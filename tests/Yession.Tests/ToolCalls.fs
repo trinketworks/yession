@@ -227,7 +227,8 @@ let private servicesQueueing (seen: ResizeArray<CommandRequest>) (sandboxes: Wor
                                           Block = None
                                           Status = TerminalCommandRunning
                                           OutputTail = ""
-                                          Elided = 0 }
+                                          Elided = 0
+                                          From = None }
                             } } }
 
 let private declaring (setup: string option) : EnvironmentSpec =

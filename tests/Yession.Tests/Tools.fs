@@ -107,7 +107,18 @@ let private ran (command: string) : TerminalCommandOutcome =
       Block = None
       Status = TerminalCommandRan (CommandSucceeded 0)
       OutputTail = command
-      Elided = 0 }
+      Elided = 0
+      From = None }
+
+/// An outcome that ran long enough to be cut, from a block that starts at `from`.
+let private elided (from: int option) : TerminalCommandOutcome =
+    { Terminal = TerminalId.create "t1" |> expect
+      Handle = QueueId.create "q1" |> expect
+      Block = None
+      Status = TerminalCommandRan (CommandSucceeded 0)
+      OutputTail = "the end of it"
+      Elided = 48707
+      From = from }
 
 let private queryDef (raw: string) : QueryDef =
     { Name = QueryName.create raw |> expect
@@ -130,6 +141,27 @@ let private readingTerminal (tail: TerminalTail) =
 
 let private sessionTests =
     testList "the yession namespace" [
+
+        // Two invariants, because they fail at different times and their reds mean different
+        // things: one that a cut answer says which END it handed over, one that it says where
+        // the rest starts. An answer could gain the first and still leave a reader guessing.
+        test "a cut answer says which end of the output it handed over" {
+            let said = AgentTools.renderOutcome (elided (Some 41))
+            Expect.stringContains said "the last" "it names the end it gave, not just the loss"
+        }
+
+        test "a cut answer says where to read the rest from" {
+            let said = AgentTools.renderOutcome (elided (Some 41))
+            Expect.stringContains said "read_terminal" "it names the call that fetches the rest"
+            Expect.stringContains said "from: 41" "and the line that call takes"
+        }
+
+        // A command still only a request has no block, so no first line exists to name. It
+        // says what it lost and stops there rather than inventing a line to read from.
+        test "an answer with no block yet promises no line to read from" {
+            let said = AgentTools.renderOutcome (elided None)
+            Expect.isFalse (said.Contains "read_terminal") "nothing to page yet, so nothing offered"
+        }
 
         test "every verb is declared once, under the names the model already knew" {
             let registry = AgentTools.registry AgentCapabilities.none

@@ -2526,7 +2526,8 @@ module TerminalCommands =
               Block = block |> Option.map (fun b -> b.BlockId)
               Status = status
               OutputTail = (if elided > 0 then output.Substring elided else output)
-              Elided = elided }
+              Elided = elided
+              From = block |> Option.map (fun b -> b.FromSeq) }
 
         /// Wait the work out, then answer. The deadline is measured from the moment the block
         /// STARTED, when one has, so a command that spent time queued behind another still
