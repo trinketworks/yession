@@ -195,18 +195,24 @@ let private representativeModel : ClientModel =
                       [ QueryColumn.create "repo" "repo"
                         QueryColumn.create "branch" "branch"
                         QueryColumn.create "checks" "checks"
-                        QueryColumn.create "dirty" "uncommitted changes" ] }
+                        QueryColumn.create "dirty" "uncommitted changes" ]
+                Legend = [] }
               { Name = QueryName.create "work_environment" |> expect
                 Title = "work environment"
                 Description = "where commands run"
-                Shape = Fields [ QueryColumn.create "backend" "backend"; QueryColumn.create "state" "state" ] }
+                Shape = Fields [ QueryColumn.create "backend" "backend"; QueryColumn.create "state" "state" ]
+                // A query whose values are written in a vocabulary, so the rendered surface
+                // this suite walks includes a legend — the acceptance render is where the
+                // ONE renderer for every future query is exercised.
+                Legend = [ "sock:PATH", "a unix socket" ] }
               // Declared but not yet answered: the surface must render a section for a
               // query whose first value has not arrived, or a slow query is an empty gap
               // rather than a thing that is loading.
               { Name = QueryName.create "leases" |> expect
                 Title = "leases"
                 Description = "devices leased to this session"
-                Shape = Value } ]
+                Shape = Value
+                Legend = [] } ]
           Values =
             Map.ofList
                 [ "repos",
@@ -399,8 +405,8 @@ let private uiChecklistTests =
                     Approvals =
                         RepoApprovals.apply
                             RepoApprovals.empty
-                            [ asked waiting [ "reaches anywhere (sensitive)" ] true
-                              asked settled [ "/nix, read-only" ] false ] }
+                            [ asked waiting [ "!net:anywhere" ] true
+                              asked settled [ "path:/nix:ro" ] false ] }
             let html = Support.render model
             // Counted rather than matched, so the assertion is about how MANY there are —
             // which is the promise — and not about any of the words around them.
@@ -413,6 +419,28 @@ let private uiChecklistTests =
             Expect.equal (occurrences (Dom.attr Dom.Hooks.approvalPrompt "octo/hello")) 1 "offered once"
             Expect.equal (occurrences (Dom.attr Dom.Hooks.approvalPrompt "octo/quiet")) 0 "and an ordinary ask is not a decision"
             Expect.equal (occurrences (Dom.attr Dom.Hooks.approvalAction "octo/hello")) 1 "with one way to say yes"
+
+        // Consent is to lines written in a vocabulary, so how to read them is on the screen
+        // where the decision is — and only the part these lines need. Counted, because that
+        // the entries are the ones this prompt's grants use is the promise; which words
+        // explain a socket is a design.
+        testCase "a prompt says how to read the grants it is asking about" <| fun () ->
+            let repo = RepoRef.create "octo/hello" |> expect
+            let model =
+                { representativeModel with
+                    Approvals =
+                        RepoApprovals.apply
+                            RepoApprovals.empty
+                            [ SessionEvent.RepoCapabilitiesChanged
+                                { RepoCapabilitiesChanged.MessageId = MessageId.create "ask" |> expect
+                                  RepoCapabilitiesChanged.Repo = repo
+                                  RepoCapabilitiesChanged.Granted = [ "!sock:/run/docker.sock" ]
+                                  RepoCapabilitiesChanged.Sensitive = true
+                                  RepoCapabilitiesChanged.Actor = ActorRef.Configured repo } ] }
+            let html = Support.render model
+            Expect.isTrue
+                (html.Contains (Dom.attr Dom.Hooks.legend "2"))
+                "the socket and the mark, and none of the five kinds nobody was offered"
 
         testCase "every required Phase 1 UI element renders from the model" <| fun () ->
             let html = Support.render representativeModel
@@ -1059,6 +1087,11 @@ let private uiChecklistTests =
             Expect.isTrue (html.Contains ">yes<") "a flag cell renders as a word"
             Expect.isFalse (html.Contains ">true<") "the wire's boolean does not reach the page"
             Expect.isTrue (html.Contains "data-query-pending") "an unanswered query says so rather than rendering nothing"
+            // A query whose values are written in a vocabulary carries its legend into the
+            // panel; one whose values are words carries none, so the surface does not fill
+            // with headings explaining `octo/hello`.
+            Expect.isTrue (html.Contains (Dom.attr Dom.Hooks.legend "1")) "the declared legend renders"
+            Expect.isFalse (html.Contains (Dom.attr Dom.Hooks.legend "0")) "and a query without one renders no legend"
 
         // A tone is how loudly a value is said, never what it says. What is pinned is the
         // HOOK and the word — not the ink, which is how the surface is built and what a

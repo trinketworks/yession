@@ -32,7 +32,8 @@ let private def (raw: string) (shape: QueryShape) : QueryDef =
     { Name = name raw
       Title = raw
       Description = sprintf "the %s of this session" raw
-      Shape = shape }
+      Shape = shape
+      Legend = [] }
 
 let private constant (raw: string) (shape: QueryShape) (value: QueryValue) : Queries.QueryRegistration =
     { Def = def raw shape
@@ -96,6 +97,22 @@ let private shapeTests =
             let described = QueryDef.toolDescription (def "repos" rowsShape)
             Expect.isTrue (described.Contains "rows of: repo, uncommitted changes") "the columns are named"
             Expect.isTrue (described.Contains "Read-only") "the contract is stated"
+
+        // A model reading an answer written in a vocabulary has no panel beside it to read
+        // a legend off, so the declaration's legend is IN the words it gets.
+        testCase "a declared legend reaches the model that will read the answer" <| fun () ->
+            let described =
+                QueryDef.toolDescription
+                    { def "resources" rowsShape with Legend = [ "sock:PATH", "a unix socket" ] }
+            Expect.isTrue (described.Contains "sock:PATH — a unix socket.") "the entry is spelled out"
+
+        // The other half, and the reason the first is not vacuous: a query whose values are
+        // words says nothing about how to read them. An empty legend that still announced
+        // itself would be a sentence every tool description carries and no model needs.
+        testCase "a query with no legend says nothing about how to read its values" <| fun () ->
+            Expect.isFalse
+                ((QueryDef.toolDescription (def "repos" rowsShape)).Contains "How to read")
+                "no legend, no sentence"
     ]
 
 // --- names ---------------------------------------------------------------------------------
@@ -264,6 +281,27 @@ let private codecTests =
 
         // A cell rides as its native JSON type, which is what keeps the stream readable to
         // anything that consumes it without this codec.
+        // The client renders a legend it was never compiled against, exactly as it renders
+        // the values — so the entries and their ORDER have to survive, the order being the
+        // reading order somebody wrote them in.
+        testCase "a declaration's legend rides the wire in order" <| fun () ->
+            let frame =
+                QueriesDeclared
+                    [ { def "resources" rowsShape with
+                          Legend = [ "path:PATH[>AT]:ro|rw|ovl", "a file or directory"; "sock:PATH", "a unix socket" ] } ]
+            let json = Codec.toString Codec.queryFrame frame
+            Expect.equal (Codec.fromString Codec.queryFrame json) (Ok frame) "the legend survives the wire"
+
+        // A page open since before queries could carry one reads the declarations again on
+        // its next connection. Until then a missing legend is a query without one, never a
+        // frame that failed to decode and took every other query's panel with it.
+        testCase "a declaration written before legends decodes as a query with none" <| fun () ->
+            let json =
+                """{"tag":"queries","queries":[{"name":"leases","title":"leases","description":"d","shape":{"kind":"value"}}]}"""
+            match Codec.fromString Codec.queryFrame json with
+            | Ok (QueriesDeclared [ declared ]) -> Expect.equal declared.Legend [] "no legend, and no failure"
+            | other -> failwithf "expected one declaration, got %A" other
+
         testCase "cells ride as JSON strings, booleans and null" <| fun () ->
             let json =
                 Codec.toString

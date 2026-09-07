@@ -30,7 +30,8 @@ let private queryDef : QueryDef =
       Shape =
         Rows
             [ QueryColumn.create "sandbox" "sandbox"
-              QueryColumn.create "cwd" "starts in" ] }
+              QueryColumn.create "cwd" "starts in" ]
+      Legend = [] }
 
 /// Register the profiles as a query. It takes the terminal MANAGER rather than a snapshot:
 /// a profile changes mid-session, and a value read at composition time would be the one

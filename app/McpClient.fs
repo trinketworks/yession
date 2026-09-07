@@ -419,7 +419,8 @@ let private queryDef : QueryDef =
               QueryColumn.create "transport" "address"
               QueryColumn.create "status" "status"
               QueryColumn.create "tools" "tools"
-              QueryColumn.create "description" "description" ] }
+              QueryColumn.create "description" "description" ]
+      Legend = [] }
 
 /// Register the session's servers as a query. It takes a GETTER for the same reason the
 /// sandboxes query does: the query surface is composed before the Host is started, and the

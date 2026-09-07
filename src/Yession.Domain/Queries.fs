@@ -156,7 +156,17 @@ type QueryDef =
       Title : string
       /// One sentence: what this answers, for the agent's tool description.
       Description : string
-      Shape : QueryShape }
+      Shape : QueryShape
+      /// How to read the values, when they are written in a vocabulary rather than in
+      /// words: each entry a shape and what it means. Usually empty — a repo name and a
+      /// timestamp explain themselves — and the one thing a declaration can say that both
+      /// audiences need at once, which is why it is a field rather than words appended to
+      /// `Description` by whoever remembered.
+      ///
+      /// Pairs of plain strings, and deliberately not a type of its own: what it holds is
+      /// prose, it crosses the wire to a browser that draws it, and a richer shape would
+      /// be one the renderer has to interpret.
+      Legend : (string * string) list }
 
 /// What crosses the wire to a browser. ONE multiplexed stream carries every query — the
 /// declarations once, then a value per query, then a value again whenever one changes —
@@ -227,4 +237,17 @@ module QueryDef =
                 sprintf "Answers with one record: %s." (columns |> List.map (fun c -> c.Label) |> String.concat ", ")
             | Rows columns ->
                 sprintf "Answers with zero or more rows of: %s." (columns |> List.map (fun c -> c.Label) |> String.concat ", ")
-        sprintf "%s %s Read-only." def.Description shape
+        // The legend follows the shape because it is about the values rather than the
+        // question — a model that has decided to call this still has to read the answer.
+        // One sentence per entry, ended by its own full stop rather than joined by a
+        // separator: a meaning is free text, and the day one of them contains the
+        // separator is the day the legend reads as an entry nobody wrote.
+        let legend =
+            match def.Legend with
+            | [] -> ""
+            | entries ->
+                entries
+                |> List.map (fun (shape, meaning) -> sprintf "%s — %s." shape meaning)
+                |> String.concat " "
+                |> sprintf " How to read the values: %s"
+        sprintf "%s %s Read-only.%s" def.Description shape legend

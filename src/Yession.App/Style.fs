@@ -659,6 +659,36 @@ module Style =
     /// The same value, in the ink its tone asked for.
     let queryValueIn (tone: string) = queryValueShape + " " + tone
 
+    /// How to read values written in a vocabulary rather than in words: the shapes, and
+    /// what each one means. Under whatever it explains, and separated by the same hairline
+    /// the sections already use, because it is a footnote to the answer above and not
+    /// another answer.
+    ///
+    /// STACKED, where a query's own fields are a two-track grid: a shape is up to 25
+    /// characters of punctuation with no break opportunity in it, so a label track would
+    /// either take the lane or wrap the shape one character per line. The pairs read down
+    /// instead, which is also how a legend is read — you arrive knowing the token and look
+    /// for it.
+    let queryLegend = "flex flex-col gap-1 pt-3 " + Stroke.dividerTop
+    /// The entries themselves, under the heading. The `<dl>` holds only terms and their
+    /// meanings — the block's own name is a sibling above it, because a heading inside the
+    /// list would be a term of the glossary rather than what the glossary is called.
+    ///
+    /// The gap is BETWEEN entries and not inside one: evenly spaced, a meaning sat as close
+    /// to the next shape as to its own, and eight pairs read as sixteen lines.
+    let queryLegendEntries = "flex flex-col gap-2"
+    /// One pair, kept together. A `<div>` inside a `<dl>` is exactly what the grouping
+    /// element is for, so the pairing is in the markup a screen reader walks and not only
+    /// in the spacing a sighted reader sees.
+    let queryLegendEntry = "flex flex-col"
+    /// The shape. At full `ink` because it is the thing being looked up, and
+    /// `overflow-wrap:anywhere` because `path:PATH[>AT]:ro|rw|ovl` is one unbreakable token
+    /// as far as the polite rule is concerned.
+    let queryLegendShape = "font-light text-small leading-5 text-ink [overflow-wrap:anywhere]"
+    /// What it means. `ink-dim` rather than `ink-faint`: this is prose somebody reads to
+    /// understand what they are consenting to, so it holds the 4.5:1 floor.
+    let queryLegendMeaning = "font-light text-small leading-5 text-ink-dim break-words"
+
     /// On a phone this column sits under the fixed degradation bar, so it pays for it in
     /// padding — but only while the bar is there (`degradedShell`).
     let mainColumn = "flex-1 flex flex-col min-w-0 h-full " + degradedBarRoomPad

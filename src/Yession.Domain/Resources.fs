@@ -527,28 +527,47 @@ module GrantNotation =
           Variable ("CI", "1")
           Exec "/usr/bin/git" ]
 
+    /// Whether a written grant is of this kind, by the token the RENDERER emits for it —
+    /// everything up to its first colon, read off `describe` rather than off the shape
+    /// beside it. Derived, so the legend cannot come to promise a token nothing writes.
+    ///
+    /// The leading `!` comes off first: a sensitive grant is still a grant of its kind, and
+    /// an entry that stopped applying the moment the operator marked something would be
+    /// missing from exactly the line somebody is deciding about.
+    let private writes (line: string) (leaf: ResourceLeaf) : bool =
+        let written = ResourceLeaf.describe leaf
+        let token = written.Substring (0, written.IndexOf ':' + 1)
+        (line.TrimStart '!').StartsWith token
+
     /// The two marks, which are not kinds: one is what the operator said about a grant, the
     /// other what this host made of it. Last, because that is the order a line is read in.
-    let private marks : (string * string) list =
-        [ "!GRANT", "sensitive, which is the operator saying this one is worth being told about"
-          "GRANT ~> OTHER",
-          "this host cannot scope GRANT, so the sandbox gets OTHER instead, where * is any of \
-           that kind, and \"~> nothing\" is not granted here followed by why" ]
+    let private marks : ((string -> bool) * (string * string)) list =
+        [ (fun (line: string) -> line.StartsWith "!"),
+          ("!GRANT", "sensitive, which is the operator saying this one is worth being told about")
+          (fun (line: string) -> line.Contains " ~> "),
+          ("GRANT ~> OTHER",
+           "this host cannot scope GRANT, so the sandbox gets OTHER instead, where * is any of \
+            that kind, and \"~> nothing\" is not granted here followed by why") ]
 
-    /// Every entry, in reading order.
-    let legend : (string * string) list = (kinds |> List.map kind) @ marks
+    /// Every entry, in reading order, beside the question "does this line use it".
+    let private entries : ((string -> bool) * (string * string)) list =
+        (kinds |> List.map (fun leaf -> (fun line -> writes line leaf), kind leaf)) @ marks
 
-    /// The legend as prose, for a tool description — where a model reads it and there is no
-    /// table to draw. The same list, so the two audiences cannot be told different things.
+    /// The whole vocabulary. What a surface shows beside a list somebody may come back to —
+    /// the operator's own resources, where the question is what this host can offer at all.
+    let legend : (string * string) list = entries |> List.map snd
+
+    /// The entries these particular lines need, and no others.
     ///
-    /// One SENTENCE per entry, ended by its full stop rather than joined by a separator: a
-    /// meaning is free text and the day one of them contains the separator is the day the
-    /// legend reads as an entry nobody wrote.
-    let sentence : string =
-        legend
-        |> List.map (fun (shape, meaning) -> sprintf "%s — %s." shape meaning)
-        |> String.concat " "
-        |> sprintf "Grants are written in one notation. %s"
+    /// What a consent prompt shows, and the difference from `legend` is the difference
+    /// between the two surfaces: a settings panel is a reference, and a prompt is a decision
+    /// about the four lines above the button. Eight entries over a socket and a path is a
+    /// wall of text somebody scrolls past to reach the button, which is how a legend stops
+    /// being read at the one place it was worth having.
+    let legendFor (lines: string list) : (string * string) list =
+        entries
+        |> List.filter (fun (applies, _) -> lines |> List.exists applies)
+        |> List.map snd
 
 /// An operator's whole vocabulary, AFTER validation.
 ///

@@ -119,16 +119,17 @@ let private queryDef : QueryDef =
         "What this host offers a sandbox, as the operator declared it. Each row is a name a \
          repo may select, and what selecting it finally grants — which is the whole closure, \
          not the line written beside the name. A resource is sensitive when something it \
-         reaches is, however deeply. "
-        // The legend travels with the answer, because this is where a model meets the
-        // notation and there is no panel beside it to read one off.
-        + GrantNotation.sentence
+         reaches is, however deeply."
       Shape =
         Rows
             [ QueryColumn.create "resource" "resource"
               QueryColumn.create "grants" "grants"
               QueryColumn.create "sensitive" "sensitive"
-              QueryColumn.create "default" "granted to every sandbox" ] }
+              QueryColumn.create "default" "granted to every sandbox" ]
+      // The WHOLE vocabulary, because this is the surface an operator comes to in order to
+      // learn what this host can offer at all — the one place the kinds nobody has selected
+      // yet are still worth reading.
+      Legend = GrantNotation.legend }
 
 /// The declared names and what each one comes to.
 ///
