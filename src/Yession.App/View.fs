@@ -904,16 +904,19 @@ module View =
             match cell with
             | CellStatus (_, tone) -> QueryTone.name tone
             | _ -> ""
-        // One record's pairs, on the aligned two-track grid (`Style.queryFields`). A `<dl>`
-        // and not a table: the lane is 280px, so there are no columns to compare down, and
-        // a description list is what says "these are facts about the subject above" to a
+        // One record's pairs, label over value (`Style.queryFields`). A `<dl>` and not a
+        // table: the lane is 217px, so there are no columns to compare down, and a
+        // description list is what says "these are facts about the subject above" to a
         // screen reader without pretending to a structure the eye cannot see.
         let pairs (row: (string * QueryCell) list) (columns: QueryColumn list) =
             columns
-            |> List.collect (fun column ->
+            |> List.map (fun column ->
                 let cell = cellAt row column
-                [ html $"""<dt class="{Style.queryFieldLabel}">{column.Label}</dt>"""
-                  html $"""<dd class="{face cell}" data-query-cell="{column.Key}" data-query-tone="{toneHook cell}">{QueryCell.describe cell}</dd>""" ])
+                html $"""
+                    <div class="{Style.queryField}">
+                      <dt class="{Style.queryFieldLabel}">{column.Label}</dt>
+                      <dd class="{face cell}" data-query-cell="{column.Key}" data-query-tone="{toneHook cell}">{QueryCell.describe cell}</dd>
+                    </div>""")
         match shape, value with
         | _, None -> html $"""<span class="{Style.small}" data-query-pending>…</span>"""
         | Value, Some (ValueOf cellValue) ->
