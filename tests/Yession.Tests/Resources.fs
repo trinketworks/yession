@@ -665,6 +665,24 @@ let tests =
                     (GrantNotation.legend |> List.exists (fun (shape, _) -> shape.StartsWith kind))
                     (sprintf "%s is written but the legend does not say what %s means" written kind)
 
+        // A legend beside a decision is read only while it is short enough to read, so the
+        // one shown over a consent prompt is the entries THOSE lines use. Its red means the
+        // filter has stopped tracking what the renderer writes — a token nobody can decode,
+        // or seven entries about grants nobody was offered.
+        testCase "a legend for particular grants holds what they use, and nothing else" <| fun () ->
+            let shapes =
+                GrantNotation.legendFor [ "!sock:/run/docker.sock ~> sock:*"; "path:/nix:ro" ]
+                |> List.map fst
+            Expect.equal
+                shapes
+                [ "path:PATH[>AT]:ro|rw|ovl"; "sock:PATH"; "!GRANT"; "GRANT ~> OTHER" ]
+                "the two kinds and both marks, in reading order"
+
+        // The empty case is the one that would go unnoticed: a surface with nothing to
+        // explain must render no legend at all, rather than a heading over the vocabulary.
+        testCase "grants that need no explaining ask for no legend" <| fun () ->
+            Expect.equal (GrantNotation.legendFor []) [] "nothing shown, nothing to read"
+
         // A leaf that materialises and was never shown is the fault this module exists to
         // prevent. Counts leaves and marks; never the wording, which is a design and moves.
         check "every leaf in a closure is described, and every sensitive one is marked" <| fun () ->

@@ -460,7 +460,8 @@ let private queryDef : QueryDef =
               QueryColumn.create "checks" "checks"
               QueryColumn.create "watcher" "watched by"
               QueryColumn.create PrStatus.Columns.status "status"
-              QueryColumn.create "since" "since" ] }
+              QueryColumn.create "since" "since" ]
+      Legend = [] }
 
 /// When a watch last became what it is, as a stamp the reader subtracts from.
 ///

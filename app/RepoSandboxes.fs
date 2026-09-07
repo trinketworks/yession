@@ -443,7 +443,8 @@ let private queryDef : QueryDef =
             [ QueryColumn.create "repo" "repo"
               QueryColumn.create "sandbox" "sandbox"
               QueryColumn.create "state" "state"
-              QueryColumn.create "problem" "problem" ] }
+              QueryColumn.create "problem" "problem" ]
+      Legend = [] }
 
 /// Register the fold's answer as a query.
 ///

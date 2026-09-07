@@ -2011,13 +2011,27 @@ module Codec =
                     [ "name", queryName.Encode def.Name
                       "title", Encode.string def.Title
                       "description", Encode.string def.Description
-                      "shape", queryShape.Encode def.Shape ])
+                      "shape", queryShape.Encode def.Shape
+                      // A pair per entry rather than an object, because the order is the
+                      // reading order and an object's keys are not ordered on the wire.
+                      "legend",
+                      Encode.list (
+                          def.Legend
+                          |> List.map (fun (shape, meaning) ->
+                              Encode.list [ Encode.string shape; Encode.string meaning ])) ])
           Decode =
             Decode.object (fun get ->
                 { Name = get.Required.Field "name" queryName.Decode
                   Title = get.Required.Field "title" Decode.string
                   Description = get.Required.Field "description" Decode.string
-                  Shape = get.Required.Field "shape" queryShape.Decode }) }
+                  Shape = get.Required.Field "shape" queryShape.Decode
+                  // Optional: a page still open from before queries could carry one reads
+                  // the declarations again on its next connection, and until then a
+                  // missing legend is a query without one rather than a broken frame.
+                  Legend =
+                    get.Optional.Field "legend" (Decode.list (Decode.list Decode.string))
+                    |> Option.defaultValue []
+                    |> List.choose (function [ shape; meaning ] -> Some (shape, meaning) | _ -> None) }) }
 
     /// One frame of the multiplexed query stream. Tagged like `sessionFrame` for the same
     /// reason: one connection carries every query there will ever be, and a client folds

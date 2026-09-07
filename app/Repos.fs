@@ -653,7 +653,8 @@ let private queryDef : QueryDef =
             [ QueryColumn.create "repo" "repo"
               QueryColumn.create "branch" "branch"
               QueryColumn.create "dirty" "uncommitted changes"
-              QueryColumn.create "path" "path" ] }
+              QueryColumn.create "path" "path" ]
+      Legend = [] }
 
 /// Register the listing as a query. The service keeps its typed `ListRepos` — the query
 /// is a projection of it, not a replacement — so the shape lives beside the thing it

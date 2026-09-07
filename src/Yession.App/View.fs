@@ -510,6 +510,37 @@ module View =
     /// wear the SAME roster row — avatar cell, name, right-aligned status — and only the words
     /// (and the prompt hanging under the row) change. Connecting flips "no agent" to "ready" in
     /// place; the roster never jumps.
+    /// How to read what is above it. ONE renderer, used by the generated panels and by the
+    /// consent prompt, because a legend that read one way where a grant is listed and
+    /// another where it is agreed to would be two vocabularies wearing one name.
+    ///
+    /// A `<dl>` for the reason the query's own fields are one: these are terms and what they
+    /// mean, which is exactly what the element says to a screen reader. Empty renders
+    /// nothing at all — a heading over no entries is a promise of help that is not there.
+    let private legendView (entries: (string * string) list) : TemplateResult =
+        match entries with
+        | [] -> html $""""""
+        | entries ->
+            let rows =
+                entries
+                |> List.map (fun (shape, meaning) ->
+                    html $"""
+                        <div class="{Style.queryLegendEntry}">
+                          <dt class="{Style.queryLegendShape}">{shape}</dt>
+                          <dd class="{Style.queryLegendMeaning}">{meaning}</dd>
+                        </div>""")
+            // Titled, because without a word in front of it the first shape reads as one
+            // more of whatever is above — on the resources panel `path:PATH[>AT]:ro|rw|ovl`
+            // sat in the same type as a resource's name and looked like a resource called
+            // that. The label wears the query's own field-label voice, so the block joins
+            // the panel's rhythm rather than announcing itself, and it sits BESIDE the list
+            // rather than in it: a `<dt>` is a term of the glossary, and this is its name.
+            html $"""
+                <div class="{Style.queryLegend}" data-legend="{List.length entries}">
+                  <span class="{Style.queryFieldLabel}">how to read</span>
+                  <dl class="{Style.queryLegendEntries}">{rows}</dl>
+                </div>"""
+
     let private peopleSection (actions: ViewActions) (model: ClientModel) : TemplateResult =
         // The agent's row says whether a turn can RUN, which is not the same question as
         // whether a credential is stored. `agentAvailable` answers the second (any relevant
@@ -578,6 +609,7 @@ module View =
                         <span class="{Style.noAgentEdge}"></span>
                         <div class="{Style.noAgentBody}">
                           <ul class="{Style.cls [ Style.label; "w-full min-w-0 whitespace-normal" ]}">{lines}</ul>
+                          {legendView (GrantNotation.legendFor granted)}
                           <button type="button" class="{Style.cls [ Style.btnPrimary; Style.noAgentAction; "w-full min-w-0" ]}"
                                   data-repo-approve="{RepoRef.value repo}"
                                   @click={Ev(fun _ -> actions.ApproveRepoCapabilities repo granted)}>Approve</button>
@@ -920,6 +952,7 @@ module View =
                 <section class="{Style.cls [ Style.sideSection; Style.settingsLane1 ]}" data-query-panel="{name}">
                   <span class="{Style.label}">{def.Title}</span>
                   {queryValueView def.Shape (Map.tryFind name queries.Values)}
+                  {legendView def.Legend}
                 </section>""")
 
     /// Settings, as the sidebar column's OTHER FACE. Not a drawer over the conversation: you

@@ -169,6 +169,11 @@ module Dom =
         /// is a design, that there is exactly one per waiting repo is a promise.
         let approvalPrompt = "data-repo-approval"
         let approvalAction = "data-repo-approve"
+        /// How to read the values above it, where they are written in a vocabulary rather
+        /// than in words. Carries how many entries it holds, because that is the promise
+        /// worth counting: a consent prompt shows the entries ITS grants use, so a legend
+        /// that grew to the whole vocabulary would be a wall of text over the button.
+        let legend = "data-legend"
         // The reconnect offer (Plan 11): shown in place of the connection status word when
         // the session has stopped and this deployment can bring it back.
         let sessionGone = "data-session-gone"

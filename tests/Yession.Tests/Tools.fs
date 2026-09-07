@@ -113,7 +113,8 @@ let private queryDef (raw: string) : QueryDef =
     { Name = QueryName.create raw |> expect
       Title = raw
       Description = sprintf "the %s of this session" raw
-      Shape = Value }
+      Shape = Value
+      Legend = [] }
 
 /// Every property of a tool's schema, paired with whether it declares itself write-only.
 let private writeOnly (schema: string) : (string * bool) list =

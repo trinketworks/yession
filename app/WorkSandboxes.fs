@@ -393,8 +393,7 @@ let private queryDef : QueryDef =
         "The sandboxes commands can run in, each with the backend confining it, what it \
          runs, whether it is up, and which credentials were forwarded into it and by whom. \
          Read from the processes themselves. A degraded row says what this host could not \
-         give exactly. "
-        + GrantNotation.sentence
+         give exactly."
       Shape =
         Rows
             [ QueryColumn.create "name" "name"
@@ -412,7 +411,12 @@ let private queryDef : QueryDef =
               // seeing, and this one is worth seeing on the day it is not empty.
               QueryColumn.create "degraded" "degraded"
               QueryColumn.create "started_by" "started by"
-              QueryColumn.create "started_at" "started" ] }
+              QueryColumn.create "started_at" "started" ]
+      // The `degraded` column is written in the grant notation, so the legend comes with
+      // it. The whole of it rather than the part today's degradations happen to use: any
+      // kind can be the one a host cannot give exactly, and a legend that had to be
+      // predicted from the answers would be wrong on the day it mattered.
+      Legend = GrantNotation.legend }
 
 /// Register the sandboxes as a query. `state` is read from the RUNNING sandbox rather
 /// than from what the registry was told — the same rule the repos listing follows, for
