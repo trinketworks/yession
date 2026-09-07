@@ -128,7 +128,14 @@ type TerminalCommandOutcome =
       /// Characters the tail leaves out. Stated rather than silently elided: a model that
       /// cannot tell a short output from a truncated one will confidently describe the wrong
       /// thing.
-      Elided : int }
+      Elided : int
+      /// The transcript line this command's output STARTS at, once there is a block. What
+      /// makes the elision actionable rather than merely honest: `Elided` says something is
+      /// missing and the tail says what the end looked like, and neither says where the
+      /// beginning is. This does, in the one vocabulary that can fetch it — `read_terminal`'s
+      /// `from`. Measured: told only that 48,707 characters were gone, an agent narrowed
+      /// `sed -n` ranges ten times and never reached the part it wanted.
+      From : int option }
 
 /// Run a command for the agent (Plan 13, stage 3b). ONE door: the agent has no private
 /// execution path, so the classifier that gates this gates everything the agent runs.

@@ -157,10 +157,26 @@ module AgentTools =
     let renderOutcome (outcome: TerminalCommandOutcome) : string =
         let where = sprintf "terminal %s" (TerminalId.value outcome.Terminal)
         let handle = QueueId.value outcome.Handle
+        // What an elision has to say to be acted on, rather than merely admitted. "N earlier
+        // characters omitted" is honest and useless: it does not say that what follows is the
+        // END, and it does not say where the beginning is — so a reader that wants the start
+        // has nothing to ask for and guesses. Measured: told 48,707 characters were gone, an
+        // agent narrowed `sed -n` ranges over the same file ten times and never reached the
+        // section it was after; another paged it four times to answer one question. Both had
+        // the whole output sitting in the transcript at a line neither was ever told.
+        //
+        // So the note names the end it gave you and the call that fetches the rest, in that
+        // call's own vocabulary. `From` is the block's first line, which is exactly what
+        // `read_terminal` takes.
         let output =
             if outcome.OutputTail = "" then ""
             else if outcome.Elided > 0 then
-                sprintf "\n[%d earlier characters omitted]\n%s" outcome.Elided outcome.OutputTail
+                let readOn =
+                    match outcome.From with
+                    | Some from ->
+                        sprintf " — read_terminal on %s from: %d for the rest" (TerminalId.value outcome.Terminal) from
+                    | None -> ""
+                sprintf "\n[the last %d characters; %d earlier ones omitted%s]\n%s" outcome.OutputTail.Length outcome.Elided readOn outcome.OutputTail
             else "\n" + outcome.OutputTail
         match outcome.Status with
         | TerminalCommandRan (CommandSucceeded code) -> sprintf "exit code %d in %s%s" code where output
