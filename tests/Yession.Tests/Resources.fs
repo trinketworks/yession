@@ -516,6 +516,42 @@ let tests =
             | Ok _ -> failwith "expected a refusal"
             | Error e -> Expect.isTrue (e.Contains "overlay") (sprintf "the refusal lists the modes, said: %s" e)
 
+        // The policy the file's two halves express: `resources` is the menu, `always` is what
+        // is served whether or not anybody ordered it. A name in one and not the other is the
+        // state this model exists to make expressible — available, and not granted.
+        testCase "what a host always grants is one selection from its own menu" <| fun () ->
+            let profile =
+                OperatorProfile.parse """
+                    { "version": 1,
+                      "resources": { "store": { "mount": { "from": "/nix" } },
+                                     "docker": { "socket": "/run/docker.sock" } },
+                      "always": [ "store" ] }"""
+                |> expect
+            Expect.equal
+                (profile.Always |> List.map ResourceName.value)
+                [ "store" ]
+                "the one that is handed out, and not the one that is merely offered"
+
+        // Refused while the operator is looking at the file, rather than at whichever
+        // session first fails to start with it.
+        testCase "a host cannot always grant something it does not declare" <| fun () ->
+            match OperatorProfile.parse """{ "version": 1, "resources": {}, "always": [ "ghost" ] }""" with
+            | Ok _ -> failwith "expected a refusal"
+            | Error e -> Expect.isTrue (e.Contains "ghost") (sprintf "the refusal names it, said: %s" e)
+
+        // `always` was `default`, and an operator with the old spelling must be told which
+        // word replaced it rather than that a key is unknown — the courtesy a variable moved
+        // onto the command line already gets.
+        testCase "the spelling this key had before is refused by name" <| fun () ->
+            match OperatorProfile.parse """{ "version": 1, "resources": {}, "default": [] }""" with
+            | Ok _ -> failwith "expected a refusal"
+            | Error e ->
+                Expect.isTrue (e.Contains "always") (sprintf "the refusal names the word to write, said: %s" e)
+                // Not "unknown key: default (known: version, resources, always)", which names
+                // the new word only by listing every word there is, and leaves the operator
+                // to work out that one replaced the other.
+                Expect.isFalse (e.Contains "unknown") (sprintf "and says it was replaced, not that it is a typo, said: %s" e)
+
         testCase "a version this build does not speak is refused" <| fun () ->
             Expect.isError (OperatorProfile.parse """{ "version": 2, "resources": {} }""") "not read as a lossy version 1"
 
@@ -584,6 +620,23 @@ let tests =
                 Expect.isTrue (grants.Contains "path:/nix:ro") (sprintf "the mount it reaches, said: %s" grants)
                 Expect.isTrue (grants.Contains "daemon-socket") (sprintf "and the socket, said: %s" grants)
             | other -> failwithf "expected text, got %A" other
+
+        // Declared and not granted is a real state, and the row is the only place an operator
+        // can see which of their names they are handing out unasked.
+        testCase "a resource this host always grants says so, and one it merely offers does not" <| fun () ->
+            let profile =
+                OperatorProfile.parse """
+                    { "version": 1,
+                      "resources": { "store": { "mount": { "from": "/nix" } },
+                                     "docker": { "socket": "/run/docker.sock" } },
+                      "always": [ "store" ] }"""
+                |> expect
+            let always name =
+                OperatorResources.rows profile
+                |> List.find (fun row -> row |> List.contains ("resource", CellText name))
+                |> List.pick (fun (column, cell) -> if column = "always" then Some cell else None)
+            Expect.equal (always "store") (CellText "yes") "handed out without asking"
+            Expect.equal (always "docker") CellAbsent "on the menu, and not on the table"
 
         // Sensitivity is the reason the surface exists at all: an operator has to be able to
         // see which of their own names are the loud ones, INCLUDING the ones that are only

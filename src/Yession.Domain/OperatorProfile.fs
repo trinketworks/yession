@@ -19,22 +19,30 @@ open Yession.Domain
 // operator can therefore split a leaf into three, or gather three into one name, without any
 // repo's file changing. That is what makes the vocabulary genuinely theirs.
 
-/// A whole profile: the vocabulary, and what every sandbox on this host gets without asking.
+/// A whole profile: the vocabulary, and what every sandbox on this host holds without asking.
 ///
-/// `Default` is the operator granting something to everything, which is a DIFFERENT act from
+/// `Always` is the operator granting something to everything, which is a DIFFERENT act from
 /// declaring that it exists — and keeping the two apart is the correction this model is built
 /// around. `YESSION_SESSION_READ` was both at once, so an operator could not offer a path
 /// without forcing it on every sandbox, and a repo asking for one could never obtain it.
 ///
-/// Here `resources` is the menu and `default` is one selection from it. A name declared and
-/// not defaulted is available and not granted — the state the old variable could not express.
+/// So `resources` is the menu and `always` is what is served whether or not anybody ordered
+/// it: every sandbox on this host holds it, no repo has to name it, and none can decline it.
+/// A name declared and not in `always` is available and not granted — the state the old
+/// variable could not express.
+///
+/// It was `default`, and the word was wrong twice over. A default is what you get unless you
+/// say otherwise, and there is no otherwise to say — a repo's selection ADDS to this set and
+/// can never subtract from it. And `default` already means something else two files away: the
+/// sandbox every session has (`SandboxRef.defaultRef`), so "the default resources" and "the
+/// default sandbox's resources" were one phrase for two things.
 type ProfileFile =
     { Resources : ResourceProfile
-      Default : ResourceName list }
+      Always : ResourceName list }
 
 module ProfileFile =
 
-    let empty : ProfileFile = { Resources = ResourceProfile.empty; Default = [] }
+    let empty : ProfileFile = { Resources = ResourceProfile.empty; Always = [] }
 
 module OperatorProfile =
 
@@ -47,7 +55,7 @@ module OperatorProfile =
     [<Literal>]
     let Version = 1
 
-    let private fileKeys = [ "version"; "resources"; "default" ]
+    let private fileKeys = [ "version"; "resources"; "always" ]
     let private leafKeys = [ "mount"; "socket"; "endpoint"; "env"; "exec"; "volume"; "sensitive" ]
     let private mountKeys = [ "from"; "at"; "mode" ]
     let private volumeKeys = [ "name"; "at" ]
@@ -190,8 +198,23 @@ module OperatorProfile =
                 | Ok names -> Decode.succeed names
                 | Error e -> Decode.fail e)
 
+    /// `default` is the spelling `always` had before it was named for what it does. Refused
+    /// BY NAME rather than left to `noUnknownKeys`, which would say "unknown key: default
+    /// (known: version, resources, always)" and leave an operator to work out that one
+    /// replaced the other — the same courtesy a variable moved onto the command line gets.
+    let private noOldKeys : Decoder<unit> =
+        Decode.keys
+        |> Decode.andThen (fun keys ->
+            failIf
+                (List.contains "default" keys)
+                (sprintf
+                    "'default' is now 'always' in %s — every sandbox on this host holds what it names and no repo can decline it, which is not what a default is"
+                    FileName)
+                (Decode.succeed ()))
+
     let decoder : Decoder<ProfileFile> =
-        noUnknownKeys fileKeys
+        noOldKeys
+        |> Decode.andThen (fun () -> noUnknownKeys fileKeys)
         |> Decode.andThen (fun () ->
             Decode.field "version" Decode.int
             |> Decode.andThen (fun version ->
@@ -201,7 +224,7 @@ module OperatorProfile =
                     (Decode.map2
                         (fun declared selection -> declared, selection)
                         (Decode.field "resources" resources)
-                        (Decode.optional "default" names |> Decode.map (Option.defaultValue [])))))
+                        (Decode.optional "always" names |> Decode.map (Option.defaultValue [])))))
         |> Decode.andThen (fun (declared, selection) ->
             // The algebra's own refusals — a cycle, a dangling name, a name declared twice, a
             // resource that contradicts itself — reached through `load` and NOT re-checked
@@ -210,12 +233,12 @@ module OperatorProfile =
             match ResourceProfile.load declared with
             | Error e -> Decode.fail e
             | Ok profile ->
-                // The default must RESOLVE, and it is checked here rather than at the first
-                // sandbox that would have used it. An operator granting something to every
-                // sandbox on the host should learn it does not hold while they are looking at
-                // the file, not when somebody else's session refuses to start.
+                // What is always granted must RESOLVE, and it is checked here rather than at
+                // the first sandbox that would have held it. An operator granting something to
+                // every sandbox on the host should learn it does not hold while they are
+                // looking at the file, not when somebody else's session refuses to start.
                 match ResourceProfile.resolve profile selection with
-                | Error e -> Decode.fail (sprintf "the default selection cannot be granted: %s" e)
-                | Ok _ -> Decode.succeed { Resources = profile; Default = selection })
+                | Error e -> Decode.fail (sprintf "what this host always grants cannot be granted: %s" e)
+                | Ok _ -> Decode.succeed { Resources = profile; Always = selection })
 
     let parse (json: string) : Result<ProfileFile, string> = Decode.fromString decoder json
