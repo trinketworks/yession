@@ -125,7 +125,7 @@ let private queryDef : QueryDef =
             [ QueryColumn.create "resource" "resource"
               QueryColumn.create "grants" "grants"
               QueryColumn.create "sensitive" "sensitive"
-              QueryColumn.create "default" "granted to every sandbox" ]
+              QueryColumn.create "always" "always granted" ]
       // The WHOLE vocabulary, because this is the surface an operator comes to in order to
       // learn what this host can offer at all — the one place the kinds nobody has selected
       // yet are still worth reading.
@@ -160,9 +160,9 @@ let rows (file: ProfileFile) : (string * QueryCell) list list =
         [ "resource", CellText (ResourceName.value name)
           "grants", CellText (fst described)
           "sensitive", snd described
-          // Whether every sandbox on this host gets it without asking. Declared and not
+          // Whether every sandbox on this host holds it without asking. Declared and not
           // granted is a real state, and one an operator cannot see any other way.
-          "default", (if List.contains name file.Default then CellText "yes" else CellAbsent) ])
+          "always", (if List.contains name file.Always then CellText "yes" else CellAbsent) ])
 
 /// Register it. Takes a thunk rather than a value for the reason the other registrations do:
 /// what a session holds is settled during composition, and a value read here would be the

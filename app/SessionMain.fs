@@ -77,22 +77,22 @@ let private resourceProfile =
         | Ok profile -> profile
         | Error e -> failwith e
 
-/// What the operator grants every work sandbox without it asking: the profile's `default`,
+/// What the operator grants every work sandbox without it asking: the profile's `always`,
 /// flattened once at boot.
 ///
 /// Resolved here rather than per sandbox because it cannot differ between them — it is the
 /// host's statement, not this sandbox's — and because a failure to resolve it is a failure of
-/// the profile, which the decoder already refused. `[]` is a deployment that declared no
-/// default, which is ordinary: the vocabulary exists and nothing is handed out.
+/// the profile, which the decoder already refused. `[]` is a deployment that always grants
+/// nothing, which is ordinary: the vocabulary exists and nothing is handed out unasked.
 let private grantedLeaves : ResourceLeaf list =
     match resourceProfile with
     | None -> []
     | Some file ->
-        match ResourceProfile.resolve file.Resources file.Default with
+        match ResourceProfile.resolve file.Resources file.Always with
         | Ok closure -> ResourceClosure.leaves closure |> Set.toList
         | Error e -> failwith e
 
-/// What one sandbox holds: the host's `default`, plus whatever the sandbox itself selected.
+/// What one sandbox holds: what the host always grants, plus whatever the sandbox selected.
 ///
 /// A selection naming something this host does not declare is refused HERE, with the profile
 /// in hand, and the sentence lists what there is instead. That refusal is the whole of the

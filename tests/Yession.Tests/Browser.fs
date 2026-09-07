@@ -756,8 +756,8 @@ let tests =
         // panel" stays green while the answer is unreadable. What starved it was the LABEL
         // — a grid maximizes its intrinsic tracks before it expands a flexible one, so a
         // bare `auto` label track took its whole max-content and left the value what was
-        // over. On a phone the `resources` query's `granted to every sandbox` did exactly
-        // that: `/private/etc/ssl/cert.pem, read-only; …` read one character per line.
+        // over. On a phone the `resources` query's longest label did exactly that:
+        // `/private/etc/ssl/cert.pem, read-only; …` read one character per line.
         //
         // Both halves are ARRANGED, for the reason the case above arranges its value: a
         // live session's own labels are short enough that nothing here would ever bite.
@@ -786,7 +786,7 @@ let tests =
                         })
                         const before = values().map(el => el.getBoundingClientRect().width)
                         panel.querySelectorAll('dl dt').forEach(el => {
-                            el.textContent = 'granted to every sandbox on this host'
+                            el.textContent = 'a label longer than the lane it is asked to share'
                         })
                         return values()
                             .map((el, at) => [el, before[at], el.getBoundingClientRect().width])

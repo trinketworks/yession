@@ -50,8 +50,9 @@ never reaches a sandboxed command.
 
 `YESSION_SESSION_RESOURCES` names a **resources profile**: named resources a repo's
 `yession.yaml` selects by name, so a repo cannot exceed what the operator declared. `resources:`
-is what the host can offer; `default:` is what every sandbox gets unasked. Declared and not
-defaulted means available and not granted.
+is what the host can offer; `always:` is what every sandbox holds without asking, which no repo
+has to name and none can decline. Declared and not always granted means available and not
+granted.
 
 ---
 

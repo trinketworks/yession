@@ -619,7 +619,7 @@ module Style =
     ///
     /// It was a two-track grid, a label column beside a value column, capped so that a long
     /// label could not take the lane. Measured, that cap WAS the lane: the pane is 217px of
-    /// content, `granted to every sandbox` spends the whole 7rem allowance, and the value
+    /// content, the resources query's longest label spent the whole 7rem allowance, and the value
     /// got 93px — a label track wider than the value it was starving, and
     /// `!sock:/nix/var/nix/daemon-socket/socket` read four lines deep at ten characters a
     /// line. Every narrower cap moves the same problem: 217px cannot hold a caps label
