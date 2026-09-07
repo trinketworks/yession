@@ -1866,10 +1866,20 @@ module SessionTerminals =
                 // is. Gated on detection rather than on the reader, because a reader is not a
                 // second writer: it takes nothing and blocks nobody, so who is asking does not
                 // change the answer.
-                if canInstrument key && not (TerminalLeases.autoHeld id leases) then
+                //
+                // The refusal is the TAIL read's alone. A command's answer carries what it
+                // printed only up to `Digest.tailCap` characters, and past that it carries the
+                // LAST of them and says how many it dropped — so on a long output the premise
+                // above is false, and a caller sent back to `execute_command` is sent back to
+                // the same 2000 characters it already has. A `from` read is the page that
+                // recovers the rest: it is what `TerminalCommandOutcome` means by "the
+                // transcript keeps all of it", and without it that sentence was aspirational.
+                // Measured: reading a 50,000-character file through this door cost an agent
+                // ten calls and it never reached the part it wanted.
+                if from.IsNone && canInstrument key && not (TerminalLeases.autoHeld id leases) then
                     return
                         Error
-                            "this terminal's output comes back as blocks — run it with execute_command, whose answer carries what it printed"
+                            "this terminal's output comes back as blocks — run it with execute_command, whose answer carries what it printed, and read on from a line of it with from:"
                 else
                     // The live edge, whether or not the terminal is still open: a closed one
                     // reads back from its recording, and its length stopped moving with it.

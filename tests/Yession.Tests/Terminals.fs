@@ -2882,6 +2882,24 @@ let private sourceTests =
                 | Error reason -> Expect.stringContains reason "execute_command" "and it says where the answer is"
             }
 
+        // The other half of that refusal, and the reason it is a half: a command's answer
+        // carries what it printed only up to `Digest.tailCap`, so past that the sentence
+        // "run it with execute_command" sends a caller back to output it already has. A
+        // `from` read is what recovers the rest, and the record type has always said so
+        // ("the transcript keeps all of it").
+        testCaseAsync "a shell terminal still pages from a line, which is how a long answer is read past its tail" <|
+            async {
+                let log = newLog ()
+                let environment, _ = scriptedEnvironment (fun _ -> [], 0)
+                let openTranscript, _, _, _, readTranscript = recordingTranscripts ()
+                let attach, _, _, _ = loopback ()
+                let terminals, _, _ = makeTerminalsWith attach log environment openTranscript readTranscript []
+                let! shell = terminals.Open (PeerRef ada) (SandboxShell SandboxRef.defaultRef) (TerminalTitle.fromProse "build")
+                match! terminals.Tail (expect shell) (Some 0) None with
+                | Ok page -> Expect.equal page.From 0 "the page starts where it was asked to"
+                | Error reason -> failwithf "a page of a shell's transcript is how its elided output is read: %s" reason
+            }
+
         testCaseAsync "on an instrumented terminal nobody holds it is refused, because that is what blocks are for" <|
             async {
                 let log = newLog ()
