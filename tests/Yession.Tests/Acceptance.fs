@@ -420,6 +420,38 @@ let private uiChecklistTests =
             Expect.equal (occurrences (Dom.attr Dom.Hooks.approvalPrompt "octo/quiet")) 0 "and an ordinary ask is not a decision"
             Expect.equal (occurrences (Dom.attr Dom.Hooks.approvalAction "octo/hello")) 1 "with one way to say yes"
 
+        // A glossary is consulted, not read: it is offered above what it explains and shut
+        // until somebody wants it, so a panel of answers is not a wall of vocabulary. Both
+        // mounts are checked at once because it is ONE promise about every legend there is —
+        // and a `<details>` is what keeps it the browser's disclosure rather than ours.
+        testCase "every legend is offered without taking the surface" <| fun () ->
+            let repo = RepoRef.create "octo/hello" |> expect
+            let model =
+                { representativeModel with
+                    Approvals =
+                        RepoApprovals.apply
+                            RepoApprovals.empty
+                            [ SessionEvent.RepoCapabilitiesChanged
+                                { RepoCapabilitiesChanged.MessageId = MessageId.create "ask" |> expect
+                                  RepoCapabilitiesChanged.Repo = repo
+                                  RepoCapabilitiesChanged.Granted = [ "!sock:/run/docker.sock" ]
+                                  RepoCapabilitiesChanged.Sensitive = true
+                                  RepoCapabilitiesChanged.Actor = ActorRef.Configured repo } ] }
+            let html = Support.render model
+            // The tag each legend hook sits in: back to its `<`, forward to its `>`.
+            let rec tags (from: int) (found: string list) =
+                match html.IndexOf (Dom.Hooks.legend, from) with
+                | -1 -> List.rev found
+                | at ->
+                    let opened = html.LastIndexOf ('<', at)
+                    let closed = html.IndexOf ('>', at)
+                    tags (closed + 1) (html.Substring (opened, closed - opened) :: found)
+            let legends = tags 0 []
+            Expect.isNonEmpty legends "the panel's and the prompt's, so neither half is vacuous"
+            for tag in legends do
+                Expect.isTrue (tag.StartsWith "<details") (sprintf "a legend is a disclosure, this one is %s" tag)
+                Expect.isFalse (tag.Contains " open") (sprintf "and it is shut, this one is %s" tag)
+
         // Consent is to lines written in a vocabulary, so how to read them is on the screen
         // where the decision is — and only the part these lines need. Counted, because that
         // the entries are the ones this prompt's grants use is the promise; which words
