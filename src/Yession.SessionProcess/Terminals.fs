@@ -581,7 +581,8 @@ module SessionTerminals =
 
     /// Transcript lines `Tail` counts back from the end of a live terminal (Plan 19). Lines
     /// rather than characters because that is what a range read is addressed by; the
-    /// character bound is `Digest.tailCap`, applied after.
+    /// character bound is `TerminalCommandOutcome.answerCap`, applied after — this is one
+    /// answer somebody asked for, which is that budget, not the per-turn digest's.
     let private tailWindow = 500
 
     /// The longest a read may be held waiting for a device to speak (Plan 25). The same
@@ -1868,14 +1869,12 @@ module SessionTerminals =
                 // change the answer.
                 //
                 // The refusal is the TAIL read's alone. A command's answer carries what it
-                // printed only up to `Digest.tailCap` characters, and past that it carries the
-                // LAST of them and says how many it dropped — so on a long output the premise
+                // printed only up to `TerminalCommandOutcome.answerCap` characters, and past
+                // that it carries one or both ENDS — so on a long enough output the premise
                 // above is false, and a caller sent back to `execute_command` is sent back to
-                // the same 2000 characters it already has. A `from` read is the page that
-                // recovers the rest: it is what `TerminalCommandOutcome` means by "the
-                // transcript keeps all of it", and without it that sentence was aspirational.
-                // Measured: reading a 50,000-character file through this door cost an agent
-                // ten calls and it never reached the part it wanted.
+                // what it already has. A `from` read is the page that recovers the middle: it
+                // is what `TerminalCommandOutcome` means by "the transcript keeps all of it",
+                // and without it that sentence was aspirational.
                 if from.IsNone && canInstrument key && not (TerminalLeases.autoHeld id leases) then
                     return
                         Error
@@ -1930,7 +1929,7 @@ module SessionTerminals =
                         // `Through` is the length.
                         let start = max 0 (length - tailWindow)
                         let printed = readTranscript id start None |> Transcript.printed
-                        let elided = max 0 (printed.Length - Digest.tailCap)
+                        let elided = max 0 (printed.Length - TerminalCommandOutcome.answerCap)
                         return
                             Ok
                                 { Text = (if elided > 0 then printed.Substring elided else printed)
@@ -2520,12 +2519,15 @@ module TerminalCommands =
                 match block with
                 | Some b -> readOutput terminal b.FromSeq b.ToSeq
                 | None -> ""
-            let elided = max 0 (output.Length - Digest.tailCap)
+            // The cut is the outcome's own rule, on the outcome's own budget — not the
+            // digest's, which bounds a different record for a different reader.
+            let kept, whichEnd, elided = TerminalCommandOutcome.cut status output
             { Terminal = terminal
               Handle = handle
               Block = block |> Option.map (fun b -> b.BlockId)
               Status = status
-              OutputTail = (if elided > 0 then output.Substring elided else output)
+              Output = kept
+              Kept = whichEnd
               Elided = elided
               From = block |> Option.map (fun b -> b.FromSeq) }
 

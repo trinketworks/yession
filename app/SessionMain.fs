@@ -361,7 +361,7 @@ let private diagnosticAgent : RunAgent =
             | Ok outcome ->
                 match outcome.Status with
                 | TerminalCommandRan (CommandSucceeded 0) ->
-                    let output = outcome.OutputTail.Trim ()
+                    let output = outcome.Output.Trim ()
                     onChunk (AgentResponseChunk.Text output)
                     return AgentCompleted (sprintf "diagnostic: %s" output, None)
                 | other -> return AgentFailed (sprintf "diagnostic command failed: %A" other, None)

@@ -110,6 +110,21 @@ type TerminalCommandStatus =
     /// it is not retried another way.
     | TerminalCommandRefused of by: ActorRef * reason: string option
 
+/// Which end of an over-long output an answer carries. Named rather than implied, because
+/// "2000 characters of a 50,000-character file" is two completely different answers depending
+/// on which 2000 they are, and a reader cannot tell from the text.
+[<RequireQualifiedAccess>]
+type OutputEnd =
+    /// Nothing was cut.
+    | Whole
+    /// The FIRST of it. What a preview is: content is read from the front.
+    | Head
+    /// The first and the last, with the middle gone — a diagnosis needs the cause and the
+    /// verdict, and they sit at opposite ends. Carries where the seam is, so the note about
+    /// what went can be written INTO the gap rather than after the whole thing: a reader that
+    /// meets the second half without warning reads it as continuous with the first.
+    | BothEnds of headLength: int
+
 /// What one `execute_command` answered with (Plan 13, stage 3b).
 type TerminalCommandOutcome =
     { Terminal : TerminalId
@@ -122,12 +137,13 @@ type TerminalCommandOutcome =
       /// The block, once there is one. `None` while the command is still only a request.
       Block : BlockId option
       Status : TerminalCommandStatus
-      /// The tail of what it printed, capped. The transcript keeps all of it, and the block's
-      /// range travels with the handle, so nothing here is the only copy.
-      OutputTail : string
-      /// Characters the tail leaves out. Stated rather than silently elided: a model that
-      /// cannot tell a short output from a truncated one will confidently describe the wrong
-      /// thing.
+      /// What it printed, capped. The transcript keeps all of it, and the block's range
+      /// travels with the handle, so nothing here is the only copy.
+      Output : string
+      /// Which end of it this is (`Kept`), and how many characters went (`Elided`). Stated
+      /// rather than silently elided: a model that cannot tell a short output from a truncated
+      /// one will confidently describe the wrong thing.
+      Kept : OutputEnd
       Elided : int
       /// The transcript line this command's output STARTS at, once there is a block. What
       /// makes the elision actionable rather than merely honest: `Elided` says something is
@@ -136,6 +152,46 @@ type TerminalCommandOutcome =
       /// `from`. Measured: told only that 48,707 characters were gone, an agent narrowed
       /// `sed -n` ranges ten times and never reached the part it wanted.
       From : int option }
+
+module TerminalCommandOutcome =
+
+    /// Characters of a command's OWN answer kept — deliberately not `Digest.tailCap`, and the
+    /// difference is whose budget it spends. The digest is unsolicited, arrives every turn,
+    /// and is multiplied by however many blocks ran; this is ONE block, asked for, with the
+    /// caller waiting on exactly it. Sharing one number meant a bound sized for the first
+    /// silently bounded the second, and nothing went red either way because nothing tested it.
+    ///
+    /// 32k because that is where every harness that bounds this sits — Claude Code 30k,
+    /// OpenHands 30k, Cline 48k, Goose 50k — not because a file we cared about happened to fit
+    /// under it. Sizing the bound to a document is how this bug comes back at twice the
+    /// number; what stops that is `cut` below, which no longer hands back the wrong end.
+    [<Literal>]
+    let answerCap = 32768
+
+    /// The cut, as one function rather than a subtraction at each call site: the rule lives
+    /// with the record it governs, so the cheap tier reaches it without standing up a Host.
+    ///
+    /// WHICH end depends on how the command ended, and that is the whole of it. A command that
+    /// SUCCEEDED answered with content somebody asked for, and content is read from the front
+    /// — so the preview is the head. Anything else is being read for a diagnosis, where the
+    /// cause is at the start and the verdict at the end, so both survive and the middle goes.
+    ///
+    /// Measured, on one 714-line file through the old tail-only cut: asked something answered
+    /// at line 72, sessions took five to nine calls and several never arrived; asked something
+    /// answered in the last 1,200 characters, one took two. Same file, same bound. The bound
+    /// was never what was wrong.
+    let cut (status: TerminalCommandStatus) (output: string) : string * OutputEnd * int =
+        let elided = output.Length - answerCap
+        if elided <= 0 then output, OutputEnd.Whole, 0
+        else
+            match status with
+            | TerminalCommandRan (CommandSucceeded _) -> output.Substring (0, answerCap), OutputEnd.Head, elided
+            | _ ->
+                // Halved, so the two ends together spend the same budget the head would have.
+                let side = answerCap / 2
+                let head = output.Substring (0, side)
+                let tail = output.Substring (output.Length - side)
+                head + tail, OutputEnd.BothEnds head.Length, output.Length - head.Length - tail.Length
 
 /// Run a command for the agent (Plan 13, stage 3b). ONE door: the agent has no private
 /// execution path, so the classifier that gates this gates everything the agent runs.

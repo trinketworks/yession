@@ -158,26 +158,34 @@ module AgentTools =
         let where = sprintf "terminal %s" (TerminalId.value outcome.Terminal)
         let handle = QueueId.value outcome.Handle
         // What an elision has to say to be acted on, rather than merely admitted. "N earlier
-        // characters omitted" is honest and useless: it does not say that what follows is the
-        // END, and it does not say where the beginning is — so a reader that wants the start
-        // has nothing to ask for and guesses. Measured: told 48,707 characters were gone, an
-        // agent narrowed `sed -n` ranges over the same file ten times and never reached the
-        // section it was after; another paged it four times to answer one question. Both had
-        // the whole output sitting in the transcript at a line neither was ever told.
-        //
-        // So the note names the end it gave you and the call that fetches the rest, in that
-        // call's own vocabulary. `From` is the block's first line, which is exactly what
-        // `read_terminal` takes.
+        // characters omitted" is honest and useless: it does not say which end you are
+        // holding, and it does not say where the rest is. Both are said here, and the note
+        // about a missing MIDDLE is written into the gap rather than after the whole answer —
+        // a reader that meets the second half with no warning reads it as continuous with the
+        // first, which is a worse failure than losing it.
+        let readOn =
+            match outcome.From with
+            | Some from -> sprintf ", read_terminal on %s from: %d" (TerminalId.value outcome.Terminal) from
+            | None -> ""
         let output =
-            if outcome.OutputTail = "" then ""
-            else if outcome.Elided > 0 then
-                let readOn =
-                    match outcome.From with
-                    | Some from ->
-                        sprintf " — read_terminal on %s from: %d for the rest" (TerminalId.value outcome.Terminal) from
-                    | None -> ""
-                sprintf "\n[the last %d characters; %d earlier ones omitted%s]\n%s" outcome.OutputTail.Length outcome.Elided readOn outcome.OutputTail
-            else "\n" + outcome.OutputTail
+            if outcome.Output = "" then ""
+            else
+                match outcome.Kept with
+                | OutputEnd.Whole -> "\n" + outcome.Output
+                | OutputEnd.Head ->
+                    sprintf
+                        "\n%s\n[the first %d characters; %d more after them%s]"
+                        outcome.Output
+                        outcome.Output.Length
+                        outcome.Elided
+                        readOn
+                | OutputEnd.BothEnds headLength ->
+                    sprintf
+                        "\n%s\n[%d characters omitted from the middle%s]\n%s"
+                        (outcome.Output.Substring (0, headLength))
+                        outcome.Elided
+                        readOn
+                        (outcome.Output.Substring headLength)
         match outcome.Status with
         | TerminalCommandRan (CommandSucceeded code) -> sprintf "exit code %d in %s%s" code where output
         | TerminalCommandRan (CommandFailed code) -> sprintf "FAILED with exit code %d in %s%s" code where output

@@ -18,6 +18,7 @@ module Yession.Tests.Tools
 open Fable.Pyxpecto
 open Yession.Domain
 open Yession.Domain.Agent
+open Yession.Domain.Terminals
 open Yession.Domain.Tools
 
 #if FABLE_COMPILER
@@ -106,19 +107,23 @@ let private ran (command: string) : TerminalCommandOutcome =
       Handle = QueueId.create "q1" |> expect
       Block = None
       Status = TerminalCommandRan (CommandSucceeded 0)
-      OutputTail = command
+      Output = command
+      Kept = OutputEnd.Whole
       Elided = 0
       From = None }
 
-/// An outcome that ran long enough to be cut, from a block that starts at `from`.
-let private elided (from: int option) : TerminalCommandOutcome =
+/// An outcome that ran long enough to be cut, keeping `kept`, from a block starting at `from`.
+let private elidedAs (kept: OutputEnd) (from: int option) : TerminalCommandOutcome =
     { Terminal = TerminalId.create "t1" |> expect
       Handle = QueueId.create "q1" |> expect
       Block = None
       Status = TerminalCommandRan (CommandSucceeded 0)
-      OutputTail = "the end of it"
+      Output = "the middle is gone"
+      Kept = kept
       Elided = 48707
       From = from }
+
+let private elided (from: int option) : TerminalCommandOutcome = elidedAs OutputEnd.Head from
 
 let private queryDef (raw: string) : QueryDef =
     { Name = QueryName.create raw |> expect
@@ -142,12 +147,57 @@ let private readingTerminal (tail: TerminalTail) =
 let private sessionTests =
     testList "the yession namespace" [
 
+        // The bug the whole cut exists to avoid, and the one assertion that goes red if the
+        // answer's budget is ever re-merged with the digest's: a string sized between the two
+        // survives one path whole and not the other.
+        test "output the per-turn digest would cut arrives whole in a command's own answer" {
+            let long = String.replicate (Digest.tailCap + 1) "x"
+            let kept, whichEnd, elided = TerminalCommandOutcome.cut (TerminalCommandRan (CommandSucceeded 0)) long
+            Expect.equal elided 0 "a command's answer is not bounded by the digest's number"
+            Expect.equal whichEnd OutputEnd.Whole "so nothing was cut"
+            Expect.equal kept.Length long.Length "and it arrives whole"
+        }
+
+        // Which end, and why it is the question rather than the size. Measured on one file:
+        // through a tail-only cut, a question answered near the top cost five to nine calls
+        // and several sessions never arrived; one answered in the last 1,200 characters cost
+        // two. The bound was the same in both.
+        test "a command that succeeded is previewed from the front" {
+            let long = String.replicate (TerminalCommandOutcome.answerCap + 500) "x" + "LAST"
+            let kept, whichEnd, _ = TerminalCommandOutcome.cut (TerminalCommandRan (CommandSucceeded 0)) long
+            Expect.equal whichEnd OutputEnd.Head "content is read from the front"
+            Expect.isFalse (kept.EndsWith "LAST") "so the end is what went, not the beginning"
+        }
+
+        test "a command that failed keeps both ends, because a diagnosis needs cause and verdict" {
+            let long = "FIRST" + String.replicate (TerminalCommandOutcome.answerCap + 500) "x" + "LAST"
+            let kept, whichEnd, elided = TerminalCommandOutcome.cut (TerminalCommandRan (CommandFailed 1)) long
+            match whichEnd with
+            | OutputEnd.BothEnds _ -> ()
+            | other -> failwithf "a failure is read for a diagnosis, got %A" other
+            Expect.isTrue (kept.StartsWith "FIRST") "the cause is at the start"
+            Expect.isTrue (kept.EndsWith "LAST") "the verdict is at the end"
+            Expect.equal elided (long.Length - kept.Length) "and what went is what is missing"
+        }
+
+        test "a middle elision is said in the gap, not after the answer" {
+            // Anchored on POSITION, and on the count rather than the wording of the note: what
+            // has to hold is that a reader meets the warning before the second half, however
+            // the sentence is later phrased.
+            let said =
+                AgentTools.renderOutcome
+                    { elidedAs (OutputEnd.BothEnds 8) (Some 41) with Output = "HEADPARTTAILPART" }
+            let head, note, tail = said.IndexOf "HEADPART", said.IndexOf "48707", said.IndexOf "TAILPART"
+            Expect.isTrue (head < note) "the note follows the head"
+            Expect.isTrue (note < tail) "and precedes the tail, rather than trailing the whole answer"
+        }
+
         // Two invariants, because they fail at different times and their reds mean different
         // things: one that a cut answer says which END it handed over, one that it says where
         // the rest starts. An answer could gain the first and still leave a reader guessing.
         test "a cut answer says which end of the output it handed over" {
             let said = AgentTools.renderOutcome (elided (Some 41))
-            Expect.stringContains said "the last" "it names the end it gave, not just the loss"
+            Expect.stringContains said "the first" "it names the end it gave, not just the loss"
         }
 
         test "a cut answer says where to read the rest from" {
