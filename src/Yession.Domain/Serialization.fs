@@ -1113,6 +1113,7 @@ module Codec =
                     [ "messageId", messageId.Encode p.MessageId
                       "sandbox", sandboxRef.Encode p.Sandbox
                       "backend", Encode.string p.Backend
+                      "description", Encode.option Encode.string p.Description
                       // Names only. There is no branch of this codec that can carry a
                       // credential VALUE, which is the point: the log is replicated to
                       // every peer, and a shape that could hold a token eventually does.
@@ -1125,6 +1126,10 @@ module Codec =
                 { WorkSandboxStarted.MessageId = get.Required.Field "messageId" messageId.Decode
                   WorkSandboxStarted.Sandbox = get.Required.Field "sandbox" sandboxRef.Decode
                   WorkSandboxStarted.Backend = get.Required.Field "backend" Decode.string
+                  // Optional on the way in: every start recorded before a repo could describe
+                  // its sandboxes has no such field, and those logs are still read.
+                  WorkSandboxStarted.Description =
+                    get.Optional.Field "description" (Decode.option Decode.string) |> Option.flatten
                   WorkSandboxStarted.Forwarded = get.Required.Field "forwarded" (Decode.list Decode.string)
                   WorkSandboxStarted.CredentialOwner = get.Required.Field "credentialOwner" (Decode.option actor.Decode)
                   // Optional on the way in, and this is the only backward-compatible reading

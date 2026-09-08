@@ -79,6 +79,7 @@ let private registryWithSpecs (log: EventLog<SessionEvent>) (credentials: WorkSa
     let sandboxes =
         WorkSandboxes.create
             { Backend = fun _ -> "fake"
+              Describe = fun _ -> None
               Credentials = credentials
               Create =
                 fun name spec env ->
@@ -95,6 +96,7 @@ let private registryWithSpecs (log: EventLog<SessionEvent>) (credentials: WorkSa
 let private registryHolding (log: EventLog<SessionEvent>) (realisation: string list) =
     WorkSandboxes.create
         { Backend = fun _ -> "fake"
+          Describe = fun _ -> None
           Credentials = []
           Create = fun _ _ _ -> Ok (fakeEnvironmentHolding realisation)
           Log = log
@@ -153,6 +155,54 @@ let private normaliseTests =
 
 let private ensureTests =
     testList "ensure semantics" [
+
+        // What a sandbox is FOR reaches the record, so a reader choosing between two of them
+        // chooses on the reason rather than the spelling.
+        testCaseAsync "a sandbox that was described says so where it started" <|
+            async {
+                let log = newLog ()
+                let sandboxes =
+                    WorkSandboxes.create
+                        { Backend = fun _ -> "fake"
+                          Describe = fun _ -> Some "day-to-day work"
+                          Credentials = []
+                          Create = fun _ _ _ -> Ok (fakeEnvironment ())
+                          Log = log
+                          Clock = fixedClock }
+                    |> expect
+                let! _ = sandboxes.Ensure caller (sandbox "test") (forwarding [])
+                let! events = eventsOf log
+                match startedEvents events with
+                | [ started ] -> Expect.equal started.Description (Some "day-to-day work") "the reason travels with the start"
+                | other -> failwithf "expected one start, got %d" (List.length other)
+            }
+
+        // The hazard this shape exists to avoid. A description is metadata, never part of what
+        // makes two asks the same sandbox — so editing prose in a repo's file must not read as
+        // a configuration change and refuse every session until somebody stops the container.
+        // It would, if the description rode inside `SandboxRequest`, which `Ensure` compares.
+        testCaseAsync "a sandbox re-described is the same sandbox, not a changed one" <|
+            async {
+                let log = newLog ()
+                let described = ref (Some "as first written")
+                let sandboxes =
+                    WorkSandboxes.create
+                        { Backend = fun _ -> "fake"
+                          Describe = fun _ -> described.Value
+                          Credentials = []
+                          Create = fun _ _ _ -> Ok (fakeEnvironment ())
+                          Log = log
+                          Clock = fixedClock }
+                    |> expect
+                let! _ = sandboxes.Ensure caller (sandbox "test") (forwarding [])
+                described.Value <- Some "as somebody later put it"
+                match! sandboxes.Ensure caller (sandbox "test") (forwarding []) with
+                | Error reason -> failwithf "re-describing is not a configuration change: %s" reason
+                | Ok outcome ->
+                    match outcome with
+                    | WorkSandboxes.SandboxAlreadyRunning _ -> ()
+                    | other -> failwithf "expected the same sandbox, got %A" other
+            }
 
         // THE property the declarative form rests on. Ask twice, get the same sandbox, and
         // the timeline does not claim anything happened the second time.
@@ -523,6 +573,7 @@ let private timelineTests =
                         { MessageId = messageId
                           Sandbox = sandbox "test"
                           Backend = "srt"
+                          Description = None
                           Forwarded = [ "github" ]
                           CredentialOwner = Some ada
                           Realisation = []
@@ -549,6 +600,7 @@ let private timelineTests =
                         { MessageId = MessageId.create "msg-2" |> expect
                           Sandbox = sandbox "test"
                           Backend = "host"
+                          Description = None
                           Forwarded = []
                           CredentialOwner = None
                           Realisation = []
@@ -575,6 +627,7 @@ let private timelineTests =
                         { MessageId = MessageId.create "msg-4" |> expect
                           Sandbox = sandbox "test"
                           Backend = "srt"
+                          Description = None
                           Forwarded = []
                           CredentialOwner = None
                           Realisation = [ "the socket at /run/docker.sock — this host cannot scope that, so the sandbox gets any unix socket on this host" ]

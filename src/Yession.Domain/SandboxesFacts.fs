@@ -41,6 +41,11 @@ and WorkSandboxStarted =
       /// Which backend it came up on, so the record says what confinement it actually
       /// got rather than what the operator configured at some point.
       Backend : string
+      /// What the declaration said this sandbox is FOR, when it said anything. On the START
+      /// rather than looked up when a note is drawn, because a log is read long after the
+      /// file that described it has changed, and a timeline that re-reads today's prose onto
+      /// last week's event is a timeline that quietly rewrites itself.
+      Description : string option
       /// The credential NAMES forwarded into it — never a value, and never a token
       /// shape that could be mistaken for one. Forwarding is a fact about the sandbox
       /// that outlives the turn that asked for it, so the log has to carry it; what the

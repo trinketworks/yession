@@ -84,7 +84,18 @@ type SandboxDecl =
       /// Idempotence is the repo's business, for the reason it is everywhere else here: a
       /// sandbox is restarted by things this file cannot see, and a setup that only works
       /// once is a sandbox that only works once.
-      Setup : string option }
+      Setup : string option
+      /// What this sandbox is FOR, in the repo's own words — the one thing here that is not
+      /// a name, a path or a command, and is not addressed to the session at all.
+      ///
+      /// A name cannot carry it. This repository declares `dev` and `gate`, identical on
+      /// every field a machine reads and different only in what a person meant; asked to run
+      /// tests and shown both names, an agent picked `gate`, which is the one that holds a
+      /// terminal for minutes. The repo knows why it declared two and had nowhere to say so.
+      ///
+      /// It reaches a reader wherever a sandbox is named — the start note, the queries — so
+      /// whoever is choosing between them is choosing on the reason rather than the spelling.
+      Description : string option }
 
 module SandboxDecl =
 
@@ -96,7 +107,8 @@ module SandboxDecl =
           Wants = []
           Files = Map.empty
           Forward = []
-          Setup = None }
+          Setup = None
+          Description = None }
 
     /// One declaration, written back as the file would have written it.
     ///
@@ -173,7 +185,8 @@ module SandboxDecl =
                         |> Map.toList
                         |> List.map (fun (path, content) -> HomePath.value path, Encode.string content))
                   if not (List.isEmpty decl.Forward) then "forward", strings decl.Forward
-                  if decl.Setup.IsSome then "setup", Encode.string decl.Setup.Value ])
+                  if decl.Setup.IsSome then "setup", Encode.string decl.Setup.Value
+                  if decl.Description.IsSome then "description", Encode.string decl.Description.Value ])
 
     /// What a declaration ASKS the session for, given where this repo's checkout is.
     ///
@@ -441,7 +454,8 @@ module ConfigFile =
                   Mounts = get.Optional.Field "volumes" (Decode.list mount) |> Option.defaultValue []
                   Command = get.Optional.Field "cmd" Decode.string }))
 
-    let private sandboxKeys = [ "container"; "workdir"; "env"; "uses"; "wants"; "files"; "forward"; "setup" ]
+    let private sandboxKeys =
+        [ "container"; "workdir"; "env"; "uses"; "wants"; "files"; "forward"; "setup"; "description" ]
 
     /// `files:` — a path inside the sandbox's home to the content written there.
     ///
@@ -472,7 +486,11 @@ module ConfigFile =
                   Wants = get.Optional.Field "wants" resourceNames |> Option.defaultValue []
                   Files = get.Optional.Field "files" seededFiles |> Option.defaultValue Map.empty
                   Forward = get.Optional.Field "forward" stringList |> Option.defaultValue []
-                  Setup = get.Optional.Field "setup" Decode.string }))
+                  Setup = get.Optional.Field "setup" Decode.string
+                  Description =
+                    get.Optional.Field "description" Decode.string
+                    |> Option.map (fun said -> said.Trim ())
+                    |> Option.filter (fun said -> said <> "") }))
 
     /// Sandbox names, refusing a clash INSIDE one file.
     ///

@@ -52,6 +52,9 @@ type RepoSandboxes =
       /// Sandboxes this session is running that no file declares any more. Named rather
       /// than stopped.
       Undeclared : unit -> SandboxRef list
+      /// What a checkout said one of its sandboxes is FOR, from the last fold. Answered here
+      /// because this is what holds declarations; the sandbox manager holds none and asks.
+      Described : SandboxRef -> string option
       /// Consent to what a repo asks for, on the authority of a person.
       ///
       /// Takes the set the person was SHOWN and refuses if it is not the set asked for now.
@@ -66,6 +69,7 @@ let none : RepoSandboxes =
     { Fold = fun _ -> async { return () }
       Outcomes = fun () -> []
       Undeclared = fun () -> []
+      Described = fun _ -> None
       Approve = fun _ _ _ -> async { return Error "this session has no repos to approve anything for" } }
 
 /// What the log already says about one declaration: the reason it was last refused, when
@@ -182,6 +186,10 @@ let create
     // "no longer declared", which is a question about the difference between the two and
     // so belongs to whoever holds both.
     let mutable declaredRefs : Set<string> = Set.empty
+    // What the last fold read each declaration as saying it is for. Kept beside the refs for
+    // the same reason they are: a description is a fact about the FILE as it stood when it
+    // was folded, and re-reading it later would answer about a file that has since changed.
+    let mutable describedRefs : Map<string, string> = Map.empty
 
     let fold (onBehalfOf: ActorRef option) : Async<unit> =
         async {
@@ -189,6 +197,7 @@ let create
             | None ->
                 outcomes <- []
                 declaredRefs <- Set.empty
+                describedRefs <- Map.empty
             | Some service ->
                 match! service.ListRepos () with
                 // A listing that failed says nothing about any repo in particular, so there
@@ -199,6 +208,15 @@ let create
                 | Ok listings ->
                     let declared, unreadable =
                         RepoConfig.readAll reposDir (listings |> List.map (fun listing -> listing.Repo))
+                    // Read off the declarations BEFORE anything is started, so a sandbox that
+                    // comes up in this fold can be described as it comes up rather than on the
+                    // next one.
+                    describedRefs <-
+                        declared
+                        |> Map.toList
+                        |> List.choose (fun (ref, decl) ->
+                            decl.Description |> Option.map (fun said -> SandboxRef.render ref, said))
+                        |> Map.ofList
                     let fileProblems =
                         unreadable
                         |> List.map (fun (repo, reason) ->
@@ -424,6 +442,7 @@ let create
     { Fold = fold
       Outcomes = fun () -> outcomes
       Undeclared = undeclared
+      Described = fun ref -> Map.tryFind (SandboxRef.render ref) describedRefs
       Approve = approve }
 
 // --- the `repo_config` query ------------------------------------------------------------

@@ -105,6 +105,9 @@ let createFull
                                         (sprintf "env-%s-%s" (SessionId.value request.SessionId) (SandboxRef.render name)))
                             match WorkSandboxes.create
                                     { Backend = fun _ -> SandboxBackend.describe HostBackend
+                                      // This composition reads no repo files, so nothing here
+                                      // has a description to give.
+                                      Describe = fun _ -> None
                                       Credentials = []
                                       Create = create
                                       Log = log
