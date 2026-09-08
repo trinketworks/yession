@@ -315,14 +315,50 @@ type ToolUseLog =
     { /// Record that a call started, and answer with the handle it will be addressed by.
       /// `None` means nothing is being recorded, and `Finished` is then never called.
       Started : ToolUseBegin -> Async<ToolUseId option>
-      Finished : ToolUseId -> ToolUseEnd -> Async<unit> }
+      Finished : ToolUseId -> ToolUseEnd -> Async<unit>
+      /// What the SESSION recorded while this call was running, said the way the timeline
+      /// says it — the act notes appended by somebody OTHER than the agent between the call
+      /// starting and finishing.
+      ///
+      /// This is how a turn learns a consequence of its own call that no verb could name.
+      /// `add_repo` brings up whatever sandboxes the checkout declares, and it must not say
+      /// so: a verb that named them would be a repo verb carrying sandbox vocabulary, and the
+      /// next subsystem to acquire a consequence would want a line in it too. The consequence
+      /// announces itself instead, here, once, for every verb there will ever be.
+      ///
+      /// Between turns the same notes reach the agent as conversation. That is not enough on
+      /// its own and the gap is measured: a turn's context is built ONCE, and in a real
+      /// session the pack was assembled 7.7 seconds before the sandbox it needed came up, so
+      /// twenty-eight calls ran without it. A tool answer is the only thing that reaches a
+      /// turn already running.
+      Noted : ToolUseId -> Async<string list> }
 
 module ToolUseLog =
 
     /// Records nothing — for turns nobody is watching (tests, one-shots).
     let none : ToolUseLog =
         { Started = fun _ -> async { return None }
-          Finished = fun _ _ -> async { return () } }
+          Finished = fun _ _ -> async { return () }
+          Noted = fun _ -> async { return [] } }
+
+    /// How many notes one answer carries before it stops listing them. A call that set off a
+    /// dozen things has told the agent what it needs by the fourth; the rest are in the
+    /// conversation, which is where a turn reads the whole of anything.
+    [<Literal>]
+    let private NotesShown = 4
+
+    /// The notes, as the sentence appended to an answer — or nothing at all, which is the
+    /// ordinary case: most calls set nothing else off.
+    let internal describeNotes (notes: string list) : string =
+        match notes with
+        | [] -> ""
+        | notes ->
+            let shown = notes |> List.truncate NotesShown
+            let more =
+                match List.length notes - List.length shown with
+                | 0 -> ""
+                | n -> sprintf "; and %d more, in the session" n
+            sprintf "\n[while this ran: %s%s]" (String.concat "; " shown) more
 
     /// Wrap a registry so every call through it is recorded. Applied ONCE, to the merged
     /// registry, which is what makes "the same way" true rather than aspirational: a
@@ -349,12 +385,21 @@ module ToolUseLog =
                                 return Error e.Message
                         }
                     match handle with
-                    | None -> ()
+                    | None -> return answer
                     | Some id ->
                         let ending =
                             match answer with
                             | Ok answer -> { Outcome = ToolCallOk; Block = answer.Block }
                             | Error reason -> { Outcome = ToolCallFailed reason; Block = None }
                         do! log.Finished id ending
-                    return answer
+                        // Only onto an answer that HAPPENED. A refusal is about the call, and
+                        // appending the session's unrelated news to it would make a reader
+                        // hunt for the connection there is not one of.
+                        match answer with
+                        | Error _ -> return answer
+                        | Ok answered ->
+                            let! notes = log.Noted id
+                            match describeNotes notes with
+                            | "" -> return answer
+                            | said -> return Ok { answered with Text = answered.Text + said }
                 } }

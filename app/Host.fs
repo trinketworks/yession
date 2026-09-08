@@ -439,12 +439,17 @@ let startFull
         /// The id is minted here rather than derived, for the same reason `BlockId` is: a
         /// chip somebody will tap, and eventually link to, must not be identified by a rule
         /// that lives nowhere in the data.
+        /// Where each recorded call began, so `Noted` can read the log from exactly there.
+        /// Kept rather than searched: the append already answers with the offset, and a scan
+        /// for the start event would re-read the whole log once per tool call.
+        let toolUseStartedAt = System.Collections.Generic.Dictionary<string, EventOffset> ()
+
         let toolUseLogFor (turnId: AgentTurnId) : ToolUseLog =
             { Started =
                 fun (started: ToolUseBegin) ->
                     async {
                         let id = mintToolUseId ()
-                        let! _ =
+                        let! appended =
                             log.Append
                                 ActorRef.Agent
                                 (SessionEvent.ToolUseStarted
@@ -453,6 +458,7 @@ let startFull
                                       Namespace = started.Namespace
                                       Name = started.Name
                                       Arguments = started.Arguments })
+                        toolUseStartedAt.[ToolUseId.value id] <- appended.Offset
                         return Some id
                     }
               Finished =
@@ -464,6 +470,40 @@ let startFull
                                 (SessionEvent.ToolUseFinished
                                     { ToolUseId = id; Outcome = ended.Outcome; Block = ended.Block })
                         return ()
+                    }
+              // Read through the CONVERSATION's own projection rather than by matching event
+              // cases here. Two renderings of one note are two things free to disagree, and
+              // the whole value of this is that the agent reads the sentence the timeline
+              // shows — so what a person saw happen and what the agent was told are the same
+              // words by construction.
+              Noted =
+                fun id ->
+                    async {
+                        match toolUseStartedAt.TryGetValue (ToolUseId.value id) with
+                        | false, _ -> return []
+                        | true, from ->
+                            let! page = log.Read (Some from) System.Int32.MaxValue
+                            // Qualified rather than opened: this file already carries several
+                            // records with an `Items`, and an `open` for one read would decide
+                            // which of them a label means everywhere below it.
+                            let projection : Yession.Domain.Chat.ConversationProjection =
+                                Yession.Domain.Chat.ConversationProjection.applyEvents
+                                    None
+                                    page.Events
+                                    Yession.Domain.Chat.ConversationProjection.empty
+                                |> fst
+                            toolUseStartedAt.Remove (ToolUseId.value id) |> ignore
+                            return
+                                projection.Items
+                                |> List.filter (fun item ->
+                                    // Somebody ELSE's act note. The agent's own acts are what
+                                    // it just did, and an answer that read them back to it
+                                    // would be the call describing itself.
+                                    item.Author <> ActorRef.Agent
+                                    && (match item.Kind with
+                                        | Yession.Domain.Chat.ConversationItemKind.ActNote _ -> true
+                                        | _ -> false))
+                                |> List.map Yession.Domain.Chat.ConversationItem.said
                     } }
 
         /// A stream a provider offers becomes a terminal (Plan 19). Session-scoped, because
