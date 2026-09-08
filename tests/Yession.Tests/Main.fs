@@ -108,6 +108,7 @@ let all =
         // beside it — who may write the process env, and who may read a confinement switch —
         // are now `YES007` and `YES008`, read off the typed tree by `lint`.
         Tag.needs "Committed lock" [] (fun () -> LockSource.tests)
+        Tag.needs "Declared setup" [] (fun () -> DeclaredSetup.tests)
         // The rich editor rendering E2E stands alone: it needs a browser but NOT the native
         // WebRTC host, so it runs wherever Chromium exists ([Browser]). The full two-peer
         // convergence/persistence E2E spawns the real Session Process, so it also needs Native.
