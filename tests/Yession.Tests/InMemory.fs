@@ -233,7 +233,7 @@ let tests =
                 | Error e -> failwithf "the command did not run: %s" e
                 | Ok outcome ->
                     Expect.equal outcome.Status (TerminalCommandRan (CommandSucceeded 0)) "it ran"
-                    Expect.isTrue (outcome.OutputTail.Contains "ran in test") "and it ran in the named sandbox"
+                    Expect.isTrue (outcome.Output.Contains "ran in test") "and it ran in the named sandbox"
                 Expect.equal (List.ofSeq spawnedIn) [ "test" ] "nothing was spawned in default"
 
                 // And the terminal it opened records which sandbox it belongs to, so a
@@ -363,9 +363,9 @@ let tests =
                 | Error reason -> failwith reason
                 | Ok first ->
                     Expect.equal first.Status (TerminalCommandRan (CommandSucceeded 0)) "it ran, inside the call"
-                    Expect.isTrue (first.OutputTail.Contains "ran<first>") "and its real output came back"
+                    Expect.isTrue (first.Output.Contains "ran<first>") "and its real output came back"
                     // Conditioned on what the first one printed — the whole point of chaining.
-                    let next = if first.OutputTail.Contains "ran<first>" then "second" else "wrong"
+                    let next = if first.Output.Contains "ran<first>" then "second" else "wrong"
                     match! host.TerminalCommands.Execute { CommandRequest.ofCommand next with Target = Some (InTerminal first.Terminal) } agentActing with
                     | Error reason -> failwith reason
                     | Ok second ->
@@ -490,7 +490,7 @@ let tests =
                 | Error reason -> failwith reason
                 | Ok outcome ->
                     Expect.equal outcome.Status (TerminalCommandRan (CommandSucceeded 0)) "it ran, and the call carried the answer"
-                    Expect.isTrue (outcome.OutputTail.Contains "classified output") "with its output"
+                    Expect.isTrue (outcome.Output.Contains "classified output") "with its output"
                     Expect.equal spawns.Value 1 "exactly once"
                 // The record every peer reads: the block exists, attributed to the agent.
                 let ran (m: ClientModel) =

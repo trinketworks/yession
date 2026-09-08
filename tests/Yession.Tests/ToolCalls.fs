@@ -226,7 +226,8 @@ let private servicesQueueing (seen: ResizeArray<CommandRequest>) (sandboxes: Wor
                                           Handle = QueueId.create "setup-queue" |> expect
                                           Block = None
                                           Status = TerminalCommandRunning
-                                          OutputTail = ""
+                                          Output = ""
+                                          Kept = OutputEnd.Whole
                                           Elided = 0
                                           From = None }
                             } } }
