@@ -665,19 +665,34 @@ module Style =
     let queryValueIn (tone: string) = queryValueShape + " " + tone
 
     /// How to read values written in a vocabulary rather than in words: the shapes, and
-    /// what each one means. Under whatever it explains, and separated by the same hairline
-    /// the sections already use, because it is a footnote to the answer above and not
-    /// another answer.
+    /// what each one means.
+    ///
+    /// A real `<details>`, like every other disclosure in the product, and ABOVE what it
+    /// explains. It was an open list underneath, which is where a footnote goes — but a
+    /// legend is not a footnote: you consult it before reading, and eight entries at full
+    /// weight under a panel nobody opened for a glossary is a wall to scroll past. Closed
+    /// it costs one dim line, and a reader who already knows the notation never pays more.
     ///
     /// STACKED, where a query's own fields are a two-track grid: a shape is up to 25
     /// characters of punctuation with no break opportunity in it, so a label track would
     /// either take the lane or wrap the shape one character per line. The pairs read down
     /// instead, which is also how a legend is read — you arrive knowing the token and look
     /// for it.
-    let queryLegend = "flex flex-col gap-1 pt-3 " + Stroke.dividerTop
-    /// The entries themselves, under the heading. The `<dl>` holds only terms and their
-    /// meanings — the block's own name is a sibling above it, because a heading inside the
-    /// list would be a term of the glossary rather than what the glossary is called.
+    let queryLegend = "flex flex-col gap-1"
+    /// The name of the glossary, and the control that opens it. The product's own
+    /// disclosure voice (`detailSummary`, the timeline's tool runs, a block's facts) rather
+    /// than the caps a label wears: it now sits directly under the panel's title, and two
+    /// caps lines in a row read as two headings — the second of which is a control. A real
+    /// `<summary>`, so the disclosure is the browser's: keyboard-operable and announced
+    /// without a line of script, with `list-none` dropping the platform triangle as every
+    /// other summary in the product does.
+    let queryLegendSummary =
+        cls [ small; "cursor-pointer list-none pb-1"
+              "hover:text-ink-dim transition-colors duration-150 ease-out"
+              focusRing ]
+    /// The entries themselves, under the summary. The `<dl>` holds only terms and their
+    /// meanings — the block's own name is the summary above it, because a heading inside
+    /// the list would be a term of the glossary rather than what the glossary is called.
     ///
     /// The gap is BETWEEN entries and not inside one: evenly spaced, a meaning sat as close
     /// to the next shape as to its own, and eight pairs read as sixteen lines.
