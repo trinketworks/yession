@@ -194,7 +194,7 @@ let dispatch (services: CommandServices) : CommandDispatch =
                                                     "added %s — the checkout is shared with everyone in this session and visible in the work environment%s"
                                                     (RepoListing.describe listing)
                                                     (if unset then
-                                                         ". Terminals do not start there: set_shell_profile with that path if this is where the work is."
+                                                         ". That path is the DEFAULT sandbox's; a sandbox the repo declares mounts the checkout somewhere of its own and says where when it starts. Terminals do not start there: set_shell_profile with the path for the sandbox you mean."
                                                      else
                                                          ""))
                                 }))

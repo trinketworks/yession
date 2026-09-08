@@ -108,6 +108,7 @@ let createFull
                                       // This composition reads no repo files, so nothing here
                                       // has a description to give.
                                       Describe = fun _ -> None
+                                      Checkout = fun _ -> None
                                       Credentials = []
                                       Create = create
                                       Log = log

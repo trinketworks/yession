@@ -83,6 +83,11 @@ type WorkSandboxesConfig =
       /// description in it would make editing prose in a repo's file read as a configuration
       /// change and refuse every running session until somebody stopped the container.
       Describe : SandboxRef -> string option
+      /// Where a repo-owned sandbox sees its own checkout — `None` for the session's own,
+      /// which has no repo. Asked here for the same reason `Backend` is: it is a fact about
+      /// the NAME and the backend under it, and settling it anywhere earlier settles it in
+      /// the wrong view.
+      Checkout : SandboxRef -> string option
       Credentials : CredentialSource list
       /// Build the environment for a sandbox: the spec it was asked to be, plus the
       /// resolved credentials as extra policy env. Synchronous and fallible — whether this
@@ -271,6 +276,7 @@ let create (config: WorkSandboxesConfig) : Result<WorkSandboxes, string> =
                                           Sandbox = name
                                           Backend = config.Backend name
                                           Description = config.Describe name
+                                          Checkout = config.Checkout name
                                           Forwarded = wanted.Forward
                                           CredentialOwner =
                                             (if List.isEmpty wanted.Forward then None else Some caller.Credential)

@@ -46,6 +46,16 @@ and WorkSandboxStarted =
       /// file that described it has changed, and a timeline that re-reads today's prose onto
       /// last week's event is a timeline that quietly rewrites itself.
       Description : string option
+      /// Where the repo's checkout is AS THIS SANDBOX SEES IT, for a sandbox its repo
+      /// declared. `None` for a session's own, which has no repo to hold one.
+      ///
+      /// One checkout has two addresses (`CheckoutViews`) and which one is right depends on
+      /// where you are standing: the host's path under srt, `/repos/…` inside a container.
+      /// Only a sandbox settles that, which is why the answer is on the START and not on
+      /// `add_repo` — measured, an agent told the host path by `add_repo` pointed a shell
+      /// profile at it inside the container, watched it silently not take, and spent six
+      /// calls working out why.
+      Checkout : string option
       /// The credential NAMES forwarded into it — never a value, and never a token
       /// shape that could be mistaken for one. Forwarding is a fact about the sandbox
       /// that outlives the turn that asked for it, so the log has to carry it; what the
