@@ -678,7 +678,7 @@ module Style =
     /// either take the lane or wrap the shape one character per line. The pairs read down
     /// instead, which is also how a legend is read — you arrive knowing the token and look
     /// for it.
-    let queryLegend = "flex flex-col gap-1"
+    let queryLegend = "group flex flex-col gap-1"
     /// The name of the glossary, and the control that opens it. The product's own
     /// disclosure voice (`detailSummary`, the timeline's tool runs, a block's facts) rather
     /// than the caps a label wears: it now sits directly under the panel's title, and two
@@ -687,9 +687,18 @@ module Style =
     /// without a line of script, with `list-none` dropping the platform triangle as every
     /// other summary in the product does.
     let queryLegendSummary =
-        cls [ small; "cursor-pointer list-none pb-1"
+        cls [ small; "flex items-center gap-1.5 cursor-pointer list-none pb-1"
               "hover:text-ink-dim transition-colors duration-150 ease-out"
               focusRing ]
+    /// Its mark. A control in this product is quiet type with a thin chevron pointing the
+    /// way the surface is about to move — `settings ›` sets the rule — and without one this
+    /// summary was a quiet word in a stack of label-over-value pairs, which is exactly what
+    /// a VALUE looks like: `resources` over `how to read` read as the panel's answer. The
+    /// mark turns to point down when the glossary is open, so the line says which way it
+    /// goes rather than only that it goes.
+    let queryLegendMark =
+        "text-ink-faint transition-transform duration-150 ease-out motion-reduce:transition-none "
+        + "group-open:rotate-90"
     /// The entries themselves, under the summary. The `<dl>` holds only terms and their
     /// meanings — the block's own name is the summary above it, because a heading inside
     /// the list would be a term of the glossary rather than what the glossary is called.
