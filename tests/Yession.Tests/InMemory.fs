@@ -218,6 +218,7 @@ let tests =
                     WorkSandboxes.create
                         { Backend = fun _ -> "scripted"
                           Describe = fun _ -> None
+                          Checkout = fun _ -> None
                           Credentials = []
                           Create = fun name _ _ -> Ok (environmentNamed (SandboxRef.render name))
                           Log = log

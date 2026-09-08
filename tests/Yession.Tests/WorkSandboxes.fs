@@ -80,6 +80,7 @@ let private registryWithSpecs (log: EventLog<SessionEvent>) (credentials: WorkSa
         WorkSandboxes.create
             { Backend = fun _ -> "fake"
               Describe = fun _ -> None
+              Checkout = fun _ -> None
               Credentials = credentials
               Create =
                 fun name spec env ->
@@ -97,6 +98,7 @@ let private registryHolding (log: EventLog<SessionEvent>) (realisation: string l
     WorkSandboxes.create
         { Backend = fun _ -> "fake"
           Describe = fun _ -> None
+          Checkout = fun _ -> None
           Credentials = []
           Create = fun _ _ _ -> Ok (fakeEnvironmentHolding realisation)
           Log = log
@@ -165,6 +167,7 @@ let private ensureTests =
                     WorkSandboxes.create
                         { Backend = fun _ -> "fake"
                           Describe = fun _ -> Some "day-to-day work"
+                          Checkout = fun _ -> None
                           Credentials = []
                           Create = fun _ _ _ -> Ok (fakeEnvironment ())
                           Log = log
@@ -176,6 +179,57 @@ let private ensureTests =
                 | [ started ] -> Expect.equal started.Description (Some "day-to-day work") "the reason travels with the start"
                 | other -> failwithf "expected one start, got %d" (List.length other)
             }
+
+        // The fault this exists for: one checkout has two addresses and only a sandbox
+        // settles which. Told the host's by `add_repo`, an agent pointed a shell profile at
+        // it INSIDE the container, watched it silently not take, and spent six calls working
+        // out why. The start is where both halves are known at once.
+        testCaseAsync "a repo's sandbox says where it sees the checkout" <|
+            async {
+                let log = newLog ()
+                let sandboxes =
+                    WorkSandboxes.create
+                        { Backend = fun _ -> "fake"
+                          Describe = fun _ -> None
+                          Checkout = fun _ -> Some "/repos/owner/name"
+                          Credentials = []
+                          Create = fun _ _ _ -> Ok (fakeEnvironment ())
+                          Log = log
+                          Clock = fixedClock }
+                    |> expect
+                let! _ = sandboxes.Ensure caller (sandbox "test") (forwarding [])
+                let! events = eventsOf log
+                match startedEvents events with
+                | [ started ] -> Expect.equal started.Checkout (Some "/repos/owner/name") "the address travels with the start"
+                | other -> failwithf "expected one start, got %d" (List.length other)
+            }
+
+        // The other half, and a different layer: the address has to REACH a reader. A field on
+        // an event nothing renders is a field nobody has.
+        testCase "the note a start writes says where the checkout is" <| fun () ->
+            let started =
+                SessionEvent.WorkSandboxStarted
+                    { MessageId = MessageId.create "m-1" |> expect
+                      Sandbox = SandboxRef.parse "owner/name:dev" |> expect
+                      Backend = "docker"
+                      Description = Some "day-to-day work"
+                      Checkout = Some "/repos/owner/name"
+                      Forwarded = []
+                      CredentialOwner = None
+                      Realisation = []
+                      Actor = ActorRef.Agent }
+            let envelope : EventEnvelope<SessionEvent> =
+                { EventId = EventId.fresh ()
+                  SessionId = SessionId.create "notes" |> expect
+                  Offset = EventOffset.create 0L |> expect
+                  Actor = ActorRef.Agent
+                  Timestamp = System.DateTimeOffset.UtcNow
+                  Event = started }
+            let projection, _ =
+                ConversationProjection.applyEvents None [ envelope ] ConversationProjection.empty
+            match projection.Items with
+            | [ item ] -> Expect.stringContains item.Body "/repos/owner/name" "a reader is told where the work is"
+            | other -> failwithf "expected one note, got %d" (List.length other)
 
         // The hazard this shape exists to avoid. A description is metadata, never part of what
         // makes two asks the same sandbox — so editing prose in a repo's file must not read as
@@ -189,6 +243,7 @@ let private ensureTests =
                     WorkSandboxes.create
                         { Backend = fun _ -> "fake"
                           Describe = fun _ -> described.Value
+                          Checkout = fun _ -> None
                           Credentials = []
                           Create = fun _ _ _ -> Ok (fakeEnvironment ())
                           Log = log
@@ -574,6 +629,7 @@ let private timelineTests =
                           Sandbox = sandbox "test"
                           Backend = "srt"
                           Description = None
+                          Checkout = None
                           Forwarded = [ "github" ]
                           CredentialOwner = Some ada
                           Realisation = []
@@ -601,6 +657,7 @@ let private timelineTests =
                           Sandbox = sandbox "test"
                           Backend = "host"
                           Description = None
+                          Checkout = None
                           Forwarded = []
                           CredentialOwner = None
                           Realisation = []
@@ -628,6 +685,7 @@ let private timelineTests =
                           Sandbox = sandbox "test"
                           Backend = "srt"
                           Description = None
+                          Checkout = None
                           Forwarded = []
                           CredentialOwner = None
                           Realisation = [ "the socket at /run/docker.sock — this host cannot scope that, so the sandbox gets any unix socket on this host" ]

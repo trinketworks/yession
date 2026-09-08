@@ -349,9 +349,15 @@ module ConversationProjection =
                     @ [ { MessageId = s.MessageId
                           Author = s.Actor
                           Body =
-                            match s.Description with
-                            | Some said -> sprintf "started sandbox %s (%s) — %s" (SandboxRef.render s.Sandbox) s.Backend said
-                            | None -> sprintf "started sandbox %s (%s)" (SandboxRef.render s.Sandbox) s.Backend
+                            // Two facts about one sandbox, in the order they are wanted:
+                            // whether to reach for it, then where its work is once you have.
+                            let named =
+                                match s.Description with
+                                | Some said -> sprintf "started sandbox %s (%s) — %s" (SandboxRef.render s.Sandbox) s.Backend said
+                                | None -> sprintf "started sandbox %s (%s)" (SandboxRef.render s.Sandbox) s.Backend
+                            match s.Checkout with
+                            | Some at -> sprintf "%s — the checkout is at %s in here" named at
+                            | None -> named
                           Status = Complete
                           Kind =
                             ConversationItemKind.ActNote

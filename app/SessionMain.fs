@@ -290,6 +290,20 @@ let private makeSandboxes
                   // Asked of the fold rather than captured, because the sandbox manager is
                   // built before the first fold has run and a description arrives with it.
                   Describe = fun ref -> repoSandboxes.Described ref
+                  // Answered from the ref's own scope and the backend it will run under, so
+                  // the path is the one a command in THIS sandbox would use.
+                  Checkout =
+                    fun ref ->
+                        match SandboxRef.scope ref with
+                        | RepoOwned repo ->
+                            Some (
+                                sprintf
+                                    "%s/%s"
+                                    (Sandboxes.reposVisibleAt
+                                        (SandboxRuntime.scopedBackend workBackend (SandboxRef.scope ref))
+                                        reposDir)
+                                    (RepoRef.relativePath repo))
+                        | SessionOwned -> None
                   // The credentials this session knows how to forward. GitHub is the one
                   // Plan 14 left deferred, and it is what makes `git push` from a terminal
                   // work; resolution is the Plan 08 precedence, unchanged.

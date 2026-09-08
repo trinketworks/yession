@@ -246,15 +246,29 @@ let private frameSerializationTests =
                       Sandbox = SandboxRef.parse "test" |> expect
                       Backend = "srt"
                       Description = None
+                      Checkout = None
                       Forwarded = [ "github" ]
                       CredentialOwner = Some (UserRef (UserId.create "alice" |> expect))
                       Realisation = [ "the socket at /run/docker.sock — this host cannot scope that" ]
+                      Actor = ActorRef.Agent }
+                  // A repo-declared start, carrying both the things only a sandbox settles:
+                  // what it is for, and where it sees the checkout.
+                  WorkSandboxStarted
+                    { MessageId = messageId
+                      Sandbox = SandboxRef.parse "octo/hello:dev" |> expect
+                      Backend = "docker"
+                      Description = Some "day-to-day work"
+                      Checkout = Some "/repos/octo/hello"
+                      Forwarded = []
+                      CredentialOwner = None
+                      Realisation = []
                       Actor = ActorRef.Agent }
                   WorkSandboxStarted
                     { MessageId = messageId
                       Sandbox = SandboxRef.defaultRef
                       Backend = "host"
                       Description = None
+                      Checkout = None
                       Forwarded = []
                       CredentialOwner = None
                       Realisation = []
@@ -391,6 +405,7 @@ let private frameSerializationTests =
                       Sandbox = SandboxRef.create SessionOwned (SandboxName.create "build" |> expect)
                       Backend = "srt"
                       Description = None
+                      Checkout = None
                       Forwarded = []
                       CredentialOwner = None
                       // A start recorded before the host became an author of a grant. Absent
