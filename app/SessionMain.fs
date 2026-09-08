@@ -58,6 +58,15 @@ let private controlChannel = launch.Control |> Option.map (fun c -> c.Url, c.Sec
 // otherwise. That is the point of the seam, and a default of `host` meant every
 // deployment that never read the documentation ran them unconfined. `host` is still
 // there, and still honest about what it is — it just has to be asked for now.
+// The fold over every checkout's `yession.yaml` (Plan 27). Filled once the Host exists,
+// because it puts each declaration through the Host's own command gate — the same door the
+// agent's `start_work_sandbox` goes through, which is the whole point.
+let mutable private repoSandboxes : RepoSandboxes.RepoSandboxes = RepoSandboxes.none
+//
+// Declared HERE rather than beside the other cells below, because the sandbox manager built
+// under it asks this for a sandbox's description, and F# scoping is top-down: a cell read at
+// composition has to exist before the composition that reads it.
+
 let private workBackend =
     match SandboxBackend.parse (Interop.envOr "YESSION_SESSION_WORK_BACKEND" "srt") with
     | Ok backend -> backend
@@ -278,6 +287,9 @@ let private makeSandboxes
                     // started yet.
                     fun (ref: SandboxRef) ->
                         SandboxBackend.describe (SandboxRuntime.scopedBackend workBackend (SandboxRef.scope ref))
+                  // Asked of the fold rather than captured, because the sandbox manager is
+                  // built before the first fold has run and a description arrives with it.
+                  Describe = fun ref -> repoSandboxes.Described ref
                   // The credentials this session knows how to forward. GitHub is the one
                   // Plan 14 left deferred, and it is what makes `git push` from a terminal
                   // work; resolution is the Plan 08 precedence, unchanged.
@@ -461,10 +473,6 @@ let private reconcileWatches (watches: PrWatch list) =
 // which no turn can run, because nothing is listening.
 let mutable private workSandboxes : WorkSandboxes.WorkSandboxes = WorkSandboxes.unavailable
 
-// The fold over every checkout's `yession.yaml` (Plan 27). Filled once the Host exists,
-// because it puts each declaration through the Host's own command gate — the same door the
-// agent's `start_work_sandbox` goes through, which is the whole point.
-let mutable private repoSandboxes : RepoSandboxes.RepoSandboxes = RepoSandboxes.none
 
 // The terminal manager (Plan 25 needs it here for the `shell_profile` query and the command
 // that changes it). Filled from the Host beside the sandboxes above, and for the same

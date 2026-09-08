@@ -348,7 +348,10 @@ module ConversationProjection =
                     proj.Items
                     @ [ { MessageId = s.MessageId
                           Author = s.Actor
-                          Body = sprintf "started sandbox %s (%s)" (SandboxRef.render s.Sandbox) s.Backend
+                          Body =
+                            match s.Description with
+                            | Some said -> sprintf "started sandbox %s (%s) — %s" (SandboxRef.render s.Sandbox) s.Backend said
+                            | None -> sprintf "started sandbox %s (%s)" (SandboxRef.render s.Sandbox) s.Backend
                           Status = Complete
                           Kind =
                             ConversationItemKind.ActNote

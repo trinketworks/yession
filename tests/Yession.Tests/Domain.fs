@@ -245,6 +245,7 @@ let private frameSerializationTests =
                     { MessageId = messageId
                       Sandbox = SandboxRef.parse "test" |> expect
                       Backend = "srt"
+                      Description = None
                       Forwarded = [ "github" ]
                       CredentialOwner = Some (UserRef (UserId.create "alice" |> expect))
                       Realisation = [ "the socket at /run/docker.sock — this host cannot scope that" ]
@@ -253,6 +254,7 @@ let private frameSerializationTests =
                     { MessageId = messageId
                       Sandbox = SandboxRef.defaultRef
                       Backend = "host"
+                      Description = None
                       Forwarded = []
                       CredentialOwner = None
                       Realisation = []
@@ -388,6 +390,7 @@ let private frameSerializationTests =
                     { MessageId = MessageId.create "msg-legacy" |> expect
                       Sandbox = SandboxRef.create SessionOwned (SandboxName.create "build" |> expect)
                       Backend = "srt"
+                      Description = None
                       Forwarded = []
                       CredentialOwner = None
                       // A start recorded before the host became an author of a grant. Absent
@@ -1284,6 +1287,31 @@ let private configTests =
             Expect.equal dev.Setup (Some "nix develop --impure --command true") "the command as written"
             let request = SandboxDecl.toRequest None dev |> expect
             Expect.equal request.Spec.Setup (Some "nix develop --impure --command true") "and it survives to the spec"
+
+        // A name cannot say what a sandbox is for, and two sandboxes identical on every field
+        // a machine reads are told apart only by what a person meant. Measured: shown `dev`
+        // and `gate` and asked to run tests, an agent picked `gate`, which holds a terminal
+        // for minutes.
+        testCase "a sandbox can say what it is for" <| fun () ->
+            let file =
+                ConfigFile.parse """
+                    { "version": 2,
+                      "sandboxes": {
+                        "dev": {
+                          "description": "day-to-day work — the full toolchain" } } }"""
+                |> expect
+            let dev = file.Sandboxes |> Map.find (sandboxName "dev")
+            Expect.equal dev.Description (Some "day-to-day work — the full toolchain") "the words as written"
+
+        // Absent and blank are one state. A repo that wrote `description:` and left it empty
+        // has said nothing, and a note reading "started sandbox dev (docker) — " would be
+        // this file's punctuation leaking onto a timeline.
+        testCase "a description of nothing but space is no description" <| fun () ->
+            let file =
+                ConfigFile.parse """{ "version": 2, "sandboxes": { "dev": { "description": "   " } } }"""
+                |> expect
+            let dev = file.Sandboxes |> Map.find (sandboxName "dev")
+            Expect.isNone dev.Description "nothing said is nothing carried"
 
         testCase "a sandbox that declares no setup asks for none" <| fun () ->
             let file = ConfigFile.parse """{ "version": 2, "sandboxes": { "dev": {} } }""" |> expect

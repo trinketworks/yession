@@ -76,6 +76,13 @@ type WorkSandboxesConfig =
       /// own keep the configured confinement, a repo's are containers), so one string
       /// for the whole registry would misdescribe half of it.
       Backend : SandboxRef -> string
+      /// What a sandbox is FOR, when whoever declared it said — asked here for the same
+      /// reason `Backend` is: it is a fact about the NAME, settled by whoever declared it,
+      /// and this manager holds no declarations. Deliberately not on `SandboxRequest`: the
+      /// request is what `Ensure` compares to decide two asks are the same sandbox, so a
+      /// description in it would make editing prose in a repo's file read as a configuration
+      /// change and refuse every running session until somebody stopped the container.
+      Describe : SandboxRef -> string option
       Credentials : CredentialSource list
       /// Build the environment for a sandbox: the spec it was asked to be, plus the
       /// resolved credentials as extra policy env. Synchronous and fallible — whether this
@@ -263,6 +270,7 @@ let create (config: WorkSandboxesConfig) : Result<WorkSandboxes, string> =
                                         { MessageId = mintMessageId ()
                                           Sandbox = name
                                           Backend = config.Backend name
+                                          Description = config.Describe name
                                           Forwarded = wanted.Forward
                                           CredentialOwner =
                                             (if List.isEmpty wanted.Forward then None else Some caller.Credential)
