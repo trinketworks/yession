@@ -51,11 +51,14 @@ PATH.
 
 **Inside a yession work sandbox** (`YESSION_SANDBOX` is set, and names which one): the
 container brings nix and the checkout brings the toolchain, so the devshell is assembled by
-the flake — `nix develop --command check`, and the same for any other task. Do NOT install
-devenv here and do NOT run `.claude/setup.sh`, which is for a Claude Code container and
-correctly no-ops in this one; a session that reconstructed the laptop's route from the prose
-below spent two minutes installing a second devenv it did not need. `yession.yaml` declares
-the sandboxes (`dev` for work, `gate` for the long `verify`).
+the flake — `nix develop --impure --command check`, and the same for any other task.
+`--impure` is load-bearing rather than a preference: devenv resolves its root from the
+process's working directory, which a pure evaluation does not have, so the pure form fails
+with "devenv was not able to determine the current directory" — in this container and on a
+laptop alike. Do NOT install devenv here and do NOT run `.claude/setup.sh`, which is for a
+Claude Code container and correctly no-ops in this one; a session that reconstructed the
+laptop's route from the prose below spent two minutes installing a second devenv it did not
+need. `yession.yaml` declares the sandboxes (`dev` for work, `gate` for the long `verify`).
 
 A fresh Claude Code container: run `bash .claude/setup.sh` once (idempotent; minutes cold,
 cheap to re-run). It installs single-user Nix with the container-specific fixes, makes every
@@ -300,8 +303,8 @@ check Jumpstarter            # + our MCP client driven against the Python exampl
                              #   over two real child processes. Needs uv and a CPython.
 check Docker Dogfood         # + the self-hosting run: this repo's whole suite inside the
                              #   dev container its own yession.yaml declares (`nix develop
-                             #   --command check`, in the container, through the real docker
-                             #   backend). ~11 min warm, up to an hour cold; in NO scheduled
+                             #   --impure --command check`, in the container, through the real
+                             #   docker backend). ~11 min warm, up to an hour cold; in NO scheduled
                              #   tier — run it when the container environment story changes,
                              #   locally or via a verify.yml dispatch naming both caps.
 verify                       # == check Browser Ports Native Docker LiveAgent Keyring Nix Srt

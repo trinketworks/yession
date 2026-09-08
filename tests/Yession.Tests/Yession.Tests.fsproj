@@ -79,6 +79,9 @@
     <Compile Include="Cli.fs" />
     <Compile Include="NixSource.fs" />
     <Compile Include="LockSource.fs" />
+    <!-- The setup this repository declares for its own work sandbox: a committed-file
+         contract, like LockSource above, and cheap for the same reason. -->
+    <Compile Include="DeclaredSetup.fs" />
     <Compile Include="Main.fs" />
   </ItemGroup>
 

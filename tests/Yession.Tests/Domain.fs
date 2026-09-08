@@ -1278,12 +1278,12 @@ let private configTests =
                       "sandboxes": {
                         "dev": {
                           "container": { "image": "nixos/nix" },
-                          "setup": "nix develop --command true" } } }"""
+                          "setup": "nix develop --impure --command true" } } }"""
                 |> expect
             let dev = file.Sandboxes |> Map.find (sandboxName "dev")
-            Expect.equal dev.Setup (Some "nix develop --command true") "the command as written"
+            Expect.equal dev.Setup (Some "nix develop --impure --command true") "the command as written"
             let request = SandboxDecl.toRequest None dev |> expect
-            Expect.equal request.Spec.Setup (Some "nix develop --command true") "and it survives to the spec"
+            Expect.equal request.Spec.Setup (Some "nix develop --impure --command true") "and it survives to the spec"
 
         testCase "a sandbox that declares no setup asks for none" <| fun () ->
             let file = ConfigFile.parse """{ "version": 2, "sandboxes": { "dev": {} } }""" |> expect
