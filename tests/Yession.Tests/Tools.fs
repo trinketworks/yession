@@ -497,11 +497,73 @@ let private recorder () =
                 }
           Finished =
             fun _ ended ->
-                async { finished.Add ended } }
+                async { finished.Add ended }
+          Noted = fun _ -> async { return [] } }
     log, started, finished
+
+/// A recorder whose calls all set `notes` off, so the seam's own behaviour is testable
+/// without a Host: what a session records while a call runs is somebody else's business, and
+/// this stands in for whoever that was.
+let private recorderNoting (notes: string list) : ToolUseLog =
+    { Started = fun _ -> async { return Some (ToolUseId.create "use-1" |> expect) }
+      Finished = fun _ _ -> async { return () }
+      Noted = fun _ -> async { return notes } }
 
 let private auditTests =
     testList "the audit seam" [
+
+        // What a turn learns about a consequence of its own call. Four invariants, because
+        // they break at different times: that the news arrives, that it arrives only when
+        // there is some, that a refusal is left alone, and that a flood is bounded.
+        testCaseAsync "an answer carries what the session recorded while the call ran" <|
+            async {
+                let registry =
+                    ToolUseLog.wrap
+                        (recorderNoting [ "started sandbox repo:dev (docker) — day-to-day work" ])
+                        (AgentTools.registry AgentCapabilities.none)
+                match! registry.Invoke (call "yession" "list_secrets" "{}") with
+                | Ok answer ->
+                    Expect.stringContains answer.Text "started sandbox repo:dev" "the note reached the turn"
+                    Expect.stringContains answer.Text "day-to-day work" "in the words the timeline uses"
+                | Error e -> failwithf "list_secrets should answer: %s" e
+            }
+
+        // The ordinary case, and the one that decides whether this is affordable: almost
+        // every call sets nothing else off, and an answer that said so each time would be a
+        // line the model learns to skip — including on the calls where it matters.
+        testCaseAsync "an answer says nothing when the session recorded nothing" <|
+            async {
+                let registry = ToolUseLog.wrap (recorderNoting []) (AgentTools.registry AgentCapabilities.none)
+                match! registry.Invoke (call "yession" "list_secrets" "{}") with
+                | Ok answer -> Expect.isFalse (answer.Text.Contains "while this ran") "nothing to report, nothing said"
+                | Error e -> failwithf "list_secrets should answer: %s" e
+            }
+
+        // `Error` is the call that did not HAPPEN — unreadable arguments, no such tool — as
+        // against a call that ran and went badly, which comes back `Ok` saying so and is
+        // something the agent should act on. Only the first is left alone: news of a sandbox
+        // attached to "could not read the arguments" reads as its cause.
+        testCaseAsync "a call that never happened is not given the session's other news" <|
+            async {
+                let registry =
+                    ToolUseLog.wrap (recorderNoting [ "started sandbox repo:dev (docker)" ]) (AgentTools.registry AgentCapabilities.none)
+                match! registry.Invoke (call "yession" "add_repo" "{}") with
+                | Ok answer -> failwithf "add_repo with no repo argument cannot be read: %s" answer.Text
+                | Error reason ->
+                    Expect.isFalse (reason.Contains "while this ran") "a call that did not happen is told nothing else"
+            }
+
+        testCaseAsync "a flood is bounded, and says how much it left in the session" <|
+            async {
+                let many = [ for i in 1 .. 9 -> sprintf "started sandbox repo:s%d (docker)" i ]
+                let registry = ToolUseLog.wrap (recorderNoting many) (AgentTools.registry AgentCapabilities.none)
+                match! registry.Invoke (call "yession" "list_secrets" "{}") with
+                | Ok answer ->
+                    Expect.stringContains answer.Text "and 5 more" "the rest are counted, not listed"
+                    Expect.isFalse (answer.Text.Contains "repo:s9") "and genuinely not listed"
+                | Error e -> failwithf "list_secrets should answer: %s" e
+            }
+
 
         // THE test of this part. `set_secret` was recorded nowhere at all before it, and the
         // log is served in immutable cacheable chunks — so a value that reached it would be
