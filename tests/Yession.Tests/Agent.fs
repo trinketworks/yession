@@ -102,6 +102,57 @@ let private envelope (offset: int64) (event: SessionEvent) : EventEnvelope<Sessi
 
 let private turnTests =
     testList "Agent turn" [
+        // Reasoning is recorded and is NOT speech: it appends its own event, and the message
+        // around it reads exactly as it would have without it. The whole-sequence assertion
+        // is what makes that testable — a thought that had opened a message, closed one, or
+        // joined the body would move something in this list.
+        testCaseAsync "what the model thought is recorded, and is not what it said" <|
+            async {
+                let log = newLog ()
+                let scripted : RunAgent =
+                    fun _context _capabilities _signal onChunk ->
+                        async {
+                            onChunk (AgentResponseChunk.Thinking "the repo declares a dev sandbox")
+                            onChunk (AgentResponseChunk.Text "Running it.")
+                            return AgentCompleted ("Running it.", None)
+                        }
+                do! AgentTurn.run log scripted AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId mintMessageId sessionId [ triggerItem ] [] None (AgentTurn.FromMessage trigger)
+                let! events = eventsOf log
+                Expect.equal
+                    events
+                    [ AgentTurnStarted { AgentTurnId = turnId; Cause = TurnCause.TriggeredBy humanMessageId }
+                      AgentContextBuilt { AgentTurnId = turnId; MessageCount = 1 }
+                      AgentMessageStarted { AgentTurnId = turnId; MessageId = agentMessageId; Antecedent = None }
+                      AgentThought { AgentTurnId = turnId; Thought = "the repo declares a dev sandbox" }
+                      AgentMessageDelta { AgentTurnId = turnId; MessageId = agentMessageId; Delta = "Running it." }
+                      AgentMessageCompleted { AgentTurnId = turnId; MessageId = agentMessageId; Body = "Running it." } ]
+                    "the thought is its own event, and the message is untouched by it"
+            }
+
+        // A turn whose only output was reasoning and tool calls SAID nothing, and the
+        // transcript has to go on reading that way — otherwise recording the thinking would
+        // quietly turn silent turns into speaking ones on every surface that draws them.
+        testCaseAsync "a turn that only thought has still said nothing" <|
+            async {
+                let log = newLog ()
+                let scripted : RunAgent =
+                    fun _context _capabilities _signal onChunk ->
+                        async {
+                            onChunk (AgentResponseChunk.Thinking "weighing it up")
+                            onChunk AgentResponseChunk.MessageBoundary
+                            onChunk (AgentResponseChunk.Thinking "still weighing it up")
+                            return AgentCompleted ("", None)
+                        }
+                do! AgentTurn.run log scripted AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId (mintMessageIds ()) sessionId [ triggerItem ] [] None (AgentTurn.FromMessage trigger)
+                let! events = eventsOf log
+                let started =
+                    events |> List.filter (function AgentMessageStarted _ -> true | _ -> false) |> List.length
+                Expect.equal started 1 "a boundary between two thoughts opens no second message"
+                Expect.isEmpty
+                    (events |> List.filter (function AgentMessageDelta _ -> true | _ -> false))
+                    "and nothing was said"
+            }
+
         testCaseAsync "a completed run appends the full lifecycle with streamed deltas" <|
             async {
                 let log = newLog ()

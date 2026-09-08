@@ -472,6 +472,14 @@ module ConversationProjection =
                           Kind = ConversationItemKind.ActNote { Detail = c.Reason; Notable = false }
                           Offset = envelope.Offset
                           Woke = None; Replying = None } ] }
+        // Reasoning is recorded and shown to NOBODY, and this case exists to say that is a
+        // decision rather than an omission. It is a summary of what a model thought before it
+        // acted: useful for asking why a turn did what it did, and not the same kind of thing
+        // as anything else on this timeline — it was never said to anyone, nobody is
+        // answerable for it, and a reader who met it beside speech would take it for speech.
+        // The event is in the log for whoever goes looking; putting it on a screen is a
+        // separate decision, with a person to make it.
+        | SessionEvent.AgentThought _ -> proj
         // The MCP set changing (Plan 17). `ActorRef.System`, because nobody in the session
         // did it, and the DELTA only — the Process compares what it was last told, from
         // its own events, against the newly resolved set, so a boot, a reconnect and a
