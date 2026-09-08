@@ -542,7 +542,7 @@ module View =
                         </div>""")
             html $"""
                 <details class="{Style.queryLegend}" data-legend="{List.length entries}">
-                  <summary class="{Style.queryLegendSummary}">how to read</summary>
+                  <summary class="{Style.queryLegendSummary}">how to read<span class="{Style.queryLegendMark}" aria-hidden="true">›</span></summary>
                   <dl class="{Style.queryLegendEntries}">{rows}</dl>
                 </details>"""
 
