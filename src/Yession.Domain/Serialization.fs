@@ -292,6 +292,17 @@ module Codec =
                   AgentMessageDelta.MessageId = get.Required.Field "messageId" messageId.Decode
                   AgentMessageDelta.Delta = get.Required.Field "delta" Decode.string }) }
 
+    let private agentThought : Codec<AgentThought> =
+        { Encode =
+            fun (p: AgentThought) ->
+                Encode.object
+                    [ "agentTurnId", agentTurnId.Encode p.AgentTurnId
+                      "thought", Encode.string p.Thought ]
+          Decode =
+            Decode.object (fun get ->
+                { AgentThought.AgentTurnId = get.Required.Field "agentTurnId" agentTurnId.Decode
+                  AgentThought.Thought = get.Required.Field "thought" Decode.string }) }
+
     let private agentMessageCompleted : Codec<AgentMessageCompleted> =
         { Encode =
             fun (p: AgentMessageCompleted) ->
@@ -1321,6 +1332,8 @@ module Codec =
                     Encode.object [ "type", Encode.string "agentMessageStarted"; "payload", agentMessageStarted.Encode p ]
                 | AgentMessageDelta p ->
                     Encode.object [ "type", Encode.string "agentMessageDelta"; "payload", agentMessageDelta.Encode p ]
+                | AgentThought p ->
+                    Encode.object [ "type", Encode.string "agentThought"; "payload", agentThought.Encode p ]
                 | AgentMessageCompleted p ->
                     Encode.object [ "type", Encode.string "agentMessageCompleted"; "payload", agentMessageCompleted.Encode p ]
                 | AgentTurnFailed p ->
@@ -1421,6 +1434,7 @@ module Codec =
                 | "agentContextBuilt" -> Decode.field "payload" agentContextBuilt.Decode |> Decode.map AgentContextBuilt
                 | "agentMessageStarted" -> Decode.field "payload" agentMessageStarted.Decode |> Decode.map AgentMessageStarted
                 | "agentMessageDelta" -> Decode.field "payload" agentMessageDelta.Decode |> Decode.map AgentMessageDelta
+                | "agentThought" -> Decode.field "payload" agentThought.Decode |> Decode.map AgentThought
                 | "agentMessageCompleted" -> Decode.field "payload" agentMessageCompleted.Decode |> Decode.map AgentMessageCompleted
                 | "agentTurnFailed" -> Decode.field "payload" agentTurnFailed.Decode |> Decode.map AgentTurnFailed
                 | "agentTurnInterrupted" -> Decode.field "payload" agentTurnInterrupted.Decode |> Decode.map AgentTurnInterrupted

@@ -169,6 +169,13 @@ module AgentTurn =
                     if not (signal.IsAborted ()) then
                         match chunk with
                         | AgentResponseChunk.MessageBoundary -> boundary.Value <- true
+                        // Recorded, and deliberately touching NONE of the message state above:
+                        // reasoning is not the model speaking, so it opens no message, closes
+                        // none, and does not make a boundary into a message that has spoken.
+                        // A turn whose whole output was thinking and tool calls still said
+                        // nothing, and the transcript should go on reading that way.
+                        | AgentResponseChunk.Thinking thought ->
+                            Async.StartImmediate (append (AgentThought { AgentTurnId = turnId; Thought = thought }))
                         | AgentResponseChunk.Text text ->
                             if boundary.Value && spoken.Value <> "" then
                                 let next = mintMessageId ()

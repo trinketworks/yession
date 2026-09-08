@@ -39,6 +39,7 @@ type SessionEvent =
     | AgentContextBuilt of AgentContextBuilt
     | AgentMessageStarted of AgentMessageStarted
     | AgentMessageDelta of AgentMessageDelta
+    | AgentThought of AgentThought
     | AgentMessageCompleted of AgentMessageCompleted
     | AgentTurnFailed of AgentTurnFailed
     // An explicit interrupt (Phase 3, Step 17): the turn's terminal event when a peer

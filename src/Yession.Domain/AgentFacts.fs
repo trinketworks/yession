@@ -92,6 +92,21 @@ and AgentMessageDelta =
       MessageId : MessageId
       Delta : string }
 
+/// What the model reasoned before it spoke or acted, as the provider summarised it.
+///
+/// Recorded because it was not, and its absence is what makes a turn's decisions
+/// unfalsifiable: 629 turns on one machine left a signed, empty block apiece — proof that
+/// something was thought and nothing about what, so every account of WHY a turn did what it
+/// did was reconstructed from the outcome it produced.
+///
+/// A SUMMARY, never raw reasoning: the provider offers `summarized` or `omitted` and there is
+/// no third choice to make here. Attributed to the turn rather than to a message, because
+/// reasoning precedes the decision to speak at all — most of it belongs to turns whose next
+/// act was a tool call.
+and AgentThought =
+    { AgentTurnId : AgentTurnId
+      Thought : string }
+
 and AgentMessageCompleted =
     { AgentTurnId : AgentTurnId
       MessageId : MessageId

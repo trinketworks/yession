@@ -36,7 +36,7 @@ type private JsToolAnswer =
     abstract ok : bool
     abstract text : string
 
-[<Emit("""(async function (prompts, agentEnv, claudePath, descriptors, invoke, allowedTools, onChunk, onBoundary, registerAbort, claudeSpawner) {
+[<Emit("""(async function (prompts, agentEnv, claudePath, descriptors, invoke, allowedTools, onChunk, onBoundary, registerAbort, claudeSpawner, onThought) {
   // Declared OUTSIDE the try because a turn does not always end by returning: the SDK
   // reports a non-success ending by THROWING, and what the turn streamed and spent before
   // that has to survive the throw. See the catch.
@@ -118,6 +118,10 @@ type private JsToolAnswer =
         // Claude Code runs under. A turn ends when the model is done or somebody
         // interrupts it, never at a step count this file picked.
         settingSources: [],
+        // Ask for the reasoning, summarised — the only two choices the provider offers are a
+        // summary and nothing, and unasked it answers with a signed empty block: proof that
+        // something was thought, and nothing about what.
+        thinking: { type: 'adaptive', display: 'summarized' },
         includePartialMessages: true,
         mcpServers,
         // The turn's ONLY tools are the registry's. `tools: []` drops every built-in
@@ -150,6 +154,13 @@ type private JsToolAnswer =
           onChunk(e.delta.text)
           streamed += e.delta.text
         }
+        // Reasoning arrives on the same stream under its own delta, and used to fall through
+        // the condition above in silence — `typeof undefined === 'string'` is false, so a
+        // thinking delta looked exactly like an event this runner did not care about. It is
+        // NOT added to `streamed`: that is the fallback body for what the model SAID.
+        if (e && e.type === 'content_block_delta' && e.delta && typeof e.delta.thinking === 'string') {
+          onThought(e.delta.thinking)
+        }
       } else if (m.type === 'result') {
         // Plan 04, Step 28: read the usage block instead of discarding it.
         const u = m.usage || {}
@@ -173,7 +184,7 @@ type private JsToolAnswer =
     // reason; `Agent.sdkFailureReason` unwraps the latter.
     return { ok: false, body: '', reason: String((err && err.message) || err), inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens, model }
   }
-})($0, $1, $2, $3, $4, $5, $6, $7, $8, $9)""")>]
+})($0, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10)""")>]
 let private runQuery
     (prompts: {| system: string; prompt: string; model: string |})
     (agentEnv: obj)
@@ -187,6 +198,7 @@ let private runQuery
     (onBoundary: unit -> unit)
     (registerAbort: (unit -> unit) -> unit)
     (claudeSpawner: obj)
+    (onThought: string -> unit)
     : JS.Promise<RunOutcome> =
     jsNative
 
@@ -373,6 +385,7 @@ let runWith (dataDir: string) (backend: SandboxBackend) (credential: (string * s
                     (fun () -> onChunk AgentResponseChunk.MessageBoundary)
                     signal.OnAbort
                     cli.Spawner
+                    (fun thought -> onChunk (AgentResponseChunk.Thinking thought))
                 |> Interop.awaitPromise
             let usage =
                 { InputTokens = outcome.inputTokens

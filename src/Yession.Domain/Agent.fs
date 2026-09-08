@@ -53,9 +53,15 @@ type AgentContextPack =
 /// every case there is — which is where what it says next stops being a continuation of
 /// what it said before. The boundary carries no text of its own and promises none: a
 /// message that is only tool calls begins with one too, and says nothing after it.
+///
+/// `Thinking` is the model REASONING, and it is a separate case rather than more `Text` for
+/// the reason a transcript exists: what an agent said is a thing it is answerable for, and
+/// folding its reasoning into the same stream would put words in its mouth. It is recorded
+/// and, for now, shown to nobody.
 [<RequireQualifiedAccess>]
 type AgentResponseChunk =
     | Text of string
+    | Thinking of string
     | MessageBoundary
 
 /// Token/cache usage the runner reports for one turn (Plan 04, Step 28). Telemetry only —
