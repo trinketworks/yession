@@ -829,9 +829,19 @@ let private backendTests =
         // sat under /repos (measured on a live session before this rule existed).
         testCase "a repo's declaration resolves against the container's view of its checkout" (fun () ->
             Expect.equal
-                (Sandboxes.workCheckoutAt "/Users/o/.yession/sessions/S1/workspace/repos" repo)
+                (Sandboxes.workCheckoutAt None "/Users/o/.yession/sessions/S1/workspace/repos" repo)
                 "/repos/octo/hello"
                 "the container view, independent of where the host keeps the clones")
+
+        // …and against the view its own file asked for, when it asked. The same function
+        // answers both, which is the point: the mount, the write path and the answer a verb
+        // gives are one computation, so a declaration cannot move one of them and not the
+        // others.
+        testCase "a sandbox that says where it wants the checkouts is answered there" (fun () ->
+            Expect.equal
+                (Sandboxes.workCheckoutAt (Some "/src") "/Users/o/.yession/sessions/S1/workspace/repos" repo)
+                "/src/octo/hello"
+                "the declared root, with the same repo under it")
     ]
 
 let private workspaceVolumeTests =

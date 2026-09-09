@@ -1318,6 +1318,27 @@ let private configTests =
             let dev = file.Sandboxes |> Map.find (sandboxName "dev")
             Expect.equal dev.Description (Some "day-to-day work — the full toolchain") "the words as written"
 
+        // A repo saying where the session's checkouts should appear in its own container.
+        testCase "a sandbox can say where it wants the checkouts" <| fun () ->
+            let file =
+                ConfigFile.parse """{ "version": 2, "sandboxes": { "dev": { "repos": "/src" } } }"""
+                |> expect
+            let dev = file.Sandboxes |> Map.find (sandboxName "dev")
+            Expect.equal dev.Repos (Some "/src") "the target as written"
+
+        // The mirror of `workdir:`, which refuses an absolute path because it names somewhere
+        // inside a checkout. This names somewhere inside a CONTAINER, where a relative path
+        // has no root to be relative to — so the refusal runs the other way, and says so.
+        testCase "a relative checkouts path is refused, because it would have no root" <| fun () ->
+            match ConfigFile.parse """{ "version": 2, "sandboxes": { "dev": { "repos": "src" } } }""" with
+            | Ok _ -> failwith "a relative target inside a container resolves against nothing"
+            | Error reason -> Expect.stringContains reason "absolute" "it says which way it must be written"
+
+        testCase "a checkouts path that climbs is refused" <| fun () ->
+            match ConfigFile.parse """{ "version": 2, "sandboxes": { "dev": { "repos": "/src/../etc" } } }""" with
+            | Ok _ -> failwith "a climb means one thing to its author and another to what resolves it"
+            | Error reason -> Expect.stringContains reason "climb" "it says what is wrong with it"
+
         // Absent and blank are one state. A repo that wrote `description:` and left it empty
         // has said nothing, and a note reading "started sandbox dev (docker) — " would be
         // this file's punctuation leaking onto a timeline.

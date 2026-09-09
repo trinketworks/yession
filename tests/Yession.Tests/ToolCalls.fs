@@ -143,7 +143,7 @@ let private servicesOver (service: Repos.ReposService) : Commands.CommandService
     { Repos = fun () -> Some service
       Sandboxes = fun () -> WorkSandboxes.unavailable
       WorkCheckout =
-        fun repo ->
+        fun repo _declared ->
             { InSandbox = "/repos/" + RepoRef.relativePath repo
               OnHost = "/data/repos/" + RepoRef.relativePath repo }
       Terminals = fun () -> SessionTerminals.unavailable

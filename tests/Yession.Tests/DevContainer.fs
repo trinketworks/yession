@@ -89,7 +89,7 @@ let private reposDirWith (checkout: string -> unit) : string =
 let private declaredDev (reposDir: string) : EnvironmentSpec =
     let file = RepoConfig.read reposDir repoRef |> expect |> Option.get
     let decl = file.Sandboxes |> Map.find (SandboxName.create "dev" |> expect)
-    let request = SandboxDecl.toRequest (Some (Sandboxes.checkoutViewsAt reposDir repoRef)) decl |> expect
+    let request = SandboxDecl.toRequest (Some (Sandboxes.checkoutViewsAt None reposDir repoRef)) decl |> expect
     match request.Spec.Runtime with
     | Container _ -> ()
     | Confinement -> failwith "yession.yaml declares no container, and a repo work sandbox is one"

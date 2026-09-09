@@ -47,7 +47,7 @@ type CommandServices =
       /// rather than a repo verb because it is a different fact: the verbs answer in
       /// the view of the session's own sandboxes, where their answers are acted on,
       /// and a repo's sandbox is a container with a view of its own.
-      WorkCheckout : RepoRef -> CheckoutViews
+      WorkCheckout : RepoRef -> string option -> CheckoutViews
       /// The terminal manager, which owns the shell profile (Plan 25).
       Terminals : unit -> SessionTerminals.SessionTerminals
       /// Queueing a command as a recorded block — the same door `execute_command` goes
@@ -330,7 +330,10 @@ let dispatch (services: CommandServices) : CommandDispatch =
                             // checkout, not the path a terminal in `default` would use.
                             let checkout =
                                 match SandboxRef.scope name, services.Repos () with
-                                | RepoOwned repo, Some _ -> Some (services.WorkCheckout repo)
+                                // With the declaration's own `repos:`, so a `workdir:` beside
+                                // it resolves against where the checkouts are about to be
+                                // rather than where they would have been by default.
+                                | RepoOwned repo, Some _ -> Some (services.WorkCheckout repo decl.Repos)
                                 | RepoOwned _, None
                                 | SessionOwned, _ -> None
                             match SandboxDecl.toRequest checkout decl with
