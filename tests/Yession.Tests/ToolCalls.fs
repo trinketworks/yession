@@ -264,6 +264,17 @@ let private tests' =
                 Expect.stringContains (answered answer) "/repos/octo/hello" "where to cd, not just what was cloned"
             }
 
+        // Two paths for one checkout now arrive in a single answer — this verb's, and the
+        // sandbox's, appended by the seam — so which view this one is has to be said. It was
+        // not, for one build: an agent read the first path, pointed a dev sandbox's profile at
+        // it, and spent two calls undoing that.
+        testCaseAsync "the answer says which view the path it named is" <|
+            async {
+                let session = cloningAt "main"
+                let! answer = addRepo session "octo/hello"
+                Expect.stringContains (answered answer) "DEFAULT sandbox" "the path is labelled, not left to be guessed at"
+            }
+
         // The two cases that used to sit here pinned `add_repo` telling an agent to call
         // `set_shell_profile`, and stopping once somebody had. That advice is gone: it named
         // the DEFAULT sandbox's path, so an agent that followed it into a container the repo
