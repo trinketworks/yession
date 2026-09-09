@@ -12,6 +12,7 @@ module Yession.Tests.Cli
 
 open Fable.Core
 open Fable.Core.JsInterop
+open Yession.Domain
 open Fable.Pyxpecto
 open Yession.Host
 
