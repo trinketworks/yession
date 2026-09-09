@@ -273,6 +273,58 @@ let private waitFor (what: string) (page: IPage) (predicate: string) : Async<uni
 // state token is the only place this can come from, which is where a markup contract belongs.
 let private connected = """document.querySelector('[data-connection]')?.getAttribute('data-connection') === 'Connected'"""
 
+/// Has this client actually KEPT the thing the reload will replay?
+///
+/// On screen is not kept. The live leg puts a record in the model the moment it arrives, and
+/// the SAME record triggers a separate HTTP read that is what writes it to the store
+/// (`Client.fs`: `TerminalRecordMsg` / `EventsAvailable` -> fetch -> `cache.Write`), started with
+/// `Async.StartImmediate` and awaited by nothing. So there is a window in which the assertion
+/// these cases make about the LIVE page is already true and the store behind the reload is
+/// still empty — measured at 1 run in 3 on an idle box, and wider on a loaded CI runner, where
+/// killing the session inside it left the reload nothing to replay and the case timed out
+/// naming no cause. Waiting on the store is the difference between testing this and testing
+/// that race, exactly as waiting on the worker's registration is below.
+/// The store search `keptIn` is, with the body test spelled out — for a case where "the text
+/// is in there somewhere" is not the question being asked.
+let private keptWhere (cachePart: string) (bodyTest: string) =
+    sprintf
+        """(async () => {
+             try {
+               const names = (await caches.keys()).filter(n => n.includes('%s'))
+               for (const n of names) {
+                 const c = await caches.open(n)
+                 for (const req of await c.keys()) {
+                   const r = await c.match(req)
+                   if (r) {
+                     const body = await r.text()
+                     if (%s) return true
+                   }
+                 }
+               }
+             } catch (e) { return false }
+             return false
+           })()"""
+        cachePart
+        bodyTest
+
+let private keptIn (cachePart: string) (text: string) =
+    sprintf
+        """(async () => {
+             try {
+               const names = (await caches.keys()).filter(n => n.includes('%s'))
+               for (const n of names) {
+                 const c = await caches.open(n)
+                 for (const req of await c.keys()) {
+                   const r = await c.match(req)
+                   if (r && (await r.text()).includes('%s')) return true
+                 }
+               }
+             } catch (e) { return false }
+             return false
+           })()"""
+        cachePart
+        text
+
 // The open draft is a ProseMirror editable (`.ProseMirror`) inside the editable
 // (`data-rich-readonly="false"`) body-mount host — and it is whichever draft this peer has open,
 // which may be someone else's: the composer joins the message already being written. Collapsed
@@ -446,7 +498,7 @@ let private reportingAll (name: string) (pages: (IPage * Evidence) list) (body: 
 /// One CONTEXT per peer, never two pages in one: a peer id lives in origin-partitioned
 /// localStorage, so two pages in one context are one person in two tabs rather than the two
 /// collaborators a convergence case is about.
-let private peersCase (name: string) (peers: int) (body: IPage list -> Async<unit>) =
+let private peersCase (name: string) (peers: int) (body: Host -> IPage list -> Async<unit>) =
     testCaseAsync name <|
         async {
             let host = startHost ()
@@ -479,7 +531,7 @@ let private peersCase (name: string) (peers: int) (body: IPage list -> Async<uni
                         ()
                     for i, page in List.indexed pages do
                         do! waitFor (sprintf "peer %d to connect" (i + 1)) page connected
-                    do! body pages
+                    do! body host pages
                 }
             let! outcome = Async.Catch (reportingAll name opened arranged)
             // Teardown that cannot strand a host: a browser refusing to close must not stop
@@ -495,11 +547,19 @@ let private peersCase (name: string) (peers: int) (body: IPage list -> Async<uni
 
 /// A case with one peer in it.
 let private sessionCase (name: string) (body: IPage -> Async<unit>) =
-    peersCase name 1 (fun pages -> body pages.Head)
+    peersCase name 1 (fun _ pages -> body pages.Head)
+
+/// A case with one peer that also reads the SESSION's own files. Everything above asserts on
+/// what a browser can see, which is the right default; this is for the one thing a browser
+/// cannot answer — how much transcript there actually is — where the alternative is to assume
+/// it, and assuming it is what made the reopen budget below mean different things on different
+/// machines.
+let private hostSessionCase (name: string) (body: Host -> IPage -> Async<unit>) =
+    peersCase name 1 (fun host pages -> body host pages.Head)
 
 /// A case with two, which is what convergence and presence are about.
 let private sessionPair (name: string) (body: IPage -> IPage -> Async<unit>) =
-    peersCase name 2 (fun pages ->
+    peersCase name 2 (fun _ pages ->
         match pages with
         | [ a; b ] -> body a b
         | other -> failwithf "expected two peers, got %d" other.Length)
@@ -652,9 +712,25 @@ let tests =
         // `Srt` because the seed is a command that really runs: on a box that cannot host a
         // sandbox it never would, and this would wait out its timeout rather than skip.
         Tag.needs "what reopening a session costs" [ Tag.Browser; Tag.Native; Tag.Srt ] (fun () ->
-        sessionCase "reopening a session renders a bounded number of times per transcript record" <|
-            fun page ->
+        hostSessionCase "reopening a session renders a bounded number of times per transcript record" <|
+            fun host page ->
             async {
+                // How much transcript there IS, counted off the session's own recordings. A
+                // record is one line of a `.cast`, and one line is one write the pty handed
+                // over — which is emphatically NOT one echo. This started out assuming it was,
+                // dividing renders by the number of lines the seed asked for, and the two
+                // numbers disagreed by a factor of four: 2.02 renders per line on a laptop
+                // where the pty coalesced several echoes into each read, 7.60 on a CI runner
+                // where it did not. Same code, same seed, different machine, and a budget in
+                // between would have failed for whoever ran it on the wrong one.
+                //
+                // So the denominator is measured rather than assumed, and measured from the
+                // artifact rather than from the client: this counts what the SESSION wrote,
+                // which is the thing the reopen has to fold, and it cannot be moved by a
+                // change to how the browser is instrumented.
+                let records () =
+                    Directory.GetFiles (host.DataDir, "*.cast", SearchOption.AllDirectories)
+                    |> Array.sumBy (fun f -> File.ReadAllLines(f).Length)
                 let composerInput = "[data-terminal-input^='term-draft:']:not([readonly])"
                 let printed (n: int) =
                     sprintf
@@ -664,8 +740,10 @@ let tests =
                 // Output in MANY small writes, because a record is a write and not a line:
                 // `seq 1 300` arrives in a handful of chunks and would seed a handful of
                 // records, which is a transcript this cost cannot be measured on. The pause is
-                // what separates them, and it arranges the fixture rather than timing an
-                // assertion — everything below waits on content.
+                // what separates them — how WELL it separates them is the machine's business,
+                // which is why `records` counts the result rather than trusting it — and it
+                // arranges the fixture rather than timing an assertion: everything below waits
+                // on content.
                 // Focused and sent WITHOUT the pointer. A reload leaves the terminal column
                 // laid out with its composer out of the viewport and the chat composer over
                 // the top of it, so a real click retries until it times out — and reports that
@@ -683,9 +761,23 @@ let tests =
                             awaitU (page.Keyboard.TypeAsync (
                                 sprintf "for i in $(seq %d %d); do echo line-$i; sleep 0.01; done" first last))
                         do! awaitU (page.Locator("[data-terminal-send]").First.DispatchEventAsync "click")
-                        // Seeded when the LAST line is on screen: the command finishing says it
-                        // ran, this says the transcript holds what a reopen has to replay.
+                        // On screen first, then KEPT. On screen is not kept: the live leg puts a
+                        // record in the model as it arrives and a separate HTTP read is what
+                        // writes it to the store, so a reload taken in between replays part of
+                        // the transcript out of the store and fetches the rest back over the
+                        // network — two different folds, at a ratio the machine decides. That is
+                        // the difference this case measured across two boxes before it waited
+                        // here: 2.01 renders per record on a laptop, 7.60 on a runner, same code
+                        // and same transcript. Waiting for the store makes the reopen the one
+                        // thing it is supposed to be — a replay of what this device already has.
                         do! waitFor (sprintf "the terminal to print line-%d" last) page (printed last)
+                        do!
+                            waitFor
+                                (sprintf "line-%d to be kept in this device's transcript store" last)
+                                page
+                                (keptWhere
+                                    "/terminals/"
+                                    (sprintf """body.split('\n').some(l => l.includes('"o"') && l.includes('line-%d'))""" last))
                     }
 
                 // Reopening. A reload keeps this origin's storage, so the client replays the
@@ -745,42 +837,44 @@ let tests =
                 let large = 400
                 do! seed 1 small
                 let! rendersSmall = reopen small
+                let recordsSmall = records ()
                 do! seed (small + 1) large
                 let! rendersLarge = reopen large
+                let recordsLarge = records ()
 
-                let added = large - small
+                let added = recordsLarge - recordsSmall
+                // A seed that added no records measures nothing, and would divide by zero
+                // saying so. It means the echoes all landed in writes this session had already
+                // made, which no pty does — so it is a broken fixture, not a fast one.
+                if added <= 0 then
+                    failwithf
+                        "seeding %d more lines added %d transcript records (%d then %d) — there is nothing here to                          measure the cost of"
+                        (large - small) added recordsSmall recordsLarge
                 let perRecord = float (rendersLarge - rendersSmall) / float added
                 printfn
-                    "  reopen: %d renders at %d lines, %d at %d — %.2f renders per added line"
-                    rendersSmall small rendersLarge large perRecord
+                    "  reopen: %d renders over %d records, then %d over %d — %.2f renders per added record"
+                    rendersSmall recordsSmall rendersLarge recordsLarge perRecord
 
-                // The budget, per seeded LINE rather than per record: the pause above makes
-                // each echo its own write, so records track lines, and lines is a number this
-                // case sets rather than one it has to go and measure. A pty that chunked more
-                // would produce FEWER records and a smaller slope, which is the safe direction
-                // for an upper bound.
+                // The budget. Both ends of the measurement are counted now — renders the page
+                // reports, records the session wrote — so this is machine-independent in a way
+                // the renders-per-LINE version was not, and it is a COUNT, which has no jitter
+                // to leave room for. That is the whole reason it is counted rather than timed.
                 //
-                // Measured on this scenario at 2.02 renders per added line, and 2.02 again on
-                // a re-run: a COUNT has no jitter to leave room for, which is the whole reason
-                // this is counted rather than timed. So the headroom is 50%, not the 3x
-                // `tasks.fsx`'s bench guard allows itself — that factor is calibrated against a
-                // shared runner's scheduling noise, and copying it here bought nothing while
-                // costing the guard its teeth: the replay was regressed to dispatch each record
-                // three times, the slope went to 4.02, and a 3x budget let it through.
-                //
-                // What the headroom IS for: a pty that splits one echo across two reads seeds
-                // more records than lines and lifts the ratio a little. A pty that merges them
-                // seeds fewer and lowers it, which is the safe direction.
+                // So the headroom is 50%, not the 3x `tasks.fsx`'s bench guard allows itself.
+                // That factor is calibrated against a shared runner's scheduling noise, and
+                // copying it here bought nothing while costing the guard its teeth: with the
+                // replay regressed to dispatch each record three times, a 3x budget let it
+                // straight through.
                 //
                 // When the replay is fixed to batch, this comes DOWN toward zero, which is what
                 // makes it the proof rather than a note.
-                let budget = 3.0
+                let budget = 12.0
                 if perRecord > budget then
                     failwithf
-                        "reopening this session cost %.2f renders per added transcript record (%d renders at %d \
-                         lines, %d at %d); the budget is %.1f. Reopening got more expensive per record — see the \
-                         replay in `Client.fs` and `setState` in `app/browser/Browser.fs`."
-                        perRecord rendersSmall small rendersLarge large budget
+                        "reopening this session cost %.2f renders per added transcript record (%d renders over %d \
+                         records, then %d over %d); the budget is %.1f. Reopening got more expensive per record — \
+                         see the replay in `Client.fs` and `setState` in `app/browser/Browser.fs`."
+                        perRecord rendersSmall recordsSmall rendersLarge recordsLarge budget
             })
 
         // A command line belongs to ONE terminal. The domain says so — a draft is keyed by
@@ -2580,58 +2674,6 @@ let private inTimeline =
         saidInTimeline
 
 let private printedInTerminal = "printed-before-the-session-died"
-
-/// Has this client actually KEPT the thing the reload will replay?
-///
-/// On screen is not kept. The live leg puts a record in the model the moment it arrives, and
-/// the SAME record triggers a separate HTTP read that is what writes it to the store
-/// (`Client.fs`: `TerminalRecordMsg` / `EventsAvailable` -> fetch -> `cache.Write`), started with
-/// `Async.StartImmediate` and awaited by nothing. So there is a window in which the assertion
-/// these cases make about the LIVE page is already true and the store behind the reload is
-/// still empty — measured at 1 run in 3 on an idle box, and wider on a loaded CI runner, where
-/// killing the session inside it left the reload nothing to replay and the case timed out
-/// naming no cause. Waiting on the store is the difference between testing this and testing
-/// that race, exactly as waiting on the worker's registration is below.
-/// The store search `keptIn` is, with the body test spelled out — for a case where "the text
-/// is in there somewhere" is not the question being asked.
-let private keptWhere (cachePart: string) (bodyTest: string) =
-    sprintf
-        """(async () => {
-             try {
-               const names = (await caches.keys()).filter(n => n.includes('%s'))
-               for (const n of names) {
-                 const c = await caches.open(n)
-                 for (const req of await c.keys()) {
-                   const r = await c.match(req)
-                   if (r) {
-                     const body = await r.text()
-                     if (%s) return true
-                   }
-                 }
-               }
-             } catch (e) { return false }
-             return false
-           })()"""
-        cachePart
-        bodyTest
-
-let private keptIn (cachePart: string) (text: string) =
-    sprintf
-        """(async () => {
-             try {
-               const names = (await caches.keys()).filter(n => n.includes('%s'))
-               for (const n of names) {
-                 const c = await caches.open(n)
-                 for (const req of await c.keys()) {
-                   const r = await c.match(req)
-                   if (r && (await r.text()).includes('%s')) return true
-                 }
-               }
-             } catch (e) { return false }
-             return false
-           })()"""
-        cachePart
-        text
 
 /// The transcript store holding what the terminal PRINTED — an asciicast `"o"` output record
 /// carrying the shell's answer, not the `"i"` input record of the command that caused it.
