@@ -213,6 +213,22 @@ let private appRoot () : obj = jsNative
 [<Emit("$0.replaceChildren()")>]
 let private clearChildren (el: obj) : unit = jsNative
 
+// How many times the whole view has been rendered since this document loaded.
+//
+// A render is the unit of cost on this page. Elmish calls `setState` once per message, and
+// each call re-renders the entire view and reads two scroll positions back out of layout
+// (`surfaceScroll`) — so the question "is reopening a session expensive?" is really "how many
+// renders does it take?", and that is a COUNT: the same number on a laptop and on a phone,
+// unlike every millisecond a test could measure instead.
+//
+// Published rather than inferred. A test can already see the cost indirectly — hook
+// `document.querySelectorAll`, watch `surfaceScroll` go past, count the calls — and that
+// reads a private detail of the render below, so it goes quietly VACUOUS the day the scroll
+// is preserved some other way: no calls, count zero, budget met, nothing to see. This is the
+// render saying what it did, and it is wrong only if it is removed.
+[<Emit("globalThis.__yessionRenders = (globalThis.__yessionRenders || 0) + 1")>]
+let private countRender () : unit = jsNative
+
 // The two surfaces that are read from their END — the chat, and a terminal's scrollback.
 // Both are pinned to the bottom while the reader is at (or within a few px of) it, and both
 // keep their place when they have scrolled up to read. `-1` marks "was pinned". Lit
@@ -1632,6 +1648,7 @@ let private start () =
         // Render the Lit view on every model change. Lit diffs into `#app`, so the focused
         // textarea and its caret survive; only the timeline scroll is restored by hand.
         let setState (model: ClientModel) (dispatch: Ylmish.Program.Message<ClientMsg> -> unit) =
+            countRender ()
             dispatchRef <- fun msg -> dispatch (Ylmish.Program.Message.User msg)
             latestModel <- model
             let scroll = surfaceScroll PinnedSurfaces
