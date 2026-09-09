@@ -796,8 +796,9 @@ let tests =
                 // value. It cannot be, yet, because the measured value is not one number: a
                 // reopen replays whatever this device has KEPT and refetches the rest, the live
                 // leg writes to the store asynchronously, and how that splits depends on how
-                // fast the machine got there. Same code and same seed measured 2.01 renders per
-                // record on a laptop and 7.60 on a CI runner.
+                // fast the machine got there. Same code and same seed: 2.01 renders per record
+                // on a laptop, 5.64 on a CI runner — and the DENOMINATORS agreed there (103
+                // then ~405 records on both), so the spread is renders and nothing else.
                 //
                 // So the line sits above the worst seen, and this catches a gross regression
                 // rather than a subtle one. That is worth having and it is not what was wanted:
