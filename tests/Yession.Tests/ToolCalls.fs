@@ -264,35 +264,16 @@ let private tests' =
                 Expect.stringContains (answered answer) "/repos/octo/hello" "where to cd, not just what was cloned"
             }
 
-        // Terminals do not follow a checkout on their own, and an agent that does not learn
-        // that at the moment one appears learns it by putting `cd` in front of every command
-        // for the rest of the session. The same advice sits on `set_shell_profile`, where
-        // only an agent already reaching for that tool would read it.
-        testCaseAsync "a checkout with nowhere pointed at it says so" <|
-            async {
-                let session = cloningAt "main"
-                let! answer = addRepo session "octo/hello"
-                Expect.stringContains
-                    (answered answer)
-                    "set_shell_profile"
-                    "the way to stop cd-ing, named where it is worth acting on"
-            }
-
-        // ...and stops saying it once somebody has decided. Advice that survives being taken
-        // is noise, and noise in a tool result is spent context on every later call.
-        testCaseAsync "a session that has already decided where terminals start is not told again" <|
-            async {
-                let session =
-                    openToolSession (
-                        servicesProfiledOver
-                            "/repos/octo/hello"
-                            (reposAnswering (fun repo ->
-                                async { return Ok { Repo = repo; Branch = "main"; Dirty = false; Path = "/repos/octo/hello" } })))
-                let! answer = addRepo session "octo/hello"
-                let text = answered answer
-                Expect.stringContains text "added octo/hello" "the add still reports what it did"
-                Expect.isFalse (text.Contains "set_shell_profile") "and nothing is suggested twice"
-            }
+        // The two cases that used to sit here pinned `add_repo` telling an agent to call
+        // `set_shell_profile`, and stopping once somebody had. That advice is gone: it named
+        // the DEFAULT sandbox's path, so an agent that followed it into a container the repo
+        // declared pointed a profile somewhere that does not exist there, and spent six calls
+        // finding out. Where the work is belongs to the sandbox that mounted it — pinned now
+        // by "a repo's sandbox says where it sees the checkout" and "the note a start writes
+        // says where the checkout is" — and what to do about it belongs to the repo, in its
+        // `description:`. Removing them here rather than loosening them: the second asserted
+        // the advice was ABSENT once a profile existed, and with no advice at all it could
+        // never have failed again.
 
         // A repo name the domain refuses never reaches the gate, and the model is told what
         // to fix rather than that something failed.

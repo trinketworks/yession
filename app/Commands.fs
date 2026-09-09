@@ -173,30 +173,26 @@ let dispatch (services: CommandServices) : CommandDispatch =
                                     match! service.AddRepo (repoCaller invocation) repo with
                                     | Error e -> return Error e
                                     | Ok listing ->
-                                        // Said HERE, at the moment a checkout first exists,
-                                        // because that is when it is worth acting on. The
-                                        // same advice sits on `set_shell_profile`, where only
-                                        // an agent already reaching for that tool reads it —
-                                        // which is not the agent about to `cd` in front of
-                                        // every command for the rest of the session.
+                                        // What this verb KNOWS, and nothing else. It used to
+                                        // end with "set_shell_profile with that path", which
+                                        // is advice about a tool a repo verb has no business
+                                        // knowing — and the path it named was the default
+                                        // sandbox's, so an agent that followed it into a
+                                        // container the repo declared pointed a profile at
+                                        // somewhere that does not exist there and spent six
+                                        // calls finding out.
                                         //
-                                        // Conditioned on there being no profile rather than
-                                        // on this being the first repo: the point is that
-                                        // terminals still start somewhere else, and it stops
-                                        // saying so once somebody has decided where.
-                                        let unset =
-                                            (services.Terminals ()).Profiles ()
-                                            |> ShellProfileProjection.workingDirectory SandboxRef.defaultRef
-                                            |> Option.isNone
+                                        // Where the work is, and what to do about it, are the
+                                        // SANDBOX's to say: its start names the checkout as
+                                        // that sandbox sees it, and a repo that wants to steer
+                                        // whoever reads it writes so in its `description:`.
+                                        // Both reach a running turn, which is the whole reason
+                                        // this sentence existed and the only reason it worked.
                                         return
                                             Ok (
                                                 sprintf
-                                                    "added %s — the checkout is shared with everyone in this session and visible in the work environment%s"
-                                                    (RepoListing.describe listing)
-                                                    (if unset then
-                                                         ". That path is the DEFAULT sandbox's; a sandbox the repo declares mounts the checkout somewhere of its own and says where when it starts. Terminals do not start there: set_shell_profile with the path for the sandbox you mean."
-                                                     else
-                                                         ""))
+                                                    "added %s — the checkout is shared with everyone in this session and visible in the work environment. Where a sandbox sees it, and what that sandbox is for, are said when it starts."
+                                                    (RepoListing.describe listing))
                                 }))
                 | Some _, other -> return Error (sprintf "add_repo takes one repo, got %d arguments" (List.length other))
             }

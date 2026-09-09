@@ -27,7 +27,8 @@ sandboxes:
     # container on the same image and differ only in what they are FOR, so a name is the one
     # thing that cannot tell them apart: shown both and asked to run tests, an agent picked
     # `gate`, which is the one that holds a terminal for minutes.
-    description: day-to-day work — the toolchain, and where `check` runs
+    description: day-to-day work — the toolchain, and where `check` runs; point a shell
+      profile here rather than cd-ing in front of every command
     workdir: .
     container:
       image: nixos/nix
@@ -88,7 +89,8 @@ sandboxes:
   # `verify` is minutes long. A second sandbox on the same configuration means the gate
   # runs beside interactive work instead of holding the shell.
   gate:
-    description: the long `verify`, so it runs beside interactive work instead of holding it
+    description: the long `verify`, so it runs beside interactive work instead of holding
+      it; not the one to reach for to run tests
     workdir: .
     container:
       image: nixos/nix
