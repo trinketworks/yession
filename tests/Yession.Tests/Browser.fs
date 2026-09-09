@@ -446,7 +446,7 @@ let private reportingAll (name: string) (pages: (IPage * Evidence) list) (body: 
 /// One CONTEXT per peer, never two pages in one: a peer id lives in origin-partitioned
 /// localStorage, so two pages in one context are one person in two tabs rather than the two
 /// collaborators a convergence case is about.
-let private peersCase (name: string) (peers: int) (body: IPage list -> Async<unit>) =
+let private peersCase (name: string) (peers: int) (body: Host -> IPage list -> Async<unit>) =
     testCaseAsync name <|
         async {
             let host = startHost ()
@@ -479,7 +479,7 @@ let private peersCase (name: string) (peers: int) (body: IPage list -> Async<uni
                         ()
                     for i, page in List.indexed pages do
                         do! waitFor (sprintf "peer %d to connect" (i + 1)) page connected
-                    do! body pages
+                    do! body host pages
                 }
             let! outcome = Async.Catch (reportingAll name opened arranged)
             // Teardown that cannot strand a host: a browser refusing to close must not stop
@@ -495,11 +495,19 @@ let private peersCase (name: string) (peers: int) (body: IPage list -> Async<uni
 
 /// A case with one peer in it.
 let private sessionCase (name: string) (body: IPage -> Async<unit>) =
-    peersCase name 1 (fun pages -> body pages.Head)
+    peersCase name 1 (fun _ pages -> body pages.Head)
+
+/// A case with one peer that also reads the SESSION's own files. Everything above asserts on
+/// what a browser can see, which is the right default; this is for the one thing a browser
+/// cannot answer — how much transcript there actually is — where the alternative is to assume
+/// it, and assuming it is what made the reopen budget below mean different things on different
+/// machines.
+let private hostSessionCase (name: string) (body: Host -> IPage -> Async<unit>) =
+    peersCase name 1 (fun host pages -> body host pages.Head)
 
 /// A case with two, which is what convergence and presence are about.
 let private sessionPair (name: string) (body: IPage -> IPage -> Async<unit>) =
-    peersCase name 2 (fun pages ->
+    peersCase name 2 (fun _ pages ->
         match pages with
         | [ a; b ] -> body a b
         | other -> failwithf "expected two peers, got %d" other.Length)
@@ -619,6 +627,196 @@ let tests =
                     await (pageA.WaitForFunctionAsync
                             "document.querySelector(\"[data-terminal-input^='term-draft:']:not([readonly])\")?.value === ''")
                     |> Async.Ignore
+            })
+
+        // --- Reopening a session, and what it costs -------------------------------------
+        //
+        // Reopening a tab on a session with a long terminal behind it is the slowest thing
+        // this product does, and nothing here could see it. Measured on a real deployment
+        // against a session holding 230 events and 1,469 terminal records: a cold open spent
+        // 10,087 full re-renders and ~22 seconds with the main thread never yielding — on an
+        // M-series laptop. A phone is several times slower again, which is where it was
+        // reported from: inputs dead, and the top of the conversation never painting because
+        // no frame ever completed.
+        //
+        // The cause is one render per replayed record. `Client.fs`'s transcript replay
+        // dispatches a message per record, Elmish calls `setState` per message, and
+        // `setState` re-renders the whole view and reads layout back twice. So the cost is
+        // records × the whole page, and the number that says so is a COUNT of renders.
+        //
+        // WHAT THIS PINS, and what it deliberately does not. It pins the MARGINAL cost —
+        // how many extra renders each extra transcript record adds to a reopen — and not a
+        // duration, because a millisecond budget on a shared runner is the flaky test this
+        // repository warns about while a count is the same number on every box. Marginal
+        // rather than total, because a cold open costs a fixed number of renders whatever the
+        // transcript holds, and that constant is not what got anybody's phone stuck: the
+        // slope is. Two transcripts, one session, and the difference between them is the
+        // measurement.
+        //
+        // The budget is set well above what the code does today (see `perRecord`), so this is
+        // a guard against getting worse rather than a description of good — the storm above is
+        // still there. Tightening this constant is how the fix that removes it gets proved.
+        //
+        // `Srt` because the seed is a command that really runs: on a box that cannot host a
+        // sandbox it never would, and this would wait out its timeout rather than skip.
+        Tag.needs "what reopening a session costs" [ Tag.Browser; Tag.Native; Tag.Srt ] (fun () ->
+        hostSessionCase "reopening a session renders a bounded number of times per transcript record" <|
+            fun host page ->
+            async {
+                // How much transcript there IS, counted off the session's own recordings. A
+                // record is one line of a `.cast`, and one line is one write the pty handed
+                // over — which is emphatically NOT one echo. This started out assuming it was,
+                // dividing renders by the number of lines the seed asked for, and the two
+                // numbers disagreed by a factor of four: 2.02 renders per line on a laptop
+                // where the pty coalesced several echoes into each read, 7.60 on a CI runner
+                // where it did not. Same code, same seed, different machine, and a budget in
+                // between would have failed for whoever ran it on the wrong one.
+                //
+                // So the denominator is measured rather than assumed, and measured from the
+                // artifact rather than from the client: this counts what the SESSION wrote,
+                // which is the thing the reopen has to fold, and it cannot be moved by a
+                // change to how the browser is instrumented.
+                let records () =
+                    Directory.GetFiles (host.DataDir, "*.cast", SearchOption.AllDirectories)
+                    |> Array.sumBy (fun f -> File.ReadAllLines(f).Length)
+                let composerInput = "[data-terminal-input^='term-draft:']:not([readonly])"
+                let printed (n: int) =
+                    sprintf
+                        "[...document.querySelectorAll('[data-terminal-output]')].some(o => o.textContent.includes('line-%d'))"
+                        n
+
+                // Output in MANY small writes, because a record is a write and not a line:
+                // `seq 1 300` arrives in a handful of chunks and would seed a handful of
+                // records, which is a transcript this cost cannot be measured on. The pause is
+                // what separates them — how WELL it separates them is the machine's business,
+                // which is why `records` counts the result rather than trusting it — and it
+                // arranges the fixture rather than timing an assertion: everything below waits
+                // on content.
+                // Focused and sent WITHOUT the pointer. A reload leaves the terminal column
+                // laid out with its composer out of the viewport and the chat composer over
+                // the top of it, so a real click retries until it times out — and reports that
+                // as "element is outside of the viewport", which is a fact about this layout
+                // and nothing about what is being measured here. Whether that composer is
+                // clickable is a promise, and it is the two cases above that make it; this one
+                // is about what a reopen costs, so it takes the shortest honest route to a
+                // command having run. The KEYSTROKES stay real — the input's binding is what
+                // writes the CRDT, and typing is the only thing that exercises it.
+                let seed (first: int) (last: int) =
+                    async {
+                        let! _ = await (page.WaitForSelectorAsync composerInput)
+                        do! awaitU (page.EvalOnSelectorAsync (composerInput, "el => el.focus()"))
+                        do!
+                            awaitU (page.Keyboard.TypeAsync (
+                                sprintf "for i in $(seq %d %d); do echo line-$i; sleep 0.01; done" first last))
+                        do! awaitU (page.Locator("[data-terminal-send]").First.DispatchEventAsync "click")
+                        // Seeded when the LAST line is on screen: the command finishing says it
+                        // ran, this says the transcript holds what a reopen has to replay.
+                        do! waitFor (sprintf "the terminal to print line-%d" last) page (printed last)
+                    }
+
+                // Reopening. A reload keeps this origin's storage, so the client replays the
+                // transcript out of its OWN store — the path a person reopening a closed tab
+                // takes, and the expensive one. A fresh context would fetch it back over HTTP
+                // and fold it somewhere else.
+                //
+                // Settled when the render count has stopped moving. Reported rather than waited
+                // on: a page still rendering after this long has not failed to settle in some
+                // incidental way, it IS the regression, and it should say so in a number rather
+                // than in a timeout that names nothing.
+                let reopen (upTo: int) =
+                    async {
+                        let! _ = await (page.ReloadAsync ())
+                        do! waitFor "the reopened session to connect" page connected
+                        do! waitFor "the reopened session to have replayed its terminal" page (printed upTo)
+                        let! settled =
+                            await (page.EvaluateAsync<string> """() => new Promise(resolve => {
+                              let last = -1, still = 0, waited = 0
+                              const tick = () => {
+                                const n = globalThis.__yessionRenders ?? -1
+                                if (n === last) still++ ; else { still = 0; last = n }
+                                waited += 250
+                                if (still >= 6 || waited >= 30000) resolve(n + ',' + (still >= 6))
+                                else setTimeout(tick, 250)
+                              }
+                              tick()
+                            })""")
+                        match settled.Split ',' with
+                        | [| n; s |] ->
+                            let renders = int n
+                            // Anti-vacuity, both ways this passes a budget while measuring
+                            // nothing: a counter that was never incremented (the app stopped
+                            // publishing one, so this reads -1 or 0), and a page still
+                            // rendering when time ran out. The third — a transcript too short
+                            // to cost anything — is the wait above, which does not settle
+                            // until the last seeded line is back on screen.
+                            if renders <= 0 then
+                                failwithf
+                                    "the page reports %d renders — `Browser.fs` publishes \
+                                     `globalThis.__yessionRenders` and this budget means nothing without it"
+                                    renders
+                            if s <> "true" then
+                                failwithf
+                                    "the reopened session was still rendering after 30s (%d renders so far, %d \
+                                     seeded lines) — the replay storm this budget exists for, not a slow box"
+                                    renders upTo
+                            return renders
+                        | _ -> return failwithf "the render counter answered '%s', which is not a count" settled
+                    }
+
+                do! awaitU (page.Locator("[data-terminal-toggle='show']").First.ClickAsync ())
+                do! awaitU (page.Locator("[data-terminal-new]").First.ClickAsync ())
+                let! _ = await (page.WaitForFunctionAsync "!!document.querySelector('[data-terminal-tab]')")
+
+                let small = 100
+                let large = 400
+                do! seed 1 small
+                let! rendersSmall = reopen small
+                let recordsSmall = records ()
+                do! seed (small + 1) large
+                let! rendersLarge = reopen large
+                let recordsLarge = records ()
+
+                let added = recordsLarge - recordsSmall
+                // A seed that added no records measures nothing, and would divide by zero
+                // saying so. It means the echoes all landed in writes this session had already
+                // made, which no pty does — so it is a broken fixture, not a fast one.
+                if added <= 0 then
+                    failwithf
+                        "seeding %d more lines added %d transcript records (%d then %d) — there is nothing here to                          measure the cost of"
+                        (large - small) added recordsSmall recordsLarge
+                let perRecord = float (rendersLarge - rendersSmall) / float added
+                printfn
+                    "  reopen: %d renders over %d records, then %d over %d — %.2f renders per added record"
+                    rendersSmall recordsSmall rendersLarge recordsLarge perRecord
+
+                // The budget, and why it is loose rather than tight.
+                //
+                // Both ends are counted now — renders the page reports, records the session
+                // wrote — and a count has no jitter, so this wanted to be 50% over the measured
+                // value. It cannot be, yet, because the measured value is not one number: a
+                // reopen replays whatever this device has KEPT and refetches the rest, the live
+                // leg writes to the store asynchronously, and how that splits depends on how
+                // fast the machine got there. Same code and same seed: 2.01 renders per record
+                // on a laptop, 5.64 on a CI runner — and the DENOMINATORS agreed there (103
+                // then ~405 records on both), so the spread is renders and nothing else.
+                //
+                // So the line sits above the worst seen, and this catches a gross regression
+                // rather than a subtle one. That is worth having and it is not what was wanted:
+                // making the reopen deterministic — waiting until the transcript is in the
+                // store, so the fold under measurement is the replay and only the replay — is
+                // what lets this come down to about 3.0, and it is its own piece of work
+                // (the wait for it never settled inside 30s on the runner, which is a fact
+                // about the store's write path and not about this budget).
+                //
+                // When the replay is fixed to batch, this comes DOWN toward zero, which is what
+                // makes it the proof rather than a note.
+                let budget = 12.0
+                if perRecord > budget then
+                    failwithf
+                        "reopening this session cost %.2f renders per added transcript record (%d renders over %d \
+                         records, then %d over %d); the budget is %.1f. Reopening got more expensive per record — \
+                         see the replay in `Client.fs` and `setState` in `app/browser/Browser.fs`."
+                        perRecord rendersSmall recordsSmall rendersLarge recordsLarge budget
             })
 
         // A command line belongs to ONE terminal. The domain says so — a draft is keyed by
