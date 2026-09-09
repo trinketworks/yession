@@ -188,10 +188,20 @@ let dispatch (services: CommandServices) : CommandDispatch =
                                         // whoever reads it writes so in its `description:`.
                                         // Both reach a running turn, which is the whole reason
                                         // this sentence existed and the only reason it worked.
+                                        //
+                                        // What stays is WHICH VIEW this path is, and that is a
+                                        // fact rather than advice — the only fact here nothing
+                                        // else supplies. Both paths now arrive in one answer,
+                                        // this one and the sandbox's, and an answer carrying
+                                        // two addresses for one checkout without saying which
+                                        // is which invites the reader to pick the first:
+                                        // measured, an agent did exactly that, pointed a dev
+                                        // sandbox's profile at the default's path, and spent
+                                        // two more calls undoing it.
                                         return
                                             Ok (
                                                 sprintf
-                                                    "added %s — the checkout is shared with everyone in this session and visible in the work environment. Where a sandbox sees it, and what that sandbox is for, are said when it starts."
+                                                    "added %s — and that path is the DEFAULT sandbox's. A sandbox this repo declares sees the checkout somewhere of its own and says where when it starts. It is shared with everyone in this session either way."
                                                     (RepoListing.describe listing))
                                 }))
                 | Some _, other -> return Error (sprintf "add_repo takes one repo, got %d arguments" (List.length other))
