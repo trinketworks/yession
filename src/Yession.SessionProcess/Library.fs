@@ -19,6 +19,7 @@ module Bootstrap =
         | AgentMessageStarted _ -> "agent-message-started"
         | AgentMessageDelta _ -> "agent-message-delta"
         | AgentThought _ -> "agent-thought"
+        | SandboxSetupQueued _ -> "sandbox-setup-queued"
         | AgentMessageCompleted _ -> "agent-message-completed"
         | AgentTurnFailed _ -> "agent-turn-failed"
         | AgentTurnInterrupted _ -> "agent-turn-interrupted"

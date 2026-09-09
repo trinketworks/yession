@@ -60,6 +60,14 @@ type CommandServices =
       /// Say a query's answer changed. A command is the only thing that can change one, so
       /// a command is the only thing that has to say so — nothing polls.
       Invalidate : QueryName -> unit
+      /// Record that a repo's `setup:` was queued, or could not be — the one thing a command
+      /// here puts on the log directly, because it is the one thing no service below it
+      /// knows: the sandbox manager did not queue it and the terminal does not know why it
+      /// exists.
+      ///
+      /// A `Result` rather than the fact's own two optionals, so a caller cannot build the
+      /// pair that means nothing; the Host maps it, in one place.
+      NoteSetup : SandboxRef -> string -> Result<QueueId, string> -> ActorRef -> Async<unit>
       /// Re-read every checkout's `yession.yaml` and ensure what it declares (Plan 27), on
       /// the authority of whoever ran the verb.
       ///
@@ -382,12 +390,34 @@ let dispatch (services: CommandServices) : CommandDispatch =
                                                             Background = true }
                                                         invocation.Authority
                                                     with
-                                                | Ok _ -> return " — running its setup"
+                                                // Recorded, not just returned. This answer
+                                                // reaches whoever called `start_work_sandbox`
+                                                // — and on the fold path that is the fold,
+                                                // which reads it and drops it, so the one
+                                                // sentence explaining a terminal the next
+                                                // turn finds busy was written and thrown
+                                                // away. The event reaches both audiences:
+                                                // the timeline a person reads, and — through
+                                                // the audit seam — the turn that is running.
+                                                | Ok outcome ->
+                                                    do!
+                                                        services.NoteSetup
+                                                            entry.Ref
+                                                            command
+                                                            (Ok outcome.Handle)
+                                                            (Authority.author invocation.Authority)
+                                                    return " — running its setup"
                                                 // Said, never fatal: the sandbox is up, and
                                                 // a setup that could not be QUEUED is worth
                                                 // reading rather than a start that reports
                                                 // failure for something already running.
                                                 | Error reason ->
+                                                    do!
+                                                        services.NoteSetup
+                                                            entry.Ref
+                                                            command
+                                                            (Error reason)
+                                                            (Authority.author invocation.Authority)
                                                     return sprintf " — its setup could not be queued: %s" reason
                                             }
                                         | _ -> async { return "" }

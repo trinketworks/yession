@@ -478,6 +478,39 @@ module ConversationProjection =
                           Kind = ConversationItemKind.ActNote { Detail = c.Reason; Notable = false }
                           Offset = envelope.Offset
                           Woke = None; Replying = None } ] }
+        // A repo's `setup:`, said because nobody in the session asked for it. Every other
+        // block on this timeline is somebody here running something; this one appears in a
+        // terminal they will find busy, holding it until it finishes. The DETAIL carries the
+        // handle, which is what makes it actionable rather than merely honest — `said` gives
+        // the agent both, and a screen shows the headline with the mechanics beside it.
+        | SessionEvent.SandboxSetupQueued q ->
+            { proj with
+                Items =
+                    proj.Items
+                    @ [ { MessageId = q.MessageId
+                          Author = q.Actor
+                          Body =
+                            match q.Problem with
+                            | Some _ -> sprintf "%s could not start its setup" (SandboxRef.render q.Sandbox)
+                            | None -> sprintf "%s is running its setup: %s" (SandboxRef.render q.Sandbox) q.Command
+                          Status = Complete
+                          Kind =
+                            ConversationItemKind.ActNote
+                                { Detail =
+                                    match q.Handle, q.Problem with
+                                    | Some handle, _ ->
+                                        Some (
+                                            sprintf
+                                                "it holds that terminal until it finishes; check_pending with handle '%s' for the outcome"
+                                                (QueueId.value handle))
+                                    | None, Some problem -> Some problem
+                                    | None, None -> None
+                                  // Worth seeing when it FAILED: a sandbox whose setup never
+                                  // ran is a sandbox the next command pays for in full, and
+                                  // that is the case somebody should be told loudly.
+                                  Notable = q.Problem.IsSome }
+                          Offset = envelope.Offset
+                          Woke = None; Replying = None } ] }
         // Reasoning is recorded and shown to NOBODY, and this case exists to say that is a
         // decision rather than an omission. It is a summary of what a model thought before it
         // acted: useful for asking why a turn did what it did, and not the same kind of thing

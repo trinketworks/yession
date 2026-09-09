@@ -95,6 +95,7 @@ type SessionEvent =
     // act, attributed, with its own MessageId so it reads in the timeline beside the repo
     // notes it is a sibling of.
     | WorkSandboxStarted of WorkSandboxStarted
+    | SandboxSetupQueued of SandboxSetupQueued
     | WorkSandboxStopped of WorkSandboxStopped
     // A declaration that did NOT become a sandbox (Plan 27). The sibling above announces the
     // starts; until this, only the starts were announced — so a file with a typo in it read
