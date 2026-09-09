@@ -58,6 +58,13 @@ type AgentContextPack =
 /// the reason a transcript exists: what an agent said is a thing it is answerable for, and
 /// folding its reasoning into the same stream would put words in its mouth. It is recorded
 /// and, for now, shown to nobody.
+///
+/// A whole THOUGHT, unlike `Text`, which is whatever arrived. The asymmetry is not an
+/// oversight: a message is bracketed — started, delta'd, completed with a body — so a reader
+/// can put its pieces back together and knows when it has them all. A thought is bracketed by
+/// nothing, so a runner that forwarded its deltas would leave every reader reassembling by
+/// adjacency, which is a rule nothing states and nothing can check. It shipped that way for
+/// one build: seven thoughts arrived as twenty-eight events, split mid-word.
 [<RequireQualifiedAccess>]
 type AgentResponseChunk =
     | Text of string

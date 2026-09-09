@@ -42,6 +42,9 @@ type private JsToolAnswer =
   // that has to survive the throw. See the catch.
   let body = ''
   let streamed = ''
+  // One thought's deltas, held until its block ends. Declared out here with the rest of what
+  // has to survive a throw: a turn that ends badly still thought what it thought.
+  let thinking = ''
   let failed = null
   let inputTokens = 0
   let outputTokens = 0
@@ -147,6 +150,7 @@ type private JsToolAnswer =
         // turn can be split where the model split it, and `streamed` starts over so the
         // fallback body below is that of the LAST message rather than of the whole turn.
         if (e && e.type === 'message_start') {
+          if (thinking !== '') { onThought(thinking); thinking = '' }
           onBoundary()
           streamed = ''
         }
@@ -158,8 +162,23 @@ type private JsToolAnswer =
         // the condition above in silence — `typeof undefined === 'string'` is false, so a
         // thinking delta looked exactly like an event this runner did not care about. It is
         // NOT added to `streamed`: that is the fallback body for what the model SAID.
+        //
+        // ACCUMULATED to the end of its block, so one thought is one `onThought`. Forwarded
+        // per delta, a thought arrived as an event per token — twenty-eight events for seven
+        // thoughts, split at "I" / "'ll clone the repository" — and every reader had to put
+        // them back together by adjacency, which is a rule nothing states and nothing checks.
+        // Text gets away with per-delta because a message is bracketed by started/completed
+        // and the completion carries the whole body; a thought is bracketed by nothing.
         if (e && e.type === 'content_block_delta' && e.delta && typeof e.delta.thinking === 'string') {
-          onThought(e.delta.thinking)
+          thinking += e.delta.thinking
+        }
+        // The provider's own end of the block. `message_start` above and the end of the
+        // stream below flush too, so a block the provider never closes is still reported
+        // rather than lost — an unterminated thought is worth reading and this is the only
+        // copy of it.
+        if (e && e.type === 'content_block_stop' && thinking !== '') {
+          onThought(thinking)
+          thinking = ''
         }
       } else if (m.type === 'result') {
         // Plan 04, Step 28: read the usage block instead of discarding it.
@@ -173,6 +192,7 @@ type private JsToolAnswer =
         else failed = 'agent run ended: ' + m.subtype
       }
     }
+    if (thinking !== '') { onThought(thinking); thinking = '' }
     const usage = { inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens, model }
     return failed ? { ok: false, body: '', reason: failed, ...usage } : { ok: true, body, reason: '', ...usage }
   } catch (err) {
