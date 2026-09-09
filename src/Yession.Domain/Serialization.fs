@@ -1117,6 +1117,27 @@ module Codec =
                   PrTransitioned.Checks = get.Required.Field "checks" checksRollup.Decode
                   PrTransitioned.Watcher = get.Required.Field "watcher" actor.Decode }) }
 
+    let private sandboxSetupQueued : Codec<SandboxSetupQueued> =
+        { Encode =
+            fun (p: SandboxSetupQueued) ->
+                Encode.object
+                    [ "messageId", messageId.Encode p.MessageId
+                      "sandbox", sandboxRef.Encode p.Sandbox
+                      "command", Encode.string p.Command
+                      "handle", Encode.option (QueueId.value >> Encode.string) p.Handle
+                      "problem", Encode.option Encode.string p.Problem
+                      "actor", actor.Encode p.Actor ]
+          Decode =
+            Decode.object (fun get ->
+                { SandboxSetupQueued.MessageId = get.Required.Field "messageId" messageId.Decode
+                  SandboxSetupQueued.Sandbox = get.Required.Field "sandbox" sandboxRef.Decode
+                  SandboxSetupQueued.Command = get.Required.Field "command" Decode.string
+                  SandboxSetupQueued.Handle =
+                    get.Optional.Field "handle" (Decode.option queueId.Decode) |> Option.flatten
+                  SandboxSetupQueued.Problem =
+                    get.Optional.Field "problem" (Decode.option Decode.string) |> Option.flatten
+                  SandboxSetupQueued.Actor = get.Required.Field "actor" actor.Decode }) }
+
     let private workSandboxStarted : Codec<WorkSandboxStarted> =
         { Encode =
             fun (p: WorkSandboxStarted) ->
@@ -1397,6 +1418,8 @@ module Codec =
                     Encode.object [ "type", Encode.string "repoBranchSwitched"; "payload", repoBranchSwitched.Encode p ]
                 | WorkSandboxStarted p ->
                     Encode.object [ "type", Encode.string "workSandboxStarted"; "payload", workSandboxStarted.Encode p ]
+                | SandboxSetupQueued p ->
+                    Encode.object [ "type", Encode.string "sandboxSetupQueued"; "payload", sandboxSetupQueued.Encode p ]
                 | WorkSandboxStopped p ->
                     Encode.object [ "type", Encode.string "workSandboxStopped"; "payload", workSandboxStopped.Encode p ]
                 | RepoConfigRefused p ->
@@ -1470,6 +1493,7 @@ module Codec =
                 | "repoRemoved" -> Decode.field "payload" repoRemoved.Decode |> Decode.map RepoRemoved
                 | "repoBranchSwitched" -> Decode.field "payload" repoBranchSwitched.Decode |> Decode.map RepoBranchSwitched
                 | "workSandboxStarted" -> Decode.field "payload" workSandboxStarted.Decode |> Decode.map WorkSandboxStarted
+                | "sandboxSetupQueued" -> Decode.field "payload" sandboxSetupQueued.Decode |> Decode.map SandboxSetupQueued
                 | "repoConfigRefused" -> Decode.field "payload" repoConfigRefused.Decode |> Decode.map RepoConfigRefused
                 | "repoCapabilitiesChanged" ->
                     Decode.field "payload" repoCapabilitiesChanged.Decode |> Decode.map RepoCapabilitiesChanged

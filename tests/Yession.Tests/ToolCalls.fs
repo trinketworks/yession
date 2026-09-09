@@ -150,6 +150,7 @@ let private servicesOver (service: Repos.ReposService) : Commands.CommandService
       RunCommand = fun () -> TerminalCommands.unavailable
       Prs = fun () -> None
       Invalidate = ignore
+      NoteSetup = fun _ _ _ _ -> async { return () }
       Refold = fun _ -> async { return () } }
 
 /// The same, with a shell profile already set for the default sandbox — a session where

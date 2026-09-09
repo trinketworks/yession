@@ -30,6 +30,27 @@ and [<RequireQualifiedAccess>] EnvironmentStopRequested =
 and [<RequireQualifiedAccess>] EnvironmentStopped =
     { EnvironmentId : string }
 
+/// What a repo's file asked to have run to make one of its sandboxes ready, and what became
+/// of the asking (`setup:`).
+///
+/// Its own fact rather than a field on the start, because it happens after one: the sandbox is
+/// up before there is anywhere to queue this. And a fact at all because nobody in the session
+/// asked for it — the block appears in a terminal they will find busy, holding it until it
+/// finishes, and a turn that meets that with no explanation spends calls establishing what it
+/// is. Measured: three, on a session that had everything else right.
+and SandboxSetupQueued =
+    { MessageId : MessageId
+      Sandbox : SandboxRef
+      /// As written in the file. The block carries it too; this is what a reader is told
+      /// without going to look for the block.
+      Command : string
+      /// The handle it can be picked up by — the same `check_pending` takes, which is what
+      /// makes this actionable rather than merely honest. Absent only when the queueing
+      /// itself failed, and then `Problem` says why: exactly one of the two is present.
+      Handle : QueueId option
+      Problem : string option
+      Actor : ActorRef }
+
 and WorkSandboxStarted =
     { MessageId : MessageId
       /// Which sandbox, scope included. The wire form is `SandboxRef.render`, and it is

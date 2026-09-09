@@ -499,6 +499,17 @@ let mutable private terminals : SessionTerminals.SessionTerminals = SessionTermi
 /// built by the Host, which owns the doc every queue entry is written into.
 let mutable private terminalCommands : TerminalCommands.TerminalCommands = TerminalCommands.unavailable
 
+/// The session's event log, once boot has opened it. A getter for the same reason every
+/// service above is one: this record is built before the async that fills the cells.
+///
+/// Absent DEGRADES rather than throws, which is the posture every cell above it takes —
+/// `WorkSandboxes.unavailable`, `SessionTerminals.unavailable`, `RepoSandboxes.none` all
+/// answer "this session has no X" instead of failing. A gated command is answerable to a
+/// model reading its result, and an unexplained exception there is the one shape it cannot
+/// act on. Nothing can reach this before boot fills it; the point is what happens if
+/// something ever does.
+let mutable private openedLog : EventLog<SessionEvent> option = None
+
 // The MCP servers this session was given (Plan 17). Composed HERE rather than by the Host,
 // unlike the other reverse legs, because what arrives on that leg has two consumers: a
 // turn's registry, which the Host builds, and the `mcp_servers` query, which is this
@@ -590,6 +601,28 @@ let private commandServices : Commands.CommandServices =
       RunCommand = fun () -> terminalCommands
       Prs = fun () -> prWatchService
       Invalidate = fun name -> queryRegistry.Invalidate name
+      // Minted and appended HERE, which is what keeps a projection a pure fold: an item's id
+      // has to come from the log, and a projection that minted one would give different
+      // answers on every re-read of the same events. Through the same cell every other
+      // service here reads, filled by the boot async.
+      NoteSetup =
+        fun sandbox command queued actor ->
+            async {
+                match openedLog with
+                | None -> return ()
+                | Some log ->
+                let! _ =
+                    log.Append
+                        actor
+                        (SessionEvent.SandboxSetupQueued
+                            { MessageId = MessageId.create (string (System.Guid.NewGuid ())) |> Result.defaultWith failwith
+                              Sandbox = sandbox
+                              Command = command
+                              Handle = (match queued with Ok handle -> Some handle | Error _ -> None)
+                              Problem = (match queued with Ok _ -> None | Error reason -> Some reason)
+                              Actor = actor })
+                return ()
+            }
       // What a repo verb does to the configuration. Handed as a function rather than the
       // fold itself because the cell is filled after this record is built — and because a
       // command's business is to say WHEN the configuration may have changed, never to know
@@ -769,6 +802,9 @@ Async.StartImmediate (
     async {
         let log =
             EventStore.openLog (sprintf "%s/events.jsonl" dataDir) sessionId (fun () -> System.DateTimeOffset.UtcNow)
+        // Filled before anything that could read it runs: the command table was built above
+        // and holds a getter, not this value.
+        openedLog <- Some log
         // The repo manager (Plan 14), over the same log and the agent backend's sandbox
         // family. A backend that cannot host it fails the boot — the same fail-closed
         // stance as the WorkSandbox composition above.
