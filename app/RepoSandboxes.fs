@@ -55,6 +55,9 @@ type RepoSandboxes =
       /// What a checkout said one of its sandboxes is FOR, from the last fold. Answered here
       /// because this is what holds declarations; the sandbox manager holds none and asks.
       Described : SandboxRef -> string option
+      /// Where one of them asked for the session's checkouts, from the same fold. `None` is
+      /// the backend's default, which is what every file that says nothing gets.
+      ReposAt : SandboxRef -> string option
       /// Consent to what a repo asks for, on the authority of a person.
       ///
       /// Takes the set the person was SHOWN and refuses if it is not the set asked for now.
@@ -70,6 +73,7 @@ let none : RepoSandboxes =
       Outcomes = fun () -> []
       Undeclared = fun () -> []
       Described = fun _ -> None
+      ReposAt = fun _ -> None
       Approve = fun _ _ _ -> async { return Error "this session has no repos to approve anything for" } }
 
 /// What the log already says about one declaration: the reason it was last refused, when
@@ -190,6 +194,7 @@ let create
     // the same reason they are: a description is a fact about the FILE as it stood when it
     // was folded, and re-reading it later would answer about a file that has since changed.
     let mutable describedRefs : Map<string, string> = Map.empty
+    let mutable reposAtRefs : Map<string, string> = Map.empty
 
     let fold (onBehalfOf: ActorRef option) : Async<unit> =
         async {
@@ -198,6 +203,7 @@ let create
                 outcomes <- []
                 declaredRefs <- Set.empty
                 describedRefs <- Map.empty
+                reposAtRefs <- Map.empty
             | Some service ->
                 match! service.ListRepos () with
                 // A listing that failed says nothing about any repo in particular, so there
@@ -216,6 +222,12 @@ let create
                         |> Map.toList
                         |> List.choose (fun (ref, decl) ->
                             decl.Description |> Option.map (fun said -> SandboxRef.render ref, said))
+                        |> Map.ofList
+                    reposAtRefs <-
+                        declared
+                        |> Map.toList
+                        |> List.choose (fun (ref, decl) ->
+                            decl.Repos |> Option.map (fun at -> SandboxRef.render ref, at))
                         |> Map.ofList
                     let fileProblems =
                         unreadable
@@ -443,6 +455,7 @@ let create
       Outcomes = fun () -> outcomes
       Undeclared = undeclared
       Described = fun ref -> Map.tryFind (SandboxRef.render ref) describedRefs
+      ReposAt = fun ref -> Map.tryFind (SandboxRef.render ref) reposAtRefs
       Approve = approve }
 
 // --- the `repo_config` query ------------------------------------------------------------

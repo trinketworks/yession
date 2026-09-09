@@ -276,11 +276,17 @@ module SessionLayout =
 /// drift: the mount, the sandbox's write path, and — the half that was missing — the
 /// ANSWER a repo verb gives. A checkout the agent cannot name is a checkout it hunts for,
 /// and hunting is what the turn gets spent on.
-let reposVisibleAt (backend: SandboxBackend) (hostReposDir: string) : string =
+/// `declared` is a sandbox's own `repos:`, when it wrote one. It only bears on a backend
+/// that MOUNTS the checkouts — a host-family sandbox shares the session's own directory by
+/// path, and there is no mount whose target could be moved, so a declaration there names
+/// somewhere nothing would appear. Unreachable today by construction rather than by luck: a
+/// repo-owned declaration is refused without a `container:`, and repo work runs on
+/// `SandboxRuntime.repoWorkBackend`.
+let reposVisibleAt (declared: string option) (backend: SandboxBackend) (hostReposDir: string) : string =
     match backend with
     | HostBackend
     | SrtBackend -> hostReposDir
-    | DockerBackend -> "/repos"
+    | DockerBackend -> declared |> Option.defaultValue "/repos"
 
 /// A repo's checkout as its OWN work sandbox will see it — the root that repo's
 /// `workdir:` resolves against (`SandboxDecl.toRequest`). Repo-owned work runs under
@@ -289,15 +295,15 @@ let reposVisibleAt (backend: SandboxBackend) (hostReposDir: string) : string =
 /// produced a container whose working directory wore the HOST checkout path — an empty
 /// volume mounted where nothing would ever look, while the checkout sat under the
 /// /repos bind.
-let workCheckoutAt (reposDir: string) (repo: RepoRef) : string =
-    sprintf "%s/%s" (reposVisibleAt SandboxRuntime.repoWorkBackend reposDir) (RepoRef.relativePath repo)
+let workCheckoutAt (declared: string option) (reposDir: string) (repo: RepoRef) : string =
+    sprintf "%s/%s" (reposVisibleAt declared SandboxRuntime.repoWorkBackend reposDir) (RepoRef.relativePath repo)
 
 /// The same checkout in both its addresses (`CheckoutViews`): the sandbox's own view for
 /// `workdir:`, the host's for a `build:` context the daemon client reads from THIS
 /// filesystem. `SandboxDecl.toRequest` takes the pair so each path resolves against the
 /// view its reader will use.
-let checkoutViewsAt (reposDir: string) (repo: RepoRef) : CheckoutViews =
-    { InSandbox = workCheckoutAt reposDir repo
+let checkoutViewsAt (declared: string option) (reposDir: string) (repo: RepoRef) : CheckoutViews =
+    { InSandbox = workCheckoutAt declared reposDir repo
       OnHost = sprintf "%s/%s" reposDir (RepoRef.relativePath repo) }
 
 /// What the SESSION adds to whatever was asked for. The checkouts are the session's,
@@ -327,7 +333,10 @@ let withSessionRepos (reposDir: string) (backend: SandboxBackend) (requested: En
                         Mounts =
                             container.Mounts
                             @ [ { Source = HostPath reposDir
-                                  Target = reposVisibleAt backend reposDir
+                                  // The sandbox's own choice, which `workdir:` was already
+                                  // resolved against — one function, so the mount and the
+                                  // paths that answer for it cannot name two places.
+                                  Target = reposVisibleAt requested.ReposAt backend reposDir
                                   Mode = ReadWrite } ] } }
     | HostBackend
     | SrtBackend -> requested

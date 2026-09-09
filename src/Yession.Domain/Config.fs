@@ -95,7 +95,14 @@ type SandboxDecl =
       ///
       /// It reaches a reader wherever a sandbox is named — the start note, the queries — so
       /// whoever is choosing between them is choosing on the reason rather than the spelling.
-      Description : string option }
+      Description : string option
+      /// Where this sandbox wants the session's checkouts to appear, absolute; absent takes
+      /// the backend's own default (`/repos` in a container).
+      ///
+      /// A TARGET and never a source, which is what makes it the repo's to write at all — the
+      /// same line `files:` draws. The checkouts arrive regardless; this only says where to
+      /// look for them, inside a container this file already specifies entirely.
+      Repos : string option }
 
 module SandboxDecl =
 
@@ -108,7 +115,8 @@ module SandboxDecl =
           Files = Map.empty
           Forward = []
           Setup = None
-          Description = None }
+          Description = None
+          Repos = None }
 
     /// One declaration, written back as the file would have written it.
     ///
@@ -186,7 +194,8 @@ module SandboxDecl =
                         |> List.map (fun (path, content) -> HomePath.value path, Encode.string content))
                   if not (List.isEmpty decl.Forward) then "forward", strings decl.Forward
                   if decl.Setup.IsSome then "setup", Encode.string decl.Setup.Value
-                  if decl.Description.IsSome then "description", Encode.string decl.Description.Value ])
+                  if decl.Description.IsSome then "description", Encode.string decl.Description.Value
+                  if decl.Repos.IsSome then "repos", Encode.string decl.Repos.Value ])
 
     /// What a declaration ASKS the session for, given where this repo's checkout is.
     ///
@@ -271,7 +280,8 @@ module SandboxDecl =
                       Wants = decl.Wants
                       Files = decl.Files
                       Runtime = runtime
-                      Setup = decl.Setup }
+                      Setup = decl.Setup
+                      ReposAt = decl.Repos }
                   Forward = decl.Forward }
 
 /// One repo's whole file.
@@ -391,6 +401,30 @@ module ConfigFile =
                 Decode.fail (sprintf "%s must be inside the checkout, and '%s' climbs out of it" what path)
             else Decode.succeed path)
 
+    /// `repos:` — where the session's checkouts appear in this sandbox.
+    ///
+    /// The mirror image of `inCheckout` above, and deliberately so: that one refuses an
+    /// absolute path because it names somewhere INSIDE a checkout, and this one requires an
+    /// absolute path because it names somewhere inside a CONTAINER, where a relative path has
+    /// no root to be relative to. `..` is refused in both for the same reason — a path with a
+    /// climb in it means one thing to whoever wrote it and another to whatever resolves it.
+    ///
+    /// Nothing here reaches out of the sandbox: this is a mount TARGET, and the source is the
+    /// session's own repos directory in every case. A repo that could name the source could
+    /// name any directory on the host, which is what `uses:`/`wants:` exists to arbitrate.
+    let private reposTarget : Decoder<string> =
+        Decode.string
+        |> Decode.andThen (fun raw ->
+            let path = raw.Trim().TrimEnd '/'
+            let segments = path.Split ([| '/'; '\\' |]) |> List.ofArray
+            if path = "" then Decode.fail "repos cannot be blank"
+            elif not (path.StartsWith "/") then
+                Decode.fail (
+                    sprintf "repos is where the checkouts appear inside the sandbox, so it must be absolute, and '%s' is not" path)
+            elif segments |> List.contains ".." then
+                Decode.fail (sprintf "repos cannot climb, and '%s' does" path)
+            else Decode.succeed path)
+
     /// `build:` — a context directory, and optionally a dockerfile within it.
     ///
     /// Both paths go through `inCheckout` for the same reason `workdir` does: the context
@@ -455,7 +489,7 @@ module ConfigFile =
                   Command = get.Optional.Field "cmd" Decode.string }))
 
     let private sandboxKeys =
-        [ "container"; "workdir"; "env"; "uses"; "wants"; "files"; "forward"; "setup"; "description" ]
+        [ "container"; "workdir"; "env"; "uses"; "wants"; "files"; "forward"; "setup"; "description"; "repos" ]
 
     /// `files:` — a path inside the sandbox's home to the content written there.
     ///
@@ -490,7 +524,8 @@ module ConfigFile =
                   Description =
                     get.Optional.Field "description" Decode.string
                     |> Option.map (fun said -> said.Trim ())
-                    |> Option.filter (fun said -> said <> "") }))
+                    |> Option.filter (fun said -> said <> "")
+                  Repos = get.Optional.Field "repos" reposTarget }))
 
     /// Sandbox names, refusing a clash INSIDE one file.
     ///

@@ -47,7 +47,7 @@ type CommandServices =
       /// rather than a repo verb because it is a different fact: the verbs answer in
       /// the view of the session's own sandboxes, where their answers are acted on,
       /// and a repo's sandbox is a container with a view of its own.
-      WorkCheckout : RepoRef -> CheckoutViews
+      WorkCheckout : RepoRef -> string option -> CheckoutViews
       /// The terminal manager, which owns the shell profile (Plan 25).
       Terminals : unit -> SessionTerminals.SessionTerminals
       /// Queueing a command as a recorded block — the same door `execute_command` goes
@@ -173,30 +173,26 @@ let dispatch (services: CommandServices) : CommandDispatch =
                                     match! service.AddRepo (repoCaller invocation) repo with
                                     | Error e -> return Error e
                                     | Ok listing ->
-                                        // Said HERE, at the moment a checkout first exists,
-                                        // because that is when it is worth acting on. The
-                                        // same advice sits on `set_shell_profile`, where only
-                                        // an agent already reaching for that tool reads it —
-                                        // which is not the agent about to `cd` in front of
-                                        // every command for the rest of the session.
+                                        // What this verb KNOWS, and nothing else. It used to
+                                        // end with "set_shell_profile with that path", which
+                                        // is advice about a tool a repo verb has no business
+                                        // knowing — and the path it named was the default
+                                        // sandbox's, so an agent that followed it into a
+                                        // container the repo declared pointed a profile at
+                                        // somewhere that does not exist there and spent six
+                                        // calls finding out.
                                         //
-                                        // Conditioned on there being no profile rather than
-                                        // on this being the first repo: the point is that
-                                        // terminals still start somewhere else, and it stops
-                                        // saying so once somebody has decided where.
-                                        let unset =
-                                            (services.Terminals ()).Profiles ()
-                                            |> ShellProfileProjection.workingDirectory SandboxRef.defaultRef
-                                            |> Option.isNone
+                                        // Where the work is, and what to do about it, are the
+                                        // SANDBOX's to say: its start names the checkout as
+                                        // that sandbox sees it, and a repo that wants to steer
+                                        // whoever reads it writes so in its `description:`.
+                                        // Both reach a running turn, which is the whole reason
+                                        // this sentence existed and the only reason it worked.
                                         return
                                             Ok (
                                                 sprintf
-                                                    "added %s — the checkout is shared with everyone in this session and visible in the work environment%s"
-                                                    (RepoListing.describe listing)
-                                                    (if unset then
-                                                         ". That path is the DEFAULT sandbox's; a sandbox the repo declares mounts the checkout somewhere of its own and says where when it starts. Terminals do not start there: set_shell_profile with the path for the sandbox you mean."
-                                                     else
-                                                         ""))
+                                                    "added %s — the checkout is shared with everyone in this session and visible in the work environment. Where a sandbox sees it, and what that sandbox is for, are said when it starts."
+                                                    (RepoListing.describe listing))
                                 }))
                 | Some _, other -> return Error (sprintf "add_repo takes one repo, got %d arguments" (List.length other))
             }
@@ -334,7 +330,10 @@ let dispatch (services: CommandServices) : CommandDispatch =
                             // checkout, not the path a terminal in `default` would use.
                             let checkout =
                                 match SandboxRef.scope name, services.Repos () with
-                                | RepoOwned repo, Some _ -> Some (services.WorkCheckout repo)
+                                // With the declaration's own `repos:`, so a `workdir:` beside
+                                // it resolves against where the checkouts are about to be
+                                // rather than where they would have been by default.
+                                | RepoOwned repo, Some _ -> Some (services.WorkCheckout repo decl.Repos)
                                 | RepoOwned _, None
                                 | SessionOwned, _ -> None
                             match SandboxDecl.toRequest checkout decl with

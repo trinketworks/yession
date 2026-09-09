@@ -300,6 +300,7 @@ let private makeSandboxes
                                 sprintf
                                     "%s/%s"
                                     (Sandboxes.reposVisibleAt
+                                        (repoSandboxes.ReposAt ref)
                                         (SandboxRuntime.scopedBackend workBackend (SandboxRef.scope ref))
                                         reposDir)
                                     (RepoRef.relativePath repo))
@@ -584,7 +585,7 @@ let private reportGitHubNetworkFailure (credentialActor: ActorRef) (_gitSaid: st
 let private commandServices : Commands.CommandServices =
     { Repos = fun () -> reposService
       Sandboxes = fun () -> workSandboxes
-      WorkCheckout = Sandboxes.checkoutViewsAt reposDir
+      WorkCheckout = fun repo declared -> Sandboxes.checkoutViewsAt declared reposDir repo
       Terminals = fun () -> terminals
       RunCommand = fun () -> terminalCommands
       Prs = fun () -> prWatchService
@@ -786,7 +787,10 @@ Async.StartImmediate (
                       VisibleAt =
                         SandboxPath.reachedFrom
                             (workspaceFor SandboxRef.defaultRef)
-                            (Sandboxes.reposVisibleAt workBackend reposDir)
+                            // The DEFAULT sandbox's view, and it declares nothing — no file
+                            // may configure the session's own, so there is never a `repos:`
+                            // here to honour.
+                            (Sandboxes.reposVisibleAt None workBackend reposDir)
                       ExtraReadPaths = []
                       Git = Repos.gitExecutable (Sandboxes.ambientEnv ())
                       AllowedDomains = [ "github.com" ]
