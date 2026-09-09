@@ -13,7 +13,6 @@
     <Compile Include="Version.fs" />
     <Compile Include="Interop.fs" />
     <Compile Include="Assets.fs" />
-    <Compile Include="Cli.fs" />
     <Compile Include="Retirements.fs" />
     <Compile Include="ManagerCli.fs" />
     <Compile Include="Sse.fs" />

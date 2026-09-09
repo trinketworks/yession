@@ -1,4 +1,4 @@
-module Yession.Host.Cli
+module Yession.Domain.Cli
 
 // What each bin accepts on its command line, declared as data and parsed by Node's own
 // `parseArgs` (`node:util`) — a real parser, with no dependency to add, because these bins
@@ -79,6 +79,11 @@ let private argv () : string array = jsNative
 /// Say what happened and stop. Typed as returning anything because it returns nothing —
 /// `process.exit` does not come back, and pretending otherwise is what forced the old
 /// `failwith`-at-module-init that produced the unreadable rejection.
+/// Its own rather than the Host's, which is the whole of what tied this file to `app/`: one
+/// call to `Interop.exit`, beside an abort that already emits `process.exit(2)` itself.
+[<Emit("process.exit($0)")>]
+let private exitWith (code: int) : unit = jsNative
+
 [<Emit("(console.error($0), process.exit(2))")>]
 let abort (message: string) : 'a = jsNative
 
@@ -214,8 +219,8 @@ let parseOrExit (spec: Spec) (currentVersion: string) : Parsed =
     | Ok parsed ->
         if isSet version parsed then
             printfn "%s" currentVersion
-            Interop.exit 0
+            exitWith 0
         if isSet help parsed then
             printfn "%s" (usage spec)
-            Interop.exit 0
+            exitWith 0
         parsed

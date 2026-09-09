@@ -5,6 +5,11 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- What a bin accepts on its command line, as data. Depends on nothing in the domain and
+         on nothing of the Host's — it was in `app/` only because the bins were the first
+         things to need it, and a probe that wants the same usage conventions should not have
+         to drag a session Host in to get them. -->
+    <Compile Include="Cli.fs" />
     <Compile Include="Push.fs" />
     <!-- Depends on nothing but System: retry/backoff/deadlines as values and a circuit over
          a resource, used by the client's event-feed transport (and available to any other

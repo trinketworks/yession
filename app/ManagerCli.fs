@@ -14,6 +14,8 @@ module Yession.Host.ManagerCli
 // lockstep is not a check, it is a second list.
 
 /// Every option, in the order `--help` prints them.
+open Yession.Domain
+
 let authOption =
     Cli.value "auth" "rule" "how a request's subject is established: none, localhost, trusted-headers"
 
