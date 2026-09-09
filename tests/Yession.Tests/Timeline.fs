@@ -81,7 +81,8 @@ let private shapes (items: TimelineItem list) : string list =
         | TimelineMessage item -> "said:" + MessageId.value item.MessageId
         | TimelineBlock (_, _, blockId) -> "ran:" + BlockId.value blockId
         | TimelineStretch stretch -> "held:" + TerminalId.value stretch.TerminalId
-        | TimelineToolUse (_, id) -> "used:" + ToolUseId.value id)
+        | TimelineToolUse (_, id) -> "used:" + ToolUseId.value id
+        | TimelineThought (_, thought) -> "thought:" + thought.Thought)
 
 let private stretchesOf (items: TimelineItem list) : TerminalStretch list =
     items |> List.choose (function TimelineStretch s -> Some s | _ -> None)
@@ -102,6 +103,21 @@ let private orderTests =
                       at 3L 2.0 (sent "1" "how's it going?")
                       at 4L 3.0 (completed terminalA "1" (CommandSucceeded 0) 40) ]
             Expect.equal (shapes items) [ "ran:b-1"; "said:m-1" ] "the chip holds the place it started at"
+
+        // Reasoning is two decisions, and they are pinned separately because they break
+        // separately: it is IN the order things happened, and it is OFF the screen.
+        testCase "what the model reasoned sits in the order it happened" <| fun () ->
+            let items =
+                merge
+                    [ at 1L 0.0 (sent "1" "run the tests")
+                      at 2L 1.0 (
+                          SessionEvent.AgentThought
+                              { AgentTurnId = AgentTurnId.create "turn-t1" |> expect; Thought = "dev, not gate" })
+                      at 3L 2.0 (sent "2" "on it") ]
+            Expect.equal
+                (shapes items)
+                [ "said:m-1"; "thought:dev, not gate"; "said:m-2" ]
+                "between the acts it explains, not appended to a list of its own"
 
         testCase "everything is ordered by ONE key: the offset it was anchored at" <| fun () ->
             let items =
@@ -1447,6 +1463,19 @@ let private cardTests =
             | (RowTaskCard _ as card) :: _ ->
                 Expect.equal (EventOffset.value (TimelineRow.offset card)) 3L "the offset of the first command"
             | other -> failwithf "expected the card first, got %A" other
+
+        // The other half of "in the order, off the screen". Its pair sits in `The merged
+        // order`, where the fold is; this is about what is DRAWN, which is a different rule
+        // in a different function and goes red for a different reason.
+        testCase "what the model reasoned is not drawn" <| fun () ->
+            Expect.equal
+                (drawn
+                    [ at 1L 0.0 (sent "1" "run the tests")
+                      at 2L 1.0 (
+                          SessionEvent.AgentThought
+                              { AgentTurnId = turn "t1"; Thought = "dev, not gate" }) ])
+                [ "said:m-1" ]
+                "it was never said to anyone, so a screen does not say it"
 
         testCase "a card carries NO status of its own — the row is the same either way" <| fun () ->
             // What makes a card's lines mutate in place for free, exactly as chips do: the

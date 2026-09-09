@@ -3,6 +3,7 @@ namespace Yession.Domain.Chat
 open System
 
 open Yession.Domain
+open Yession.Domain.Agent
 open Yession.Domain.Tools
 open Yession.Domain.Terminals
 
@@ -100,6 +101,18 @@ type TimelineItem =
     /// Carried by id, like a block, and resolved against `ToolUses` below — so the outcome
     /// arriving later moves what the chip says without moving where it sits.
     | TimelineToolUse of EventOffset * ToolUseId
+    /// What the model reasoned before it acted, at the offset it was recorded.
+    ///
+    /// On the timeline and HIDDEN by default (`TimelineProjection.visible`), which is two
+    /// decisions and not one. It is here because it belongs to the order things happened in,
+    /// and a reader who wants to know why a turn did what it did wants it between the acts it
+    /// explains, not in a separate list they have to align by eye. It is hidden because it was
+    /// never said to anyone and nobody is answerable for it: shown beside speech, unasked, it
+    /// would be taken for speech.
+    ///
+    /// Carried whole rather than by id — a thought resolves against nothing later, unlike a
+    /// block or a call whose outcome arrives after it.
+    | TimelineThought of EventOffset * AgentThought
 
 module TimelineItem =
 
@@ -110,6 +123,7 @@ module TimelineItem =
         | TimelineBlock (offset, _, _) -> offset
         | TimelineStretch stretch -> stretch.Offset
         | TimelineToolUse (offset, _) -> offset
+        | TimelineThought (offset, _) -> offset
 
 /// What a task card says about one of its commands — coarser than `BlockStatus`, and
 /// coarser on purpose. A card is read at a glance to answer three questions: is anything
@@ -321,6 +335,11 @@ module TimelineProjection =
                     TerminalItems = proj.TerminalItems @ [ TimelineStretch stretch ]
                     OpenLeases = Map.remove key proj.OpenLeases }
             | _ -> proj
+        // Recorded in the order it happened, so a reader who asks for it meets it between the
+        // acts it explains. `rows` drops it — this fold is about facts, that one about what a
+        // screen shows, which is the same split the three rules there already make.
+        | SessionEvent.AgentThought e ->
+            { proj with TerminalItems = proj.TerminalItems @ [ TimelineThought (envelope.Offset, e) ] }
         | SessionEvent.ToolUseStarted e ->
             let use' =
                 { ToolUseId = e.ToolUseId
@@ -411,6 +430,12 @@ module TimelineProjection =
     /// items group, so anything said in the middle splits the row. That is not a shared
     /// implementation detail, it is the rule — a card that swallowed the message between two
     /// commands would tell a reader the wrong story about the order.
+    ///
+    /// A fourth rule, and the only one about a whole KIND: reasoning is dropped. It is on the
+    /// timeline because it belongs to the order things happened in, and off the screen because
+    /// it was never said to anyone and nobody is answerable for it — beside speech, unasked, a
+    /// reader would take it for speech. `items` carries it for whoever asks, which is what
+    /// makes showing it later a change to this line rather than to the fold.
     let rows (conversation: ConversationProjection) (proj: TimelineProjection) : TimelineRow list =
         let turnOf item =
             match item with
@@ -424,6 +449,7 @@ module TimelineProjection =
         |> List.filter (fun item ->
             match item with
             | TimelineToolUse (_, id) -> drawsChip id proj
+            | TimelineThought _ -> false
             | _ -> true)
         |> List.fold
             (fun rows item ->

@@ -1773,6 +1773,11 @@ module View =
                 // `rows` never puts a tool use in a bare row, and never a run of anything
                 // else — but both are `TimelineItem`s, so the types cannot say so.
                 | RowItem (TimelineToolUse _) -> None
+                // Nor a thought: `rows` drops the kind outright, because reasoning was never
+                // said to anyone. Here for the same reason as the line above — the filter is
+                // a rule the type cannot hold — and this is the line that changes on the day
+                // somebody decides a screen should show it.
+                | RowItem (TimelineThought _) -> None
                 | RowToolRun (turn, calls) ->
                     let uses =
                         calls
