@@ -514,6 +514,17 @@ let createWithUi
     let mutable lastExit : Map<string, int option> = Map.empty
     // Stops in flight: their exits are expected, not crashes.
     let mutable stopping : Set<string> = Set.empty
+    // Launches in flight: a session whose child is spawning but has not yet printed its
+    // readiness line, and everyone else who asked for it meanwhile. `children` alone cannot
+    // refuse a second launch, because it is written only when the spawn RESOLVES — seconds
+    // after it began — and two launches that both read it empty both spawn. That happened:
+    // a page that asked the Manager to open a session twice, milliseconds apart, got two
+    // children for one session; the second `Map.add` kept one and the other ran on unowned
+    // — its own port, its own OIDC client registration (last-write-wins by session id), a
+    // second writer on the data directory — and a login bounce redeemed its code against
+    // whichever registration had won. A second asker is not refused, either: it wanted the
+    // session up, and the session is coming up, so it is answered with the same outcome.
+    let mutable launching : Map<string, (Result<int, string> -> unit) list> = Map.empty
 
     // What each RUNNING launch has told us about being in use (Plan 11). Runtime-only and
     // keyed like `children`, so it is born at launch and dies at exit — a stopped session
@@ -1043,7 +1054,16 @@ let createWithUi
             match ManagerState.launchable sessionId state with
             | Error reason -> return Error reason
             | Ok _ when Map.containsKey key children -> return Error (sprintf "session %s is already running" key)
+            | Ok _ when Map.containsKey key launching ->
+                // Join the launch in flight: settled with its port, or its failure, when
+                // it is — never a second spawn.
+                return!
+                    Async.FromContinuations (fun (cont, _, _) ->
+                        launching <- Map.add key (cont :: Map.find key launching) launching)
             | Ok record ->
+                // Taken HERE, before anything awaits, so the next asker joins above
+                // whichever way this spawn turns out; settled on both of its outcomes.
+                launching <- Map.add key [] launching
                 // Step 24: mint the per-launch secret — every launch gets one; it
                 // authenticates OAuth client registration, supervision reports, and the
                 // secrets/connections custody calls. The session scope is established
@@ -1124,11 +1144,18 @@ let createWithUi
                         key
                         { SessionId = record.SessionId; LastBusyAt = clock (); EverReported = false }
                         activity
-                match! Spawn.launch options.SessionCommand options.SessionArgs env options.LaunchTimeoutMs with
+                let! spawned = Spawn.launch options.SessionCommand options.SessionArgs env options.LaunchTimeoutMs
+                // Everyone who joined, answered AFTER the bookkeeping below: a joiner that
+                // asks `TryFind` the moment it resumes must see what the launcher sees.
+                let joined = Map.tryFind key launching |> Option.defaultValue []
+                launching <- Map.remove key launching
+                let settle (outcome: Result<int, string>) = joined |> List.rev |> List.iter (fun answer -> answer outcome)
+                match spawned with
                 | Error reason ->
                     revokeSecret ()
                     activity <- Map.remove key activity
                     summaries <- Map.remove key summaries
+                    settle (Error reason)
                     return Error reason
                 | Ok launched ->
                     let child, port = launched.Child, launched.Port
@@ -1166,6 +1193,7 @@ let createWithUi
                              @ (match reapReason with
                                 | Some reason -> [ "yession.session.stop_reason", box (ReapReason.describe reason) ]
                                 | None -> [])))
+                    settle (Ok port)
                     return Ok port
         }
 
