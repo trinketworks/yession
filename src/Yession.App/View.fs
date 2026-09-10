@@ -1633,7 +1633,7 @@ module View =
                 | Streaming ->
                     // The one visible statement that a turn is in flight, and the hook that
                     // says so is what a test counts: there must never be a second.
-                    Style.messageBodyStreaming, html $"""<span class="{Style.caret}" data-agent-writing></span>"""
+                    Style.messageBodyStreaming, html $"""<span class="{Style.caretWorking}" data-agent-writing></span>"""
                 | _ -> Style.messageBody, Lit.nothing
             let bodyClass = Style.cls [ bodyClass; Style.messageVoice isAgent ]
             // The author line is the GROUP's to say (see `group` below); a message's own meta
@@ -1869,8 +1869,10 @@ module View =
         // nothing about where the conversation starts or that the near-black composer below it
         // is where you type. So the chat carries its OWN idle symbol — a caret standing where
         // the first message will land — exactly as the terminals pane stands an idle `$` in its
-        // empty pane. A mark, not a sentence: it is the same blinking caret a streaming message
-        // wears, so it reads as "text goes here" without a word of instruction.
+        // empty pane. A mark, not a sentence: it is the blinking caret every text field in the
+        // world wears, so it reads as "text goes here" without a word of instruction. Blinking
+        // and not pulsing, which is the other half of the same vocabulary — a message being
+        // written pulses (`Style.caretWorking`), and nothing is being written here.
         //
         // Keyed on the ROWS, not on the rendered list: the mapping above answers a bare tool
         // use and an empty run with `Lit.nothing`, so a timeline can hold rows and still draw
@@ -1906,7 +1908,7 @@ module View =
             // a reader that cannot see the pulse is told in words.
             | [], false ->
                 [ html $"""<div class="{Style.timelineIdle}" role="status" data-history-loading>
-                       <span class="{Style.caretReading}"></span>
+                       <span class="{Style.caretWorking}"></span>
                        <span class="{Style.srOnly}">{Dom.Text.readingHistory}</span>
                      </div>""" ]
             // Looked, and there is genuinely nothing: the caret now only ever means what it
