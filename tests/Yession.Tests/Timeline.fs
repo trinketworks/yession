@@ -592,6 +592,32 @@ let private withRecords (model: ClientModel) =
     |> List.fold (fun m (seq, record) -> ClientModel.update (TerminalRecordMsg (terminalA, seq, record)) m) model
     |> ClientModel.update (TerminalHeaderMsg (terminalA, baseHeader))
 
+/// A page of transcript is one message and one render (`TerminalPageMsg`); what has to hold
+/// is that it leaves the model exactly where the same lines arriving one at a time would.
+let private pageTests =
+    testList "A transcript page (one message, one render)" [
+        testCase "a page folds to the same feed as its lines one at a time, header and read position included" <| fun () ->
+            let fresh = ClientModel.init { PeerId = ada; DisplayName = "swift-heron" }
+            let records =
+                [ 1, { At = 10.0; Kind = TranscriptOutput; Data = "building\r\n" }
+                  2, { At = 11.0; Kind = TranscriptOutput; Data = "done\r\n" }
+                  4, { At = 43.5; Kind = TranscriptOutput; Data = "FAILED\r\n" } ]
+            let oneAtATime =
+                records
+                |> List.fold (fun m (seq, record) -> ClientModel.update (TerminalRecordMsg (terminalA, seq, record)) m) fresh
+                |> ClientModel.update (TerminalHeaderMsg (terminalA, baseHeader))
+                |> ClientModel.update (TerminalReadThroughMsg (terminalA, 5))
+            let asPage = ClientModel.update (TerminalPageMsg (terminalA, records, Some baseHeader, 5)) fresh
+            Expect.equal asPage.TerminalFeeds oneAtATime.TerminalFeeds "the same feed, however it arrived"
+
+        testCase "a page with no header leaves the header it had" <| fun () ->
+            let fresh =
+                ClientModel.init { PeerId = ada; DisplayName = "swift-heron" }
+                |> ClientModel.update (TerminalHeaderMsg (terminalA, baseHeader))
+            let later = ClientModel.update (TerminalPageMsg (terminalA, [ 7, { At = 1.0; Kind = TranscriptOutput; Data = "x" } ], None, 8)) fresh
+            Expect.equal (Map.find terminalA later.TerminalFeeds).Header (Some baseHeader) "line 0 came earlier and stays"
+    ]
+
 let private videoTests =
     testList "The video item (Plan 14, stage 4)" [
         testCase "a whole recording is chaptered by the commands that ran in it" <| fun () ->
@@ -1606,6 +1632,7 @@ let tests =
         stretchTests
         unchangedTests
         paneTests
+        pageTests
         keyframeTests
         videoTests
         readsTests

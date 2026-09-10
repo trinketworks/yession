@@ -705,9 +705,20 @@ type ClientMsg =
     /// queries there are: a message per query would be a message per FUTURE query too.
     | QueryFrameMsg of QueryFrame
     // --- Terminals (Plan 13) ---------------------------------------------------------
-    /// One transcript record arrived — live over the data channel, or from a fetched
-    /// history chunk. Both routes carry the sequence number, so both fold the same way.
+    /// One transcript record arrived live over the data channel. Keyed by seq, so folding
+    /// it is idempotent against the same record arriving in a page below.
     | TerminalRecordMsg of TerminalId * seq: int * TranscriptRecord
+    /// A PAGE of a terminal's transcript — fetched over HTTP, or replayed from what this
+    /// device kept: its records, the header when the page carried line 0, and how far the
+    /// contiguous prefix now reaches. ONE message for the whole page, deliberately, because a
+    /// message is a render: this used to be one `TerminalRecordMsg` per record plus the two
+    /// after, so a reopen replayed a session's kept 2,138 lines as 2,176 full re-renders of
+    /// the page — 9.9s of the main thread on a laptop, minutes on a phone, during which no
+    /// tap landed and the `/me` probe that would have said "session stopped" never ran. The
+    /// fold is exactly the three it replaced, in the order they were dispatched; what
+    /// changes is how often the view is asked to draw.
+    | TerminalPageMsg of
+        TerminalId * records: (int * TranscriptRecord) list * header: TranscriptHeader option * readThrough: int
     /// A terminal's transcript is this long. A hint that triggers a read, never data.
     | TerminalAvailableMsg of TerminalId * length: int
     /// A contiguous prefix of a terminal's transcript has been read through this seq.
@@ -1504,7 +1515,7 @@ module ClientModel =
         | None -> signal + "yession"
 
     /// Fold a message into the model.
-    let update (msg: ClientMsg) (model: ClientModel) : ClientModel =
+    let rec update (msg: ClientMsg) (model: ClientModel) : ClientModel =
         match msg with
         | ConnectingMsg ->
             { model with Connection = Connecting }
@@ -1736,6 +1747,17 @@ module ClientModel =
         | TerminalRecordMsg (terminal, seq, record) ->
             let feed = terminalFeed terminal model |> TerminalFeed.withRecord seq record
             { model with TerminalFeeds = Map.add terminal feed model.TerminalFeeds }
+        | TerminalPageMsg (terminal, records, header, readThrough) ->
+            // Through the three folds it stands for rather than a fourth spelling of them, so
+            // a page and the same lines arriving one at a time cannot come to differ.
+            let folded =
+                records
+                |> List.fold (fun m (seq, record) -> update (TerminalRecordMsg (terminal, seq, record)) m) model
+            let withHeader =
+                match header with
+                | Some h -> update (TerminalHeaderMsg (terminal, h)) folded
+                | None -> folded
+            update (TerminalReadThroughMsg (terminal, readThrough)) withHeader
         | TerminalAvailableMsg (terminal, length) ->
             let feed = terminalFeed terminal model
             { model with

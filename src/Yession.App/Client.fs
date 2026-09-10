@@ -395,6 +395,14 @@ module Client =
                     // the header and a first answer always carries it.
                     let mutable expected = 0
                     let mutable stop = false
+                    // The whole contiguous run, as ONE page — see `TerminalPageMsg` for why a
+                    // message per record froze a phone. Per kept ANSWER is not enough: a
+                    // terminal somebody watched live keeps one answer per record (each live
+                    // record fetches from the read position, and the answer is that one
+                    // line under its own address), so a walk that folded per answer was the
+                    // same storm under another name — measured at 402 pages for 404 records.
+                    let records = ResizeArray<int * TranscriptRecord> ()
+                    let mutable header = None
                     for (first, body) in ordered do
                         if not stop then
                             if first > expected then stop <- true
@@ -406,12 +414,11 @@ module Client =
                                 // failing costs that terminal and nothing else.
                                 | Error _ -> stop <- true
                                 | Ok page ->
-                                    page.Header
-                                    |> Option.iter (fun h -> dispatch (TerminalHeaderMsg (terminal, h)))
-                                    for (seq, record) in page.Records do
-                                        dispatch (TerminalRecordMsg (terminal, seq, record))
-                                    dispatch (TerminalReadThroughMsg (terminal, page.NextSeq))
+                                    records.AddRange page.Records
+                                    header <- (match page.Header with Some h -> Some h | None -> header)
                                     expected <- max expected page.NextSeq
+                    if expected > 0 then
+                        dispatch (TerminalPageMsg (terminal, List.ofSeq records, header, expected))
             }
 
     /// How a connection consumes the event log (Step 07).
@@ -836,11 +843,8 @@ module Client =
                             // re-arms this. Parking beats spinning.
                             return ()
                         | Ok page ->
-                            for (seq, record) in page.Records do
-                                dispatch (TerminalRecordMsg (terminal, seq, record))
                             transcriptRead.[TerminalId.value terminal] <- max (readPositionOf terminal) page.NextSeq
-                            page.Header |> Option.iter (fun h -> dispatch (TerminalHeaderMsg (terminal, h)))
-                            dispatch (TerminalReadThroughMsg (terminal, page.NextSeq))
+                            dispatch (TerminalPageMsg (terminal, page.Records, page.Header, page.NextSeq))
                             // `NextSeq > fromSeq` guards the one way this could spin: a
                             // chunk that yields nothing new would otherwise be re-read for
                             // ever at the same offset.
