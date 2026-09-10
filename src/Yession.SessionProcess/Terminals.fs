@@ -869,9 +869,14 @@ module SessionTerminals =
         /// because it is a fact about which terminals exist, and a caller cannot ask for a
         /// second one — `AgentTerminal` is the only way to name it.
         let agentTerminals = Collections.Generic.Dictionary<string, TerminalId> ()
-        /// The NAMED terminals the agent opened for itself. Kept apart from the general-purpose
-        /// one above because the cap counts these: an agent that has filled its allowance can
-        /// still run a plain command, which is the one shell it should never have to ask for.
+        /// Every terminal the agent opened for itself — the named ones AND the general-purpose
+        /// one above, because ownership is one question and "may the agent close this" has one
+        /// answer for both. For a while only the named ones were here, and the agent could not
+        /// close the terminal `execute_command` had opened for it: a command stuck reading
+        /// stdin in there was answered "that terminal is not yours", and nothing else it could
+        /// reach would end it either. The cap is a DIFFERENT question, asked of the named ones
+        /// alone (`openAgentTerminal`): an agent that has filled its allowance can still run a
+        /// plain command, which is the one shell it should never have to ask for.
         let agentOpened = Collections.Generic.HashSet<string> ()
 
         /// The block a pty terminal is waiting on: what to call when its `D` mark lands, and
@@ -2012,12 +2017,16 @@ module SessionTerminals =
 
         let openAgentTerminal (sandbox: SandboxRef) (name: string) : Async<Result<TerminalId, string>> =
             async {
+                // The named ones in this sandbox: the general-purpose terminal is the agent's
+                // too, and is not counted.
+                let general = agentTerminals.Values |> Seq.map TerminalId.value |> Set.ofSeq
                 let held =
                     agentOpened
                     |> Seq.filter (fun key ->
-                        match live.TryGetValue key with
-                        | true, terminal -> terminal.Sandbox = Some sandbox
-                        | _ -> false)
+                        not (Set.contains key general)
+                        && (match live.TryGetValue key with
+                            | true, terminal -> terminal.Sandbox = Some sandbox
+                            | _ -> false))
                     |> Seq.length
                 let name = name.Trim ()
                 if name = "" then return Error "a terminal needs a name — it is what everyone here reads"
@@ -2058,6 +2067,7 @@ module SessionTerminals =
                     | Error reason -> return Error reason
                     | Ok id ->
                         agentTerminals.[key] <- id
+                        agentOpened.Add (TerminalId.value id) |> ignore
                         return Ok id
             }
 

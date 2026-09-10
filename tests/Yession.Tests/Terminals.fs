@@ -3625,6 +3625,30 @@ let private agentVerbTests =
                 Expect.isTrue (Result.isOk general) "the one door is never closed by the cap"
             }
 
+        testCaseAsync "the terminal a plain command opened is the agent's to close" <|
+            async {
+                // The one `execute_command` opens on first use is opened BY the agent, and for
+                // a while was the only terminal of its own it could not close: "that terminal
+                // is not yours" over a shell nobody else had touched, with a command stuck
+                // reading stdin in it and no other verb that would end it.
+                let terminals, _ = fixture ()
+                let! general = terminals.AgentTerminal SandboxRef.defaultRef "perl -pi -e 1"
+                let id = general |> expect
+                Expect.isTrue (terminals.OpenedByAgent id) "it opened it, so it may close it"
+                let! closed = terminals.Close id "stuck"
+                Expect.isTrue (Result.isOk closed) "and closing it is how a stuck command ends"
+            }
+
+        testCaseAsync "the general-purpose terminal does not count against the cap" <|
+            async {
+                // Owned, and still not counted: the cap is about named terminals asked for, not
+                // the shell a plain command gets without asking.
+                let terminals, _ = fixture ()
+                let! _ = terminals.AgentTerminal SandboxRef.defaultRef "git status"
+                let! fourth = openFour terminals
+                Expect.isTrue (Result.isOk fourth) "four named ones still open beside it"
+            }
+
         testCaseAsync "a terminal a person opened is not the agent's" <|
             async {
                 let terminals, _ = fixture ()
