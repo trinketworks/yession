@@ -1174,13 +1174,14 @@ let private median (xs: float list) : float =
 let private regressionFactor = 3.0
 let private regressionFloorMs = 2.0
 let private slopeFactor = 2.0
-/// Every metric that is a RATIO across a sweep rather than a duration. They are judged more
-/// tightly than the rest (`slopeFactor`) because a ratio taken on one box divides the box out
-/// of itself, so what is left moving is the complexity — which is what these exist to catch.
-/// A list rather than one name: the suite sweeps two different axes now, and a second slope
-/// that fell through to the duration threshold would be judged three times looser than the
-/// number it is.
-let private slopeMetrics = [ "caret.push.slope"; "transcript.read.slope" ]
+/// Every metric that is a RATIO rather than a duration — a slope across a sweep, or a count
+/// per record. They are judged more tightly than the rest (`slopeFactor`) because a ratio
+/// taken on one box divides the box out of itself, so what is left moving is the complexity
+/// — which is what these exist to catch. A list rather than one name: the suite sweeps three
+/// axes now, and a slope that fell through to the duration threshold would be judged three
+/// times looser than the number it is. `scroll.renders` is renders per record landing during
+/// a fling: exactly one today, and a count has no jitter at all, so 2x is a real change.
+let private slopeMetrics = [ "caret.push.slope"; "transcript.read.slope"; "scroll.render.slope"; "scroll.renders" ]
 /// Below this many recorded points there is no baseline worth the name. A guard with nothing to
 /// compare against must not invent something.
 let private minimumHistory = 3
@@ -1294,11 +1295,14 @@ let private padL, padT, gapX, gapY = 46.0, 26.0, 26.0, 42.0
 let private benchSeries =
     let chars = [ 200; 2_000; 20_000 ], "chars"
     let records = [ 400; 1_500; 6_000 ], "records"
+    let items = [ 20; 60; 200 ], "items"
     [ "type", chars
       "receive", chars
       "caret.push", chars
       "caret.paint", chars
-      "transcript.read", records ]
+      "transcript.read", records
+      "scroll.render", items
+      "scroll.frame", items ]
 /// One hue per document size, darkest = largest. Ordered, because the sizes are.
 let private sizeColours = [ "#7fd0f5"; "#1ba1e2"; "#0b5f88" ]
 
@@ -1313,7 +1317,7 @@ let private renderChart (history: BenchPoint list) : string =
     let rows = (List.length panels + cols - 1) / cols
     let width = padL + float cols * (panelW + gapX)
     let height = padT + float rows * (panelH + gapY) + 18.0
-    add "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 %.0f %.0f\" width=\"%.0f\" role=\"img\" aria-label=\"Yession editor latency by release, at three document sizes\">" width height width
+    add "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 %.0f %.0f\" width=\"%.0f\" role=\"img\" aria-label=\"Yession client latency by release, at three sizes per sweep\">" width height width
     add "<style>"
     add "  :root { --ink:#1c1c1c; --dim:#6b6b6b; --grid:#e2e2e2; --ground:#ffffff }"
     add "  @media (prefers-color-scheme: dark) { :root { --ink:#f0f0f0; --dim:#9a9a9a; --grid:#2a2a2a; --ground:#0d1117 } }"
