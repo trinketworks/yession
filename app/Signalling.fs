@@ -469,14 +469,13 @@ let start
             // beside messages correctly signed with the real one.
             let respondMe (subject: string) (displayName: string option) (attribution: PeerAttribution) =
                 let attributed = match attribution with AttributedUser _ -> true | UnattributedAccess -> false
+                let payload: MeProbe.Response =
+                    { PeerToken = mintPeerToken attribution
+                      Sub = subject
+                      Attributed = attributed
+                      DisplayName = displayName }
                 res.writeHead (200, createObj [ "content-type", box "application/json"; "cache-control", box "no-store" ]) |> ignore
-                res.``end``
-                    (sprintf
-                        """{"peerToken":"%s","sub":"%s","attributed":%b,"displayName":%s}"""
-                        (mintPeerToken attribution)
-                        subject
-                        attributed
-                        (displayName |> Option.map Encode.string |> Option.defaultValue Encode.nil |> Encode.toString 0))
+                res.``end`` (MeProbe.toJson payload)
             match auth with
             | None -> respondMe "local" None UnattributedAccess
             | Some a ->
