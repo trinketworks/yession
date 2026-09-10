@@ -44,6 +44,20 @@ module AgentTurn =
         + "before assuming a queued command did nothing. "
         + "Explain meaningful progress to the session."
 
+    /// The prompt a turn actually runs under: the core above, and after it whatever the
+    /// operator of this host wrote in their profile (`ProfileFile.Guidance`).
+    ///
+    /// Appended, never substituted — an operator cannot take the core away. The core describes
+    /// mechanics the BUILD defines and the operator's file cannot see change; a replacement
+    /// prompt would describe the tools as they were the day it was written. Introduced by a
+    /// line saying whose words they are: the model treats "never push to main" differently
+    /// knowing it came from the host's operator rather than from the product, and the
+    /// transcript's reader can tell the two apart.
+    let promptWith (guidance: string option) : string =
+        match guidance with
+        | None -> systemPrompt
+        | Some words -> systemPrompt + "\n\nThe operator of this host adds:\n\n" + words
+
     /// Why a turn is running (Plan 20, stage 2). A turn has exactly ONE reason to exist,
     /// which is what makes this a choice rather than two optional arguments free to be both
     /// set or neither.
@@ -106,6 +120,10 @@ module AgentTurn =
         // that read its conversation now and its model later could run the answer to one
         // question on the model somebody picked for the next.
         (model: ModelId option)
+        // What the operator wrote for the agent, if anything (`promptWith`). Read once at boot
+        // with the rest of the profile, unlike the model beside it: the profile is the host's
+        // statement, and a host does not change its mind between turns.
+        (guidance: string option)
         (trigger: TurnTrigger)
         : Async<unit> =
         async {
@@ -159,7 +177,7 @@ module AgentTurn =
                       CurrentMessage = currentMessage
                       Terminals = terminals
                       Model = model
-                      SystemPrompt = systemPrompt }
+                      SystemPrompt = promptWith guidance }
                 do! append (AgentContextBuilt { AgentTurnId = turnId; MessageCount = List.length conversation })
 
                 // Where one message ends and the next begins, decided from the stream alone.

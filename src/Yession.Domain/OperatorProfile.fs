@@ -36,13 +36,23 @@ open Yession.Domain
 /// can never subtract from it. And `default` already means something else two files away: the
 /// sandbox every session has (`SandboxRef.defaultRef`), so "the default resources" and "the
 /// default sandbox's resources" were one phrase for two things.
+///
+/// `Guidance` is the one thing here that is not about resources: words for the agent, from the
+/// operator, appended after the product's own system prompt (`AgentTurn.systemPrompt`). It is
+/// APPENDED and never replaces, on the same principle that keeps a path out of a repo's file:
+/// each author writes what only they know. The core prompt describes mechanics the build
+/// defines — which tool reaches which sandbox, how a queued command comes back — and a copy of
+/// it in an operator's file would describe the build that was current when they wrote it. What
+/// an operator knows is this host: its conventions, what is slow here, what is never to be
+/// pushed where. `None` appends nothing, and the agent runs on the core alone.
 type ProfileFile =
     { Resources : ResourceProfile
-      Always : ResourceName list }
+      Always : ResourceName list
+      Guidance : string option }
 
 module ProfileFile =
 
-    let empty : ProfileFile = { Resources = ResourceProfile.empty; Always = [] }
+    let empty : ProfileFile = { Resources = ResourceProfile.empty; Always = []; Guidance = None }
 
 module OperatorProfile =
 
@@ -55,7 +65,8 @@ module OperatorProfile =
     [<Literal>]
     let Version = 1
 
-    let private fileKeys = [ "version"; "resources"; "always" ]
+    let private fileKeys = [ "version"; "resources"; "always"; "agent" ]
+    let private agentKeys = [ "guidance" ]
     let private leafKeys = [ "mount"; "socket"; "endpoint"; "env"; "exec"; "volume"; "sensitive" ]
     let private mountKeys = [ "from"; "at"; "mode" ]
     let private volumeKeys = [ "name"; "at" ]
@@ -198,6 +209,18 @@ module OperatorProfile =
                 | Ok names -> Decode.succeed names
                 | Error e -> Decode.fail e)
 
+    /// What the operator tells the agent. One key today, under a block of its own so the next
+    /// thing an operator has to say to the agent has somewhere to go that is not the file's
+    /// top level. Trimmed, because a YAML block scalar ends in the newline that closed it, and
+    /// refused when nothing is left: an `agent:` block that says nothing is the same failure
+    /// as a resource that grants nothing — configuration that reads as something and is none.
+    let private agent : Decoder<string> =
+        noUnknownKeys agentKeys
+        |> Decode.andThen (fun () -> Decode.field "guidance" Decode.string)
+        |> Decode.map (fun text -> text.Trim ())
+        |> Decode.andThen (fun text ->
+            failIf (text = "") "agent guidance says nothing — write what the agent should know about this host, or leave the block out" (Decode.succeed text))
+
     /// `default` is the spelling `always` had before it was named for what it does. Refused
     /// BY NAME rather than left to `noUnknownKeys`, which would say "unknown key: default
     /// (known: version, resources, always)" and leave an operator to work out that one
@@ -221,11 +244,12 @@ module OperatorProfile =
                 failIf
                     (version <> Version)
                     (sprintf "this build speaks %s version %d, not %d" FileName Version version)
-                    (Decode.map2
-                        (fun declared selection -> declared, selection)
+                    (Decode.map3
+                        (fun declared selection guidance -> declared, selection, guidance)
                         (Decode.field "resources" resources)
-                        (Decode.optional "always" names |> Decode.map (Option.defaultValue [])))))
-        |> Decode.andThen (fun (declared, selection) ->
+                        (Decode.optional "always" names |> Decode.map (Option.defaultValue []))
+                        (Decode.optional "agent" agent))))
+        |> Decode.andThen (fun (declared, selection, guidance) ->
             // The algebra's own refusals — a cycle, a dangling name, a name declared twice, a
             // resource that contradicts itself — reached through `load` and NOT re-checked
             // here. A decoder with its own copy of those rules is the redundant spare that
@@ -239,6 +263,6 @@ module OperatorProfile =
                 // looking at the file, not when somebody else's session refuses to start.
                 match ResourceProfile.resolve profile selection with
                 | Error e -> Decode.fail (sprintf "what this host always grants cannot be granted: %s" e)
-                | Ok _ -> Decode.succeed { Resources = profile; Always = selection })
+                | Ok _ -> Decode.succeed { Resources = profile; Always = selection; Guidance = guidance })
 
     let parse (json: string) : Result<ProfileFile, string> = Decode.fromString decoder json

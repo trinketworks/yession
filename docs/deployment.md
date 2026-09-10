@@ -54,6 +54,13 @@ is what the host can offer; `always:` is what every sandbox holds without asking
 has to name and none can decline. Declared and not always granted means available and not
 granted.
 
+The same file carries the one thing you can say to the agent: `agent.guidance`, appended after
+the product's own system prompt on every turn, introduced as the operator's. It never replaces
+that prompt — the prompt describes the build's tools and sandboxes, and a copy in your file
+would describe the build you wrote it against — so write what only this host knows: its
+conventions, what is slow here, what is never to be pushed where. Leave the block out to say
+nothing; a block that says nothing is refused.
+
 ---
 
 ## Interfaces
@@ -477,6 +484,12 @@ let
         env:
           SSL_CERT_FILE: /private/etc/ssl/cert.pem
           NIX_SSL_CERT_FILE: /private/etc/ssl/cert.pem
+    # Appended after the product's system prompt, as the operator's words. Host
+    # conventions only — the prompt already covers the tools.
+    agent:
+      guidance: |
+        The first `nix develop` in a fresh container takes minutes; wait for it
+        rather than retrying. Push to feature branches only.
   '';
 in
 {
