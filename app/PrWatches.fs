@@ -5,11 +5,12 @@ module Yession.Host.PrWatches
 // how a session keeps looking: the cadence, the ETag bookkeeping, the in-flight guard, the
 // verbs that start and stop a watch, and the query all of it reads back through.
 //
-// The whole provider surface is `FetchPr` — one function, one look — plus a `provider`
-// label the error copy is written around, because "github rejected this credential" is a
-// sentence a person has to read and "the provider rejected this credential" is not. A
-// second forge is a second `fetchOver` and a second hook filter (`GitHubPrs.fs` is the
-// first), and nothing in this file changes to admit it.
+// The whole provider surface is two functions — `FetchPr`, one look, and `OpenPr`, one
+// pull request opened — plus a `provider` label the error copy is written around, because
+// "github rejected this credential" is a sentence a person has to read and "the provider
+// rejected this credential" is not. A second forge is a second `fetchOver`, a second
+// `openOver` and a second hook filter (`GitHubPrs.fs` is the first), and nothing in this
+// file changes to admit it.
 //
 // Polling, not webhooks, and that is a decision rather than a stopgap: a repo webhook
 // needs admin on every repo somebody wants watched, and inbound delivery needs a
@@ -31,7 +32,10 @@ type PrEtags = { Pr : string; Checks : string }
 module PrEtags =
     let none : PrEtags = { Pr = ""; Checks = "" }
 
-/// Why a look at the provider produced no snapshot, folded to what the poller acts on.
+/// Why a call to the provider produced nothing, folded to what a caller acts on. Shared by
+/// the look and by opening one: a dead credential, an invisible repo, a spent budget and a
+/// network that is not there are the same four facts whichever endpoint met them, and two
+/// classifications of them would be two vocabularies for one dead credential.
 type PrFetchFailure =
     /// The credential is dead: the one failure that is news to the broker.
     | PrUnauthorized
@@ -57,6 +61,24 @@ type PrFetchOutcome =
 /// The poller, the watch verb and every test hold this signature, so replacing polling
 /// with a pushed stream later replaces an implementation rather than a design.
 type FetchPr = string option -> PrRef -> PrEtags -> PrSnapshot option -> Async<PrFetchOutcome>
+
+/// What came of asking the provider to open one.
+type PrOpenOutcome =
+    /// It exists now, under the number the provider gave it.
+    | PrOpened of PrRef
+    /// One was already open from this head onto this base, so nothing was created — the
+    /// `add_repo` rule, and what makes this verb safe to call twice: a repeated ask is a
+    /// question, and the number is the answer to it.
+    | PrAlreadyOpen of PrRef
+    /// The provider read the draft and would not open it — no commits between the branches,
+    /// a head branch it cannot find. It carries what the provider SAID, because that sentence
+    /// is the diagnosis and nothing this side could reconstruct it.
+    | PrOpenRefused of string
+    | PrOpenFailed of PrFetchFailure
+
+/// THE SEAM for opening one, beside `FetchPr` and for the same reason: the credential the
+/// caller resolved, the draft, one answer, and no forge named anywhere above it.
+type OpenPr = string option -> PrDraft -> Async<PrOpenOutcome>
 
 // --- the poller --------------------------------------------------------------------------
 
@@ -332,33 +354,58 @@ let create
 
 // --- the watch verbs ----------------------------------------------------------------------
 
-/// Starting and stopping a watch. Both are ACTS: they change what the session does from
-/// now on, they are attributed, and they read back in the timeline — so they go through
-/// the same gate every other repo verb does, and the session's own log is where a watch
-/// lives rather than any config file.
-type PrWatchService =
+/// This session's pull request verbs. All three are ACTS: they change what the session does
+/// from now on, or what exists at the provider; they are attributed, and they read back in
+/// the timeline — so they go through the same gate every other repo verb does, and the
+/// session's own log is where a watch lives rather than any config file.
+type PrService =
     { /// Begin watching. Validates by LOOKING once with the caller's credential, which is
       /// also where the baseline comes from: a watch whose provider cannot be read is a
       /// watch that would never say anything, and refusing now beats a silent row.
       Watch : ActorRef -> ActorRef -> PrRef -> Async<Result<string, string>>
-      Unwatch : ActorRef -> PrRef -> Async<Result<string, string>> }
+      Unwatch : ActorRef -> PrRef -> Async<Result<string, string>>
+      /// Open one, on the credential of whoever's turn it is — the only argument, because
+      /// this records no event of its own: what it makes lives at the provider, and the act
+      /// line the gate writes is what says who asked for it.
+      ///
+      /// Nothing is watched as a result. Watching is a decision about what this session will
+      /// keep saying, and the number this hands back is what `Watch` takes.
+      Create : ActorRef -> PrDraft -> Async<Result<string, string>> }
 
 /// Build the watch verbs over the session's log and the poller they reconcile into.
 ///
 /// `refold` re-reads the log and hands the watches over, so the projection is the single
 /// source of what is watched — the verbs never mutate the poller's list directly, and a
 /// restart rebuilding from the same log lands in the same place.
-let watchService
+let service
     (provider: string)
     (append: ActorRef -> SessionEvent -> Async<unit>)
     (watchesNow: unit -> Async<PrWatch list>)
     (fetch: FetchPr)
+    (openPr: OpenPr)
     (resolveToken: ActorRef -> Async<string option>)
     (refold: PrWatch list -> unit)
-    : PrWatchService =
+    : PrService =
 
     let mintId () =
         MessageId.create (string (System.Guid.NewGuid ()))
+
+    /// What a verb somebody is waiting on says when the provider would not answer. ONE
+    /// renderer for all of them: a dead credential is a dead credential whichever endpoint met
+    /// it, and a second sentence for the same fact reads as a second fault.
+    let cannotReach (what: string) (failure: PrFetchFailure) : string =
+        match failure with
+        // The 404 that means "gone" and the one that means "your credential cannot reach it"
+        // are the same answer from a provider, so the sentence names both rather than guessing.
+        | PrNotFound ->
+            sprintf
+                "%s cannot see %s — check it, and whether the connected %s credential can reach that repo"
+                provider
+                what
+                provider
+        | PrUnauthorized -> sprintf "%s rejected the credential — sign in again from the Connections panel" provider
+        | PrRateLimited _ -> sprintf "rate limited by %s — try again shortly" provider
+        | PrUnreachable reason -> reason
 
     let describe (pr: PrRef) (snapshot: PrSnapshot) =
         sprintf
@@ -386,19 +433,7 @@ let watchService
                     let! token = resolveToken credential
                     let! outcome = fetch token pr PrEtags.none None
                     match outcome with
-                    | PrFetchFailed PrNotFound ->
-                        return
-                            Error (
-                                sprintf
-                                    "%s cannot see %s — check the number, or whether the connected %s credential can reach that repo"
-                                    provider
-                                    (PrRef.render pr)
-                                    provider)
-                    | PrFetchFailed PrUnauthorized ->
-                        return Error (sprintf "%s rejected the credential — sign in again from the Connections panel" provider)
-                    | PrFetchFailed (PrRateLimited _) ->
-                        return Error (sprintf "rate limited by %s — try again shortly" provider)
-                    | PrFetchFailed (PrUnreachable reason) -> return Error reason
+                    | PrFetchFailed failure -> return Error (cannotReach (PrRef.render pr) failure)
                     // Unreachable in practice (nothing has an ETag yet), but total: a
                     // provider that answers 304 to a first look has told us nothing to
                     // start a baseline from.
@@ -430,6 +465,35 @@ let watchService
                         let! watches = watchesNow ()
                         refold watches
                         return Ok (sprintf "%s unwatched" (PrRef.render pr))
+            }
+      Create =
+        fun credential draft ->
+            async {
+                let! token = resolveToken credential
+                match! openPr token draft with
+                | PrOpened pr ->
+                    return
+                        Ok (
+                            sprintf
+                                "opened %s — \"%s\", %s into %s"
+                                (PrRef.render pr)
+                                draft.Title
+                                draft.Head
+                                draft.Base)
+                // Nothing was created, and the answer is the number of the one that already
+                // exists — which is the point of asking again rather than an apology for it.
+                | PrAlreadyOpen pr ->
+                    return
+                        Ok (
+                            sprintf
+                                "%s is already open from %s into %s — nothing was created"
+                                (PrRef.render pr)
+                                draft.Head
+                                draft.Base)
+                // What the provider said, passed through: "No commits between master and
+                // topic" is the whole diagnosis, and nothing on this side could invent it.
+                | PrOpenRefused said -> return Error (sprintf "%s would not open it: %s" provider said)
+                | PrOpenFailed failure -> return Error (cannotReach (RepoRef.value draft.Repo) failure)
             } }
 
 // --- the query -----------------------------------------------------------------------------

@@ -2029,6 +2029,8 @@ let private githubRouteTests =
 let private prRepo = RepoRef.create "octo/hello" |> expect
 let private prOne = PrRef.create prRepo 12 |> expect
 
+let private topicDraft = PrDraft.create prRepo "topic" "master" "Add feature" (Some "why") false |> expect
+
 let private snapshotWith state checks queued : PrSnapshot =
     { State = state; Title = "Add feature"; HeadSha = "abc123"; Checks = checks; Queued = queued; Mergeable = None }
 
@@ -2089,6 +2091,41 @@ let private prPollTests =
             Expect.equal fields.Title "Add feature" "title"
             Expect.equal fields.HeadSha "abc123" "head sha"
             Expect.equal fields.Mergeable None "a null mergeable is not a false one"
+
+        // Which branch a pull request comes FROM, as GitHub names it. The list endpoint
+        // requires the owner, so a bare branch is qualified — and a head that already carries
+        // one is left alone, because qualifying it twice would name an owner called
+        // "someone:topic".
+        testCase "a head is qualified with its owner, and a fork's head is left as it is" <| fun () ->
+            Expect.equal (GitHubPrs.headRef topicDraft) "octo:topic" "a branch on this repo"
+            let forked = PrDraft.create prRepo "someone:topic" "master" "Add feature" None false |> expect
+            Expect.equal (GitHubPrs.headRef forked) "someone:topic" "and one on somebody's fork"
+
+        // A refusal is only useful if it carries the sentence that says why. The envelope's
+        // own message is "Validation Failed", which says nothing anybody can act on.
+        testCase "the reason under a validation failure wins over the words above it" <| fun () ->
+            let refused =
+                """{"message":"Validation Failed","errors":[{"message":"No commits between master and topic"}]}"""
+            Expect.equal
+                (Decode.fromString GitHubPrs.refusalOf refused |> expect)
+                (Some "No commits between master and topic")
+                "the specific reason"
+            Expect.equal
+                (Decode.fromString GitHubPrs.refusalOf """{"message":"Not Found"}""" |> expect)
+                (Some "Not Found")
+                "and the envelope when there is nothing under it"
+            Expect.equal
+                (Decode.fromString GitHubPrs.refusalOf "{}" |> expect)
+                None
+                "and a reply that says nothing readable is not a reason"
+
+        testCase "the draft goes to github as the fields it asks for" <| fun () ->
+            let body = GitHubPrs.createBody topicDraft
+            Expect.stringContains body "\"head\":\"octo:topic\"" "the head, qualified"
+            Expect.stringContains body "\"base\":\"master\"" "the base"
+            Expect.stringContains body "\"title\":\"Add feature\"" "the title"
+            Expect.stringContains body "\"body\":\"why\"" "the description"
+            Expect.stringContains body "\"draft\":false" "and the flag, stated rather than left to a default"
 
         testCase "an open and a closed-unmerged pull request each decode as themselves" <| fun () ->
             let openPr = """{"state":"open","merged":false,"title":"WIP","head":{"sha":"d00d"},"mergeable":true}"""
@@ -2570,10 +2607,19 @@ type private StubGitHubApi =
       SetPr : string -> unit
       SetCheckRuns : string -> unit
       SetStatus : int -> unit
+      /// What the LIST endpoint answers: which pull requests are already open from a head
+      /// onto a base. `[]` — nothing is — is the ordinary case and the default.
+      SetOpenList : string -> unit
+      /// What the CREATE endpoint answers: a status and a body, so a case can be the 201 that
+      /// numbers a pull request or the 422 that says why there is not one.
+      SetCreateReply : int -> string -> unit
       /// The rate-limit headers every reply carries: remaining, reset (epoch seconds) and
       /// the bucket they describe. `None` serves a reply with none at all.
       SetAllowance : (int * int64 * string) option -> unit
-      Requests : ResizeArray<string * string option> }
+      Requests : ResizeArray<string * string option>
+      /// Every POST it was sent, as (path, body) — what a case reads to see what GitHub was
+      /// actually asked to open.
+      Posted : ResizeArray<string * string> }
 
 let private startStubGitHubApi () : Async<StubGitHubApi> =
     async {
@@ -2582,8 +2628,12 @@ let private startStubGitHubApi () : Async<StubGitHubApi> =
         let mutable prVersion = 1
         let mutable checksVersion = 1
         let mutable status = 200
+        let mutable openList = "[]"
+        let mutable createStatus = 201
+        let mutable createBody = """{"number":7}"""
         let mutable allowance : (int * int64 * string) option = None
         let requests = ResizeArray<string * string option> ()
+        let posted = ResizeArray<string * string> ()
         let withAllowance (pairs: (string * obj) list) =
             match allowance with
             | None -> pairs
@@ -2595,11 +2645,31 @@ let private startStubGitHubApi () : Async<StubGitHubApi> =
         let handler (req: Interop.IncomingMessage) (res: Interop.ServerResponse) =
             let path = req.url.Split('?').[0]
             requests.Add (path, Interop.headerOf req "authorization")
-            let body, version = if path.Contains "/check-runs" then checksBody, checksVersion else prBody, prVersion
-            let etag = sprintf "\"v%d\"" version
-            if status <> 200 then
+            let refuse () =
                 res.writeHead (status, Fable.Core.JsInterop.createObj (withAllowance [ "content-type", box "application/json" ])) |> ignore
                 res.``end`` """{"message":"nope"}"""
+            let answer (code: int) (json: string) =
+                res.writeHead (code, Fable.Core.JsInterop.createObj (withAllowance [ "content-type", box "application/json" ]))
+                |> ignore
+                res.``end`` json
+            let body, version = if path.Contains "/check-runs" then checksBody, checksVersion else prBody, prVersion
+            let etag = sprintf "\"v%d\"" version
+            // The create endpoint: a POST, whose body is what a case reads back.
+            if req.``method`` = "POST" then
+                let mutable acc = ""
+                req.on ("data", fun chunk -> acc <- acc + Interop.bufferToString chunk) |> ignore
+                req.on (
+                    "end",
+                    fun _ ->
+                        posted.Add (path, acc)
+                        if status <> 200 then refuse () else answer createStatus createBody)
+                |> ignore
+            // The list endpoint, which a create asks before it posts: `/pulls`, where a look
+            // asks `/pulls/{n}`. No ETag — nobody keeps one for a question asked once.
+            elif path.EndsWith "/pulls" then
+                if status <> 200 then refuse () else answer 200 openList
+            elif status <> 200 then
+                refuse ()
             elif Interop.headerOf req "if-none-match" = Some etag then
                 res.writeHead (304, Fable.Core.JsInterop.createObj (withAllowance [ "etag", box etag ])) |> ignore
                 res.``end`` ""
@@ -2617,8 +2687,11 @@ let private startStubGitHubApi () : Async<StubGitHubApi> =
               SetPr = (fun body -> prBody <- body; prVersion <- prVersion + 1)
               SetCheckRuns = (fun body -> checksBody <- body; checksVersion <- checksVersion + 1)
               SetStatus = (fun s -> status <- s)
+              SetOpenList = (fun body -> openList <- body)
+              SetCreateReply = (fun code body -> createStatus <- code; createBody <- body)
               SetAllowance = (fun a -> allowance <- a)
-              Requests = requests }
+              Requests = requests
+              Posted = posted }
     }
 
 /// A `Spending` over a real ledger, so a case can watch what a reply taught it.
@@ -2808,6 +2881,73 @@ let private prFetchTests =
             }
     ]
 
+let private prCreateTests =
+    let opening (stub: StubGitHubApi) = GitHubPrs.openOver stub.Url GitHubPrs.Spending.unmetered
+
+    testList "opening a pull request" [
+        testCaseAsync "the number github gave it comes back as the pull request's reference" <|
+            async {
+                let! stub = startStubGitHubApi ()
+                stub.SetCreateReply 201 """{"number":7}"""
+                match! opening stub (Some "token-abc") topicDraft with
+                | PrWatches.PrOpened pr -> Expect.equal (PrRef.render pr) "octo/hello#7" "named the way everything else names one"
+                | other -> failwithf "expected a pull request, got %A" other
+            }
+
+        testCaseAsync "the draft is what github was asked to open" <|
+            async {
+                let! stub = startStubGitHubApi ()
+                let! _ = opening stub (Some "token-abc") topicDraft
+                match List.ofSeq stub.Posted with
+                | [ path, body ] ->
+                    Expect.equal path "/repos/octo/hello/pulls" "the create endpoint"
+                    Expect.stringContains body "\"head\":\"octo:topic\"" "the branch the work is on"
+                    Expect.stringContains body "\"base\":\"master\"" "and the one it is for"
+                | posted -> failwithf "expected one post, got %A" posted
+            }
+
+        // The reason this verb asks before it posts: GitHub answers a second pull request from
+        // the same head with a 422 whose text is the only thing separating it from "no commits
+        // between them", and a verb whose meaning turns on somebody else's prose breaks when
+        // they reword it. Asked first, a repeated ask is a question with the number for an
+        // answer.
+        testCaseAsync "one already open is reported, and nothing is posted" <|
+            async {
+                let! stub = startStubGitHubApi ()
+                stub.SetOpenList """[{"number":4}]"""
+                match! opening stub (Some "token-abc") topicDraft with
+                | PrWatches.PrAlreadyOpen pr ->
+                    Expect.equal (PrRef.render pr) "octo/hello#4" "the one that exists"
+                    Expect.equal stub.Posted.Count 0 "and github was never asked to make another"
+                | other -> failwithf "expected the one already open, got %A" other
+            }
+
+        testCaseAsync "a draft github will not open comes back as what github said" <|
+            async {
+                let! stub = startStubGitHubApi ()
+                stub.SetCreateReply
+                    422
+                    """{"message":"Validation Failed","errors":[{"message":"No commits between master and topic"}]}"""
+                match! opening stub (Some "token-abc") topicDraft with
+                | PrWatches.PrOpenRefused said ->
+                    Expect.equal said "No commits between master and topic" "the diagnosis, passed through"
+                | other -> failwithf "expected a refusal, got %A" other
+            }
+
+        testCaseAsync "a 401 and a 404 on the way to opening one are classified like a look" <|
+            async {
+                let! stub = startStubGitHubApi ()
+                stub.SetStatus 401
+                match! opening stub (Some "stale") topicDraft with
+                | PrWatches.PrOpenFailed PrWatches.PrUnauthorized -> ()
+                | other -> failwithf "expected unauthorized, got %A" other
+                stub.SetStatus 404
+                match! opening stub (Some "token-abc") topicDraft with
+                | PrWatches.PrOpenFailed PrWatches.PrNotFound -> ()
+                | other -> failwithf "expected not found, got %A" other
+            }
+    ]
+
 let private prWatchVerbTests =
     let ada = PeerRef (PeerId.create "ada" |> expect)
     let watchSessionId = SessionId.create "pr-watch-suite" |> expect
@@ -2826,11 +2966,12 @@ let private prWatchVerbTests =
             }
         let applied = ResizeArray<PrWatch list> ()
         let service =
-            PrWatches.watchService
+            PrWatches.service
                 GitHubPrs.provider
                 (fun actor event -> async { let! _ = log.Append actor event in () })
                 watchesNow
                 (GitHubPrs.fetchOver stub.Url GitHubPrs.Spending.unmetered)
+                (GitHubPrs.openOver stub.Url GitHubPrs.Spending.unmetered)
                 (fun _ -> async { return Some "token-abc" })
                 applied.Add
         service, log, applied
@@ -2889,6 +3030,50 @@ let private prWatchVerbTests =
                 Expect.isEmpty events "a refused watch records nothing"
             }
 
+        testCaseAsync "opening one answers with its number and what it was called" <|
+            async {
+                let! stub = startStubGitHubApi ()
+                let service, _, _ = serviceOver stub
+                let! outcome = service.Create ada topicDraft
+                Expect.equal outcome (Ok "opened octo/hello#7 — \"Add feature\", topic into master") "the number, and the work it names"
+            }
+
+        // Nothing to project: what this verb made lives at the provider, and the act line the
+        // gate writes is what says who asked for it. A watch is the thing that needs a
+        // baseline in the log, and opening one is not watching it.
+        testCaseAsync "opening one records no event of its own" <|
+            async {
+                let! stub = startStubGitHubApi ()
+                let service, log, _ = serviceOver stub
+                let! _ = service.Create ada topicDraft
+                let! events = eventsOf log
+                Expect.isEmpty events "nothing was recorded, and nothing is watched"
+            }
+
+        testCaseAsync "opening one that is already open reports it rather than refusing" <|
+            async {
+                let! stub = startStubGitHubApi ()
+                stub.SetOpenList """[{"number":4}]"""
+                let service, _, _ = serviceOver stub
+                let! outcome = service.Create ada topicDraft
+                Expect.equal
+                    outcome
+                    (Ok "octo/hello#4 is already open from topic into master — nothing was created")
+                    "a repeated ask is a question"
+            }
+
+        testCaseAsync "what github would not open, and why, is what the caller is told" <|
+            async {
+                let! stub = startStubGitHubApi ()
+                stub.SetCreateReply
+                    422
+                    """{"message":"Validation Failed","errors":[{"message":"No commits between master and topic"}]}"""
+                let service, _, _ = serviceOver stub
+                match! service.Create ada topicDraft with
+                | Error said -> Expect.stringContains said "No commits between master and topic" "github's own words"
+                | Ok said -> failwithf "expected a refusal, got %s" said
+            }
+
         testCaseAsync "unwatching records the stop; unwatching what is not watched refuses" <|
             async {
                 let! stub = startStubGitHubApi ()
@@ -2921,6 +3106,7 @@ let tests =
         Tag.needs "GitHub sign-in routes" [ Tag.Ports ] (fun () -> githubRouteTests)
         Tag.needs "Pull request endpoints" [ Tag.Ports ] (fun () -> prFetchTests)
         Tag.needs "What a look spends" [ Tag.Ports ] (fun () -> prBudgetTests)
+        Tag.needs "Opening a pull request" [ Tag.Ports ] (fun () -> prCreateTests)
         Tag.needs "Watching a pull request" [ Tag.Ports ] (fun () -> prWatchVerbTests)
         Tag.needs "Per-actor credentials E2E" [ Tag.Ports; Tag.Native ] (fun () -> e2eTests)
     ]

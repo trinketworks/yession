@@ -465,7 +465,7 @@ let private foldFor (authorities: ActorRef option list) : Async<unit> =
 let mutable private prWatchers : PrWatches.PrWatchers = PrWatches.PrWatchers.none
 
 /// The watch verbs over that poller, built once the log exists.
-let mutable private prWatchService : PrWatches.PrWatchService option = None
+let mutable private prService : PrWatches.PrService option = None
 
 /// What this session asks the Manager to forward: one hook subscription per watched repo.
 /// Only where there is a control channel to declare it over — without one, polling is the
@@ -612,7 +612,7 @@ let private commandServices : Commands.CommandServices =
       WorkCheckout = fun repo declared -> Sandboxes.checkoutViewsAt declared reposDir repo
       Terminals = fun () -> terminals
       RunCommand = fun () -> terminalCommands
-      Prs = fun () -> prWatchService
+      Prs = fun () -> prService
       Invalidate = fun name -> queryRegistry.Invalidate name
       // Minted and appended HERE, which is what keeps a projection a pure fold: an item's id
       // has to come from the log, and a projection that minted one would give different
@@ -855,10 +855,13 @@ Async.StartImmediate (
         // why reading the provider's own counter needs no coordination and a count of our
         // own would need all of it.
         let githubLedger = Resilience.Ledger.create ()
+        // Read once, spent by both endpoints below: a second read of the same variable is a
+        // second default, and the two would disagree the first time one moved.
+        let githubApi = Interop.envOr "YESSION_GITHUB_API_URL" "https://api.github.com"
+        let githubSpending (spend: Resilience.Spend) =
+            GitHubPrs.Spending.over githubLedger (fun () -> System.DateTimeOffset.UtcNow) spend
         let githubLooking (spend: Resilience.Spend) =
-            GitHubPrs.fetchOver
-                (Interop.envOr "YESSION_GITHUB_API_URL" "https://api.github.com")
-                (GitHubPrs.Spending.over githubLedger (fun () -> System.DateTimeOffset.UtcNow) spend)
+            GitHubPrs.fetchOver githubApi (githubSpending spend)
         do
             let recordPrTransitions
                 (watcher: ActorRef)
@@ -907,9 +910,9 @@ Async.StartImmediate (
                         |> List.fold PrWatchesProjection.applyEvent PrWatchesProjection.empty
                         |> fun projection -> projection.Watches
                 }
-            prWatchService <-
+            prService <-
                 Some (
-                    PrWatches.watchService
+                    PrWatches.service
                         GitHubPrs.provider
                         (fun actor event ->
                             async {
@@ -917,8 +920,10 @@ Async.StartImmediate (
                                 ()
                             })
                         watchesNow
-                        // Foreground: somebody typed this, and the reserve is what it is for.
+                        // Foreground, both of them: somebody typed this, and the reserve is
+                        // what it is for.
                         (githubLooking Resilience.Foreground)
+                        (GitHubPrs.openOver githubApi (githubSpending Resilience.Foreground))
                         resolveGitHubToken
                         reconcileWatches)
         // The query registry (Plan 15): every read-only view this session declares, in

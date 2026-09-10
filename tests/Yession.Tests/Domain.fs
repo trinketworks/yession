@@ -763,6 +763,38 @@ let private prWatchTests =
             Expect.isError (PrRef.create repo 0) "zero is not a PR number"
             Expect.isError (PrRef.create repo -3) "nor is a negative"
 
+        // A draft is what a pull request is before a provider has numbered it, and these
+        // are the refusals that are true of a pull request rather than of GitHub — each one
+        // a round trip an agent does not spend to be told the same thing in someone else's
+        // words.
+        testCase "a draft keeps what it was given, trimmed" <| fun () ->
+            let drafted = PrDraft.create repo "  topic  " " master " "  Add feature  " (Some "why") false |> expect
+            Expect.equal drafted.Head "topic" "the head, trimmed"
+            Expect.equal drafted.Base "master" "the base, trimmed"
+            Expect.equal drafted.Title "Add feature" "the title, trimmed"
+            Expect.equal drafted.Body (Some "why") "and the body as written"
+            Expect.equal (PrDraft.render drafted) "octo/hello topic -> master" "named for a reader"
+
+        // A description that is only whitespace is no description, and must not reach a
+        // provider as one: what a squash-merge would make of it is a commit body of spaces.
+        testCase "a draft whose body is nothing has no body" <| fun () ->
+            let drafted = PrDraft.create repo "topic" "master" "Add feature" (Some "  \n ") false |> expect
+            Expect.equal drafted.Body None "whitespace is all a body has to be, so that is not one"
+
+        testCase "a draft with no title is refused" <| fun () ->
+            Expect.isError (PrDraft.create repo "topic" "master" "   " None false) "a title nobody wrote"
+
+        testCase "a draft with a branch nobody named is refused" <| fun () ->
+            Expect.isError (PrDraft.create repo "" "master" "Add feature" None false) "no head"
+            Expect.isError (PrDraft.create repo "topic" "  " "Add feature" None false) "no base"
+
+        // A title in the wrong argument, which is what a branch with a space in it always is.
+        testCase "a branch that cannot be one is refused" <| fun () ->
+            Expect.isError (PrDraft.create repo "add a feature" "master" "Add feature" None false) "not a ref name"
+
+        testCase "a head that is its own base is refused" <| fun () ->
+            Expect.isError (PrDraft.create repo "master" "master" "Add feature" None false) "nothing to merge"
+
         testCase "a merge, a close and a reopen are each one transition" <| fun () ->
             Expect.equal
                 (PrTransitions.detect (known PrOpen ChecksGreen) (snapshot PrMerged ChecksGreen))
