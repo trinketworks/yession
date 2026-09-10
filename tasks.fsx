@@ -1167,7 +1167,13 @@ let private median (xs: float list) : float =
 let private regressionFactor = 3.0
 let private regressionFloorMs = 2.0
 let private slopeFactor = 2.0
-let private slopeMetric = "caret.push.slope"
+/// Every metric that is a RATIO across a sweep rather than a duration. They are judged more
+/// tightly than the rest (`slopeFactor`) because a ratio taken on one box divides the box out
+/// of itself, so what is left moving is the complexity — which is what these exist to catch.
+/// A list rather than one name: the suite sweeps two different axes now, and a second slope
+/// that fell through to the duration threshold would be judged three times looser than the
+/// number it is.
+let private slopeMetrics = [ "caret.push.slope"; "transcript.read.slope" ]
 /// Below this many recorded points there is no baseline worth the name. A guard with nothing to
 /// compare against must not invent something.
 let private minimumHistory = 3
@@ -1175,12 +1181,12 @@ let private minimumHistory = 3
 let private baselineWindow = 10
 
 let private thresholdFor (metric: string) (baseline: float) =
-    if metric = slopeMetric then baseline * slopeFactor
+    if List.contains metric slopeMetrics then baseline * slopeFactor
     else max (baseline * regressionFactor) (baseline + regressionFloorMs)
 
 /// The metrics a regression is judged on: p50 (the tail is where a runner's noise lives) and
-/// the slope. p95 is recorded and charted; it is just not what trips the wire.
-let private judged (name: string) = name.Contains ".p50@" || name = slopeMetric
+/// the slopes. p95 is recorded and charted; it is just not what trips the wire.
+let private judged (name: string) = name.Contains ".p50@" || List.contains name slopeMetrics
 
 let private benchBaselines () : Map<string, float> =
     let history = benchHistory ()
@@ -1199,7 +1205,7 @@ let private benchBaselines () : Map<string, float> =
 /// Run the measurement. Never judges: `bench-guard` does that, and the release deliberately
 /// wants the first without the second.
 let bench (args: string list) =
-    check ([ "Browser"; "Bench"; "--only"; "Editor performance" ] @ args)
+    check ([ "Browser"; "Bench"; "--only"; "Client performance" ] @ args)
     let now = measured ()
     match benchBaselines () with
     | b when Map.isEmpty b ->
@@ -1273,8 +1279,19 @@ let benchGuard () =
 let private panelW, panelH = 300.0, 150.0
 let private padL, padT, gapX, gapY = 46.0, 26.0, 26.0, 42.0
 
-let private benchSeries = [ "type"; "receive"; "caret.push"; "caret.paint" ]
-let private benchSizes = [ 200; 2_000; 20_000 ]
+/// Each measured series with the sweep it was taken across, and what that axis COUNTS. The
+/// axis is part of the series rather than one list for all of them, because there are two of
+/// them now — a document's characters and a terminal transcript's records — and a panel drawn
+/// against the wrong one finds no points and draws an empty box that looks like a metric
+/// nobody has recorded yet.
+let private benchSeries =
+    let chars = [ 200; 2_000; 20_000 ], "chars"
+    let records = [ 400; 1_500; 6_000 ], "records"
+    [ "type", chars
+      "receive", chars
+      "caret.push", chars
+      "caret.paint", chars
+      "transcript.read", records ]
 /// One hue per document size, darkest = largest. Ordered, because the sizes are.
 let private sizeColours = [ "#7fd0f5"; "#1ba1e2"; "#0b5f88" ]
 
@@ -1284,7 +1301,7 @@ let private renderChart (history: BenchPoint list) : string =
     let sb = Text.StringBuilder ()
     let add (fmt: Printf.StringFormat<'a, unit>) = Printf.kprintf (fun s -> sb.AppendLine s |> ignore) fmt
     // Every panel plus one for the slope, two across.
-    let panels = benchSeries @ [ slopeMetric ]
+    let panels = (benchSeries |> List.map fst) @ slopeMetrics
     let cols = 2
     let rows = (List.length panels + cols - 1) / cols
     let width = padL + float cols * (panelW + gapX)
@@ -1305,19 +1322,25 @@ let private renderChart (history: BenchPoint list) : string =
 
     panels |> List.iteri (fun i metric ->
         let x0, y0 = at i
+        let isSlope = List.contains metric slopeMetrics
+        let axis = benchSeries |> List.tryPick (fun (m, (_, counts)) -> if m = metric then Some counts else None)
         let series =
-            if metric = slopeMetric then [ (metric, "") ]
-            else benchSizes |> List.map (fun size -> sprintf "%s.p50@%d" metric size, string size)
+            if isSlope then [ (metric, "") ]
+            else
+                benchSeries
+                |> List.tryPick (fun (m, (sizes, _)) -> if m = metric then Some sizes else None)
+                |> Option.defaultValue []
+                |> List.map (fun size -> sprintf "%s.p50@%d" metric size, string size)
         let values = series |> List.collect (fun (n, _) -> points n |> List.choose id)
         let top = if List.isEmpty values then 1.0 else max 0.001 (List.max values) * 1.15
         add "<text class=\"ti\" x=\"%.0f\" y=\"%.0f\">%s</text>" x0 (y0 - 8.0) (svgEscape metric)
         add "<line class=\"gr\" x1=\"%.0f\" y1=\"%.0f\" x2=\"%.0f\" y2=\"%.0f\"/>" x0 (y0 + panelH) (x0 + panelW) (y0 + panelH)
         add "<line class=\"gr\" x1=\"%.0f\" y1=\"%.0f\" x2=\"%.0f\" y2=\"%.0f\"/>" x0 y0 x0 (y0 + panelH)
-        add "<text class=\"ax\" x=\"%.0f\" y=\"%.0f\" text-anchor=\"end\">%.1f%s</text>" (x0 - 4.0) (y0 + 8.0) top (if metric = slopeMetric then "x" else "ms")
+        add "<text class=\"ax\" x=\"%.0f\" y=\"%.0f\" text-anchor=\"end\">%.1f%s</text>" (x0 - 4.0) (y0 + 8.0) top (if isSlope then "x" else "ms")
         add "<text class=\"ax\" x=\"%.0f\" y=\"%.0f\" text-anchor=\"end\">0</text>" (x0 - 4.0) (y0 + panelH)
         let n = max 1 (List.length history - 1)
         series |> List.iteri (fun k (name, label) ->
-            let colour = if metric = slopeMetric then "#a8dd00" else List.item (min k (List.length sizeColours - 1)) sizeColours
+            let colour = if isSlope then "#a8dd00" else List.item (min k (List.length sizeColours - 1)) sizeColours
             let path =
                 points name
                 |> List.mapi (fun j v -> j, v)
@@ -1326,7 +1349,7 @@ let private renderChart (history: BenchPoint list) : string =
             if not (List.isEmpty path) then
                 add "<polyline fill=\"none\" stroke=\"%s\" stroke-width=\"1.6\" points=\"%s\"/>" colour (String.concat " " path)
                 if label <> "" then
-                    add "<text class=\"ax\" x=\"%.0f\" y=\"%.0f\" fill=\"%s\">%s</text>" (x0 + panelW - 4.0) (y0 + 10.0 + 11.0 * float k) colour (svgEscape (label + " chars"))))
+                    add "<text class=\"ax\" x=\"%.0f\" y=\"%.0f\" fill=\"%s\">%s</text>" (x0 + panelW - 4.0) (y0 + 10.0 + 11.0 * float k) colour (svgEscape (label + " " + Option.defaultValue "" axis))))
 
     let last = history |> List.tryLast |> Option.map (fun p -> p.Label) |> Option.defaultValue "?"
     add "<text class=\"ax\" x=\"%.0f\" y=\"%.0f\">%d releases, oldest left · newest: %s · p50 · lower is better</text>" padL (height - 4.0) (List.length history) (svgEscape last)

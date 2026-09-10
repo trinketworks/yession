@@ -254,6 +254,13 @@ let private exposeBenchReset (f: unit -> unit) : unit = jsNative
 [<Emit("(function(f){ window.__benchTyping = f; })($0)")>]
 let private exposeTyping (f: unit -> string) : unit = jsNative
 
+/// One named number series as JSON — `twoSeries` for a scenario that measures one thing.
+[<Emit("JSON.stringify({ [$0]: $1 })")>]
+let private oneSeries (a: string) (xs: float[]) : string = jsNative
+
+[<Emit("(function(f){ window.__benchTranscript = f; })($0)")>]
+let private exposeTranscript (f: int -> int -> int -> string) : unit = jsNative
+
 /// Markdown of roughly `chars` characters, as paragraphs rather than one enormous line: what
 /// the reconciliation walks is NODES, so a document's structure is part of what is being
 /// measured and a single block would flatter it.
@@ -367,6 +374,47 @@ do
 
     exposeTyping (fun () ->
         twoSeries "type" (typeSamples.ToArray ()) "receive" (receiveSamples.ToArray ()))
+
+    // What one render's worth of transcript reading costs.
+    //
+    // A pane draws every block of the terminal it is showing, and each block asks the feed for
+    // its OWN range (`terminalBlockView` -> `TerminalFeed.outputText`). So the thing a person
+    // waits through is the sum over blocks, and what matters about it is not any single call —
+    // no single call ever looks slow — but how that sum grows with the transcript. `slice` used
+    // to answer a range by materialising every record the terminal held and filtering it down,
+    // which made the sum the transcript times the number of blocks: 0.6ms at 400 records,
+    // 8.6ms at 1,500, 61.8ms at 6,000, on the path a reopened session waits through.
+    //
+    // Hence a SWEEP rather than a number, and hence measured here rather than on the .NET side
+    // where the same F# is far easier to call: `Map` is Fable's implementation in the browser
+    // and .NET's in a test, and it is the browser's cost that a person pays.
+    //
+    // Nothing is rendered — this is the read the render does, isolated, so a change in what the
+    // pane draws cannot be mistaken for a change in what the transcript costs to read.
+    exposeTranscript (fun records blockSize samples ->
+        let feed =
+            Seq.fold
+                (fun f seq ->
+                    TerminalFeed.withRecord seq { At = float seq; Kind = TranscriptOutput; Data = "line\n" } f)
+                TerminalFeed.empty
+                (seq { 0 .. records - 1 })
+        let blocks = [ for b in 0 .. records / blockSize - 1 -> b * blockSize, (b + 1) * blockSize ]
+        let taken = ResizeArray<float> ()
+        for _ in 1 .. samples do
+            let t0 = now ()
+            let mutable read = 0
+            for (fromSeq, toSeq) in blocks do
+                read <- read + (TerminalFeed.outputText fromSeq toSeq feed).Length
+            let elapsed = now () - t0
+            // Anti-vacuity, and the one thing this scenario can silently get wrong: a feed that
+            // came out empty, or ranges that miss it, measure a loop over nothing at whatever
+            // speed nothing takes — and report it as a beautifully flat line.
+            if read = 0 then
+                failwith
+                    "the transcript sweep read no output at all — the feed or the block ranges are \
+                     empty, and this series would be a measurement of nothing"
+            taken.Add elapsed
+        oneSeries "transcript.read" (taken.ToArray ()))
 
     // Fill BOTH docs to roughly `chars`, through the real relay, and settle. One write rather
     // than a keystroke drip: this is setup, and nothing here is timed.

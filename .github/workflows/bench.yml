@@ -103,7 +103,7 @@ jobs:
       - name: Warm the devenv shell
         uses: ./.github/actions/devenv-warm
       # `bench` provisions Chromium itself (the same PLAYWRIGHT_BROWSERS_PATH every browser tier
-      # uses) and runs only the `Editor performance` suite — no host, no WebRTC, no addon.
+      # uses) and runs only the `Client performance` suite — no host, no WebRTC, no addon.
       # Best effort whenever nothing is being guarded, which is the release's case: a benchmark
       # is never a good enough reason to hold delivery, and `continue-on-error` cannot go on the
       # job that calls this workflow. When `guard` IS on — a pull request — a failed measurement
