@@ -192,6 +192,29 @@ let private sessionTests =
             Expect.isTrue (note < tail) "and precedes the tail, rather than trailing the whole answer"
         }
 
+        // A wait names its way out. Asserted on the VERB each answer points at rather than its
+        // sentence, because the verb is the mechanism: a model told only that a terminal is
+        // busy tries the same terminal again — four times, two minutes each, in one session —
+        // and never reaches a verb it was not pointed at.
+        test "a wait behind a running command names both ways past it" {
+            let said = AgentTools.renderOutcome { elided None with Status = TerminalCommandAwaitingTerminal BehindBlock; Output = "" }
+            Expect.stringContains said "open_terminal" "run beside it"
+            Expect.stringContains said "close_terminal" "or end it, if the terminal is yours"
+            Expect.stringContains said "check_pending" "or wait for it"
+        }
+
+        test "a wait on a person does not offer to end them" {
+            let said = AgentTools.renderOutcome { elided None with Status = TerminalCommandAwaitingTerminal HeldByPerson; Output = "" }
+            Expect.isFalse (said.Contains "close_terminal") "a person's hold is not the agent's to end"
+            Expect.stringContains said "open_terminal" "but the agent can work elsewhere"
+        }
+
+        test "the four waits read as four different answers" {
+            let says wait = AgentTools.renderOutcome { elided None with Status = TerminalCommandAwaitingTerminal wait; Output = "" }
+            let answers = [ BehindBlock; BehindQueue; HeldByPerson; UnmarkedShell ] |> List.map says
+            Expect.equal (List.distinct answers |> List.length) 4 "none collapses into another"
+        }
+
         // Two invariants, because they fail at different times and their reds mean different
         // things: one that a cut answer says which END it handed over, one that it says where
         // the rest starts. An answer could gain the first and still leave a reader guessing.

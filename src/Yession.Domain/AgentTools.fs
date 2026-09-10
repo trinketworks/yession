@@ -203,9 +203,25 @@ module AgentTools =
             sprintf
                 "WAITING FOR A KEYSTROKE in %s. It opened a full-screen program, so it will not finish on its own — and the terminal is now YOURS to type into. Use write_terminal to answer it and read_terminal to see the screen; leaving the program hands the terminal back and finishes the command. Call check_pending with handle '%s' for the outcome.%s"
                 where handle output
-        | TerminalCommandAwaitingTerminal ->
+        // Each hold names its way out. "Somebody is using it, or another command is running
+        // there" was true and useless: told that over a terminal its own stuck command was
+        // holding, an agent tried the same terminal four times and every verb that might have
+        // ended the wait was one it had not been pointed at.
+        | TerminalCommandAwaitingTerminal BehindBlock ->
             sprintf
-                "WAITING FOR %s TO BE FREE — somebody is using it, or another command is running there. It has not run. Call check_pending with handle '%s' later."
+                "WAITING FOR %s — another command is running there, and this one is queued behind it. It has not run. To run it beside that command now: open_terminal, then execute_command with that `terminal`. To end what is running there, if the terminal is yours: close_terminal (whatever is queued there goes with it). Otherwise call check_pending with handle '%s' later."
+                where handle
+        | TerminalCommandAwaitingTerminal BehindQueue ->
+            sprintf
+                "WAITING FOR %s — other commands are queued ahead of this one. It has not run; it runs when they have. Call check_pending with handle '%s' later, or open_terminal to run it somewhere else now."
+                where handle
+        | TerminalCommandAwaitingTerminal HeldByPerson ->
+            sprintf
+                "WAITING FOR %s — somebody is typing in it. It has not run; it runs when they finish, and that is theirs to decide. Call check_pending with handle '%s' later, or open_terminal to run it somewhere else now."
+                where handle
+        | TerminalCommandAwaitingTerminal UnmarkedShell ->
+            sprintf
+                "WAITING FOR %s — its shell stopped answering the session's instrumentation, and a person has to re-arm it before anything can run there. It has not run. open_terminal runs it somewhere else now; check_pending with handle '%s' picks it up if the terminal is repaired."
                 where handle
         | TerminalCommandRefused (by, reason) ->
             let who = ActorRef.token by
