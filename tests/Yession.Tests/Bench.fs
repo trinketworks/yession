@@ -50,7 +50,7 @@ let private transcriptSizes = [ 400; 1_500; 6_000 ]
 /// per-block read multiplies against, so a sweep of one enormous block would measure the one
 /// shape the cost is linear in and miss the fault entirely — which is exactly how the reopen
 /// budget in `Browser.fs`, whose seed is a single command, reads the same 2.01 renders per
-/// record either side of a fix worth 300x.
+/// record either side of a fix that took 6,000 records from 70.2ms a render to 2.5ms.
 let private recordsPerBlock = 10
 
 /// Samples per metric per size. The first few are discarded — a cold JIT and an unwarmed

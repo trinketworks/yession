@@ -382,8 +382,9 @@ do
     // waits through is the sum over blocks, and what matters about it is not any single call —
     // no single call ever looks slow — but how that sum grows with the transcript. `slice` used
     // to answer a range by materialising every record the terminal held and filtering it down,
-    // which made the sum the transcript times the number of blocks: 0.6ms at 400 records,
-    // 8.6ms at 1,500, 61.8ms at 6,000, on the path a reopened session waits through.
+    // which made the sum the transcript times the number of blocks: measured through this very
+    // hook, 0.4ms at 400 records, 4.6ms at 1,500 and 70.2ms at 6,000, against 0.5 / 0.8 / 2.5
+    // once the walk was bounded by the range — a slope of 175x where there is now one of 5x.
     //
     // Hence a SWEEP rather than a number, and hence measured here rather than on the .NET side
     // where the same F# is far easier to call: `Map` is Fable's implementation in the browser
