@@ -2285,6 +2285,77 @@ let editorTests =
                              ?.opacity === '1'""")
                 return ()
             }
+        // A turn in flight, on the screen that had the least room for it. This is the phone
+        // photographed in the report that started this: an author line, the word `streaming`
+        // under it, an empty body, and a 48px band below saying "agent is responding" a third
+        // time — one fact, three animated marks.
+        //
+        // Only a browser can settle it. Every cheap tier reads markup, and markup with a
+        // visually-hidden sentence in it looks exactly like markup that says the thing twice:
+        // what separates them is whether the pixels are painted. So the count here is of marks
+        // a person can SEE — hit-tested at their own centre, never `offsetParent` (null for
+        // anything fixed) and never a non-zero rect (a clipped element keeps one).
+        editorCaseIn 390 844 "a turn in flight is stated on the screen exactly once" (EDITOR_PORT + 36) <| fun page ->
+            async {
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-draft-editor]")
+                do! awaitU (page.EvaluateAsync "() => window.__agentTurn()")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-agent-writing]")
+                // The shell into the viewport, then the timeline to its end — where a turn that
+                // has just started is. Both, because this harness page stacks its mounts and
+                // the shell is not the top of it: a mark below the fold is invisible for a
+                // reason this case is not about, and would fail it while the design was right.
+                // (Measured: without the first scroll the caret sits at y=1433 on an 844px
+                // screen, and every hit-test answers null.)
+                let! _ =
+                    await (page.EvaluateAsync<bool>
+                            """() => { document.querySelector('#shell').scrollIntoView()
+                                       const t = document.querySelector('#shell [data-conversation]')
+                                       t.scrollTop = t.scrollHeight
+                                       return t.scrollTop > 0 }""")
+                let! marks =
+                    await (page.EvaluateAsync<int>
+                            """() => [...document.querySelectorAll('#shell [data-agent-writing]')].filter(m => {
+                                 const b = m.getBoundingClientRect()
+                                 if (b.width === 0 || b.height === 0) return false
+                                 const at = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2)
+                                 return at !== null && m.contains(at)
+                               }).length""")
+                Expect.equal marks 1 "the agent's turn is marked once on the screen"
+
+                // The other half of "once": the sentence a screen reader is told must not also
+                // be a thing anybody sees, or the count above is 1 and the screen still says it
+                // twice. A visually-hidden region occupies no readable area — which is what
+                // `sr-only` MEANS, and the one property every correct spelling of it shares.
+                let! shown =
+                    await (page.EvaluateAsync<float>
+                            """() => { const r = document.querySelector('#shell [data-agent-stream]').getBoundingClientRect()
+                                       return r.width * r.height }""")
+                Expect.isTrue (shown < 25.0) (sprintf "the spoken sentence is not painted for anyone (%f px²)" shown)
+                return ()
+            }
+        // What the band it replaced could not take away, and what a control arriving in a band
+        // can: the composer. A turn starting must not push what a person types with off the
+        // screen, or the one thing to do while the agent writes — queue the next message — is
+        // gone exactly when it is wanted.
+        editorCaseIn 390 844 "a turn starting never costs the composer its line or its send" (EDITOR_PORT + 37) <| fun page ->
+            async {
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-draft-editor]")
+                do! awaitU (page.EvaluateAsync "() => window.__agentTurn()")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-interrupt-turn]")
+                let! whole =
+                    await (page.EvaluateAsync<bool>
+                            """() => {
+                                 const inside = sel => {
+                                   const el = document.querySelector('#shell ' + sel)
+                                   if (!el) return false
+                                   const b = el.getBoundingClientRect()
+                                   return b.width > 0 && b.height > 0 && b.left >= 0 && b.right <= window.innerWidth
+                                 }
+                                 return inside('[data-draft-input]') && inside('[data-send-draft]') && inside('[data-interrupt-turn]')
+                               }""")
+                Expect.isTrue whole "the line, its send, and the new stop control all fit the phone at once"
+                return ()
+            }
         // The DVR (Plan 14, stage 7). What only a browser can answer: that rewinding a LIVE
         // terminal really mounts a player over what it has recorded so far — the same player
         // and the same cast a finished terminal's replay uses, which is what "rewound like

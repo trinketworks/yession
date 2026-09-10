@@ -253,6 +253,26 @@ let private withMarks (ids: string list) : ClientModel =
 let private occurrences (needle: string) (haystack: string) : int =
     (haystack.Split ([| needle |], System.StringSplitOptions.None)).Length - 1
 
+/// A turn that has started and not yet said a word. The moment a phone spends the longest on,
+/// and the one the old activity strip was worst at: an author line, the word `streaming`, an
+/// empty body under it, and a 48px band below saying the same thing a third time.
+let private silentTurnModel : ClientModel =
+    { representativeModel with
+        Conversation =
+            { representativeModel.Conversation with
+                Items =
+                    representativeModel.Conversation.Items
+                    |> List.map (fun item -> if item.Status = Streaming then { item with Body = "" } else item) } }
+
+/// Nothing running: the last turn finished and nobody has asked for another.
+let private restingModel : ClientModel =
+    { representativeModel with
+        Agent = { ActiveTurn = None }
+        Conversation =
+            { representativeModel.Conversation with
+                Items = representativeModel.Conversation.Items |> List.map (fun item -> { item with Status = Complete })
+                ActiveAgentMessages = Map.empty } }
+
 /// The composer when a PEER is the one writing: their draft is what you are in, yours (if any)
 /// is a summary you can open, and "new message" is the way out of collaborating.
 let private joinedComposerModel : ClientModel =
@@ -494,7 +514,7 @@ let private uiChecklistTests =
                   "sent message in timeline", ">ship it</p>"
                   "agent streaming response", Dom.attr Dom.Hooks.messageStatus Dom.Text.streaming
                   "agent stream indicator", Dom.Hooks.agentStream
-                  "active agent turn", Dom.Hooks.agentTurn
+                  "a way to stop the turn that is running", Dom.attr Dom.Hooks.interruptTurn "turn-ui"
                   "last processed event offset", Dom.hookText Dom.Hooks.lastProcessedOffset "5"
                   "latest known event offset", Dom.hookText Dom.Hooks.latestKnownOffset "7"
                   "catch-up status", Dom.hookText Dom.Hooks.catchUp Dom.Text.catchingUp
@@ -2008,9 +2028,72 @@ let private semanticsTests =
                 "send keeps its place either way — it is never taken away"
     ]
 
+// A turn in flight is ONE fact, and this is the suite that keeps it being said once.
+//
+// It used to be said three times at once: the streaming message's meta line wore a pulsing dot
+// and the word `streaming`, its body wore the caret, and a 48px band under the timeline wore a
+// second pulse, the sentence "agent is responding", the turn's number and a bordered Interrupt.
+// Three animated marks for one fact, on a phone screen that had room for about six.
+//
+// What is pinned here is the COUNT, never the shape: a redesign may move the mark, restyle it,
+// or put the stop control somewhere else entirely, and these stay green. Two of anything is
+// what goes red.
+let private agentTurnTests =
+    testList "What a turn in flight says about itself" [
+        testCase "a turn in flight is marked exactly once" <| fun () ->
+            Expect.equal
+                (occurrences Dom.Hooks.agentWriting (Support.render representativeModel))
+                1
+                "one mark, in the timeline, where the words are landing"
+
+        testCase "a turn in flight offers exactly one way to stop it" <| fun () ->
+            Expect.equal
+                (occurrences Dom.Hooks.interruptTurn (Support.render representativeModel))
+                1
+                "one control, on the band where a person answers the turn"
+
+        // The sentence survives for the people the caret cannot reach, and for nobody else. A
+        // second copy of it is the strip coming back.
+        testCase "the sentence a screen reader is told exists in one place" <| fun () ->
+            let html = Support.render representativeModel
+            Expect.equal (occurrences Dom.Text.agentResponding html) 1 "said once"
+            Expect.isTrue
+                (html.Contains (Dom.hookText Dom.Hooks.agentStream Dom.Text.agentResponding))
+                "and it is the live region that says it"
+
+        // The screenshot that started this: a turn accepted, nothing said yet. The mark stands
+        // where the first word will land — which is the whole of what it is for.
+        testCase "a turn that has said nothing yet still marks where the words will land" <| fun () ->
+            Expect.equal
+                (occurrences Dom.Hooks.agentWriting (Support.render silentTurnModel))
+                1
+                "an empty body is still a message arriving"
+
+        testCase "nothing running: nothing marked" <| fun () ->
+            Expect.equal
+                (occurrences Dom.Hooks.agentWriting (Support.render restingModel))
+                0
+                "no turn, no mark"
+
+        testCase "nothing running: nothing to stop" <| fun () ->
+            Expect.equal
+                (occurrences Dom.Hooks.interruptTurn (Support.render restingModel))
+                0
+                "a stop control over nothing is a control that cannot work"
+
+        // A live region announces what CHANGES inside it, so it has to be there BEFORE the
+        // sentence is: mounted at rest, empty, waiting. A region that appeared with its text
+        // already in it is a region several screen readers never read out.
+        testCase "the live region is mounted before there is anything to say" <| fun () ->
+            let html = Support.render restingModel
+            Expect.equal (occurrences Dom.Hooks.agentStream html) 1 "mounted"
+            Expect.isTrue (html.Contains (Dom.hookText Dom.Hooks.agentStream "")) "and saying nothing"
+    ]
+
 let tests =
     testList "Acceptance" [
         uiChecklistTests
+        agentTurnTests
         terminalListTests
         presenceTests
         syncStatusTests
