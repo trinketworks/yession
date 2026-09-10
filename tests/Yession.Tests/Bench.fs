@@ -147,27 +147,56 @@ let private table (all: Series list) (ratios: Ratio list) =
         printfn "  %-16s %8s %9.2f%s" r.Name r.Over r.Value r.Unit
     printfn ""
 
-/// Flinging back: touch input through Chromium's own gesture synthesis, at the middle of the
-/// conversation, until the stream of records has been sent — jumping to the end and flinging
-/// again whenever the top is reached, so a short conversation is measured over as many
-/// records as a long one. Real input rather than a `scrollTop` write, because a write is one
-/// scroll event and a thumb is hundreds — and the listeners the app hangs on scroll are part
-/// of what a frame pays for.
+/// One thumb, down near the top of the conversation and dragged fast to its foot, then
+/// lifted: a touch sequence through the browser's own input pipeline, timestamped as a
+/// thumb moves, so the gesture recogniser scrolls on every move and flings on the lift.
+/// Sent as touch EVENTS rather than through `Input.synthesizeScrollGesture`, whose touch
+/// synthesis carried the conversation nowhere on the Linux runner while carrying it fine on
+/// a Mac — and a gesture that may or may not have happened is not a fling.
+let private thumbFling (cdp: ICDPSession) (x: float) (fromY: float) (toY: float) : Async<unit> =
+    async {
+        let touch (kind: string) (y: float) (at: float) =
+            async {
+                let point = Collections.Generic.Dictionary<string, obj> ()
+                point.["x"] <- box x
+                point.["y"] <- box y
+                let args = Collections.Generic.Dictionary<string, obj> ()
+                args.["type"] <- box kind
+                args.["touchPoints"] <- box (if kind = "touchEnd" then [||] else [| point |])
+                args.["timestamp"] <- box at
+                let! reply = await (cdp.SendAsync ("Input.dispatchTouchEvent", args))
+                ignore reply
+            }
+        let steps = 12
+        let stepMs = 8.0
+        let t0 = float (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds ()) / 1000.0
+        do! touch "touchStart" fromY t0
+        for i in 1 .. steps do
+            let y = fromY + (toY - fromY) * float i / float steps
+            do! touch "touchMove" y (t0 + float i * stepMs / 1000.0)
+        do! touch "touchEnd" toY (t0 + float (steps + 1) * stepMs / 1000.0)
+    }
+
+/// Flinging back: a thumb through the conversation, again and again until the stream of
+/// records has been sent — jumping to the end and flinging again whenever the top is reached,
+/// so a short conversation is measured over as many records as a long one. Real input rather
+/// than a `scrollTop` write, because a write is one scroll event and a thumb is hundreds —
+/// and the listeners the app hangs on scroll are part of what a frame pays for.
 ///
 /// Returns how far the conversation was carried, in pixels. Nothing means the frames
 /// recorded were not a fling's, whatever else they were.
 let private flingWhileStreaming (page: IPage) (cdp: ICDPSession) (records: int) : Async<float> =
     async {
         let scrollTop = "() => document.querySelector('#shell [data-conversation]').scrollTop"
-        // Where to put the thumb, found again before every gesture: a fling that reaches the
+        // Where the thumb goes, found again before every gesture: a fling that reaches the
         // conversation's top chains to the page, which scrolls the shell out from under a
-        // point measured once.
-        let centre =
+        // box measured once.
+        let box' =
             """() => {
               const el = document.querySelector('#shell [data-conversation]')
               el.scrollIntoView()
               const r = el.getBoundingClientRect()
-              return [r.x + r.width / 2, r.y + r.height / 2]
+              return [r.x + r.width / 2, r.top + r.height * 0.2, r.top + r.height * 0.9]
             }"""
         let mutable carried = 0.0
         let mutable sent = 0
@@ -175,15 +204,17 @@ let private flingWhileStreaming (page: IPage) (cdp: ICDPSession) (records: int) 
         // Bounded, so a stream that stopped early cannot fling forever: at most one gesture
         // per record is far more than any conversation needs.
         while sent < records && gestures < records do
-            let! centre = await (page.EvaluateAsync<float[]> centre)
+            let! b = await (page.EvaluateAsync<float[]> box')
             let! before = await (page.EvaluateAsync<float> scrollTop)
-            let args = Collections.Generic.Dictionary<string, obj> ()
-            args.["x"] <- box centre.[0]
-            args.["y"] <- box centre.[1]
-            args.["yDistance"] <- box 3000
-            args.["speed"] <- box 6000
-            args.["gestureSourceType"] <- box "touch"
-            let! _ = await (cdp.SendAsync ("Input.synthesizeScrollGesture", args))
+            do! thumbFling cdp b.[0] b.[1] b.[2]
+            // Let the fling run out before measuring what it carried: a thumb lifted is a
+            // scroll still going.
+            do! awaitU (page.WaitForFunctionAsync """() => new Promise(done => {
+                  const el = document.querySelector('#shell [data-conversation]')
+                  let last = el.scrollTop, still = 0
+                  const tick = () => { if (el.scrollTop === last) still++; else { still = 0; last = el.scrollTop }
+                    if (still >= 3) done(true); else requestAnimationFrame(tick) }
+                  requestAnimationFrame(tick) })""")
             gestures <- gestures + 1
             let! after = await (page.EvaluateAsync<float> scrollTop)
             carried <- carried + max 0.0 (before - after)
