@@ -303,6 +303,30 @@ let private exposeTranscript (f: int -> int -> int -> string) : unit = jsNative
 [<Emit("(function(f){ window.__benchSettle = f; })($0)")>]
 let private exposeSettle (f: unit -> JS.Promise<unit>) : unit = jsNative
 
+/// Begin the scroll scenario: a conversation of `items`, `records` transcript records arriving
+/// one every `everyMs`, and the frame clock and render clock running. The FLING is the driver's
+/// to make, with real touch input, once this returns.
+[<Emit("(function(f){ window.__benchScrollBegin = f; })($0)")>]
+let private exposeScrollBegin (f: int -> int -> int -> unit) : unit = jsNative
+
+/// How many records the stream has sent so far. The driver flings until the stream is spent,
+/// so every size is measured over the same records rather than over however long one fling
+/// through it happened to take.
+[<Emit("(function(f){ window.__benchScrollSent = f; })($0)")>]
+let private exposeScrollSent (f: unit -> int) : unit = jsNative
+
+/// End it: stop the stream and the clocks, and hand back what they recorded.
+[<Emit("(function(f){ window.__benchScrollEnd = f; })($0)")>]
+let private exposeScrollEnd (f: unit -> string) : unit = jsNative
+
+/// What the scroll scenario recorded, in the series shape the driver reads everywhere else,
+/// plus the counts that say whether it measured anything: renders against records sent, and
+/// where the scroll started and ended.
+[<Emit("JSON.stringify({ frame: $0, render: $1, renders: $2, records: $3, scrolledFrom: $4, scrolledTo: $5 })")>]
+let private scrollReport
+    (frames: float[]) (renders: float[]) (rendersN: int) (recordsN: int) (scrolledFrom: float) (scrolledTo: float)
+    : string = jsNative
+
 /// Markdown of roughly `chars` characters, as paragraphs rather than one enormous line: what
 /// the reconciliation walks is NODES, so a document's structure is part of what is being
 /// measured and a single block would flatter it.
@@ -552,12 +576,31 @@ let private shellHost : obj = jsNative
 [<Emit("document.getElementById('shell').className = $0")>]
 let private dressShell (className: string) : unit = jsNative
 
+let private expect = function Ok v -> v | Error e -> failwith e
+
+/// What the shell model's conversation is filled with: a column of one-liners, or a person and
+/// an agent taking turns, the agent in paragraphs with a list and a fence. Every render parses
+/// every body's Markdown again (`RichText.render`), so what a render costs is the prose on the
+/// page — and a column of one-liners measured at a fifth of what a working session did.
+type private Filler =
+    | Lines
+    | Replies
+
+/// The block-mode terminal the shell model opens. Module-level because two things name it:
+/// the model, and the scroll scenario below that streams records into it.
+let private harnessTerminal : TerminalId = TerminalId.create "term-harness" |> expect
+
 /// A session that has run one command: one open terminal, one finished block, and the two
 /// transcript records it produced. Enough for a chip to render in the chat and for its tab
 /// to have something to show.
-let private shellModel : ClientModel =
-    let expect = function Ok v -> v | Error e -> failwith e
-    let terminalId : TerminalId = TerminalId.create "term-harness" |> expect
+///
+/// `fillerItems` is how long the conversation is, and `filler` what it is made of. Sixteen
+/// lines is what the browser-tier cases were written against (`msg-filler-8` is a landmark, a
+/// jump target, and the middle of a column those cases scroll to); the scroll scenario sweeps
+/// the length over replies, because what a render costs while a person scrolls grows with
+/// what is on the page, and one length of one-liners cannot show that growing.
+let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
+    let terminalId = harnessTerminal
     /// A second terminal, in LIVE mode and held by this peer — the screen that takes
     /// keystrokes (Plan 14, stage 6). Its own terminal rather than the first one's, so the
     /// block-mode flows above keep a block-mode terminal to run in.
@@ -596,10 +639,26 @@ let private shellModel : ClientModel =
     /// beneath the line saying who spoke — and a two-message fixture can show neither, so a
     /// test written against one passes whatever the jump does.
     let filler : ConversationItem list =
-        [ for i in 1 .. 16 ->
+        [ for i in 1 .. fillerItems ->
+            let person = (match filler with Lines -> true | Replies -> i % 2 = 1)
             { MessageId = MessageId.create (sprintf "msg-filler-%d" i) |> expect
-              Author = PeerRef peerId
-              Body = sprintf "and then line %d, which is here to make the column long" i
+              Author = if person then PeerRef peerId else ActorRef.Agent
+              Body =
+                if person then sprintf "and then line %d, which is here to make the column long" i
+                else
+                    String.concat
+                        "\n"
+                        [ sprintf "Looked at line %d. The fold runs once per record, and the render after it reads the layout back twice — once to keep the reader's place and once to put it back." i
+                          ""
+                          "- `Client.fs` dispatches a message per record"
+                          "- `setState` renders the whole view for each of them"
+                          "- the conversation and the scrollback both restore their scroll"
+                          ""
+                          "```"
+                          "for i in $(seq 1 300); do echo line-$i; sleep 0.01; done"
+                          "```"
+                          ""
+                          "So the cost is records × the page, and the number that says so is a count of renders." ]
               Status = Complete
               Kind = ConversationItemKind.Message
               Offset = offset (int64 (10 + i))
@@ -781,6 +840,8 @@ let private shellModel : ClientModel =
         Pins = [ TerminalTab terminalId; TerminalTab liveId ]
         TerminalsOpen = false }
 
+let private shellModel : ClientModel = shellModelOf Lines 16
+
 /// Every byte the live screen decided to send, for the E2E to read back. The keystroke
 /// translation is the whole of what a terminal front end does with a keyboard event, and it
 /// is the one part of it that only a real browser can exercise: `KeyboardEvent` is not
@@ -876,6 +937,10 @@ do
                   ResizeTerminal = recordResized
                   Http = fun _ -> async { return Error (Client.HttpUnreachable "the harness serves no session") } } }
     let mutable model = shellModel
+    /// Where a render's cost goes while the scroll scenario below is running, and nowhere
+    /// otherwise. Timed around the whole of `render` — the view, Lit's diff, and the syncs
+    /// after it — because that is the task a frame waits on when a record lands mid-scroll.
+    let mutable renderTimes : ResizeArray<float> option = None
     let rec dispatch (msg: ClientMsg) : unit =
         model <- ClientModel.update msg model
         // Read back off the MODEL rather than out of the message: a measurement the reducer
@@ -886,7 +951,9 @@ do
             Map.tryFind terminal model.TerminalViewports
             |> Option.iter (fun size -> recordViewport terminal size.Cols size.Rows)
         | _ -> ()
+        let started = now ()
         render ()
+        renderTimes |> Option.iter (fun times -> times.Add (now () - started))
     and render () = renderer.SetState model
     dispatchRef <- dispatch
     takeRef <-
@@ -937,3 +1004,73 @@ do
     // splitter, a pinned surface or a rail that only worked in the app is one no browser-tier
     // test could reach.
     Render.attach ()
+
+    // --- Scrolling while records arrive (the `bench` scroll scenario) ------------------------
+    //
+    // A person flinging back through a conversation while the agent is working. Measured on
+    // the home deployment against a session with 57 items and a turn in progress: every frame
+    // over 50ms during the fling held exactly one render, and a fling with no render in it
+    // dropped no frame at all. A record arriving is a full render — the view, the diff, the
+    // syncs — and one landing mid-fling is the stutter, so what this records is two things: how
+    // long a render takes while the conversation is scrolled, and how far apart the frames were
+    // while records were landing in them.
+    //
+    // The stream goes into the block-mode terminal as transcript records, which is what the
+    // app's own record path dispatches (`TerminalRecordMsg`); the running block in the burst
+    // card grows with them, so the conversation redraws too. The fling itself is NOT made here:
+    // a synthetic scroll would be a scroll the browser's input pipeline never saw, and the
+    // driver has real touch input. So it is two calls — begin, fling, end — and the report says
+    // how far the scroll went, so a driver whose fling never moved cannot mistake a quiet page
+    // for a smooth one.
+    //
+    // What is timed is the app's own render (`Render.create`), the whole of it: a change
+    // anywhere between a model and the page shows here.
+    let conversation () =
+        Browser.Dom.document.querySelector "#shell [data-conversation]" :?> Browser.Types.HTMLElement
+    let mutable finish : (unit -> string) option = None
+    let mutable sentSoFar : unit -> int = fun () -> 0
+    exposeScrollBegin (fun items records everyMs ->
+        model <- shellModelOf Replies items
+        render ()
+        let surface = conversation ()
+        surface.scrollTop <- surface.scrollHeight
+        let scrolledFrom = surface.scrollTop
+        let times = ResizeArray<float> ()
+        renderTimes <- Some times
+        let frames = ResizeArray<float> ()
+        let mutable running = true
+        let mutable lastFrame = now ()
+        let rec frame () =
+            if running then
+                let t = now ()
+                frames.Add (t - lastFrame)
+                lastFrame <- t
+                onFrame frame
+        onFrame frame
+        let mutable sent = 0
+        sentSoFar <- fun () -> sent
+        let interval =
+            Browser.Dom.window.setInterval (
+                (fun () ->
+                    if sent < records then
+                        let seq = 2 + sent
+                        sent <- sent + 1
+                        dispatch (
+                            TerminalRecordMsg (
+                                harnessTerminal,
+                                seq,
+                                { At = float seq; Kind = TranscriptOutput; Data = sprintf "line %d\r\n" seq }))),
+                everyMs)
+        finish <-
+            Some (fun () ->
+                running <- false
+                Browser.Dom.window.clearInterval interval
+                renderTimes <- None
+                scrollReport (frames.ToArray ()) (times.ToArray ()) times.Count sent scrolledFrom (conversation ()).scrollTop))
+    exposeScrollSent (fun () -> sentSoFar ())
+    exposeScrollEnd (fun () ->
+        match finish with
+        | Some report ->
+            finish <- None
+            report ()
+        | None -> failwith "__benchScrollEnd without a __benchScrollBegin — nothing was being measured")

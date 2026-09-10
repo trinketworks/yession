@@ -10,10 +10,10 @@ module Yession.Tests.Bench
 // once a frame. Nothing in the repository could see that, and nothing would have seen it get
 // worse.
 //
-// Three latencies and one budget, each swept across document SIZES. The sweep is the point:
-// the concern is O(document), and a number taken at one size cannot show a complexity
-// regression at all. What comes out is `dist/bench.json`; `tasks.fsx` judges it against the
-// recorded history and charts it.
+// Latencies swept across SIZES — a document's characters, a transcript's records, a
+// conversation's items. The sweep is the point: the concern is O(document), and a number taken
+// at one size cannot show a complexity regression at all. What comes out is `dist/bench.json`;
+// `tasks.fsx` judges it against the recorded history and charts it.
 //
 // This is a measuring run, not an asserting one. The ONLY thing this suite fails on is being
 // unable to take its measurement — a page that did not load, a scenario that returned nothing.
@@ -53,6 +53,25 @@ let private transcriptSizes = [ 400; 1_500; 6_000 ]
 /// record either side of a fix that took 6,000 records from 70.2ms a render to 2.5ms.
 let private recordsPerBlock = 10
 
+/// The third sweep, in conversation ITEMS: how long the conversation a person is scrolling
+/// back through is. The session the stutter was reported from held 57.
+let private conversationSizes = [ 20; 60; 200 ]
+
+/// The scroll scenario's viewport and stream. A phone's screen, because that is where a
+/// fling is made with a thumb and where the stutter was seen; and records at twenty a second,
+/// which is the rate a working turn's terminal output and events arrived at on that session
+/// (five to twenty-two a second, in bursts). The fling is repeated until they have all landed.
+let private phone = 390, 844
+let private streamRecords = 100
+let private streamEveryMs = 50
+
+/// The scroll scenario runs the main thread at a QUARTER speed (`Emulation.setCPUThrottlingRate`).
+/// A render that takes 5ms on the runner and 20ms on a phone lands in a frame on the phone and
+/// between two on the runner, so unthrottled the frame series could not see the collision this
+/// scenario is about. The slowdown is uniform and the judgement is against history on the same
+/// runner, so the ratio it is judged by does not move with it.
+let private scrollThrottle = 4
+
 /// Samples per metric per size. The first few are discarded — a cold JIT and an unwarmed
 /// layout are not what anybody experiences after the first keystroke.
 let private samples = 30
@@ -84,10 +103,15 @@ let private seriesFrom (json: string) (size: int) (names: (string * string) list
         let values = if List.length all > warmup then List.skip warmup all else all
         { Metric = metric; Size = size; Values = values } ]
 
+/// A number that is not a series: a slope across a sweep, or a count. Name, unit, value, and
+/// what it was taken over.
+[<RequireQualifiedAccess>]
+type private Ratio = { Name : string; Unit : string; Value : float; Over : string }
+
 /// `dist/bench.json`, in github-action-benchmark's `customSmallerIsBetter` shape — so the
 /// history is readable by that tool if this repo ever wants its chart instead of ours, and so
 /// the schema was designed by somebody who had already thought about it.
-let private writeReport (all: Series list) (slope: float) (transcriptSlope: float) =
+let private writeReport (all: Series list) (ratios: Ratio list) =
     let dist = Path.Combine (Directory.GetCurrentDirectory (), "dist")
     Directory.CreateDirectory dist |> ignore
     use stream = File.Create (Path.Combine (dist, "bench.json"))
@@ -107,35 +131,72 @@ let private writeReport (all: Series list) (slope: float) (transcriptSlope: floa
                 "ms"
                 (percentile p s.Values)
                 (sprintf "%d samples" (List.length s.Values))
-    // The one number that barely moves with the hardware it was taken on, and the only one
-    // that answers the question this suite was built for: is the caret push's cost growing
-    // with the document? Linear puts it near 100; a fix upstream would collapse it toward 1.
-    point "caret.push.slope" "x" slope (sprintf "%d/%d chars" (List.max sizes) (List.min sizes))
-    // The same question on the other axis: is a render's transcript reading growing with the
-    // TRANSCRIPT, or with the transcript times the blocks on it? Proportional puts this near
-    // the size ratio (15); the per-block scan it replaced put it near the square of it.
-    point
-        "transcript.read.slope"
-        "x"
-        transcriptSlope
-        (sprintf "%d/%d records" (List.max transcriptSizes) (List.min transcriptSizes))
+    for r in ratios do
+        point r.Name r.Unit r.Value r.Over
     w.WriteEndArray ()
     w.Flush ()
 
-let private table (all: Series list) (slope: float) (transcriptSlope: float) =
+let private table (all: Series list) (ratios: Ratio list) =
     printfn ""
     printfn "  %-16s %8s %9s %9s" "metric" "size" "p50 (ms)" "p95 (ms)"
     for s in all do
         printfn
             "  %-16s %8d %9.2f %9.2f"
             s.Metric s.Size (percentile 0.5 s.Values) (percentile 0.95 s.Values)
-    printfn "  %-16s %8s %9.1fx" "caret.push slope" "20k/200" slope
-    printfn "  %-16s %8s %9.1fx" "transcript slope" "6k/400" transcriptSlope
+    for r in ratios do
+        printfn "  %-16s %8s %9.2f%s" r.Name r.Over r.Value r.Unit
     printfn ""
+
+/// Flinging back: touch input through Chromium's own gesture synthesis, at the middle of the
+/// conversation, until the stream of records has been sent — jumping to the end and flinging
+/// again whenever the top is reached, so a short conversation is measured over as many
+/// records as a long one. Real input rather than a `scrollTop` write, because a write is one
+/// scroll event and a thumb is hundreds — and the listeners the app hangs on scroll are part
+/// of what a frame pays for.
+///
+/// Returns how far the conversation was carried, in pixels. Nothing means the frames
+/// recorded were not a fling's, whatever else they were.
+let private flingWhileStreaming (page: IPage) (cdp: ICDPSession) (records: int) : Async<float> =
+    async {
+        let scrollTop = "() => document.querySelector('#shell [data-conversation]').scrollTop"
+        // Where to put the thumb, found again before every gesture: a fling that reaches the
+        // conversation's top chains to the page, which scrolls the shell out from under a
+        // point measured once.
+        let centre =
+            """() => {
+              const el = document.querySelector('#shell [data-conversation]')
+              el.scrollIntoView()
+              const r = el.getBoundingClientRect()
+              return [r.x + r.width / 2, r.y + r.height / 2]
+            }"""
+        let mutable carried = 0.0
+        let mutable sent = 0
+        let mutable gestures = 0
+        // Bounded, so a stream that stopped early cannot fling forever: at most one gesture
+        // per record is far more than any conversation needs.
+        while sent < records && gestures < records do
+            let! centre = await (page.EvaluateAsync<float[]> centre)
+            let! before = await (page.EvaluateAsync<float> scrollTop)
+            let args = Collections.Generic.Dictionary<string, obj> ()
+            args.["x"] <- box centre.[0]
+            args.["y"] <- box centre.[1]
+            args.["yDistance"] <- box 3000
+            args.["speed"] <- box 6000
+            args.["gestureSourceType"] <- box "touch"
+            let! _ = await (cdp.SendAsync ("Input.synthesizeScrollGesture", args))
+            gestures <- gestures + 1
+            let! after = await (page.EvaluateAsync<float> scrollTop)
+            carried <- carried + max 0.0 (before - after)
+            if after <= 0.0 then
+                do! awaitU (page.EvaluateAsync "() => { const el = document.querySelector('#shell [data-conversation]'); el.scrollTop = el.scrollHeight }")
+            let! n = await (page.EvaluateAsync<int> "() => window.__benchScrollSent()")
+            sent <- n
+        return carried
+    }
 
 let tests =
     testList "Client performance" [
-        testCaseAsync "the editor, the collaboration path and the transcript read, swept by size" <|
+        testCaseAsync "the editor, the collaboration path, the transcript read and the scroll, swept by size" <|
             async {
                 let server = serveStatic harnessRoot BENCH_PORT
                 let! pw = await (Playwright.CreateAsync ())
@@ -203,6 +264,60 @@ let tests =
                                 seriesFrom read records [ "transcript.read", "transcript.read" ])
                             printfn "  read %d records in %d-record blocks" records recordsPerBlock
 
+                        // The scroll, on a phone's screen with the main thread slowed to a
+                        // phone's pace. Its own context, because the viewport is part of the
+                        // scenario: what a render draws at 390px is not what it draws at the
+                        // browser's own window, and the fling is a thumb's.
+                        //
+                        // `ViewportSize` and `HasTouch`, never `IsMobile`: that additionally
+                        // asks Chromium to fit the layout to a device window, which lands at
+                        // 648px rather than 390 (`Browser.fs` tells the same story). Touch is
+                        // what makes the fling a touch gesture rather than a wheel.
+                        let! phoneContext =
+                            await (br.NewContextAsync (
+                                BrowserNewContextOptions (
+                                    ViewportSize = ViewportSize (Width = fst phone, Height = snd phone),
+                                    HasTouch = true)))
+                        let! phonePage = await (phoneContext.NewPageAsync ())
+                        let! _ = await (phonePage.GotoAsync (sprintf "http://127.0.0.1:%d/" BENCH_PORT))
+                        let! _ = await (phonePage.WaitForSelectorAsync "#shell [data-conversation]")
+                        let! cdp = await (phonePage.Context.NewCDPSessionAsync phonePage)
+                        let throttle = Collections.Generic.Dictionary<string, obj> ()
+                        throttle.["rate"] <- box scrollThrottle
+                        let! _ = await (cdp.SendAsync ("Emulation.setCPUThrottlingRate", throttle))
+                        let rendersPerRecord = ResizeArray<float> ()
+                        for items in conversationSizes do
+                            do!
+                                awaitU (phonePage.EvaluateAsync (
+                                    sprintf "() => window.__benchScrollBegin(%d, %d, %d)" items streamRecords streamEveryMs))
+                            let! carried = flingWhileStreaming phonePage cdp streamRecords
+                            let! report = await (phonePage.EvaluateAsync<string> "() => window.__benchScrollEnd()")
+                            use doc = JsonDocument.Parse report
+                            let renders = doc.RootElement.GetProperty("renders").GetInt32 ()
+                            let records = doc.RootElement.GetProperty("records").GetInt32 ()
+                            let startedAt = doc.RootElement.GetProperty("scrolledFrom").GetDouble ()
+                            // Anti-vacuity, the three ways this scenario measures nothing and
+                            // reports a smooth scroll: a conversation that never scrolled (it
+                            // fit the screen, so the frames were a page standing still), a fling
+                            // that carried it nowhere (the gestures went somewhere else), and a
+                            // stream that never arrived (the frames had nothing to collide with).
+                            // The distance is a few screens' worth: a thumb's fling is one, and
+                            // the stream outlasts several.
+                            if startedAt <= 0.0 then
+                                failwithf "the conversation of %d items starts at scrollTop %.0f — it does not scroll, so nothing here was flung" items startedAt
+                            if carried < 3.0 * float (snd phone) then
+                                failwithf "flinging through %d items carried the conversation %.0fpx — less than three screens, so these frames are not a fling's" items carried
+                            if records < streamRecords || renders < 1 then
+                                failwithf
+                                    "the stream over %d items sent %d of %d records and the page rendered %d times — too few to have collided with a fling"
+                                    items records streamRecords renders
+                            printfn
+                                "  flung %d items %.0fpx while %d records landed in %d renders"
+                                items carried records renders
+                            rendersPerRecord.Add (float renders / float records)
+                            collected.AddRange (seriesFrom report items [ "frame", "scroll.frame"; "render", "scroll.render" ])
+                        do! awaitU (phoneContext.CloseAsync ())
+
                         let all = List.ofSeq collected
                         let medianOf metric size =
                             all
@@ -214,6 +329,35 @@ let tests =
                         let readAt = medianOf "transcript.read"
                         let transcriptSlope =
                             readAt (List.max transcriptSizes) / readAt (List.min transcriptSizes)
+                        let renderAt = medianOf "scroll.render"
+                        let scrollSlope =
+                            renderAt (List.max conversationSizes) / renderAt (List.min conversationSizes)
+                        let ratios =
+                            [ // The one number that barely moves with the hardware it was taken
+                              // on, and the only one that answers the question this suite was
+                              // built for: is the caret push's cost growing with the document?
+                              // Linear puts it near 100; a fix upstream would collapse it toward 1.
+                              { Ratio.Name = "caret.push.slope"; Ratio.Unit = "x"; Ratio.Value = slope
+                                Ratio.Over = sprintf "%d/%d chars" (List.max sizes) (List.min sizes) }
+                              // The same question on the other axis: is a render's transcript
+                              // reading growing with the TRANSCRIPT, or with the transcript
+                              // times the blocks on it? Proportional puts this near the size
+                              // ratio (15); the per-block scan it replaced put it near its square.
+                              { Ratio.Name = "transcript.read.slope"; Ratio.Unit = "x"; Ratio.Value = transcriptSlope
+                                Ratio.Over = sprintf "%d/%d records" (List.max transcriptSizes) (List.min transcriptSizes) }
+                              // And on the third: does a render mid-scroll grow with the
+                              // conversation? It does today — the view draws every item — and
+                              // this is the number that says by how much.
+                              { Ratio.Name = "scroll.render.slope"; Ratio.Unit = "x"; Ratio.Value = scrollSlope
+                                Ratio.Over = sprintf "%d/%d items" (List.max conversationSizes) (List.min conversationSizes) }
+                              // Renders per record that arrived while the conversation was
+                              // being flung. A COUNT, so it is the same on every box: one today,
+                              // because each record is dispatched and each dispatch renders.
+                              // Holding renders while a surface scrolls is the change that
+                              // would move it, and this is where that change would show.
+                              { Ratio.Name = "scroll.renders"; Unit = "x"
+                                Value = (Seq.sum rendersPerRecord) / float rendersPerRecord.Count
+                                Ratio.Over = sprintf "%d records at %dms" streamRecords streamEveryMs } ]
 
                         // Anti-vacuity. Every one of these has a silent failure that produces a
                         // perfectly plausible report: a scenario that never ran leaves an empty
@@ -228,14 +372,12 @@ let tests =
                                 failwithf
                                     "%s@%d collected %d samples — too few to take a percentile from, so this report would be fiction%s"
                                     s.Metric s.Size (List.length s.Values) diag
-                        if Double.IsNaN slope || Double.IsInfinity slope then
-                            failwith "the caret.push slope is not a number — one end of the sweep produced nothing"
-                        if Double.IsNaN transcriptSlope || Double.IsInfinity transcriptSlope then
-                            failwith
-                                "the transcript.read slope is not a number — one end of the sweep produced nothing"
+                        for r in ratios do
+                            if Double.IsNaN r.Value || Double.IsInfinity r.Value then
+                                failwithf "%s is not a number — one end of its sweep produced nothing" r.Name
 
-                        table all slope transcriptSlope
-                        writeReport all slope transcriptSlope
+                        table all ratios
+                        writeReport all ratios
                     }
 
                 // Teardown unconditionally, then re-raise — the shape every browser case here
