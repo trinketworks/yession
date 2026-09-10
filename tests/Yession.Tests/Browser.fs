@@ -2306,6 +2306,12 @@ let editorTests =
         // anything fixed) and never a non-zero rect (a clipped element keeps one).
         editorCaseIn 390 844 "a turn in flight is stated on the screen exactly once" (EDITOR_PORT + 36) <| fun page ->
             async {
+                // Measured with motion turned off, which is a real setting rather than a trick:
+                // a mark that ANIMATES is on the screen at one opacity or another depending on
+                // the frame the camera caught, and "how many marks are there" is only a
+                // well-posed question once nothing is mid-cycle. `motion-reduce:animate-none`
+                // is what every mark here already carries.
+                do! awaitU (page.EmulateMediaAsync (PageEmulateMediaOptions (ReducedMotion = ReducedMotion.Reduce)))
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-draft-editor]")
                 do! awaitU (page.EvaluateAsync "() => window.__agentTurn()")
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-agent-writing]")

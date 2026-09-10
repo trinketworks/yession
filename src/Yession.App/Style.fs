@@ -1064,12 +1064,29 @@ module Style =
         cls [ "pl-8 flex items-baseline gap-1.5 text-small text-ink-faint w-full text-left"
               "bg-transparent border-0 p-0 cursor-pointer hover:text-ink"; focusRing ]
 
-    let caret =
-        "inline-block w-[7px] h-[15px] bg-blue align-[-2px] ml-0.5 animate-blink motion-reduce:animate-none"
+    /// The mark itself, with nothing said about what it MEANS: a 7px bar sitting on the text's
+    /// baseline. Two marks wear it, and the ANIMATION is the whole difference between them —
+    /// which is the vocabulary this app already had and had stopped spending.
+    let private caretBar = "inline-block w-[7px] h-[15px] bg-blue align-[-2px] ml-0.5"
 
-    /// The empty timeline's own mark: the streaming caret, standing where the first message
-    /// will land. Dimmed, because it is an invitation rather than an event — a full-strength
-    /// caret in an empty room reads as something already happening.
+    /// BLINKING: "text goes here". An invitation, and the terminal cursor everybody already
+    /// knows. Worn where nothing is happening and something could be.
+    let caret = caretBar + " animate-blink motion-reduce:animate-none"
+
+    /// PULSING: "something is happening". ONE name for it, because the client reading what it
+    /// kept and the agent writing into a message are the same statement made by the same mark.
+    ///
+    /// A streaming message wore the BLINKING one, which was survivable while a pulsing dot and
+    /// an activity strip carried the claim beside it. Alone it is not: `blink` is `steps(1)`,
+    /// fully transparent for half of every second, so a turn that had been accepted and had
+    /// said nothing yet showed an empty row and — half the time — nothing whatsoever. `pulse2`
+    /// bottoms out at 0.25, so the mark is never gone. Photographed on a phone, twice, before
+    /// anybody noticed the picture was of a screen saying nothing.
+    let caretWorking = caretBar + " animate-pulse2 motion-reduce:animate-none"
+
+    /// The empty timeline's own mark: the blinking caret, standing where the first message will
+    /// land. Dimmed on top of that, because it is an invitation rather than an event — a
+    /// full-strength caret in an empty room reads as something already happening.
     ///
     /// Aligned to the message grid's content column (20px avatar + 12px gutter) so the first
     /// real message appears exactly where the caret was standing, rather than stepping sideways
@@ -1077,11 +1094,6 @@ module Style =
     let timelineIdle = "pl-8 max-md:pl-8"
     let caretIdle = caret + " opacity-50"
 
-    /// The same caret while this client is still READING what it already had (Plan 20). It
-    /// pulses rather than blinks, which is the vocabulary every other "working on it" in this
-    /// app already uses (`statusDotPulse`), and it is full strength: something IS happening,
-    /// unlike the dimmed invitation beside it.
-    let caretReading = "inline-block w-[7px] h-[15px] bg-blue align-[-2px] ml-0.5 animate-pulse2 motion-reduce:animate-none"
 
     /// Present to a screen reader, absent to everyone else. For a state whose whole expression
     /// is a moving mark: the pulse says "reading" to people who can see it, and this says the
