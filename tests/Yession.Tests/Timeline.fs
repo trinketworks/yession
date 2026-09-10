@@ -327,22 +327,60 @@ let private unchangedTests =
                 (without.Items |> List.map (fun i -> i.MessageId, i.Author, i.Body, i.Status))
                 "the same items, in the same order, whatever the terminals did"
 
-        testCase "an item's offset is where it was CREATED, and streaming does not move it" <| fun () ->
-            // Deltas and completions move the body and the status; they never move the item.
-            // A streaming answer holds its place exactly as a running command's chip does.
+        testCase "an agent's message anchors at its FIRST WORD, and later words do not move it" <| fun () ->
+            // The item opens when the turn does, before the model has spoken, so the chat
+            // shows a turn under way. It takes its place at the first delta; every later delta
+            // and the completion move the body and the status only, so a streaming answer
+            // holds its place exactly as a running command's chip does.
             let turnId = AgentTurnId.create "turn-1" |> expect
             let messageId = message "agent"
             let events =
                 [ at 1L 0.0 (AgentTurnStarted { AgentTurnId = turnId; Cause = TurnCause.TriggeredBy (message "1") })
                   at 2L 1.0 (AgentMessageStarted { AgentTurnId = turnId; MessageId = messageId; Antecedent = None })
                   at 3L 2.0 (AgentMessageDelta { AgentTurnId = turnId; MessageId = messageId; Delta = "hel" })
-                  at 4L 3.0 (AgentMessageCompleted { AgentTurnId = turnId; MessageId = messageId; Body = "hello" }) ]
+                  at 4L 3.0 (AgentMessageDelta { AgentTurnId = turnId; MessageId = messageId; Delta = "lo" })
+                  at 5L 4.0 (AgentMessageCompleted { AgentTurnId = turnId; MessageId = messageId; Body = "hello" }) ]
+            let opened, _ = ConversationProjection.applyEvents None (List.take 2 events) ConversationProjection.empty
+            let proj, _ = ConversationProjection.applyEvents None events ConversationProjection.empty
+            match opened.Items, proj.Items with
+            | [ silent ], [ item ] ->
+                Expect.equal (EventOffset.value silent.Offset) 2L "until it speaks, it sits where it opened"
+                Expect.equal (EventOffset.value item.Offset) 3L "anchored at the first word"
+                Expect.equal item.Body "hello" "even though the rest of the body arrived later"
+            | opened, items -> failwithf "expected one item each, got %d and %d" (List.length opened) (List.length items)
+
+        testCase "a completion that carries the only words anchors the message too" <| fun () ->
+            // A body that arrives whole, with no delta before it, is still the first word.
+            let turnId = AgentTurnId.create "turn-1" |> expect
+            let messageId = message "agent"
+            let events =
+                [ at 1L 0.0 (AgentMessageStarted { AgentTurnId = turnId; MessageId = messageId; Antecedent = None })
+                  at 2L 1.0 (AgentMessageCompleted { AgentTurnId = turnId; MessageId = messageId; Body = "done" }) ]
             let proj, _ = ConversationProjection.applyEvents None events ConversationProjection.empty
             match proj.Items with
-            | [ item ] ->
-                Expect.equal (EventOffset.value item.Offset) 2L "anchored where the message started"
-                Expect.equal item.Body "hello" "even though the body arrived later"
+            | [ item ] -> Expect.equal (EventOffset.value item.Offset) 2L "anchored where the body landed"
             | other -> failwithf "expected one item, got %d" (List.length other)
+
+        testCase "an answer reads AFTER the work that reached it" <| fun () ->
+            // The case that showed the old rule wrong: a turn that opens, calls two tools, and
+            // only then speaks. Anchored where it opened, the answer sat above the calls — the
+            // conclusion, then the twelve commands that reached it. The stream puts the
+            // conclusion last, and so does the chat.
+            let turnId = AgentTurnId.create "turn-a" |> expect
+            let messageId = message "agent"
+            let items =
+                merge
+                    [ at 1L 0.0 (sent "1" "which test command?")
+                      at 2L 1.0 (AgentTurnStarted { AgentTurnId = turnId; Cause = TurnCause.TriggeredBy (message "1") })
+                      at 3L 2.0 (AgentMessageStarted { AgentTurnId = turnId; MessageId = messageId; Antecedent = None })
+                      at 4L 3.0 (SessionEvent.ToolUseStarted { ToolUseId = ToolUseId.create "t-1" |> expect; AgentTurnId = turnId; Namespace = "yession"; Name = "add_repo"; Arguments = None })
+                      at 5L 4.0 (SessionEvent.ToolUseStarted { ToolUseId = ToolUseId.create "t-2" |> expect; AgentTurnId = turnId; Namespace = "yession"; Name = "execute_command"; Arguments = None })
+                      at 6L 5.0 (AgentMessageDelta { AgentTurnId = turnId; MessageId = messageId; Delta = "`check`" })
+                      at 7L 6.0 (AgentMessageCompleted { AgentTurnId = turnId; MessageId = messageId; Body = "`check`" }) ]
+            Expect.equal
+                (shapes items)
+                [ "said:m-1"; "used:t-1"; "used:t-2"; "said:m-agent" ]
+                "the question, the work, then the answer"
     ]
 
 // --- The pane's tabs (stage 2) -------------------------------------------------------------

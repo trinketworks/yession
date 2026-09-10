@@ -65,10 +65,19 @@ type ConversationItem =
       Body      : string
       Status    : ConversationItemStatus
       Kind      : ConversationItemKind
-      /// The offset of the event that CREATED this item — the message that was sent, or the
-      /// agent message that started (Plan 14, stage 1). Deltas and completions move the body
-      /// and the status; they never move the item, so a streaming answer holds its place in
-      /// the order exactly as a running command's chip does.
+      /// The offset of the event at which this item first SAID something — the message that
+      /// was sent, the note that was made, or the agent's first word (Plan 14, stage 1).
+      /// Later deltas and the completion move the body and the status; they never move the
+      /// item, so a streaming answer holds its place in the order exactly as a running
+      /// command's chip does.
+      ///
+      /// The agent's first message of a turn opens BEFORE it speaks, so the chat shows a turn
+      /// under way, and most turns then call tools for a while before saying anything. Until
+      /// the first word the item sits where it opened; at the first word it moves to where
+      /// that word landed. Anchoring it where it opened put every answer ABOVE the work it
+      /// answered with — a reader saw the conclusion, then the twelve commands that reached
+      /// it. A follower message opens on its first word already (`AgentMessageStarted` with an
+      /// antecedent), so this makes the first message read like the rest.
       ///
       /// Carried so the view can interleave this with terminal work in one timeline. Both are
       /// folds of the SAME ordered log, which makes merging them a sort rather than a clock
@@ -622,17 +631,28 @@ module ConversationProjection =
                           // reason — a follower answers its antecedent, not the trigger.
                           Replying = (match a.Antecedent with None -> replyingTo a.AgentTurnId proj | Some _ -> None) } ]
                 ActiveAgentMessages = Map.add a.AgentTurnId a.MessageId proj.ActiveAgentMessages }
+        // The first word anchors the item (see `Offset`); every later one only lengthens it.
+        // A completion that carries a body nobody streamed — a turn whose only words arrived
+        // whole — is that message's first word too, and anchors it the same way.
         | AgentMessageDelta a ->
             { proj with
                 Items =
                     proj.Items
                     |> updateItem a.MessageId (fun item ->
-                        if item.Status = Streaming then { item with Body = item.Body + a.Delta } else item) }
+                        if item.Status = Streaming then
+                            { item with
+                                Body = item.Body + a.Delta
+                                Offset = if item.Body = "" then envelope.Offset else item.Offset }
+                        else item) }
         | AgentMessageCompleted a ->
             { proj with
                 Items =
                     proj.Items
-                    |> updateItem a.MessageId (fun item -> { item with Body = a.Body; Status = Complete })
+                    |> updateItem a.MessageId (fun item ->
+                        { item with
+                            Body = a.Body
+                            Status = Complete
+                            Offset = if item.Body = "" && a.Body <> "" then envelope.Offset else item.Offset })
                 ActiveAgentMessages = Map.remove a.AgentTurnId proj.ActiveAgentMessages }
         | AgentTurnInterrupted a ->
             match Map.tryFind a.AgentTurnId proj.ActiveAgentMessages with
