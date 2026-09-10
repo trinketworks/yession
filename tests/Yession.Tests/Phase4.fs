@@ -1135,6 +1135,92 @@ let private registryPublishTests =
             }
     ]
 
+// A session that is nothing but its readiness line: writes its pid to `ledger`, prints the
+// line after a beat, then waits to be stopped. Enough of the spawn contract for the
+// Manager's launch bookkeeping to run against, and the beat is the point — it is the window
+// in which a second launch used to slip through, and a real session's window is seconds
+// wide. The ledger is the only witness that can count: the Manager's own view holds ONE
+// child per session by construction, which is exactly why it could not see the other.
+let private stubSession (ledger: string) (body: string) =
+    [ "-e"
+      sprintf "require('fs').appendFileSync(%s, process.pid + '\\n'); %s" (JS.JSON.stringify ledger) body ]
+
+let private readyThenWait (readyAfterMs: int) =
+    sprintf "setTimeout(() => console.log(JSON.stringify({ yession: 'ready', port: 1 })), %d); setInterval(() => {}, 1000)" readyAfterMs
+
+let private exitBeforeReady = "setTimeout(() => process.exit(3), 200)"
+
+/// The pids the ledger saw — and, whatever the assertion says next, none of them left
+/// running: an orphan holds the suite's stdout open and turns a red case into a hang.
+let private spawnedChildren (ledger: string) : int list =
+    let pids =
+        if Fs.exists ledger then
+            (Fs.readText ledger).Split '\n'
+            |> Array.filter (fun l -> l.Trim().Length > 0)
+            |> Array.map int
+            |> List.ofArray
+        else []
+    for pid in pids do
+        try sigkill pid with _ -> ()
+    pids
+
+let private managerOfStubs (name: string) (body: string) =
+    let dataDir =
+        sprintf "tests/Yession.Tests/out/.data/%s-%d" name (int (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds ()) % 1000000)
+    Fs.ensureDir dataDir
+    let ledger = dataDir + "/spawned"
+    async {
+        let! pm =
+            ProcessManager.create
+                { ProcessManager.Options.defaults dataDir nodePath (stubSession ledger body) with
+                    Strategy = Some Strategy.localhost }
+        return pm, ledger
+    }
+
+let private launchOnceTests =
+    testList "One session, one child (the launch in flight)" [
+        // The guard used to read `children`, which is written only when the spawn RESOLVES,
+        // so two launches that both read it empty both spawned: two children for one
+        // session, one of them forgotten by the Manager and running on with its own port
+        // and its own OIDC registration. The second asker is not refused for it — it wanted
+        // the session up, and it is coming up — it is handed the same outcome.
+        testCaseAsync "two launches in flight at once spawn one child, and both askers get its port" <|
+            async {
+                let! pm, ledger = managerOfStubs "launch-once" (readyThenWait 300)
+                let record = pm.CreateSession "launch-once" "Launch once" |> expect
+                let! first = pm.Launch record.SessionId |> Async.StartChild
+                let! second = pm.Launch record.SessionId |> Async.StartChild
+                let! a = first
+                let! b = second
+                do! pm.StopAll ()
+                let spawned = spawnedChildren ledger
+                Expect.isTrue (Result.isOk a) (sprintf "the launch succeeded: %A" a)
+                Expect.equal b a "one outcome, told to both"
+                Expect.equal (List.length spawned) 1 (sprintf "one child spawned, not %A" spawned)
+            }
+
+        testCaseAsync "a launch that fails fails everyone who joined it, and spawned once" <|
+            async {
+                // A child that exits before its readiness line: the launch settles as an
+                // error, and the joiner must hear the same rather than wait for ever.
+                let! pm, ledger = managerOfStubs "launch-fail" exitBeforeReady
+                let record = pm.CreateSession "launch-fail" "Launch fail" |> expect
+                let! first = pm.Launch record.SessionId |> Async.StartChild
+                let! second = pm.Launch record.SessionId |> Async.StartChild
+                let! a = first
+                let! b = second
+                Expect.isTrue (Result.isError a) "the launcher was told it failed"
+                Expect.equal b a "and so was the joiner, in the same words"
+                Expect.equal (List.length (spawnedChildren ledger)) 1 "one child spawned for the two of them"
+                // And the slot is free again: a later launch is a launch, not a join of
+                // something that is over.
+                match! pm.Launch record.SessionId with
+                | Error _ -> Expect.equal (List.length (spawnedChildren ledger)) 2 "the next launch spawned again"
+                | Ok _ -> failwith "this child never becomes ready"
+                do! pm.StopAll ()
+            }
+    ]
+
 let private uiFlowTests =
     testList "Management UI flow (Step 25)" [
         testCaseAsync "create -> launch -> open -> stop -> resume -> crash, all over the management endpoint, with live status pushed on the rows stream" <|
@@ -2555,6 +2641,7 @@ let tests =
         // `Ports` only: a ProcessManager binds its control endpoint on creation, but nothing
         // here launches a child — the invariant is about the moment BEFORE the first launch.
         Tag.needs "Registry writes announce themselves (UX review P0)" [ Tag.Ports ] (fun () -> registryPublishTests)
+        Tag.needs "One session, one child (the launch in flight)" [ Tag.Ports ] (fun () -> launchOnceTests)
         Tag.needs "Idle reaping over the process boundary (Plan 11)" [ Tag.Ports; Tag.Native ] (fun () -> reapingTests)
         // `Srt` for the same reason: the packaged child picks the sandbox DEFAULT, and this
         // suite waits on an environment that reached Running and a command that exited 0 —
