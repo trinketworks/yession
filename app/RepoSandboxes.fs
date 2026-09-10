@@ -45,7 +45,9 @@ type FoldOutcome =
 
 type RepoSandboxes =
     { /// Re-read every checkout and ensure what it declares, on the authority of whoever
-      /// asked. `None` is the fold at boot, which nobody triggered.
+      /// asked. `None` is the fold at boot, which nobody triggered — and the one that runs
+      /// again, on THEIR authority, when somebody arrives. One fold runs at a time; a
+      /// second asked for while one is in flight waits for it.
       Fold : ActorRef option -> Async<unit>
       /// What the last fold made of each repo, in a stable order — the query's rows.
       Outcomes : unit -> FoldOutcome list
@@ -196,7 +198,7 @@ let create
     let mutable describedRefs : Map<string, string> = Map.empty
     let mutable reposAtRefs : Map<string, string> = Map.empty
 
-    let fold (onBehalfOf: ActorRef option) : Async<unit> =
+    let foldOnce (onBehalfOf: ActorRef option) : Async<unit> =
         async {
             match repos () with
             | None ->
@@ -364,6 +366,30 @@ let create
                                           RepoConfigRefused.Sandbox = outcome.Sandbox
                                           RepoConfigRefused.Reason = reason
                                           RepoConfigRefused.Actor = actor })
+        }
+
+    // One fold at a time. Folding is idempotent by construction, but only ONE AT A TIME:
+    // `start_work_sandbox` decides "is this already running" before it starts anything, and
+    // a start can be a container to pull, so two folds in flight at once would both find
+    // nothing running and both start it. That was latent while a fold could only overlap
+    // an approval; it became routine once a person's arrival folds, because the person
+    // arrives seconds after the boot fold began. A fold that finds one running waits its
+    // turn, and reads a registry the earlier one has already filled.
+    let mutable folding = false
+    let waiting = System.Collections.Generic.Queue<unit -> unit> ()
+
+    let fold (onBehalfOf: ActorRef option) : Async<unit> =
+        async {
+            if folding then
+                do! Async.FromContinuations (fun (cont, _, _) -> waiting.Enqueue cont)
+            folding <- true
+            try
+                do! foldOnce onBehalfOf
+            finally
+                // Hand straight to the next in line, so `folding` never reads false with a
+                // fold about to start; it is the last one out that clears it.
+                if waiting.Count > 0 then waiting.Dequeue () ()
+                else folding <- false
         }
 
     /// What this repo asks for right now, or nothing when its selection does not resolve.

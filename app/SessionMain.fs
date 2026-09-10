@@ -447,6 +447,19 @@ let mutable private reposService : Repos.ReposService option = None
 // place.
 let mutable private queryRegistry : Queries.QueryRegistry = Queries.empty
 
+/// The `yession.yaml` fold, once per authority it is asked on, and then what it changed
+/// told to whoever is reading. Every fold this file triggers goes through here — the
+/// boot one, a repo verb's, an arrival's — so "fold, then invalidate the two queries it
+/// feeds" is written once rather than at each of them.
+let private foldFor (authorities: ActorRef option list) : Async<unit> =
+    async {
+        for onBehalfOf in authorities do
+            do! repoSandboxes.Fold onBehalfOf
+        if not (List.isEmpty authorities) then
+            queryRegistry.Invalidate RepoSandboxes.queryName
+            queryRegistry.Invalidate WorkSandboxes.queryName
+    }
+
 /// The pull requests this session watches (Plan 14 follow-on). A cell like the others:
 /// the query surface is composed before the log exists, and the poller needs the log.
 let mutable private prWatchers : PrWatches.PrWatchers = PrWatches.PrWatchers.none
@@ -627,13 +640,7 @@ let private commandServices : Commands.CommandServices =
       // fold itself because the cell is filled after this record is built — and because a
       // command's business is to say WHEN the configuration may have changed, never to know
       // what reading it involves.
-      Refold =
-        fun actor ->
-            async {
-                do! repoSandboxes.Fold actor
-                queryRegistry.Invalidate RepoSandboxes.queryName
-                queryRegistry.Invalidate WorkSandboxes.queryName
-            } }
+      Refold = fun actor -> foldFor [ actor ] }
 
 /// The credential a party's calls on the provider run on (Plan 08): the session's own
 /// explicit credential first, then the actor's — fresh from the Manager, which lazily
@@ -958,8 +965,17 @@ Async.StartImmediate (
                 // keeps it, or a dropped connection elsewhere would cost every session its
                 // catalogue.
                 if updated <> connectionStatus then
+                    let arrived = ConnectionStatusList.arrivals connectionStatus updated
                     connectionStatus <- updated
-                    modelCatalogue.Forget ())
+                    modelCatalogue.Forget ()
+                    // Somebody arrived — verified into this launch, or connected something
+                    // — so a `forward:` the fold could not resolve for anybody may now
+                    // resolve for them. Fold again on their authority: that is the one fact
+                    // the boot fold lacked, and idling out and reopening the session used
+                    // to lose every forwarding sandbox until a repo verb happened to run.
+                    // Before the fold exists (this stream opens ahead of the Host) the
+                    // frame is only kept, and the boot fold below reads who is here.
+                    Async.StartImmediate (foldFor arrived))
             |> ignore
         | None -> ()
         // The browser-facing Claude connection surface: only meaningful with both a
@@ -1197,10 +1213,13 @@ Async.StartImmediate (
         // that waited for one would look to the Manager like a session that failed to
         // start. Nobody triggered this one, so it runs on nothing's authority; what it made
         // of each file is the `repo_config` query's answer, live from the moment it lands.
+        //
+        // Then once more for everyone already here. The connection stream opened before
+        // the fold existed, so whoever verified into this launch while the Host was
+        // starting arrived to nothing listening — a relaunch after an idle stop is exactly
+        // that person, and their `forward:` sandboxes stayed down until a repo verb
+        // happened to run. Read off the same frame the stream keeps, so the two cannot
+        // disagree about who is here.
         Async.StartImmediate (
-            async {
-                do! repoSandboxes.Fold None
-                queryRegistry.Invalidate RepoSandboxes.queryName
-                queryRegistry.Invalidate WorkSandboxes.queryName
-            })
+            foldFor (List.distinct (None :: ConnectionStatusList.arrivals Map.empty connectionStatus)))
     })

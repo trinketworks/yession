@@ -86,3 +86,37 @@ type ConnectionStatus =
 
 /// The status-stream frame: every connection the receiving launch may currently read.
 type ConnectionStatusList = { Connections : ConnectionStatus list }
+
+module ConnectionStatusList =
+
+    /// Whose authority a `forward:` could newly be resolved on, between two frames — in the
+    /// shape the `yession.yaml` fold takes it: `Some person` for a credential of theirs,
+    /// `None` for one the session reaches with nobody named (its own scope, or the
+    /// deployment's unattributed one).
+    ///
+    /// What it answers is "who just arrived". The Manager grows a launch's readable set on
+    /// exactly two occasions: a person verifies into the launch, and a person connects
+    /// something new. Both mean there is now a credential to resolve where before there
+    /// was not, and the fold that ran at boot on nobody's authority — and refused every
+    /// `forward:` for want of one — wants running again. Read off the frame rather than
+    /// told by the Manager, because the frame is the one thing the session is already
+    /// given about this.
+    ///
+    /// A peer's scope is not an arrival: `CredentialOwner.ofActor` refuses a peer, so a
+    /// fold on a peer's authority would resolve exactly what the boot fold did. And a
+    /// connection that LEFT is not one either — what a departure calls for is nothing,
+    /// since a sandbox already started keeps what it was given.
+    let arrivals
+        (before: Map<SecretId, ConnectionStatus>)
+        (after: Map<SecretId, ConnectionStatus>)
+        : ActorRef option list =
+        after
+        |> Map.toList
+        |> List.choose (fun (id, _) ->
+            if Map.containsKey id before then None
+            else
+                match id.Scope with
+                | UserScope user -> Some (Some (UserRef user))
+                | SessionScope _ | LocalScope -> Some None
+                | PeerScope _ -> None)
+        |> List.distinct
