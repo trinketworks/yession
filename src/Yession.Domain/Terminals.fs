@@ -282,9 +282,27 @@ module Projection =
         | SessionEvent.TerminalClosed e ->
             // The lease goes with the terminal. A closed terminal has no stdin to hold, and
             // a holder left standing on one would render as "nick is typing" for ever.
+            //
+            // So does any block still running: no process outlives its pty, so a block a
+            // closed terminal still calls running is a chip spinning over nothing. The
+            // Process appends the completion itself when it closes a terminal, and this is
+            // the guard for the log that predates that, and for the one where the two
+            // events arrive the other way round. `ToSeq` stays unknown — the fold has no
+            // sequence to close the range at, and a reader that slices to the end gets
+            // everything the command printed before the shell went.
             proj
             |> updateTerminal e.TerminalId (fun t ->
-                { t with IsOpen = false; ClosedReason = Some e.Reason; Lease = None })
+                { t with
+                    IsOpen = false
+                    ClosedReason = Some e.Reason
+                    Lease = None
+                    Blocks =
+                        t.Blocks
+                        |> List.map (fun b ->
+                            match b.Status with
+                            | BlockRunning ->
+                                { b with Status = BlockFinished (CommandExecutionFailed (sprintf "the terminal was closed: %s" e.Reason)) }
+                            | _ -> b) })
         | SessionEvent.TerminalLeaseTaken e ->
             proj |> updateTerminal e.TerminalId (fun t -> { t with Lease = Some e.By })
         | SessionEvent.TerminalLeaseReleased e ->

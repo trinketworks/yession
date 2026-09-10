@@ -218,6 +218,31 @@ let private projectionTests =
             Expect.equal a.Blocks.Head.Status (BlockFinished (CommandSucceeded 0)) "with its exit code"
             Expect.equal a.Blocks.Head.ToSeq (Some 4) "and the transcript range it produced"
 
+        testCase "a block still running when its terminal closes is finished BY the close" <| fun () ->
+            // No process outlives its pty. The Process appends the completion itself when it
+            // closes a terminal; this is the fold's own guard, for a log written before it did
+            // and for the two events arriving the other way round.
+            let proj =
+                fold
+                    [ opened terminalA "build"
+                      started terminalA "1" "perl -pi -e 1" 0
+                      SessionEvent.TerminalClosed { TerminalId = terminalA; Reason = "stuck" } ]
+            let a = Projection.tryFind terminalA proj |> Option.get
+            Expect.equal
+                a.Blocks.Head.Status
+                (BlockFinished (CommandExecutionFailed "the terminal was closed: stuck"))
+                "it ended with the terminal, and says so"
+            let finished =
+                fold
+                    [ opened terminalA "build"
+                      started terminalA "1" "make" 0
+                      completed terminalA "1" (CommandFailed 2) 9
+                      SessionEvent.TerminalClosed { TerminalId = terminalA; Reason = "done" } ]
+            Expect.equal
+                (Projection.tryFind terminalA finished |> Option.get).Blocks.Head.Status
+                (BlockFinished (CommandFailed 2))
+                "one that had already ended keeps its own ending"
+
         testCase "a closed terminal keeps its blocks — the audit outlives the process" <| fun () ->
             let proj =
                 fold
@@ -3695,6 +3720,29 @@ let private agentVerbTests =
                 let! _ = terminals.AgentTerminal SandboxRef.defaultRef "git status"
                 let! fourth = openFour terminals
                 Expect.isTrue (Result.isOk fourth) "four named ones still open beside it"
+            }
+
+        testCaseAsync "closing a terminal ends the block running in it, on the record" <|
+            async {
+                // The one verb that ends a stuck command. Killing the pty killed the process,
+                // but the `D` mark that closes a block died with the shell, so the block stayed
+                // `BlockRunning` for ever — and whoever was waiting on it waited for ever.
+                let log = newLog ()
+                let environment, _ = profileEnvironment (fun () -> Set.empty)
+                let openTranscript, _, _, _, readTranscript = recordingTranscripts ()
+                let terminals, _, _ = makeTerminals log environment openTranscript readTranscript []
+                let! opened = terminals.AgentTerminal SandboxRef.defaultRef "perl -pi -e 1"
+                let id = opened |> expect
+                let started, awaitStarted = latch ()
+                Async.StartImmediate (terminals.RunBlock id (entry "a1" id ActorRef.Agent 1.0) "perl -pi -e 1" started)
+                do! awaitStarted
+                Expect.isTrue (terminals.Busy () |> Set.contains (TerminalId.value id)) "the block is running, and nothing will end it"
+                let! closed = terminals.Close id "stuck"
+                Expect.isOk closed "it closes"
+                let! events = eventsOf log
+                let results = events |> List.choose (function SessionEvent.TerminalBlockCompleted c -> Some c.Result | _ -> None)
+                Expect.equal results [ CommandExecutionFailed "the terminal was closed: stuck" ] "the block ended with it, and the log says why"
+                Expect.isFalse (terminals.Busy () |> Set.contains (TerminalId.value id)) "and nothing is busy"
             }
 
         testCaseAsync "a terminal a person opened is not the agent's" <|

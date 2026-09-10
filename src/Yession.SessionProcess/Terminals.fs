@@ -900,11 +900,12 @@ module SessionTerminals =
         /// plain command, which is the one shell it should never have to ask for.
         let agentOpened = Collections.Generic.HashSet<string> ()
 
-        /// The block a pty terminal is waiting on: what to call when its `D` mark lands, and
-        /// the per-block output accounting the piped path keeps in locals. Keyed by terminal,
-        /// because a terminal runs one block at a time — which is the same invariant `busy`
-        /// already states.
-        let pending = Collections.Generic.Dictionary<string, (int -> unit) * (unit -> int) * (int -> unit)> ()
+        /// The block a pty terminal is waiting on: what to call with its result — the `D`
+        /// mark's exit code, or the reason the terminal closed under it — and the per-block
+        /// output accounting the piped path keeps in locals. Keyed by terminal, because a
+        /// terminal runs one block at a time — which is the same invariant `busy` already
+        /// states.
+        let pending = Collections.Generic.Dictionary<string, (CommandResult -> unit) * (unit -> int) * (int -> unit)> ()
         /// Who wrote the block currently running in each terminal — the input the flip policy
         /// needs, since "a TUI took the screen" only says whose keyboard it should be if we
         /// know whose command started it.
@@ -1214,7 +1215,7 @@ module SessionTerminals =
                                     | true, (complete, _, _) when
                                         not current.MarksCommandStart || sawCommandStart.Contains key ->
                                         pending.Remove key |> ignore
-                                        complete code
+                                        complete (if code = 0 then CommandSucceeded 0 else CommandFailed code)
                                     // A `D` with no block open is the shell's own prompt cycle
                                     // — at startup, or after a peer typed something in live
                                     // mode. And a `D` before THIS block's `C`, on a dialect
@@ -1489,7 +1490,18 @@ module SessionTerminals =
                         terminal.Emulator.Dispose ()
                         terminal.Shell |> Option.iter (fun pty -> pty.Kill ())
                     | None -> ()
-                    pending.Remove (TerminalId.value id) |> ignore
+                    // A block running here ends WITH the terminal, and says so. Killing the pty
+                    // kills the process, but the `D` mark that would have closed the block dies
+                    // with the shell — so a block whose terminal closed under it was left
+                    // `BlockRunning` for ever: a spinning chip, a card counting one still going,
+                    // and an agent's `check_pending` waiting on a command nothing would finish.
+                    // The one verb that ends a stuck block is this one, and a verb that ends the
+                    // process while leaving its record open has done half its job.
+                    match pending.TryGetValue (TerminalId.value id) with
+                    | true, (complete, _, _) ->
+                        pending.Remove (TerminalId.value id) |> ignore
+                        complete (CommandExecutionFailed (sprintf "the terminal was closed: %s" reason))
+                    | _ -> ()
                     runningAuthor.Remove (TerminalId.value id) |> ignore
                     appliedSize.Remove (TerminalId.value id) |> ignore
                     busy <- Set.remove (TerminalId.value id) busy
@@ -1670,12 +1682,12 @@ module SessionTerminals =
                                     // a prompt cycle that was not its command. Listening first
                                     // closes the window: no mark this command triggers can arrive
                                     // before we are ready for it.
-                                    let! code =
+                                    let! result =
                                         Async.FromContinuations (fun (cont, _, _) ->
                                             pending.[key] <-
-                                                ((fun code ->
+                                                ((fun result ->
                                                      settled <- true
-                                                     cont code),
+                                                     cont result),
                                                  (fun () -> written),
                                                  (fun extra ->
                                                      dropped <- dropped + extra
@@ -1708,7 +1720,7 @@ module SessionTerminals =
                                                                       { TerminalId = terminalId; BlockId = Some blockId })
                                                           reDrain ()
                                                   }))
-                                    return (if code = 0 then CommandSucceeded 0 else CommandFailed code)
+                                    return result
                                 }
                             | None ->
                                 // The degraded terminal: stage 1's path, unchanged.
