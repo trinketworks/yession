@@ -461,10 +461,11 @@ let private revealSettings () : unit = jsNative
 //
 // Expressed as an ordinary F# `async` pipeline over `MeProbe.Response` — the SAME codec
 // (`Yession.Domain.MeProbe`) the Session Process encodes its answer with — rather than one
-// JS `Emit` string that encoded the branching itself. Binding `fetch`/`AbortSignal` below
-// is still Emit, because that is the host's API and there is no other way to reach it, but
-// it is one line per primitive with no logic in the string; what the answer MEANS is this
-// file's `ProbeOutcome` and the match below, both type-checked.
+// JS `Emit` string that encoded the branching itself. The fetch call itself goes through
+// `Fable.Fetch` (https://github.com/fable-compiler/fable-fetch), a typed binding, not a
+// hand-rolled Emit; `AbortSignal.timeout` is the one piece it does not cover and stays a
+// one-line Emit below. What the answer MEANS is this file's `ProbeOutcome` and the match
+// below, both type-checked.
 //
 // The URL is a PARAMETER: every fetch below takes its URL from `SessionRoute.relative`, so
 // it stays checked against the route table rather than living as a literal only the
@@ -482,18 +483,11 @@ let private revealSettings () : unit = jsNative
 // turns into data a `match` must cover, rather than an exception a caller must remember to
 // catch.
 
-/// The shape of the one host API this needs: `fetch` and `AbortSignal.timeout`, bound as
-/// plain external declarations (Fable's usual way to reach a host API), not as logic.
-type private FetchResponse =
-    abstract ok: bool
-    abstract status: int
-    abstract text: unit -> JS.Promise<string>
-
-[<Emit("fetch($0, $1)")>]
-let private rawFetch (url: string) (init: obj) : JS.Promise<FetchResponse> = jsNative
-
+/// `Fetch.AbortSignal.timeout(...)` is the one piece `Fable.Fetch` does not bind (it is not
+/// part of the fetch surface itself), so this stays a one-line Emit, typed against the
+/// package's own `AbortSignal` so it slots straight into `RequestProperties.Signal` below.
 [<Emit("AbortSignal.timeout($0)")>]
-let private abortAfter (deadlineMs: float) : obj = jsNative
+let private abortAfter (deadlineMs: float) : Fetch.Types.AbortSignal = jsNative
 
 /// The two axes `fetchMe` resolves to. A record of two independent bools (the shape this
 /// replaced) let a caller ask whether `reachable = false, authorized = true` — a
@@ -506,17 +500,23 @@ type private ProbeOutcome =
 
 let private fetchMe (url: string) (deadlineMs: float) : Async<ProbeOutcome> =
     async {
-        let init = createObj [ "cache", box "no-store"; "signal", abortAfter deadlineMs ]
-        let! attempt = rawFetch url init |> Async.AwaitPromise |> Async.Catch
+        let init =
+            [ Fetch.Types.RequestProperties.Cache Fetch.Types.RequestCache.Nostore
+              Fetch.Types.RequestProperties.Signal(abortAfter deadlineMs) ]
+        // `fetchUnsafe`, not `fetch`: the plain binding throws on a non-2xx status, which
+        // would fold the "refused" and "not there" axes back into one exception to
+        // re-inspect. This wants the raw response so it can tell 401/403 (refused) apart
+        // from everything else (not there) below.
+        let! attempt = Fetch.fetchUnsafe url init |> Async.AwaitPromise |> Async.Catch
         match attempt with
         | Choice2Of2 exn -> return ProbeUnreachable (string exn.Message)
-        | Choice1Of2 response when response.ok ->
+        | Choice1Of2 response when response.Ok ->
             let! body = response.text () |> Async.AwaitPromise
             match MeProbe.ofJson body with
             | Ok me -> return ProbeAuthorized me
             | Error err -> return ProbeUnreachable err
-        | Choice1Of2 response when response.status = 401 || response.status = 403 -> return ProbeUnauthorized
-        | Choice1Of2 response -> return ProbeUnreachable (sprintf "HTTP %d" response.status)
+        | Choice1Of2 response when response.Status = 401 || response.Status = 403 -> return ProbeUnauthorized
+        | Choice1Of2 response -> return ProbeUnreachable (sprintf "HTTP %d" response.Status)
     }
 
 // `location.assign` resolves against the DOCUMENT's URL, not `<base href>` — the one

@@ -25,6 +25,9 @@
          you rely on and do not declare is one a transitive bump can take away. -->
     <PackageVersion Include="Fable.Browser.Dom" Version="2.10.1" />
     <PackageVersion Include="Fable.Browser.WebStorage" Version="1.1.0" />
+    <!-- Typed fetch() binding: the app's one place that talks to the host's network API
+         (the /me probe) does it through this, not a hand-rolled Emit string. -->
+    <PackageVersion Include="Fable.Fetch" Version="2.7.0" />
     <!-- Fable.Lit: the `html` DSL for the client shell (client-side render) and the
          management UI (our own SSR wrapper renders the same templates to a string). -->
     <PackageVersion Include="Fable.Lit" Version="1.4.2" />
