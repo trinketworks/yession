@@ -75,6 +75,9 @@ module Scheduler =
         // stage 3a). Injected rather than reached for, so a session with no transcript
         // storage still runs turns — it simply reports blocks with empty output.
         (readTranscript: ReadTranscript)
+        // The operator's words for the agent, from the host's profile; `None` is a host that
+        // wrote none. Passed straight to `AgentTurn.run`.
+        (guidance: string option)
         (initialConsumed: Set<string>)
         : SessionScheduler =
 
@@ -167,7 +170,7 @@ module Scheduler =
                                     |> Digest.build
                                         (fun id fromSeq toSeq -> readTranscript id fromSeq toSeq |> Transcript.printed)
                                         (Digest.window events)
-                                do! AgentTurn.run log agent (signalFor turn) capabilitiesFor emitUsage (fun () -> turn.TurnId) mintMessageId sessionId projection.Items terminals (selectedModel ()) trigger
+                                do! AgentTurn.run log agent (signalFor turn) capabilitiesFor emitUsage (fun () -> turn.TurnId) mintMessageId sessionId projection.Items terminals (selectedModel ()) guidance trigger
                                 // Release the slot and re-arm — unless an interrupt
                                 // already released it (and possibly started a successor).
                                 match running with
@@ -235,6 +238,7 @@ module Scheduler =
                                     projection.Items
                                     terminals
                                     (selectedModel ())
+                                    guidance
                                     (AgentTurn.FromWake (reason, turnActor))
                             match running with
                             | Some current when current.Generation = turn.Generation ->

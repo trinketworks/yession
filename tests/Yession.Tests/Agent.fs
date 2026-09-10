@@ -117,7 +117,7 @@ let private turnTests =
                             onChunk (AgentResponseChunk.Text "Running it.")
                             return AgentCompleted ("Running it.", None)
                         }
-                do! AgentTurn.run log scripted AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId mintMessageId sessionId [ triggerItem ] [] None (AgentTurn.FromMessage trigger)
+                do! AgentTurn.run log scripted AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId mintMessageId sessionId [ triggerItem ] [] None None (AgentTurn.FromMessage trigger)
                 let! events = eventsOf log
                 Expect.equal
                     events
@@ -128,6 +128,33 @@ let private turnTests =
                       AgentMessageDelta { AgentTurnId = turnId; MessageId = agentMessageId; Delta = "Running it." }
                       AgentMessageCompleted { AgentTurnId = turnId; MessageId = agentMessageId; Body = "Running it." } ]
                     "the thought is its own event, and the message is untouched by it"
+            }
+
+        // The prompt is two authors' words in one string, and the ORDER is the invariant: the
+        // product's core first, the operator's after it, introduced as theirs. A host that
+        // wrote nothing gets the core and not a dangling introduction. Asserted on the
+        // context the runner is handed, which is the only place the assembled prompt exists.
+        testCaseAsync "the operator's words follow the product's, and are named as theirs" <|
+            async {
+                let seen = ref []
+                let capturing : RunAgent =
+                    fun context _capabilities _signal _onChunk ->
+                        async {
+                            seen.Value <- context.SystemPrompt :: seen.Value
+                            return AgentCompleted ("", None)
+                        }
+                let words = "Never push to main on this host."
+                do! AgentTurn.run (newLog ()) capturing AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId mintMessageId sessionId [ triggerItem ] [] None (Some words) (AgentTurn.FromMessage trigger)
+                do! AgentTurn.run (newLog ()) capturing AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId mintMessageId sessionId [ triggerItem ] [] None None (AgentTurn.FromMessage trigger)
+                match List.rev seen.Value with
+                | [ guided; bare ] ->
+                    Expect.equal bare AgentTurn.systemPrompt "no guidance is the core alone"
+                    Expect.isTrue (guided.StartsWith AgentTurn.systemPrompt) "the core comes first, whole"
+                    Expect.isTrue (guided.EndsWith words) "the operator's words come last, whole"
+                    Expect.isTrue
+                        (guided.Substring(AgentTurn.systemPrompt.Length).Contains "operator")
+                        "and between them a line says whose they are"
+                | other -> failwithf "expected two prompts, got %d" (List.length other)
             }
 
         // A turn whose only output was reasoning and tool calls SAID nothing, and the
@@ -144,7 +171,7 @@ let private turnTests =
                             onChunk (AgentResponseChunk.Thinking "still weighing it up")
                             return AgentCompleted ("", None)
                         }
-                do! AgentTurn.run log scripted AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId (mintMessageIds ()) sessionId [ triggerItem ] [] None (AgentTurn.FromMessage trigger)
+                do! AgentTurn.run log scripted AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId (mintMessageIds ()) sessionId [ triggerItem ] [] None None (AgentTurn.FromMessage trigger)
                 let! events = eventsOf log
                 let started =
                     events |> List.filter (function AgentMessageStarted _ -> true | _ -> false) |> List.length
@@ -166,7 +193,7 @@ let private turnTests =
                             onChunk (AgentResponseChunk.Text "lo!")
                             return AgentCompleted ("Hello!", None)
                         }
-                do! AgentTurn.run log scripted AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId mintMessageId sessionId [ triggerItem ] [] None (AgentTurn.FromMessage trigger)
+                do! AgentTurn.run log scripted AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId mintMessageId sessionId [ triggerItem ] [] None None (AgentTurn.FromMessage trigger)
                 let! events = eventsOf log
                 Expect.equal
                     events
@@ -195,7 +222,7 @@ let private turnTests =
                             onChunk (AgentResponseChunk.Text "It finished.")
                             return AgentCompleted ("Let me run it again.It finished.", None)
                         }
-                do! AgentTurn.run log scripted AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId (mintMessageIds ()) sessionId [ triggerItem ] [] None (AgentTurn.FromMessage trigger)
+                do! AgentTurn.run log scripted AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId (mintMessageIds ()) sessionId [ triggerItem ] [] None None (AgentTurn.FromMessage trigger)
                 let! events = eventsOf log
                 Expect.equal
                     (events |> List.skip 2)
@@ -220,7 +247,7 @@ let private turnTests =
                             onChunk (AgentResponseChunk.Text "Done.")
                             return AgentCompleted ("Done.", None)
                         }
-                do! AgentTurn.run log scripted AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId (mintMessageIds ()) sessionId [ triggerItem ] [] None (AgentTurn.FromMessage trigger)
+                do! AgentTurn.run log scripted AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId (mintMessageIds ()) sessionId [ triggerItem ] [] None None (AgentTurn.FromMessage trigger)
                 let! events = eventsOf log
                 Expect.equal
                     (events |> List.skip 2)
@@ -240,7 +267,7 @@ let private turnTests =
                             onChunk AgentResponseChunk.MessageBoundary
                             return AgentCompleted ("Done.", None)
                         }
-                do! AgentTurn.run log scripted AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId (mintMessageIds ()) sessionId [ triggerItem ] [] None (AgentTurn.FromMessage trigger)
+                do! AgentTurn.run log scripted AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId (mintMessageIds ()) sessionId [ triggerItem ] [] None None (AgentTurn.FromMessage trigger)
                 let! events = eventsOf log
                 Expect.equal
                     (events |> List.skip 2)
@@ -254,7 +281,7 @@ let private turnTests =
             async {
                 let log = newLog ()
                 let failing : RunAgent = fun _ _ _ _ -> async { return AgentFailed ("boom", None) }
-                do! AgentTurn.run log failing AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId mintMessageId sessionId [ triggerItem ] [] None (AgentTurn.FromMessage trigger)
+                do! AgentTurn.run log failing AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId mintMessageId sessionId [ triggerItem ] [] None None (AgentTurn.FromMessage trigger)
                 let! events = eventsOf log
                 Expect.equal
                     (List.last events)
@@ -266,7 +293,7 @@ let private turnTests =
             async {
                 let log = newLog ()
                 let throwing : RunAgent = fun _ _ _ _ -> failwith "runner exploded"
-                do! AgentTurn.run log throwing AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId mintMessageId sessionId [ triggerItem ] [] None (AgentTurn.FromMessage trigger)
+                do! AgentTurn.run log throwing AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId mintMessageId sessionId [ triggerItem ] [] None None (AgentTurn.FromMessage trigger)
                 let! events = eventsOf log
                 match List.last events with
                 | AgentTurnFailed f -> Expect.equal f.Reason "runner exploded" "the thrown reason is captured"
@@ -541,7 +568,7 @@ let private liveTests =
                 let log = newLog ()
                 let mintLiveTurn () = AgentTurnId.create (string (Guid.NewGuid ())) |> expect
                 let mintLiveMessage () = MessageId.create (string (Guid.NewGuid ())) |> expect
-                do! AgentTurn.run log (Agent.run Launch.unlaunched.DataDir HostBackend) AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintLiveTurn mintLiveMessage sessionId [ triggerItem ] [] None (AgentTurn.FromMessage trigger)
+                do! AgentTurn.run log (Agent.run Launch.unlaunched.DataDir HostBackend) AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintLiveTurn mintLiveMessage sessionId [ triggerItem ] [] None None (AgentTurn.FromMessage trigger)
                 let! events = eventsOf log
                 match List.last events with
                 | AgentMessageCompleted completed ->
@@ -562,7 +589,7 @@ let private liveTests =
                 let log = newLog ()
                 let mintLiveTurn () = AgentTurnId.create (string (Guid.NewGuid ())) |> expect
                 let mintLiveMessage () = MessageId.create (string (Guid.NewGuid ())) |> expect
-                do! AgentTurn.run log (Agent.runWith Launch.unlaunched.DataDir HostBackend (Some credential)) AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintLiveTurn mintLiveMessage sessionId [ triggerItem ] [] None (AgentTurn.FromMessage trigger)
+                do! AgentTurn.run log (Agent.runWith Launch.unlaunched.DataDir HostBackend (Some credential)) AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintLiveTurn mintLiveMessage sessionId [ triggerItem ] [] None None (AgentTurn.FromMessage trigger)
                 let! events = eventsOf log
                 match List.last events with
                 | AgentMessageCompleted completed ->
@@ -639,7 +666,7 @@ let private liveTests =
                 let log = newLog ()
                 let mintLiveTurn () = AgentTurnId.create (string (Guid.NewGuid ())) |> expect
                 let mintLiveMessage () = MessageId.create (string (Guid.NewGuid ())) |> expect
-                do! AgentTurn.run log (Agent.run Launch.unlaunched.DataDir HostBackend) AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintLiveTurn mintLiveMessage sessionId [ probeItem ] [] None (AgentTurn.FromMessage probe)
+                do! AgentTurn.run log (Agent.run Launch.unlaunched.DataDir HostBackend) AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintLiveTurn mintLiveMessage sessionId [ probeItem ] [] None None (AgentTurn.FromMessage probe)
                 let! events = eventsOf log
                 match List.last events with
                 | AgentMessageCompleted completed ->
@@ -1035,7 +1062,7 @@ let private armedScheduler (seed: SessionEvent list) (duringTurn: EventLog<Sessi
     let scheduler =
         Scheduler.create sessionId (Y.Doc.Create ()) log (fun () -> Some runner)
             (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId mintMessageId PeerRef
-            (fun _ _ _ -> []) Set.empty
+            (fun _ _ _ -> []) None Set.empty
     scheduler, log
 
 let private startedTurns (log: EventLog<SessionEvent>) =
@@ -1241,7 +1268,7 @@ let private schedulerOverPickedModel (choice: ModelId option) =
     let scheduler =
         Scheduler.create (SessionId.create "model-session" |> expect) doc log (fun () -> Some runner)
             (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) (fun () -> turnId) (fun () -> agentMessageId) PeerRef
-            (fun _ _ _ -> []) Set.empty
+            (fun _ _ _ -> []) None Set.empty
     scheduler, (fun () -> seen)
 
 let private modelChoiceTests =

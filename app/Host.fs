@@ -142,6 +142,9 @@ let startFull
     // Whether a session keeps its address across launches (Plan 12); false means the
     // client's local-first promise has to be qualified. Baked into the shell.
     (ephemeralStorage: bool)
+    // What the operator of this host wrote for the agent (`ProfileFile.Guidance`), appended
+    // after the product's system prompt on every turn. `None` for a host that wrote none.
+    (guidance: string option)
     (port: int)
     : Async<SessionHost> =
     async {
@@ -612,7 +615,7 @@ let startFull
         // `Scheduler` (shared with the property harness); the Host wires it to this
         // session's doc, log, environment capabilities, and command surface.
         let scheduler =
-            Scheduler.create sessionId doc log runAgent capabilitiesFor emitUsage mintTurnId mintMessageId actorFor transcripts.ReadRange initialConsumed
+            Scheduler.create sessionId doc log runAgent capabilitiesFor emitUsage mintTurnId mintMessageId actorFor transcripts.ReadRange guidance initialConsumed
         let drain () = scheduler.Drain ()
         let requestInterrupt = scheduler.RequestInterrupt
 
@@ -984,7 +987,7 @@ let startWithEnvironment
     // No mount: these helpers serve an unfronted, origin-root session. No transcript store
     // either — terminals fall back to the in-memory one, which is the right default for a
     // host with no data directory.
-    startFull (fun () -> runAgent) makeSandboxes None baseLog None None None None (fun _ _ -> ()) None McpClient.McpConnections.none None sessionId None "" None false port
+    startFull (fun () -> runAgent) makeSandboxes None baseLog None None None None (fun _ _ -> ()) None McpClient.McpConnections.none None sessionId None "" None false None port
 
 /// `startWithEnvironment` without an environment — Step 08-era topology.
 let startWith (runAgent: RunAgent option) (sessionId: SessionId) (port: int) : Async<SessionHost> =

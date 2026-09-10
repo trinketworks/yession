@@ -517,6 +517,34 @@ let tests =
             | Ok _ -> failwith "expected a refusal"
             | Error e -> Expect.isTrue (e.Contains "overlay") (sprintf "the refusal lists the modes, said: %s" e)
 
+        // The one key in this file that is not a resource: words for the agent, from the
+        // operator. Read as written apart from the newline a YAML block scalar leaves on the
+        // end, and absent — not empty — when the block is not there, so the prompt that
+        // appends it can tell "wrote nothing" from "wrote an empty string".
+        testCase "an operator's guidance is read as written, and absent when unwritten" <| fun () ->
+            let profile =
+                OperatorProfile.parse """
+                    { "version": 1, "resources": {},
+                      "agent": { "guidance": "Never push to main on this host.\n" } }"""
+                |> expect
+            Expect.equal profile.Guidance (Some "Never push to main on this host.") "the words, without the scalar's closing newline"
+            let silent = OperatorProfile.parse """{ "version": 1, "resources": {} }""" |> expect
+            Expect.equal silent.Guidance None "no block is no words"
+
+        // The same failure a hollow resource is: a block that reads as configuration and is
+        // none. Both spellings of nothing — no key, and a key with only whitespace behind it.
+        testCase "an agent block that says nothing is refused, not read as no guidance" <| fun () ->
+            for body in [ """{ }"""; """{ "guidance": "   \n" }""" ] do
+                match OperatorProfile.parse (sprintf """{ "version": 1, "resources": {}, "agent": %s }""" body) with
+                | Ok _ -> failwithf "%s was accepted, and it says nothing" body
+                | Error e -> Expect.isTrue (e.Contains "guidance") (sprintf "the refusal names the key, said: %s" e)
+
+        testCase "an unknown key inside the agent block is refused, not skipped" <| fun () ->
+            Expect.isError
+                (OperatorProfile.parse """
+                    { "version": 1, "resources": {}, "agent": { "guidance": "x", "prompt": "y" } }""")
+                "a misspelled key fails the file even when the guidance beside it is fine"
+
         // The policy the file's two halves express: `resources` is the menu, `always` is what
         // is served whether or not anybody ordered it. A name in one and not the other is the
         // state this model exists to make expressible — available, and not granted.
