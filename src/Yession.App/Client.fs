@@ -677,6 +677,24 @@ module Client =
             | ChannelUnreachable detail -> if detail = "" then "session unreachable" else detail
             | ChannelTimedOut -> "the session did not answer"
 
+    module Probe =
+
+        /// How long the auth probe (`/me`) may go unanswered before it is answered FOR: the
+        /// session is not there. A probe settles four ways — a token, a refusal, some other
+        /// status, a thrown fetch — and each has a remedy; the fifth, never, had none. A
+        /// phone whose tunnel is not yet up after a resume gets a TCP connect the kernel
+        /// retries for a minute before it fails; a proxy whose upstream accepted and stalled
+        /// holds the request open for as long as the upstream likes; a page suspended with
+        /// the fetch in flight can come back to a promise that never settles. In every case
+        /// the model wore the state it started in, which reads as "not connected" with no
+        /// reason and nothing to press, for as long as that took.
+        ///
+        /// Ten seconds: past a session's cold boot behind a front door (a few seconds) and a
+        /// tailnet's first handshake, short of a person concluding the app is dead. Past it
+        /// the probe reports unreachable with the timeout as its reason, and the reopen offer
+        /// and the retry are on the screen — the two things that can change the answer.
+        let deadline = System.TimeSpan.FromSeconds 10.0
+
     module SessionChannel =
 
         /// The shipped policy for opening the transport: four retries, exponentially backed
