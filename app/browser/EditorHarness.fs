@@ -231,12 +231,50 @@ let private nextFrame () : JS.Promise<unit> = jsNative
 /// a trend move, which is this suite's whole job.
 ///
 /// Capturing (`true`), so a keystroke is timed from before the editor sees it.
+///
+/// It also keeps a per-burst DIAGNOSTIC (`window.__benchDiagState`), because the `type` series
+/// can only come up short two ways and a bare `collected 3 samples` says neither: a keydown that
+/// never reached the co-editor (focus elsewhere), or a sample frame that had not fired by the
+/// time the driver read the series. `docKeydowns` counts every keydown the page saw (a
+/// document-level capture, which fires even when focus left the editor); `hostKeydowns` counts
+/// only those that reached this host; `rafs` counts the sample frames that had fired at read
+/// time; and `focus` records where `activeElement` sat for each key, so a burst that started in
+/// the editor and drifted out says exactly when. This is the instrument the size-200 flake
+/// turned on: it showed the keystrokes always landed (`hostKeydowns` 32, focus never leaving)
+/// while `rafs` swung from 32 down to 0 — the frames were pending, not the keys missing.
 [<Emit("""(function (host, take) {
+  window.__benchDiagState = { hostKeydowns: 0, docKeydowns: 0, rafs: 0, focus: [] }
+  document.addEventListener('keydown', function () {
+    var d = window.__benchDiagState, a = document.activeElement
+    d.docKeydowns++
+    if (d.focus.length < 60)
+      d.focus.push(!a ? 'none' : (a.closest && a.closest('#peer-b')) ? 'peer-b' : a.id ? '#' + a.id : a.tagName.toLowerCase())
+  }, true)
   host.addEventListener('keydown', function (e) {
-    requestAnimationFrame(function () { take(performance.now() - e.timeStamp) })
+    window.__benchDiagState.hostKeydowns++
+    requestAnimationFrame(function () {
+      window.__benchDiagState.rafs++
+      take(performance.now() - e.timeStamp)
+    })
   }, true)
 })($0, $1)""")>]
 let private onKeystrokePainted (host: obj) (take: float -> unit) : unit = jsNative
+
+/// Clear the typing diagnostic for a fresh burst — reset in place so the listeners above keep
+/// counting into the same object. Called by `__benchReset`, beside the sample arrays.
+[<Emit("""(function () {
+  var d = window.__benchDiagState
+  if (d) { d.hostKeydowns = 0; d.docKeydowns = 0; d.rafs = 0; d.focus = [] }
+})()""")>]
+let private resetTypingDiagnostics () : unit = jsNative
+
+/// The typing diagnostic as JSON, for the driver to print each burst and to quote when a series
+/// comes up short.
+[<Emit("JSON.stringify(window.__benchDiagState || null)")>]
+let private typingDiagnostics () : string = jsNative
+
+[<Emit("(function(f){ window.__benchDiag = f; })($0)")>]
+let private exposeTypingDiag (f: unit -> string) : unit = jsNative
 
 /// Two named number series as one JSON object — the shape every scenario returns.
 [<Emit("JSON.stringify({ [$0]: $1, [$2]: $3 })")>]
@@ -260,6 +298,9 @@ let private oneSeries (a: string) (xs: float[]) : string = jsNative
 
 [<Emit("(function(f){ window.__benchTranscript = f; })($0)")>]
 let private exposeTranscript (f: int -> int -> int -> string) : unit = jsNative
+
+[<Emit("(function(f){ window.__benchSettle = f; })($0)")>]
+let private exposeSettle (f: unit -> JS.Promise<unit>) : unit = jsNative
 
 /// Markdown of roughly `chars` characters, as paragraphs rather than one enormous line: what
 /// the reconciliation walks is NODES, so a document's structure is part of what is being
@@ -370,10 +411,38 @@ do
 
     exposeBenchReset (fun () ->
         typeSamples.Clear ()
-        receiveSamples.Clear ())
+        receiveSamples.Clear ()
+        resetTypingDiagnostics ())
 
     exposeTyping (fun () ->
         twoSeries "type" (typeSamples.ToArray ()) "receive" (receiveSamples.ToArray ()))
+    exposeTypingDiag typingDiagnostics
+
+    // Drain this burst's pending sample frames before the driver reads the series. Every `type`
+    // and `receive` sample lands in a `requestAnimationFrame` callback, and the driver reads the
+    // instant `TypeAsync` returns — so on a busy frame (a large doc reconciling each keystroke,
+    // or the cold first size) few or none have fired yet, and the series comes back short or
+    // empty (`type@2000 collected 0 samples`, `rafs` anywhere from 0 to 32 across runs while the
+    // keystrokes all landed). This resolves once the sample count has held steady across two
+    // frames — every scheduled frame has fired — and it also stops a size's late frames leaking
+    // into the next size's reset window. Bounded so it can never hang: a genuinely empty series
+    // settles at zero and the driver's `< 5` guard still refuses it.
+    exposeSettle (fun () ->
+        async {
+            let mutable last = -1
+            let mutable stable = 0
+            let mutable frames = 0
+            while stable < 2 && frames < 180 do
+                do! nextFrame () |> Async.AwaitPromise
+                frames <- frames + 1
+                let n = typeSamples.Count + receiveSamples.Count
+                if n = last then
+                    stable <- stable + 1
+                else
+                    stable <- 0
+                    last <- n
+        }
+        |> Async.StartAsPromise)
 
     // What one render's worth of transcript reading costs.
     //
