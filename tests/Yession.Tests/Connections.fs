@@ -286,6 +286,52 @@ let private observationTests =
                 "and a provider refusing one certainly is"
     ]
 
+// --- Pure: who a status frame says has arrived ----------------------------------------------
+
+let private arrivalTests =
+    let status (scope: SecretScope) (name: string) : SecretId * ConnectionStatus =
+        let id : SecretId = { Scope = scope; Name = SecretName.create name |> expect }
+        let status : ConnectionStatus = { Id = id; Kind = OAuthConnection; Health = ConnectionUsable; UpdatedAt = now }
+        id, status
+    let frame (entries: (SecretId * ConnectionStatus) list) = Map.ofList entries
+    let bob = UserId.create "bob" |> expect
+
+    testList "arrivals between two status frames" [
+        // The fault this exists for: a session relaunched after an idle stop folds its
+        // `yession.yaml` on nobody's authority, and the person whose sign-in the first
+        // launch resolved against arrives a moment later.
+        testCase "a person whose credential became readable is a fold on their authority" <| fun () ->
+            let before = frame []
+            let after = frame [ status (UserScope alice) "github" ]
+            Expect.equal (ConnectionStatusList.arrivals before after) [ Some (UserRef alice) ] "alice arrived"
+
+        testCase "a person already here is not an arrival, and a person who left is nothing" <| fun () ->
+            let before = frame [ status (UserScope alice) "github"; status (UserScope bob) "github" ]
+            let after = frame [ status (UserScope alice) "github" ]
+            Expect.equal (ConnectionStatusList.arrivals before after) [] "nothing to fold for"
+
+        // One fold per person, however many things they connected at once — a sign-in
+        // surfaces every credential they already had, in one frame.
+        testCase "several credentials of one person are one arrival" <| fun () ->
+            let before = frame []
+            let after = frame [ status (UserScope alice) "github"; status (UserScope alice) "claude-code" ]
+            Expect.equal (ConnectionStatusList.arrivals before after) [ Some (UserRef alice) ] "once"
+
+        // The session's own credential and the deployment's are reached with nobody named,
+        // which is the fold the boot already ran — so the arrival is that fold again.
+        testCase "a credential the session reaches on its own is a fold on nobody's authority" <| fun () ->
+            let before = frame []
+            let after = frame [ status (SessionScope sessionA) "github"; status LocalScope "github" ]
+            Expect.equal (ConnectionStatusList.arrivals before after) [ None ] "one fold, nobody named"
+
+        // A peer owns nothing (`CredentialOwner.ofActor`), so a fold on a peer's authority
+        // would resolve exactly what the boot fold did: nothing new to do.
+        testCase "a peer's credential is not an arrival" <| fun () ->
+            let before = frame []
+            let after = frame [ status (PeerScope peer1) "github" ]
+            Expect.equal (ConnectionStatusList.arrivals before after) [] "no fold"
+    ]
+
 // --- Pure: the session-side Claude module ---------------------------------------------------
 
 let private claudeTests =
@@ -2864,6 +2910,7 @@ let tests =
         flowTests
         wireTests
         observationTests
+        arrivalTests
         claudeTests
         githubTests
         prPollTests

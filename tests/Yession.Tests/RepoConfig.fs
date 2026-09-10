@@ -371,6 +371,40 @@ let foldTests =
                 Expect.equal (Authority.effective seen.[0].Authority) ada "whose credential a forward: resolves against"
             }
 
+        // `start_work_sandbox` decides "already running?" before it starts anything, and a
+        // start can be a container to pull — so two folds in flight at once would both find
+        // nothing running and both start it. A person arrives seconds after the boot fold
+        // began, which is exactly that overlap; their fold has to wait its turn.
+        testCaseAsync "a fold asked for while one is in flight waits for it" <|
+            async {
+                let r = repo "octo/hello"
+                let dir = checkout r (Some "version: 2\nsandboxes:\n  dev: {}\n")
+                let seen = ResizeArray<ActorRef option> ()
+                let mutable release : (unit -> unit) option = None
+                // A gate whose FIRST call holds until released, so the first fold is
+                // caught mid-flight with a second one asked for.
+                let holding : RunGatedCommand =
+                    fun call ->
+                        async {
+                            seen.Add (Authority.onBehalfOf call.Authority)
+                            if seen.Count = 1 then
+                                do! Async.FromContinuations (fun (cont, _, _) -> release <- Some cont)
+                            return Ok { Handle = None; Tool = call.Tool; Summary = call.Summary; Status = CommandRan "ok" }
+                        }
+                let folded =
+                    RepoSandboxes.create dir (cell (Some (reposOver dir [ r ]))) (cell WorkSandboxes.unavailable) holding (foldLog ()) noCapabilities
+                let ada = UserRef (UserId.create "ada" |> expect)
+                let! first = Async.StartChild (folded.Fold None)
+                do! Async.Sleep 20
+                let! second = Async.StartChild (folded.Fold (Some ada))
+                do! Async.Sleep 20
+                Expect.equal (List.ofSeq seen) [ None ] "the first is at the gate; the second has not reached it"
+                release.Value ()
+                do! first
+                do! second
+                Expect.equal (List.ofSeq seen) [ None; Some ada ] "and then it does, after"
+            }
+
         // The row is the fold's only surface for a declaration that did not become a
         // sandbox, so a refusal that produced no row would be a silent one.
         testCaseAsync "a refused declaration is a row saying which, and why" <|
