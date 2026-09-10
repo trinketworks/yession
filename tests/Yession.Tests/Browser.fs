@@ -808,9 +808,18 @@ let tests =
                 // (the wait for it never settled inside 30s on the runner, which is a fact
                 // about the store's write path and not about this budget).
                 //
-                // When the replay is fixed to batch, this comes DOWN toward zero, which is what
-                // makes it the proof rather than a note.
-                let budget = 12.0
+                // The replay now folds a terminal's whole kept run as ONE message
+                // (`TerminalPageMsg`), and a fetched chunk likewise, so a record adds no render
+                // of its own: this case measures 0.01 per record (30 renders for a reopen over
+                // 404 records, against 431 before). The line sits at half a render per record
+                // — fifty times what the fix spends, and under every value the storm ever
+                // read: 2.01 on a laptop, 5.64 on the runner, and 1.01 with the fetch batched
+                // but the replay still folding per kept answer (a terminal watched live keeps
+                // one answer per record). Measured before the fix on the home deployment, with
+                // a session's real 2,138 lines kept: 2,176 renders and 9.9s of main-thread long
+                // tasks on an M-series laptop, the reopen offer painting at 11.2s — which on a
+                // phone is the minute or two of dead taps reported as "the PWA does not reopen".
+                let budget = 0.5
                 if perRecord > budget then
                     failwithf
                         "reopening this session cost %.2f renders per added transcript record (%d renders over %d \

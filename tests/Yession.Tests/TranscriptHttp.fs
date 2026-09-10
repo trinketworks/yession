@@ -251,10 +251,10 @@ let private answerOf (first: int) (count: int) =
 
 let private recordsIn (seen: ResizeArray<ClientMsg>) (of': TerminalId) =
     seen
-    |> Seq.choose (fun msg ->
+    |> Seq.collect (fun msg ->
         match msg with
-        | TerminalRecordMsg (t, seq, _) when t = of' -> Some seq
-        | _ -> None)
+        | TerminalPageMsg (t, records, _, _) when t = of' -> records |> List.map fst
+        | _ -> [])
     |> List.ofSeq
 
 let private storeTests =
@@ -278,7 +278,7 @@ let private storeTests =
                 let header =
                     seen |> Seq.tryPick (fun msg ->
                         match msg with
-                        | TerminalHeaderMsg (_, h) -> Some h
+                        | TerminalPageMsg (_, _, Some h, _) -> Some h
                         | _ -> None)
                 Expect.equal (header |> Option.map (fun h -> h.Width)) (Some 80) "the recording's own width"
             }
@@ -291,9 +291,32 @@ let private storeTests =
                 let readThrough =
                     seen |> Seq.fold (fun acc msg ->
                         match msg with
-                        | TerminalReadThroughMsg (_, seq) -> max acc seq
+                        | TerminalPageMsg (_, _, _, seq) -> max acc seq
                         | _ -> acc) 0
                 Expect.equal readThrough 5 "one past the last line kept"
+            }
+
+        // A message is a render. A replay that said one thing per record re-drew the whole
+        // page per record — thousands of times on a reopen — and a phone sat frozen through
+        // it. Per kept ANSWER would not do either: a terminal watched live keeps one answer
+        // per record. What is pinned is that a terminal's whole contiguous run is folded as
+        // ONE message, so the renders a replay costs is the number of terminals.
+        testCaseAsync "a replay is one message per terminal, however many answers and lines it kept" <|
+            async {
+                let store = storeOf [ terminal, [ answerOf 0 3; answerOf 3 2 ] ]
+                let seen = ResizeArray ()
+                do! Client.TranscriptFetch.replay store seen.Add
+                let forThisTerminal =
+                    seen
+                    |> Seq.filter (fun msg ->
+                        match msg with
+                        | TerminalPageMsg (t, _, _, _)
+                        | TerminalRecordMsg (t, _, _)
+                        | TerminalHeaderMsg (t, _)
+                        | TerminalReadThroughMsg (t, _) -> t = terminal
+                        | _ -> false)
+                    |> List.ofSeq
+                Expect.equal (List.length forThisTerminal) 1 "two answers, four lines, one message"
             }
 
         testCaseAsync "answers the store hands back out of order still fold in recording order" <|
