@@ -201,17 +201,14 @@ let startFull
         // restart-safe by construction: every `PeerJoined` carrying a Manager-verified
         // user binds that peer, live joins update it through the append wrapper below,
         // and a departed peer keeps its last-known binding — a still-queued message from
-        // a peer that left drains attributed.
-        let mutable peerUsers : Map<string, UserId> = Map.empty
+        // a peer that left drains attributed. The fold and the decision rule live in
+        // `Yession.Domain.Attribution`, shared with the client (Fable compiles the same
+        // function), so chat authorship and the sidebar cannot again disagree about who
+        // somebody is.
+        let mutable peerUsers : Map<PeerId, UserId> = Map.empty
         let recordAttribution (event: SessionEvent) : unit =
-            match event with
-            | PeerJoined { PeerId = peer; User = Some user } ->
-                peerUsers <- Map.add (PeerId.value peer) user peerUsers
-            | _ -> ()
-        let actorFor (peerId: PeerId) : ActorRef =
-            match Map.tryFind (PeerId.value peerId) peerUsers with
-            | Some user -> UserRef user
-            | None -> PeerRef peerId
+            peerUsers <- Attribution.applyEvent peerUsers event
+        let actorFor (peerId: PeerId) : ActorRef = Attribution.actorFor peerUsers peerId
 
         // The terminal projection as the Process itself has it, folded forward on every
         // append. The Process is the log's only writer, so this is complete and ordered by

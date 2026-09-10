@@ -33,6 +33,7 @@ let private queueId = QueueId.create "queue-ui" |> expect
 let private draftQueueId = QueueId.create "queue-ui-draft" |> expect
 let private ada = PeerId.create "ada" |> expect
 let private bob = PeerId.create "bob" |> expect
+let private carol = UserId.create "carol@example.com" |> expect
 let private sessionId = SessionId.create "demo-session" |> expect
 let private terminalId = TerminalId.create "term-ui" |> expect
 let private blockId = BlockId.create "block-ui" |> expect
@@ -131,6 +132,7 @@ let private representativeModel : ClientModel =
       Presence = Map.ofList [ bob, { DisplayName = "brave-owl"; Focus = { Field = Title; Pos = { Anchor = "AQI="; Head = "AwQ=" } } } ]
       // The roster names a draft's author even when they are not here: a label, never a peer id.
       Peers = Map.ofList [ ada, "swift-heron"; bob, "brave-owl" ]
+      PeerUsers = Map.empty
       Composer = Unchosen
       Environment = EnvironmentNotStarted
       Terminals =
@@ -1958,6 +1960,14 @@ let private semanticsTests =
             let stop = html.IndexOf (Dom.Hooks.messageBody, start)
             html.Substring (start, stop - start)
 
+        /// The same lookup, keyed by the author hook's raw TOKEN rather than a `PeerId` —
+        /// what a `UserRef` author's message carries (`UserId.value`, per `authorLabel`).
+        let messageMetaOfLabel (label: string) (html: string) : string =
+            let start = html.IndexOf (Dom.attr Dom.Hooks.messageAuthor label)
+            Expect.isTrue (start >= 0) "the message renders at all"
+            let stop = html.IndexOf (Dom.Hooks.messageBody, start)
+            html.Substring (start, stop - start)
+
         /// The fixture with one message from a COLLABORATOR — `bob`, deliberately not the
         /// local peer, so what the chat prints about him can only have come from the roster
         /// lookup under test rather than from the client's own identity.
@@ -1997,6 +2007,60 @@ let private semanticsTests =
             Expect.isTrue
                 ((messageMetaOf bob html).Contains ">bob<")
                 "no name known, so the id stands in rather than nothing"
+
+        // A `UserRef` author is an attributed peer's durable identity — the same one the
+        // Session Process's `actorFor` (`Yession.Domain.Attribution`) stamped `MessageSent`
+        // with. Resolving it means finding the peer this client saw join AS that user and
+        // reading the roster's name for THAT peer, exactly as `nameOf` already does for a
+        // `PeerRef` — which is the unification this whole thread was about: chat and the
+        // roster fold the same log through the same rule and can no longer disagree.
+        testCase "a message from an attributed user wears the peer's real name, not their subject" <| fun () ->
+            let html =
+                Support.render
+                    { representativeModel with
+                        Peers = Map.ofList [ bob, "quiet-otter" ]
+                        PeerUsers = Map.ofList [ bob, carol ]
+                        Presence = Map.empty
+                        Conversation =
+                            { Items =
+                                [ { MessageId = MessageId.create "msg-carol" |> expect
+                                    Author = UserRef carol
+                                    Body = "on it"
+                                    Status = Complete
+                                    Kind = ConversationItemKind.Message
+                                    Offset = EventOffset.create 1L |> expect
+                                    Woke = None; Replying = None } ]
+                              ActiveAgentMessages = Map.empty; WokenTurn = None; TriggeredTurn = None }
+                        Timeline = TimelineProjection.empty }
+            let meta = messageMetaOfLabel (UserId.value carol) html
+            Expect.isTrue (meta.Contains ">quiet-otter<") "the author is the name the attributed peer's join carried"
+            Expect.isFalse (meta.Contains ">carol@example.com<") "and never the raw subject as a person's name"
+
+        // A user this client has never seen a `PeerJoined` for (their only connection was
+        // to a peer that joined before this client's replay began, say) has nothing to
+        // resolve through — the raw subject stands in, exactly as an id does for an unknown
+        // `PeerRef`.
+        testCase "an attributed user this client has never seen a join for falls back to their subject" <| fun () ->
+            let html =
+                Support.render
+                    { representativeModel with
+                        Peers = Map.empty
+                        PeerUsers = Map.empty
+                        Presence = Map.empty
+                        Conversation =
+                            { Items =
+                                [ { MessageId = MessageId.create "msg-carol" |> expect
+                                    Author = UserRef carol
+                                    Body = "on it"
+                                    Status = Complete
+                                    Kind = ConversationItemKind.Message
+                                    Offset = EventOffset.create 1L |> expect
+                                    Woke = None; Replying = None } ]
+                              ActiveAgentMessages = Map.empty; WokenTurn = None; TriggeredTurn = None }
+                        Timeline = TimelineProjection.empty }
+            Expect.isTrue
+                ((messageMetaOfLabel (UserId.value carol) html).Contains ">carol@example.com<")
+                "no peer join known for this user, so the subject stands in rather than nothing"
 
         // The roster is folded from the durable `PeerJoined` log; your own display name comes
         // from THIS connection. When a peer rejoined under a new name the two disagreed, and a

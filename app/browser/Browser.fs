@@ -459,30 +459,65 @@ let private revealSettings () : unit = jsNative
 // on its cached stores and says so). Collapsing them — which a thrown fetch did — turns
 // "offline" into "log in", and a login bounce against an unreachable session goes nowhere.
 //
-// The URL is a PARAMETER, not baked into the Emit: a string literal inside an Emit is
-// outside F#'s reach, so a path embedded here could not be checked against
-// `SessionRoute`. Every fetch below takes its URL from `SessionRoute.relative`, and the
-// browser resolves it against the shell's `<base href>`.
+// Expressed as an ordinary F# `async` pipeline over `MeProbe.Response` — the SAME codec
+// (`Yession.Domain.MeProbe`) the Session Process encodes its answer with — rather than one
+// JS `Emit` string that encoded the branching itself. The fetch call itself goes through
+// `Fable.Fetch` (https://github.com/fable-compiler/fable-fetch), a typed binding, not a
+// hand-rolled Emit; `AbortSignal.timeout` is the one piece it does not cover and stays a
+// one-line Emit below. What the answer MEANS is this file's `ProbeOutcome` and the match
+// below, both type-checked.
+//
+// The URL is a PARAMETER: every fetch below takes its URL from `SessionRoute.relative`, so
+// it stays checked against the route table rather than living as a literal only the
+// runtime can see.
 //
 // A REFUSAL is 401/403 and nothing else. Every other error status — a 502 from the
 // operator's proxy standing in front of a session that is gone, a 503 from one still
 // starting — is the session not being there, which is the other axis entirely. Reading them
 // as "log in" sent a client whose session had stopped off to a login bounce that could only
 // fail, and (once the shell was served from a worker) replaced a perfectly good offline
-// session with a browser error page. The thrown case was already right; this is the same
-// distinction for the answers that arrive.
+// session with a browser error page.
 //
 // And an answer that does NOT arrive is the same axis again (`Client.Probe.deadline`): the
-// abort rejects, and the rejection is the thrown case with the timeout as its reason. The
-// deadline is a parameter for the reason the URL is — a number inside an Emit is outside
-// F#'s reach, and this one is the domain's to state.
-[<Emit("""fetch($0, { cache: 'no-store', signal: AbortSignal.timeout($1) }).then(
-  r => r.ok ? r.json().then(me => ({ reachable: true, authorized: true, token: me.peerToken, detail: '' }))
-      : (r.status === 401 || r.status === 403)
-        ? { reachable: true, authorized: false, token: '', detail: 'HTTP ' + r.status }
-        : { reachable: false, authorized: false, token: '', detail: 'HTTP ' + r.status },
-  e => ({ reachable: false, authorized: false, token: '', detail: String(e) }))""")>]
-let private fetchMe (url: string) (deadlineMs: float) : JS.Promise<{| reachable: bool; authorized: bool; token: string; detail: string |}> = jsNative
+// fetch rejects — network failure, or the abort signal firing — which `Async.Catch` below
+// turns into data a `match` must cover, rather than an exception a caller must remember to
+// catch.
+
+/// `Fetch.AbortSignal.timeout(...)` is the one piece `Fable.Fetch` does not bind (it is not
+/// part of the fetch surface itself), so this stays a one-line Emit, typed against the
+/// package's own `AbortSignal` so it slots straight into `RequestProperties.Signal` below.
+[<Emit("AbortSignal.timeout($0)")>]
+let private abortAfter (deadlineMs: float) : Fetch.Types.AbortSignal = jsNative
+
+/// The two axes `fetchMe` resolves to. A record of two independent bools (the shape this
+/// replaced) let a caller ask whether `reachable = false, authorized = true` — a
+/// combination that cannot actually happen; a case per real outcome makes it
+/// unrepresentable instead of merely undocumented.
+type private ProbeOutcome =
+    | ProbeUnreachable of detail: string
+    | ProbeUnauthorized
+    | ProbeAuthorized of MeProbe.Response
+
+let private fetchMe (url: string) (deadlineMs: float) : Async<ProbeOutcome> =
+    async {
+        let init =
+            [ Fetch.Types.RequestProperties.Cache Fetch.Types.RequestCache.Nostore
+              Fetch.Types.RequestProperties.Signal(abortAfter deadlineMs) ]
+        // `fetchUnsafe`, not `fetch`: the plain binding throws on a non-2xx status, which
+        // would fold the "refused" and "not there" axes back into one exception to
+        // re-inspect. This wants the raw response so it can tell 401/403 (refused) apart
+        // from everything else (not there) below.
+        let! attempt = Fetch.fetchUnsafe url init |> Async.AwaitPromise |> Async.Catch
+        match attempt with
+        | Choice2Of2 exn -> return ProbeUnreachable (string exn.Message)
+        | Choice1Of2 response when response.Ok ->
+            let! body = response.text () |> Async.AwaitPromise
+            match MeProbe.ofJson body with
+            | Ok me -> return ProbeAuthorized me
+            | Error err -> return ProbeUnreachable err
+        | Choice1Of2 response when response.Status = 401 || response.Status = 403 -> return ProbeUnauthorized
+        | Choice1Of2 response -> return ProbeUnreachable (sprintf "HTTP %d" response.Status)
+    }
 
 // `location.assign` resolves against the DOCUMENT's URL, not `<base href>` — the one
 // place relative resolution does not follow the base — so resolve explicitly against
@@ -1734,22 +1769,30 @@ let private start () =
         // what the channel's own retries wear, `Client.SessionChannel.policy`), and the
         // deadline is what bounds it.
         dispatchRef ConnectingMsg
-        let! probe = fetchMe (SessionRoute.relative Me) Client.Probe.deadline.TotalMilliseconds |> Async.AwaitPromise
-        if not probe.reachable then
-            dispatchRef (ConnectFailedMsg (Client.ChannelFault.describe (Client.ChannelUnreachable probe.detail)))
-        elif not probe.authorized then
+        let! outcome = fetchMe (SessionRoute.relative Me) Client.Probe.deadline.TotalMilliseconds
+        match outcome with
+        | ProbeUnreachable detail ->
+            dispatchRef (ConnectFailedMsg (Client.ChannelFault.describe (Client.ChannelUnreachable detail)))
+        | ProbeUnauthorized ->
             // The peer id rides the login bounce so the Manager can witness which peer
             // signed in for this session (Plan 07 — peer-scoped secrets).
             navigateTo (SessionRoute.relative Login + "?peer_id=" + urlEncode (PeerId.value peerId))
-        else
+        | ProbeAuthorized me ->
             // Authenticated: the Claude panel's status is knowable now, and the read
             // surface's stream has a cookie that will be accepted.
             refreshClaude ()
             subscribeQueries ()
+            // `me.DisplayName` is the attributed user's real name, when `/me` had one
+            // (see `Signalling.fs`) — carried into OUR OWN `PeerHello` instead of the
+            // random one so the durable `PeerJoined` this join appends records the name a
+            // person actually goes by. Falling back to the random `displayName` when the
+            // probe had none (unattributed access) keeps that case exactly as it was.
+            let effectiveDisplayName =
+                me.DisplayName |> Option.filter (fun name -> name <> "") |> Option.defaultValue displayName
             let hello =
                 { PeerId = peerId
-                  DisplayName = displayName
-                  Token = probe.token }
+                  DisplayName = effectiveDisplayName
+                  Token = me.PeerToken }
             // Events come over HTTP by CURSOR: a client asks from the position it has folded
             // through and is answered with a range whose bounds never move, so history is
             // served out of this client's own Cache API store and only what is past its

@@ -502,6 +502,13 @@ type ClientModel =
       /// the durable log (`PeerJoined`/`PeerLeft`), so it survives a reload and names a draft's
       /// author even while that author is away. Presence is who is here NOW; this is who is who.
       Peers         : Map<PeerId, string>
+      /// Peer → durable user, for every join a Manager-verified authentication strategy
+      /// attributed — the client's own copy of `Yession.Domain.Attribution.peerUsers`,
+      /// folded from the same `PeerJoined` events the Session Process folds. It exists so
+      /// chat can resolve a `UserRef` author to a real name through the exact rule that
+      /// decided the author was a `UserRef` in the first place, rather than a client-side
+      /// guess that could disagree with it.
+      PeerUsers     : Map<PeerId, UserId>
       /// Which draft this client has OPEN in the composer, of the at-most-one that can be. App
       /// state, never synced: two people in one session may each have a different draft open.
       Composer      : ComposerChoice
@@ -828,6 +835,7 @@ module ClientModel =
           Agent = { ActiveTurn = None }
           Presence = Map.empty
           Peers = Map.empty
+          PeerUsers = Map.empty
           Composer = Unchosen
           Environment = EnvironmentNotStarted
           Terminals = Projection.empty
@@ -1398,6 +1406,20 @@ module ClientModel =
                 | Some presence when presence.DisplayName <> "" -> presence.DisplayName
                 | _ -> PeerId.value peer
 
+    /// A `UserRef` author's real name, resolved through the SAME rule the Session Process
+    /// used to decide the author was a `UserRef` in the first place
+    /// (`Yession.Domain.Attribution`) rather than a client-side guess that could disagree
+    /// with it: find a peer this client has seen join AS that user, and ask `nameOf` for
+    /// THAT peer's name. Any peer attributed to the same user carries that user's own
+    /// name once `Signalling.fs`'s `/me` supplies it (see `PeerHello.DisplayName`), so it
+    /// does not matter which one this finds. Falls back to the raw subject only when this
+    /// client has never seen the user's peer join at all — an id is a last resort here
+    /// exactly as it is in `nameOf`.
+    let userName (user: UserId) (model: ClientModel) : string =
+        model.PeerUsers
+        |> Map.tryPick (fun peer u -> if u = user then Some (nameOf peer model) else None)
+        |> Option.defaultValue (UserId.value user)
+
     /// What a stroke on the rail is called, for a reader who cannot see where it points.
     ///
     /// An act note's headline is already a short sentence and arrives whole. A message is not:
@@ -1576,6 +1598,16 @@ module ClientModel =
                             Map.add joined.PeerId joined.DisplayName roster
                         | _ -> roster)
                     model.Peers
+            // Same fold, same events, but the DECISION `Yession.Domain.Attribution` makes —
+            // shared with the Session Process, which stamps `MessageSent.Author` with it — so
+            // a `UserRef` author resolves to a name through the identical rule that decided
+            // it was a `UserRef` in the first place, not a client-side guess that could
+            // disagree with it.
+            let peerUsers =
+                Map.fold
+                    (fun acc k v -> Map.add k v acc)
+                    model.PeerUsers
+                    (Attribution.peerUsers (freshEvents |> List.map (fun e -> e.Event)))
             // The terminal half of the chat, gated on the same offset as the conversation —
             // one page, two folds, merged only at render.
             let timeline, _ =
@@ -1616,6 +1648,7 @@ module ClientModel =
                 Terminals = terminals
                 Pins = pins
                 Peers = peers
+                PeerUsers = peerUsers
                 EventConsumer =
                     { LastProcessedOffset = highWater
                       LatestKnownOffset = latestKnown
