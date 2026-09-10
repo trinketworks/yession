@@ -33,6 +33,12 @@ let esbuild = Path.Combine (binDir, "esbuild")
 let tailwind = Path.Combine (binDir, "tailwindcss")
 
 // Run a command capturing stdout (fails on non-zero); used where the output is a value.
+//
+// A failure carries what the command PRINTED. `compile` builds the solution through this, and
+// a build that cannot restore a package inside the Nix sandbox — a NuGet reference added
+// without re-deriving the fixed-output cache's hash — failed as one line, `dotnet build
+// Yession.slnx failed (1)`, with the NU1101 that named the package captured and discarded.
+// That cost a rebuild outside the sandbox to learn what the sandbox already knew.
 let runIn (workingDir: string) (command: string) (arguments: string list) : string =
     let psi = ProcessStartInfo (command)
     arguments |> List.iter psi.ArgumentList.Add
@@ -41,7 +47,8 @@ let runIn (workingDir: string) (command: string) (arguments: string list) : stri
     use p = Process.Start psi
     let output = p.StandardOutput.ReadToEnd ()
     p.WaitForExit ()
-    if p.ExitCode <> 0 then failwithf "%s %s failed (%d)" command (String.concat " " arguments) p.ExitCode
+    if p.ExitCode <> 0 then
+        failwithf "%s %s failed (%d):\n%s" command (String.concat " " arguments) p.ExitCode (output.Trim ())
     output.Trim ()
 
 let run (command: string) (arguments: string list) : string = runIn repoRoot command arguments
