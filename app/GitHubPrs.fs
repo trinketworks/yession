@@ -1,12 +1,14 @@
 module Yession.Host.GitHubPrs
 
-// Everything GitHub-specific about watching a pull request, and nothing else — the
+// Everything GitHub-specific about a session's pull requests, and nothing else — the
 // `GitHubConnection.fs` precedent, for the same reason: the Manager brokers the credential
 // and never learns which service it brokered, so a REST endpoint has no business above
-// this file. What is left here is the two endpoints and their JSON (`fetchOver`, the whole
-// of the `FetchPr` seam this side owns) and the one field path a delivery names its repo
-// at. The cadence, the ETag bookkeeping, the verbs and the query are provider-neutral and
-// live in `PrWatches.fs`; a second forge is a second copy of this file, not a second poller.
+// this file. What is left here is the endpoints and their JSON — the two a look reads
+// (`fetchOver`, the whole of the `FetchPr` seam this side owns), and the two that open one
+// (`openOver`: the list that keeps a repeated ask a question, then the create) — and the one
+// field path a delivery names its repo at. The cadence, the ETag bookkeeping, the verbs and
+// the query are provider-neutral and live in `PrWatches.fs`; a second forge is a second copy
+// of this file, not a second poller.
 
 open System
 open Fable.Core
@@ -278,6 +280,136 @@ let fetchOver (apiBase: string) (spending: Spending) : FetchPr =
                             { Pr = (if succeeded prReply then prReply.etag else etags.Pr)
                               Checks = (if succeeded checksReply then checksReply.etag else etags.Checks) }
                         return PrChanged (snapshot, nextEtags)
+        }
+
+// --- opening one -------------------------------------------------------------------------
+
+/// `POST /repos/{o}/{r}/pulls`, with the headers a look sends plus a body. Its own macro
+/// rather than a mode flag on the one above: the method, the body and the absent conditional
+/// header are all of what the two requests differ by, and a flag would hide that in a branch.
+[<Emit("""(function (url, token, payload) {
+  const headers = { 'accept': 'application/vnd.github+json', 'content-type': 'application/json',
+                    'user-agent': 'yession', 'x-github-api-version': '2022-11-28' }
+  if (token) headers['authorization'] = 'Bearer ' + token
+  return fetch(url, { method: 'POST', headers, body: payload })
+    .then(async r => ({ reachable: true, status: r.status, etag: '',
+                        reset: r.headers.get('x-ratelimit-reset') || '',
+                        remaining: r.headers.get('x-ratelimit-remaining') || '',
+                        resource: r.headers.get('x-ratelimit-resource') || '', body: await r.text() }))
+    .catch(e => ({ reachable: false, status: 0, etag: '', reset: '', remaining: '', resource: '',
+                   body: String((e && e.message) || e) }))
+})($0, $1, $2)""")>]
+let private postJson (url: string) (token: string) (payload: string) : JS.Promise<FetchReply> = jsNative
+
+/// A value on its way into a query string. Branch names carry `/` and, on a fork's head, `:`.
+[<Emit("encodeURIComponent($0)")>]
+let private urlPart (value: string) : string = jsNative
+
+/// How GitHub names the branch a pull request comes FROM: `owner:branch`, which is what the
+/// list endpoint requires and what the create endpoint accepts. A head a caller already
+/// qualified passes through untouched — that spelling is the provider's own, and qualifying
+/// it twice would name an owner called `owner:branch`.
+let headRef (draft: PrDraft) : string =
+    if draft.Head.Contains ":" then draft.Head
+    else sprintf "%s:%s" (RepoRef.owner draft.Repo) draft.Head
+
+/// The draft as `POST /pulls` takes it. `draft` is sent whichever way it was answered — a
+/// field GitHub defaults for us is a decision taken at the provider, and this verb has been
+/// given the answer — while a description nobody wrote is a field that is not there, rather
+/// than an empty one that reads as a description of nothing.
+let createBody (draft: PrDraft) : string =
+    Encode.object
+        [ yield "title", Encode.string draft.Title
+          yield "head", Encode.string (headRef draft)
+          yield "base", Encode.string draft.Base
+          match draft.Body with
+          | Some said -> yield "body", Encode.string said
+          | None -> ()
+          yield "draft", Encode.bool draft.Draft ]
+    |> Encode.toString 0
+
+/// The number the create endpoint answers with — the whole of what this side needs from a
+/// pull request it just made, because every other fact about one is what a look reports.
+let private numberDecoder : Decoder<int> = Decode.field "number" Decode.int
+
+/// `GET /pulls?state=open&head=…&base=…` — the numbers already open from that head onto that
+/// base. At most one can be, but a list is what the endpoint returns and reading the first is
+/// honest about that.
+let private openNumbersDecoder : Decoder<int list> = Decode.list numberDecoder
+
+/// What GitHub says when it has READ the draft and will not open it (422). The specific
+/// reason lives in `errors[].message` — "No commits between master and topic" — and the
+/// envelope's own `message` is "Validation Failed", which says nothing; so the errors win and
+/// the envelope is the fallback. `None` when a reply says nothing readable at all, which is a
+/// different answer from one that gave a reason and is reported as one.
+let refusalOf : Decoder<string option> =
+    Decode.object (fun get ->
+        let envelope = get.Optional.Field "message" Decode.string
+        let said =
+            get.Optional.Field
+                "errors"
+                (Decode.list (Decode.object (fun each -> each.Optional.Field "message" Decode.string)))
+            |> Option.defaultValue []
+            |> List.choose id
+            |> List.filter (fun m -> m <> "")
+        if List.isEmpty said then envelope else Some (String.concat "; " said))
+
+/// Opening one, composed against a real API base like the look above.
+///
+/// It ASKS FIRST, and that is the whole reason this is two requests. GitHub answers a second
+/// pull request from the same head onto the same base with a 422 whose TEXT is the only thing
+/// separating it from "no commits between them" — and a verb whose meaning turns on matching
+/// somebody else's prose is a verb that breaks when they reword it. One cheap GET makes the
+/// repeated ask a question with an answer (the number) instead of a refusal a caller parses.
+let openOver (apiBase: string) (spending: Spending) : OpenPr =
+    fun token draft ->
+        async {
+            match spending.Permit () with
+            | Resilience.Hold until ->
+                return PrOpenFailed (PrRateLimited (Some (int (until.ToUnixTimeSeconds ()))))
+            | Resilience.Go ->
+                let bearer = Option.toObj token
+                let repo = RepoRef.value draft.Repo
+                let root = apiBase.TrimEnd '/'
+                let succeeded (reply: FetchReply) = reply.reachable && reply.status >= 200 && reply.status < 300
+                let listUrl =
+                    sprintf
+                        "%s/repos/%s/pulls?state=open&head=%s&base=%s"
+                        root
+                        repo
+                        (urlPart (headRef draft))
+                        (urlPart draft.Base)
+                let! listing = getConditional listUrl bearer "" |> Interop.awaitPromise
+                spending.Learned (allowanceIn listing)
+                if not (succeeded listing) then return PrOpenFailed (failureOf listing)
+                else
+                    match Decode.fromString openNumbersDecoder listing.body with
+                    | Error e -> return PrOpenFailed (PrUnreachable (sprintf "unrecognised pull request list: %s" e))
+                    | Ok (number :: _) ->
+                        match PrRef.create draft.Repo number with
+                        | Ok pr -> return PrAlreadyOpen pr
+                        | Error e -> return PrOpenFailed (PrUnreachable e)
+                    | Ok [] ->
+                        let! created =
+                            postJson (sprintf "%s/repos/%s/pulls" root repo) bearer (createBody draft)
+                            |> Interop.awaitPromise
+                        spending.Learned (allowanceIn created)
+                        // A refusal is not a failure: GitHub read the draft and said no, which
+                        // is an answer somebody can act on. Every other non-2xx is the same
+                        // four facts a look classifies.
+                        if created.reachable && created.status = 422 then
+                            match Decode.fromString refusalOf created.body with
+                            | Ok (Some said) -> return PrOpenRefused said
+                            | _ -> return PrOpenRefused "it would not say why"
+                        elif not (succeeded created) then return PrOpenFailed (failureOf created)
+                        else
+                            match Decode.fromString numberDecoder created.body with
+                            | Error e ->
+                                return PrOpenFailed (PrUnreachable (sprintf "unrecognised pull request reply: %s" e))
+                            | Ok number ->
+                                match PrRef.create draft.Repo number with
+                                | Ok pr -> return PrOpened pr
+                                | Error e -> return PrOpenFailed (PrUnreachable e)
         }
 
 // --- the hook subscription -------------------------------------------------------------------

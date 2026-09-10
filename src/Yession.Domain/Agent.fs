@@ -1,6 +1,7 @@
 namespace Yession.Domain.Agent
 
 open Yession.Domain
+open Yession.Domain.Prs
 open Yession.Domain.Sandboxes
 
 open Yession.Domain.Chat
@@ -504,6 +505,19 @@ type SwitchRepoBranch = RepoRef -> string -> bool -> Async<Result<CommandOutcome
 type WatchPr = RepoRef -> int -> Async<Result<CommandOutcome, string>>
 type UnwatchPr = RepoRef -> int -> Async<Result<CommandOutcome, string>>
 
+/// Open a pull request on a repo. A verb ON a repo like the two above, spending the same
+/// credential — and the one repo verb whose effect is OUTSIDE this session: what it makes is
+/// visible to everybody who can see the repository, and no verb here can take it back.
+///
+/// It publishes nothing of its own: the commits are already on the branch the draft names,
+/// pushed from a terminal like every other irreversible thing. What is left is the one act
+/// that has no shell equivalent without a forge CLI nobody here has.
+///
+/// A whole `PrDraft` rather than six curried arguments, and the reason is the arguments:
+/// two branches and two strings, all of type `string`, adjacent — a positional call that
+/// swapped a pair would compile and open somebody the wrong pull request.
+type CreatePr = PrDraft -> Async<Result<CommandOutcome, string>>
+
 /// Fetch a repo's remote refs (prune, no submodules). The one network verb besides the
 /// clone itself; runs on the same per-invocation credential.
 type FetchRepo = RepoRef -> Async<Result<string, string>>
@@ -613,7 +627,10 @@ type RepoCapabilities =
       /// session does from now on (it polls, and announces), and everyone sees the watch
       /// begin in the timeline.
       WatchPr : WatchPr
-      UnwatchPr : UnwatchPr }
+      UnwatchPr : UnwatchPr
+      /// Opening one. Beside the watch verbs because it is the same kind of act on the same
+      /// kind of thing — and the answer it gives is what `WatchPr` takes.
+      CreatePr : CreatePr }
 
 /// which named sandboxes exist, and where a shell opened in one starts.
 /// NOT what runs in them — `Terminals.Execute` is still the one door into a sandbox.
@@ -700,7 +717,8 @@ module AgentCapabilities =
               Log = fun _ -> async { return Error "no repos capability" }
               Diff = fun _ -> async { return Error "no repos capability" }
               WatchPr = fun _ _ -> async { return Error "no repos capability" }
-              UnwatchPr = fun _ _ -> async { return Error "no repos capability" } }
+              UnwatchPr = fun _ _ -> async { return Error "no repos capability" }
+              CreatePr = fun _ -> async { return Error "no repos capability" } }
           Sandboxes =
             { Start = fun _ _ -> async { return Error "no sandbox capability" }
               Stop = fun _ -> async { return Error "no sandbox capability" }

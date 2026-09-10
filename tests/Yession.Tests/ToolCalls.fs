@@ -27,6 +27,7 @@ open Yession.Domain
 open Yession.Domain.Sandboxes
 open Yession.Domain.Agent
 open Yession.Domain.Collab
+open Yession.Domain.Prs
 open Yession.Domain.Repos
 open Yession.Host
 open Yession.SessionProcess
@@ -138,6 +139,13 @@ let private reposAnswering (add: RepoRef -> Async<Result<RepoListing, string>>) 
       RepoLog = denied
       RepoDiff = denied
       RemoveRepo = fun _ _ _ -> async { return Error "not part of this test" } }
+
+/// A pull request service that answers `create_pr` with whatever the test says, and refuses
+/// the rest — the leaf substituted, like the repo service above it.
+let private prsOpening (create: PrDraft -> Async<Result<string, string>>) : PrWatches.PrService =
+    { Watch = fun _ _ _ -> async { return Error "not part of this test" }
+      Unwatch = fun _ _ -> async { return Error "not part of this test" }
+      Create = fun _ draft -> create draft }
 
 let private servicesOver (service: Repos.ReposService) : Commands.CommandServices =
     { Repos = fun () -> Some service
@@ -286,6 +294,36 @@ let private tests' =
         // `description:`. Removing them here rather than loosening them: the second asserted
         // the advice was ABSENT once a profile existed, and with no advice at all it could
         // never have failed again.
+
+        // create_pr crosses the gate as SIX encoded strings and is re-assembled on the far
+        // side. Nothing but their order joins the two halves, and every one of them is a
+        // string: a pair swapped in the encoding would compile, pass every layer's own suite,
+        // and open a real pull request the wrong way round.
+        testCaseAsync "every argument of a create_pr survives the gate in the place it was written" <|
+            async {
+                let mutable seen : PrDraft option = None
+                let session =
+                    openToolSession (
+                        { servicesOver (reposAnswering (fun _ -> async { return Error "not part of this test" })) with
+                            Prs =
+                              fun () ->
+                                Some (
+                                    prsOpening (fun draft ->
+                                        async {
+                                            seen <- Some draft
+                                            return Ok (sprintf "opened %s#7" (RepoRef.value draft.Repo))
+                                        })) })
+                let! answer =
+                    session.Call
+                        "create_pr"
+                        """{"repo":"octo/hello","head":"topic","base":"master","title":"Add feature","body":"why","draft":true}"""
+                Expect.equal (seen |> Option.map (fun d -> d.Head)) (Some "topic") "the head is the head"
+                Expect.equal (seen |> Option.map (fun d -> d.Base)) (Some "master") "the base is the base"
+                Expect.equal (seen |> Option.map (fun d -> d.Title)) (Some "Add feature") "the title is the title"
+                Expect.equal (seen |> Option.map (fun d -> d.Body)) (Some (Some "why")) "the body is the body"
+                Expect.equal (seen |> Option.map (fun d -> d.Draft)) (Some true) "and the flag is the flag"
+                Expect.stringContains (answered answer) "opened octo/hello#7" "and the service's own words came back"
+            }
 
         // A repo name the domain refuses never reaches the gate, and the model is told what
         // to fix rather than that something failed.

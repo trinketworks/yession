@@ -1,5 +1,6 @@
 namespace Yession.Domain.Prs
 
+open System
 open Yession.Domain
 
 /// The facts a watched pull request records. Provider-lean like `RepoRef`: "pull
@@ -22,6 +23,79 @@ module PrRef =
 
     /// The canonical rendering — "owner/repo#12" — used by notes, gates and queries alike.
     let render (pr: PrRef) : string = sprintf "%s#%d" (RepoRef.value pr.Repo) pr.Number
+
+/// What OPENING a pull request needs said, before a provider has given it a number.
+/// Provider-lean like `PrRef`: every forge asks for these five, and none of them is an
+/// endpoint — the REST that turns one of these into a `PrRef` is the session host's
+/// (`app/GitHubPrs.fs`), the way `RepoRef.cloneUrl` keeps github.com out of the types that
+/// carry a repo.
+type PrDraft =
+    { Repo : RepoRef
+      /// The branch the work is on. A fork's head is `owner:branch`, which is the provider's
+      /// own spelling for it and passes through untouched.
+      Head : string
+      /// The branch it is FOR.
+      Base : string
+      Title : string
+      /// The description, when there is one. A repo that squash-merges makes this the commit
+      /// body, so it is not decoration — but it is optional, and `None` rather than `""`,
+      /// because a pull request with no description and one whose description is nothing are
+      /// the same thing at every forge and only one of them should be representable.
+      Body : string option
+      /// Opened as a draft: on the record, and explicitly not asking for review yet.
+      Draft : bool }
+
+module PrDraft =
+
+    /// A branch as a caller wrote it: trimmed, and refused when it cannot be one. Blank and
+    /// whitespace are the two an agent actually produces — a computed branch name that came
+    /// back empty, and a title pasted into the wrong argument — and both would otherwise
+    /// reach the provider as a validation failure that cost a request to discover.
+    let private branch (which: string) (raw: string) : Result<string, string> =
+        let trimmed = raw.Trim ()
+        if trimmed = "" then Error (sprintf "a pull request needs a %s branch" which)
+        elif trimmed |> Seq.exists Char.IsWhiteSpace then
+            Error (sprintf "'%s' is not a branch name — a %s branch has no spaces in it" trimmed which)
+        else Ok trimmed
+
+    /// Assemble one. The refusals here are the ones that are true of a pull request rather
+    /// than of GitHub: a title nobody wrote, a branch nobody named, and a head that is its
+    /// own base — which the provider would refuse too, one round trip later and in its own
+    /// words.
+    let create
+        (repo: RepoRef)
+        (head: string)
+        (onto: string)
+        (title: string)
+        (body: string option)
+        (draft: bool)
+        : Result<PrDraft, string> =
+        let titled = title.Trim ()
+        if titled = "" then Error "a pull request needs a title"
+        else
+            match branch "head" head, branch "base" onto with
+            | Error e, _
+            | _, Error e -> Error e
+            | Ok head, Ok onto ->
+                if head = onto then
+                    Error (sprintf "the head and the base are both %s — there would be nothing to merge" head)
+                else
+                    Ok
+                        { Repo = repo
+                          Head = head
+                          Base = onto
+                          Title = titled
+                          // Not trimmed, unlike everything above it: a description is prose,
+                          // and what looks like padding in one is a fenced code block's
+                          // indentation. Whitespace is all a body HAS to be, though, so a body
+                          // that is only that is no body.
+                          Body = body |> Option.filter (fun said -> said.Trim () <> "")
+                          Draft = draft }
+
+    /// How a draft is named where somebody has to read it before it exists — a gate's
+    /// summary, a refusal. `PrRef.render` is what names it afterwards.
+    let render (draft: PrDraft) : string =
+        sprintf "%s %s -> %s" (RepoRef.value draft.Repo) draft.Head draft.Base
 
 type PrState =
     | PrOpen

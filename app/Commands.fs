@@ -55,8 +55,9 @@ type CommandServices =
       /// can watch, edit before it runs, and read the outcome of afterwards, not a private
       /// spawn this layer arranges on the side.
       RunCommand : unit -> TerminalCommands.TerminalCommands
-      /// Watching pull requests, absent when the session could not start the poller.
-      Prs : unit -> PrWatches.PrWatchService option
+      /// The pull request verbs — watching, and opening one — absent when the session
+      /// could not start the poller they share.
+      Prs : unit -> PrWatches.PrService option
       /// Say a query's answer changed. A command is the only thing that can change one, so
       /// a command is the only thing that has to say so — nothing polls.
       Invalidate : QueryName -> unit
@@ -128,6 +129,7 @@ let private andPublish
 let private addRepoTool = "add_repo"
 let private removeRepoTool = "remove_repo"
 let private switchBranchTool = "switch_branch"
+let private createPrTool = "create_pr"
 let private watchPrTool = "watch_pr"
 let private unwatchPrTool = "unwatch_pr"
 let private startWorkSandboxTool = "start_work_sandbox"
@@ -280,6 +282,40 @@ let dispatch (services: CommandServices) : CommandDispatch =
                                 }))
                 | Some _, other ->
                     return Error (sprintf "switch_branch takes a repo, a branch and a flag, got %d arguments" (List.length other))
+            }
+
+          createPrTool,
+          fun (invocation: GatedInvocation) ->
+            async {
+                // A description is present or it is not, and the ARITY carries that, like
+                // `set_shell_profile`'s directory below: five arguments is a pull request with
+                // no body, six is one with the body last. Never an empty string standing in
+                // for the absence.
+                let parsed =
+                    match decodeArgs invocation.Args with
+                    | [ repo; head; onto; title; draft ] -> Ok (repo, head, onto, title, draft, None)
+                    | [ repo; head; onto; title; draft; body ] -> Ok (repo, head, onto, title, draft, Some body)
+                    | other -> Error other
+                match services.Prs (), parsed with
+                | None, _ -> return Error "this session cannot open pull requests"
+                | Some _, Error other ->
+                    return
+                        Error (
+                            sprintf
+                                "create_pr takes a repo, a head, a base, a title, a flag and an optional body, got %d arguments"
+                                (List.length other))
+                | Some service, Ok (repo, head, onto, title, draft, body) ->
+                    match RepoRef.create repo with
+                    | Error e -> return Error (sprintf "not a repo name: %s" e)
+                    | Ok repo ->
+                        // Re-made from the encoded arguments rather than carried: the gate is
+                        // the boundary the act crosses, and a draft assembled on the far side
+                        // of it is one this side validated again. Nothing is published here —
+                        // no watch begins, no event is appended, so there is no query whose
+                        // answer this changed.
+                        match PrDraft.create repo head onto title body (draft = "true") with
+                        | Error e -> return Error e
+                        | Ok drafted -> return! service.Create (Authority.effective invocation.Authority) drafted
             }
 
           watchPrTool,
@@ -528,6 +564,27 @@ let private repoCapabilitiesFor
                           if create then sprintf "switch_branch %s -> new branch %s" (RepoRef.value repo) branch
                           else sprintf "switch_branch %s -> %s" (RepoRef.value repo) branch
                       gated switchBranchTool [ RepoRef.value repo; branch; (if create then "true" else "false") ] summary
+                  CreatePr =
+                    fun draft ->
+                      // The head, the base and the DRAFT flag are in the summary, because that
+                      // is the sentence the classifier reads and a person watching the queue
+                      // sees before it happens — and a pull request everybody can see is not
+                      // the same act as a draft nobody is asked to review yet.
+                      let summary =
+                          sprintf
+                              "create_pr %s%s: %s"
+                              (PrDraft.render draft)
+                              (if draft.Draft then " as a draft" else "")
+                              draft.Title
+                      gated
+                          createPrTool
+                          ([ RepoRef.value draft.Repo
+                             draft.Head
+                             draft.Base
+                             draft.Title
+                             (if draft.Draft then "true" else "false") ]
+                           @ Option.toList draft.Body)
+                          summary
                   WatchPr =
                     fun repo number ->
                       gated
