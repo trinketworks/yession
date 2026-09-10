@@ -1301,18 +1301,6 @@ module View =
               </div>
             </header>"""
 
-    let private agentStrip (actions: ViewActions) (agent: AgentViewState) : TemplateResult =
-        match agent.ActiveTurn with
-        | Some turn ->
-            html $"""
-                <section class="{Style.activity}" data-agent-stream>
-                  <span class="{Style.activityPulse}"></span>
-                  <span class="{Style.activityText}" data-agent-turn="{AgentTurnId.value turn}">agent is responding</span>
-                  <span class="{Style.activityTurn}">turn {AgentTurnId.value turn}</span>
-                  <button type="button" class="{Style.btnDanger} ml-auto" data-interrupt-turn="{AgentTurnId.value turn}" @click={Ev(fun _ -> actions.Interrupt turn)}>Interrupt</button>
-                </section>"""
-        | None -> html $"""<section class="hidden" data-agent-stream></section>"""
-
     let private queue (dispatch: ClientMsg -> unit) (synced: SyncedSessionState) : TemplateResult =
         let entries = QueueOrder.sorted synced.Queue
         let head =
@@ -1365,6 +1353,38 @@ module View =
                   <span class="{Style.draftSummaryBody}" data-rich-body="{BodyKey.draft peerId}" data-rich-readonly="true"></span>
                   <span class="{Style.draftEditors}">{editors peerId}</span>
                 </button>"""
+        // The agent's turn, in the band where a person answers it. One control, at the
+        // LEADING edge of the line: Send's mirror image, and the only part of the strip this
+        // replaced that was ever the strip's own. Whether a turn is running is said by the
+        // caret in the timeline, where the words are landing — so this is a verb, not an
+        // announcement, and it wears the weight of one (`btnStopInField`).
+        //
+        // It rides the composer rather than the streaming message because a message scrolls
+        // and the band does not: a stop control that leaves the screen when the conversation
+        // moves is one nobody can reach at the moment they want it.
+        let interrupt =
+            match model.Agent.ActiveTurn with
+            | None -> Lit.nothing
+            | Some turn ->
+                html $"""
+                    <button type="button" class="{Style.btnStopInField}" aria-label="{Dom.Text.interruptLabel}"
+                            data-interrupt-turn="{AgentTurnId.value turn}"
+                            @click={Ev(fun _ -> actions.Interrupt turn)}>{Icon.stop}</button>"""
+        // The same fact for a reader who cannot see the caret, and the only place the sentence
+        // still exists in the product.
+        //
+        // MOUNTED ALWAYS, empty at rest: a live region announces what changes INSIDE it, and
+        // one inserted with its text already in place is announced by no screen reader
+        // reliably. So the region is permanent and only its contents come and go.
+        //
+        // `role="status"` and nothing beside it: that role IS a polite live region, so an
+        // `aria-live` next to it would be one requirement declared twice.
+        let agentLive =
+            let said =
+                match model.Agent.ActiveTurn with
+                | Some _ -> Dom.Text.agentResponding
+                | None -> ""
+            html $"""<span class="{Style.srOnly}" role="status" data-agent-stream>{said}</span>"""
         // The open draft: an editable rich editor bound to that body fragment (mounted
         // imperatively by the browser), Send for anyone, Discard for its author.
         let open' =
@@ -1399,6 +1419,7 @@ module View =
                 else html $"""<span class="{Style.draftAuthor}">{ClientModel.nameOf target model}'s message</span>"""
             html $"""
                 <article class="{Style.draftBox}" data-draft-id="{PeerId.value target}" data-draft-author="{PeerId.value target}">
+                  {interrupt}
                   <div class="{Style.draftBody}">
                     {author}
                     <div class="{Style.draftInput}" data-rich-body="{BodyKey.draft target}" data-rich-readonly="false" data-draft-input="{PeerId.value target}"></div>
@@ -1423,6 +1444,7 @@ module View =
             <section class="{Style.composer}" data-draft-editor>
               <span class="{Style.bandRail}"></span>
               <span class="{Style.bandEdge}"></span>
+              {agentLive}
               {ClientModel.collapsedDrafts model |> List.map summary}
               {open'}
               {startMine}
@@ -1594,21 +1616,34 @@ module View =
                         | IntegrationLost _ -> Dom.Text.wokeIntegrationLost, Dom.Text.turnWokeIntegrationLost
                         | PrChanged _ -> Dom.Text.wokePrChanged, Dom.Text.turnWokePrChanged
                     html $"""<span class="{Style.statusFaint}" data-message-woke="{token}" title="{title}">{Dom.Text.turnWoke}</span>"""
+            // A message still arriving says so with the CARET at the end of its body, and with
+            // nothing else. `streaming` used to be a word on this line as well — one line
+            // above that caret, and a few centimetres above a strip that said it a third
+            // time. Of the three, the caret is the only one carrying something the others
+            // cannot: WHERE the next word lands. So the word goes and the mark stays.
             let statusInner =
                 match item.Status with
-                | Complete -> Lit.nothing
-                | Streaming -> html $"""<span class="{Style.statusRun}"><span class="{Style.statusDotPulse}"></span>streaming</span>"""
+                | Complete | Streaming -> Lit.nothing
                 | ConversationItemStatus.Failed -> html $"""<span class="{Style.statusErr}">failed</span>"""
                 | ConversationItemStatus.Interrupted -> html $"""<span class="{Style.statusFaint}">interrupted</span>"""
             let bodyClass, caret =
                 match item.Status with
-                | Streaming -> Style.messageBodyStreaming, html $"""<span class="{Style.caret}"></span>"""
+                | Streaming ->
+                    // The one visible statement that a turn is in flight, and the hook that
+                    // says so is what a test counts: there must never be a second.
+                    Style.messageBodyStreaming, html $"""<span class="{Style.caret}" data-agent-writing></span>"""
                 | _ -> Style.messageBody, Lit.nothing
             let bodyClass = Style.cls [ bodyClass; Style.messageVoice isAgent ]
             // The author line is the GROUP's to say (see `group` below); a message's own meta
-            // line exists only while it has news of its own — streaming, failed, woken unasked.
+            // line exists only while it has news of its own — failed, interrupted, woken
+            // unasked. Not streaming: that is the caret's, and a line that appeared to say it
+            // and then vanished would move the body under the reader mid-sentence.
+            let hasStatusNews =
+                match item.Status with
+                | Complete | Streaming -> false
+                | ConversationItemStatus.Failed | ConversationItemStatus.Interrupted -> true
             let meta =
-                if item.Woke.IsSome || item.Status <> ConversationItemStatus.Complete then
+                if item.Woke.IsSome || hasStatusNews then
                     html $"""<div class="{Style.messageMeta}">{wokeInner}{statusInner}</div>"""
                 else Lit.nothing
             // A ref to what this reply answers, drawn ONLY when the projection judged it worth
@@ -2976,7 +3011,6 @@ module View =
               {signInPrompt actions model}
               {chat actions dispatch model}
               {pendingActs actions dispatch model}
-              {agentStrip actions model.Agent}
               {queue dispatch model.Synced}
               {drafts actions dispatch model}
             </div>

@@ -18,6 +18,7 @@ open Fable.Core
 open Lit
 open Yjs
 open Yession.Domain
+open Yession.Domain.Agent
 open Yession.Domain.Terminals
 open Yession.Domain.Collab
 open Yession.Domain.Chat
@@ -815,6 +816,15 @@ let private recordResized (_terminal: TerminalId) (cols: int) (rows: int) : unit
 [<Emit("(function(c, r){ window.__viewport = c + 'x' + r })($1, $2)")>]
 let private recordViewport (_terminal: TerminalId) (cols: int) (rows: int) : unit = jsNative
 
+/// Start an agent turn in the shell, as the Session Process does when the model begins to
+/// answer: the turn, the message it opens, and the first words of it, folded through the same
+/// page the real client reads. Exposed because the browser tier boots its session with NO
+/// model credential (deliberately — see `Browser.fs`), so a turn in flight is a state no
+/// amount of typing on this page can reach, and how many marks a person sees while one is
+/// running is a question only a laid-out page can answer.
+[<Emit("(function(f){ window.__agentTurn = f })($0)")>]
+let private exposeAgentTurn (f: unit -> unit) : unit = jsNative
+
 /// Hand a terminal's lease to this peer WITHOUT a press, as the alt-screen flip does: a block
 /// takes the screen and the Session Process gives its author the keyboard. Exposed for the
 /// same reason the snapshot is — it is the arrival of a fact from elsewhere, and a test that
@@ -884,6 +894,29 @@ do
         match TerminalId.create id with
         | Ok terminal -> screens.Snapshot terminal { Seq = seq; Cols = cols; Rows = rows; Screen = screen }
         | Error _ -> ())
+    exposeAgentTurn (fun () ->
+        let expect = function Ok v -> v | Error e -> failwith e
+        let turn : AgentTurnId = AgentTurnId.create "turn-live" |> expect
+        let messageId : MessageId = MessageId.create "msg-live" |> expect
+        // The turn answers something a PERSON said — the fixture's first message. Naming the
+        // agent's own message here instead makes the reply detached from itself, and the
+        // timeline dutifully quotes the message above its own body.
+        let asked : MessageId = MessageId.create "msg-harness" |> expect
+        let envelope (offset: int64) (event: SessionEvent) : EventEnvelope<SessionEvent> =
+            { EventId = EventId.fresh ()
+              SessionId = model.Session |> Option.defaultWith (fun () -> SessionId.create "harness" |> expect)
+              Offset = EventOffset.create offset |> expect
+              Actor = ActorRef.Agent
+              Timestamp = System.DateTimeOffset.UtcNow
+              Event = event }
+        dispatch (
+            EventsPageMsg
+                { Events =
+                    [ envelope 40L (SessionEvent.AgentTurnStarted { AgentTurnId = turn; Cause = TurnCause.TriggeredBy asked })
+                      envelope 41L (SessionEvent.AgentMessageStarted { AgentTurnId = turn; MessageId = messageId; Antecedent = None })
+                      envelope 42L (SessionEvent.AgentMessageDelta { AgentTurnId = turn; MessageId = messageId; Delta = "Looking at it" }) ]
+                  LastOffset = EventOffset.create 42L |> expect |> Some
+                  IsEnd = true }))
     exposeTake (fun id ->
         match TerminalId.create id with
         | Ok terminal -> takeRef terminal

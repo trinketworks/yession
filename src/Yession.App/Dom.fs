@@ -95,9 +95,11 @@ module Dom =
         let itemMenu = "data-item-menu"
         let itemBookmark = "data-item-bookmark"
         let itemMarked = "data-item-marked"
-        // Agent activity strip.
+        // What a turn in flight looks like, in the three places it is legible: the mark the
+        // agent writes behind (one, in the timeline), the live region that says the same
+        // thing to a reader who cannot see it, and the control that stops it.
+        let agentWriting = "data-agent-writing"
         let agentStream = "data-agent-stream"
-        let agentTurn = "data-agent-turn"
         let interruptTurn = "data-interrupt-turn"
         // Message queue.
         let messageQueue = "data-message-queue"
@@ -533,6 +535,14 @@ module Dom =
         /// The accessible name of the ref that JUMPS: a control's name says what it does, and
         /// this one takes the reader to the message it quotes.
         let replyRefJumpLabel = "Go to the message this replies to"
+        /// The accessible name of the composer's leading verb. A control's name says what it
+        /// DOES, and this one stops the turn that is running — which is also the only reason
+        /// the control is on the band at all.
+        let interruptLabel = "Interrupt the agent"
+        /// What a screen reader is told while the agent writes, carried by the composer's
+        /// live region. The only place this sentence still exists: what everyone else gets is
+        /// the caret standing where the words are landing.
+        let agentResponding = "agent is responding"
         // Conversation item status.
         let complete = "complete"
         let streaming = "streaming"

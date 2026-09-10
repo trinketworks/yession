@@ -315,6 +315,18 @@ module Style =
     /// not a blocked one.
     let btnSendInFieldWaiting = cls [ btnInField; "text-ink-faint hover:text-ink" ]
     let btnDiscardInField = cls [ btnInField; "text-ink-faint hover:text-err" ]
+    /// The verb at the LEADING edge of the composer's line: stop the turn that is running.
+    /// Send's mirror image, and deliberately the same 32px in-field control rather than a
+    /// bordered button on a strip of its own — the band it sits in is the surface, here as
+    /// everywhere else.
+    ///
+    /// Faint at rest, err under the hand, exactly as discard is: it is a control, not an
+    /// announcement. What says the agent is writing is the caret in the timeline, where the
+    /// words are landing; a second blue pulse down here would be the same fact twice.
+    ///
+    /// `ml-2 mb-1` is `draftCommit`'s `pr-2 pb-1` reflected, so the two verbs sit at the same
+    /// height on the same line (the row is `items-end`).
+    let btnStopInField = cls [ btnInField; "text-ink-faint hover:text-err ml-2 mb-1" ]
     /// Chrome, not an action: the small sidebar collapse/reveal chevrons. They lean the way
     /// they travel on hover and lead further on press — the only motion chrome earns, and the
     /// reason the two directions are separate values rather than one class plus a guess.
@@ -1301,14 +1313,12 @@ module Style =
     let proseLink = "text-blue underline decoration-1 underline-offset-2 hover:text-blue-bright"
     let proseHr = "border-0 " + Stroke.dividerTop + " my-3"
 
-    // --- Agent activity strip ----------------------------------------------------------------
-
-    let activity =
-        "h-12 shrink-0 flex items-center gap-3 px-8 bg-panel max-md:px-4 " + Stroke.dividerTop
-
-    let activityPulse = "w-2 h-2 bg-blue animate-pulse2 motion-reduce:animate-none"
-    let activityText = "font-light text-small text-blue"
-    let activityTurn = "text-label text-ink-faint tabular-nums max-md:hidden"
+    // The agent's activity strip used to live here: a 48px band carrying a pulse, the words
+    // "agent is responding", the turn's number and a bordered Interrupt. It said what the
+    // streaming message's own meta line said one line above it, and what that message's caret
+    // said in the same breath — one fact, three animated marks, a twelfth of a phone's screen
+    // spent on the third of them. The control it carried was the only part that was its own,
+    // and it moved into the composer band (`btnStopInField`), where a person answers the turn.
 
     // --- Queue: editable until drained; the head's green count says so ------------------------
     // The queue is the composer's dock, not a list floating over the ground: its rows are
@@ -1319,7 +1329,7 @@ module Style =
     let queue = "shrink-0 flex flex-col gap-0.5 pt-4"
 
     /// The same band holding nothing. Padding is what a band spends on the rows inside it, and
-    /// with no rows the `pt-4` was 16px of ground between the agent's activity strip and the
+    /// with no rows the `pt-4` was 16px of ground between whatever sits above it and the
     /// composer — a gap that said something was there. Nothing is there, so it takes no room:
     /// the composer's rail sits directly under whatever is above it.
     let queueEmpty = "shrink-0"
