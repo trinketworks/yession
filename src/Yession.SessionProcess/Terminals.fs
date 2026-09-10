@@ -309,21 +309,21 @@ module TerminalCommandWait =
         // Behind another entry: a wait on the QUEUE, bounded by the process deadline, because
         // what has to happen first is that the entries ahead run.
         | None when not observation.IsHead ->
-            if deadlineElapsed then Return TerminalCommandAwaitingTerminal else KeepWaiting
+            if deadlineElapsed then Return (TerminalCommandAwaitingTerminal BehindQueue) else KeepWaiting
         | None ->
             match observation.Hold with
             // A peer holding the terminal is mid-task and will not be done soon — an
             // unbounded wait, so it returns at once rather than burning a deadline.
-            | Some TerminalQueueDrain.AwaitingTerminal -> Return TerminalCommandAwaitingTerminal
+            | Some TerminalQueueDrain.AwaitingTerminal -> Return (TerminalCommandAwaitingTerminal HeldByPerson)
             // Another block is running here: a wait on a PROCESS, so it gets the process
-            // deadline — a quick command ahead of ours still chains. Reported as
-            // `AwaitingTerminal` because from the caller's side both holds say the same
-            // thing: the terminal is not free.
+            // deadline — a quick command ahead of ours still chains. Said apart from a
+            // person's hold, because the way out is different: a block can be ended by whoever
+            // owns the terminal, and run beside in another; a person cannot be hurried.
             | Some TerminalQueueDrain.AwaitingBlock ->
-                if deadlineElapsed then Return TerminalCommandAwaitingTerminal else KeepWaiting
+                if deadlineElapsed then Return (TerminalCommandAwaitingTerminal BehindBlock) else KeepWaiting
             // Marks are gone here and only a person re-arming brings them back — an unbounded
             // wait, like an approval, so it returns at once rather than burning a deadline.
-            | Some TerminalQueueDrain.AwaitingIntegration -> Return TerminalCommandAwaitingTerminal
+            | Some TerminalQueueDrain.AwaitingIntegration -> Return (TerminalCommandAwaitingTerminal UnmarkedShell)
             // Nothing is holding it — it is about to run, or has just been consumed and the
             // block event has not landed yet. Bounded by the process deadline, because what is
             // being waited for is the run.

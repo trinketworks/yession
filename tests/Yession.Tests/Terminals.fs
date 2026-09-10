@@ -694,8 +694,8 @@ let private integrationTests =
                       TerminalCommandWait.Observation.IsHead = true
                       TerminalCommandWait.Observation.Hold = Some TerminalQueueDrain.AwaitingIntegration
                       TerminalCommandWait.Observation.Interactive = false })
-                (TerminalCommandWait.Return TerminalCommandAwaitingTerminal)
-                "no waiting at all"
+                (TerminalCommandWait.Return (TerminalCommandAwaitingTerminal UnmarkedShell))
+                "no waiting at all, and the answer says the shell is the problem"
 
         testCase "the projection remembers, and forgets on repair" <| fun () ->
             let lost =
@@ -873,8 +873,8 @@ let private waitTests =
             // A peer with a terminal open is mid-task and will not be done soon.
             Expect.equal
                 (TerminalCommandWait.step false (waitingOn (Some TerminalQueueDrain.AwaitingTerminal)))
-                (TerminalCommandWait.Return TerminalCommandAwaitingTerminal)
-                "no waiting at all"
+                (TerminalCommandWait.Return (TerminalCommandAwaitingTerminal HeldByPerson))
+                "no waiting at all, and the answer names the person"
 
         testCase "waiting on a PROCESS gets the process deadline" <| fun () ->
             // A command running ahead of ours in the same terminal, and our own command once
@@ -888,8 +888,8 @@ let private waitTests =
                     "inside the deadline it keeps waiting"
             Expect.equal
                 (TerminalCommandWait.step true (waitingOn (Some TerminalQueueDrain.AwaitingBlock)))
-                (TerminalCommandWait.Return TerminalCommandAwaitingTerminal)
-                "the terminal was never free"
+                (TerminalCommandWait.Return (TerminalCommandAwaitingTerminal BehindBlock))
+                "the terminal was never free, and the answer says what held it"
             Expect.equal
                 (TerminalCommandWait.step true (observing BlockRunning false))
                 (TerminalCommandWait.Return TerminalCommandRunning)
@@ -911,8 +911,8 @@ let private waitTests =
             Expect.equal (TerminalCommandWait.step false behind) TerminalCommandWait.KeepWaiting "still queued"
             Expect.equal
                 (TerminalCommandWait.step true behind)
-                (TerminalCommandWait.Return TerminalCommandAwaitingTerminal)
-                "and it names the queue"
+                (TerminalCommandWait.Return (TerminalCommandAwaitingTerminal BehindQueue))
+                "and it names the queue, not the head's block"
 
         testCase "an outcome ends the wait, deadline or no" <| fun () ->
             for status, expected in
@@ -944,7 +944,10 @@ let private waitTests =
                   TerminalCommandRan (CommandFailed 1)
                   TerminalCommandRunning
                   TerminalCommandInteractive
-                  TerminalCommandAwaitingTerminal
+                  TerminalCommandAwaitingTerminal BehindBlock
+                  TerminalCommandAwaitingTerminal BehindQueue
+                  TerminalCommandAwaitingTerminal HeldByPerson
+                  TerminalCommandAwaitingTerminal UnmarkedShell
                   TerminalCommandRefused (PeerRef bob, None) ]
             Expect.equal (List.distinct statuses |> List.length) (List.length statuses) "no two are the same value"
     ]

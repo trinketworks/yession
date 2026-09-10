@@ -104,6 +104,20 @@ type EnsureEnvironment = string -> Async<EnsureEnvironmentResult>
 /// model "queued" when it is actually blocked on a person has it conclude, after a silent
 /// pause, that its command failed and try something else — which is how it routes around
 /// whatever was holding it.
+/// What a terminal that is not free is held by, as the caller needs to know it: each case has
+/// a different way out, and a wait reported without its reason is a wait nobody can end.
+type TerminalHeldBy =
+    /// Another block is running there. Ends when it does; the terminal's owner can end it
+    /// sooner by closing the terminal, and anyone can run beside it in a terminal of their own.
+    | BehindBlock
+    /// Other entries are queued ahead of this one. Ends as they run.
+    | BehindQueue
+    /// A person holds its stdin. Ends when they finish; not the caller's to hurry.
+    | HeldByPerson
+    /// The shell stopped answering the session's marks, so nothing can be bounded there until
+    /// a person re-arms it.
+    | UnmarkedShell
+
 type TerminalCommandStatus =
     /// It ran to an outcome. The ordinary answer.
     | TerminalCommandRan of CommandResult
@@ -116,9 +130,10 @@ type TerminalCommandStatus =
     /// `TerminalCommandRunning` says "be patient" about a thing that is waiting for the
     /// caller. Returned the moment detection hands the terminal over, deadline or no.
     | TerminalCommandInteractive
-    /// The terminal is not free: a peer is typing in it, or another block is running there.
-    /// Ends when a person or a process finishes a task.
-    | TerminalCommandAwaitingTerminal
+    /// The terminal is not free, and this says WHAT holds it — because the remedies differ,
+    /// and an answer that could not tell them apart sent an agent four times, two minutes
+    /// each, to a terminal a stuck command of its own was holding.
+    | TerminalCommandAwaitingTerminal of TerminalHeldBy
     /// The classifier said no (Plan 23). An answer, not an error: it names who and why, so
     /// it is not retried another way.
     | TerminalCommandRefused of by: ActorRef * reason: string option
