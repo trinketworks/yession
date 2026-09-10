@@ -434,7 +434,8 @@ let private turnTests =
                     ConversationProjection.empty
             Expect.equal
                 (projection.Items |> List.map (fun i -> EventOffset.value i.Offset, i.Body))
-                [ 1L, "on it\n\noverloaded" ]
+                // Offset 2: where it SPOKE, not where it opened — the first word is the anchor.
+                [ 2L, "on it\n\noverloaded" ]
                 "the item stays where it was said, wearing the reason it stopped"
 
         testCase "a turn that fails before its message started still shows in the conversation" <| fun () ->
