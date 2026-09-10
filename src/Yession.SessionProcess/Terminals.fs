@@ -146,7 +146,15 @@ module TerminalQueueDrain =
           /// Doc keys to remove without running: entries a `TerminalBlockStarted` already
           /// names (a crash between the append and the removal), repaired rather than run
           /// a second time.
-          Removals : QueueId list }
+          Removals : QueueId list
+          /// Entries queued on a terminal that is CLOSED. Nothing will ever run them — a
+          /// closed terminal has no shell to type into and never reopens — and a queue that
+          /// kept them said "queued" for ever, to every replica, over commands whose terminal
+          /// a person had already killed. They are refused instead, on the record, with the
+          /// closing as the reason: the same durable shape a classifier's refusal takes, so
+          /// the entry is consumed exactly as a start or a refusal consumes one, and a
+          /// replica that never saw the doc removal cannot run it.
+          Orphaned : (TerminalId * PendingAct) list }
 
 
     /// The gate for ONE terminal, shared by `plan` and `holdOf` so what runs and what the
@@ -224,13 +232,20 @@ module TerminalQueueDrain =
                 | Choice1Of2 resolved -> Some resolved
                 | Choice2Of2 _ -> None)
 
+        let unconsumed = queue |> Map.toList |> List.map snd |> List.filter (alreadyConsumed >> not)
+
         { Ready = ready
           Removals =
             queue
             |> Map.toList
             |> List.map snd
             |> List.filter alreadyConsumed
-            |> List.map (fun e -> e.QueueId) }
+            |> List.map (fun e -> e.QueueId)
+          Orphaned =
+            unconsumed
+            |> List.filter (fun e -> not (isOpen e.Terminal))
+            |> List.sortBy (fun e -> TerminalId.value e.Terminal, e.Order)
+            |> List.map (fun e -> e.Terminal, e) }
 
     /// The consumed-set contribution of one event: a terminal drain dedups against every
     /// `TerminalBlockStarted` that names a queue entry — anchored in the log, never in the
@@ -667,6 +682,11 @@ module SessionTerminals =
           /// and its doc key may be removed, which is why it is a callback and not
           /// something the caller can do before or after the whole run.
           RunBlock : TerminalId -> PendingAct -> string -> (unit -> unit) -> Async<unit>
+          /// Refuse one drained queue entry without running it, on the record: the drain's
+          /// answer to an entry whose terminal closed under it. The same durable shape a
+          /// classifier's refusal takes, attributed to the session, so the entry is consumed
+          /// exactly as a start or a refusal consumes one.
+          Refuse : TerminalId -> PendingAct -> string -> string -> Async<unit>
           /// Take the terminal's stdin (Plan 13, stage 2e), stealing it from whoever holds it.
           /// Refused only when there is nothing to hold: a terminal that is not open, or a
           /// degraded one with no persistent shell to type into.
@@ -781,6 +801,7 @@ module SessionTerminals =
           OpenedByAgent = fun _ -> false
           Close = fun _ _ -> async { return Error "this session has no terminals" }
           RunBlock = fun _ _ _ _ -> async { return () }
+          Refuse = fun _ _ _ _ -> async { return () }
           Take = fun _ _ -> async { return Error "this session has no terminals" }
           Release = fun _ _ -> async { return Error "this session has no terminals" }
           PeerGone = fun _ -> async { return () }
@@ -1486,6 +1507,10 @@ module SessionTerminals =
                     // that predate sources) would tell a reader of a closed DEVICE to go and
                     // use execute_command on it.
                     do! append (SessionEvent.TerminalClosed { TerminalId = id; Reason = reason })
+                    // Whatever was queued here is now queued on nothing. The drain is what
+                    // says so, on the record, and it is told now rather than at the next doc
+                    // update — which, for a queue nobody is writing to, is never.
+                    reDrain ()
                     return Ok ()
             }
 
@@ -1519,6 +1544,23 @@ module SessionTerminals =
                     appliedSize.[key] <- size
                 | _ -> ()
 
+        /// The refusal is the durable fact that consumes the entry — `consumedOf` reads
+        /// `TerminalCommandRejected` exactly as it reads a start — attributed to the session,
+        /// with the command snapshotted because the doc entry goes the moment this lands. Two
+        /// callers: the classifier saying no inside a run, and the drain finding an entry
+        /// whose terminal has closed.
+        let refuse (terminalId: TerminalId) (entry: PendingAct) (command: string) (reason: string) : Async<unit> =
+            appendAs
+                ActorRef.System
+                (SessionEvent.TerminalCommandRejected
+                    { TerminalId = terminalId
+                      QueueId = entry.QueueId
+                      BlockId = mintBlockId ()
+                      Author = Authority.author entry.Authority
+                      RejectedBy = ActorRef.System
+                      Command = command
+                      Reason = Some reason })
+
         let runBlock (terminalId: TerminalId) (entry: PendingAct) (command: string) (onStarted: unit -> unit) : Async<unit> =
             async {
                 let key = TerminalId.value terminalId
@@ -1542,21 +1584,7 @@ module SessionTerminals =
                     // because the queue is editable until this moment.
                     match! classifier (Authority.author entry.Authority) (TerminalAct (terminalId, command)) with
                     | Rejected reason ->
-                        // The refusal is the durable fact that consumes the entry —
-                        // `consumedOf` reads `TerminalCommandRejected` exactly as it reads a
-                        // start — attributed to the session, with the command snapshotted
-                        // because the doc entry goes the moment this lands.
-                        do!
-                            appendAs
-                                ActorRef.System
-                                (SessionEvent.TerminalCommandRejected
-                                    { TerminalId = terminalId
-                                      QueueId = entry.QueueId
-                                      BlockId = mintBlockId ()
-                                      Author = Authority.author entry.Authority
-                                      RejectedBy = ActorRef.System
-                                      Command = command
-                                      Reason = Some reason })
+                        do! refuse terminalId entry command reason
                         onStarted ()
                         busy <- Set.remove key busy
                         runningAuthor.Remove key |> ignore
@@ -2251,6 +2279,7 @@ module SessionTerminals =
           OpenedByAgent = fun id -> agentOpened.Contains (TerminalId.value id)
           Close = closeTerminal
           RunBlock = runBlock
+          Refuse = refuse
           Take = take
           Release = release
           PeerGone = peerGone
@@ -2354,6 +2383,18 @@ module TerminalScheduler =
                 // Leftovers first: a crash between the start append and the doc removal
                 // leaves an entry that is already a block, and repairing it is free.
                 SyncedStateSync.removePending doc plan.Removals
+                // Then the orphans: an entry whose terminal closed is refused on the record
+                // and leaves the doc, so "queued" never outlives the terminal it was queued
+                // on. Consumed here, as a start is, so a re-entrant drain cannot refuse it
+                // twice.
+                for terminal, entry in plan.Orphaned do
+                    let command = SyncedStateSync.terminalQueuedText doc entry.QueueId
+                    consumed <- Set.add (QueueId.value entry.QueueId) consumed
+                    Async.StartImmediate (
+                        async {
+                            do! terminals.Refuse terminal entry command "the terminal was closed before it ran"
+                            SyncedStateSync.removePending doc [ entry.QueueId ]
+                        })
                 for terminal, entry in plan.Ready do
                     // Snapshot the command from THIS replica at the instant it is
                     // consumed, exactly as the message drain snapshots a body: what runs

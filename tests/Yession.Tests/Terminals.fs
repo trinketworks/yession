@@ -135,6 +135,24 @@ let private drainTests =
                     [ entry "a1" terminalA (PeerRef ada) 1.0 ]
             Expect.isEmpty plan.Ready "nothing runs in a terminal that is not open"
 
+        testCase "what is queued on a closed terminal is orphaned — every entry, and only those" <| fun () ->
+            // A closed terminal never reopens, so its queue would say "queued" for ever. Both
+            // of its entries go, not just the head: the drain refuses rather than runs, and
+            // a refusal has no one-at-a-time rule to wait on. An open terminal's queue, and
+            // an entry a start already consumed, are not the drain's to refuse.
+            let plan =
+                planWith (Set.singleton "q-a0") Set.empty (fun t -> t = terminalB)
+                    [ entry "a0" terminalA (PeerRef ada) 0.0
+                      entry "a1" terminalA (PeerRef ada) 1.0
+                      entry "a2" terminalA (PeerRef ada) 2.0
+                      entry "b1" terminalB (PeerRef bob) 1.0 ]
+            Expect.equal
+                (plan.Orphaned |> List.map (fun (_, e) -> QueueId.value e.QueueId))
+                [ "q-a1"; "q-a2" ]
+                "the closed terminal's unconsumed entries, in queue order"
+            Expect.equal (plan.Ready |> List.map (fun (_, e) -> QueueId.value e.QueueId)) [ "q-b1" ] "the open one runs as before"
+            Expect.equal (plan.Removals |> List.map QueueId.value) [ "q-a0" ] "and the consumed one is repaired, not refused"
+
         testCase "an entry already named by a started block is repaired away, never re-run" <| fun () ->
             // The crash window: the block event was appended and the doc removal was not.
             let plan =
@@ -1952,6 +1970,33 @@ let private schedulerTests =
                 Expect.equal startedEvent.Command "echo ok" "the queued command ran"
                 let synced = syncedOf doc
                 Expect.isTrue (Map.isEmpty synced.Pending) "and its entry left the doc once consumed"
+            }
+
+        testCaseAsync "a command queued on a terminal that then closes is refused, on the record" <|
+            async {
+                // Seen in a session: two commands parked behind a stuck block, and after the
+                // terminal was killed they would have sat there as "queued" for good — the
+                // drain's gate said `NotWaiting` for a closed terminal and left the entries
+                // where they were. Now the drain refuses them with the closing as the reason,
+                // which consumes the entry exactly as a start does.
+                let log = newLog ()
+                let environment, _ = scriptedEnvironment (fun _ -> [], 0)
+                let openTranscript, _, _, _, readTranscript = recordingTranscripts ()
+                let terminals, _, _ = makeTerminals log environment openTranscript readTranscript []
+                let! opened = terminals.Open (PeerRef ada) (SandboxShell SandboxRef.defaultRef) (TerminalTitle.fromProse "build")
+                let id = opened |> expect
+                let doc = Y.Doc.Create ()
+                let scheduler = TerminalScheduler.create doc terminals ignore Set.empty
+                let! _ = terminals.Close id "killed"
+                SyncedStateSync.enqueueTerminalCommand doc (queue "a1") id (Authority.ofAuthor (PeerRef ada)) 1.0 "echo late" false
+                scheduler.Drain ()
+                do! Async.Sleep 20
+
+                let! events = eventsOf log
+                let refused = events |> List.choose (function SessionEvent.TerminalCommandRejected r -> Some r | _ -> None)
+                Expect.equal (refused |> List.map (fun r -> r.Command, r.Reason)) [ "echo late", Some "the terminal was closed before it ran" ] "refused, and the record says why"
+                Expect.isEmpty (events |> List.choose (function SessionEvent.TerminalBlockStarted e -> Some e | _ -> None)) "nothing ran"
+                Expect.isTrue (Map.isEmpty (syncedOf doc).Pending) "and the entry left the doc"
             }
 
         testCaseAsync "the agent's command runs the moment it drains — nothing parks" <|
