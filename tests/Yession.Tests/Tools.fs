@@ -367,6 +367,35 @@ let private sessionTests =
                 Expect.equal answer (Ok (ToolAnswer.text "exit code 0 in terminal t1\necho hi")) "and the outcome came back as text"
             }
 
+        // `open_terminal` hands back an id and says to pass it here as `terminal`. For a
+        // while the schema had no such field and the decoder read none, so every command the
+        // agent aimed at a terminal it had opened ran in its general-purpose one instead —
+        // and queued behind whatever was stuck there. The promise and the door are one now.
+        testCaseAsync "a terminal named by id is where the command goes" <|
+            async {
+                let mutable target = None
+                let registry =
+                    AgentTools.registry (capabilities (fun (request: CommandRequest) ->
+                        async {
+                            target <- request.Target
+                            return Ok (ran request.Command)
+                        }))
+                let! _ = registry.Invoke (call "yession" "execute_command" """{"command":"echo hi","terminal":"T1"}""")
+                Expect.equal target (Some (InTerminal (TerminalId.create "T1" |> expect))) "routed to that terminal, not a sandbox's own"
+            }
+
+        testCaseAsync "a terminal and a sandbox together are refused, and nothing runs" <|
+            async {
+                let mutable ran' = false
+                let registry =
+                    AgentTools.registry (capabilities (fun _ -> async { ran' <- true; return Ok (ran "") }))
+                let! answer = registry.Invoke (call "yession" "execute_command" """{"command":"ls","terminal":"T1","sandbox":"test"}""")
+                Expect.isFalse ran' "the capability was never reached"
+                match answer with
+                | Ok text -> Expect.stringContains text.Text "not both" "and it says which of the two to drop"
+                | Error e -> failwithf "expected an answer, got %s" e
+            }
+
         // The distinction the SDK is told about as `isError`: arguments that cannot be read
         // mean the call never happened, and that is not the same as a command that failed.
         testCaseAsync "arguments that cannot be read are a refusal, not a failed command" <|

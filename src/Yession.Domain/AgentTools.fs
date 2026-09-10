@@ -41,10 +41,13 @@ module private ToolArgs =
     /// `execute_command`'s three: the line, which named sandbox to run it in, and whether the
     /// caller intends to wait for it (Plan 20, stage 2). An absent or empty `sandbox` is the
     /// default one, which is what the optional parameter degrades to.
-    let commandSandbox (json: string) : Result<string * string option * bool, string> =
+    /// `execute_command`'s arguments: the line, where to run it (a terminal by id, or a
+    /// sandbox's own), and whether to wait.
+    let commandWhere (json: string) : Result<string * string option * string option * bool, string> =
         read
             (Decode.object (fun get ->
                 get.Required.Field "command" Decode.string,
+                get.Optional.Field "terminal" Decode.string |> Option.filter (fun s -> s <> ""),
                 get.Optional.Field "sandbox" Decode.string |> Option.filter (fun s -> s <> ""),
                 get.Optional.Field "background" Decode.bool |> Option.defaultValue false))
             json
@@ -251,16 +254,22 @@ module AgentTools =
     let private executeCommand
         (capabilities: AgentCapabilities)
         (command: string)
+        (terminal: string option)
         (sandbox: string option)
         (background: bool)
         : Async<ToolAnswer> =
         async {
+            // A terminal already sits in a sandbox, so naming both is a question with two
+            // answers — refused rather than resolved by a precedence the model would have to
+            // learn from the outcome.
             let target =
-                match sandbox with
-                | None -> Ok None
-                | Some s -> SandboxRef.parse s |> Result.map (InSandbox >> Some)
+                match terminal, sandbox with
+                | Some _, Some _ -> Error "name a terminal or a sandbox, not both — a terminal is already in one"
+                | Some t, None -> TerminalId.create t |> Result.mapError (sprintf "not a terminal id: %s") |> Result.map (InTerminal >> Some)
+                | None, Some s -> SandboxRef.parse s |> Result.mapError (sprintf "not a sandbox: %s") |> Result.map (InSandbox >> Some)
+                | None, None -> Ok None
             match target with
-            | Error e -> return ToolAnswer.text (sprintf "not a sandbox: %s" e)
+            | Error e -> return ToolAnswer.text e
             | Ok target ->
                 match! capabilities.Terminals.Execute { Command = command; Target = target; Background = background } with
                 | Ok outcome -> return { Text = renderOutcome outcome; Block = outcome.Block; Stream = None }
@@ -520,8 +529,9 @@ module AgentTools =
                 }
         [ tool
             "execute_command"
-            "Run a shell command in one of this session's terminals, where the people in the session can see it and edit it while it queues, and every run is on the record. This is the only way to run anything. Pass `sandbox` to run in a named work sandbox (start_work_sandbox creates one); omit it for the default sandbox, which is where everything runs unless you say otherwise. It waits for the result and returns the exit code and output; if the terminal is busy, or the command is still going, it says so and returns a handle for check_pending instead of hanging. Read what it returns: every answer states which of those happened."
+            "Run a shell command in one of this session's terminals, where the people in the session can see it and edit it while it queues, and every run is on the record. This is the only way to run anything. Pass `sandbox` to run in a named work sandbox (start_work_sandbox creates one); omit it for the default sandbox, which is where everything runs unless you say otherwise. Each sandbox has one terminal of yours that runs one command at a time; pass `terminal` to run in a terminal you opened with open_terminal instead, which is how work runs beside something long. It waits for the result and returns the exit code and output; if the terminal is busy, or the command is still going, it says so and returns a handle for check_pending instead of hanging. Read what it returns: every answer states which of those happened."
             [ ToolField.required "command" "string" "the shell command line to run, e.g. \"npm test -- --watch=false\""
+              ToolField.optional "terminal" "string" "the id of a terminal to run in, as open_terminal or list_terminals gave it; omit for your own terminal in the sandbox"
               ToolField.optional "sandbox" "string" "the work sandbox to run in, e.g. \"test\"; omit for the default one"
               ToolField.optional
                   "background"
@@ -529,10 +539,10 @@ module AgentTools =
                   "true to start it and carry on without waiting — use it for long work, and for work that can run alongside other work. You will be told when it finishes." ]
             (fun args ->
                 async {
-                    match ToolArgs.commandSandbox args with
+                    match ToolArgs.commandWhere args with
                     | Error e -> return Error e
-                    | Ok (command, sandbox, background) ->
-                        return! answered (executeCommand capabilities command sandbox background)
+                    | Ok (command, terminal, sandbox, background) ->
+                        return! answered (executeCommand capabilities command terminal sandbox background)
                 })
 
           // The terminal verbs a person already has (Plan 20, stage 3). Deliberately the same
