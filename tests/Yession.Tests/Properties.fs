@@ -31,6 +31,7 @@ open Yession.Domain.Chat
 open Yession.SessionProcess
 open Yession.App
 open Yession.Tests.Support
+open Yession.Peer
 
 // --- The schedule vocabulary -----------------------------------------------------------
 

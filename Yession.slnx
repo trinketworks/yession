@@ -20,6 +20,7 @@
     <Project Path="src/Yession.Manager/Yession.Manager.fsproj" />
     <Project Path="src/Yession.Oidc/Yession.Oidc.fsproj" />
     <Project Path="src/Yession.SessionProcess/Yession.SessionProcess.fsproj" />
+    <Project Path="src/Yession.Peer/Yession.Peer.fsproj" />
   </Folder>
   <Folder Name="/analyzers/">
     <Project Path="analyzers/Yession.Analyzers/Yession.Analyzers.fsproj" />
@@ -29,5 +30,6 @@
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Yession.Tests/Yession.Tests.fsproj" />
+    <Project Path="tools/Yession.Probe/Yession.Probe.fsproj" />
   </Folder>
 </Solution>

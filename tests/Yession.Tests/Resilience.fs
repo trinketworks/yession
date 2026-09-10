@@ -36,6 +36,7 @@ open Yession.Domain.Collab
 open Yession.App
 open Yession.Host
 open Yession.Tests.Support
+open Yession.Peer
 
 // --- Test clock: the whole point of injecting `Sleep` ------------------------------------
 

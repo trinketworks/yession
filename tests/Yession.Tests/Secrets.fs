@@ -12,6 +12,7 @@ open Yession.Domain
 open Yession.Domain.Sandboxes
 open Yession.Domain.Agent
 open Yession.Domain.Access
+open Yession.Peer
 
 let private expect =
     function

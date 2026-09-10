@@ -17,6 +17,7 @@ open Yession.Domain
 open Yession.App
 open Yession.Host
 open Yession.Tests.Support
+open Yession.Peer
 
 // A GET that exposes status + cache header alongside the body (Node 24 global fetch).
 type private HttpReply =

@@ -18,6 +18,7 @@ open Yession.Domain.Sandboxes
 open Yession.Domain.Access
 open Yession.Host
 open Yession.Tests.Support
+open Yession.Peer
 
 // --- Node helpers (host-side fs/os and process env, for HostPath mounts + secret store) --
 

@@ -20,6 +20,7 @@ open Yession.Domain.Collab
 open Yession.App
 open Yession.Host
 open Yession.Tests.Support
+open Yession.Peer
 
 /// A scripted agent that completes with fixed usage — the credential-free stand-in for a real
 /// turn that reports token/cache counts.

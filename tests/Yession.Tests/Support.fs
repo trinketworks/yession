@@ -1,5 +1,11 @@
 module Yession.Tests.Support
 
+// The headless client that used to live here is `Yession.Peer` now — one wiring, shared with
+// the probe that investigates real sessions. What stayed is what only a suite wants: the
+// connectors over an in-memory channel (they take a `SessionHost`, which no tool has), the SSR
+// render, the fixtures and the waiters. `open Yession.Peer` below keeps every call site here
+// unchanged.
+
 // Shared test infrastructure: a headless Elmish runner with event-driven model waiters,
 // and a full-client connector (WebRTC channel + Yjs doc + withYlmish program + drivers)
 // parameterized by host, so every E2E suite composes the same way. No sleeps, no polling.
@@ -14,6 +20,7 @@ open Yession.Domain.Link
 open Yession.Domain.Collab
 open Yession.App
 open Yession.Host
+open Yession.Peer
 
 #if FABLE_COMPILER
 open Thoth.Json
@@ -120,106 +127,10 @@ let runInSandbox
             return run, out.ToString (), err.ToString ()
     }
 
-/// Run an Elmish program headlessly, exposing the latest model, dispatch, and an
-/// event-driven `WaitFor` that resolves the first time the model satisfies a predicate.
-module Harness =
-
-    [<Fable.Core.Emit("queueMicrotask($0)")>]
-    let private defer (f: unit -> unit) : unit = Fable.Core.Util.jsNative
-
-    [<Fable.Core.Emit("setTimeout($0, $1)")>]
-    let private setTimer (f: unit -> unit) (ms: int) : float = Fable.Core.Util.jsNative
-
-    [<Fable.Core.Emit("clearTimeout($0)")>]
-    let private clearTimer (handle: float) : unit = Fable.Core.Util.jsNative
-
-    /// How long a single `WaitFor` may wait before it is a FAILURE rather than a wait.
-    ///
-    /// A condition that never arrives used to hang for ever, and the run's own budget
-    /// (`tasks.fsx`, 240s for the whole Node suite) was the only thing that stopped it — so
-    /// one stuck predicate killed every suite after it and reported "tests timed out" with no
-    /// name attached. Finding which test it was meant reading a process table. A deadline here
-    /// costs nothing when things work and turns that into one named failing test.
-    ///
-    /// 30s is deliberately far above anything real: the slowest whole test in a healthy
-    /// `check Ports Native Srt` run — a packaged manager launching real child processes over
-    /// real WebRTC, with several waits inside it — is under 9s, and a single wait is
-    /// milliseconds. It is a hang detector, not a performance budget.
-    let waitForTimeoutMs = 30000
-
-    type Runner<'model, 'msg> =
-        { Model : unit -> 'model
-          Dispatch : 'msg -> unit
-          /// Resolve the first time the model satisfies the predicate, or FAIL after
-          /// `waitForTimeoutMs`. Never waits for ever.
-          WaitFor : ('model -> bool) -> Async<unit> }
-
-    /// The runner, with the wait deadline as a parameter — so the deadline itself can be
-    /// tested (a 30s one cannot be, in a cheap tier measured in milliseconds) without any
-    /// suite having to reach for a different mechanism. `run` is this at the real deadline.
-    let runWith (timeoutMs: int) (program: Program<unit, 'model, 'msg, unit>) : Runner<'model, 'msg> =
-        let mutable model = Unchecked.defaultof<'model>
-        let mutable dispatch : 'msg -> unit = ignore
-        let mutable waiters : (('model -> bool) * (unit -> unit)) list = []
-        let setState m d =
-            model <- m
-            dispatch <- d
-            let fire, keep = waiters |> List.partition (fun (predicate, _) -> predicate m)
-            waiters <- keep
-            // Resume on a microtask: setState runs INSIDE the Elmish dispatch loop, and
-            // a continuation that dispatches synchronously from here would only enqueue
-            // (ring buffer) — its Model() reads would then see stale state. Deferring
-            // lets the loop drain first, so awaited WaitFor + Dispatch compose safely.
-            fire |> List.iter (fun (_, resume) -> defer resume)
-        Program.withSetState setState program |> Program.run
-        { Model = fun () -> model
-          Dispatch = fun msg -> dispatch msg
-          WaitFor =
-            fun predicate ->
-                Async.FromContinuations (fun (cont, econt, _) ->
-                    if predicate model then cont ()
-                    else
-                        // Settled exactly once, by whichever comes first — the model or the
-                        // clock. `settled` is what makes that true: the timer cannot resume a
-                        // continuation the model already resumed, and a model update cannot
-                        // resume one the timer already failed.
-                        let settled = ref false
-                        let timer = ref 0.0
-                        let resume () =
-                            if not settled.Value then
-                                settled.Value <- true
-                                clearTimer timer.Value
-                                cont ()
-                        waiters <- (predicate, resume) :: waiters
-                        timer.Value <-
-                            setTimer
-                                (fun () ->
-                                    if not settled.Value then
-                                        settled.Value <- true
-                                        // Drop the waiter before failing: a predicate left in
-                                        // the list would be re-evaluated on every later
-                                        // setState, for a test that is already over.
-                                        waiters <-
-                                            waiters
-                                            |> List.filter (fun (_, r) ->
-                                                not (System.Object.ReferenceEquals (r, resume)))
-                                        econt (
-                                            exn (
-                                                sprintf
-                                                    "WaitFor timed out after %dms: the model never satisfied the predicate"
-                                                    timeoutMs)))
-                                timeoutMs) }
-
-    let run (program: Program<unit, 'model, 'msg, unit>) : Runner<'model, 'msg> =
-        runWith waitForTimeoutMs program
-
 /// Render the client view to an HTML string for markup assertions — through the very
 /// renderer the served bootstrap uses (`Ssr`), so tests exercise the shipped SSR path.
 /// The view's `ViewActions` are no-ops (handlers fire on live browser events only).
 let render (model: ClientModel) : string = Ssr.renderModel model
-
-let peer (id: string) (name: string) : PeerState =
-    { PeerId = PeerId.create id |> expect; DisplayName = name }
 
 /// Drive the OIDC authorization flow over plain HTTP, the way a browser would: a cookie
 /// jar plus MANUAL redirect following. Manual matters twice — an auto-following fetch
@@ -434,47 +345,6 @@ let waitUntilWithin (timeoutMs: int) (label: string) (condition: unit -> bool) :
 /// The everyday wait: 5s, a hang detector for a signal that normally arrives in milliseconds.
 let waitUntil (label: string) (condition: unit -> bool) : Async<unit> = waitUntilWithin 5_000 label condition
 
-/// One full connected client against a host. `Registry` is the client's `BodyRegistry` (over
-/// its doc), so the body seam below binds the same top-level fragment roots the app does.
-type Client =
-    { Runner : Harness.Runner<ClientModel, Ylmish.Program.Message<ClientMsg>>
-      Connection : Client.Connection
-      Registry : BodyRegistry
-      /// The plain-text roots the terminal composers live in (Plan 13), alongside the rich
-      /// bodies. Held on the client for the same reason `Registry` is: a test drives the
-      /// composer by writing the CRDT the browser's input writes.
-      Texts : TextRegistry
-      Channel : FrameChannel<string>
-      Doc : Y.Doc
-      Hello : PeerHelloPayload }
-
-/// Connect one full client with explicit options: WebRTC channel, its own Yjs doc, the
-/// withYlmish program, and the connection driver. Resolves once the model reaches
-/// `Connected`.
-let connectClientWith (options: Client.ConnectOptions) (signalUrl: string) (token: string) (id: string) (name: string) : Async<Client> =
-    async {
-        let! channel = WebRtc.connect signalUrl
-        let doc = Y.Doc.Create ()
-        let local = peer id name
-        let registry = BodyRegistry doc
-        let texts = TextRegistry doc
-        let runner = Harness.run (Client.makeProgram doc (ClientModel.init local))
-        // The composer's publication rule, wired exactly as the browser wires it: the client's
-        // draft slot appears when its body has content and goes when the body empties.
-        DraftSlot.follow doc registry local.PeerId (user >> runner.Dispatch) |> ignore
-        let hello = { PeerId = local.PeerId; DisplayName = name; Token = token }
-        // The model is what "how far have we consumed" means (see `ConnectOptions`).
-        let options = { options with ReadPosition = Some (fun () -> (runner.Model ()).EventConsumer.LastProcessedOffset) }
-        let connection = Client.connect options doc registry texts hello (user >> runner.Dispatch) channel
-        Async.StartImmediate connection.Run
-        do! runner.WaitFor (fun m -> m.Connection = Connected)
-        return { Runner = runner; Connection = connection; Registry = registry; Texts = texts; Channel = channel; Doc = doc; Hello = hello }
-    }
-
-/// `connectClientWith` under the default options (frame-based event reads).
-let connectClient (signalUrl: string) (token: string) (id: string) (name: string) : Async<Client> =
-    connectClientWith Client.ConnectOptions.defaults signalUrl token id name
-
 /// Connect one full client to a host over an IN-MEMORY channel pair — the same drivers as
 /// the WebRTC path (`Client.makeProgram` + `Client.connect` on one end, the Host's real per-peer
 /// pump on the other via `host.Connect`), but with no WebRTC, HTTP, or native addon, so it
@@ -574,8 +444,10 @@ module Body =
     /// is whatever the publication rule makes of the content (`DraftSlot.follow`), so this is how
     /// a test drives that rule; `author` is the bare-runner shortcut that dispatches the slot too.
     /// The empty string empties the composer.
+    /// The shared one (`Yession.Peer.writeBody`), named here so the seam still reads as one
+    /// thing and no suite has to know which half of it moved.
     let write (registry: BodyRegistry) (peer: PeerId) (markdown: string) : unit =
-        Markdown.intoFragment markdown (registry.Fragment (BodyKey.draft peer))
+        writeBody registry peer markdown
 
     /// Read a peer's draft body as markdown (the empty string before any content exists).
     let draft (registry: BodyRegistry) (peer: PeerId) : string option =
@@ -605,19 +477,8 @@ module Body =
     let queued (doc: Y.Doc) (queueId: QueueId) : string =
         SyncedStateSync.queuedBodyMarkdown doc queueId
 
-/// Author a draft body on a full Client: write the markdown into the peer's body fragment and
-/// wait for the slot. No slot is dispatched — writing the body publishes it (`DraftSlot.follow`,
-/// wired by the connectors above as the browser wires it), which is what typing does. The write
-/// flows through the fragment CRDT and syncs like any edit. Replaces the old `editBody`/`setDraft`.
-/// Co-editing another peer's slot goes through here too: their slot already exists (they typed).
-let compose (client: Client) (peer: PeerId) (markdown: string) : Async<unit> =
-    async {
-        Body.write client.Registry peer markdown
-        do! client.Runner.WaitFor (fun m -> Map.containsKey peer m.Synced.Drafts)
-    }
-
-/// Empty a peer's composer on a full Client (select-all-delete, or the ✕), and wait for the slot
-/// to go: publication follows the body, so an empty composer has no draft slot.
+/// Empty a peer's composer on a full Client (select-all-delete, or the ✕), and wait for the
+/// slot to go: publication follows the body, so an empty composer has no draft slot.
 let clearComposer (client: Client) (peer: PeerId) : Async<unit> =
     async {
         Body.write client.Registry peer ""

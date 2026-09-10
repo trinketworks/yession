@@ -27,6 +27,7 @@ open Yession.App
 open Yession.Host
 open Yession.SessionProcess
 open Yession.Tests.Support
+open Yession.Peer
 
 let private expect =
     function

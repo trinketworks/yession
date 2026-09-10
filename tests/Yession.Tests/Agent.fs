@@ -25,6 +25,7 @@ open Yession.App
 open Yession.Host
 open Yession.Tests.Support
 open Yession.Domain.Prs
+open Yession.Peer
 
 [<ImportAll("node:fs")>]
 let private nodeFs : obj = Fable.Core.Util.jsNative

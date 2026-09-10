@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- A headless peer with a command line, for investigating how an agent behaves in a real
+       session. NOT shipped, and nothing arranges for it not to be: the package bundles from
+       each bin's entry, so a project no bin references is simply never reached. `analyzers/`
+       is here on the same terms.
+
+       The peer it joins with is `Yession.Peer`, shared with the test suite, so the wiring a
+       browser uses has exactly one copy. It cannot reference the suite itself: that project
+       carries the test runner entry point, and Fable requires an entry point to be the last
+       declaration in the last file it compiles. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Probe.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/Yession.Peer/Yession.Peer.fsproj" />
+  </ItemGroup>
+
+</Project>
