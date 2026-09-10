@@ -2975,6 +2975,31 @@ let mountedTests =
                     do! waitFor "still one report with the nav open over it" page atMostOne
                 })
 
+        // The way back is a link to the Manager, and a link is followed ONCE. It used to carry
+        // a click handler that navigated to the same URL — an "enhancement" that fired beside
+        // the default — so one press sent two `GET …/open`, each of which is a launch: two
+        // children for one session, one of them forgotten, and a login bounce that redeemed
+        // its code against the wrong one's registration. Counted where the Manager would
+        // count it — at the request — by standing in for a Manager the host took down with
+        // it: a stub that answers, so the browser commits ONE navigation and asks nothing
+        // again (a refused connection is an error page, and error pages get retried).
+        offlineReopen
+            "pressing reopen asks the Manager once"
+            (fun _ -> async { return () })
+            (fun page ->
+                async {
+                    do! waitFor "the offer to reopen" page """document.querySelector('[data-session-reopen]') !== null"""
+                    let asked = ResizeArray<string> ()
+                    page.Request.Add (fun r -> if r.Url.EndsWith "/open" then asked.Add r.Url)
+                    do! awaitU (page.RouteAsync ("**/sessions/*/open", fun route ->
+                            route.FulfillAsync (RouteFulfillOptions (Status = 200, ContentType = "text/html", Body = "<title>opening</title>"))
+                            |> ignore))
+                    // Whichever mount is on screen; a hidden one cannot be pressed.
+                    do! awaitU (page.Locator("[data-session-reopen]:visible").First.ClickAsync ())
+                    do! waitFor "the browser to have left for the Manager" page """location.pathname.endsWith('/open')"""
+                    Expect.equal asked.Count 1 (sprintf "one press, one request: %A" (List.ofSeq asked))
+                })
+
         // Plan 22, and the other half of the bug report: the conversation came back offline
         // and the terminal under it did not. `Srt` because this really runs a command — on a
         // box that cannot host a sandbox the block never reaches `ok` and this would HANG

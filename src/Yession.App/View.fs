@@ -86,10 +86,6 @@ type ViewActions =
       // removing and switching a repo are commands, and commands belong to the agent, so
       // a human asks and reads the act-line in the timeline. What is left of that panel is
       // the `repos` QUERY, which needs no action at all.
-      /// Ask the Manager to bring this session back and take the browser to it (Plan 11).
-      /// Imperative because it is a navigation, and a navigation is not a state change this
-      /// document survives to fold.
-      ReopenSession : unit -> unit
       /// Try the session again NOW, rather than when the supervised loop next would.
       ///
       /// A trigger, never a second schedule (Plan 20): it shortens the wait the lifecycle is
@@ -179,7 +175,6 @@ module ViewActions =
           GitHubPasteToken = ignore
           GitHubDisconnect = ignore
           Copy = fun _ _ -> ()
-          ReopenSession = ignore
           RetryNow = ignore
           OpenTerminal = ignore
           ApproveRepoCapabilities = fun _ _ -> ()
@@ -320,7 +315,15 @@ module View =
     /// TOTAL over the model for the same reasons the card always was: reopening needs a
     /// settled disconnection, a Manager to ask, and a session to ask for. Absent any of them
     /// there is no link, rather than a button with nowhere to go.
-    let private reopenAction (actions: ViewActions) (model: ClientModel) (extra: string) : TemplateResult option =
+    ///
+    /// A plain anchor, with NO click handler. It had one — `location.assign` of the same
+    /// URL, described as an enhancement over the href — and the two fired together: every
+    /// press sent `GET …/open` twice, milliseconds apart, and each GET is a launch. The
+    /// Manager took both, spawned two children for one session, and the one it forgot kept
+    /// its port and its OIDC registration; the login bounce then redeemed its code against
+    /// whichever registration had won, and the page ended on a bare `authorization failed`.
+    /// The navigation IS the mechanism, and a link performs it once.
+    let private reopenAction (model: ClientModel) (extra: string) : TemplateResult option =
         match model.Connection, model.Manager, model.Session with
         | Disconnected (Some _), Some origin, Some sessionId ->
             let target = sprintf "%s/sessions/%s/open" origin (SessionId.value sessionId)
@@ -328,12 +331,11 @@ module View =
                 html $"""
                     <a class="{Style.cls [ Style.btnPrimary; extra ]}"
                        href="{target}"
-                       data-session-reopen="{target}"
-                       @click={Ev(fun _ -> actions.ReopenSession ())}>{Dom.Text.reopenSession}</a>""")
+                       data-session-reopen="{target}">{Dom.Text.reopenSession}</a>""")
         | _ -> None
 
     let private reconnectOffer (actions: ViewActions) (model: ClientModel) : TemplateResult option =
-        match model.Connection, reopenAction actions model Style.noAgentAction with
+        match model.Connection, reopenAction model Style.noAgentAction with
         | Disconnected (Some reason), Some action ->
             // What reopening actually costs. Under a `{id}` template the session returns to
             // the same address, so the doc in this browser is still its doc and syncs on
@@ -1086,7 +1088,7 @@ module View =
             // a phone reader has: the card that carries it in the column is hidden at that
             // width by the rule that stops the report being read twice.
             let action =
-                match reopenAction actions model Style.degradedBarAction with
+                match reopenAction model Style.degradedBarAction with
                 | Some action -> action
                 | None -> Lit.nothing
             html $"""
