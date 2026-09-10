@@ -2508,7 +2508,10 @@ let private mountDataDir = "tests/browser/.data-mounted"
 /// point of path-mounting is that the address does not move when that happens. A proxy that
 /// captured the port would forward to a dead one, which is the operator's reconciler bug in
 /// miniature.
-let private startMountProxy (publicPort: int) (sessionPort: unit -> int) : HttpListener =
+/// `stalls` names the requests this front door accepts and never answers — a session whose
+/// upstream took the connection and went quiet, which is a shape a proxy produces and a
+/// killed host does not (that one answers 502 at once). Held until the listener stops.
+let private startStallingMountProxy (publicPort: int) (sessionPort: unit -> int) (stalls: string -> bool) : HttpListener =
     let listener = new HttpListener ()
     listener.Prefixes.Add (sprintf "http://127.0.0.1:%d/" publicPort)
     listener.Start ()
@@ -2527,6 +2530,7 @@ let private startMountProxy (publicPort: int) (sessionPort: unit -> int) : HttpL
     let rec loop () =
         async {
             match! Async.Catch (listener.GetContextAsync () |> Async.AwaitTask) with
+            | Choice1Of2 ctx when stalls ctx.Request.RawUrl -> return! loop ()
             | Choice1Of2 ctx ->
                 Async.Start (
                     async {
@@ -2562,6 +2566,9 @@ let private startMountProxy (publicPort: int) (sessionPort: unit -> int) : HttpL
         }
     Async.Start (loop ())
     listener
+
+let private startMountProxy (publicPort: int) (sessionPort: unit -> int) : HttpListener =
+    startStallingMountProxy publicPort sessionPort (fun _ -> false)
 
 let mutable private mountedHost : Process = null
 
@@ -2999,6 +3006,54 @@ let mountedTests =
                     do! waitFor "the browser to have left for the Manager" page """location.pathname.endsWith('/open')"""
                     Expect.equal asked.Count 1 (sprintf "one press, one request: %A" (List.ofSeq asked))
                 })
+
+        // The probe settles four ways and each has a remedy; the fifth, never, had none. A
+        // phone with its tunnel not yet up, a proxy whose upstream accepted and stalled, a
+        // page suspended with the fetch in flight — each left the client wearing the state it
+        // started in: "not connected", no reason, and nothing to press, for as long as that
+        // took. Now the probe is answered FOR (`Client.Probe.deadline`), and the way back is
+        // on the screen. Its own fixture rather than `offlineReopen`, because a killed host
+        // answers 502 at once and the case is precisely an answer that never comes.
+        testCaseAsync "a probe that never answers is answered for it, and the way back is offered" <|
+            async {
+                if Directory.Exists mountDataDir then Directory.Delete (mountDataDir, true)
+                startMountedHost ()
+                let mutable stalling = false
+                let proxy =
+                    startStallingMountProxy MOUNT_PROXY_PORT (fun () -> mountSessionPort) (fun url ->
+                        stalling && url.EndsWith "/me")
+                let mutable browserToClose : IBrowser option = None
+                let mutable playwrightToDispose : IPlaywright option = None
+                try
+                    let publicUrl = sprintf "http://127.0.0.1:%d/s/%s/" MOUNT_PROXY_PORT MOUNT_SESSION
+                    let! pw = await (Playwright.CreateAsync ())
+                    playwrightToDispose <- Some pw
+                    let! br =
+                        await (pw.Chromium.LaunchAsync (
+                            BrowserTypeLaunchOptions (
+                                ExecutablePath = chromiumPath (),
+                                Args = [| "--disable-features=WebRtcHideLocalIpsWithMdns" |])))
+                    browserToClose <- Some br
+                    let! context = await (br.NewContextAsync ())
+                    let! page = await (context.NewPageAsync ())
+                    page.SetDefaultTimeout 20000.0f
+                    let evidence = watching page
+                    do! reporting "a probe that never answers" page evidence <| async {
+                    // Signed in and connected first, so the reload below is a client that has
+                    // everything but an answer — not one that is off to log in.
+                    let! _ = await (page.GotoAsync publicUrl)
+                    let! _ = await (page.WaitForFunctionAsync connected)
+                    stalling <- true
+                    let! _ = await (page.ReloadAsync ())
+                    do! waitFor "the offer to reopen, once the probe has been given up on" page
+                            """document.querySelector('[data-session-reopen]') !== null"""
+                    }
+                finally
+                    browserToClose |> Option.iter (fun b -> b.CloseAsync () |> ignore)
+                    playwrightToDispose |> Option.iter (fun p -> p.Dispose ())
+                    proxy.Stop ()
+                    try mountedHost.Kill true with _ -> ()
+            }
 
         // Plan 22, and the other half of the bug report: the conversation came back offline
         // and the terminal under it did not. `Srt` because this really runs a command — on a

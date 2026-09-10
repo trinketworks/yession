@@ -471,13 +471,18 @@ let private revealSettings () : unit = jsNative
 // fail, and (once the shell was served from a worker) replaced a perfectly good offline
 // session with a browser error page. The thrown case was already right; this is the same
 // distinction for the answers that arrive.
-[<Emit("""fetch($0, { cache: 'no-store' }).then(
+//
+// And an answer that does NOT arrive is the same axis again (`Client.Probe.deadline`): the
+// abort rejects, and the rejection is the thrown case with the timeout as its reason. The
+// deadline is a parameter for the reason the URL is — a number inside an Emit is outside
+// F#'s reach, and this one is the domain's to state.
+[<Emit("""fetch($0, { cache: 'no-store', signal: AbortSignal.timeout($1) }).then(
   r => r.ok ? r.json().then(me => ({ reachable: true, authorized: true, token: me.peerToken, detail: '' }))
       : (r.status === 401 || r.status === 403)
         ? { reachable: true, authorized: false, token: '', detail: 'HTTP ' + r.status }
         : { reachable: false, authorized: false, token: '', detail: 'HTTP ' + r.status },
   e => ({ reachable: false, authorized: false, token: '', detail: String(e) }))""")>]
-let private fetchMe (url: string) : JS.Promise<{| reachable: bool; authorized: bool; token: string; detail: string |}> = jsNative
+let private fetchMe (url: string) (deadlineMs: float) : JS.Promise<{| reachable: bool; authorized: bool; token: string; detail: string |}> = jsNative
 
 // `location.assign` resolves against the DOCUMENT's URL, not `<base href>` — the one
 // place relative resolution does not follow the base — so resolve explicitly against
@@ -1722,7 +1727,14 @@ let private start () =
         // `Disconnected` with its reason, not silence: the local-first shell — IndexedDB doc
         // plus the event ranges in this client's own store — stays fully usable, and the model
         // says why it is alone.
-        let! probe = fetchMe (SessionRoute.relative Me) |> Async.AwaitPromise
+        // Said before it is asked: the model starts `Disconnected None`, which renders as
+        // "not connected" with no reason and nothing to press, and until the probe settled
+        // that is what a page wore — for a hundred milliseconds on a laptop, and for as long
+        // as a hung fetch took on a phone. `Connecting` is the truth of the interval (it is
+        // what the channel's own retries wear, `Client.SessionChannel.policy`), and the
+        // deadline is what bounds it.
+        dispatchRef ConnectingMsg
+        let! probe = fetchMe (SessionRoute.relative Me) Client.Probe.deadline.TotalMilliseconds |> Async.AwaitPromise
         if not probe.reachable then
             dispatchRef (ConnectFailedMsg (Client.ChannelFault.describe (Client.ChannelUnreachable probe.detail)))
         elif not probe.authorized then
