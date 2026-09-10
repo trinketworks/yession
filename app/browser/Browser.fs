@@ -1616,24 +1616,6 @@ let private start () =
                 // Cut short whatever wait the lifecycle is in. On a refused peer that wait is
                 // indefinite by design, so this is its only way back short of a reload.
                 fun () -> pokeRetry ()
-              ReopenSession =
-                fun () ->
-                    // A full navigation to the Manager, not a fetch: it launches the session
-                    // if it is stopped and hands us on to wherever this deployment says the
-                    // session lives.
-                    //
-                    // What the reload costs depends on the address. Under a `{id}` template
-                    // we land on the SAME origin, so the doc in IndexedDB is still this
-                    // session's and syncs straight back. Addressed by port we land somewhere
-                    // new, and anything written since it stopped stays behind — which is why
-                    // the card says so before this runs.
-                    //
-                    // The anchor's href is the same URL, so this is an enhancement rather
-                    // than the mechanism: with no JS the link still works.
-                    match latestModel.Manager, latestModel.Session with
-                    | Some origin, Some sessionId ->
-                        navigateTo (sprintf "%s/sessions/%s/open" origin (SessionId.value sessionId))
-                    | _ -> ()
               FocusPane = PaneShell.toPane
               FocusChat = PaneShell.toChatItem
               FocusWatch = PaneShell.toWatchToggle
