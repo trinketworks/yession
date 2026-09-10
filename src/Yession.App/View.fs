@@ -230,14 +230,18 @@ module View =
     ///
     /// A peer id is a fine token and a poor name — `PEER-129755065` is nobody — and the roster,
     /// the draft summaries and the lease bar all resolve one through `nameOf` already. The chat
-    /// did not, so one human appeared under two identities on the one screen. Everything else is
-    /// already a word (`agent`, `system`, a user's own subject), so only a peer resolves; a peer
-    /// this client has never seen still falls back to the id, because a blank author would be
-    /// worse than an ugly one.
+    /// did not, so one human appeared under two identities on the one screen: the roster showed
+    /// a peer's rolled name while chat printed a `UserRef`'s raw subject, and neither was the
+    /// person's real name. Both now resolve through `Yession.App.ClientModel`, which folds
+    /// `UserRef` back to a peer's name through the same `Yession.Domain.Attribution` rule the
+    /// Session Process used to decide the author was a `UserRef` in the first place — so chat
+    /// and the sidebar can no longer show two names for one person. `Agent`/`System`/etc. are
+    /// already a word, so only a peer or a user resolves.
     let private authorName (model: ClientModel) (actor: ActorRef) : string =
         match actor with
         | PeerRef peer -> ClientModel.nameOf peer model
-        | UserRef _ | ActorRef.Agent | ActorRef.SessionProcess | ActorRef.System | ActorRef.Configured _ ->
+        | UserRef user -> ClientModel.userName user model
+        | ActorRef.Agent | ActorRef.SessionProcess | ActorRef.System | ActorRef.Configured _ ->
             authorLabel actor
 
     /// The mechanism behind a notice, folded away under one word.

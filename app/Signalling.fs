@@ -17,6 +17,8 @@ open Yession.SessionProcess
 open Yession.Host.Interop
 open Yession.Host.WebRtc
 open Yession.App
+open Thoth.Json
+open Thoth.Json.Net
 
 /// The static bootstrap page is the client shell itself, rendered from the initial model.
 /// The browser hydrates it and connects back over WebRTC; serving the same `View` keeps a
@@ -456,15 +458,30 @@ let start
             // so the Manager-verified user reaches the event log without riding any
             // peer-controlled frame. 401 tells the client to renavigate to `/login`; a
             // network error (offline) tells it to stay on the cached shell and stores.
-            let respondMe (subject: string) (attribution: PeerAttribution) =
+            //
+            // `displayName` is the attributed user's real name (minted into the cookie
+            // from the ID token's `name` claim — see `SessionAuth.create`), carried
+            // along so the browser can put it into ITS OWN `PeerHello` instead of
+            // inventing a random one. Without this the durable log never learns an
+            // attributed peer's real name, and the roster and chat — which both fold
+            // the SAME `PeerJoined` (see `Yession.Domain.Attribution`) — agree with
+            // each other but are wrong together, forever showing a random peer name
+            // beside messages correctly signed with the real one.
+            let respondMe (subject: string) (displayName: string option) (attribution: PeerAttribution) =
                 let attributed = match attribution with AttributedUser _ -> true | UnattributedAccess -> false
                 res.writeHead (200, createObj [ "content-type", box "application/json"; "cache-control", box "no-store" ]) |> ignore
-                res.``end`` (sprintf """{"peerToken":"%s","sub":"%s","attributed":%b}""" (mintPeerToken attribution) subject attributed)
+                res.``end``
+                    (sprintf
+                        """{"peerToken":"%s","sub":"%s","attributed":%b,"displayName":%s}"""
+                        (mintPeerToken attribution)
+                        subject
+                        attributed
+                        (displayName |> Option.map Encode.string |> Option.defaultValue Encode.nil |> Encode.toString 0))
             match auth with
-            | None -> respondMe "local" UnattributedAccess
+            | None -> respondMe "local" None UnattributedAccess
             | Some a ->
                 match a.IdentityOf req with
-                | Some identity -> respondMe identity.Subject identity.Attribution
+                | Some identity -> respondMe identity.Subject identity.DisplayName identity.Attribution
                 | None ->
                     res.writeHead (401, createObj [ "content-type", box "text/plain"; "cache-control", box "no-store" ]) |> ignore
                     res.``end`` "unauthorized"

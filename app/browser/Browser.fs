@@ -477,12 +477,12 @@ let private revealSettings () : unit = jsNative
 // deadline is a parameter for the reason the URL is — a number inside an Emit is outside
 // F#'s reach, and this one is the domain's to state.
 [<Emit("""fetch($0, { cache: 'no-store', signal: AbortSignal.timeout($1) }).then(
-  r => r.ok ? r.json().then(me => ({ reachable: true, authorized: true, token: me.peerToken, detail: '' }))
+  r => r.ok ? r.json().then(me => ({ reachable: true, authorized: true, token: me.peerToken, displayName: me.displayName || '', detail: '' }))
       : (r.status === 401 || r.status === 403)
-        ? { reachable: true, authorized: false, token: '', detail: 'HTTP ' + r.status }
-        : { reachable: false, authorized: false, token: '', detail: 'HTTP ' + r.status },
-  e => ({ reachable: false, authorized: false, token: '', detail: String(e) }))""")>]
-let private fetchMe (url: string) (deadlineMs: float) : JS.Promise<{| reachable: bool; authorized: bool; token: string; detail: string |}> = jsNative
+        ? { reachable: true, authorized: false, token: '', displayName: '', detail: 'HTTP ' + r.status }
+        : { reachable: false, authorized: false, token: '', displayName: '', detail: 'HTTP ' + r.status },
+  e => ({ reachable: false, authorized: false, token: '', displayName: '', detail: String(e) }))""")>]
+let private fetchMe (url: string) (deadlineMs: float) : JS.Promise<{| reachable: bool; authorized: bool; token: string; displayName: string; detail: string |}> = jsNative
 
 // `location.assign` resolves against the DOCUMENT's URL, not `<base href>` — the one
 // place relative resolution does not follow the base — so resolve explicitly against
@@ -1746,9 +1746,15 @@ let private start () =
             // surface's stream has a cookie that will be accepted.
             refreshClaude ()
             subscribeQueries ()
+            // `probe.displayName` is the attributed user's real name, when `/me` had one
+            // (see `Signalling.fs`) — carried into OUR OWN `PeerHello` instead of the
+            // random one so the durable `PeerJoined` this join appends records the name a
+            // person actually goes by. Falling back to the random `displayName` when the
+            // probe had none (unattributed access) keeps that case exactly as it was.
+            let effectiveDisplayName = if probe.displayName <> "" then probe.displayName else displayName
             let hello =
                 { PeerId = peerId
-                  DisplayName = displayName
+                  DisplayName = effectiveDisplayName
                   Token = probe.token }
             // Events come over HTTP by CURSOR: a client asks from the position it has folded
             // through and is answered with a range whose bounds never move, so history is
