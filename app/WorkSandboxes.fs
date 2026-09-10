@@ -215,12 +215,25 @@ let create (config: WorkSandboxesConfig) : Result<WorkSandboxes, string> =
                     | Some source ->
                         match! source.Resolve owner with
                         | None ->
-                            failure <-
-                                Some (
+                            // Said for the person who reads it, not the actor it resolved
+                            // against. A repo's file asking at boot is asking for nobody,
+                            // and "sign in first" to somebody who is signed in sends them
+                            // to a panel that will not help — the sandbox starts on its
+                            // own when they arrive, and the sentence has to say so.
+                            let reason =
+                                match owner with
+                                | Configured _ ->
                                     sprintf
-                                        "%s has no '%s' credential to forward — sign in on the settings panel first"
+                                        "nobody was signed in to lend a '%s' credential — it starts on its own \
+                                         the moment someone who has connected %s opens this session"
+                                        name
+                                        name
+                                | _ ->
+                                    sprintf
+                                        "%s has not connected %s — connect it on the settings panel and ask again"
                                         (ActorRef.token owner)
-                                        name)
+                                        name
+                            failure <- Some reason
                         | Some value -> resolved <- Map.add source.EnvVar value resolved
             match failure with
             | Some e -> return Error e
