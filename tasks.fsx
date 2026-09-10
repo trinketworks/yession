@@ -1628,6 +1628,17 @@ let cleanDocker () =
             runInherit repoRoot "docker" [ "volume"; "rm"; v ] |> ignore
     with ex -> eprintfn "clean-docker: %s" ex.Message
 
+/// The probe: a headless peer with a command line, for investigating how an agent behaves in
+/// a real session (`tools/Yession.Probe`).
+///
+/// A verb rather than a script, like everything else here — and NOT part of `check`, `build`
+/// or the package: it is an instrument, not a product, and nothing that ships reaches it.
+/// Its arguments pass straight through, so the probe states its own usage.
+let probe (args: string list) =
+    let out = Path.Combine (repoRoot, "tools", "Yession.Probe", "out")
+    fable false (Path.Combine (repoRoot, "tools", "Yession.Probe", "Yession.Probe.fsproj")) out
+    runInherit repoRoot "node" ([ Path.Combine (out, "Probe.js") ] @ args) |> ignore
+
 // --- dispatch --------------------------------------------------------------------------------
 
 let argv = fsi.CommandLineArgs
@@ -1645,6 +1656,7 @@ match arg 1 with
 | Some "check" -> check (rest 2)
 | Some "verify" -> verify (rest 2)
 | Some "lint" -> lint ()
+| Some "probe" -> probe (rest 2)
 | Some "bench" -> bench (rest 2)
 | Some "bench-guard" -> benchGuard ()
 | Some "bench-publish" -> benchPublish (arg 2 |> Option.defaultWith defaultVersion)

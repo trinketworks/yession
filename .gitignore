@@ -72,3 +72,4 @@ tests/browser/.data*
 
 # Release packaging output
 dist/
+tools/Yession.Probe/out/

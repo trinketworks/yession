@@ -22,6 +22,7 @@ open Yession.App
 open Yession.Host
 open Yession.SessionProcess
 open Yession.Tests.Support
+open Yession.Peer
 
 /// What the per-turn binding hands `Execute` in production (Plan 20): the agent acting, on
 /// the turn human's authority. These cases drive the capability directly, so they stand in

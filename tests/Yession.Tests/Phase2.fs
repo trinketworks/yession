@@ -18,6 +18,7 @@ open Yession.Domain.Agent
 open Yession.Domain.Link
 open Yession.Domain.Terminals
 open Yession.App
+open Yession.Peer
 
 [<ImportAll("node:fs")>]
 let private nodeFs : obj = jsNative

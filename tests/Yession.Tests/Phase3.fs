@@ -22,6 +22,7 @@ open Yession.SessionProcess
 open Yession.App
 open Yession.Host
 open Yession.Tests.Support
+open Yession.Peer
 
 // An offline peer: a full client program on its own doc, never connected to a channel.
 // Updates move only when a test explicitly delivers them.

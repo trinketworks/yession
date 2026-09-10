@@ -16,6 +16,7 @@ open Yession.Domain.Hooks
 open Yession.Domain.Prs
 open Yession.Domain.Tools
 open Yession.Manager
+open Yession.Peer
 
 #if FABLE_COMPILER
 open Thoth.Json
@@ -1125,7 +1126,7 @@ let private clearTimer (handle: float) : unit = jsNative
 
 /// Watch a launch's status stream, and wait for the frame a case is about by predicate.
 ///
-/// The wait is BOUNDED, for the reason `Support.Harness.waitForTimeoutMs` writes down: a
+/// The wait is BOUNDED, for the reason `Harness.waitForTimeoutMs` writes down: a
 /// frame that never arrives used to hang until the whole Node run's budget expired, which
 /// kills every suite after it and reports `tests timed out` with no name on it. Here the
 /// same fault is one named failing case that says which frame it wanted and how many it
@@ -1159,10 +1160,10 @@ let private watchingConnections (url: string) (secret: string) =
                                     sprintf
                                         "no status frame %s within %dms (%d frame(s) seen: %A)"
                                         what
-                                        Support.Harness.waitForTimeoutMs
+                                        Harness.waitForTimeoutMs
                                         frames.Count
                                         (frames |> Seq.map (fun f -> f.Connections) |> List.ofSeq)))))
-                    Support.Harness.waitForTimeoutMs
+                    Harness.waitForTimeoutMs
             let check () =
                 if frames |> Seq.exists predicate then
                     finish (fun () ->

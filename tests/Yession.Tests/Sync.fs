@@ -26,6 +26,7 @@ open Yession.SessionProcess
 open Yession.App
 open Yession.Host
 open Yession.Tests.Support
+open Yession.Peer
 
 // The draft slot key is its author; "ada" is the local peer in the single-client tests
 // and the slot owner in the collaboration tests.
