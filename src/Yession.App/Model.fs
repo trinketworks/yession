@@ -227,16 +227,20 @@ module TerminalFeed =
     /// render and the renders are not one. `terminalBlockView` calls this once per block, so
     /// `Map.toList |> List.filter` — which materialises every record the terminal has ever
     /// held, to keep the handful in one block's range — cost the whole transcript per block,
-    /// and the whole transcript times every block per render. Measured over a transcript cut
-    /// into ten-record blocks: 0.6ms per render at 400 records, 8.6ms at 1,500, 61.8ms at
-    /// 6,000. That is the quadratic, and it is on the path a person waits through when a
-    /// session with a long scrollback is reopened.
+    /// and the whole transcript times every block per render.
     ///
     /// The range walk is bounded by the range instead: finished blocks ask for their own
-    /// fixed span, and their sum over a render is the transcript ONCE. Gaps are ordinary — a
-    /// running block's `toSeq` runs to `KnownLength`, which availability hints move ahead of
-    /// what this device has actually fetched — so a missing sequence number is skipped rather
-    /// than being the end of the range.
+    /// fixed span, and their sum over a render is the transcript ONCE. In a browser, over a
+    /// transcript cut into ten-record blocks, one render's worth of this: 0.4ms per render at
+    /// 400 records, 4.6ms at 1,500 and 70.2ms at 6,000 the old way, against 0.5 / 0.8 / 2.5
+    /// the new one. What matters is not the 28x at the far end but the SHAPE — the old cost
+    /// grew 175x across that sweep and this one grows 5x — and the shape is what the
+    /// `transcript.read.slope` metric in `tests/Yession.Tests/Bench.fs` exists to watch, since
+    /// a number taken at one size cannot tell the two apart.
+    ///
+    /// Gaps are ordinary — a running block's `toSeq` runs to `KnownLength`, which availability
+    /// hints move ahead of what this device has actually fetched — so a missing sequence
+    /// number is skipped rather than being the end of the range.
     let slice (fromSeq: int) (toSeq: int) (feed: TerminalFeed) : TranscriptRecord list =
         [ for seq in max 0 fromSeq .. toSeq - 1 do
             match Map.tryFind seq feed.Records with
