@@ -482,10 +482,30 @@ let private credentialTests =
                 | Ok _ -> failwith "expected a refusal"
                 | Error e ->
                     Expect.isTrue (e.Contains "github") "it names the credential"
-                    Expect.isTrue (e.Contains "sign in") "and how to get one"
+                    Expect.isTrue (e.Contains "settings panel") "and where to get one"
                 Expect.isFalse (built |> Seq.exists (fun (name, _) -> name = "test")) "nothing was built"
                 let! events = eventsOf log
                 Expect.equal (startedEvents events) [] "and nothing was recorded"
+            }
+
+        // A repo's file folded at boot asks for nobody, and the person reading the refusal
+        // is usually signed in already — sending them to sign in sends them somewhere that
+        // will not help. What helps is knowing it starts on its own when they arrive.
+        testCaseAsync "a file asking with nobody signed in is told it starts when somebody is" <|
+            async {
+                let log = newLog ()
+                let sandboxes, built = registry log [ githubCredential None ]
+                let repo = RepoRef.create "octo/hello" |> expect
+                let file : WorkSandboxes.SandboxCaller =
+                    { Actor = ActorRef.Configured repo; Credential = ActorRef.Configured repo }
+                match! sandboxes.Ensure file (sandbox "octo/hello:dev") (forwarding [ "github" ]) with
+                | Ok _ -> failwith "expected a refusal"
+                | Error e ->
+                    Expect.isTrue (e.Contains "nobody was signed in") "it says why, in words"
+                    Expect.isTrue (e.Contains "starts on its own") "and that nothing needs doing"
+                    Expect.isFalse (e.Contains "sign in on") "not sent to sign in"
+                    Expect.isFalse (e.Contains "configured:") "and no token where a sentence goes"
+                Expect.isFalse (built |> Seq.exists (fun (name, _) -> name = "octo/hello:dev")) "nothing was built"
             }
 
         testCaseAsync "a credential this session does not know is refused, naming the ones it does" <|
