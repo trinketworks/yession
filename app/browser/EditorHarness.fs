@@ -538,9 +538,10 @@ do
 // strip is a tablist the arrow keys actually walk. Both are DOM-swap behaviours a rendered
 // string cannot show, and neither needs a Session Process, a channel or a native addon.
 //
-// A minimal Elmish: `View.view` over a `ClientModel`, re-rendered on dispatch. The reducer,
-// the view and the focus moves are the app's own — only the loop is local, because Program
-// would want a doc and a connection this page deliberately does not have.
+// A minimal Elmish: the app's own render (`Render.create`) over a `ClientModel`, re-run on
+// dispatch. The reducer, the view, the syncs after it and the focus moves are the app's own —
+// only the loop is local, because Program would want a doc and a connection this page
+// deliberately does not have, and what the render would send to a session goes nowhere.
 
 [<Emit("document.getElementById('shell')")>]
 let private shellHost : obj = jsNative
@@ -851,16 +852,29 @@ do
             FocusItemActions = fun id -> PaneShell.toItemActions (MessageId.value id)
             TakeTerminal = fun id -> takeRef id
             TypeIntoTerminal = recordTyped }
-    // The app's own player sync, so a block tab in the harness really plays its recording —
-    // which is the point of driving this in a browser rather than asserting a string. The
-    // forward reference is the same shape `Browser.fs` uses: the syncer needs dispatch (a
-    // rewound cast that plays off its end jumps back to live) and dispatch's render needs
-    // the syncer.
+    // The forward reference is the same shape `Browser.fs` uses: the render needs dispatch
+    // (a rewound cast that plays off its end jumps back to live) and dispatch's render needs
+    // the render.
     let mutable dispatchRef : ClientMsg -> unit = ignore
-    let replays = PaneReplays.create (fun msg -> dispatchRef msg)
-    // …and the app's own screen composition, for the same reason: the emulator, the
-    // serialization and the fold are the client's, and only a browser runs them.
-    let screens = Screens.create (fun msg -> dispatchRef msg) recordResized
+    let shellDoc = Y.Doc.Create ()
+    let renderer =
+        Render.create
+            { Doc = shellDoc
+              Registry = BodyRegistry shellDoc
+              Texts = TextRegistry shellDoc
+              PeerId = shellModel.Peer.PeerId
+              Root = shellHost
+              Actions = actions
+              Dispatch = fun msg -> dispatchRef msg
+              // No session behind this page: a draft sent, a caret reported, a keyframe
+              // asked for go nowhere. A resize is the one thing read back, because whether
+              // a box that changed reached the pty at all is a question the E2E asks.
+              Links =
+                { SendDraft = ignore
+                  SendTerminalDraft = fun _ _ -> ()
+                  ReportFocus = ignore
+                  ResizeTerminal = recordResized
+                  Http = fun _ -> async { return Error (Client.HttpUnreachable "the harness serves no session") } } }
     let mutable model = shellModel
     let rec dispatch (msg: ClientMsg) : unit =
         model <- ClientModel.update msg model
@@ -873,15 +887,7 @@ do
             |> Option.iter (fun size -> recordViewport terminal size.Cols size.Rows)
         | _ -> ()
         render ()
-    and render () =
-        Lit.render (unbox shellHost) (View.view actions model dispatch)
-        replays.Sync model
-        screens.Sync model
-        PaneShell.setOpen model.TerminalsOpen
-        // The app's own rail placement, for the same reason the harness runs its player and
-        // screen syncs: where a stroke lands is a measurement of a laid-out page, and only a
-        // browser has one.
-        RailSync.sync ()
+    and render () = renderer.SetState model
     dispatchRef <- dispatch
     takeRef <-
         fun id ->
@@ -892,7 +898,7 @@ do
             render ()
     exposeSnapshot (fun id seq screen cols rows ->
         match TerminalId.create id with
-        | Ok terminal -> screens.Snapshot terminal { Seq = seq; Cols = cols; Rows = rows; Screen = screen }
+        | Ok terminal -> renderer.Screens.Snapshot terminal { Seq = seq; Cols = cols; Rows = rows; Screen = screen }
         | Error _ -> ())
     exposeAgentTurn (fun () ->
         let expect = function Ok v -> v | Error e -> failwith e
@@ -927,10 +933,7 @@ do
             dispatch (TerminalRecordMsg (terminal, seq, { At = 0.0; Kind = kind; Data = data }))
         | _ -> ())
     render ()
-    // The shell harness drives the real view, so it gets the real shell plumbing too — a
-    // splitter that only worked in the app is a splitter no browser-tier test could reach.
-    PaneShell.installPaneResize ()
-    // Same rule for the rail: what a browser-tier test asks of it is that a stroke tracks its
-    // message while the conversation scrolls, and scrolling is exactly what only this listener
-    // answers.
-    RailSync.watch ()
+    // The shell harness drives the real render, so it gets the real page listeners too — a
+    // splitter, a pinned surface or a rail that only worked in the app is one no browser-tier
+    // test could reach.
+    Render.attach ()
