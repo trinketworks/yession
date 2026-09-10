@@ -3635,8 +3635,84 @@ let private agentVerbTests =
             }
     ]
 
+let private feedSliceTests =
+    // What a client holds of a terminal's recording, read back one block at a time. The feed
+    // is keyed by sequence number and a block owns a RANGE of it, so every case here is about
+    // which records fall in a range — including the ranges a real feed is full of, where the
+    // numbers a block spans are not all present.
+    let record (kind: TranscriptKind) (data: string) : TranscriptRecord =
+        { At = 0.0; Kind = kind; Data = data }
+
+    let feedOf (records: (int * TranscriptRecord) list) : TerminalFeed =
+        records |> List.fold (fun feed (seq, r) -> TerminalFeed.withRecord seq r feed) TerminalFeed.empty
+
+    let out (n: int) = n, record TranscriptOutput (sprintf "line-%d\n" n)
+
+    testList "A block's slice of the transcript feed" [
+        testCase "a range reads back in sequence order, however the records arrived" <| fun () ->
+            // The feed folds records in as they come, and they do not come in order: a
+            // catch-up fetch and the live leg race, and the map key is what settles it. Order
+            // is the whole contract here — this text is concatenated into a block's output.
+            let feed = feedOf [ out 3; out 1; out 0; out 2 ]
+            Expect.equal
+                (TerminalFeed.slice 0 4 feed |> List.map (fun r -> r.Data))
+                [ "line-0\n"; "line-1\n"; "line-2\n"; "line-3\n" ]
+                "sorted by sequence number, not by arrival"
+
+        testCase "the range takes its start and excludes its end" <| fun () ->
+            // A block's range is `[FromSeq, ToSeq)` and the next block's starts where this one
+            // ends. An inclusive end would print the first line of the next command under the
+            // previous one.
+            let feed = feedOf [ out 0; out 1; out 2; out 3 ]
+            Expect.equal
+                (TerminalFeed.slice 1 3 feed |> List.map (fun r -> r.Data))
+                [ "line-1\n"; "line-2\n" ]
+                "one and two, not three"
+
+        testCase "sequence numbers the device does not hold are skipped, not treated as the end" <| fun () ->
+            // The case that makes a range walk legal rather than merely faster. A reopened
+            // session fetches its transcript in chunks while the live leg delivers the tail,
+            // so the feed is a range with HOLES in it for as long as catch-up is behind —
+            // and a block spanning a hole must still show the records on the far side of it.
+            let feed = feedOf [ out 0; out 3 ]
+            Expect.equal
+                (TerminalFeed.slice 0 4 feed |> List.map (fun r -> r.Data))
+                [ "line-0\n"; "line-3\n" ]
+                "the gap is a gap, and what follows it is still this block's output"
+
+        testCase "a range running past what has been fetched yields what is there" <| fun () ->
+            // A RUNNING block has no end, so the view reads it to `KnownLength` — which comes
+            // from availability hints and is routinely ahead of what this device has actually
+            // got. Asking for records that do not exist yet is the normal case, not an error.
+            let feed = feedOf [ out 0; out 1 ]
+            Expect.equal
+                (TerminalFeed.slice 0 500 feed |> List.map (fun r -> r.Data))
+                [ "line-0\n"; "line-1\n" ]
+                "two records held, two records returned"
+
+        testCase "an empty or inverted range reads nothing" <| fun () ->
+            let feed = feedOf [ out 0; out 1; out 2 ]
+            Expect.equal (TerminalFeed.slice 2 2 feed) [] "a zero-width range holds no records"
+            Expect.equal (TerminalFeed.slice 3 1 feed) [] "and neither does one that runs backwards"
+
+        testCase "output text keeps only what the terminal printed" <| fun () ->
+            // The other half of the same read: `slice` says WHICH records, this says which of
+            // them are output. What was typed is in the recording and is not the block's
+            // output — a replay shows the keystrokes, a scrollback shows the answer.
+            let feed =
+                feedOf
+                    [ 0, record TranscriptOutput "hello "
+                      1, record TranscriptInput "ls\r"
+                      2, record TranscriptStderr "world" ]
+            Expect.equal
+                (TerminalFeed.outputText 0 3 feed)
+                "hello world"
+                "stdout and stderr concatenated in order, input dropped"
+    ]
+
 let tests =
     testList "Terminals (Plan 13)" [
+        feedSliceTests
         affordanceTests
         sourceTests
         drainTests
