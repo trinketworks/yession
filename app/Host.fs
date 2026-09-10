@@ -204,7 +204,7 @@ let startFull
         // somebody is.
         let mutable peerUsers : Map<PeerId, UserId> = Map.empty
         let recordAttribution (event: SessionEvent) : unit =
-            peerUsers <- Map.fold (fun acc k v -> Map.add k v acc) peerUsers (Attribution.peerUsers [ event ])
+            peerUsers <- Attribution.applyEvent peerUsers event
         let actorFor (peerId: PeerId) : ActorRef = Attribution.actorFor peerUsers peerId
 
         // The terminal projection as the Process itself has it, folded forward on every

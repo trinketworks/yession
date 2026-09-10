@@ -7,17 +7,19 @@ namespace Yession.Domain
 /// drift apart — which is exactly how "you" ended up with two names on one screen.
 module Attribution =
 
+    /// The single-event step: fold one more event into an existing peer→user map. This
+    /// is what a live process replays incrementally as events arrive; `peerUsers` below
+    /// is just this applied to a whole replay starting from empty.
+    let applyEvent (acc: Map<PeerId, UserId>) (event: SessionEvent) : Map<PeerId, UserId> =
+        match event with
+        | PeerJoined { PeerId = peer; User = Some user } -> Map.add peer user acc
+        | _ -> acc
+
     /// Peer → user, for every join a Manager-verified authentication strategy attributed.
     /// A peer that never appears here is unattributed (trust-localhost, or simply hasn't
     /// joined yet) and is identified only by its `PeerId`.
     let peerUsers (events: SessionEvent list) : Map<PeerId, UserId> =
-        events
-        |> List.fold
-            (fun acc event ->
-                match event with
-                | PeerJoined { PeerId = peer; User = Some user } -> Map.add peer user acc
-                | _ -> acc)
-            Map.empty
+        events |> List.fold applyEvent Map.empty
 
     /// Who to credit a peer's act to: their durable `UserRef` when their join was
     /// attributed, or the peer connection itself when it was not. This is the one rule —
