@@ -152,6 +152,10 @@ let tests =
                         let! _ = await (page.WaitForSelectorAsync "#peer-b .ProseMirror")
 
                         let collected = ResizeArray<Series> ()
+                        // What the typing burst at each size actually did (keydowns seen, frames
+                        // fired, where focus sat) — printed every run and quoted when a `type` or
+                        // `receive` series comes up short, so the failure names a cause.
+                        let diagBySize = System.Collections.Generic.Dictionary<int, string> ()
                         for size in sizes do
                             // Seed through the real relay, and check it actually landed: a
                             // sweep whose sizes all ended up the same is a sweep measuring one
@@ -170,7 +174,15 @@ let tests =
                             do! awaitU (page.ClickAsync "#peer-b .ProseMirror")
                             do! awaitU (page.Keyboard.PressAsync "ControlOrMeta+End")
                             do! awaitU (page.Keyboard.TypeAsync (String.replicate samples "x"))
+                            // Let this burst's sample frames land before reading. Every `type`
+                            // and `receive` sample is recorded in a `requestAnimationFrame`, and
+                            // reading the instant `TypeAsync` returns catches them mid-flight —
+                            // on a busy frame that truncated the series to a handful or to none.
+                            do! awaitU (page.EvaluateAsync "() => window.__benchSettle()")
                             let! typing = await (page.EvaluateAsync<string> "() => window.__benchTyping()")
+                            let! diag = await (page.EvaluateAsync<string> "() => window.__benchDiag()")
+                            diagBySize.[size] <- diag
+                            printfn "  typed %d keystrokes at size %d — %s" samples size diag
                             collected.AddRange (seriesFrom typing size [ "type", "type"; "receive", "receive" ])
 
                             // The caret push, timed twice: the work it sets off, and the wait
@@ -209,9 +221,13 @@ let tests =
                         // and charts as if it were a measurement.
                         for s in all do
                             if List.length s.Values < 5 then
+                                let diag =
+                                    match diagBySize.TryGetValue s.Size with
+                                    | true, d -> sprintf " — typing diagnostics for size %d: %s" s.Size d
+                                    | _ -> ""
                                 failwithf
-                                    "%s@%d collected %d samples — too few to take a percentile from, so this report would be fiction"
-                                    s.Metric s.Size (List.length s.Values)
+                                    "%s@%d collected %d samples — too few to take a percentile from, so this report would be fiction%s"
+                                    s.Metric s.Size (List.length s.Values) diag
                         if Double.IsNaN slope || Double.IsInfinity slope then
                             failwith "the caret.push slope is not a number — one end of the sweep produced nothing"
                         if Double.IsNaN transcriptSlope || Double.IsInfinity transcriptSlope then
