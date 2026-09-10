@@ -19,6 +19,15 @@ module AgentTurn =
     /// whether a one-shot answer opens a sandbox, and no test can see that decision — the
     /// lazy-lifecycle suite scripts its agent — so trimming these lines removes an invariant
     /// while every gate stays green.
+    ///
+    /// The same goes for WHERE work runs. The default sandbox is the session's own view of the
+    /// checkout: what the agent reads and changes there with git, grep and sed is what the
+    /// people in the session see, and what the chat will render as reads and edits. A work
+    /// sandbox is a container with a toolchain in it, for the commands that need one, and its
+    /// terminal is a build log — an edit buried in one is on the record and read by nobody. So
+    /// the prompt names the split — look and edit in the default sandbox, build and test in a
+    /// work sandbox — because every tool description says how to reach either and none of
+    /// them can say which to prefer.
     let systemPrompt =
         "You are participating in a collaborative engineering session. "
         + "Reply to the latest message, using the conversation so far as context. "
@@ -27,6 +36,9 @@ module AgentTurn =
         + "Start an environment only when repository or command execution is needed. "
         + "Use command execution deliberately. "
         + "Prefer high-signal investigation over noisy exploration. "
+        + "Read and edit the checkout in the default sandbox, with git, grep and sed, so the "
+        + "people in the session see what you looked at and what you changed; use a work "
+        + "sandbox for what needs its toolchain — building, tests, running the code. "
         + "Commands you queue in a terminal run outside your turn, so their results reach "
         + "you on a later turn as terminal activity rather than as a tool result — read it "
         + "before assuming a queued command did nothing. "
