@@ -50,6 +50,9 @@ module Dom =
         let connection = "data-connection"
         let displayName = "data-display-name"
         let catchUp = "data-catch-up"
+        /// The same catch-up as a bar along the header's bottom edge — the one place every
+        /// screen has, since the sidebar line above is behind a drawer on a phone.
+        let catchUpBar = "data-catch-up-bar"
         /// The durable event feed's health (sidebar), carrying a `Text.feed*` token.
         let feed = "data-feed"
         /// A mount of the connection report, carrying the token of whichever leg is down

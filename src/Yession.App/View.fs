@@ -427,16 +427,36 @@ module View =
         | Connecting, FeedLive
         | Connected, FeedLive -> None
 
+    /// Whether a catch-up is worth showing: PROGRESS, not health, so it is the one thing that
+    /// still speaks while everything works — and only once it has lasted long enough to be
+    /// something somebody is waiting on (`CatchUpIsSlow`). Offline, freshness is unknowable
+    /// and nothing is said. One rule for its two faces, the sidebar's line and the header's
+    /// bar, so they cannot disagree about whether there is a catch-up to show.
+    let private showsCatchUp (model: ClientModel) : bool =
+        match model.Connection with
+        | Disconnected _ -> false
+        | _ -> model.EventConsumer.IsCatchingUp && model.EventConsumer.CatchUpIsSlow
+
+    /// The catch-up as a bar along the header's bottom rule (`Style.catchUpBar`): how much of
+    /// the log this client has folded, of what it knows the log holds. A `progressbar` with
+    /// its numbers on it, because a bar with no value is decoration to a screen reader; the
+    /// sidebar's line carries the same numbers as text.
+    let private catchUpBar (model: ClientModel) : TemplateResult =
+        if not (showsCatchUp model) then Lit.nothing
+        else
+            let consumer = model.EventConsumer
+            // Offsets count from zero, so the count folded is one past the last folded.
+            let folded = consumer.LastProcessedOffset |> Option.map (fun o -> EventOffset.value o + 1L) |> Option.defaultValue 0L
+            let known = consumer.LatestKnownOffset |> Option.map (fun o -> EventOffset.value o + 1L) |> Option.defaultValue 0L
+            let percent = if known <= 0L then 0.0 else 100.0 * float (min folded known) / float known
+            let width = sprintf "width: %.1f%%" percent
+            html $"""<div class="{Style.catchUpBar}" role="progressbar" aria-label="{Dom.Text.catchingUp}"
+                          aria-valuemin="0" aria-valuemax="{string known}" aria-valuenow="{string folded}"
+                          data-catch-up-bar style="{width}"></div>"""
+
     let private connectionSection (actions: ViewActions) (model: ClientModel) : TemplateResult =
         let consumer = model.EventConsumer
-        // Catch-up is PROGRESS, not health, so it is the one thing here that still speaks
-        // while everything works — and only once it has lasted long enough to be something
-        // somebody is waiting on (`CatchUpIsSlow`). Offline, freshness is unknowable and
-        // nothing is said either.
-        let showsCatchUp =
-            match model.Connection with
-            | Disconnected _ -> false
-            | _ -> consumer.IsCatchingUp && consumer.CatchUpIsSlow
+        let showsCatchUp = showsCatchUp model
         let catchUp =
             if not showsCatchUp then Lit.nothing
             else
@@ -1353,6 +1373,7 @@ module View =
                 {agentAbsence actions model.Claude}
                 {terminalsReopen dispatch model}
               </div>
+              {catchUpBar model}
             </header>"""
 
     let private queue (dispatch: ClientMsg -> unit) (synced: SyncedSessionState) : TemplateResult =
