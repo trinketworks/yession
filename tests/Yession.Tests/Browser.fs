@@ -2054,6 +2054,74 @@ let editorTests =
                 Expect.isTrue landed "the message the ref answers is on the screen and holds the cursor"
                 return ()
             }
+        // The contents' promise, and the reason it is the phone's whole navigation: tapping a
+        // chapter takes you to it. `revealMessage` finds an element by id, scrolls it, flashes
+        // it and moves the cursor there — a hook that stopped matching would leave a list of
+        // buttons that quietly do nothing, which no rendered string can tell from one that
+        // works.
+        editorCaseIn 1440 900 "a chapter in the contents takes you to it" (EDITOR_PORT + 38) <| fun page ->
+            async {
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-chapters] [data-chapter-entry]")
+                // Away from it first, so the jump has a real scroll to make.
+                let! _ =
+                    await (page.EvaluateAsync<bool>
+                            """() => { const t = document.querySelector('#shell [data-conversation]')
+                                       t.scrollTop = t.scrollHeight
+                                       return t.scrollTop > 0 }""")
+                do! awaitU (page.ClickAsync "#shell [data-chapter-entry='msg-harness']")
+                let! _ =
+                    await (page.WaitForFunctionAsync
+                        """document.querySelector("#shell [data-conversation] [data-message-id='msg-harness']")
+                             ?.classList.contains('animate-reveal') === true""")
+                let! focused =
+                    await (page.EvaluateAsync<bool>
+                            """() => document.querySelector("#shell [data-conversation] [data-message-id='msg-harness']") === document.activeElement""")
+                Expect.isTrue focused "the contents moves the cursor to the chapter, through the same reveal the ref uses"
+                return ()
+            }
+        // On a phone the contents live in a DRAWER over the conversation, so the jump has one
+        // more thing to get right than it does on a desktop: the sheet the tap came from has
+        // to stand aside, or the reader is taken to a message they cannot see. Nothing in the
+        // markup says whether a drawer is over the words — the message scrolls, flashes and
+        // takes the cursor either way.
+        //
+        // The drawer is opened by the class the shell itself uses for it, because the harness
+        // wires no nav toggle; what is under test is the jump, not the chevron. The case reads
+        // the cover BEFORE the tap as well as after, so an arrangement that stopped covering
+        // anything would fail here rather than pass by vacuity.
+        editorCaseIn 390 844 "a chapter reached from the phone's contents is not left behind the drawer" (EDITOR_PORT + 39) <| fun page ->
+            async {
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-chapters] [data-chapter-entry]")
+                let! covered =
+                    await (page.EvaluateAsync<bool>
+                            """() => {
+                                 document.documentElement.classList.add('nav-alt')
+                                 const item = document.querySelector("#shell [data-conversation] [data-message-id='msg-harness']")
+                                 const box = item.getBoundingClientRect()
+                                 const at = document.elementFromPoint(box.left + box.width / 2, box.top + 4)
+                                 return !item.contains(at)
+                               }""")
+                Expect.isTrue covered "the drawer is over the conversation, which is what the phone's contents sit in"
+
+                do! awaitU (page.ClickAsync "#shell [data-chapter-entry='msg-harness']")
+                let! _ =
+                    await (page.WaitForFunctionAsync
+                        """document.querySelector("#shell [data-conversation] [data-message-id='msg-harness']")
+                             ?.classList.contains('animate-reveal') === true""")
+                // Hit-tested at its own centre, which is the only way to ask whether something
+                // is over it: a drawer left open leaves the message's box exactly where it was,
+                // and every cheap visibility check answers yes.
+                let! uncovered =
+                    await (page.WaitForFunctionAsync
+                            """(() => {
+                                 const item = document.querySelector("#shell [data-conversation] [data-message-id='msg-harness']")
+                                 const box = item.getBoundingClientRect()
+                                 const at = document.elementFromPoint(box.left + box.width / 2, box.top + 4)
+                                 return item.contains(at)
+                               })()""")
+                Expect.isNotNull uncovered "the drawer stood aside, so the chapter is on the screen"
+                return ()
+            }
         // The name on a rule is an INPUT at rest, which is a promise no markup test can
         // settle: a field that renders but never takes a keystroke, or one whose value the
         // next render puts back, reads in the DOM exactly like one that works. So this types

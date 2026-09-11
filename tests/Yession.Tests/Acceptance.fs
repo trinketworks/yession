@@ -1230,6 +1230,21 @@ let private uiChecklistTests =
                 occurrences (Dom.attr Dom.Hooks.messageAuthor (PeerId.value ada)) (Support.render model)
             Expect.equal (runs divided) (runs joined + 1) "the run is split, rather than the rule joining it"
 
+        // The contents: the list is what a phone gets instead of a gutter, and what a desktop
+        // gets instead of scrolling to find a chapter. Its order is the CONVERSATION's, not
+        // the order chapters were made in — a reader walking the list is walking the session.
+        testCase "the contents list every chapter, in the order the session holds them" <| fun () ->
+            let html = Support.render (withChapters [ "msg-agent"; "msg-1" ])
+            let entry id = html.IndexOf (Dom.attr Dom.Hooks.chapterEntry id)
+            Expect.isTrue (entry "msg-1" >= 0 && entry "msg-agent" >= 0) "both chapters are listed"
+            Expect.isTrue (entry "msg-1" < entry "msg-agent") "oldest first, whatever order they were made in"
+
+        // A heading over nothing teaches a reader to skip the place the list will appear.
+        testCase "a session nobody has divided has no contents" <| fun () ->
+            Expect.isFalse
+                ((Support.render representativeModel).Contains Dom.Hooks.chapters)
+                "no chapters, no contents"
+
         // What a rule says is the SESSION's answer (`Chapters.name`), not this surface's: two
         // surfaces computing a name apiece are two surfaces that can call one chapter two
         // things. The cut, the guess and the stripped markdown are the domain's, and are
