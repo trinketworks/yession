@@ -411,14 +411,6 @@ let limitsFor (backend: SandboxBackend) (platform: string) : HostLimits =
         else HostLimits.of' [ HostDistinction.EgressByHost ]
     | DockerBackend -> HostLimits.of' [ HostDistinction.SocketsByPath; HostDistinction.NamedVolumes ]
 
-/// What a backend can distinguish on the host this process is running on.
-///
-/// The one place that asks the process what it is. `limitsFor` takes the platform as an
-/// argument precisely so that every claim about it is checkable from either machine, and a
-/// second caller reading `process.platform` for itself would be a second answer that only
-/// ever agrees with the first on the box it was written on.
-let limitsHere (backend: SandboxBackend) : HostLimits = limitsFor backend (platform ())
-
 /// The name by which a sandbox on this backend reaches a listener bound on THIS host, or
 /// none when it cannot — a fact about the backend, stated by the backend, so that whatever
 /// hands a sandbox a route to this process (the git gateway) asks rather than guesses.
@@ -427,16 +419,33 @@ let limitsHere (backend: SandboxBackend) : HostLimits = limitsFor backend (platf
 /// daemon's `host-gateway`. That is the host's loopback under Colima and Docker Desktop and
 /// the bridge address under a native Linux daemon — which is why a listener meant for a
 /// container binds every interface, not loopback. host: loopback, there being no boundary.
-/// srt: this box's own hostname. Its egress is a filtering proxy whose `NO_PROXY` covers
-/// loopback and every private range, so `127.0.0.1` would be dialled DIRECTLY — into a
-/// namespace with no route on Linux, a seatbelt deny on macOS. The hostname is in neither
-/// list, the proxy carries it once the sandbox's egress allows it, and it is resolved on
-/// the PARENT side to an address the every-interface listener answers on.
-let hostAddressFrom (hostname: string) (backend: SandboxBackend) : string option =
+/// srt: a name its proxy will carry. Its egress is a filtering proxy whose `NO_PROXY`
+/// covers `localhost`, `127.0.0.1` and every private range, so any of those is dialled
+/// DIRECTLY — into a namespace with no route on Linux, a seatbelt deny on macOS. What is
+/// left splits by platform, and the split is the fault this takes the platform for: on
+/// Linux loopback is the whole of 127/8, so `127.0.0.2` is dialled by the parent with no
+/// resolver involved and answered by the every-interface listener; macOS configures only
+/// `.1` on `lo0`, so the name is the box's own hostname, which macOS resolves for itself
+/// and a Linux runner has no entry for ("Empty reply from server", measured).
+let hostAddressFrom (hostname: string) (platform: string) (backend: SandboxBackend) : string option =
     match backend with
     | DockerBackend -> Some "host.docker.internal"
     | HostBackend -> Some "127.0.0.1"
-    | SrtBackend -> Some hostname
+    | SrtBackend -> if platform = "darwin" then Some hostname else Some "127.0.0.2"
+
+/// What a backend can distinguish on the host this process is running on.
+///
+/// The one place that asks the process what it is. `limitsFor` takes the platform as an
+/// argument precisely so that every claim about it is checkable from either machine, and a
+/// second caller reading `process.platform` for itself would be a second answer that only
+/// ever agrees with the first on the box it was written on.
+let limitsHere (backend: SandboxBackend) : HostLimits = limitsFor backend (platform ())
+
+/// `hostAddressFrom` on the host this process is running on — the same one-place reading
+/// of the platform `limitsHere` is, for the same reason.
+let hostAddressHere (hostname: string) (backend: SandboxBackend) : string option =
+    hostAddressFrom hostname (platform ()) backend
+
 
 /// What one set of granted leaves comes to, each channel beside the others because they
 /// are one fact read by different consumers: the host family closes path SETS over the

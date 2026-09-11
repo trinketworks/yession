@@ -57,6 +57,15 @@ let private routeTests =
                 Expect.equal value "https://github.com/" "of the address a remote is written as"
             | other -> failwithf "expected one entry, got %A" other
 
+        // Where a sandbox reaches this process is the backend's fact, and srt's splits by
+        // platform for a reason a test on either box can check: Linux loopback is 127/8 and
+        // macOS configures `.1` alone, while srt's `NO_PROXY` covers `127.0.0.1` on both.
+        testCase "each backend names the host by what its sandbox can reach" <| fun () ->
+            Expect.equal (Sandboxes.hostAddressFrom "box.local" "darwin" DockerBackend) (Some "host.docker.internal") "docker, by the daemon's alias"
+            Expect.equal (Sandboxes.hostAddressFrom "box.local" "linux" HostBackend) (Some "127.0.0.1") "host, loopback"
+            Expect.equal (Sandboxes.hostAddressFrom "box.local" "darwin" SrtBackend) (Some "box.local") "srt on macOS: the box's name"
+            Expect.equal (Sandboxes.hostAddressFrom "runner" "linux" SrtBackend) (Some "127.0.0.2") "srt on Linux: a loopback address NO_PROXY does not name"
+
         // The pkt-line header counts BYTES. A message with an em dash in it, counted in
         // characters, arrived at git one byte short and printed with its last letter gone.
         testCase "a pkt-line's length counts bytes, not characters" <| fun () ->
@@ -451,7 +460,7 @@ let private srtTests =
                 withGateway upstream.Origin (fun gateway ->
                     async {
                         let host =
-                            match Sandboxes.hostAddressFrom (Interop.hostname ()) SrtBackend with
+                            match Sandboxes.hostAddressHere (Interop.hostname ()) SrtBackend with
                             | Some host -> host
                             | None -> failwith "srt is a backend with a route to the host"
                         let cap = gateway.Grant (sandbox "dev") (lenderOf (lending (Some "ghu_lent")))

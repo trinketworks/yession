@@ -643,13 +643,13 @@ first's.
     Forwarding is a route through the session's git gateway (`app/GitGateway.fs`); the
     sandbox's git is told one `insteadOf` and the credential never enters it. The route
     has to be REACHABLE, and `Sandboxes.hostAddressFrom` is the backend's answer: docker's
-    `host.docker.internal`, the host backend's loopback, and for srt `os.hostname()` —
-    because srt's proxy sets `NO_PROXY` over loopback and every private range, so any of
-    those is dialled directly into a namespace with no route, while the hostname goes
-    through the proxy and is resolved on the parent side. That resolution is the
-    assumption: a box whose own hostname does not resolve (no `/etc/hosts` entry, no DNS)
-    gives a confined git a proxy error naming the host, not a route. Verified on macOS
-    and on the PR runner; an operator's box is on its own.
+    `host.docker.internal`, the host backend's loopback, and for srt a name its proxy
+    carries — because the proxy sets `NO_PROXY` over `localhost`, `127.0.0.1` and every
+    private range, so any of those is dialled directly into a namespace with no route.
+    On Linux that is `127.0.0.2` (loopback is the whole of 127/8); on macOS, which
+    configures `.1` alone, it is `os.hostname()`, resolved on the parent side. The macOS
+    answer assumes the box resolves its own name (mDNS does); where it does not, a
+    confined git gets a proxy error naming the host, not a route.
   - **Under `YESSION_SESSION_AGENT_BACKEND=host` the git verbs run unconfined** — the
     operator's explicitly lax choice, as everywhere `host` is chosen. The per-invocation
     hardening (hooks/fsmonitor/ext off, no global config, protocol pinned) still

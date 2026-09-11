@@ -1073,7 +1073,7 @@ Async.StartImmediate (
                             if not (holdsGitHubToken owner) then return WorkSandboxes.CredentialForwarding.NotHeld
                             else
                                 let backend = SandboxRuntime.scopedBackend workBackend (SandboxRef.scope sandbox)
-                                match Sandboxes.hostAddressFrom (Interop.hostname ()) backend with
+                                match Sandboxes.hostAddressHere (Interop.hostname ()) backend with
                                 | None ->
                                     return
                                         WorkSandboxes.CredentialForwarding.Unforwardable (
