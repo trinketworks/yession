@@ -1162,10 +1162,18 @@ module SessionTerminals =
                     let rc = instrumentation.Rc
                     let carry = ref ""
                     let ready = ref false
+                    // What the shell printed BEFORE its first prompt mark, kept only so a probe
+                    // that fails can say what it saw. The transcript deliberately carries none
+                    // of this (the bootstrap is not the terminal's content), which left a
+                    // failed probe with nothing to show — and "never printed an instrumented
+                    // prompt" could not tell a shell that printed nothing from one that
+                    // printed a prompt without the marks, on a host where both were possible.
+                    let overture = System.Text.StringBuilder ()
                     let onOutput (data: string) =
                         match live.TryGetValue key with
                         | false, _ -> ()
                         | true, current ->
+                            if not ready.Value && overture.Length < 512 then overture.Append data |> ignore
                             let marks, clean, rest = Marks.scan nonce carry.Value data
                             carry.Value <- rest
                             // Clean output is written BEFORE the marks are acted on, and the
@@ -1328,11 +1336,21 @@ module SessionTerminals =
                             // Uninstrumented. Tear the shell down and keep the per-block
                             // path, which answers a smaller question completely — and say
                             // so, for the reason the spawn failure above does.
+                            // Control characters (the bytes a prompt is made of) are shown
+                            // escaped, so the notice is one legible line and cannot itself
+                            // carry a mark or an escape into the transcript.
+                            let said =
+                                overture.ToString ()
+                                |> Seq.map (fun c -> if System.Char.IsControl c then sprintf "\\x%02x" (int c) else string c)
+                                |> String.concat ""
                             emit
                                 id
                                 terminal
                                 TranscriptStderr
-                                "yession: the shell never printed an instrumented prompt, so it was closed — each command runs as its own process instead\r\n"
+                                (sprintf
+                                    "yession: the shell never printed an instrumented prompt, so it was closed — each command runs as its own process instead. In %dms it said: %s\r\n"
+                                    3000
+                                    (if said = "" then "nothing" else said))
                             pty.Kill ()
                             terminal.Shell <- None
                             terminal.MarksCommandStart <- false
