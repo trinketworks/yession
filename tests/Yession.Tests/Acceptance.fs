@@ -1786,6 +1786,17 @@ let private syncStatusTests =
             Expect.isTrue (html.Contains (Dom.hookText Dom.Hooks.catchUp Dom.Text.catchingUp)) "the sidebar names it"
             Expect.isTrue (html.Contains Dom.Hooks.lastProcessedOffset) "with how far it has got"
 
+        // The sidebar's line is behind a drawer on a phone, which is where a long catch-up is
+        // waited through. The header's bottom rule is on every screen, so the same catch-up
+        // is drawn along it — as a progress bar with its value, not a line changing colour,
+        // because a bar with no value is decoration to a screen reader.
+        testCase "a catch-up worth waiting on is drawn along the header's edge, with its value" <| fun () ->
+            let html = Support.render representativeModel
+            Expect.isTrue (html.Contains Dom.Hooks.catchUpBar) "the header carries the bar"
+            Expect.isTrue (html.Contains "role=\"progressbar\"") "which is a progress bar"
+            let folded = representativeModel.EventConsumer.LastProcessedOffset |> Option.map (fun o -> EventOffset.value o + 1L) |> Option.defaultValue 0L
+            Expect.isTrue (html.Contains (sprintf "aria-valuenow=\"%d\"" folded)) "carrying how far it has got"
+
         // The flag describes a catch-up that is RUNNING, so it cannot outlive one: a timer
         // that fires just as the page lands must not leave a status nothing can clear.
         testCase "'slow' cannot be claimed once there is nothing left to catch up on" <| fun () ->

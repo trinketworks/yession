@@ -763,6 +763,16 @@ module Style =
         + "max-md:h-14 max-md:items-center max-md:gap-2 max-md:px-4 max-md:pb-4 "
         + Stroke.dividerBottom
 
+    /// A slow catch-up's progress, drawn ON the header's bottom rule: the rule is the one
+    /// line every screen has under the title, and a bar growing along it says "loading, this
+    /// far" without taking a pixel of room from the band — which on a phone is 56px and
+    /// geometry-pinned. Two pixels tall over the one-pixel rule, so it reads as a bar and not
+    /// as the rule changing colour. Its width moves once per paced render (`Render`, every
+    /// half second while a client stays behind), and the transition carries it between.
+    let catchUpBar =
+        "absolute left-0 -bottom-px h-0.5 bg-blue pointer-events-none "
+        + "transition-[width] duration-500 ease-linear motion-reduce:transition-none"
+
     /// The header's right-hand group: sync status, and — only while the sidebar is off screen —
     /// the agent's absence. `pb-[1px]` is optical, not rhythm: it drops the 11px caps line's
     /// baseline onto the wordmark/title baseline (pb-1 left it 3px high, measured live). On a
