@@ -280,6 +280,15 @@ let
       cp -r --no-preserve=mode,ownership ${staged}/dist-npm "$out/libexec/yession"
       cp -r --no-preserve=mode,ownership ${staged}/node_modules "$out/libexec/yession/node_modules"
 
+      # `--no-preserve=mode` above is what makes the copy writable for the wrapper phase, and
+      # it also strips the execute bit off every file — including node-pty's `spawn-helper`,
+      # the one program in the tree that has to RUN. On macOS node-pty forks the shell through
+      # it, and a helper it cannot execute fails as `posix_spawnp failed.`: every terminal on
+      # the host then silently fell back to a process per block, with no persistent shell,
+      # no `cd` carrying between commands, and nothing to type into. Deployed that way for
+      # weeks; the check below is what would have said so.
+      find "$out/libexec/yession/node_modules" -name spawn-helper -type f -exec chmod 755 {} +
+
       mkdir -p "$out/libexec/yession/node_modules/node-datachannel/build/Release"
       cp ${node-datachannel}/build/Release/node_datachannel.node \
          "$out/libexec/yession/node_modules/node-datachannel/build/Release/node_datachannel.node"
@@ -389,6 +398,23 @@ let
         exit 1
       fi
       echo "smoke: yession-manager served the management UI"
+
+      # A pty opens through the PACKAGED node-pty, and a shell runs in it. The terminal
+      # story — one instrumented shell per terminal, blocks typed into it — stands on this
+      # and degrades silently without it, so it is proved where the package is made rather
+      # than discovered in a session's transcript. `/bin/sh` is what `TerminalShell.posix`
+      # names in production.
+      ${pkgs.nodejs_24}/bin/node -e '
+        const pty = require(process.argv[1] + "/node_modules/node-pty")
+        const p = pty.spawn("/bin/sh", ["-c", "echo pty-ok"], { name: "xterm", cols: 80, rows: 24, cwd: process.env.HOME, env: { PATH: "/usr/bin:/bin" } })
+        let out = ""
+        p.onData(d => { out += d })
+        p.onExit(({ exitCode }) => {
+          if (exitCode === 0 && out.includes("pty-ok")) { console.log("smoke: node-pty spawned /bin/sh in a pty"); process.exit(0) }
+          console.log("node-pty spawned but the shell did not answer: exit " + exitCode + ", said " + JSON.stringify(out)); process.exit(1)
+        })
+        setTimeout(() => { console.log("node-pty never reported the shell exiting"); process.exit(1) }, 10000)
+      ' "$out/libexec/yession"
 
       runHook postInstallCheck
     '';
