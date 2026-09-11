@@ -650,8 +650,25 @@ let policyFor
         // says what a sandbox starts with, and a repo may still say otherwise about its own.
         // Granted executables join PATH in FRONT of the inherited one, so a toolchain the
         // operator named is the one that answers.
+        //
+        // The git this session NAMES joins them, for the same reason the repo verbs exec it
+        // by path rather than by PATH: on macOS the `git` on an inherited PATH is Apple's
+        // xcode-select shim, which dies under seatbelt reading `/var/select` before git
+        // runs — so every `git` an agent typed into the default sandbox answered "No
+        // developer tools were found" while the session held a working one in
+        // `YESSION_BIN_GIT` the whole time. The read scope already admits it
+        // (`SrtSandbox.toolsFrom`); this is the half that lets a terminal FIND it.
+        let namedGitDirectory =
+            ambient
+            |> Map.tryFind "YESSION_BIN_GIT"
+            |> Option.map (fun path -> path.Trim ())
+            |> Option.filter (fun path -> path <> "")
+            |> Option.bind (fun path ->
+                match path.LastIndexOf '/' with
+                | index when index > 0 -> Some (path.Substring (0, index))
+                | _ -> None)
         let fromGrants =
-            match grantedPath granted with
+            match grantedPath granted @ Option.toList namedGitDirectory |> List.distinct with
             | [] -> grantedEnv
             | directories ->
                 let combined =

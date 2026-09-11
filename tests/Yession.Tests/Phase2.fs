@@ -395,6 +395,29 @@ let private sandboxPolicyTests =
             Expect.equal (policy.Env |> Map.tryFind "GIT_CONFIG_KEY_0") (Some "safe.directory") "the key"
             Expect.equal (policy.Env |> Map.tryFind "GIT_CONFIG_VALUE_0") (Some "*") "every path the session mounted"
 
+        // On macOS the inherited PATH's `git` is Apple's xcode-select shim, which dies under
+        // seatbelt before git runs. The session names a working one (`YESSION_BIN_GIT`) for
+        // its own verbs; a terminal in the sandbox has to be able to find the same one.
+        testCase "the git this session names is the first git on a confined terminal's PATH" <| fun () ->
+            let ambient = Map.ofList [ "PATH", "/usr/bin:/bin"; "YESSION_BIN_GIT", "/nix/store/x-git/bin/git" ]
+            for backend in [ SrtBackend; HostBackend ] do
+                let policy =
+                    Sandboxes.policyFor
+                        backend (Sandboxes.limitsFor backend "darwin") ambient Map.empty None None None
+                        []
+                        Set.empty
+                        EnvironmentSpec.defaults
+                    |> expect
+                Expect.equal (policy.Env |> Map.tryFind "PATH") (Some "/nix/store/x-git/bin:/usr/bin:/bin") (sprintf "%s: named git first, the rest kept" (SandboxBackend.describe backend))
+            let unnamed =
+                Sandboxes.policyFor
+                    SrtBackend (Sandboxes.limitsFor SrtBackend "darwin") (Map.ofList [ "PATH", "/usr/bin:/bin" ]) Map.empty None None None
+                    []
+                    Set.empty
+                    EnvironmentSpec.defaults
+                |> expect
+            Expect.equal (unnamed.Env |> Map.tryFind "PATH") (Some "/usr/bin:/bin") "nothing named, nothing added"
+
         testCase "a spec that names the git trio still wins over the docker baseline" <| fun () ->
             let policy =
                 Sandboxes.policyFor
