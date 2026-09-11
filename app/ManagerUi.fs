@@ -685,7 +685,15 @@ let private answeredFor (status: int) : bool =
     status <> 0 && status <> 404 && not (status >= 502 && status <= 504)
 
 /// One of the Manager's own standalone pages: the two below are the only surfaces a browser
-/// reaches that are not the management page, and they wear the same plain sheet.
+/// reaches that are not the management page, and they wear the same sheet it does.
+///
+/// The SAME sheet, linked, not a private inline one. These pages sit between the Manager and
+/// a session — `/open` is the page a browser is looking at while a session launches — and
+/// both neighbours paint the stylesheet's black ground on `<html>`. An inline sheet here said
+/// nothing about the ground, so the browser painted its default, and every launch was a
+/// white page between two black ones. Linking the app's stylesheet is what makes that
+/// impossible to reintroduce: whatever the ground becomes, these pages have it, because it
+/// is declared once, on the document, in the one file every surface links.
 ///
 /// HTML, and that is the point rather than a detail. Every other answer this file gives is
 /// read by the page's script, so `text/plain` is right for them — but these are NAVIGATIONS
@@ -697,12 +705,17 @@ let private standalonePage (title: string) (body: string) : string =
         """<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>%s</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<style>body{font-family:system-ui,sans-serif;max-width:32rem;margin:4rem auto;padding:0 1rem}p{color:#444}</style>
-</head><body>
-<h1>%s</h1>
 %s
+</head><body class="%s">
+<main class="max-w-[32rem] mx-auto my-16 px-4 flex flex-col gap-3">
+<h1 class="%s">%s</h1>
+%s
+</main>
 </body></html>"""
         (Ssr.escapeText title)
+        (Style.headTags cssUrl)
+        Style.standalone
+        Style.heading
         (Ssr.escapeText title)
         body
 
@@ -711,8 +724,8 @@ let private standalonePage (title: string) (body: string) : string =
 let private problemPage (title: string) (detail: string) : string =
     standalonePage
         title
-        (sprintf """<p>%s</p>
-<p><a href="/">Back to the session manager</a></p>""" (Ssr.escapeText detail))
+        (sprintf """<p class="%s">%s</p>
+<p><a class="%s" href="/">Back to the session manager</a></p>""" Style.body (Ssr.escapeText detail) Style.proseLink)
 
 /// A refusal a BROWSER is holding: the status it deserves, and a page that says so.
 let private problem (res: ServerResponse) (status: int) (title: string) (detail: string) =
@@ -741,8 +754,8 @@ let private openingPage (target: string) (readyUrl: string) : string =
     standalonePage
         "Opening session…"
         (sprintf
-            """<p id="status">Waiting for it to answer.</p>
-<p><a id="target" href="%s">Open it directly</a></p>
+            """<p id="status" class="%s">Waiting for it to answer.</p>
+<p><a id="target" class="%s" href="%s">Open it directly</a></p>
 <script>
   const target = %s
   const ready = %s
@@ -767,6 +780,8 @@ let private openingPage (target: string) (readyUrl: string) : string =
   }
   poll()
 </script>"""
+            Style.body
+            Style.proseLink
             (Ssr.escapeAttr target)
             (jsonLiteral target)
             (jsonLiteral readyUrl))

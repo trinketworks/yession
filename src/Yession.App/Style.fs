@@ -1970,6 +1970,13 @@ module Style =
     /// two units are the same number.
     let app = "flex h-dvh overflow-hidden bg-bg text-ink font-ui antialiased"
 
+    /// The same ground and face as `app`, on a page that is a DOCUMENT rather than a shell: the
+    /// Manager's standalone pages (`/open` while a session launches, a refusal with a way
+    /// back). No `h-dvh`/`overflow-hidden` — a few paragraphs scroll like paragraphs — but the
+    /// colours are `app`'s exactly, because the one thing these pages must not do is flash a
+    /// different ground between two surfaces that share one.
+    let standalone = "bg-bg text-ink font-ui antialiased"
+
     /// Tailwind, built locally into a stylesheet and served by both the Session Process and
     /// the Manager UI — never a CDN (local first). The utilities and the theme tokens come
     /// from the CLI build over `app/tailwind.css`, whose `@source` rules scan the F# sources
