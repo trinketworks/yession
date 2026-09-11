@@ -214,7 +214,7 @@ module AgentTools =
             sprintf "EXECUTION FAILED in %s: %s%s" where reason output
         | TerminalCommandRunning ->
             sprintf
-                "STILL RUNNING in %s. It has NOT finished; nothing was cancelled. Call check_pending with handle '%s' to pick it up.%s"
+                "STILL RUNNING in %s. It has NOT finished; nothing was cancelled. Call check_pending with handle '%s' to pick it up. If it is waiting on input, or stuck, write_terminal can type into it — \"\\u0003\" interrupts it.%s"
                 where handle output
         | TerminalCommandInteractive ->
             sprintf
@@ -226,7 +226,7 @@ module AgentTools =
         // ended the wait was one it had not been pointed at.
         | TerminalCommandAwaitingTerminal BehindBlock ->
             sprintf
-                "WAITING FOR %s — another command is running there, and this one is queued behind it. It has not run. To run it beside that command now: open_terminal, then execute_command with that `terminal`. To end what is running there, if the terminal is yours: close_terminal (whatever is queued there goes with it). Otherwise call check_pending with handle '%s' later."
+                "WAITING FOR %s — another command is running there, and this one is queued behind it. It has not run. To run it beside that command now: open_terminal, then execute_command with that `terminal`. To end what is running there: if the running command is yours, write_terminal \"\\u0003\" into that terminal interrupts it; if the terminal is yours, close_terminal ends everything in it (whatever is queued there goes with it). Otherwise call check_pending with handle '%s' later."
                 where handle
         | TerminalCommandAwaitingTerminal BehindQueue ->
             sprintf
@@ -686,7 +686,7 @@ module AgentTools =
 
           tool
               "write_terminal"
-              "Type into a terminal you hold the keyboard for: one streaming something live — a device, a console, anything whose bytes come from outside this session — or one where a command of yours opened a full-screen program and is waiting for a keystroke. Send exactly the bytes you mean, including \"\\r\" if the thing on the other end expects a newline. On a live stream, typing takes the terminal, which everyone here can see and take back, so type what you meant to and hand it over. On a shell terminal it works only while you already hold it — otherwise use execute_command, where what you run is classified and on the record."
+              "Type into a terminal you hold the keyboard for: one streaming something live — a device, a console, anything whose bytes come from outside this session — or one where a command of yours is running: a full-screen program waiting for a keystroke, a prompt you ran with `stdin: true`, or something stuck that you want to end (send \"\\u0003\" to interrupt it, \"\\u0004\" for end-of-file). Send exactly the bytes you mean, including \"\\r\" if the thing on the other end expects a newline. On a live stream, typing takes the terminal, which everyone here can see and take back, so type what you meant to and hand it over. On a shell terminal it works only while a command of yours is running there — otherwise use execute_command, where what you run is classified and on the record."
               [ ToolField.required "terminal" "string" "the terminal id, from the terminal that was opened for the stream"
                 ToolField.required "data" "string" "the bytes to type, e.g. \"AT\\r\"" ]
               (fun args ->

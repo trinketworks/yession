@@ -849,6 +849,17 @@ let private idleLeaseTests =
                 "a non-holder cannot refresh it"
     ]
 
+let private typingTests =
+    testList "Who may type into a shell terminal (Typing)" [
+        // The rule alone. Both admitted parties are typing into something already on the
+        // record; the fourth case is the door the rule exists to keep shut.
+        testCase "the lease holder and the running block's author may type; nobody else, and nobody into an idle shell" <| fun () ->
+            Expect.isTrue (Typing.admits (Some (PeerRef ada)) None (PeerRef ada)) "the holder detection handed it to"
+            Expect.isTrue (Typing.admits None (Some ActorRef.Agent) ActorRef.Agent) "the author of the block running now"
+            Expect.isFalse (Typing.admits (Some (PeerRef ada)) (Some (PeerRef ada)) ActorRef.Agent) "not a third party, whoever holds and runs"
+            Expect.isFalse (Typing.admits None None ActorRef.Agent) "and not into a shell at its prompt — that is a command, and commands are blocks"
+    ]
+
 let private flipTests =
     testList "Alt-screen flip policy" [
         testCase "a peer's block entering the alt screen hands them the terminal" <| fun () ->
@@ -3879,6 +3890,7 @@ let tests =
         drainTests
         projectionTests
         blockStdinTests
+        typingTests
         markTests
         emulatorTests
         rejectionTests

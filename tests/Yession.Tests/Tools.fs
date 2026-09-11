@@ -200,8 +200,14 @@ let private sessionTests =
         test "a wait behind a running command names both ways past it" {
             let said = AgentTools.renderOutcome { elided None with Status = TerminalCommandAwaitingTerminal BehindBlock; Output = "" }
             Expect.stringContains said "open_terminal" "run beside it"
+            Expect.stringContains said "write_terminal" "or interrupt it, if the command is yours"
             Expect.stringContains said "close_terminal" "or end it, if the terminal is yours"
             Expect.stringContains said "check_pending" "or wait for it"
+        }
+
+        test "a command still running is told it can be typed into" {
+            let said = AgentTools.renderOutcome { elided None with Status = TerminalCommandRunning; Output = "" }
+            Expect.stringContains said "write_terminal" "the hand that answers a prompt or ends a stuck one"
         }
 
         test "a wait on a person does not offer to end them" {

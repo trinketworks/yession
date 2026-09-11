@@ -1884,18 +1884,34 @@ module SessionTerminals =
                 let key = TerminalId.value id
                 if not (isOpen id) then return Error "terminal is not open"
                 elif canInstrument key then
-                    // The refusal stops exactly where the lease starts (Plan 20, stage 6). It
-                    // exists because raw bytes into a shell would be the door around the
-                    // classifier — and an actor already HOLDING an instrumented terminal is
-                    // one detection handed it to, over a block already classified and on the
-                    // record, whose keystrokes are that block's. So no taking here, only
-                    // using what the flip gave you: an actor that could take this lease
-                    // itself would be back through the door it was refused at.
-                    match TerminalLeases.holderOf id leases with
-                    | Some holder when holder = by ->
-                        return (if input id by data then Ok () else Error "this terminal has nothing to type into")
-                    | _ ->
+                    // The refusal stops exactly where `Typing.admits` says (Plan 20, stage 6).
+                    // It exists because raw bytes into a shell would be the door around the
+                    // classifier; what is admitted is typing into a block already classified
+                    // and on the record — by the holder detection handed the terminal to, or
+                    // by the author of the block running now. No taking here: an actor that
+                    // could take this lease itself would be back through the door it was
+                    // refused at.
+                    let holder = TerminalLeases.holderOf id leases
+                    let running =
+                        match runningAuthor.TryGetValue key with
+                        | true, author when Set.contains key busy -> Some author
+                        | _ -> None
+                    if not (Typing.admits holder running by) then
                         return Error "this terminal runs commands as blocks — run it with execute_command, where they are classified and on the record"
+                    elif holder = Some by then
+                        return (if input id by data then Ok () else Error "this terminal has nothing to type into")
+                    else
+                        // The author's own block, with no lease in play: straight to the
+                        // shell, whose foreground process is the block. Nothing to touch
+                        // for idleness — there is no lease to keep alive.
+                        match live.TryGetValue key with
+                        | true, terminal ->
+                            match terminal.Shell with
+                            | Some pty ->
+                                pty.Write data
+                                return Ok ()
+                            | None -> return Error "this terminal has nothing to type into"
+                        | _ -> return Error "terminal is not open"
                 else
                     match! take id by with
                     | Error reason -> return Error reason
