@@ -7,19 +7,43 @@ namespace Yession.Domain
 /// drift apart — which is exactly how "you" ended up with two names on one screen.
 module Attribution =
 
-    /// The single-event step: fold one more event into an existing peer→user map. This
-    /// is what a live process replays incrementally as events arrive; `peerUsers` below
-    /// is just this applied to a whole replay starting from empty.
-    let applyEvent (acc: Map<PeerId, UserId>) (event: SessionEvent) : Map<PeerId, UserId> =
+    /// Both directions of the one decision, carried together. A `PeerJoined` that
+    /// attributes a peer to a user is a single fact; keeping its two readings — "who is
+    /// this peer" and "which peer is this user's current one" — in one record folded by
+    /// one function means there is only one place that fact gets recorded, instead of two
+    /// folds over the same events that could (and did, once) drift out of step.
+    type State =
+        { /// Peer → user, for every join a Manager-verified authentication strategy
+          /// attributed. A peer that never appears here is unattributed (trust-localhost,
+          /// or simply hasn't joined yet) and is identified only by its `PeerId`.
+          PeerUsers : Map<PeerId, UserId>
+          /// User → their most recently joined attributed peer. A user can be attributed
+          /// through more than one `PeerJoined` over the life of a session — every
+          /// reconnect (a new tab, a dropped connection, simply having joined before)
+          /// mints a new `PeerId` — and the last one to join is the one whose
+          /// `DisplayName` is current. `PeerUsers` alone cannot answer "which one is
+          /// current": its keys are peers, so several can map to the same user with
+          /// nothing to say which is newest. This is that answer, kept up to date by the
+          /// same fold.
+          UserPeers : Map<UserId, PeerId> }
+
+    let empty : State = { PeerUsers = Map.empty; UserPeers = Map.empty }
+
+    /// The single-event step: fold one more event into an existing state, updating both
+    /// directions from the one match arm. This is what a live process replays
+    /// incrementally as events arrive; `ofEvents` below is just this applied to a whole
+    /// replay starting from empty.
+    let applyEvent (acc: State) (event: SessionEvent) : State =
         match event with
-        | PeerJoined { PeerId = peer; User = Some user } -> Map.add peer user acc
+        | PeerJoined { PeerId = peer; User = Some user } ->
+            { PeerUsers = Map.add peer user acc.PeerUsers
+              UserPeers = Map.add user peer acc.UserPeers }
         | _ -> acc
 
-    /// Peer → user, for every join a Manager-verified authentication strategy attributed.
-    /// A peer that never appears here is unattributed (trust-localhost, or simply hasn't
-    /// joined yet) and is identified only by its `PeerId`.
-    let peerUsers (events: SessionEvent list) : Map<PeerId, UserId> =
-        events |> List.fold applyEvent Map.empty
+    /// A whole event log, folded from empty. Same result as replaying `applyEvent` one
+    /// event at a time from `empty`.
+    let ofEvents (events: SessionEvent list) : State =
+        events |> List.fold applyEvent empty
 
     /// Who to credit a peer's act to: their durable `UserRef` when their join was
     /// attributed, or the peer connection itself when it was not. This is the one rule —

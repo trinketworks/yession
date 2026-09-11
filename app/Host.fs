@@ -205,10 +205,10 @@ let startFull
         // `Yession.Domain.Attribution`, shared with the client (Fable compiles the same
         // function), so chat authorship and the sidebar cannot again disagree about who
         // somebody is.
-        let mutable peerUsers : Map<PeerId, UserId> = Map.empty
+        let mutable attribution : Attribution.State = Attribution.empty
         let recordAttribution (event: SessionEvent) : unit =
-            peerUsers <- Attribution.applyEvent peerUsers event
-        let actorFor (peerId: PeerId) : ActorRef = Attribution.actorFor peerUsers peerId
+            attribution <- Attribution.applyEvent attribution event
+        let actorFor (peerId: PeerId) : ActorRef = Attribution.actorFor attribution.PeerUsers peerId
 
         // The terminal projection as the Process itself has it, folded forward on every
         // append. The Process is the log's only writer, so this is complete and ordered by

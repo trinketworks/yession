@@ -133,7 +133,7 @@ let private representativeModel : ClientModel =
       Presence = Map.ofList [ bob, { DisplayName = "brave-owl"; Focus = { Field = Title; Pos = { Anchor = "AQI="; Head = "AwQ=" } } } ]
       // The roster names a draft's author even when they are not here: a label, never a peer id.
       Peers = Map.ofList [ ada, "swift-heron"; bob, "brave-owl" ]
-      PeerUsers = Map.empty
+      Attribution = Attribution.empty
       Composer = Unchosen
       Environment = EnvironmentNotStarted
       Terminals =
@@ -2015,7 +2015,7 @@ let private semanticsTests =
                 Support.render
                     { representativeModel with
                         Peers = Map.ofList [ bob, "quiet-otter" ]
-                        PeerUsers = Map.ofList [ bob, carol ]
+                        Attribution = { PeerUsers = Map.ofList [ bob, carol ]; UserPeers = Map.ofList [ carol, bob ] }
                         Presence = Map.empty
                         Conversation =
                             { Items =
@@ -2041,7 +2041,7 @@ let private semanticsTests =
                 Support.render
                     { representativeModel with
                         Peers = Map.empty
-                        PeerUsers = Map.empty
+                        Attribution = Attribution.empty
                         Presence = Map.empty
                         Conversation =
                             { Items =
@@ -2057,6 +2057,36 @@ let private semanticsTests =
             Expect.isTrue
                 ((messageMetaOfLabel (UserId.value carol) html).Contains ">carol@example.com<")
                 "no peer join known for this user, so the subject stands in rather than nothing"
+
+        // The exact defect reported live: an attributed user's EARLIER join (before a real
+        // name reached it, or simply an earlier session) stays in `PeerUsers` right alongside
+        // their current one — reverse-scanning that map for "a peer attributed to this user"
+        // can land on either, which is how chat showed a stale random name while the sidebar
+        // (self, which never goes through this lookup) showed the current one on the same
+        // screen. `UserPeers` is what makes "current" well-defined: whichever `PeerJoined`
+        // came LAST wins, deterministically, not whichever `PeerId` sorts first.
+        testCase "an attributed user's message wears their CURRENT join's name, not a stale one" <| fun () ->
+            let dora = PeerId.create "dora" |> expect
+            let html =
+                Support.render
+                    { representativeModel with
+                        Peers = Map.ofList [ bob, "lucid-tern"; dora, "warm-tern" ]
+                        Attribution = { PeerUsers = Map.ofList [ bob, carol; dora, carol ]; UserPeers = Map.ofList [ carol, dora ] }
+                        Presence = Map.empty
+                        Conversation =
+                            { Items =
+                                [ { MessageId = MessageId.create "msg-carol" |> expect
+                                    Author = UserRef carol
+                                    Body = "on it"
+                                    Status = Complete
+                                    Kind = ConversationItemKind.Message
+                                    Offset = EventOffset.create 1L |> expect
+                                    Woke = None; Replying = None } ]
+                              ActiveAgentMessages = Map.empty; WokenTurn = None; TriggeredTurn = None }
+                        Timeline = TimelineProjection.empty }
+            let meta = messageMetaOfLabel (UserId.value carol) html
+            Expect.isTrue (meta.Contains ">warm-tern<") "the current join's name, not the stale one"
+            Expect.isFalse (meta.Contains ">lucid-tern<") "an earlier join under the same user is not who they are now"
 
         // The roster is folded from the durable `PeerJoined` log; your own display name comes
         // from THIS connection. When a peer rejoined under a new name the two disagreed, and a
