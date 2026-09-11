@@ -81,12 +81,12 @@ module Dom =
         /// Marks the ref that is a JUMP — a live control, as against the inert one whose source
         /// paged out of the loaded conversation. Presence is the difference a test reads.
         let replyJump = "data-reply-jump"
-        /// The chapter rail beside the timeline, and one stroke on it valued by the message
-        /// whose chapter it points at. Beside them, the per-item control that opens a chapter
-        /// there — valued by the same id, and carrying whether this item already opens one, so
-        /// a test can read the state without reading a class.
-        let chapterRail = "data-chapter-rail"
-        let chapter = "data-chapter"
+        /// The rule a chapter draws across the transcript, valued by the message it opens at,
+        /// and the field on it that says what the chapter is called. Beside them, the per-item
+        /// control that opens a chapter there — valued by the same id, and carrying whether
+        /// this item already opens one, so a test can read the state without reading a class.
+        let chapterRule = "data-chapter-rule"
+        let chapterName = "data-chapter-name"
         /// The per-item actions control, valued by the message it acts on, and the menu it
         /// opens. `data-item-is-chapter` rides the CHAPTER entry rather than the control: what
         /// a test wants to read is which way the entry will go, and that is a property of
@@ -348,7 +348,7 @@ module Dom =
         let catchingUp = "Catching up"
         let upToDate = "Up to date"
 
-        // The chapter rail, and the menu a chapter is opened from.
+        // The chapter rule, and the menu a chapter is opened from.
         //
         // ONE word, on the surface and in the code alike. It used to be "bookmark" here and
         // "landmark" underneath — the code's word admitting that some of them arrive without
@@ -367,6 +367,10 @@ module Dom =
         /// A chapter on a message that has not said anything yet — a turn that has started and
         /// written nothing. Rare, and the alternative is a control with no name at all.
         let unnamedChapter = "Unnamed chapter"
+
+        /// What the field on a rule is, for a reader who cannot see the rule it sits on. The
+        /// name itself is the value, so the label says what KIND of thing it is.
+        let chapterNameLabel = "Chapter name"
 
         /// What a copy control says once it has copied, IN THE BOX that held the value —
         /// the confirmation lands where the eye already is, rather than beside it. A moment

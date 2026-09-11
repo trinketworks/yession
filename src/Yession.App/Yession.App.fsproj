@@ -17,7 +17,6 @@
     <!-- Where a stroke sits on the landmark rail. Pure arithmetic over measurements the
          browser takes, so it sits below the view that renders the rail and below the browser
          module that measures for it. -->
-    <Compile Include="Rail.fs" />
     <Compile Include="Style.fs" />
     <Compile Include="Icon.fs" />
     <Compile Include="ProseMirror.fs" />

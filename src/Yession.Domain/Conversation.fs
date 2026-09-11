@@ -214,6 +214,16 @@ module Chapters =
             | ConversationItemKind.ActNote facts -> facts.Notable
             | ConversationItemKind.Message -> false
 
+    /// The name as the session HOLDS it: empty where nobody has written one.
+    ///
+    /// What a WRITER needs, where `name` is what a reader sees. An edit is a splice against
+    /// the text that is there, so a field diffing against the guess would be a field whose
+    /// first keystroke re-wrote a name nobody had chosen.
+    let written (chapters: Map<MessageId, ChapterMark>) (item: ConversationItem) : Ylmish.Text =
+        match chapters |> Map.tryFind item.MessageId with
+        | Some mark -> mark.Name
+        | None -> Ylmish.Text.empty
+
     /// What the chapter here is called: what somebody wrote, or the guess until they do.
     ///
     /// The fallback is HERE rather than at the surfaces, for the reason the default verdict
@@ -221,9 +231,9 @@ module Chapters =
     /// it, so a surface reading the map on its own would draw a rule with nothing written on
     /// it — and the next surface would have to remember the same rule.
     let name (chapters: Map<MessageId, ChapterMark>) (item: ConversationItem) : string =
-        match chapters |> Map.tryFind item.MessageId with
-        | Some mark when Ylmish.Text.toString mark.Name <> "" -> Ylmish.Text.toString mark.Name
-        | _ -> defaultName item
+        match Ylmish.Text.toString (written chapters item) with
+        | "" -> defaultName item
+        | said -> said
 
     /// Open a chapter here, or close the one that is open.
     ///

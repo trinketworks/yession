@@ -654,11 +654,6 @@ let create (deps: Deps) : Renderer =
         // model, because unlike the sidebar this column's visibility is something the app
         // itself changes (selecting a terminal opens it).
         PaneShell.setOpen model.TerminalsOpen
-        // Where the chapter rail's strokes stand, measured against the conversation this
-        // render just wrote. Here rather than a frame later: a stroke reads its position
-        // from a custom property, and a frame with none written is a frame of hairlines
-        // stacked on the rail's foot.
-        RailSync.sync ()
         // Keep a slot rule running for every open terminal: a person may be mid-command
         // in more than one, and each slot follows its own command line.
         syncTerminalSlots model
@@ -678,11 +673,8 @@ let create (deps: Deps) : Renderer =
 
 /// The listeners that belong with the render and are bound once per page: renders keep the
 /// reader's place (`setState`), and this keeps it across the other thing that moves it, a
-/// viewport that changed size under a laid-out surface; the split between the two columns is
-/// the reader's to set, not the theme's; and the rail follows the conversation while it moves
-/// under it — which scrolling and a resized window both do without changing a thing in the
-/// model.
+/// viewport that changed size under a laid-out surface; and the split between the two columns
+/// is the reader's to set, not the theme's.
 let attach () : unit =
     keepSurfacesPinned PinnedSurfaces
     PaneShell.installPaneResize ()
-    RailSync.watch ()

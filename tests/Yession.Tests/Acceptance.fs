@@ -1186,79 +1186,55 @@ let private uiChecklistTests =
             Expect.isTrue (html.Contains "#377 unreachable") "the strip says nobody is driving it"
             Expect.isFalse (html.Contains "#377 queued") "and not the state it is stuck in"
 
-        // --- The chapter rail ---------------------------------------------------------
+        // --- Chapters in the timeline -------------------------------------------------
 
-        testCase "only where a chapter opens is on the rail" <| fun () ->
-            Expect.equal (ClientModel.chapters representativeModel) [] "no chapters, nothing drawn"
-            Expect.equal
-                (ClientModel.chapters (withChapters [ "msg-1" ]) |> List.map (fun i -> MessageId.value i.MessageId))
-                [ "msg-1" ]
-                "one chapter, one stroke, on the item it opens at"
+        // Where a chapter opens, a rule stands — one, on the item it opens at, and none
+        // anywhere else. This replaced a rail whose hairlines were placed by measuring the
+        // laid-out page; what a rule promises instead is only that it is in the flow, and
+        // this is the half of that a rendered string can see.
+        testCase "a rule stands where a chapter opens, and nowhere else" <| fun () ->
+            let bare = Support.render representativeModel
+            Expect.isFalse (bare.Contains Dom.Hooks.chapterRule) "no chapters, no rules"
+            let divided = Support.render (withChapters [ "msg-1"; "msg-agent" ])
+            Expect.equal (occurrences (Dom.attr Dom.Hooks.chapterRule "msg-1") divided) 1 "one rule for one chapter"
+            Expect.equal (occurrences (Dom.attr Dom.Hooks.chapterRule "msg-agent") divided) 1 "and one for the other"
 
-        // The promise the whole rail rests on, and the one a person sees: tap a stroke, the
-        // message arrives, and the stroke is level with it. In the exact zone the placement IS
-        // the measurement — anything else here and the two lines are near each other by luck.
-        testCase "a message on screen puts its stroke exactly level with it" <| fun () ->
-            for aboveFold in [ 12.0; 100.0; 300.0; 452.0 ] do
-                Expect.equal
-                    (Rail.place 800.0 aboveFold)
-                    aboveFold
-                    (sprintf "a message %fpx above the fold is a stroke %fpx up" aboveFold aboveFold)
+        // A rule is a divider across the session, so it cannot be a member of an author's
+        // group: folded into one it would be a line drawn inside somebody's turn, under their
+        // name. The group head is what a run of messages by one actor opens with, so a rule
+        // that broke out of the run leaves the message it opens at starting a new one.
+        testCase "a chapter breaks the run of messages it opens in" <| fun () ->
+            // A run to break, and nothing else on the timeline: consecutive messages by one
+            // person fold under one author line, and the representative session has no two of
+            // them in a row — a block sits between its only pair.
+            let saidBy id at =
+                { MessageId = MessageId.create id |> expect
+                  Author = PeerRef ada
+                  Body = "ship it"
+                  Status = Complete
+                  Kind = ConversationItemKind.Message
+                  Offset = EventOffset.create at |> expect
+                  Woke = None; Replying = None }
+            let first = saidBy "msg-a" 1L
+            let next = saidBy "msg-b" 2L
+            let joined =
+                { representativeModel with
+                    Conversation = { ConversationProjection.empty with Items = [ first; next ] }
+                    Timeline = TimelineProjection.empty }
+            let divided =
+                { joined with
+                    Synced =
+                        { joined.Synced with
+                            Chapters = Map.ofList [ next.MessageId, { Opens = true; Name = Ylmish.Text.empty } ] } }
+            let runs (model: ClientModel) =
+                occurrences (Dom.attr Dom.Hooks.messageAuthor (PeerId.value ada)) (Support.render model)
+            Expect.equal (runs divided) (runs joined + 1) "the run is split, rather than the rule joining it"
 
-        // The rail may not run off either end, however far a message is from the fold. A
-        // stroke outside its own box is a chapter nobody can click.
-        testCase "no message is far enough away to put its stroke off the rail" <| fun () ->
-            for aboveFold in [ -1e6; -900.0; -1.0; 0.0; 801.0; 5000.0; 1e6 ] do
-                let place = Rail.place 800.0 aboveFold
-                Expect.isTrue
-                    (place >= 0.0 && place <= 800.0)
-                    (sprintf "%f above the fold placed at %f, which is off a 800px rail" aboveFold place)
-
-        // Order is the rail's other promise: a mark older than another is above it, wherever
-        // either of them has got to. A curve that folded back on itself would cross two
-        // strokes over and say the conversation happened in a different order.
-        testCase "a mark further up the conversation is further up the rail" <| fun () ->
-            let places = [ for i in 0 .. 200 -> Rail.place 800.0 (float (i * 12) - 400.0) ]
-            Expect.equal (List.sort places) places "placement never doubles back"
-
-        // The reason the easing has the shape it does, and the promise a person actually
-        // feels: a stroke never moves FASTER than the conversation under it. Inside the exact
-        // zone it moves at exactly the scroll's speed and outside it lags, so a pixel of
-        // scrolling is at most a pixel of rail — which is what makes both seams invisible.
-        //
-        // Swept rather than sampled at the two seams, so the case does not have to know where
-        // they are: a discontinuity anywhere is a hairline that teleports mid-scroll, and a
-        // test that guessed the seam's address would miss one that had moved.
-        testCase "a stroke never travels further than the message it is following" <| fun () ->
-            let step = 0.5
-            let worst =
-                [ for i in 0 .. 2400 -> Rail.place 800.0 (float i * step - 400.0) ]
-                |> List.pairwise
-                |> List.map (fun (below, above) -> above - below)
-                |> List.max
-            Expect.isTrue
-                (worst <= step + 1e-9)
-                (sprintf "%fpx of scrolling moved the rail %fpx" step worst)
-
-        // What crowding does to the rail. Everything scrolled away shares one band, so a long
-        // session's older marks arrive on top of each other — ordered, and unreadable as
-        // marks.
-        testCase "strokes landing on each other are pushed apart, keeping their order" <| fun () ->
-            let spread = Rail.spaced 6.0 800.0 [ 3.0; 2.0; 1.0; 0.0 ]
-            Expect.equal spread [ 18.0; 12.0; 6.0; 0.0 ] "each one a gap above the one below it"
-
-        // And what it does NOT do. The exact zone is where the placement is a promise, and a
-        // separation rule that nudged strokes there would quietly break it for the strokes it
-        // is not needed for.
-        testCase "strokes already apart are left exactly where they were" <| fun () ->
-            let places = [ 400.0; 200.0; 90.0; 20.0 ]
-            Expect.equal (Rail.spaced 6.0 800.0 places) places "no crowding, no correction"
-
-        // What a stroke is called is the SESSION's answer (`Chapters.name`), not this
-        // surface's: two surfaces computing a name apiece are two surfaces that can call one
-        // chapter two things. The cut, the guess and the stripped markdown are the domain's,
-        // and are pinned there.
-        testCase "a stroke wears the name the session holds for its chapter" <| fun () ->
+        // What a rule says is the SESSION's answer (`Chapters.name`), not this surface's: two
+        // surfaces computing a name apiece are two surfaces that can call one chapter two
+        // things. The cut, the guess and the stripped markdown are the domain's, and are
+        // pinned there.
+        testCase "a rule wears the name the session holds for its chapter" <| fun () ->
             let messageId = MessageId.create "msg-1" |> expect
             let model = withChapters [ "msg-1" ]
             let named =
@@ -1287,13 +1263,6 @@ let private uiChecklistTests =
                 (ClientModel.chapterName representativeModel silent)
                 Dom.Text.unnamedChapter
                 "a name, rather than nothing to announce"
-
-        testCase "the rail draws one stroke per chapter, and is not there when there are none" <| fun () ->
-            let bare = Support.render representativeModel
-            Expect.isFalse (bare.Contains Dom.Hooks.chapterRail) "no chapters, no rail"
-            let divided = Support.render (withChapters [ "msg-1"; "msg-agent" ])
-            Expect.isTrue (divided.Contains Dom.Hooks.chapterRail) "a rail once the session is divided"
-            Expect.equal (occurrences "data-chapter=" divided) 2 "one stroke per chapter"
 
         // "Divide it anywhere" is the promise, so the control is on every item that has an id —
         // a message and an act alike. Chapters chosen for the reader would be somebody else's

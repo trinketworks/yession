@@ -1206,34 +1206,6 @@ let [<Literal>] private groundSpare =
          return port.clientWidth - item.getBoundingClientRect().width
        }"""
 
-/// How far the rail's stroke sits from the top of the message it marks, once the rail has had
-/// a chance to place it — the one number both rail-tracking cases are about.
-///
-/// A promise resolved three frames out rather than a timeout, because the sequence is exact: a
-/// scroll happens, the scroll ASKS for a measurement, and the measurement lands on the frame
-/// after that. Reading on the frame the scroll happened reads where the rail was, which is a
-/// green case that measures nothing.
-///
-/// The stroke's CENTRE, because that is where its hairline is: the button is a hit area
-/// deliberately taller than the mark inside it.
-///
-/// The mark in the MIDDLE of the harness's conversation, not the first one: an item at the top
-/// of a scrollport cannot be scrolled to the middle of it, so the first message is never in
-/// the zone where the placement is exact and a case measuring it would be measuring the
-/// easing.
-let [<Literal>] private settledOffset =
-    """() => new Promise(done => {
-         const measure = () => {
-           const stroke = document.querySelector("#shell [data-chapter='msg-filler-8']")
-           const item = document.querySelector("#shell [data-conversation] [data-message-id='msg-filler-8']")
-           const s = stroke.getBoundingClientRect()
-           const i = item.getBoundingClientRect()
-           return Math.abs((s.top + s.height / 2) - i.top)
-         }
-         const frame = n => n === 0 ? done(measure()) : requestAnimationFrame(() => frame(n - 1))
-         frame(3)
-       })"""
-
 let editorTests =
     testList "Editor rendering (browser)" [
         editorCase "Markdown typed in the rich editor renders formatted and round-trips to Markdown" EDITOR_PORT <| fun page ->
@@ -2005,71 +1977,50 @@ let editorTests =
                 let! after = await (viewport ())
                 Expect.notEqual after before "the width the next command would claim follows the pane"
             }
-        // The chapter rail lives in the timeline's own left padding — 32px the scroller
-        // already reserves and draws nothing in — rather than in a column of its own. That is
-        // the arrangement that costs the conversation no width, and it is also the one whose
-        // failure is silent: nothing in the markup says whether a stroke has ended up on top
-        // of the words it points at, and every cheap tier reads markup. Two ways it breaks —
-        // the rail widening, or the timeline's inset narrowing — and one measurement catches
-        // both, because what is promised is the relationship and not either number.
-        //
-        // Clicking it is the other half. `revealMessage` finds an element by id and scrolls
-        // it; a hook that stopped matching would leave a rail of buttons that quietly do
-        // nothing, which no rendered string can tell from one that works.
-        editorCaseIn 1440 900 "a rail stroke stands clear of the words it points at, and takes you to them" (EDITOR_PORT + 22) <| fun page ->
+        // A chapter's rule is in the FLOW, which is the whole of what replaced the rail: no
+        // measurement places it, so what a browser has to settle is not where it was put but
+        // that it is where the document says — above the message it opens at, across the
+        // reading column, and painted. Every cheap tier reads markup, and markup cannot tell a
+        // rule standing over its message from one collapsed to nothing behind it.
+        editorCaseIn 1440 900 "a chapter's rule stands above the message it opens, across the column" (EDITOR_PORT + 22) <| fun page ->
             async {
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-chapter-rail] [data-chapter]")
-                let! clear =
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-chapter-rule='msg-filler-8']")
+                let! above =
                     await (page.EvaluateAsync<bool>
                             """() => {
-                                 const stroke = document.querySelector('#shell [data-chapter] > *')
-                                 const body = document.querySelector('#shell [data-conversation] [data-message-body]')
-                                 return stroke.getBoundingClientRect().right <= body.getBoundingClientRect().left
+                                 const rule = document.querySelector("#shell [data-chapter-rule='msg-filler-8']")
+                                 const item = document.querySelector("#shell [data-conversation] [data-message-id='msg-filler-8']")
+                                 const r = rule.getBoundingClientRect()
+                                 const i = item.getBoundingClientRect()
+                                 return r.height > 0 && r.width > 0 && r.bottom <= i.top
                                }""")
-                Expect.isTrue clear "the stroke ends before the reading column begins"
+                Expect.isTrue above "the rule stands above its message, with a box of its own"
 
-                // And it is a mark somebody can SEE: a hairline that resolved to nothing, or
-                // painted the background colour onto the background, would measure as being
-                // in the right place and show as an empty gutter.
+                // And it is a line somebody can SEE. A border that resolved to nothing, or
+                // painted the ground onto the ground, measures exactly as one that works.
                 let! painted =
                     await (page.EvaluateAsync<bool>
                             """() => {
-                                 const mark = document.querySelector('#shell [data-chapter] > *')
-                                 const box = mark.getBoundingClientRect()
-                                 const paint = getComputedStyle(mark).backgroundColor
-                                 return box.width > 0 && box.height > 0
-                                        && paint !== 'rgba(0, 0, 0, 0)' && paint !== 'transparent'
+                                 const rule = document.querySelector("#shell [data-chapter-rule='msg-filler-8']")
+                                 const style = getComputedStyle(rule)
+                                 const ground = getComputedStyle(document.querySelector('#shell [data-conversation]')).backgroundColor
+                                 return parseFloat(style.borderTopWidth) > 0 && style.borderTopColor !== ground
                                }""")
-                Expect.isTrue painted "the stroke is a mark on the screen, not a box with nothing in it"
+                Expect.isTrue painted "the rule is a line on the screen, not a border the ground swallowed"
 
-                // Away from the chapter first, so the click has a real scroll to make
-                // and the author line is pinned over the top of the column when it lands.
-                let! _ =
-                    await (page.EvaluateAsync<bool>
-                            """() => { const t = document.querySelector('#shell [data-conversation]')
-                                       t.scrollTop = t.scrollHeight
-                                       return t.scrollTop > 0 }""")
-                do! awaitU (page.ClickAsync "#shell [data-chapter]")
-                let! _ =
-                    await (page.WaitForFunctionAsync
-                        """document.querySelector("#shell [data-conversation] [data-message-id='msg-harness']")
-                             ?.classList.contains('animate-reveal') === true""")
-
-                // And it lands somewhere a person can READ it. A jump that scrolls to the top
-                // of this scrollport puts its target under the author line pinned there — the
-                // flash above fires either way, so the mark says "here" about something off
-                // the screen. Hit-tested rather than measured against the header's box: what
-                // matters is that the message is what is PAINTED where it claims to be, and a
-                // rect stays honest under anything drawn over it.
-                let! reached =
+                // It divides the COLUMN, so it is exactly as wide as the column. Narrower and
+                // it reads as a mark on one message; wider — which is what a rule with no
+                // measure of its own does on a desktop — and it reads as a line drawn on the
+                // page, with the conversation happening to sit inside it.
+                let! spans =
                     await (page.EvaluateAsync<bool>
                             """() => {
-                                 const item = document.querySelector("#shell [data-conversation] [data-message-id='msg-harness']")
-                                 const box = item.getBoundingClientRect()
-                                 const at = document.elementFromPoint(box.left + box.width / 2, box.top + 4)
-                                 return item.contains(at)
+                                 const rule = document.querySelector("#shell [data-chapter-rule='msg-filler-8']")
+                                 const item = document.querySelector("#shell [data-conversation] [data-message-id='msg-filler-8']")
+                                 return Math.abs(rule.getBoundingClientRect().width
+                                                 - item.getBoundingClientRect().width) <= 1
                                }""")
-                Expect.isTrue reached "the message a stroke points at is on the screen, not under what covers the top of it"
+                Expect.isTrue spans "the rule runs the width of the column it divides"
                 return ()
             }
         // The reply ref's jump — the same `revealMessage` the rail drives, reached from the
@@ -2103,72 +2054,27 @@ let editorTests =
                 Expect.isTrue landed "the message the ref answers is on the screen and holds the cursor"
                 return ()
             }
-        // The rail's half of the same promise, now that the reveal moves focus for both: a
-        // stroke does not only scroll to its message, it puts the cursor there. This is the
-        // parity — one `revealMessage`, two triggers — and regressing the focus line fails this
-        // case and the ref's together, which is what says they are the one function.
-        editorCaseIn 1440 900 "a rail stroke lands the cursor on its message, the same jump the ref makes" (EDITOR_PORT + 35) <| fun page ->
+        // The name on a rule is an INPUT at rest, which is a promise no markup test can
+        // settle: a field that renders but never takes a keystroke, or one whose value the
+        // next render puts back, reads in the DOM exactly like one that works. So this types
+        // into it and waits for what was typed to survive a render — which is the whole
+        // round trip, from the field through `EditChapterNameMsg` and the session's own text
+        // back to the value the view writes.
+        editorCaseIn 1440 900 "what you type on a chapter's rule is what the session calls it" (EDITOR_PORT + 29) <| fun page ->
             async {
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-chapter-rail] [data-chapter]")
-                do! awaitU (page.ClickAsync "#shell [data-chapter='msg-filler-8']")
-                let! _ =
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-chapter-name='msg-filler-8']")
+                do! awaitU (page.ClickAsync "#shell [data-chapter-name='msg-filler-8']")
+                // To the end of whatever the heuristic guessed, so this adds rather than
+                // replacing — an edit against the text the session holds is what the field is
+                // for, and appending is the edit most likely to expose a diff computed against
+                // the wrong side.
+                do! awaitU (page.Keyboard.PressAsync "End")
+                do! awaitU (page.Keyboard.TypeAsync " — settled")
+                let! kept =
                     await (page.WaitForFunctionAsync
-                        """document.querySelector("#shell [data-conversation] [data-message-id='msg-filler-8']")
-                             ?.classList.contains('animate-reveal') === true""")
-                let! focused =
-                    await (page.EvaluateAsync<bool>
-                            """() => document.querySelector("#shell [data-conversation] [data-message-id='msg-filler-8']") === document.activeElement""")
-                Expect.isTrue focused "the rail moves the cursor to its message, through the same reveal the ref uses"
-                return ()
-            }
-        // The rail's whole promise, and the one nothing but a rendered page can settle: a
-        // stroke stands LEVEL with the message it marks. `Rail.place` is pinned in the cheap
-        // tier and says nothing about what it is given — a syncer measuring against the wrong
-        // box, or against a rail whose ends are inset from the scrollport's, satisfies every
-        // model test and puts every stroke on the screen a constant distance from its message.
-        //
-        // Measured after the rail's own jump, which is what a person does to see this: tap the
-        // stroke, the message arrives, and the two are on one line.
-        editorCaseIn 1440 900 "a stroke stands level with the message it marks" (EDITOR_PORT + 29) <| fun page ->
-            async {
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-chapter-rail] [data-chapter]")
-                do! awaitU (page.ClickAsync "#shell [data-chapter='msg-filler-8']")
-                let! _ =
-                    await (page.WaitForFunctionAsync
-                        """document.querySelector("#shell [data-conversation] [data-message-id='msg-filler-8']")
-                             ?.classList.contains('animate-reveal') === true""")
-                // Three frames rather than a timeout: the jump scrolls, the scroll is what asks
-                // for a measurement, and the measurement lands on the frame after that. A read
-                // taken on the frame the scroll happened is a read of where the rail WAS.
-                let! apart = await (page.EvaluateAsync<float> settledOffset)
-                Expect.isTrue
-                    (apart < 2.0)
-                    (sprintf "the stroke sits %fpx from the top of the message it marks" apart)
-                return ()
-            }
-        // And it goes on standing there while the conversation moves under it. Nothing
-        // re-renders when a reader scrolls — the model does not hold a pixel — so the only
-        // thing that can keep these two on one line is the listener, and a rail without one
-        // passes the case above and then slides off its message on the first scroll.
-        editorCaseIn 1440 900 "a stroke follows its message while the timeline scrolls" (EDITOR_PORT + 30) <| fun page ->
-            async {
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-chapter-rail] [data-chapter]")
-                do! awaitU (page.ClickAsync "#shell [data-chapter='msg-filler-8']")
-                let! _ =
-                    await (page.WaitForFunctionAsync
-                        """document.querySelector("#shell [data-conversation] [data-message-id='msg-filler-8']")
-                             ?.classList.contains('animate-reveal') === true""")
-                let! _ = await (page.EvaluateAsync<float> settledOffset)
-                let! _ =
-                    await (page.EvaluateAsync<bool>
-                            """() => { const t = document.querySelector('#shell [data-conversation]')
-                                       const was = t.scrollTop
-                                       t.scrollTop = was + 40
-                                       return t.scrollTop > was }""")
-                let! apart = await (page.EvaluateAsync<float> settledOffset)
-                Expect.isTrue
-                    (apart < 2.0)
-                    (sprintf "40px of scrolling left the stroke %fpx from its message" apart)
+                        """document.querySelector("#shell [data-chapter-name='msg-filler-8']")
+                             ?.value.endsWith(' — settled') === true""")
+                Expect.isNotNull kept "what was typed is what the rule says, after the render that followed it"
                 return ()
             }
         // The ground a message stands on, and the three promises it makes that only a laid-out

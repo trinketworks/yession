@@ -1791,15 +1791,41 @@ module View =
                   </summary>
                   {lines |> List.map (fun ((terminalId, block), _) -> blockChip terminalId block)}
                 </details>"""
+        // Where a chapter opens: a rule across the column carrying what it is called, above
+        // the item it opens at and outside whatever author group that item belongs to — a
+        // divider folded into a group would be a line drawn inside somebody's turn rather
+        // than across the session.
+        //
+        // The name is an INPUT at rest, the session title's arrangement: a name that only
+        // becomes editable once pressed is a name nobody presses, and the two places this
+        // product lets you write on a shared surface should not work two ways. What it diffs
+        // against is what the session HOLDS (`Chapters.written`), never the guess on screen,
+        // so the first keystroke on a chapter nobody has named writes a name rather than
+        // editing one nobody chose.
+        let chapterRule (item: ConversationItem) =
+            let held = Chapters.written model.Synced.Chapters item
+            let named = ClientModel.chapterName model item
+            html $"""
+                <div class="{Style.chapterRule}" data-chapter-rule="{MessageId.value item.MessageId}">
+                  <span class="{Style.chapterDot}" aria-hidden="true"></span>
+                  <input type="text" class="{Style.chapterName}"
+                         data-chapter-name="{MessageId.value item.MessageId}"
+                         aria-label="{Dom.Text.chapterNameLabel}"
+                         autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false"
+                         enterkeyhint="done"
+                         value="{named}"
+                         .value={named}
+                         @input={EvVal(fun v -> dispatch (EditChapterNameMsg (item.MessageId, Ylmish.Text.edit v held)))}
+                         @keydown={Ev(fun e -> commitOnEnter e)}>
+                </div>"""
         let rows = TimelineProjection.rows model.Conversation model.Timeline
         // Every row resolved to (whose act it is, its rendering) BEFORE grouping, so a row
         // whose backing state a page boundary withheld contributes no entry — never an empty
         // element, and never an author line standing over nothing. An act note's actor is
         // `None`: its sentence carries its own name, so it neither takes an author line nor
         // joins a run under one.
-        let entries : (ActorRef option * TemplateResult) list =
-            rows
-            |> List.choose (function
+        let entryOf row =
+            match row with
                 | RowItem (TimelineMessage item) ->
                     match item.Kind with
                     | ConversationItemKind.ActNote facts -> Some (None, actNoteItem facts item)
@@ -1841,7 +1867,16 @@ module View =
                     | [] -> None
                     | [ (terminalId, block) ] ->
                         Some (Some (Authority.author block.Authority), blockChip terminalId block)
-                    | many -> Some (Some ActorRef.Agent, taskCard turn many))
+                    | many -> Some (Some ActorRef.Agent, taskCard turn many)
+        let entries : (ActorRef option * TemplateResult) list =
+            rows
+            |> List.collect (fun row ->
+                let rule =
+                    match row with
+                    | RowItem (TimelineMessage item) when Chapters.opens model.Synced.Chapters item ->
+                        [ None, chapterRule item ]
+                    | _ -> []
+                rule @ Option.toList (entryOf row))
         // Consecutive acts by ONE actor fold under one author line — the avatar and name a
         // message used to repeat per turn, said once where the speaker changes. The line is
         // sticky (`Style.messageGroupHead`), so a run longer than the screen keeps saying
@@ -1925,32 +1960,7 @@ module View =
                 | None ->
                     [ html $"""<div class="{Style.timelineIdle}" aria-hidden="true"><span class="{Style.caretIdle}"></span></div>""" ]
             | _ -> Option.toList missing @ items
-        // One stroke per chapter, standing level with the message it opens at. WHERE that is cannot
-        // be rendered: it is a measurement of a laid-out page that changes on every scroll
-        // frame, so each stroke reads a custom property the browser layer writes (`RailSync`),
-        // and this puts the `data-chapter` hook on it that says which message to measure.
-        let rail =
-            match ClientModel.chapters model with
-            | [] -> Lit.nothing
-            | chapters ->
-                let stroke (item: ConversationItem) =
-                    let label = ClientModel.chapterName model item
-                    html $"""
-                        <button type="button" class="{Style.chapterStroke}"
-                                style="{Style.chapterAt}"
-                                data-chapter="{MessageId.value item.MessageId}" aria-label="{label}"
-                                @click={Ev(fun _ -> actions.RevealMessage item.MessageId)}>
-                          <span class="{Style.chapterMark}"></span>
-                        </button>"""
-                html $"""
-                    <nav class="{Style.chapterRail}" aria-label="{Dom.Text.chapters}" data-chapter-rail>
-                      {chapters |> List.map stroke}
-                    </nav>"""
-        html $"""
-            <div class="{Style.timelineFrame}">
-              {rail}
-              <section class="{Style.timeline}" data-conversation>{body}</section>
-            </div>"""
+        html $"""<section class="{Style.timeline}" data-conversation>{body}</section>"""
 
     /// Everything a block printed, as TEXT — the cheap read of the same bytes the recording
     /// holds, and the one both surfaces that show a block are made of.
