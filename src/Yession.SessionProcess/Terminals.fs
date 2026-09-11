@@ -1642,8 +1642,15 @@ module SessionTerminals =
                         onStarted ()
                         // The command line is echoed into the transcript as INPUT, so a replay
                         // shows what was typed as well as what came back — the same reason
-                        // asciinema records `"i"` events at all.
+                        // asciinema records `"i"` events at all. The command AS AUTHORED, like
+                        // the block event above: the stdin wrapping below is how the shell is
+                        // asked to run it, and the shell's own echo shows that form.
                         emit terminalId terminal TranscriptInput (command + "\n")
+
+                        // Where this command reads its input from — decided by who wrote it,
+                        // applied to the text the shell sees, on both paths below alike.
+                        let shellCommand =
+                            BlockStdin.wrap (BlockStdinPolicy.forAuthor (Authority.author entry.Authority)) command
 
                         let mutable written = 0
                         let mutable dropped = 0
@@ -1693,7 +1700,7 @@ module SessionTerminals =
                                                      dropped <- dropped + extra
                                                      written <- written + extra))
                                             sawCommandStart.Remove key |> ignore
-                                            pty.Write (writeFor command)
+                                            pty.Write (writeFor shellCommand)
                                             // The integration detector (Plan 13, stage 2f), armed
                                             // beside the block rather than awaited: a lost shell
                                             // must not make this block wait, because the block is
@@ -1737,7 +1744,7 @@ module SessionTerminals =
                                     let! spawned =
                                         (environmentOf terminalId).Spawn
                                             { Executable = shell.Executable
-                                              Arguments = shell.Arguments @ [ command ]
+                                              Arguments = shell.Arguments @ [ shellCommand ]
                                               Env = Map.empty
                                               // The profile applies here TOO (Plan 25). This
                                               // path gets a fresh process per block and carries

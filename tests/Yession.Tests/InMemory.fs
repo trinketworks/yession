@@ -366,14 +366,21 @@ let tests =
                 | Error reason -> failwith reason
                 | Ok first ->
                     Expect.equal first.Status (TerminalCommandRan (CommandSucceeded 0)) "it ran, inside the call"
-                    Expect.isTrue (first.Output.Contains "ran<first>") "and its real output came back"
+                    // The fake echoes the line the shell was handed, which for the agent's
+                    // block is the command with its stdin closed (`BlockStdinPolicy`) — so this
+                    // also pins that the policy reaches the per-block path, not only the pty.
+                    // Asserted in two halves: the answer is read back through the terminal
+                    // emulator, where the wrapper's newline is a cursor movement, not a `\n`.
+                    let handed = BlockStdin.wrap BlockStdin.Closed "first"
+                    let cameBack = first.Output.Contains "ran<{ first" && first.Output.Contains "</dev/null>"
+                    Expect.isTrue cameBack (sprintf "and its real output came back, wrapped; got: %s" first.Output)
                     // Conditioned on what the first one printed — the whole point of chaining.
-                    let next = if first.Output.Contains "ran<first>" then "second" else "wrong"
+                    let next = if cameBack then "second" else "wrong"
                     match! host.TerminalCommands.Execute { CommandRequest.ofCommand next with Target = Some (InTerminal first.Terminal) } agentActing with
                     | Error reason -> failwith reason
                     | Ok second ->
                         Expect.equal second.Status (TerminalCommandRan (CommandSucceeded 0)) "the second ran too"
-                        Expect.equal (List.ofSeq ran) [ "first"; "second" ] "both, in order, in that terminal"
+                        Expect.equal (List.ofSeq ran) [ handed; BlockStdin.wrap BlockStdin.Closed "second" ] "both, in order, in that terminal"
                 do! host.Stop ()
             }
 

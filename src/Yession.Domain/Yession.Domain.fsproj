@@ -95,6 +95,9 @@
          terminals beyond the fact that a console is lines. -->
     <Compile Include="TerminalPattern.fs" />
     <Compile Include="Terminals.fs" />
+    <!-- Where a block's command reads its input from, and whose blocks read what. Needs
+         only Identity.fs (the author) and sits with the terminal modules it serves. -->
+    <Compile Include="BlockStdin.fs" />
     <Compile Include="TerminalMarks.fs" />
     <!-- After both projections it merges: the chat as a person reads it, said and run
          interleaved by offset (Plan 14). A view-level merge, never a third fold. -->

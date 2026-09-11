@@ -288,6 +288,33 @@ let private foreign (body: string) = "]133;" + body + ""
 
 let private scan1 (data: string) = Marks.scan nonce "" data
 
+let private blockStdinTests =
+    testList "Where a block reads its input (BlockStdin)" [
+        // The mechanism, on the three shapes a naive `</dev/null` suffix gets wrong: the
+        // redirection has to cover the WHOLE command, survive a trailing comment, and not
+        // land on a heredoc's delimiter line. One assertion on the exact text, because the
+        // shell will read exactly this and nothing here is cosmetic.
+        testCase "closing stdin wraps the whole command, past a comment and a heredoc" <| fun () ->
+            Expect.equal
+                (BlockStdin.wrap BlockStdin.Closed "a; b # check")
+                "{ a; b # check\n} </dev/null"
+                "the group covers both commands, and the brace is past the comment"
+            Expect.equal
+                (BlockStdin.wrap BlockStdin.Closed "cat > f <<'EOF'\nbody\nEOF")
+                "{ cat > f <<'EOF'\nbody\nEOF\n} </dev/null"
+                "the heredoc's body has ended before the shell reads the brace"
+
+        testCase "leaving stdin on the terminal changes nothing" <| fun () ->
+            Expect.equal (BlockStdin.wrap BlockStdin.Terminal "perl -pi -e 1") "perl -pi -e 1" "as authored"
+
+        // The policy, apart from the mechanism: who gets a keyboard. Every author the log can
+        // name, so a new case of `ActorRef` has to be placed here on purpose.
+        testCase "the agent's blocks read end-of-file; everyone else's read the terminal" <| fun () ->
+            Expect.equal (BlockStdinPolicy.forAuthor ActorRef.Agent) BlockStdin.Closed "nobody is at the agent's keyboard"
+            for author in [ PeerRef ada; UserRef (UserId.create "u1" |> expect); ActorRef.System; ActorRef.SessionProcess; ActorRef.Configured (RepoRef.create "octo/hello" |> expect) ] do
+                Expect.equal (BlockStdinPolicy.forAuthor author) BlockStdin.Terminal (sprintf "%A keeps the terminal" author)
+    ]
+
 let private markTests =
     testList "Terminal marks" [
         testCase "our marks are recognised and taken out of the output" <| fun () ->
@@ -3837,6 +3864,7 @@ let tests =
         sourceTests
         drainTests
         projectionTests
+        blockStdinTests
         markTests
         emulatorTests
         rejectionTests
