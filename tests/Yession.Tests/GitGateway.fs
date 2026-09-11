@@ -489,9 +489,18 @@ let private srtTests =
                         match! Sandboxes.SrtSandbox.create (srtTools ()) policy with
                         | Error reason -> failwithf "srt sandbox failed: %s" reason
                         | Ok confined ->
+                            // Verbose on purpose: this case can only fail by a wire it does
+                            // not control, and curl's trace is the one account of which hop
+                            // ("Empty reply from server" on the Linux runner said nothing).
                             let! run, out, err =
-                                runInSandbox confined "git" [ "ls-remote"; "https://github.com/octo/hello.git" ] (Map.ofList [ "GIT_TERMINAL_PROMPT", "0" ]) None
-                            Expect.equal run (SandboxExited 0) (sprintf "ls-remote succeeded from inside: %s" err)
+                                runInSandbox
+                                    confined
+                                    "git"
+                                    [ "ls-remote"; "https://github.com/octo/hello.git" ]
+                                    (Map.ofList [ "GIT_TERMINAL_PROMPT", "0"; "GIT_CURL_VERBOSE", "1" ])
+                                    None
+                            let! _, proxyEnv, _ = runInSandbox confined "sh" [ "-c"; "env | grep -i proxy" ] Map.empty None
+                            Expect.equal run (SandboxExited 0) (sprintf "ls-remote succeeded from inside (proxy env: %s): %s" proxyEnv err)
                             Expect.isTrue (out.Contains "refs/heads/main") "and read the upstream's refs"
                             Expect.equal (List.ofSeq upstream.Authorizations) [ Some (basic "ghu_lent") ] "github.com saw the lent credential"
                             do! confined.Dispose ()
