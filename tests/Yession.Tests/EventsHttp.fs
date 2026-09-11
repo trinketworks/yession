@@ -258,6 +258,40 @@ let private storeTests =
                     "and nothing is missing — the events were all here, in a bag rather than a queue"
             }
 
+        testCaseAsync "a replay is one message, however many answers were kept" <|
+            async {
+                // Every message is a full render. A session somebody watched live keeps one
+                // answer per poll, so a replay that dispatched per answer was one render per
+                // poll — 179 on the session this was measured on, in a single task, a phone
+                // frozen for three seconds on an empty conversation.
+                let store = storeOf [ for first in 0L .. 3L .. 297L -> answerOf first 3 ]
+                let seen = ResizeArray ()
+                do! Client.EventFetch.replay store seen.Add
+                let pages = seen |> Seq.filter (function LocalHistoryMsg _ -> true | _ -> false) |> Seq.length
+                Expect.equal pages 1 "one page for the whole contiguous run"
+                let last =
+                    seen |> Seq.tryPick (function LocalHistoryMsg page -> page.LastOffset | _ -> None)
+                Expect.equal (last |> Option.map EventOffset.value) (Some 299L) "reaching the last kept event"
+            }
+
+        testCaseAsync "two answers that overlap put each event on the page once" <|
+            async {
+                // Two tabs fetching one range keep answers that meet in the middle. The page
+                // carries the event where they meet once: a fold that saw it twice would count
+                // a joined peer twice, and a page is folded as a whole.
+                let store = storeOf [ answerOf 0L 4; answerOf 2L 4 ]
+                let seen = ResizeArray ()
+                do! Client.EventFetch.replay store seen.Add
+                let offsets =
+                    seen
+                    |> Seq.collect (fun msg ->
+                        match msg with
+                        | LocalHistoryMsg page -> page.Events |> List.map (fun e -> EventOffset.value e.Offset)
+                        | _ -> [])
+                    |> List.ofSeq
+                Expect.equal offsets [ 0L; 1L; 2L; 3L; 4L; 5L ] "each kept event once, in log order"
+            }
+
         testCaseAsync "a hole stops the fold at its edge" <|
             async {
                 // An entry evicted from the middle leaves the rest kept. Folding over the gap
