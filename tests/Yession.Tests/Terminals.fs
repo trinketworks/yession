@@ -935,7 +935,7 @@ let private leaseGateTests =
 let private blockOf (status: BlockStatus) : Block =
     { BlockId = block "1"
       QueueId = Some (queue "a1")
-      Authority = Authority.agentFor (PeerRef ada)
+      Authority = Authority.agentFor (Principal.Peer ada)
       Command = "make"
       Background = false
       FromSeq = 0
@@ -1138,7 +1138,7 @@ let private digestTests =
                       { TerminalId = terminalA
                         BlockId = block "1"
                         QueueId = None
-                        Authority = Authority.agentFor (PeerRef ada)
+                        Authority = Authority.agentFor (Principal.Peer ada)
                         Command = "rm -rf build"
                         FromSeq = 0
                         Background = false }
@@ -1456,7 +1456,7 @@ let private codecTests =
                       { TerminalId = terminalA
                         BlockId = block "1"
                         QueueId = Some (queue "a1")
-                        Authority = Authority.agentFor (PeerRef bob)
+                        Authority = Authority.agentFor (Principal.Peer bob)
                         Command = "ls -la"
                         FromSeq = 3
                         Background = false }
@@ -1491,7 +1491,7 @@ let private codecTests =
                     { TerminalId = terminalA
                       BlockId = block "1"
                       QueueId = Some (queue "a1")
-                      Authority = Authority.agentFor (PeerRef bob)
+                      Authority = Authority.agentFor (Principal.Peer bob)
                       Command = "ls -la"
                       FromSeq = 3
                       Background = false }
@@ -1530,7 +1530,7 @@ let private codecTests =
                 Expect.equal (Authority.author decoded.Authority) ActorRef.Agent "the author survives"
                 Expect.equal
                     (Authority.onBehalfOf decoded.Authority)
-                    (Some (PeerRef ada))
+                    (Some (Principal.Peer ada))
                     "and whose authority it ran on"
             | other -> failwithf "an approved pre-Plan-23 block must still read back, got %A" other
 
@@ -2080,7 +2080,7 @@ let private schedulerTests =
                 let id = opened |> expect
                 let doc = Y.Doc.Create ()
                 let scheduler = TerminalScheduler.create doc terminals ignore Set.empty
-                SyncedStateSync.enqueueTerminalCommand doc (queue "a1") id (Authority.agentFor (PeerRef ada)) 1.0 "echo hi" false false
+                SyncedStateSync.enqueueTerminalCommand doc (queue "a1") id (Authority.agentFor (Principal.Peer ada)) 1.0 "echo hi" false false
                 scheduler.Drain ()
                 do! Async.Sleep 20
                 Expect.equal (List.length (List.ofSeq spawned)) 1 "it ran, with nobody asked"
@@ -2106,7 +2106,7 @@ let private schedulerTests =
                 let id = opened |> expect
                 let doc = Y.Doc.Create ()
                 let scheduler = TerminalScheduler.create doc terminals ignore Set.empty
-                SyncedStateSync.enqueueTerminalCommand doc (queue "a1") id (Authority.agentFor (PeerRef ada)) 1.0 "rm -rf /" false false
+                SyncedStateSync.enqueueTerminalCommand doc (queue "a1") id (Authority.agentFor (Principal.Peer ada)) 1.0 "rm -rf /" false false
                 SyncedStateSync.enqueueTerminalCommand doc (queue "a2") id (Authority.ofAuthor (PeerRef ada)) 2.0 "echo ok" false false
                 scheduler.Drain ()
                 do! Async.Sleep 50
@@ -2143,7 +2143,7 @@ let private schedulerTests =
                 let id = opened |> expect
                 let doc = Y.Doc.Create ()
                 let scheduler = TerminalScheduler.create doc terminals ignore Set.empty
-                SyncedStateSync.enqueueTerminalCommand doc (queue "a1") id (Authority.agentFor (PeerRef ada)) 1.0 "echo draft" false false
+                SyncedStateSync.enqueueTerminalCommand doc (queue "a1") id (Authority.agentFor (Principal.Peer ada)) 1.0 "echo draft" false false
                 // Edited after the enqueue, before the drain — a peer fixing the command.
                 (doc.getText (BodyKey.terminalQueued (queue "a1"))).delete (0, 10)
                 (doc.getText (BodyKey.terminalQueued (queue "a1"))).insert (0, "echo final")
@@ -2322,7 +2322,7 @@ let private syncTests =
     testList "Terminal collaborative state" [
         testCase "a terminal queue entry survives a doc round-trip" <| fun () ->
             let doc = Y.Doc.Create ()
-            SyncedStateSync.enqueueTerminalCommand doc (queue "a1") terminalA (Authority.agentFor (PeerRef ada)) 3.0 "git status" false false
+            SyncedStateSync.enqueueTerminalCommand doc (queue "a1") terminalA (Authority.agentFor (Principal.Peer ada)) 3.0 "git status" false false
             let synced = syncedOf doc
             let entry = synced.Pending |> Map.find (queue "a1")
             Expect.equal entry.Terminal terminalA "the entry names its terminal"
@@ -2338,8 +2338,8 @@ let private syncTests =
         // person writes — reads as no ask, which is the state `BlockStdinPolicy` closes.
         testCase "an ask for stdin rides the queue entry, and no ask is no field" <| fun () ->
             let doc = Y.Doc.Create ()
-            SyncedStateSync.enqueueTerminalCommand doc (queue "a1") terminalA (Authority.agentFor (PeerRef ada)) 1.0 "npx create-thing" false true
-            SyncedStateSync.enqueueTerminalCommand doc (queue "a2") terminalA (Authority.agentFor (PeerRef ada)) 2.0 "ls" false false
+            SyncedStateSync.enqueueTerminalCommand doc (queue "a1") terminalA (Authority.agentFor (Principal.Peer ada)) 1.0 "npx create-thing" false true
+            SyncedStateSync.enqueueTerminalCommand doc (queue "a2") terminalA (Authority.agentFor (Principal.Peer ada)) 2.0 "ls" false false
             let synced = syncedOf doc
             Expect.isTrue (synced.Pending |> Map.find (queue "a1")).Stdin "asked for, and read back"
             Expect.isFalse (synced.Pending |> Map.find (queue "a2")).Stdin "not asked for"
@@ -2350,7 +2350,7 @@ let private syncTests =
             // would carry out an act nobody released; dropping it at decode is the safe
             // direction, and the terminal entry beside it is untouched.
             let doc = Y.Doc.Create ()
-            SyncedStateSync.enqueueTerminalCommand doc (queue "a1") terminalA (Authority.agentFor (PeerRef ada)) 1.0 "ls" false false
+            SyncedStateSync.enqueueTerminalCommand doc (queue "a1") terminalA (Authority.agentFor (Principal.Peer ada)) 1.0 "ls" false false
             legacyPendingInDoc doc yjsModule "q-cmd" "command:add_repo" "agent"
             let synced = syncedOf doc
             Expect.isTrue (Map.containsKey (queue "a1") synced.Pending) "the terminal entry survives"
@@ -2361,7 +2361,7 @@ let private syncTests =
             // old browser tab may still write them. Thoth-style structural reads ignore
             // fields nobody asks for — pinned, because replay depends on it.
             let doc = Y.Doc.Create ()
-            SyncedStateSync.enqueueTerminalCommand doc (queue "a1") terminalA (Authority.agentFor (PeerRef ada)) 1.0 "x" false false
+            SyncedStateSync.enqueueTerminalCommand doc (queue "a1") terminalA (Authority.agentFor (Principal.Peer ada)) 1.0 "x" false false
             setQueuedFieldInDoc doc (queue "a1") "approvedBy" "bob"
             setQueuedFieldInDoc doc (queue "a1") "rejectedBy" "bob"
             let synced = syncedOf doc

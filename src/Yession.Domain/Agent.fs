@@ -27,7 +27,11 @@ type AgentContextPack =
       /// was fine while every turn began with somebody speaking. A woken turn (Plan 20,
       /// stage 2) has nobody speaking and still has authority, so the thing three call sites
       /// actually wanted — WHOSE turn is this — says so itself.
-      TurnActor      : ActorRef
+      ///
+      /// A `Principal`, not an actor: a turn runs on somebody's credential, and the type
+      /// says there is a somebody. A wake that resolved its actor to the agent used to
+      /// type-check and fail at dispatch, saying "sign in" to a person who was.
+      TurnActor      : Principal
       /// What was just said, when a turn began with somebody saying something. `None` for a
       /// turn nothing asked for: the agent was woken because work it started finished, and
       /// there is no message to point at. What moved arrives through `Terminals` either way.
@@ -315,7 +319,7 @@ type GatedCall =
 /// A command being carried out, as its dispatch entry sees it.
 type GatedInvocation =
     { Args : string
-      /// The acting parties. `Authority.effective` is what a dispatch entry asks for whose
+      /// The acting parties. `Authority.principal` is what a dispatch entry asks for whose
       /// credential to run on.
       Authority : Authority }
 
@@ -796,14 +800,15 @@ module AgentWake =
     ///
     /// A block that completed and was never `Background` does not wake anything: somebody was
     /// already waiting on it, and their tool call is what carries the outcome back.
-    /// The actor a woken turn would run AS, or `None` when nothing is owed.
+    /// The principal a woken turn would run AS, or `None` when nothing is owed.
     ///
     /// One fold answering both halves, because they are one question: a turn that is due but
     /// has nobody to run as is not due. Every turn resolves its repo credential, its sandbox
     /// credential and its Claude account from whoever it is FOR, and a woken turn has no
-    /// triggering message to read that from — so it carries the actor of the turn that queued
-    /// the work, which the block recorded as `OnBehalfOf`. That invents no authority: it
-    /// continues the one the queuing turn already had.
+    /// triggering message to read that from — so it carries the principal of the turn that
+    /// queued the work, which the block recorded as `OnBehalfOf`. That invents no authority:
+    /// it continues the one the queuing turn already had. And it is a `Principal` by type: a
+    /// wake cannot hand the scheduler an actor no credential resolves for.
     ///
     /// A background block with no recorded owner therefore wakes nothing. That is the same
     /// safe direction an unreadable owner already takes elsewhere — run on nothing rather
@@ -833,10 +838,10 @@ module AgentWake =
         | PrChanged _ -> 3
 
     /// Why a turn is owed and who it would run as, or `None` when nothing is.
-    let pendingReason (events: SessionEvent list) : (WakeReason * ActorRef) option =
+    let pendingReason (events: SessionEvent list) : (WakeReason * Principal) option =
         // Owed reasons are collected rather than short-circuited, because precedence is across
         // KINDS and the highest-ranked one can arrive last.
-        let better (candidate: WakeReason * ActorRef) (best: (WakeReason * ActorRef) option) =
+        let better (candidate: WakeReason * Principal) (best: (WakeReason * Principal) option) =
             match best with
             // Strictly better, so within one rank the FIRST owed still wins — the rest
             // coalesce into it, as they always have.
@@ -855,7 +860,7 @@ module AgentWake =
             |> Set.ofList
         events
         |> List.fold
-            (fun (background: Map<string, ActorRef>, lastAgent: Map<string, ActorRef>, pendingCommands: (string * ActorRef) list, owed) event ->
+            (fun (background: Map<string, Principal>, lastAgent: Map<string, Principal>, pendingCommands: (string * Principal) list, owed) event ->
                 match event with
                 // A new turn takes everything before it: whatever those blocks did, that
                 // turn's digest reported it. `lastAgent` is NOT reset — it is not a debt, it
@@ -911,7 +916,9 @@ module AgentWake =
                         | None -> owed
                     background, lastAgent, pendingCommands, owed
                 // A watched pull request moved. The owner is the WATCHER on the payload,
-                // never the envelope's `System`: the wake runs as whoever asked to be told.
+                // never the envelope's `System` and never the watch's AUTHOR: the wake runs
+                // as whoever's credential the watch was looking with, which for a watch the
+                // agent started is the person whose turn it started in.
                 | SessionEvent.PrTransitioned p -> background, lastAgent, pendingCommands, better (PrChanged p.Pr, p.Watcher) owed
                 // Unwatching clears what that pull request owed. A person who has just said
                 // they no longer care must not get a turn about it a moment later.
@@ -931,8 +938,8 @@ module AgentWake =
             | (_, owner) :: _ -> better (CommandFinished, owner) owed
             | [] -> owed
 
-    /// The actor a woken turn would run AS, for the readers that do not need the reason.
-    let pending (events: SessionEvent list) : ActorRef option = pendingReason events |> Option.map snd
+    /// The principal a woken turn would run AS, for the readers that do not need the reason.
+    let pending (events: SessionEvent list) : Principal option = pendingReason events |> Option.map snd
 
     /// Whether a turn is owed at all. `pending` says who; this says whether, for the readers
     /// that only need the question answered.

@@ -268,7 +268,7 @@ let private makeBareFixture (root: string) (name: string) : string =
 let private serviceSpending
     (git: string)
     (token: string option)
-    (failures: ResizeArray<ActorRef * string>)
+    (failures: ResizeArray<Principal option * string>)
     (root: string)
     (log: EventLog<SessionEvent>)
     : Repos.ReposService =
@@ -311,7 +311,7 @@ let private freshLog () =
     InMemoryEventLog.create (SessionId.create "git-suite" |> expect) (fun () -> DateTimeOffset.UtcNow)
 
 let private ada = PeerId.create "ada" |> expect
-let private caller : Repos.RepoCaller = { Actor = ActorRef.Agent; Credential = PeerRef ada }
+let private caller : Repos.RepoCaller = { Actor = ActorRef.Agent; Credential = Some (Principal.Peer ada) }
 
 let private eventsOf (log: EventLog<SessionEvent>) : Async<SessionEvent list> =
     async {
@@ -489,7 +489,7 @@ let private srtTests =
         // from a repo that is not there); this only has to say that one was spent.
         testCaseAsync "a network verb that fails while spending a credential says so" <| async {
             let root = mkdtemp nodeFs nodeOs
-            let failures = ResizeArray<ActorRef * string> ()
+            let failures = ResizeArray<Principal option * string> ()
             // No fixture made, so the clone has nothing to clone.
             let service = serviceSpending namedGit (Some "ghu_whatever") failures root (freshLog ())
             let! added = service.AddRepo caller (RepoRef.create "octo/missing" |> expect)
@@ -500,7 +500,7 @@ let private srtTests =
 
         testCaseAsync "a network verb that fails anonymously says nothing about anyone's sign-in" <| async {
             let root = mkdtemp nodeFs nodeOs
-            let failures = ResizeArray<ActorRef * string> ()
+            let failures = ResizeArray<Principal option * string> ()
             let service = serviceSpending namedGit None failures root (freshLog ())
             let! added = service.AddRepo caller (RepoRef.create "octo/missing" |> expect)
             Expect.isError added "the clone still fails"
@@ -711,7 +711,7 @@ let private srtTests =
             let service = serviceIn root log
             let repo = RepoRef.create "octo/hello" |> expect
             let! _ = service.AddRepo caller repo
-            let human : Repos.RepoCaller = { Actor = PeerRef ada; Credential = PeerRef ada }
+            let human : Repos.RepoCaller = { Actor = PeerRef ada; Credential = Some (Principal.Peer ada) }
             let! removed = service.RemoveRepo human repo false
             expect removed |> ignore
             Expect.isFalse (exists nodeFs (sprintf "%s/octo/hello" (reposIn root))) "checkout gone"

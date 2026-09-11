@@ -77,7 +77,7 @@ type CommandServices =
       /// is idempotent — a declaration that is already a running sandbox is an ask that
       /// changes nothing and records nothing, which is what every mutating command being
       /// ensure-shaped bought.
-      Refold : ActorRef option -> Async<unit> }
+      Refold : Principal option -> Async<unit> }
 
 let private encodeArgs (values: string list) : string = Codec.toString Codec.gatedArgs values
 
@@ -104,7 +104,7 @@ let private andRefold
         match result with
         // Whoever the verb ran on the authority of. A `forward:` in a file the fold picks up
         // resolves for THEM, by the same Plan 08 precedence the verb itself used.
-        | Ok _ -> do! services.Refold (Some (Authority.effective invocation.Authority))
+        | Ok _ -> do! services.Refold (Authority.principal invocation.Authority)
         | Error _ -> ()
         return result
     }
@@ -161,11 +161,12 @@ let dispatch (services: CommandServices) : CommandDispatch =
     // otherwise. It used to be a `defaultArg` per call site with `ActorRef.Agent` written in
     // as the fallback — which was right only because the agent is what authored every one of
     // these, a coincidence each site had to keep re-establishing.
-    let repoCaller (invocation: GatedInvocation) =
-        Repos.agentCaller (Authority.effective invocation.Authority)
+    let repoCaller (invocation: GatedInvocation) : Repos.RepoCaller =
+        { Actor = Authority.author invocation.Authority
+          Credential = Authority.principal invocation.Authority }
     let sandboxCaller (invocation: GatedInvocation) : WorkSandboxes.SandboxCaller =
         { Actor = Authority.author invocation.Authority
-          Credential = Authority.effective invocation.Authority }
+          Credential = Authority.principal invocation.Authority }
     Map.ofList
         [ addRepoTool,
           fun (invocation: GatedInvocation) ->
@@ -315,7 +316,7 @@ let dispatch (services: CommandServices) : CommandDispatch =
                         // answer this changed.
                         match PrDraft.create repo head onto title body (draft = "true") with
                         | Error e -> return Error e
-                        | Ok drafted -> return! service.Create (Authority.effective invocation.Authority) drafted
+                        | Ok drafted -> return! service.Create (Authority.principal invocation.Authority) drafted
             }
 
           watchPrTool,
@@ -333,10 +334,7 @@ let dispatch (services: CommandServices) : CommandDispatch =
                         | Ok pr ->
                             return!
                                 andPublish services PrWatches.queryName (
-                                    service.Watch
-                                        (Authority.author invocation.Authority)
-                                        (Authority.effective invocation.Authority)
-                                        pr)
+                                    service.Watch invocation.Authority pr)
                 | Some _, other ->
                     return Error (sprintf "watch_pr takes a repo and a number, got %d arguments" (List.length other))
             }
@@ -527,7 +525,7 @@ let dispatch (services: CommandServices) : CommandDispatch =
 /// still reach it.
 let private repoCapabilitiesFor
     (services: CommandServices)
-    (turnActor: ActorRef)
+    (turnActor: Principal)
     (capabilities: AgentCapabilities)
     : AgentCapabilities =
     match services.Repos () with
@@ -606,7 +604,7 @@ let private repoCapabilitiesFor
 
 /// The turn's sandbox commands (Plan 15, stage 2) and the shell profile (Plan 25), bound to
 /// the acting party.
-let private sandboxCapabilitiesFor (turnActor: ActorRef) (capabilities: AgentCapabilities) : AgentCapabilities =
+let private sandboxCapabilitiesFor (turnActor: Principal) (capabilities: AgentCapabilities) : AgentCapabilities =
     let gated (tool: string) (args: string list) (summary: string) =
         capabilities.RunGated
             { Tool = tool
@@ -636,5 +634,5 @@ let private sandboxCapabilitiesFor (turnActor: ActorRef) (capabilities: AgentCap
 /// the credential is the turn human's (Plan 08). The Host leaves these as denials because
 /// only the per-turn dispatcher knows who the turn is for; this is where they stop being
 /// denials, and it is one call so a turn cannot pick up half of them.
-let bindFor (services: CommandServices) (turnActor: ActorRef) (capabilities: AgentCapabilities) : AgentCapabilities =
+let bindFor (services: CommandServices) (turnActor: Principal) (capabilities: AgentCapabilities) : AgentCapabilities =
     capabilities |> repoCapabilitiesFor services turnActor |> sandboxCapabilitiesFor turnActor

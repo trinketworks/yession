@@ -38,7 +38,7 @@ let private expect result =
     | Error e -> failwithf "invariant: %A" e
 
 let private sessionId = SessionId.create "sess-tool-calls" |> expect
-let private ada = UserRef (UserId.create "ada" |> expect)
+let private ada = Principal.User (UserId.create "ada" |> expect)
 
 // --- the harness -------------------------------------------------------------------------
 
@@ -143,7 +143,7 @@ let private reposAnswering (add: RepoRef -> Async<Result<RepoListing, string>>) 
 /// A pull request service that answers `create_pr` with whatever the test says, and refuses
 /// the rest — the leaf substituted, like the repo service above it.
 let private prsOpening (create: PrDraft -> Async<Result<string, string>>) : PrWatches.PrService =
-    { Watch = fun _ _ _ -> async { return Error "not part of this test" }
+    { Watch = fun _ _ -> async { return Error "not part of this test" }
       Unwatch = fun _ _ -> async { return Error "not part of this test" }
       Create = fun _ draft -> create draft }
 

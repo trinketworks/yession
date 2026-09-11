@@ -60,18 +60,20 @@ type CredentialSource =
       /// Provision for one actor into one sandbox. `NotHeld` is a legible refusal rather
       /// than a silent start without it: a sandbox that was asked to forward `github` and
       /// did not is a sandbox whose `git push` fails much later, somewhere less informative.
-      Provision : ActorRef -> SandboxRef -> Async<CredentialForwarding>
+      Provision : Principal option -> SandboxRef -> Async<CredentialForwarding>
       /// Take back what `Provision` gave. Called when the sandbox stops, so that whatever a
       /// provision opened (a gateway route) lives exactly as long as the sandbox does.
       Revoke : SandboxRef -> unit }
 
 /// Who is asking. The two halves differ for the agent exactly as they do for the repo
 /// verbs: the AGENT is the acting party the event records, the CREDENTIAL owner is the
-/// turn human, because the agent has no scope of its own.
+/// turn human, because the agent has no scope of its own. `None` is a start on nobody's
+/// credential — a repo file's boot fold — which reaches the session's own and the
+/// deployment's, and nothing else.
 [<RequireQualifiedAccess>]
 type SandboxCaller =
     { Actor : ActorRef
-      Credential : ActorRef }
+      Credential : Principal option }
 
 /// One sandbox the session has. Present in the registry does NOT mean started — the
 /// environment underneath is lazy, and `default` exists from boot without a sandbox
@@ -232,7 +234,7 @@ let create (config: WorkSandboxesConfig) : Result<WorkSandboxes, string> =
 
     /// Provision every named credential for one actor into one sandbox, or say which one
     /// could not be — revoking whatever was provisioned before the one that refused.
-    let provisionForward (owner: ActorRef) (name: SandboxRef) (names: string list) : Async<Result<Provision, string>> =
+    let provisionForward (owner: Principal option) (name: SandboxRef) (names: string list) : Async<Result<Provision, string>> =
         async {
             let mutable provisioned = Provision.empty
             let mutable failure = None
@@ -258,16 +260,16 @@ let create (config: WorkSandboxesConfig) : Result<WorkSandboxes, string> =
                             // own when they arrive, and the sentence has to say so.
                             let reason =
                                 match owner with
-                                | Configured _ ->
+                                | None ->
                                     sprintf
                                         "nobody was signed in to lend a '%s' credential — it starts on its own \
                                          the moment someone who has connected %s opens this session"
                                         credential
                                         credential
-                                | _ ->
+                                | Some owner ->
                                     sprintf
                                         "%s has not connected %s — connect it on the settings panel and ask again"
-                                        (ActorRef.token owner)
+                                        (Principal.token owner)
                                         credential
                             failure <- Some reason
                         | CredentialForwarding.Forwarded provision ->
@@ -333,7 +335,7 @@ let create (config: WorkSandboxesConfig) : Result<WorkSandboxes, string> =
                                           Checkout = config.Checkout name
                                           Forwarded = wanted.Forward
                                           CredentialOwner =
-                                            (if List.isEmpty wanted.Forward then None else Some caller.Credential)
+                                            (if List.isEmpty wanted.Forward then None else caller.Credential)
                                           // Asked of the environment that just came up, not
                                           // computed here: what a sandbox holds is settled by
                                           // the policy it was built from, and this manager

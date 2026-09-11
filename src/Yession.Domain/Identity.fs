@@ -306,6 +306,43 @@ module ActorRef =
                     | "configured" -> (match RepoRef.create rest with Ok r -> Some (Configured r) | Error _ -> None)
                     | _ -> None
 
+/// A party a turn can run AS: somebody whose credential a call on a provider resolves to,
+/// or falls through from. The two attributed-or-not shapes a person takes in a session, and
+/// nothing else — an agent, a process, a deployment and a repo's file are all actors, and
+/// none of them can hold a connection credential (`CredentialOwner.ofPrincipal` is the one
+/// rule that says which of THESE does).
+///
+/// Exists because `ActorRef` was doing this job by convention. Every credential path took an
+/// actor and answered "nothing" for the ones it could not resolve, and the fold that names
+/// whom a woken turn runs as took its answer from a field that was recorded as the agent —
+/// so a pull request watched by the agent on a person's behalf woke a turn AS THE AGENT,
+/// which dispatched on nobody's credential and failed saying "sign in". A turn's actor is a
+/// `Principal` now, and there is no constructor that gets the agent into one.
+[<RequireQualifiedAccess>]
+type Principal =
+    | User of UserId
+    | Peer of PeerId
+
+module Principal =
+
+    /// The actor a principal is, where attribution is what is being said.
+    let toActor (principal: Principal) : ActorRef =
+        match principal with
+        | Principal.User u -> UserRef u
+        | Principal.Peer p -> PeerRef p
+
+    /// The principal an actor is, if it is one. The only place the narrowing is decided.
+    let ofActor (actor: ActorRef) : Principal option =
+        match actor with
+        | UserRef u -> Some (Principal.User u)
+        | PeerRef p -> Some (Principal.Peer p)
+        | Agent | SessionProcess | System | Configured _ -> None
+
+    /// One string, for the same registers `ActorRef.token` serves.
+    let token (principal: Principal) : string = ActorRef.token (toActor principal)
+
+    let ofToken (raw: string) : Principal option = ActorRef.ofToken raw |> Option.bind ofActor
+
 /// On whose authority an act happens, and who is behind it: the three parties an audit asks
 /// about, as ONE value (Plan 20).
 ///
@@ -329,7 +366,7 @@ module ActorRef =
 type Authority =
     private
         { AuthAuthor : ActorRef
-          AuthOnBehalfOf : ActorRef option }
+          AuthOnBehalfOf : Principal option }
 
 module Authority =
 
@@ -340,7 +377,7 @@ module Authority =
 
     /// The agent, acting on a turn human's authority (Plan 08). The rule that was missing from
     /// one call site, as the ONLY way to build an agent-authored act.
-    let agentFor (turnActor: ActorRef) : Authority =
+    let agentFor (turnActor: Principal) : Authority =
         { AuthAuthor = ActorRef.Agent; AuthOnBehalfOf = Some turnActor }
 
     /// A repo's own `yession.yaml`, acting on the authority of whoever asked for the fold
@@ -350,9 +387,9 @@ module Authority =
     ///
     /// `None` is a fold nobody triggered: the one at boot, where there is no turn and no
     /// caller. The act then runs on NOTHING rather than on somebody guessed at, which is the
-    /// same degraded state `effective` already answers safely — a `forward:` fails saying
+    /// same degraded state `principal` already answers safely — a `forward:` fails saying
     /// there is no credential to forward, which is true.
-    let configuredBy (repo: RepoRef) (onBehalfOf: ActorRef option) : Authority =
+    let configuredBy (repo: RepoRef) (onBehalfOf: Principal option) : Authority =
         { AuthAuthor = ActorRef.Configured repo; AuthOnBehalfOf = onBehalfOf }
 
     /// Recover what somebody else already wrote — a doc entry, a stored event. NOT an
@@ -361,22 +398,30 @@ module Authority =
     /// is written would drop the entry instead.
     ///
     /// Chiefly: an agent act whose owner did not read back. That is the degraded state
-    /// `effective` answers safely — the act runs on NOTHING rather than on somebody else's
+    /// `principal` answers safely — the act runs on NOTHING rather than on somebody else's
     /// credential — and refusing to represent it here would turn a corrupt field into a
     /// missing act.
-    let rehydrate (author: ActorRef) (onBehalfOf: ActorRef option) : Authority =
+    let rehydrate (author: ActorRef) (onBehalfOf: Principal option) : Authority =
         { AuthAuthor = author; AuthOnBehalfOf = onBehalfOf }
 
     let author (authority: Authority) : ActorRef = authority.AuthAuthor
     /// Whose authority this runs on, when that is not the author's own. `None` on a person's
     /// act means there is nothing borrowed; `None` on the agent's means the owner was lost.
-    let onBehalfOf (authority: Authority) : ActorRef option = authority.AuthOnBehalfOf
+    let onBehalfOf (authority: Authority) : Principal option = authority.AuthOnBehalfOf
 
     /// Whose credentials this resolves to — the borrowed authority when there is one, the
     /// author otherwise. The question every dispatch actually asks, answered once instead of
     /// by a `defaultArg` at each site that asks it.
-    let effective (authority: Authority) : ActorRef =
-        authority.AuthOnBehalfOf |> Option.defaultValue authority.AuthAuthor
+    ///
+    /// `None` is an act that runs on nobody's credential: a file's boot fold, or an agent act
+    /// whose owner did not read back. That is a real state and the callers that resolve a
+    /// credential take it as one (session and deployment scopes only) — it is NOT the author
+    /// standing in, because an author that is not a principal has no credential to stand in
+    /// with, and a type that let it would be the fault this was narrowed to close.
+    let principal (authority: Authority) : Principal option =
+        match authority.AuthOnBehalfOf with
+        | Some borrowed -> Some borrowed
+        | None -> Principal.ofActor authority.AuthAuthor
 
 /// The name of one of the session's WorkSandboxes (Plan 15, stage 2). A session used to
 /// have exactly one, so it needed no name; now the agent can ask for a `test` sandbox

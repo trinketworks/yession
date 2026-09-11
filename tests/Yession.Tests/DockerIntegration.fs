@@ -308,7 +308,7 @@ let tests =
                     let cap =
                         gateway.Grant
                             SandboxRef.defaultRef
-                            { Owner = ActorRef.Agent
+                            { Owner = None
                               Resolve = fun () -> async { return Some "tok" }
                               Refused = fun () -> async { () } }
                     let! _, sandbox = startOrFail alpineSpec

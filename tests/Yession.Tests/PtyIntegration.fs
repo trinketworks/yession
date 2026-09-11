@@ -202,7 +202,8 @@ let private queueEntry (terminal: TerminalId) (author: ActorRef) (n: string) : P
 /// act can be built, and what makes these cases about the agent rather than about a peer
 /// wearing its name.
 let private agentEntry (terminal: TerminalId) (turnActor: ActorRef) (n: string) : PendingAct =
-    { queueEntry terminal turnActor n with Authority = Authority.agentFor turnActor }
+    { queueEntry terminal turnActor n with
+        Authority = Authority.agentFor (Principal.ofActor turnActor |> Option.defaultWith (fun () -> failwith "an agent entry needs a person to run as")) }
 
 /// Poll until `condition` holds or the budget runs out. Bounded rather than a fixed sleep:
 /// a shell's timing is not ours to predict, and a test that sleeps long enough to be safe is
