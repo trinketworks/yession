@@ -55,6 +55,10 @@ let private every =
       Claude ClaudeAction.Complete
       Claude ClaudeAction.Token
       Claude ClaudeAction.Disconnect
+      // The repo picker's two reads: the listing, and one repo's branches — a path that
+      // shares its head with the listing's and is told apart by depth.
+      GitHubRepos
+      GitHubBranches ("octo", "hello")
       Queries ]
 
 let private methodOf (route: SessionRoute) =

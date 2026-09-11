@@ -1044,7 +1044,14 @@ Async.StartImmediate (
                 match auth with
                 | Some a -> Some (Queries.routes a queryRegistry sessionMount)
                 | None -> None
-            [ claudeRoutes; githubRoutes; queryRoutes ]
+            // What a person chooses a repo FROM: the provider's listing, on the caller's
+            // credential by the same precedence a repo verb spends, against the same API
+            // base the watches read.
+            let repoRoutes =
+                match auth with
+                | Some a -> Some (GitHubRepos.routes a resolveGitHubToken githubApi sessionMount)
+                | None -> None
+            [ claudeRoutes; githubRoutes; queryRoutes; repoRoutes ]
             |> List.choose id
             |> function
                | [] -> None
