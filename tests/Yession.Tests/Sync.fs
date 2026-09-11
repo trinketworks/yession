@@ -253,7 +253,10 @@ let private codecTests =
                 |> ClientModel.update (ToggleItemMenuMsg messageId)
                 |> ClientModel.update (ToggleChapterMsg messageId)
             Expect.isNone model.ItemMenu "the menu is gone"
-            Expect.equal (Map.tryFind messageId model.Synced.Chapters) (Some true) "and the chapter was opened"
+            Expect.equal
+                (model.Synced.Chapters |> Map.tryFind messageId |> Option.map (fun mark -> mark.Opens))
+                (Some true)
+                "and the chapter was opened"
 
         // A chapter is a property of the SESSION, so it has to reach the doc: a division one
         // person could not see would be a chapter break pencilled into a shared book.
@@ -264,7 +267,10 @@ let private codecTests =
             p.Dispatch (user (EventsPageMsg (said messageId "ship it")))
             p.Dispatch (user (ToggleChapterMsg messageId))
             let decoded = SyncedStateSync.ofDoc doc |> Result.mapError (sprintf "%A") |> expect
-            Expect.equal (Map.tryFind messageId decoded.Chapters) (Some true) "the doc carries where the session divides"
+            Expect.equal
+                (decoded.Chapters |> Map.tryFind messageId |> Option.map (fun mark -> mark.Opens))
+                (Some true)
+                "the doc carries where the session divides"
 
         // And the answer that a set could not have carried. Closing a chapter an act opens by
         // nature has to reach the doc as a NO — as an absence it would read as "nobody has
@@ -277,7 +283,40 @@ let private codecTests =
             p.Dispatch (user (ToggleChapterMsg messageId))
             p.Dispatch (user (ToggleChapterMsg messageId))
             let decoded = SyncedStateSync.ofDoc doc |> Result.mapError (sprintf "%A") |> expect
-            Expect.equal (Map.tryFind messageId decoded.Chapters) (Some false) "an answer, not a gap"
+            Expect.equal
+                (decoded.Chapters |> Map.tryFind messageId |> Option.map (fun mark -> mark.Opens))
+                (Some false)
+                "an answer, not a gap"
+
+        // The half a set of ids could never have carried, and the half two people can be
+        // writing at once. A name reaches the doc as a nested `Y.Text` — the one place this
+        // codec puts collaborative text below the top level — so a peer renaming the same
+        // chapter interleaves with you rather than replacing what you wrote.
+        testCase "a chapter's name crosses the sync boundary" <| fun () ->
+            let doc = Y.Doc.Create ()
+            let p = Harness.run (Client.makeProgram doc (ClientModel.init (peer "ada" "Ada")))
+            let messageId = MessageId.create "msg-1" |> expect
+            p.Dispatch (user (EventsPageMsg (said messageId "ship it")))
+            p.Dispatch (user (ToggleChapterMsg messageId))
+            let seeded = (p.Model ()).Synced.Chapters |> Map.find messageId
+            p.Dispatch (user (EditChapterNameMsg (messageId, Text.edit "Where it was settled" seeded.Name)))
+            let decoded = SyncedStateSync.ofDoc doc |> Result.mapError (sprintf "%A") |> expect
+            Expect.equal
+                (decoded.Chapters |> Map.tryFind messageId |> Option.map (fun mark -> Text.toString mark.Name))
+                (Some "Where it was settled")
+                "the doc carries what the chapter is called"
+
+        // Both halves of an entry at once, through the decoder the app itself binds rather
+        // than the structural read above: a nested text that encoded but did not decode would
+        // be a name every peer wrote and none could read back.
+        testCase "a named chapter round-trips through the codec" <| fun () ->
+            let doc = Y.Doc.Create ()
+            let p = Harness.run (Client.makeProgram doc (ClientModel.init (peer "ada" "Ada")))
+            let messageId = MessageId.create "msg-1" |> expect
+            p.Dispatch (user (EventsPageMsg (said messageId "ship it")))
+            p.Dispatch (user (ToggleChapterMsg messageId))
+            let decoded = SyncedStateSync.ofDoc doc |> Result.mapError (sprintf "%A") |> expect
+            Expect.equal decoded.Chapters (p.Model ()).Synced.Chapters "the doc decodes back to exactly what was marked"
 
         testCase "the collaborative title round-trips through the codec" <| fun () ->
             let doc = Y.Doc.Create ()

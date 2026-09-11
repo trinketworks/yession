@@ -731,8 +731,13 @@ let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
         // against it is only ever measured outside the zone where the placement is exact.
         Synced =
             { SyncedSessionState.empty with
+                // One chapter somebody has named and one nobody has, which is what a session
+                // holds: a name is written over the heuristic's guess, never instead of it.
                 Chapters =
-                    Map.ofList [ messageId, true; MessageId.create "msg-filler-8" |> expect, true ] }
+                    Map.ofList
+                        [ messageId, { Opens = true; Name = Ylmish.Text.ofString "Where it was settled" }
+                          MessageId.create "msg-filler-8" |> expect,
+                          { Opens = true; Name = Ylmish.Text.empty } ] }
         Conversation =
             { Items =
                 [ { MessageId = messageId

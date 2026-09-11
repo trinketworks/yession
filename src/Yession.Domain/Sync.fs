@@ -2,6 +2,7 @@ namespace Yession.Domain.Collab
 
 open Yession.Domain
 open Yession.Domain.Agent
+open Yession.Domain.Chat
 open Yession.Domain.Terminals
 
 // The Ylmish sync boundary (Step 05, extended by Phase 3's message queue).
@@ -28,7 +29,7 @@ type AdaptiveSyncedState =
       TerminalDrafts : cmap<string, TerminalDraft>
       Pending : cmap<string, PendingAct>
       Model : cval<ModelId option>
-      Chapters : cmap<string, bool> }
+      Chapters : cmap<string, ChapterMark> }
 
 module SyncedStateSync =
 
@@ -64,7 +65,7 @@ module SyncedStateSync =
     let private pendingByKey (m: SyncedSessionState) : HashMap<string, PendingAct> =
         m.Pending |> Map.toSeq |> Seq.map (fun (k, v) -> QueueId.value k, v) |> HashMap.ofSeq
 
-    let private chaptersByKey (m: SyncedSessionState) : HashMap<string, bool> =
+    let private chaptersByKey (m: SyncedSessionState) : HashMap<string, ChapterMark> =
         m.Chapters |> Map.toSeq |> Seq.map (fun (k, v) -> MessageId.value k, v) |> HashMap.ofSeq
 
     /// `Create` for Ylmish's options: build the adaptive companion from a model.
@@ -148,14 +149,21 @@ module SyncedStateSync =
               Encode.string
                   (AVal.constant (q.Size |> Option.map Size.format |> Option.defaultValue "")) ]
 
-    /// One person's verdict about one message: whether a chapter opens there. The map key IS
-    /// the message, so the entry exists to carry the verdict alone — and it is written as a
-    /// WORD rather than as the presence of a key, because "nobody has decided" and "somebody
-    /// decided no" are different answers and only the second overrides an act that is notable
-    /// by nature. A string like every other field here: the doc carries text, and the domain
-    /// type is where it becomes a value.
-    let private encodeChapter (opens: bool) : Encoded =
-        Encode.object [ "opens", Encode.string (AVal.constant (if opens then "yes" else "no")) ]
+    /// One chapter: the verdict about whether it opens here, and what it is called.
+    ///
+    /// The verdict is written as a WORD rather than as the presence of a key, because "nobody
+    /// has decided" and "somebody decided no" are different answers and only the second
+    /// overrides an act that is notable by nature.
+    ///
+    /// The name is a nested `Y.Text`, which is the one place this codec carries collaborative
+    /// text below the top level. Ylmish supports it precisely here: a keyed-map item is
+    /// re-flushed whole when any field of it changes, and `Binding.flush` carries an adopted
+    /// `Y.Text` to its new content as SPLICES — so two people renaming one chapter interleave,
+    /// exactly as they do in the title, rather than the later write clobbering the earlier.
+    let private encodeChapter (mark: ChapterMark) : Encoded =
+        Encode.object
+            [ "opens", Encode.string (AVal.constant (if mark.Opens then "yes" else "no"))
+              "name", Encode.text (AVal.constant mark.Name) ]
 
     /// The session's model choice: one optional top-level REGISTER, which Ylmish lays out as
     /// a key in the argless root map rather than as a named root type (`Binding.attach`'s
@@ -263,10 +271,19 @@ module SyncedStateSync =
                   Size = size }
         }
 
-    let private decodeChapter<'m> : Decoder<'m, string option> =
+    /// The doc-side chapter, before the message id is checked: the verdict as written, and
+    /// the name as it stands. A pair rather than a named record, like the draft decoder's bare
+    /// `string option` above — there are two values and no third, and a record of `Opens` and
+    /// `Name` here would be a second type carrying `ChapterMark`'s own labels, which is how a
+    /// bare construction silently builds the wrong one (YES004).
+    ///
+    /// A chapter written before names existed decodes with an empty one, which is what
+    /// `Chapters.name` answers with the heuristic.
+    let private decodeChapter<'m> : Decoder<'m, string option * Text> =
         Decode.object {
             let! opens = Decode.object.optional "opens" Decode.string
-            return opens
+            let! name = Decode.object.optional "name" Decode.text
+            return opens, defaultArg name Text.empty
         }
 
     /// A model register the smart constructor refuses reads back as ABSENT — the provider's
@@ -329,12 +346,12 @@ module SyncedStateSync =
     /// "unmarked" would silently strip the mark off every notable act a garbled write touched.
     /// Same totality rule as every other entry here — the doc is shared with peers we don't
     /// control.
-    let private chaptersToDomain (h: HashMap<string, string option>) : Map<MessageId, bool> =
+    let private chaptersToDomain (h: HashMap<string, string option * Text>) : Map<MessageId, ChapterMark> =
         (Map.empty, HashMap.toSeq h)
-        ||> Seq.fold (fun acc (key, raw) ->
-            match MessageId.create key, raw with
-            | Ok id, Some "yes" -> acc |> Map.add id true
-            | Ok id, Some "no" -> acc |> Map.add id false
+        ||> Seq.fold (fun acc (key, (opens, name)) ->
+            match MessageId.create key, opens with
+            | Ok id, Some "yes" -> acc |> Map.add id { Opens = true; Name = name }
+            | Ok id, Some "no" -> acc |> Map.add id { Opens = false; Name = name }
             | _ -> acc)
 
     let private pendingToDomain (h: HashMap<string, PendingFields>) : Map<QueueId, PendingAct> =
@@ -425,6 +442,14 @@ module SyncedStateSync =
     let private entryStringOpt (entry: Yjs.Y.Map<obj>) (field: string) : string option =
         entry.get field |> Option.map (unbox<string>)
 
+    /// A nested collaborative text off an entry — a `Y.Text` the entry holds, not a string.
+    /// Empty when the entry has no such key, which is what a chapter written before names
+    /// reads as.
+    let private entryText (entry: Yjs.Y.Map<obj>) (field: string) : Text =
+        entry.get field
+        |> Option.map (fun value -> Text.ofString (textString (unbox<Yjs.Y.Text> value)))
+        |> Option.defaultValue Text.empty
+
     /// Fold every entry of a named root map through `read`. Absent root = empty.
     let private foldRoot (doc: Yjs.Y.Doc) (root: string) (read: Yjs.Y.Map<obj> -> 'a) : HashMap<string, 'a> =
         if not (shareHas doc root) then HashMap.empty
@@ -490,7 +515,8 @@ module SyncedStateSync =
                   Background = entryStringOpt entry "background"
                   Stdin = entryStringOpt entry "stdin"
                   Size = entryStringOpt entry "size" })
-        let chaptersH = foldRoot doc "chapters" (fun entry -> entryStringOpt entry "opens")
+        let chaptersH =
+            foldRoot doc "chapters" (fun entry -> entryStringOpt entry "opens", entryText entry "name")
         // Off the ARGLESS root map, not off a named root: a top-level register lives there
         // (see `encodeModel`), so `doc.getMap "model"` would silently mint an empty map and
         // read back as "nobody has chosen" for ever.

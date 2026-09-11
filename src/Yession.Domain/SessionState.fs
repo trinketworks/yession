@@ -2,6 +2,7 @@ namespace Yession.Domain.Collab
 
 open Yession.Domain
 open Yession.Domain.Agent
+open Yession.Domain.Chat
 open Yession.Domain.Terminals
 
 /// Collaborative session state shapes shared by the Session Process and the Browser
@@ -156,8 +157,9 @@ type SyncedSessionState =
       ///
       /// A VERDICT rather than a set of ids: `false` is how somebody closes a chapter an act
       /// opens by nature (`Chapters`), which a set cannot say. Absent is "nobody has
-      /// decided", which is not the same as "no".
-      Chapters   : Map<MessageId, bool> }
+      /// decided", which is not the same as "no" — and for a chapter nobody has touched, it
+      /// is also how its name stays the heuristic's to answer rather than a copy of one.
+      Chapters   : Map<MessageId, ChapterMark> }
 
 module SyncedSessionState =
 

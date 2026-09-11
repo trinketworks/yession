@@ -677,17 +677,26 @@ let private repoTests =
     ]
 
 let private chapterTests =
-    let item id kind : ConversationItem =
+    let itemSaying id body kind : ConversationItem =
         { MessageId = MessageId.create id |> expect
           Author = ActorRef.Agent
-          Body = "something happened"
+          Body = body
           Status = Complete
           Kind = kind
           Offset = EventOffset.create 1L |> expect
           Woke = None; Replying = None }
+    let item id kind = itemSaying id "something happened" kind
     let notable = item "n" (ConversationItemKind.ActNote { Detail = None; Notable = true })
     let ordinary = item "o" (ConversationItemKind.ActNote { Detail = None; Notable = false })
     let said = item "s" ConversationItemKind.Message
+    /// What somebody's verdict alone looks like, without a name over it — the shape a doc
+    /// written before chapters had names decodes to, and the one an auto-chapter keeps.
+    let verdict (item: ConversationItem) (opens: bool) =
+        Map.ofList [ item.MessageId, { Opens = opens; Name = Ylmish.Text.empty } ]
+    let opensOf (item: ConversationItem) (chapters: Map<MessageId, ChapterMark>) =
+        chapters |> Map.tryFind item.MessageId |> Option.map (fun mark -> mark.Opens)
+    let nameIn (item: ConversationItem) (chapters: Map<MessageId, ChapterMark>) =
+        chapters |> Map.tryFind item.MessageId |> Option.map (fun mark -> Ylmish.Text.toString mark.Name)
     testList "Chapters (where the session divides)" [
         // The default half. A watch is the reason somebody is waiting, so its news opens a
         // chapter without anybody having asked for one.
@@ -698,35 +707,94 @@ let private chapterTests =
         // The half that makes the default affordable. A default nobody can refuse becomes
         // noise the first time it is wrong.
         testCase "a person's no closes a chapter an act opens by nature" <| fun () ->
-            let verdicts = Map.ofList [ notable.MessageId, false ]
-            Expect.isFalse (Chapters.opens verdicts notable) "their answer, not the act's"
+            Expect.isFalse (Chapters.opens (verdict notable false) notable) "their answer, not the act's"
 
         // And the other direction: a chapter can open anywhere something was said, which is
         // what makes these the reader's own divisions rather than a feed of what this
         // repository thinks is important.
         testCase "a person's yes opens one where nothing would have" <| fun () ->
-            let verdicts = Map.ofList [ said.MessageId, true ]
-            Expect.isTrue (Chapters.opens verdicts said) "a message somebody chose"
+            Expect.isTrue (Chapters.opens (verdict said true) said) "a message somebody chose"
 
         // `toggle` takes the ITEM, so the caller never has to know what it defaulted to —
         // which is the whole reason the default and the verdict are read in one place.
         testCase "toggling an act that is notable by nature records the no" <| fun () ->
-            let verdicts = Chapters.toggle notable Map.empty
-            Expect.equal (Map.tryFind notable.MessageId verdicts) (Some false) "recorded, not merely absent"
+            Expect.equal (opensOf notable (Chapters.toggle notable Map.empty)) (Some false) "recorded, not merely absent"
 
         // Absence and no are different answers, so coming back from a no is a yes rather
         // than a delete — and a later change to what is notable by nature cannot silently
         // reverse a decision somebody has already made.
         testCase "toggling it back records the yes, rather than forgetting the answer" <| fun () ->
-            let verdicts = Map.empty |> Chapters.toggle notable |> Chapters.toggle notable
-            Expect.equal (Map.tryFind notable.MessageId verdicts) (Some true) "an answer either way"
+            let chapters = Map.empty |> Chapters.toggle notable |> Chapters.toggle notable
+            Expect.equal (opensOf notable chapters) (Some true) "an answer either way"
 
         testCase "the chapters keep the order the conversation holds them in" <| fun () ->
-            let verdicts = Map.ofList [ said.MessageId, true ]
             Expect.equal
-                (Chapters.over verdicts [ said; ordinary; notable ] |> List.map (fun i -> i.MessageId))
+                (Chapters.over (verdict said true) [ said; ordinary; notable ] |> List.map (fun i -> i.MessageId))
                 [ said.MessageId; notable.MessageId ]
                 "both chapters, in timeline order"
+
+        // --- What it is called ----------------------------------------------------------
+
+        // A message is markdown, and a chapter is a line. The first line is the part of a
+        // message a person wrote as its subject, whether or not they meant to.
+        testCase "a message is named by its first line" <| fun () ->
+            let message = itemSaying "m" "Do both ends.\nUpstream so it fails loudly." ConversationItemKind.Message
+            Expect.equal (Chapters.defaultName message) "Do both ends." "the first line, and only it"
+
+        testCase "a long first line is cut on a word boundary, and says it was cut" <| fun () ->
+            let message =
+                itemSaying "m" "Upstream: capture under pipefail and refuse an empty result" ConversationItemKind.Message
+            let name = Chapters.defaultName message
+            Expect.isTrue (name.EndsWith "…") (sprintf "a cut name says so, got %s" name)
+            Expect.isFalse (name.Contains "resul…") "and the cut falls between words, not inside one"
+
+        // An act note arrives as a sentence somebody already wrote short. Cutting it would be
+        // taking a headline and making a worse headline.
+        testCase "a short act headline is its whole name" <| fun () ->
+            let act =
+                itemSaying "a" "PR octo/hello#12 merged" (ConversationItemKind.ActNote { Detail = None; Notable = true })
+            Expect.equal (Chapters.defaultName act) "PR octo/hello#12 merged" "nothing to cut"
+
+        // The guess reads the line's WORDS. A line that opens with markdown opens with
+        // punctuation that says how it is set, not what it says.
+        testCase "a line that opens with markdown is named by what it says" <| fun () ->
+            let bulleted = itemSaying "b" "- ship the guard first" ConversationItemKind.Message
+            Expect.equal (Chapters.defaultName bulleted) "ship the guard first" "the bullet is not the name"
+
+        // The name belongs to the SESSION from the moment the chapter does, so every peer
+        // reads the same words — and the person who wants to change them has something to
+        // change rather than an empty field.
+        testCase "opening a chapter writes the guess down" <| fun () ->
+            let message = itemSaying "m" "Do both ends." ConversationItemKind.Message
+            Expect.equal (nameIn message (Chapters.toggle message Map.empty)) (Some "Do both ends.") "seeded, not left empty"
+
+        // A mis-tap costs a chapter, never a sentence.
+        testCase "closing a chapter keeps the name somebody wrote" <| fun () ->
+            let chapters =
+                Map.empty
+                |> Chapters.toggle said
+                |> Chapters.rename said (Ylmish.Text.ofString "Where it was settled")
+                |> Chapters.toggle said
+            Expect.equal (opensOf said chapters) (Some false) "the chapter is closed"
+            Expect.equal (nameIn said chapters) (Some "Where it was settled") "and the words are still there"
+
+        testCase "a name somebody wrote is what the chapter is called" <| fun () ->
+            let chapters = Map.ofList [ said.MessageId, { Opens = true; Name = Ylmish.Text.ofString "The decision" } ]
+            Expect.equal (Chapters.name chapters said) "The decision" "theirs, not the guess"
+
+        // The case the fallback exists for: an act that opens a chapter by nature has no
+        // entry at all until somebody touches it, and a decoded doc written before names
+        // has an entry with nothing in it. Both read as the guess.
+        testCase "a chapter nobody has named is called what the message says" <| fun () ->
+            Expect.equal (Chapters.name Map.empty notable) "something happened" "no entry, still a name"
+            Expect.equal (Chapters.name (verdict notable true) notable) "something happened" "an empty name, still a name"
+
+        // Renaming is not a way to divide the session: what it writes down is the verdict the
+        // item already carried, so naming a chapter that opened by itself leaves it open.
+        testCase "renaming a chapter nobody opened keeps the verdict it had" <| fun () ->
+            let chapters = Chapters.rename notable (Ylmish.Text.ofString "The watch begins") Map.empty
+            Expect.equal (opensOf notable chapters) (Some true) "still open, by nature"
+            Expect.equal (nameIn notable chapters) (Some "The watch begins") "and now it is called something"
     ]
 
 let private prWatchTests =
