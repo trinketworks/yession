@@ -160,6 +160,9 @@ let internal setTimeoutJs (f: unit -> unit) (ms: int) : float = jsNative
 [<Emit("clearTimeout($0)")>]
 let internal clearTimeoutJs (handle: float) : unit = jsNative
 
+[<Emit("performance.now()")>]
+let private now () : float = jsNative
+
 /// How long catch-up must run before it is worth SAYING (see `EventConsumerState.CatchUpIsSlow`).
 /// Long enough that a send — which puts this client one event behind itself for a round trip —
 /// never lights it; short enough that a real wait is reported rather than sat through in
@@ -632,7 +635,38 @@ let create (deps: Deps) : Renderer =
 
     // Render the Lit view on every model change. Lit diffs into the root, so the focused
     // textarea and its caret survive; only the timeline scroll is restored by hand.
-    let setState (model: ClientModel) =
+    //
+    // Every model change but one: a page that lands while the client is still CATCHING UP.
+    // A cold open reads the whole log a page per round trip from the oldest, and the
+    // conversation is pinned to its foot, so every page rendered was a picture of history
+    // the reader never asked for, scrolling past under their eye — 116 of them on a session
+    // of 97 items, forty-nine thousand pixels of words moving. None of them is the tail,
+    // and the tail is what an open is for. So a render that would show a client still
+    // behind is HELD, and one render is made at most every `catchUpQuietMs` while that
+    // lasts — a long catch-up still shows its progress and its indicator — and the render
+    // that shows the client caught up is immediate, whatever the hold. A send puts a client
+    // one event behind itself for a round trip, and the page that answers it lands caught
+    // up, so live traffic renders as it did; what is paced is a client that STAYS behind.
+    let mutable renderedAt = -infinity
+    let mutable held = 0.0
+    let rec setState (model: ClientModel) =
+        let since = now () - renderedAt
+        if model.EventConsumer.IsCatchingUp && since < float catchUpQuietMs then
+            latest <- Some model
+            if held = 0.0 then
+                held <-
+                    setTimeoutJs
+                        (fun () ->
+                            held <- 0.0
+                            latest |> Option.iter render)
+                        (catchUpQuietMs - int since)
+        else
+            if held <> 0.0 then
+                clearTimeoutJs held
+                held <- 0.0
+            render model
+    and render (model: ClientModel) =
+        renderedAt <- now ()
         countRender ()
         latest <- Some model
         let scroll = surfaceScroll PinnedSurfaces
