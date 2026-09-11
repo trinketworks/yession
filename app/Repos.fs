@@ -93,6 +93,16 @@ let hardenedEnv (allowProtocol: string) (token: string option) : (string * strin
              sprintf "GIT_CONFIG_VALUE_%d" i, value ])
        |> List.concat)
 
+/// Who git says made a commit, in git's own env spelling — author and committer both,
+/// because a sandbox's git has no config of its own to fall back on and "Author identity
+/// unknown" is the sentence a person pushing from one otherwise meets first.
+let identityEnv (name: string) (email: string) : Map<string, string> =
+    Map.ofList
+        [ "GIT_AUTHOR_NAME", name
+          "GIT_AUTHOR_EMAIL", email
+          "GIT_COMMITTER_NAME", name
+          "GIT_COMMITTER_EMAIL", email ]
+
 /// The git a verb runs, NAMED rather than looked up on PATH. Every other binary a
 /// confined spawn execs is named for this reason — srt's bwrap, socat and ripgrep, the
 /// agent's claude — and git was the exception until the exception cost a session.

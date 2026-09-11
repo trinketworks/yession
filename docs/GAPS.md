@@ -636,9 +636,10 @@ first's.
     Forwarding itself shipped as `start_work_sandbox`'s `forward` argument
     (`app/WorkSandboxes.fs`), so a sandbox the agent asked for can carry `github` — but
     `default` is the one nobody asks for, and it is created with `Forwarded = []`. Its
-    terminals do local git only until somebody starts a named sandbox. Commit/push
-    attribution machinery (author = requesting user, `Co-Authored-By`) is absent
-    everywhere, forwarded credential or not.
+    terminals do local git only until somebody starts a named sandbox. A sandbox that
+    forwards `github` is told who its commits are by — the GitHub account behind the
+    credential, read once at the start (`GitHubConnection.commitIdentity`) — but one that
+    forwards nothing has no author, and `Co-Authored-By` for the agent is absent everywhere.
   - **A forwarded `github` credential reaches docker and host sandboxes, not srt ones.**
     Forwarding is a route through the session's git gateway (`app/GitGateway.fs`): the
     sandbox's git is told one `insteadOf` and the credential never enters it. The route has

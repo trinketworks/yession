@@ -354,6 +354,66 @@ let refusedAt (url: string) (token: string) : Async<string option> =
 let refused (token: string) : Async<string option> =
     refusedAt (envOr "YESSION_GITHUB_USER_URL" userUrl) token
 
+/// Who a credential is, as GitHub says: what a commit made with it is authored as.
+[<RequireQualifiedAccess>]
+type Profile =
+    { Login : string
+      Id : int64
+      /// The display name, when the account has one; `login` stands in when it does not.
+      Name : string option
+      /// The PUBLIC email, when the account shows one. Most do not.
+      Email : string option }
+
+/// The same endpoint, read for its body this time.
+[<Emit("""fetch($0, { headers: { 'authorization': 'Bearer ' + $1, 'accept': 'application/vnd.github+json',
+                                 'user-agent': 'yession' } })
+  .then(r => r.ok ? r.json().then(u => ({ ok: true, status: r.status, login: String(u.login ?? ''), id: Number(u.id ?? 0), name: u.name ?? null, email: u.email ?? null }))
+                  : { ok: false, status: r.status, login: '', id: 0, name: null, email: null })
+  .catch(() => ({ ok: false, status: 0, login: '', id: 0, name: null, email: null }))""")>]
+let private getProfile
+    (url: string)
+    (token: string)
+    : JS.Promise<{| ok: bool; status: int; login: string; id: float; name: string option; email: string option |}> =
+    jsNative
+
+/// The profile behind a token, or why there is none — unreachable, refused, or an answer
+/// with no login in it, which is not a profile whatever the status said.
+let profileAt (url: string) (token: string) : Async<Result<Profile, string>> =
+    async {
+        let! reply = getProfile url token |> Interop.awaitPromise
+        if not reply.ok then
+            return Error (if reply.status = 0 then "github could not be reached" else sprintf "github answered %d" reply.status)
+        elif reply.login = "" then
+            return Error "github answered with no login"
+        else
+            return
+                Ok
+                    { Profile.Login = reply.login
+                      Id = int64 reply.id
+                      Name = reply.name
+                      Email = reply.email }
+    }
+
+/// As the session composes it.
+let profile (token: string) : Async<Result<Profile, string>> =
+    profileAt (envOr "YESSION_GITHUB_USER_URL" userUrl) token
+
+/// The author a commit made with this credential carries: the account's name, and the
+/// email GitHub itself attributes to it. The public email when the account shows one;
+/// otherwise the noreply address GitHub mints for the account (`<id>+<login>@…`), which
+/// is what its own web commits use and what its contribution graph credits — so a commit
+/// pushed from a sandbox is attributed the way one made on github.com would be.
+let commitIdentity (profile: Profile) : string * string =
+    let name =
+        match profile.Name with
+        | Some name when name.Trim () <> "" -> name.Trim ()
+        | _ -> profile.Login
+    let email =
+        match profile.Email with
+        | Some email when email.Trim () <> "" -> email.Trim ()
+        | _ -> sprintf "%d+%s@users.noreply.github.com" profile.Id profile.Login
+    name, email
+
 /// Build the /github* route handler. `statusOf` reads the session's live status cache
 /// (the same Manager connection stream that feeds /claude — a stored `github` entry
 /// appears there with no Manager changes, because status is envelope-shape detection).
