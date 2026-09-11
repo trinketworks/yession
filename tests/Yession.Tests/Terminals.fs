@@ -1063,6 +1063,7 @@ let private leaseCommandTests =
                                 return Ok id
                             })
                         (fun _ _ _ -> async { return Error "no repos in this composition" })
+                        (fun _ _ _ -> async { return Error "no repos in this composition" })
                         PeerRef
                 let! taken = handle ada (TakeTerminalLease terminalA)
                 Expect.equal taken CommandAccepted "a take always succeeds — it steals rather than asks"
@@ -1578,6 +1579,9 @@ let private codecTests =
             let codec = Codec.sessionFrame Codec.string
             let frames =
                 [ Command (Request (RequestId.fresh (), OpenTerminal "build"))
+                  // The launch surface's act, with and without a branch chosen.
+                  Command (Request (RequestId.fresh (), AddRepo (RepoRef.create "octo/hello" |> expect, Some "feature/x")))
+                  Command (Request (RequestId.fresh (), AddRepo (RepoRef.create "octo/hello" |> expect, None)))
                   Command (Request (RequestId.fresh (), CloseTerminal terminalA))
                   Command (Request (RequestId.fresh (), TakeTerminalLease terminalA))
                   Command (Request (RequestId.fresh (), ReleaseTerminalLease terminalA))

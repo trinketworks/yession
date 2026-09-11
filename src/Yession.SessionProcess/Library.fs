@@ -53,6 +53,7 @@ module Bootstrap =
         | SessionEvent.RepoCapabilitiesApproved _ -> "repo-capabilities-approved"
         | SessionEvent.ShellProfileSet _ -> "shell-profile-set"
         | SessionEvent.CommandRefused _ -> "command-refused"
+        | SessionEvent.GatedCommandFailed _ -> "gated-command-failed"
         | SessionEvent.ToolUseStarted _ -> "tool-use-started"
         | SessionEvent.ToolUseFinished _ -> "tool-use-finished"
         | SessionEvent.McpServerAvailable _ -> "mcp-server-available"

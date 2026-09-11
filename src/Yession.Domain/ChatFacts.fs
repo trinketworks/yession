@@ -36,3 +36,20 @@ and CommandRefused =
       Author : ActorRef
       RejectedBy : ActorRef
       Reason : string option }
+
+/// A command its gate released that then RAN AND FAILED, for an author with no other way to
+/// hear so. The agent reads a failure back in its tool result and everyone else sees it on
+/// the `ToolUseFinished` line, which is why the gate records nothing for its commands; a
+/// person's command has no tool result, so without this its failure went nowhere — the
+/// launch surface's clone that could not reach the repo would simply not have happened.
+/// `CommandRefused`'s sibling, and distinct from it on purpose: refused is somebody saying
+/// no, failed is the act itself not succeeding, and a reader of the record acts differently
+/// on each.
+and GatedCommandFailed =
+    { MessageId : MessageId
+      Tool : string
+      /// The arguments as a person read them (`add_repo octo/hello`), the same rendering the
+      /// refusal records.
+      Summary : string
+      Author : ActorRef
+      Reason : string }
