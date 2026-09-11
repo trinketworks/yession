@@ -71,6 +71,12 @@ NEXT request properly.
   `gh pr view <n> --json state,mergedAt,mergeStateStatus` and believe that instead.
 - **Silence is not progress.** A dropped entry produces no failure event. If a PR has neither
   merged nor failed by your next check-in, assume ejection and re-enqueue.
+- **`autoMergeRequest` reads `null` while a PR is IN the queue.** It is not proof the PR left
+  it. Read the queue: `gh api graphql -f query='{ repository(owner:"trinketworks",
+  name:"yession"){ mergeQueue(branch:"master"){ entries(first:10){ nodes{
+  pullRequest{number} state position } } } } }'`. An entry whose run failed sticks as
+  `UNMERGEABLE` and `gh pr merge --auto` answers "already queued"; clear it with the
+  `dequeuePullRequest` then `enqueuePullRequest` mutations on the PR's node id.
 - **One push can carry several PRs**, so the `release` run in Step 4 may be a batch head that
   contains your commit rather than a run named for it.
 
