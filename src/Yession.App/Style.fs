@@ -601,6 +601,21 @@ module Style =
     let personAvatar = "self-center"
     let commandCard = "flex flex-col gap-1 px-3 py-2 bg-surface"
 
+    /// One chapter in the contents: the roster row's shape, worn by a button.
+    ///
+    /// The same row as a person's, because the column holds one kind of list and a second
+    /// shape here would read as a second kind of thing. What it adds is what a control has to
+    /// have: a name that brightens under the pointer, and the ring a keyboard sees. The
+    /// padding is spent OUTWARD, so the text sits on the column's rail with everything else
+    /// and the hover fill grows around it.
+    let chapterEntry =
+        cls [ person; "w-full text-left px-2 -mx-2 py-0.5 hover:text-ink hover:bg-surface-2"
+              "transition-colors cursor-pointer"; focusRing ]
+
+    /// Its mark, the same dot the rule in the timeline wears, so one chapter looks like one
+    /// thing in both places.
+    let chapterEntryDot = "w-1.5 h-1.5 rounded-full bg-ink-faint shrink-0 self-center"
+
     /// The generated read surface (Plan 15). A query answers with rows, fields, or one
     /// value, and these are the renderings — defined ONCE here because they are what every
     /// future query gets to look like, including the ones nobody has written.

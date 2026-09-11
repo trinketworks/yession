@@ -100,3 +100,18 @@ module Scrolling =
     /// worth showing with the moments around it, which is most of why they came back.
     [<Emit("$0.scrollIntoView({ block: 'center' })")>]
     let scrollIntoMiddle (element: Browser.Types.HTMLElement) : unit = jsNative
+
+/// Asking the browser what the STYLESHEET thinks, rather than deciding it again in F#.
+///
+/// A layout that changes at a breakpoint has two readers — the stylesheet, and whatever
+/// script has to behave differently on each side of it — and the one thing they must never do
+/// is each decide for themselves. A script comparing `innerWidth` to 768 is a second
+/// definition of the breakpoint that disagrees with the first whenever a scrollbar, a zoom or
+/// a rounded viewport gets between them.
+[<AutoOpen>]
+module Media =
+
+    /// Whether a media query matches right now. The query is the stylesheet's own, passed in
+    /// by the caller that shares a breakpoint with it.
+    [<Emit("window.matchMedia($0).matches")>]
+    let mediaMatches (query: string) : bool = jsNative

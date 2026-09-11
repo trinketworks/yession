@@ -173,11 +173,27 @@ let revealBlock (terminalId: string) (blockId: string) : unit =
             reflow block
             block.classList.add [| "animate-reveal-line" |]))
 
-/// Scroll the conversation to one message and flash it — the rail's half of "take me back
-/// there", and deliberately the same two moves `revealBlock` makes: scroll it into view, then
-/// replay the reveal animation so the eye can find which line moved. A jump that only scrolled
-/// would leave a reader looking at a screen of text with no idea which of it they asked for.
+/// On a phone the sidebar is a DRAWER over the conversation, so a jump made from inside it
+/// lands behind it: the message is scrolled, flashed and focused under a sheet the reader is
+/// still looking at. On a desktop the column is beside the conversation and nothing has to
+/// move, which is what the query answers.
+///
+/// `nav-alt` is the same bit `toggleNav` writes, and on a phone it means the drawer is open.
+let private closeNavDrawer () : unit =
+    if not (mediaMatches "(min-width: 768px)") then
+        document.documentElement.classList.remove [| "nav-alt" |]
+
+/// Scroll the conversation to one message and flash it — deliberately the same two moves
+/// `revealBlock` makes: scroll it into view, then replay the reveal animation so the eye can
+/// find which line moved. A jump that only scrolled would leave a reader looking at a screen
+/// of text with no idea which of it they asked for.
+///
+/// Getting the drawer out of the way is part of taking somebody to a message, so it happens
+/// HERE rather than at the one caller that can be inside one. It is a no-op from the timeline,
+/// where no drawer is open, and the next surface that jumps from behind one does not have to
+/// remember the rule.
 let revealMessage (messageId: string) : unit =
+    closeNavDrawer ()
     nextFrame (fun () ->
         find (sprintf "[data-conversation] [data-message-id=\"%s\"]" messageId)
         |> Option.iter (fun item ->

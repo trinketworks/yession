@@ -87,6 +87,10 @@ module Dom =
         /// this item already opens one, so a test can read the state without reading a class.
         let chapterRule = "data-chapter-rule"
         let chapterName = "data-chapter-name"
+        /// The contents: the section listing every chapter, and one entry in it valued by the
+        /// message its chapter opens at.
+        let chapters = "data-chapters"
+        let chapterEntry = "data-chapter-entry"
         /// The per-item actions control, valued by the message it acts on, and the menu it
         /// opens. `data-item-is-chapter` rides the CHAPTER entry rather than the control: what
         /// a test wants to read is which way the entry will go, and that is a property of

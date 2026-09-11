@@ -1008,6 +1008,39 @@ module View =
               <button type="button" class="{Style.cls [ Style.navPivot; Style.settingsLane2 ]}" aria-label="Back to session" data-settings-toggle="close" @click={Ev(fun _ -> actions.ToggleSettings ())}><span class="{Style.pivotMarkBack}">{Icon.pivotLeft}</span>back</button>
             </div>"""
 
+    /// The contents: every chapter in the session, and the way to reach one that is not
+    /// scrolling until you find it.
+    ///
+    /// HERE rather than in a bar of its own, and that is the mobile answer as much as the
+    /// desktop one: this column is already the session's index — who is here, what the
+    /// environment is — and on a phone it is already a drawer one tap from the conversation.
+    /// A second surface listing chapters would be a second place to look for the same list,
+    /// and a phone cannot afford either the width or the tap.
+    ///
+    /// Absent until there is a chapter. A heading over nothing teaches a reader to skip the
+    /// place the list will appear.
+    let private chaptersSection (actions: ViewActions) (model: ClientModel) : TemplateResult =
+        match ClientModel.chapters model with
+        | [] -> Lit.nothing
+        | chapters ->
+            // `RevealMessage` — the same jump the reply ref makes, so a chapter reached from
+            // the contents lands exactly as a reply's source does: centred, flashed, and
+            // holding the cursor. A second way to arrive would be a second thing to keep
+            // right.
+            let entry (item: ConversationItem) =
+                html $"""
+                    <button type="button" class="{Style.chapterEntry}"
+                            data-chapter-entry="{MessageId.value item.MessageId}"
+                            @click={Ev(fun _ -> actions.RevealMessage item.MessageId)}>
+                      <span class="{Style.chapterEntryDot}"></span>
+                      <span class="truncate min-w-0">{ClientModel.chapterName model item}</span>
+                    </button>"""
+            html $"""
+                <section class="{Style.cls [ Style.sideSection; Style.navLane1 ]}" data-chapters>
+                  <span class="{Style.label}">chapters</span>
+                  {chapters |> List.map entry}
+                </section>"""
+
     /// The workspace face of the column: identity, sync health, membership, environment, log.
     let private navPane (actions: ViewActions) (model: ClientModel) : TemplateResult =
         html $"""
@@ -1018,6 +1051,7 @@ module View =
               </div>
               {connectionSection actions model}
               {peopleSection actions model}
+              {chaptersSection actions model}
               {environmentSection model.Environment}
               <div class="flex-1"></div>
               <button type="button" class="{Style.cls [ Style.navPivot; Style.navLane2 ]}" data-settings-toggle="open" @click={Ev(fun _ -> actions.ToggleSettings ())}>settings<span class="{Style.pivotMarkForward}">{Icon.pivotRight}</span></button>

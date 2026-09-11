@@ -1436,6 +1436,16 @@ module ClientModel =
         | "" -> Dom.Text.unnamedChapter
         | said -> said
 
+    /// Every chapter in the session, oldest first — the conversation's own order, which is
+    /// the order the contents lists them in and the order a reader walking the session would
+    /// meet them.
+    ///
+    /// No position here, and that is the whole lesson of the rail this replaced: where a
+    /// chapter IS on a screen is a measurement of a laid-out page, and the list is the same
+    /// on a phone and a desk.
+    let chapters (model: ClientModel) : ConversationItem list =
+        Chapters.over model.Synced.Chapters model.Conversation.Items
+
     /// What this session's pull-request watches currently stand at, read off the
     /// `pull_requests` query — the only shape a browser has them in, since the query stream
     /// is what delivers them.
