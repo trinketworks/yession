@@ -16,7 +16,9 @@ open Fable.Core.JsInterop
 open Fable.Pyxpecto
 open Yession.Domain
 open Yession.Domain.Sandboxes
+open Yession.Domain.Terminals
 open Yession.Host
+open Yession.SessionProcess
 open Yession.Tests.Support
 
 // --- Node helpers: host-side fixtures the sandbox is then pointed at ----------------------
@@ -192,6 +194,48 @@ let tests =
                 Expect.equal (exitCode run) 0 "the command ran"
                 Expect.isTrue (out.Contains "confined") "its stdout reached the caller"
                 Expect.isTrue (exists nodeFs (workspace + "/marker")) "the workspace write landed on the host"
+                do! sandbox.Dispose ()
+            })
+
+            // The terminal story's whole precondition, asked of the CONFINED spawn: an
+            // interactive shell on a pty, under this box's srt, prints the `sh` dialect's
+            // prompt mark inside the bound `openShell` waits. Every terminal on a deployed
+            // macOS host fell back to a process per block — silently, for weeks — and every
+            // pty case in the suite was green, because none of them ran the shell confined.
+            testCaseAsync "an interactive shell on a pty under srt prints an instrumented prompt" (async {
+                let workspace = mkdtemp nodeFs nodeOs
+                let! sandbox = startSandbox (policyIn workspace [])
+                match sandbox.SpawnPty with
+                | None -> failwith "srt reports no pty support"
+                | Some spawnPty ->
+                    let output = System.Text.StringBuilder ()
+                    let nonce = "srt-nonce"
+                    let rc =
+                        match Marks.rcFor "sh" nonce with
+                        | Some instrumentation -> instrumentation.Rc
+                        | None -> failwith "no sh dialect"
+                    let exec =
+                        { Executable = SessionTerminals.TerminalShell.posix.Executable
+                          Arguments = SessionTerminals.TerminalShell.posix.InteractiveArguments
+                          Env = Map.empty
+                          WorkingDirectory = None }
+                    match! spawnPty exec 80 24 (fun data -> output.Append data |> ignore) with
+                    | Error reason -> failwithf "the pty would not open: %s" reason
+                    | Ok pty ->
+                        for line in rc.Split '\n' do
+                            pty.Write (line + "\r")
+                        let rec await (remaining: int) =
+                            async {
+                                let marks, _, _ = Marks.scan nonce "" (output.ToString ())
+                                if marks |> List.contains MarkPromptStart then return true
+                                elif remaining <= 0 then return false
+                                else
+                                    do! Async.Sleep 50
+                                    return! await (remaining - 50)
+                            }
+                        let! instrumented = await 3000
+                        pty.Kill ()
+                        Expect.isTrue instrumented (sprintf "the prompt mark arrived; the shell said: %s" (output.ToString ()))
                 do! sandbox.Dispose ()
             })
 

@@ -3380,6 +3380,38 @@ let private shellProfileTests =
                 release ()
             }
 
+        // The other way a terminal ends up shell-less: a shell that runs but never prints the
+        // mark. The notice carries what it DID print, escaped, so a prompt without marks and
+        // no prompt at all read as different failures — which on a deployed host they were.
+        testCaseAsync "a shell that never marks its prompt is given up on, and the notice quotes it" <|
+            async {
+                let log = newLog ()
+                let environment, _ = profileEnvironment (fun () -> Set.empty)
+                let mute : SessionEnvironment.SessionEnvironment =
+                    { environment with
+                        SpawnPty =
+                            fun _ _ _ onOutput ->
+                                async {
+                                    return
+                                        Ok
+                                            { Write = fun _ -> onOutput "\u001b[?1034hsh-3.2$ "
+                                              Resize = fun _ _ -> ()
+                                              Kill = ignore
+                                              Exited = async { return SandboxExited 0 } }
+                                } }
+                let openTranscript, linesOf, _, _, readTranscript = recordingTranscripts ()
+                let terminals, _, _ = makeTerminals log mute openTranscript readTranscript []
+                let! opened = terminals.Open (PeerRef ada) (SandboxShell SandboxRef.defaultRef) (TerminalTitle.fromProse "build")
+                let id = opened |> expect
+                let said =
+                    linesOf id
+                    |> List.choose (function TranscriptRecordLine r when r.Kind = TranscriptStderr -> Some r.Data | _ -> None)
+                    |> String.concat ""
+                Expect.stringContains said "never printed an instrumented prompt" "the terminal says it gave the shell up"
+                Expect.stringContains said "sh-3.2$" "and quotes what the shell printed instead"
+                Expect.stringContains said "\\x1b" "with its control bytes escaped, not carried"
+            }
+
         testCaseAsync "a terminal opened afterwards starts its shell there" <|
             async {
                 // The invariant the whole plan exists for, and it is asserted on the SPAWN:
