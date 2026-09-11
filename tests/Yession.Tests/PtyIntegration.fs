@@ -518,12 +518,16 @@ let private agentLeaseTests =
                     let ada = PeerRef (PeerId.create "ada" |> expect)
                     // Enters the alternate screen and waits for a line, exactly as an editor
                     // or an installer prompt does — without depending on either being present.
+                    // From `/dev/tty`, which is where a program that insists on a person reads
+                    // (`less`, `ssh`'s passphrase prompt, `sudo`): an agent's block has no stdin
+                    // (`BlockStdinPolicy`), so a plain `read` would get end-of-file and end the
+                    // block before anything could wedge. What is left to answer is exactly this.
                     let! block =
                         Async.StartChild (
                             terminals.RunBlock
                                 id
                                 (agentEntry id ada "1")
-                                "printf '\\033[?1049h'; read -r answer; printf '\\033[?1049l'; echo \"answered $answer\""
+                                "printf '\\033[?1049h'; read -r answer </dev/tty; printf '\\033[?1049l'; echo \"answered $answer\""
                                 ignore,
                             20000)
                     let! wedged = until 8000 (fun () -> terminals.Interactive id)
@@ -535,6 +539,45 @@ let private agentLeaseTests =
                         Expect.isTrue
                             (records |> Seq.exists (fun r -> r.Data.Contains "answered yes"))
                             "the keystrokes reached the program, which then ran on to its end"
+                })
+
+        // `perl -pi -e 1` with no filename is the command that held a real session's default
+        // terminal for the rest of a day: it reads the terminal, and nobody is there to type.
+        // Under `BlockStdinPolicy` the agent's block reads end-of-file and ends on its own; a
+        // person's, the same text in the same shell, still waits, because the keyboard is
+        // theirs. `cat` stands in for perl — the same read, and present on every box.
+        testCaseAsync "an agent's block that reads stdin ends at once; a person's waits" <|
+            withPosixTerminal "stdin" (fun terminals id _ log _ _ ->
+                async {
+                    let ada = PeerRef (PeerId.create "ada" |> expect)
+                    let! agents = Async.StartChild (terminals.RunBlock id (agentEntry id ada "1") "cat" ignore, 10000)
+                    do! agents
+                    let! page = log.Read None 1000
+                    let results =
+                        page.Events
+                        |> List.choose (fun e ->
+                            match e.Event with
+                            | SessionEvent.TerminalBlockCompleted c -> Some c.Result
+                            | _ -> None)
+                    Expect.equal results [ CommandSucceeded 0 ] "end-of-file: cat copied nothing and exited clean"
+                    Async.StartImmediate (terminals.RunBlock id (queueEntry id ada "2") "cat" ignore)
+                    let! gaveUp = until 1500 (fun () -> not (terminals.Busy () |> Set.contains (TerminalId.value id)))
+                    Expect.isFalse gaveUp "a person's cat is still waiting on their keyboard"
+                })
+
+        // The wrapping is a brace group in THIS shell, so the two things blocks are typed into
+        // one shell to have — a heredoc's body, and `cd` reaching the next block — survive it.
+        testCaseAsync "an agent's heredoc and cd work as before under closed stdin" <|
+            withPosixTerminal "stdinshape" (fun terminals id records _ _ _ ->
+                async {
+                    let ada = PeerRef (PeerId.create "ada" |> expect)
+                    let dir = mkdtemp nodeFs nodeOs
+                    do! terminals.RunBlock id (agentEntry id ada "1") ("cd " + dir) ignore
+                    do! terminals.RunBlock id (agentEntry id ada "2") "cat <<'EOF' # note\nHEREDOC:$PWD\nEOF" ignore
+                    do! terminals.RunBlock id (agentEntry id ada "3") "echo \"IN:$PWD\"" ignore
+                    let printed () = records |> Seq.map (fun r -> r.Data) |> String.concat ""
+                    let! saw = until 5000 (fun () -> (printed ()).Contains ("IN:" + dir) && (printed ()).Contains "HEREDOC:$PWD")
+                    Expect.isTrue saw (sprintf "the heredoc printed literally and cd carried to the next block, got: %s" (printed ()))
                 })
 
         testCaseAsync "a shell terminal the agent does NOT hold still refuses raw bytes" <|
@@ -561,7 +604,8 @@ let private agentLeaseTests =
                             terminals.RunBlock
                                 id
                                 (agentEntry id (PeerRef (PeerId.create "ada" |> expect)) "1")
-                                "printf '\\033[?1049h'; read -r answer; printf '\\033[?1049l'"
+                                // `/dev/tty` for the reason the case above gives.
+                                "printf '\\033[?1049h'; read -r answer </dev/tty; printf '\\033[?1049l'"
                                 ignore,
                             20000)
                     let! wedged = until 8000 (fun () -> terminals.Interactive id)
