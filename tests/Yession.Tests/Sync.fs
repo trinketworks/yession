@@ -306,6 +306,56 @@ let private codecTests =
                 (Some "Where it was settled")
                 "the doc carries what the chapter is called"
 
+        // A caret in a chapter's name is a RELATIVE position over that name's own `Y.Text`, so
+        // the reporter has to find the same text the codec wrote — by the codec's own answer
+        // about where it put it, never by a path rebuilt at the browser.
+        testCase "a chapter's name is findable as the live text it is" <| fun () ->
+            let doc = Y.Doc.Create ()
+            let p = Harness.run (Client.makeProgram doc (ClientModel.init (peer "ada" "Ada")))
+            let messageId = MessageId.create "msg-1" |> expect
+            p.Dispatch (user (EventsPageMsg (said messageId "ship it")))
+            p.Dispatch (user (ToggleChapterMsg messageId))
+            Expect.isSome
+                (SyncedStateSync.chapterNameText doc (MessageId.value messageId))
+                "the chapter opened here, so its name is a text to measure a caret against"
+
+        // Nothing to measure against is an answer, not a default. A caret is relayed live
+        // while doc updates are not, so one can arrive in a chapter this doc has never had —
+        // and a position taken against some other text would encode, relay and decode into a
+        // caret standing somewhere nobody put it.
+        testCase "a chapter this doc does not have is no text at all" <| fun () ->
+            let doc = Y.Doc.Create ()
+            let p = Harness.run (Client.makeProgram doc (ClientModel.init (peer "ada" "Ada")))
+            let messageId = MessageId.create "msg-1" |> expect
+            p.Dispatch (user (EventsPageMsg (said messageId "ship it")))
+            p.Dispatch (user (ToggleChapterMsg messageId))
+            Expect.isNone
+                (SyncedStateSync.chapterNameText doc "msg-elsewhere")
+                "no chapter, no text"
+
+        // And the thing that could break every caret in a name at once, silently: the name
+        // has to stay the SAME text as it is edited. A re-flush that minted a fresh `Y.Text`
+        // would leave collaborators' positions resolving to nothing, while the name went on
+        // merging, decoding and rendering exactly as before — so nothing else here would go
+        // red.
+        testCase "a caret in a chapter's name survives the name being written" <| fun () ->
+            let doc = Y.Doc.Create ()
+            let p = Harness.run (Client.makeProgram doc (ClientModel.init (peer "ada" "Ada")))
+            let messageId = MessageId.create "msg-1" |> expect
+            p.Dispatch (user (EventsPageMsg (said messageId "ship it")))
+            p.Dispatch (user (ToggleChapterMsg messageId))
+            let text =
+                SyncedStateSync.chapterNameText doc (MessageId.value messageId)
+                |> Option.defaultWith (fun () -> failwith "the chapter's name should be in the doc")
+            // A caret after "ship" in the seeded name, taken before anybody types.
+            let caret = Y.createRelativePositionFromTypeIndex (unbox text, 4.0)
+            let seeded = (p.Model ()).Synced.Chapters |> Map.find messageId
+            p.Dispatch (user (EditChapterNameMsg (messageId, Text.edit "ship it now" seeded.Name)))
+            Expect.equal
+                (Y.createAbsolutePositionFromRelativePosition (caret, doc) |> Option.map (fun abs -> abs.index))
+                (Some 4.0)
+                "the caret still stands where it was put, in the text it was put in"
+
         // Both halves of an entry at once, through the decoder the app itself binds rather
         // than the structural read above: a nested text that encoded but did not decode would
         // be a name every peer wrote and none could read back.

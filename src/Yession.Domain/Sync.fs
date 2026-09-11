@@ -450,6 +450,25 @@ module SyncedStateSync =
         |> Option.map (fun value -> Text.ofString (textString (unbox<Yjs.Y.Text> value)))
         |> Option.defaultValue Text.empty
 
+    /// The live `Y.Text` a chapter's name IS, found by the message its chapter opens at —
+    /// what a caret in that name is measured against (`FocusField.ChapterName`).
+    ///
+    /// Here because the layout is here: this codec decided a name rides its chapter's own
+    /// entry under `name`, and a reader that reconstructed that path somewhere else would be
+    /// a second opinion about where the text lives — one that fails silently, since a
+    /// position taken against the wrong type still encodes and still decodes.
+    ///
+    /// `None` until that chapter's entry has reached this doc carrying a name: presence is
+    /// relayed live and doc updates are not, so a caret can arrive before the chapter does.
+    let chapterNameText (doc: Yjs.Y.Doc) (messageId: string) : Yjs.Y.Text option =
+        if not (shareHas doc "chapters") then None
+        else
+            (doc.getMap "chapters" : Yjs.Y.Map<obj>).get messageId
+            |> Option.filter (isNull >> not)
+            |> Option.bind (fun entry -> (unbox<Yjs.Y.Map<obj>> entry).get "name")
+            |> Option.filter (isNull >> not)
+            |> Option.map unbox<Yjs.Y.Text>
+
     /// Fold every entry of a named root map through `read`. Absent root = empty.
     let private foldRoot (doc: Yjs.Y.Doc) (root: string) (read: Yjs.Y.Map<obj> -> 'a) : HashMap<string, 'a> =
         if not (shareHas doc root) then HashMap.empty
