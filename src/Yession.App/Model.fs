@@ -509,6 +509,13 @@ type ClientModel =
       /// decided the author was a `UserRef` in the first place, rather than a client-side
       /// guess that could disagree with it.
       PeerUsers     : Map<PeerId, UserId>
+      /// User → their most recently joined attributed peer — the client's own copy of
+      /// `Yession.Domain.Attribution.userPeers`. `PeerUsers` above answers "who is this
+      /// peer"; this answers the opposite question, "which peer do I ask for this user's
+      /// CURRENT name", which `PeerUsers` cannot: a user attributed across several joins
+      /// (reconnects, or simply having joined again since) has several peers mapping to
+      /// them in `PeerUsers`, and nothing in that map says which is current. This does.
+      UserPeers     : Map<UserId, PeerId>
       /// Which draft this client has OPEN in the composer, of the at-most-one that can be. App
       /// state, never synced: two people in one session may each have a different draft open.
       Composer      : ComposerChoice
@@ -836,6 +843,7 @@ module ClientModel =
           Presence = Map.empty
           Peers = Map.empty
           PeerUsers = Map.empty
+          UserPeers = Map.empty
           Composer = Unchosen
           Environment = EnvironmentNotStarted
           Terminals = Projection.empty
@@ -1409,15 +1417,19 @@ module ClientModel =
     /// A `UserRef` author's real name, resolved through the SAME rule the Session Process
     /// used to decide the author was a `UserRef` in the first place
     /// (`Yession.Domain.Attribution`) rather than a client-side guess that could disagree
-    /// with it: find a peer this client has seen join AS that user, and ask `nameOf` for
-    /// THAT peer's name. Any peer attributed to the same user carries that user's own
-    /// name once `Signalling.fs`'s `/me` supplies it (see `PeerHello.DisplayName`), so it
-    /// does not matter which one this finds. Falls back to the raw subject only when this
-    /// client has never seen the user's peer join at all — an id is a last resort here
-    /// exactly as it is in `nameOf`.
+    /// with it: ask `UserPeers` for the peer THIS user most recently joined as, and ask
+    /// `nameOf` for that peer's name. A user attributed across several joins (a reconnect,
+    /// or simply having been in this session before under an older name) has several
+    /// entries in `PeerUsers`, and reverse-scanning that map for a match would pick
+    /// whichever one happened to sort first — stale or current, no way to tell them apart.
+    /// `UserPeers` is folded in event order and overwritten on each join, so it always
+    /// names the CURRENT one. Falls back to the raw subject only when this client has
+    /// never seen the user's peer join at all — an id is a last resort here exactly as it
+    /// is in `nameOf`.
     let userName (user: UserId) (model: ClientModel) : string =
-        model.PeerUsers
-        |> Map.tryPick (fun peer u -> if u = user then Some (nameOf peer model) else None)
+        model.UserPeers
+        |> Map.tryFind user
+        |> Option.map (fun peer -> nameOf peer model)
         |> Option.defaultValue (UserId.value user)
 
     /// What a stroke on the rail is called, for a reader who cannot see where it points.
@@ -1608,6 +1620,14 @@ module ClientModel =
                     (fun acc k v -> Map.add k v acc)
                     model.PeerUsers
                     (Attribution.peerUsers (freshEvents |> List.map (fun e -> e.Event)))
+            // Same idea, the other direction: which peer is CURRENT for a user, so a later
+            // join supersedes an earlier one instead of leaving `userName` to reverse-scan
+            // `peerUsers` and land on whichever stale join happens to sort first.
+            let userPeers =
+                Map.fold
+                    (fun acc k v -> Map.add k v acc)
+                    model.UserPeers
+                    (Attribution.userPeers (freshEvents |> List.map (fun e -> e.Event)))
             // The terminal half of the chat, gated on the same offset as the conversation —
             // one page, two folds, merged only at render.
             let timeline, _ =
@@ -1649,6 +1669,7 @@ module ClientModel =
                 Pins = pins
                 Peers = peers
                 PeerUsers = peerUsers
+                UserPeers = userPeers
                 EventConsumer =
                     { LastProcessedOffset = highWater
                       LatestKnownOffset = latestKnown
