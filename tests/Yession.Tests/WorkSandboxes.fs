@@ -8,8 +8,9 @@ module Yession.Tests.WorkSandboxes
 //     file into these commands at every boot accumulates instead of converging;
 //   * a DIFFERENT ask is refused rather than silently recreated, because recreating kills
 //     whatever is running inside;
-//   * a forwarded credential reaches the sandbox's environment and NOTHING else — the
-//     event carries the names and whose, and cannot carry a value.
+//   * what a forwarded credential provisions reaches the sandbox's environment and NOTHING
+//     else — the event carries the names and whose, and cannot carry a value — and it is
+//     taken back when the sandbox stops.
 
 open System
 open Fable.Pyxpecto
@@ -74,7 +75,7 @@ let private fakeEnvironment () = fakeEnvironmentHolding []
 /// A registry over fake environments, plus the record of what each was BUILT with — which
 /// is where a forwarded credential would have to appear, and the only place it may.
 let private registryWithSpecs (log: EventLog<SessionEvent>) (credentials: WorkSandboxes.CredentialSource list) =
-    let built = ResizeArray<string * Map<string, string>> ()
+    let built = ResizeArray<string * WorkSandboxes.Provision> ()
     let specs = ResizeArray<string * string option> ()
     let sandboxes =
         WorkSandboxes.create
@@ -83,8 +84,8 @@ let private registryWithSpecs (log: EventLog<SessionEvent>) (credentials: WorkSa
               Checkout = fun _ -> None
               Credentials = credentials
               Create =
-                fun name spec env ->
-                    built.Add (SandboxRef.render name, env)
+                fun name spec provision ->
+                    built.Add (SandboxRef.render name, provision)
                     specs.Add (SandboxRef.render name, spec.WorkingDirectory)
                     Ok (fakeEnvironment ())
               Log = log
@@ -112,8 +113,25 @@ let private registry (log: EventLog<SessionEvent>) (credentials: WorkSandboxes.C
 
 let private caller : WorkSandboxes.SandboxCaller = { Actor = ActorRef.Agent; Credential = ada }
 
-let private githubCredential (value: string option) : WorkSandboxes.CredentialSource =
-    { Name = "github"; EnvVar = "GITHUB_TOKEN"; Resolve = fun _ -> async { return value } }
+/// A source that provisions the given env into any sandbox, for any actor, or holds nothing.
+/// Records what it gave and what it was asked to take back, which is the pair the revoke
+/// cases compare.
+let private githubSource (value: string option) : WorkSandboxes.CredentialSource * ResizeArray<string> =
+    let revoked = ResizeArray<string> ()
+    { Name = "github"
+      Provision =
+        fun _ _ ->
+            async {
+                return
+                    match value with
+                    | None -> WorkSandboxes.CredentialForwarding.NotHeld
+                    | Some v ->
+                        WorkSandboxes.CredentialForwarding.Forwarded { Env = Map.ofList [ "GITHUB_ROUTE", v ]; GitConfig = [] }
+            }
+      Revoke = fun ref -> revoked.Add (SandboxRef.render ref) },
+    revoked
+
+let private githubCredential (value: string option) : WorkSandboxes.CredentialSource = fst (githubSource value)
 
 let private eventsOf (log: EventLog<SessionEvent>) =
     async {
@@ -430,9 +448,9 @@ let private ensureTests =
 let private credentialTests =
     testList "named credential forwarding" [
 
-        // The rule the shared trust boundary rests on: the VALUE goes into the sandbox's
-        // environment and nowhere else; the EVENT carries the names and whose.
-        testCaseAsync "the value reaches the sandbox env, and the event carries names only" <|
+        // The rule the shared trust boundary rests on: what a source provisions goes into
+        // the sandbox's environment and nowhere else; the EVENT carries the names and whose.
+        testCaseAsync "the provision reaches the sandbox env, and the event carries names only" <|
             async {
                 let log = newLog ()
                 let sandboxes, built = registry log [ githubCredential (Some "ghp_secret") ]
@@ -442,8 +460,8 @@ let private credentialTests =
                     [ "github" ]
                     "it forwards what was asked"
 
-                let _, env = built |> Seq.find (fun (name, _) -> name = "test")
-                Expect.equal (Map.tryFind "GITHUB_TOKEN" env) (Some "ghp_secret") "the value is in the sandbox env"
+                let _, provision = built |> Seq.find (fun (name, _) -> name = "test")
+                Expect.equal (Map.tryFind "GITHUB_ROUTE" provision.Env) (Some "ghp_secret") "the provision is in the sandbox env"
 
                 let! events = eventsOf log
                 match startedEvents events with
@@ -506,6 +524,56 @@ let private credentialTests =
                     Expect.isFalse (e.Contains "sign in on") "not sent to sign in"
                     Expect.isFalse (e.Contains "configured:") "and no token where a sentence goes"
                 Expect.isFalse (built |> Seq.exists (fun (name, _) -> name = "octo/hello:dev")) "nothing was built"
+            }
+
+        // The other half of forwarding: a provision is a thing the session OPENED (a gateway
+        // route), and a route that outlives its sandbox is a route somebody else can use.
+        testCaseAsync "stopping a sandbox takes back what was forwarded into it" <|
+            async {
+                let log = newLog ()
+                let source, revoked = githubSource (Some "tok")
+                let sandboxes, _ = registry log [ source ]
+                let! _ = sandboxes.Ensure caller (sandbox "test") (forwarding [ "github" ])
+                Expect.equal (List.ofSeq revoked) [] "nothing taken back while it runs"
+                let! stopped = sandboxes.Stop caller (sandbox "test")
+                expect stopped
+                Expect.equal (List.ofSeq revoked) [ "test" ] "the source was told to take it back, for that sandbox"
+            }
+
+        testCaseAsync "a sandbox that could not be built keeps nothing forwarded" <|
+            async {
+                let log = newLog ()
+                let source, revoked = githubSource (Some "tok")
+                let sandboxes =
+                    WorkSandboxes.create
+                        { Backend = fun _ -> "fake"
+                          Describe = fun _ -> None
+                          Checkout = fun _ -> None
+                          Credentials = [ source ]
+                          Create = fun name _ _ -> if name = SandboxRef.defaultRef then Ok (fakeEnvironment ()) else Error "no room"
+                          Log = log
+                          Clock = fixedClock }
+                    |> expect
+                match! sandboxes.Ensure caller (sandbox "test") (forwarding [ "github" ]) with
+                | Ok _ -> failwith "expected the build to refuse"
+                | Error e -> Expect.equal e "no room" "the build's own reason"
+                Expect.equal (List.ofSeq revoked) [ "test" ] "and the provision did not outlive the attempt"
+            }
+
+        // A source may have nowhere to put a credential in THIS sandbox — a backend with no
+        // route to the gateway. That is neither "you have none" nor a silent start without.
+        testCaseAsync "a credential that cannot reach this sandbox refuses the start with the reason" <|
+            async {
+                let log = newLog ()
+                let source : WorkSandboxes.CredentialSource =
+                    { Name = "github"
+                      Provision = fun _ _ -> async { return WorkSandboxes.CredentialForwarding.Unforwardable "no route from here" }
+                      Revoke = ignore }
+                let sandboxes, built = registry log [ source ]
+                match! sandboxes.Ensure caller (sandbox "test") (forwarding [ "github" ]) with
+                | Ok _ -> failwith "expected a refusal"
+                | Error e -> Expect.equal e "no route from here" "the source's own words"
+                Expect.isFalse (built |> Seq.exists (fun (name, _) -> name = "test")) "nothing was built"
             }
 
         testCaseAsync "a credential this session does not know is refused, naming the ones it does" <|

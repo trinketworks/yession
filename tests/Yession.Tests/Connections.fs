@@ -456,10 +456,6 @@ let private githubTests =
             Expect.isFalse (Yession.App.GitHubFlow.ended 502) "a bad gateway is a bad moment, and the code is still good"
             Expect.isFalse (Yession.App.GitHubFlow.ended 0) "and a fetch that never answered is not an answer"
 
-        testCase "every kind rides GITHUB_TOKEN" <| fun () ->
-            Expect.equal (GitHubConnection.envVarFor OAuthConnection "t") ("GITHUB_TOKEN", "t") "oauth"
-            Expect.equal (GitHubConnection.envVarFor StaticConnection "t") ("GITHUB_TOKEN", "t") "static"
-
         testCase "scope choices map to targets" <| fun () ->
             Expect.equal (GitHubConnection.targetFor sessionA (UserOwner alice) "session") (Ok (githubTarget (SessionScope sessionA))) "this session"
             Expect.equal (GitHubConnection.targetFor sessionA (UserOwner alice) "mine") (Ok (githubTarget (UserScope alice))) "all my sessions (user)"

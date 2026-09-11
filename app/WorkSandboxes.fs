@@ -14,10 +14,12 @@ module Yession.Host.WorkSandboxes
 // recreate silently — a sandbox has processes in it, and "converging" by killing
 // somebody's build is not convergence.
 //
-// Credential forwarding is named, never a flag. `forward = ["github"]` resolves that
+// Credential forwarding is named, never a flag. `forward = ["github"]` provisions that
 // credential for the TURN HUMAN (Plan 08 precedence, applied by the composition) into the
-// sandbox's policy env at spawn. The event records WHICH names and WHOSE — the value
-// reaches the sandbox env and nothing else, and the event type cannot carry one.
+// sandbox at spawn. What "provisions" means is the source's: for `github` it is a route to
+// the session's git gateway (`GitGateway`), which holds the credential and lends it per
+// request — the sandbox never carries the value. The event records WHICH names and WHOSE,
+// and the event type cannot carry a value.
 
 open System
 open Yession.Domain
@@ -26,18 +28,42 @@ open Yession.Domain.Agent
 open Yession.Domain.Tools
 open Yession.SessionProcess
 
-/// A credential this session knows how to forward, by name. The registry holds the name
-/// and where the value lands; resolving it is the composition's business, because who a
+/// What a forwarded credential puts in a sandbox. Two channels, because git's config is
+/// one variable everything shares (`GIT_CONFIG_COUNT`) and has to be APPENDED to, where a
+/// plain variable is simply set — `Sandboxes.withGitConfig` is the difference.
+type Provision =
+    { Env : Map<string, string>
+      GitConfig : (string * string) list }
+
+module Provision =
+
+    let empty : Provision = { Env = Map.empty; GitConfig = [] }
+
+    let merge (a: Provision) (b: Provision) : Provision =
+        { Env = Sandboxes.mergeEnv a.Env b.Env; GitConfig = a.GitConfig @ b.GitConfig }
+
+/// What forwarding one credential into one sandbox came to.
+[<RequireQualifiedAccess>]
+type CredentialForwarding =
+    | Forwarded of Provision
+    /// This actor has none to lend. The registry words the refusal, because the right
+    /// sentence depends on who asked (a person, or a repo's file asking for nobody).
+    | NotHeld
+    /// This sandbox cannot be given it, and why — a backend the source has no route into.
+    | Unforwardable of string
+
+/// A credential this session knows how to forward, by name. The registry holds the name;
+/// what lands in a sandbox, and for whom, is the composition's business, because who a
 /// credential belongs to is a Plan 08 question this module has no opinion on.
 type CredentialSource =
     { Name : string
-      /// The environment variable the value takes inside the sandbox.
-      EnvVar : string
-      /// Resolve for one actor. `None` = that actor has no such credential, which is a
-      /// legible refusal rather than a silent start without it: a sandbox that was asked
-      /// to forward `github` and did not is a sandbox whose `git push` fails much later,
-      /// somewhere less informative.
-      Resolve : ActorRef -> Async<string option> }
+      /// Provision for one actor into one sandbox. `NotHeld` is a legible refusal rather
+      /// than a silent start without it: a sandbox that was asked to forward `github` and
+      /// did not is a sandbox whose `git push` fails much later, somewhere less informative.
+      Provision : ActorRef -> SandboxRef -> Async<CredentialForwarding>
+      /// Take back what `Provision` gave. Called when the sandbox stops, so that whatever a
+      /// provision opened (a gateway route) lives exactly as long as the sandbox does.
+      Revoke : SandboxRef -> unit }
 
 /// Who is asking. The two halves differ for the agent exactly as they do for the repo
 /// verbs: the AGENT is the acting party the event records, the CREDENTIAL owner is the
@@ -89,11 +115,11 @@ type WorkSandboxesConfig =
       /// the wrong view.
       Checkout : SandboxRef -> string option
       Credentials : CredentialSource list
-      /// Build the environment for a sandbox: the spec it was asked to be, plus the
-      /// resolved credentials as extra policy env. Synchronous and fallible — whether this
+      /// Build the environment for a sandbox: the spec it was asked to be, plus what the
+      /// forwarded credentials provisioned. Synchronous and fallible — whether this
       /// backend can host what was asked for (a container under srt, say) is known without
       /// starting anything.
-      Create : SandboxRef -> EnvironmentSpec -> Map<string, string> -> Result<SessionEnvironment.SessionEnvironment, string>
+      Create : SandboxRef -> EnvironmentSpec -> Provision -> Result<SessionEnvironment.SessionEnvironment, string>
       Log : EventLog<SessionEvent>
       Clock : unit -> DateTimeOffset }
 
@@ -168,7 +194,7 @@ let create (config: WorkSandboxesConfig) : Result<WorkSandboxes, string> =
     // `default` exists from boot, because it is the sandbox every session has always had:
     // a terminal opened without naming one lands here, and nothing about a pre-Plan-15
     // session changes. It is created eagerly and started lazily, exactly as before.
-    config.Create SandboxRef.defaultRef SandboxRequest.defaults.Spec Map.empty
+    config.Create SandboxRef.defaultRef SandboxRequest.defaults.Spec Provision.empty
     |> Result.map (fun defaultEnvironment ->
 
     // Keyed by the ref itself: it is a structural value, so a lookup is an equality rather
@@ -196,25 +222,35 @@ let create (config: WorkSandboxesConfig) : Result<WorkSandboxes, string> =
             return ()
         }
 
-    /// Resolve every named credential for one actor, or say which one could not be.
-    let resolveForward (owner: ActorRef) (names: string list) : Async<Result<Map<string, string>, string>> =
+    /// Take back every provision a sandbox was given — the half of forwarding that a stop
+    /// owes, without which a route outlives the sandbox it was minted for.
+    let revoke (name: SandboxRef) (names: string list) : unit =
+        for credential in names do
+            config.Credentials
+            |> List.tryFind (fun source -> source.Name = credential)
+            |> Option.iter (fun source -> source.Revoke name)
+
+    /// Provision every named credential for one actor into one sandbox, or say which one
+    /// could not be — revoking whatever was provisioned before the one that refused.
+    let provisionForward (owner: ActorRef) (name: SandboxRef) (names: string list) : Async<Result<Provision, string>> =
         async {
-            let mutable resolved = Map.empty
+            let mutable provisioned = Provision.empty
             let mutable failure = None
-            for name in names do
+            for credential in names do
                 match failure with
                 | Some _ -> ()
                 | None ->
-                    match config.Credentials |> List.tryFind (fun source -> source.Name = name) with
+                    match config.Credentials |> List.tryFind (fun source -> source.Name = credential) with
                     | None ->
                         let known =
                             match config.Credentials |> List.map (fun s -> s.Name) with
                             | [] -> "this session forwards none"
                             | available -> "this session knows: " + String.concat ", " available
-                        failure <- Some (sprintf "there is no credential called '%s' (%s)" name known)
+                        failure <- Some (sprintf "there is no credential called '%s' (%s)" credential known)
                     | Some source ->
-                        match! source.Resolve owner with
-                        | None ->
+                        match! source.Provision owner name with
+                        | CredentialForwarding.Unforwardable reason -> failure <- Some reason
+                        | CredentialForwarding.NotHeld ->
                             // Said for the person who reads it, not the actor it resolved
                             // against. A repo's file asking at boot is asking for nobody,
                             // and "sign in first" to somebody who is signed in sends them
@@ -226,18 +262,21 @@ let create (config: WorkSandboxesConfig) : Result<WorkSandboxes, string> =
                                     sprintf
                                         "nobody was signed in to lend a '%s' credential — it starts on its own \
                                          the moment someone who has connected %s opens this session"
-                                        name
-                                        name
+                                        credential
+                                        credential
                                 | _ ->
                                     sprintf
                                         "%s has not connected %s — connect it on the settings panel and ask again"
                                         (ActorRef.token owner)
-                                        name
+                                        credential
                             failure <- Some reason
-                        | Some value -> resolved <- Map.add source.EnvVar value resolved
+                        | CredentialForwarding.Forwarded provision ->
+                            provisioned <- Provision.merge provisioned provision
             match failure with
-            | Some e -> return Error e
-            | None -> return Ok resolved
+            | Some e ->
+                revoke name names
+                return Error e
+            | None -> return Ok provisioned
         }
 
     let ensure (caller: SandboxCaller) (name: SandboxRef) (request: SandboxRequest) : Async<Result<SandboxOutcome, string>> =
@@ -263,11 +302,13 @@ let create (config: WorkSandboxesConfig) : Result<WorkSandboxes, string> =
                             (SandboxRef.render name)
                             (SandboxRequest.differences existing.Request wanted |> String.concat "; "))
             | None ->
-                match! resolveForward caller.Credential wanted.Forward with
+                match! provisionForward caller.Credential name wanted.Forward with
                 | Error e -> return Error e
-                | Ok credentialEnv ->
-                    match config.Create name wanted.Spec credentialEnv with
-                    | Error e -> return Error e
+                | Ok provision ->
+                    match config.Create name wanted.Spec provision with
+                    | Error e ->
+                        revoke name wanted.Forward
+                        return Error e
                     | Ok environment ->
                         match! environment.Ensure None (sprintf "sandbox '%s' was started" (SandboxRef.render name)) with
                         | EnvironmentUnavailable reason -> return Error reason
@@ -309,6 +350,7 @@ let create (config: WorkSandboxesConfig) : Result<WorkSandboxes, string> =
                 return Error (sprintf "there is no sandbox named '%s' in this session" (SandboxRef.render name))
             | Some entry ->
                 do! entry.Environment.Stop ()
+                revoke name entry.Request.Forward
                 // `default` keeps its ENTRY — it is the sandbox every session has, and a
                 // terminal that names nothing must still find it — but loses its
                 // configuration, so a later start may forward something different. Any
@@ -338,8 +380,9 @@ let create (config: WorkSandboxesConfig) : Result<WorkSandboxes, string> =
 
     let stopAll () : Async<unit> =
         async {
-            for _, entry in entries do
+            for name, entry in entries do
                 do! entry.Environment.Stop ()
+                revoke name entry.Request.Forward
         }
 
     { Ensure = ensure

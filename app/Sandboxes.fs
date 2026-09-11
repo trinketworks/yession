@@ -34,6 +34,30 @@ let hostBaseline (ambient: Map<string, string>) : Map<string, string> =
 let mergeEnv (baseline: Map<string, string>) (overrides: Map<string, string>) : Map<string, string> =
     overrides |> Map.fold (fun acc key value -> Map.add key value acc) baseline
 
+/// Append git config entries to an environment, in git's own env spelling
+/// (`GIT_CONFIG_COUNT` + `GIT_CONFIG_KEY_n`/`GIT_CONFIG_VALUE_n`).
+///
+/// Appended, never set: the count is one variable shared by everything that wants git to
+/// know something, and the docker baseline already spends slot 0 on `safe.directory`. A
+/// second contributor writing the trio as a plain env override replaced that slot with its
+/// own — so every checkout the session mounts went back to "dubious ownership" the moment a
+/// credential was forwarded. Reading the count first is what lets two contributors coexist
+/// without either knowing about the other.
+let withGitConfig (entries: (string * string) list) (env: Map<string, string>) : Map<string, string> =
+    let existing =
+        match Map.tryFind "GIT_CONFIG_COUNT" env |> Option.bind (fun raw -> match Int32.TryParse raw with | true, n when n >= 0 -> Some n | _ -> None) with
+        | Some n -> n
+        | None -> 0
+    entries
+    |> List.indexed
+    |> List.fold
+        (fun acc (i, (key, value)) ->
+            acc
+            |> Map.add (sprintf "GIT_CONFIG_KEY_%d" (existing + i)) key
+            |> Map.add (sprintf "GIT_CONFIG_VALUE_%d" (existing + i)) value)
+        env
+    |> Map.add "GIT_CONFIG_COUNT" (string (existing + List.length entries))
+
 /// Resolve the spec's environment variables: plain values verbatim, secret references
 /// through the injected resolver. Called fresh at every sandbox (re)creation — the
 /// resolved plaintext goes into the policy env and nowhere else.
@@ -394,6 +418,23 @@ let limitsFor (backend: SandboxBackend) (platform: string) : HostLimits =
 /// second caller reading `process.platform` for itself would be a second answer that only
 /// ever agrees with the first on the box it was written on.
 let limitsHere (backend: SandboxBackend) : HostLimits = limitsFor backend (platform ())
+
+/// The name by which a sandbox on this backend reaches a listener bound on THIS host, or
+/// none when it cannot — a fact about the backend, stated by the backend, so that whatever
+/// hands a sandbox a route to this process (the git gateway) asks rather than guesses.
+///
+/// docker: `host.docker.internal`, which every container is given as an alias for the
+/// daemon's `host-gateway`. That is the host's loopback under Colima and Docker Desktop and
+/// the bridge address under a native Linux daemon — which is why a listener meant for a
+/// container binds every interface, not loopback. host: loopback, there being no boundary.
+/// srt: none yet. Its egress is a filtering proxy whose `NO_PROXY` covers loopback and every
+/// private range, and on Linux its network namespace has no route to the host at all; a name
+/// the proxy will carry and the host will answer to is a question for a later change.
+let hostAddressFrom (backend: SandboxBackend) : string option =
+    match backend with
+    | DockerBackend -> Some "host.docker.internal"
+    | HostBackend -> Some "127.0.0.1"
+    | SrtBackend -> None
 
 /// What one set of granted leaves comes to, each channel beside the others because they
 /// are one fact read by different consumers: the host family closes path SETS over the
@@ -1160,6 +1201,12 @@ module DockerSandbox =
                                       box (
                                           createObj
                                               [ "Mounts", box (List.toArray mounts)
+                                                // The host, by the name `hostAddressFrom`
+                                                // promises. Colima and Docker Desktop
+                                                // resolve it unasked; a native Linux daemon
+                                                // does not, and `host-gateway` is the
+                                                // daemon's own answer on all three.
+                                                "ExtraHosts", box [| "host.docker.internal:host-gateway" |]
                                                 // Everything dropped, then the file-ownership
                                                 // capabilities added back. "Nothing it runs
                                                 // legitimately needs a capability" was measured

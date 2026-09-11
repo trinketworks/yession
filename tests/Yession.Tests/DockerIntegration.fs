@@ -284,4 +284,41 @@ let tests =
                 | Error reason -> Expect.isTrue (reason.Contains "USER_TOKEN") "refused: no bound user, and no env fallback"
                 | Ok _ -> failwith "an unbound session must not receive a user's secret"
             })
+
+            // The route a forwarded github credential IS (GitGateway): a listener in the
+            // Session Process, reached from inside the container by the name the backend
+            // promises for the host. What varies underneath is which address that name is
+            // — the host's loopback under Colima and Docker Desktop, the bridge under a
+            // native daemon — and this is the one place a wrong answer shows: a git in a
+            // container that cannot reach its own session's gateway.
+            testCaseAsync "a container reaches the session's git gateway by the name the backend promises" (async {
+                let host =
+                    match Sandboxes.hostAddressFrom DockerBackend with
+                    | Some host -> host
+                    | None -> failwith "docker is a backend with a route to the host"
+                // github.com, played by a listener that answers anything with one line —
+                // seeing that line inside the container is the whole proof.
+                let upstream =
+                    Interop.createServer (fun _ res ->
+                        res.writeHead (200, createObj [ "content-type", box "text/plain" ]) |> ignore
+                        res.``end`` "answered by the upstream")
+                do! Async.FromContinuations (fun (cont, _, _) -> upstream.listen (0, "127.0.0.1", fun () -> cont ()) |> ignore)
+                let! gateway = GitGateway.start (sprintf "http://127.0.0.1:%d" (Interop.serverPort upstream))
+                try
+                    let cap =
+                        gateway.Grant
+                            SandboxRef.defaultRef
+                            { Owner = ActorRef.Agent
+                              Resolve = fun () -> async { return Some "tok" }
+                              Refused = fun () -> async { () } }
+                    let! _, sandbox = startOrFail alpineSpec
+                    let url = sprintf "http://%s:%d/git/%s/github.com/octo/hello.git/info/refs?service=git-upload-pack" host gateway.Port cap
+                    let! run, out, err = runInSandbox sandbox "wget" [ "-qO-"; "-T"; "10"; url ] Map.empty None
+                    Expect.equal run (SandboxExited 0) (sprintf "the container reached the gateway: %s" err)
+                    Expect.isTrue (out.Contains "answered by the upstream") "and through it, github.com's stand-in"
+                    do! sandbox.Dispose ()
+                finally
+                    gateway.Close () |> Async.StartImmediate
+                    upstream.close ignore
+            })
         ])

@@ -231,7 +231,7 @@ let private makeSandboxes
     : Yession.SessionProcess.EventLog<SessionEvent> -> WorkSandboxes.WorkSandboxes =
     let name = SessionId.value sessionId
     fun log ->
-        let create (sandbox: SandboxRef) (requested: EnvironmentSpec) (credentialEnv: Map<string, string>) =
+        let create (sandbox: SandboxRef) (requested: EnvironmentSpec) (provision: WorkSandboxes.Provision) =
             // The scope decides the backend (`SandboxRuntime.backendFor`): the session's
             // own sandboxes keep the operator's configured light confinement; a repo's
             // are work, and work runs in a container.
@@ -267,16 +267,23 @@ let private makeSandboxes
                     SessionEnvironment.create
                         log
                         createSandbox
-                        // The forwarded credentials join the policy env HERE, at the last
-                        // moment before the sandbox comes up — the same place a `SecretRef`
-                        // resolves, and for the same reason: a value that exists earlier
-                        // than it must is a value with more places to leak from.
+                        // What the forwarded credentials provisioned joins the policy env
+                        // HERE, at the last moment before the sandbox comes up — the same
+                        // place a `SecretRef` resolves, and for the same reason: a value
+                        // that exists earlier than it must is a value with more places to
+                        // leak from. The git config is APPENDED, because the docker
+                        // baseline already spends a slot of the same count.
                         (fun () ->
                             async {
                                 match! prepare () with
                                 | Error e -> return Error e
                                 | Ok policy ->
-                                    return Ok { policy with Env = Sandboxes.mergeEnv policy.Env credentialEnv }
+                                    return
+                                        Ok
+                                            { policy with
+                                                Env =
+                                                    Sandboxes.mergeEnv policy.Env provision.Env
+                                                    |> Sandboxes.withGitConfig provision.GitConfig }
                             })
                         (Sandboxes.summaryFor backend workSpec)
                         (sprintf "env-%s" (SandboxRef.objectName sessionId sandbox)))
@@ -547,13 +554,24 @@ let private githubTargetFor (credentialActor: ActorRef) : SecretId option =
     |> List.filter (fun target -> Map.containsKey target connectionStatus)
     |> List.tryHead
 
+/// The ambient `GITHUB_TOKEN`, the last resort of the precedence below — read in one place,
+/// so that "is there one" and "what is it" cannot answer from two.
+let private ambientGitHubToken () : string option =
+    match Interop.envOr "GITHUB_TOKEN" "" with
+    | "" -> None
+    | token -> Some token
+
+/// Whether this actor has a GitHub credential to lend at all — connected, or ambient. Asked
+/// at a sandbox's start so the refusal is said then, in words; the VALUE is resolved later,
+/// per request, by `resolveGitHubToken`, and a connected credential that will not resolve is
+/// reported there as the fault it is.
+let private holdsGitHubToken (credentialActor: ActorRef) : bool =
+    (githubTargetFor credentialActor).IsSome || (ambientGitHubToken ()).IsSome
+
 let private resolveGitHubToken (credentialActor: ActorRef) : Async<string option> =
     async {
         let targets = githubTargetFor credentialActor |> Option.toList
-        let ambient () =
-            match Interop.envOr "GITHUB_TOKEN" "" with
-            | "" -> None
-            | token -> Some token
+        let ambient = ambientGitHubToken
         match connectionsClient, targets with
         | Some client, target :: _ ->
             match! client.Resolve target with
@@ -1036,9 +1054,38 @@ Async.StartImmediate (
         let transcriptStore = TranscriptStore.openStore (sprintf "%s/terminals" dataDir)
         // The credentials this session can forward into a sandbox (Plan 15, stage 2).
         // GitHub is what Plan 14 deferred, and it is what makes `git push` from a terminal
-        // work; the resolution is the Plan 08 precedence, unchanged.
+        // work. Forwarding it is a ROUTE through the git gateway, never the token: the
+        // gateway lends the credential per request, resolved by the Plan 08 precedence
+        // each time, so a refresh reaches a sandbox already running and a sandbox's env
+        // never holds a value worth printing.
+        let! gitGateway = GitGateway.start "https://github.com"
         let forwardableCredentials : WorkSandboxes.CredentialSource list =
-            [ { Name = "github"; EnvVar = "GITHUB_TOKEN"; Resolve = resolveGitHubToken } ]
+            [ { Name = "github"
+                Provision =
+                    fun owner sandbox ->
+                        async {
+                            if not (holdsGitHubToken owner) then return WorkSandboxes.CredentialForwarding.NotHeld
+                            else
+                                let backend = SandboxRuntime.scopedBackend workBackend (SandboxRef.scope sandbox)
+                                match Sandboxes.hostAddressFrom backend with
+                                | None ->
+                                    return
+                                        WorkSandboxes.CredentialForwarding.Unforwardable (
+                                            sprintf
+                                                "github cannot be forwarded into a %s sandbox yet: its git would have no route to this session's gateway"
+                                                (SandboxBackend.describe backend))
+                                | Some host ->
+                                    let cap =
+                                        gitGateway.Grant
+                                            sandbox
+                                            { Owner = owner
+                                              Resolve = fun () -> resolveGitHubToken owner
+                                              Refused = fun () -> reportGitHubNetworkFailure owner "the git gateway was answered 401" }
+                                    return
+                                        WorkSandboxes.CredentialForwarding.Forwarded
+                                            { Env = Map.empty; GitConfig = GitGateway.gitConfig host gitGateway.Port cap }
+                        }
+                Revoke = gitGateway.Revoke } ]
         let! host = Host.startFull runAgent (Some (makeSandboxes forwardableCredentials)) (secretsCapabilitiesFor sessionId) (Some log) (Some docStore) (Some transcriptStore) reportName reportActivity telemetry.Emit subscribeNotifications mcpServers connectionRoutes sessionId auth sessionMount managerOrigin ephemeralStorage (resourceProfile |> Option.bind (fun file -> file.Guidance)) port
         // The Host built the sandbox registry (it owns the log), so the cell the turn
         // capabilities and the `work_sandboxes` query read is filled here — before the

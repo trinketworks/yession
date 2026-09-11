@@ -62,6 +62,7 @@
     <Compile Include="DevContainer.fs" />
     <Compile Include="SrtIntegration.fs" />
     <Compile Include="GitIntegration.fs" />
+    <Compile Include="GitGateway.fs" />
     <Compile Include="PtyIntegration.fs" />
     <Compile Include="Phase3.fs" />
     <Compile Include="EventsHttp.fs" />
