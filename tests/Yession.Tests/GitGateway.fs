@@ -464,6 +464,7 @@ let private srtTests =
                             | Some host -> host
                             | None -> failwith "srt is a backend with a route to the host"
                         let cap = gateway.Grant (sandbox "dev") (lenderOf (lending (Some "ghu_lent")))
+                        let upstreamPort = int (upstream.Origin.Substring (upstream.Origin.LastIndexOf ':' + 1))
                         // Canonical, because seatbelt matches the path as written and
                         // `/tmp` is a symlink here (the note in GitIntegration.fs).
                         let workspace =
@@ -499,8 +500,13 @@ let private srtTests =
                                     [ "ls-remote"; "https://github.com/octo/hello.git" ]
                                     (Map.ofList [ "GIT_TERMINAL_PROMPT", "0"; "GIT_CURL_VERBOSE", "1" ])
                                     None
-                            let! _, proxyEnv, _ = runInSandbox confined "sh" [ "-c"; "env | grep -i proxy" ] Map.empty None
-                            Expect.equal run (SandboxExited 0) (sprintf "ls-remote succeeded from inside (proxy env: %s): %s" proxyEnv err)
+                            // A control beside it: the same hop with no gateway involved —
+                            // this box's own name, a bare listener. If the control fails, the
+                            // fault is srt's bridge on this box and not the route.
+                            let! _, proxyEnv, _ = runInSandbox confined "sh" [ "-c"; "env" ] Map.empty None
+                            let! _, control, controlErr =
+                                runInSandbox confined "sh" [ "-c"; sprintf "curl -sv --max-time 5 http://%s:%d/ 2>&1; echo exit=$?" host upstreamPort ] Map.empty None
+                            Expect.equal run (SandboxExited 0) (sprintf "ls-remote succeeded from inside (env: %s) (control: %s %s): %s" proxyEnv control controlErr err)
                             Expect.isTrue (out.Contains "refs/heads/main") "and read the upstream's refs"
                             Expect.equal (List.ofSeq upstream.Authorizations) [ Some (basic "ghu_lent") ] "github.com saw the lent credential"
                             do! confined.Dispose ()
