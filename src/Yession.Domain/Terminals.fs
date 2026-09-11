@@ -428,6 +428,29 @@ module Flip =
         | false, Some _ when autoHeld -> FlipToBlock
         | false, _ -> FlipNothing
 
+/// Who may type raw bytes into an INSTRUMENTED terminal — one whose commands are blocks.
+///
+/// The rule the admission asks, kept apart from the write that applies it. Blocks exist so
+/// that what runs is classified and on the record, and raw bytes into the shell would be
+/// the door around that — so nobody types into a shell terminal at large. Two parties are
+/// admitted, and both are typing into something already on the record rather than running
+/// something new:
+///
+///   * the LEASE HOLDER — detection handed them the terminal over a block that took the
+///     alternate screen (`Flip`), and their keystrokes are that block's;
+///   * the AUTHOR OF THE RUNNING BLOCK — the block is theirs, classified and recorded, and a
+///     command that prompts is waiting on exactly them. Without this an agent's block that
+///     asked for stdin (`BlockStdinPolicy`) had stdin and no hand to feed it with, and a
+///     block of its that turned out to be stuck could be ended only by closing the whole
+///     terminal, `cd` and all.
+///
+/// Neither admits typing while NOTHING runs: between blocks the shell is at its prompt, and
+/// bytes typed there would be a command that skipped the queue.
+module Typing =
+
+    let admits (holder: ActorRef option) (runningAuthor: ActorRef option) (by: ActorRef) : bool =
+        holder = Some by || runningAuthor = Some by
+
 /// One block an agent turn is told the outcome of (Plan 13, stage 3a).
 ///
 /// Terminal events fold into `Projection` and deliberately NOT into the

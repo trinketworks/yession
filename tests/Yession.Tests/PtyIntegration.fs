@@ -577,6 +577,61 @@ let private agentLeaseTests =
                     Expect.isFalse gaveUp "asked for, so the cat waits on the agent's keyboard"
                 })
 
+        // What the opt-in is FOR: an agent's block that prompts, answered by the agent — no
+        // alternate screen, no flip, no lease. `read` is the prompt every installer is made
+        // of, and the answer reaching it is proof the bytes went to the block's stdin.
+        testCaseAsync "the agent answers a plain prompt in its own block" <|
+            withPosixTerminal "stdinanswer" (fun terminals id records _ _ _ ->
+                async {
+                    let ada = PeerRef (PeerId.create "ada" |> expect)
+                    let! block =
+                        Async.StartChild (
+                            terminals.RunBlock id { agentEntry id ada "1" with Stdin = true } "read -r answer; echo \"answered:$answer\"" ignore,
+                            10000)
+                    let! running = until 5000 (fun () -> terminals.Busy () |> Set.contains (TerminalId.value id))
+                    Expect.isTrue running "the prompt is up"
+                    match! terminals.Write id ActorRef.Agent "yes\r" with
+                    | Error e -> failwithf "the block is the agent's, so it may type into it: %s" e
+                    | Ok () ->
+                        do! block
+                        let printed = records |> Seq.map (fun r -> r.Data) |> String.concat ""
+                        Expect.isTrue (printed.Contains "answered:yes") (sprintf "the keystrokes reached the prompt, got: %s" printed)
+                })
+
+        // The other use of the same hand: a block of the agent's that will not end, ended by
+        // the agent with ^C — the terminal, its cwd and its queue all survive, which closing
+        // it would not have left standing.
+        testCaseAsync "the agent interrupts its own stuck block, and the terminal lives on" <|
+            withPosixTerminal "stdinintr" (fun terminals id _ log _ _ ->
+                async {
+                    let ada = PeerRef (PeerId.create "ada" |> expect)
+                    let! block = Async.StartChild (terminals.RunBlock id (agentEntry id ada "1") "sleep 60" ignore, 10000)
+                    let! running = until 5000 (fun () -> terminals.Busy () |> Set.contains (TerminalId.value id))
+                    Expect.isTrue running "it is running"
+                    match! terminals.Write id ActorRef.Agent "\u0003" with
+                    | Error e -> failwithf "the block is the agent's, so it may end it: %s" e
+                    | Ok () ->
+                        do! block
+                        let! page = log.Read None 1000
+                        let results =
+                            page.Events
+                            |> List.choose (fun e ->
+                                match e.Event with
+                                | SessionEvent.TerminalBlockCompleted c -> Some c.Result
+                                | _ -> None)
+                        // Non-zero, and not pinned further: bash says 130, dash says 1 for
+                        // a group whose child the signal took. What matters is that it ended,
+                        // on the record, as a failure.
+                        match results with
+                        | [ CommandFailed _ ] -> ()
+                        | other -> failwithf "expected one interrupted block, got %A" other
+                        Expect.isTrue (terminals.IsOpen id) "and the terminal is still there"
+                    // Nobody may type into it now that nothing runs.
+                    match! terminals.Write id ActorRef.Agent "ls\r" with
+                    | Ok () -> failwith "an idle shell took raw bytes — that is a command around the queue"
+                    | Error reason -> Expect.stringContains reason "execute_command" "and it says where commands go"
+                })
+
         // The wrapping is a brace group in THIS shell, so the two things blocks are typed into
         // one shell to have — a heredoc's body, and `cd` reaching the next block — survive it.
         testCaseAsync "an agent's heredoc and cd work as before under closed stdin" <|
