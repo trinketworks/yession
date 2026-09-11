@@ -707,6 +707,11 @@ type ClientMsg =
     /// verdicts already recorded: a message carrying the desired state would be a message
     /// whose sender had to know what an act that opens one by nature defaults to.
     | ToggleChapterMsg of MessageId
+    /// Call the chapter at this message something else — the whole name, as the field now
+    /// reads, carried as `Ylmish.Text` so the EDIT crosses rather than the result. A message
+    /// holding a plain string would be a message that clobbers whatever a peer typed in the
+    /// same second, which is the one thing collaborative text exists to prevent.
+    | EditChapterNameMsg of MessageId * Ylmish.Text
     /// One frame off the multiplexed query stream (Plan 15) — the declarations, or one
     /// query's current value. ONE message for the whole read surface, however many
     /// queries there are: a message per query would be a message per FUTURE query too.
@@ -1420,23 +1425,16 @@ module ClientModel =
         |> Map.tryPick (fun peer u -> if u = user then Some (nameOf peer model) else None)
         |> Option.defaultValue (UserId.value user)
 
-    /// What a stroke on the rail is called, for a reader who cannot see where it points.
+    /// What the chapter at this item is called, on a surface.
     ///
-    /// An act note's headline is already a short sentence and arrives whole. A message is not:
-    /// it is somebody's markdown, and a chapter whose name was a paragraph would be a chapter
-    /// nobody could read in a list. So a message is named by its FIRST line, cut at a
-    /// length a person can hear in one breath — which is also how a person recognises their
-    /// own message in a list.
-    ///
-    /// An ellipsis marks the cut, because a sentence that simply stops reads as a sentence
-    /// that was garbled rather than one that was shortened.
-    let chapterName (item: ConversationItem) : string =
-        let firstLine =
-            match item.Body.IndexOf '\n' with
-            | -1 -> item.Body.Trim ()
-            | n -> (item.Body.Substring (0, n)).Trim ()
-        if firstLine.Length <= 72 then firstLine
-        else (firstLine.Substring (0, 71)).TrimEnd () + "…"
+    /// The name itself is the session's (`Chapters.name`: what somebody wrote, or the
+    /// heuristic until they do). What is added here is the floor under it — a chapter can sit
+    /// on a message that has said nothing yet, and a control named by an empty string is a
+    /// control a screen reader announces as "button".
+    let chapterName (model: ClientModel) (item: ConversationItem) : string =
+        match Chapters.name model.Synced.Chapters item with
+        | "" -> Dom.Text.unnamedChapter
+        | said -> said
 
     /// The items a chapter opens at, oldest first — the conversation's own order, which is the
     /// order the strokes are rendered in and the order the rail reads them back in.
@@ -1961,4 +1959,13 @@ module ClientModel =
                 model
                 |> withSynced
                     { model.Synced with Chapters = Chapters.toggle item model.Synced.Chapters }
+            | None -> model
+        // The item again, and for the reason the toggle needs it: a chapter nobody has touched
+        // has no entry, so the rename has to record the verdict the item already carried.
+        | EditChapterNameMsg (messageId, said) ->
+            match model.Conversation.Items |> List.tryFind (fun item -> item.MessageId = messageId) with
+            | Some item ->
+                model
+                |> withSynced
+                    { model.Synced with Chapters = Chapters.rename item said model.Synced.Chapters }
             | None -> model

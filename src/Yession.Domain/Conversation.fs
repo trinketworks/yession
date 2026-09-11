@@ -122,6 +122,20 @@ module ConversationItem =
         | ConversationItemKind.ActNote _
         | ConversationItemKind.Message -> item.Body
 
+/// One chapter, as the session holds it: whether one opens at this message, and what it is
+/// called.
+///
+/// The name is collaborative TEXT rather than a string, so two people renaming one chapter
+/// interleave per character instead of clobbering — the session title's arrangement, and one
+/// Ylmish carries as splices even from inside a keyed map (`Binding.flush`, which re-flushes a
+/// replaced item's text as splices for exactly this).
+///
+/// A name outlives the chapter being closed. Whoever wrote it wrote it about this message, and
+/// a close that dropped it would make a mis-tap cost somebody their sentence.
+type ChapterMark =
+    { Opens : bool
+      Name : Ylmish.Text }
+
 /// Where a chapter opens in a conversation.
 ///
 /// Two sources, and the order between them is the whole design. Some acts open one by
@@ -140,14 +154,76 @@ module ConversationItem =
 /// what was said.
 module Chapters =
 
+    /// The longest a default name runs: what fits on one rule across a phone's reading column
+    /// at the size a chapter is set in. This is the length of a GUESS — a person's own name
+    /// for a chapter is theirs to make as long as they like — and a guess that wraps onto a
+    /// second line has claimed more of the screen than a guess is worth.
+    let [<Literal>] private Limit = 48
+
+    /// What a first line can OPEN with that says nothing about what the line SAYS: a
+    /// heading's hashes, a quote's angle, a bullet.
+    ///
+    /// Walked rather than trimmed with a char set, and that is not a style choice: Fable
+    /// compiles `TrimStart [| … |]` into a regular expression built from the characters, and
+    /// this set puts `>`, `-` and `*` next to each other — which JavaScript reads as a RANGE
+    /// and refuses at runtime, in a browser, where no .NET test would see it.
+    let private isLeader (c: char) : bool =
+        c = ' ' || c = '\t' || c = '#' || c = '>' || c = '-' || c = '*' || c = '+'
+
+    /// The line without it, so a chapter cut from a bulleted line is not called "-".
+    let private withoutLeader (line: string) : string =
+        match line |> Seq.tryFindIndex (isLeader >> not) with
+        | Some at -> line.Substring at
+        | None -> ""
+
+    /// What a chapter is called until somebody names it.
+    ///
+    /// An act note's headline is already a short sentence and arrives whole. A message is not:
+    /// it is somebody's markdown, and a chapter named by a paragraph is a chapter nobody can
+    /// read in a list. So a message is named by its FIRST line, cut on a word boundary to a
+    /// length the rule it is written on can hold — which is also how a person recognises their
+    /// own message in a list.
+    ///
+    /// An ellipsis marks the cut, because a sentence that simply stops reads as one that was
+    /// garbled rather than one that was shortened.
+    ///
+    /// A HEURISTIC, and one place. It is what a chapter is called until something better is
+    /// written over it — by the person reading, or one day by an agent keeping a running
+    /// summary — and when that arrives it replaces this function rather than joining it.
+    let defaultName (item: ConversationItem) : string =
+        let firstLine =
+            match item.Body.IndexOf '\n' with
+            | -1 -> item.Body.Trim ()
+            | n -> (item.Body.Substring (0, n)).Trim ()
+        let said = (withoutLeader firstLine).Trim ()
+        if said.Length <= Limit then said
+        else
+            let cut = said.Substring (0, Limit)
+            // A cut that would leave less than half a name is a cut taken mid-word on a long
+            // word, and half a word reads worse than a word too many.
+            match cut.LastIndexOf ' ' with
+            | at when at >= Limit / 2 -> cut.Substring(0, at).TrimEnd () + "…"
+            | _ -> cut.TrimEnd () + "…"
+
     /// Whether a chapter opens at this item.
-    let opens (verdicts: Map<MessageId, bool>) (item: ConversationItem) : bool =
-        match verdicts |> Map.tryFind item.MessageId with
-        | Some said -> said
+    let opens (chapters: Map<MessageId, ChapterMark>) (item: ConversationItem) : bool =
+        match chapters |> Map.tryFind item.MessageId with
+        | Some mark -> mark.Opens
         | None ->
             match item.Kind with
             | ConversationItemKind.ActNote facts -> facts.Notable
             | ConversationItemKind.Message -> false
+
+    /// What the chapter here is called: what somebody wrote, or the guess until they do.
+    ///
+    /// The fallback is HERE rather than at the surfaces, for the reason the default verdict
+    /// is: an act that opens a chapter by nature has no entry at all until somebody touches
+    /// it, so a surface reading the map on its own would draw a rule with nothing written on
+    /// it — and the next surface would have to remember the same rule.
+    let name (chapters: Map<MessageId, ChapterMark>) (item: ConversationItem) : string =
+        match chapters |> Map.tryFind item.MessageId with
+        | Some mark when Ylmish.Text.toString mark.Name <> "" -> Ylmish.Text.toString mark.Name
+        | _ -> defaultName item
 
     /// Open a chapter here, or close the one that is open.
     ///
@@ -155,12 +231,30 @@ module Chapters =
     /// state and wrote the opposite would be a caller holding the only copy of the rule about
     /// what an act that opens one by nature defaults to — and the second caller has not read
     /// it.
-    let toggle (item: ConversationItem) (verdicts: Map<MessageId, bool>) : Map<MessageId, bool> =
-        verdicts |> Map.add item.MessageId (not (opens verdicts item))
+    ///
+    /// Opening SEEDS the name, so the words belong to the session from the moment the chapter
+    /// does. A name each replica computed at render instead would be a name two replicas could
+    /// disagree about the day the heuristic changed, and one nobody could edit without writing
+    /// it out first.
+    let toggle (item: ConversationItem) (chapters: Map<MessageId, ChapterMark>) : Map<MessageId, ChapterMark> =
+        let named =
+            match chapters |> Map.tryFind item.MessageId with
+            | Some mark when Ylmish.Text.toString mark.Name <> "" -> mark.Name
+            | _ -> Ylmish.Text.ofString (defaultName item)
+        chapters |> Map.add item.MessageId { Opens = not (opens chapters item); Name = named }
+
+    /// Call the chapter here something else.
+    ///
+    /// Takes the item for the reason `toggle` does: a chapter nobody has touched has no entry,
+    /// so writing one has to record the verdict it already had rather than invent one — a
+    /// rename that quietly opened a chapter would be a rename that changed what the transcript
+    /// says.
+    let rename (item: ConversationItem) (said: Ylmish.Text) (chapters: Map<MessageId, ChapterMark>) : Map<MessageId, ChapterMark> =
+        chapters |> Map.add item.MessageId { Opens = opens chapters item; Name = said }
 
     /// The items a chapter opens at, in the order the conversation holds them.
-    let over (verdicts: Map<MessageId, bool>) (items: ConversationItem list) : ConversationItem list =
-        items |> List.filter (opens verdicts)
+    let over (chapters: Map<MessageId, ChapterMark>) (items: ConversationItem list) : ConversationItem list =
+        items |> List.filter (opens chapters)
 
 type ConversationProjection =
     { Items : ConversationItem list

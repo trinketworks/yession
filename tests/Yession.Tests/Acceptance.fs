@@ -248,7 +248,11 @@ let private withChapters (ids: string list) : ClientModel =
     { representativeModel with
         Synced =
             { representativeModel.Synced with
-                Chapters = ids |> List.map (fun id -> MessageId.create id |> expect, true) |> Map.ofList } }
+                Chapters =
+                    ids
+                    |> List.map (fun id ->
+                        MessageId.create id |> expect, { Opens = true; Name = Ylmish.Text.empty })
+                    |> Map.ofList } }
 
 /// How many times a hook appears in a rendered page. Counting MOUNTS rather than words: what
 /// these cases promise is one control per item and one stroke per mark, and a substring of
@@ -1250,32 +1254,39 @@ let private uiChecklistTests =
             let places = [ 400.0; 200.0; 90.0; 20.0 ]
             Expect.equal (Rail.spaced 6.0 800.0 places) places "no crowding, no correction"
 
-        // A stroke's accessible name is where it goes. An act's headline is already a short
-        // sentence; a message is somebody's markdown, and a rail announcing a paragraph per
-        // stroke is a rail nobody can tab through.
-        testCase "a stroke is named for where it goes, cut where a person can still hear it" <| fun () ->
-            let long =
-                { MessageId = MessageId.create "msg-long" |> expect
+        // What a stroke is called is the SESSION's answer (`Chapters.name`), not this
+        // surface's: two surfaces computing a name apiece are two surfaces that can call one
+        // chapter two things. The cut, the guess and the stripped markdown are the domain's,
+        // and are pinned there.
+        testCase "a stroke wears the name the session holds for its chapter" <| fun () ->
+            let messageId = MessageId.create "msg-1" |> expect
+            let model = withChapters [ "msg-1" ]
+            let named =
+                { model with
+                    Synced =
+                        { model.Synced with
+                            Chapters =
+                                model.Synced.Chapters
+                                |> Map.add messageId { Opens = true; Name = Ylmish.Text.ofString "Where it was settled" } } }
+            let item = named.Conversation.Items |> List.find (fun i -> i.MessageId = messageId)
+            Expect.equal (ClientModel.chapterName named item) "Where it was settled" "theirs, not a second guess"
+            Expect.isTrue ((Support.render named).Contains "Where it was settled") "and it is on the page"
+
+        // A chapter can sit on a message that has not said anything yet — a turn that started
+        // and wrote nothing. A control named by an empty string is announced as "button".
+        testCase "a chapter on a message with nothing in it still names its control" <| fun () ->
+            let silent =
+                { MessageId = MessageId.create "msg-silent" |> expect
                   Author = PeerRef ada
-                  Body = String.replicate 20 "abcde "
+                  Body = ""
                   Status = Complete
                   Kind = ConversationItemKind.Message
-                  Offset = EventOffset.create 1L |> expect
+                  Offset = EventOffset.create 9L |> expect
                   Woke = None; Replying = None }
-            let label = ClientModel.chapterName long
-            Expect.isTrue (label.Length <= 72) (sprintf "cut to a hearable length, got %d" label.Length)
-            Expect.isTrue (label.EndsWith "…") "and says it was cut"
-
-        testCase "a stroke on a short act is named by the whole of its headline" <| fun () ->
-            let act =
-                { MessageId = MessageId.create "msg-act" |> expect
-                  Author = PeerRef ada
-                  Body = "PR octo/hello#12 merged"
-                  Status = Complete
-                  Kind = ConversationItemKind.ActNote { Detail = None; Notable = true }
-                  Offset = EventOffset.create 1L |> expect
-                  Woke = None; Replying = None }
-            Expect.equal (ClientModel.chapterName act) "PR octo/hello#12 merged" "nothing to cut"
+            Expect.equal
+                (ClientModel.chapterName representativeModel silent)
+                Dom.Text.unnamedChapter
+                "a name, rather than nothing to announce"
 
         testCase "the rail draws one stroke per chapter, and is not there when there are none" <| fun () ->
             let bare = Support.render representativeModel

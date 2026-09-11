@@ -1934,7 +1934,7 @@ module View =
             | [] -> Lit.nothing
             | chapters ->
                 let stroke (item: ConversationItem) =
-                    let label = ClientModel.chapterName item
+                    let label = ClientModel.chapterName model item
                     html $"""
                         <button type="button" class="{Style.chapterStroke}"
                                 style="{Style.chapterAt}"

@@ -364,6 +364,10 @@ module Dom =
         let dismissMenu = "Close menu"
         let chapters = "Chapters"
 
+        /// A chapter on a message that has not said anything yet — a turn that has started and
+        /// written nothing. Rare, and the alternative is a control with no name at all.
+        let unnamedChapter = "Unnamed chapter"
+
         /// What a copy control says once it has copied, IN THE BOX that held the value —
         /// the confirmation lands where the eye already is, rather than beside it. A moment
         /// and not a state: whoever set it takes it back (`ClientMsg.CopiedMsg`).
