@@ -1175,10 +1175,15 @@ let private start () =
 
         let! historyCache = openHistoryCache ()
         let! transcriptCaches = openTranscriptCaches ()
-        do! Client.EventFetch.replay historyCache (fun msg -> dispatchRef msg)
-        // After the events, never beside them: a terminal exists because an event said so, and
-        // records folded before that event has been folded have nowhere to land.
-        do! Client.TranscriptFetch.replay transcriptCaches (fun msg -> dispatchRef msg)
+        // The events, then the transcripts, then `Connecting` — the sequence a person watches
+        // between the first paint and the connection, and the one the harness measures
+        // (`Client.LocalOpen`). Said before it is asked: the model starts `Disconnected None`,
+        // which renders as "not connected" with no reason and nothing to press, and until the
+        // probe settled that is what a page wore — for a hundred milliseconds on a laptop, and
+        // for as long as a hung fetch took on a phone. `Connecting` is the truth of the
+        // interval (it is what the channel's own retries wear, `Client.SessionChannel.policy`),
+        // and the deadline is what bounds it.
+        do! Client.LocalOpen.replay historyCache transcriptCaches (fun msg -> dispatchRef msg)
 
         // Authorization by renavigation: probe `/me` for a peer token. 401 -> bounce
         // through `/login` (code + PKCE via the Manager) and land back on this shell,
@@ -1186,13 +1191,6 @@ let private start () =
         // `Disconnected` with its reason, not silence: the local-first shell — IndexedDB doc
         // plus the event ranges in this client's own store — stays fully usable, and the model
         // says why it is alone.
-        // Said before it is asked: the model starts `Disconnected None`, which renders as
-        // "not connected" with no reason and nothing to press, and until the probe settled
-        // that is what a page wore — for a hundred milliseconds on a laptop, and for as long
-        // as a hung fetch took on a phone. `Connecting` is the truth of the interval (it is
-        // what the channel's own retries wear, `Client.SessionChannel.policy`), and the
-        // deadline is what bounds it.
-        dispatchRef ConnectingMsg
         let! outcome = fetchMe (SessionRoute.relative Me) Client.Probe.deadline.TotalMilliseconds
         match outcome with
         | ProbeUnreachable detail ->

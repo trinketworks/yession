@@ -1292,17 +1292,26 @@ let private padL, padT, gapX, gapY = 46.0, 26.0, 26.0, 42.0
 /// them now — a document's characters and a terminal transcript's records — and a panel drawn
 /// against the wrong one finds no points and draws an empty box that looks like a metric
 /// nobody has recorded yet.
+///
+/// And the UNIT each was taken in. Most are waits, in milliseconds; the open scenario's are
+/// what a person opening a session sees — renders and paints counted, the page's movement in
+/// pixels — and a panel that called a count of paints "ms" would be read as one.
 let private benchSeries =
     let chars = [ 200; 2_000; 20_000 ], "chars"
     let records = [ 400; 1_500; 6_000 ], "records"
     let items = [ 20; 60; 200 ], "items"
-    [ "type", chars
-      "receive", chars
-      "caret.push", chars
-      "caret.paint", chars
-      "transcript.read", records
-      "scroll.render", items
-      "scroll.frame", items ]
+    [ "type", chars, "ms"
+      "receive", chars, "ms"
+      "caret.push", chars, "ms"
+      "caret.paint", chars, "ms"
+      "transcript.read", records, "ms"
+      "scroll.render", items, "ms"
+      "scroll.frame", items, "ms"
+      "open.renders", items, "renders"
+      "open.paints", items, "paints"
+      "open.jump", items, "px"
+      "open.blocked", items, "ms"
+      "open.time", items, "ms" ]
 /// One hue per document size, darkest = largest. Ordered, because the sizes are.
 let private sizeColours = [ "#7fd0f5"; "#1ba1e2"; "#0b5f88" ]
 
@@ -1312,7 +1321,7 @@ let private renderChart (history: BenchPoint list) : string =
     let sb = Text.StringBuilder ()
     let add (fmt: Printf.StringFormat<'a, unit>) = Printf.kprintf (fun s -> sb.AppendLine s |> ignore) fmt
     // Every panel plus one for the slope, two across.
-    let panels = (benchSeries |> List.map fst) @ slopeMetrics
+    let panels = (benchSeries |> List.map (fun (metric, _, _) -> metric)) @ slopeMetrics
     let cols = 2
     let rows = (List.length panels + cols - 1) / cols
     let width = padL + float cols * (panelW + gapX)
@@ -1334,12 +1343,15 @@ let private renderChart (history: BenchPoint list) : string =
     panels |> List.iteri (fun i metric ->
         let x0, y0 = at i
         let isSlope = List.contains metric slopeMetrics
-        let axis = benchSeries |> List.tryPick (fun (m, (_, counts)) -> if m = metric then Some counts else None)
+        let axis = benchSeries |> List.tryPick (fun (m, (_, counts), _) -> if m = metric then Some counts else None)
+        let unit =
+            if isSlope then "x"
+            else benchSeries |> List.tryPick (fun (m, _, unit) -> if m = metric then Some unit else None) |> Option.defaultValue "ms"
         let series =
             if isSlope then [ (metric, "") ]
             else
                 benchSeries
-                |> List.tryPick (fun (m, (sizes, _)) -> if m = metric then Some sizes else None)
+                |> List.tryPick (fun (m, (sizes, _), _) -> if m = metric then Some sizes else None)
                 |> Option.defaultValue []
                 |> List.map (fun size -> sprintf "%s.p50@%d" metric size, string size)
         let values = series |> List.collect (fun (n, _) -> points n |> List.choose id)
@@ -1347,7 +1359,7 @@ let private renderChart (history: BenchPoint list) : string =
         add "<text class=\"ti\" x=\"%.0f\" y=\"%.0f\">%s</text>" x0 (y0 - 8.0) (svgEscape metric)
         add "<line class=\"gr\" x1=\"%.0f\" y1=\"%.0f\" x2=\"%.0f\" y2=\"%.0f\"/>" x0 (y0 + panelH) (x0 + panelW) (y0 + panelH)
         add "<line class=\"gr\" x1=\"%.0f\" y1=\"%.0f\" x2=\"%.0f\" y2=\"%.0f\"/>" x0 y0 x0 (y0 + panelH)
-        add "<text class=\"ax\" x=\"%.0f\" y=\"%.0f\" text-anchor=\"end\">%.1f%s</text>" (x0 - 4.0) (y0 + 8.0) top (if isSlope then "x" else "ms")
+        add "<text class=\"ax\" x=\"%.0f\" y=\"%.0f\" text-anchor=\"end\">%.1f%s</text>" (x0 - 4.0) (y0 + 8.0) top unit
         add "<text class=\"ax\" x=\"%.0f\" y=\"%.0f\" text-anchor=\"end\">0</text>" (x0 - 4.0) (y0 + panelH)
         let n = max 1 (List.length history - 1)
         series |> List.iteri (fun k (name, label) ->

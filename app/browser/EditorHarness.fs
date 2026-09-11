@@ -327,6 +327,55 @@ let private scrollReport
     (frames: float[]) (renders: float[]) (rendersN: int) (recordsN: int) (scrolledFrom: float) (scrolledTo: float)
     : string = jsNative
 
+/// Open a session the way the app opens one it has been to before — from what it kept — and
+/// say what the page did between its first paint and its connection: `items` conversation
+/// items' worth of events in the kept store, `perAnswer` events to each kept answer.
+[<Emit("(function(f){ window.__benchOpen = f; })($0)")>]
+let private exposeOpen (f: int -> int -> JS.Promise<string>) : unit = jsNative
+
+/// How many times the app has rendered, ever — `Render.countRender`'s own count, read back so
+/// the open scenario counts the renders the APP made rather than a count of its own.
+[<Emit("globalThis.__yessionRenders || 0")>]
+let private appRenders () : int = jsNative
+
+/// Whether an element is still in the document — the item under the eye last frame may have
+/// been replaced by this one, and measuring a detached node's box says nothing.
+[<Emit("$0.isConnected")>]
+let private isConnected (el: Browser.Types.Element) : bool = jsNative
+
+/// One frame's look at the conversation, as far as an eye can tell two frames apart: where
+/// its box is, what is scrolled into it, how much is in it, and which item is under the
+/// middle of it.
+[<RequireQualifiedAccess>]
+type private Look =
+    { Top : float
+      ScrollTop : float
+      ScrollHeight : float
+      Items : int
+      Chars : int
+      /// Everything on the page, not just the conversation: a chip changing from
+      /// "connecting" to "connected" is a picture a person sees too.
+      PageChars : int
+      Anchor : Browser.Types.Element option }
+
+/// A turn of the event loop — a task, not a microtask, so the page may paint in between.
+/// Fixture stores answer through this because the Cache API answers that way, and the
+/// asynchrony is not incidental: it is what separates the pictures a person sees on opening
+/// (the empty shell, then the conversation, then the transcripts) — a store that answered
+/// synchronously would fold everything into one frame and measure a page that never moved.
+/// A message port rather than `setTimeout`, which the browser clamps to 4ms once nested.
+[<Emit("new Promise(r => { const c = new MessageChannel(); c.port1.onmessage = () => r(); c.port2.postMessage(0) })")>]
+let private nextTask () : JS.Promise<unit> = jsNative
+
+/// What the open scenario recorded. Counts and distances, mostly, because what a person sees
+/// on opening a session is not a latency: how many different pictures the page showed, how
+/// far the words under their eye moved, and how long the page sat frozen.
+[<Emit("JSON.stringify({ renders: $0, paints: $1, jumps: $2, jump: $3, blocked: $4, time: $5, items: $6, connection: $7, replaced: $8 })")>]
+let private openReport
+    (renders: int) (paints: int) (jumps: int) (jump: float) (blocked: float) (time: float)
+    (items: int) (connection: string) (replaced: int)
+    : string = jsNative
+
 /// Markdown of roughly `chars` characters, as paragraphs rather than one enormous line: what
 /// the reconciliation walks is NODES, so a document's structure is part of what is being
 /// measured and a single block would flatter it.
@@ -590,6 +639,25 @@ type private Filler =
 /// the model, and the scroll scenario below that streams records into it.
 let private harnessTerminal : TerminalId = TerminalId.create "term-harness" |> expect
 
+/// What the agent says in reply number `i`: paragraphs, a list and a fence — the prose a
+/// working session's replies are made of, and so what a render of one costs. Shared by the
+/// shell model's `Replies` filler and the open scenario's event fixture, so the two sweeps
+/// draw the same conversation and their numbers can be read against each other.
+let private replyBody (i: int) : string =
+    String.concat
+        "\n"
+        [ sprintf "Looked at line %d. The fold runs once per record, and the render after it reads the layout back twice — once to keep the reader's place and once to put it back." i
+          ""
+          "- `Client.fs` dispatches a message per record"
+          "- `setState` renders the whole view for each of them"
+          "- the conversation and the scrollback both restore their scroll"
+          ""
+          "```"
+          "for i in $(seq 1 300); do echo line-$i; sleep 0.01; done"
+          "```"
+          ""
+          "So the cost is records × the page, and the number that says so is a count of renders." ]
+
 /// A session that has run one command: one open terminal, one finished block, and the two
 /// transcript records it produced. Enough for a chip to render in the chat and for its tab
 /// to have something to show.
@@ -645,20 +713,7 @@ let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
               Author = if person then PeerRef peerId else ActorRef.Agent
               Body =
                 if person then sprintf "and then line %d, which is here to make the column long" i
-                else
-                    String.concat
-                        "\n"
-                        [ sprintf "Looked at line %d. The fold runs once per record, and the render after it reads the layout back twice — once to keep the reader's place and once to put it back." i
-                          ""
-                          "- `Client.fs` dispatches a message per record"
-                          "- `setState` renders the whole view for each of them"
-                          "- the conversation and the scrollback both restore their scroll"
-                          ""
-                          "```"
-                          "for i in $(seq 1 300); do echo line-$i; sleep 0.01; done"
-                          "```"
-                          ""
-                          "So the cost is records × the page, and the number that says so is a count of renders." ]
+                else replyBody i
               Status = Complete
               Kind = ConversationItemKind.Message
               Offset = offset (int64 (10 + i))
@@ -841,6 +896,111 @@ let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
         TerminalsOpen = false }
 
 let private shellModel : ClientModel = shellModelOf Lines 16
+
+/// What a client that has been to this session before holds when it opens it again: the
+/// event log as the kept answers of its own history store, and the one terminal's transcript
+/// as the kept answers of its transcript store. Built as EVENTS rather than as a model,
+/// because what the open scenario measures is the fold — every kept answer is a message, and
+/// every message is a render — and a model built by hand has no fold to measure.
+///
+/// The conversation is the `Replies` shape: a person and the agent taking turns, the agent
+/// in the same prose `replyBody` gives the shell model, with a command run every second
+/// reply so a task card, a terminal chip and a transcript are all part of what opens.
+/// `perAnswer` is how many events each kept answer holds; a session somebody watched live
+/// keeps one answer per poll, and a poll answers with the few events that arrived since.
+let private openFixture (items: int) (perAnswer: int) : Client.HistoryCache * Client.TranscriptCaches * EventOffset =
+    let peerId : PeerId = PeerId.create "ada" |> expect
+    let session : SessionId = SessionId.create "harness" |> expect
+    let terminal : TerminalId = TerminalId.create "term-open" |> expect
+    let events = ResizeArray<SessionEvent> ()
+    events.Add (PeerJoined { PeerId = peerId; DisplayName = "ada"; User = None })
+    events.Add (
+        TerminalOpened
+            { TerminalId = terminal
+              OpenedBy = ActorRef.Agent
+              Title = TerminalTitle.fromProse "build"
+              Sandbox = Some SandboxRef.defaultRef
+              Renewable = false })
+    // The transcript's records, in line order; line 0 is the header, so the first record is
+    // line 1 and a block's `FromSeq`/`ToSeq` count from there.
+    let records = ResizeArray<TranscriptRecord> ()
+    let mutable seq = 1
+    for i in 1 .. items do
+        let messageId : MessageId = MessageId.create (sprintf "msg-open-%d" i) |> expect
+        if i % 2 = 1 then
+            events.Add (
+                MessageSent
+                    { MessageId = messageId
+                      QueueId = None
+                      Author = PeerRef peerId
+                      Body = sprintf "and then line %d, which is here to make the column long" i })
+        else
+            let turn : AgentTurnId = AgentTurnId.create (sprintf "turn-open-%d" i) |> expect
+            let asked : MessageId = MessageId.create (sprintf "msg-open-%d" (i - 1)) |> expect
+            events.Add (AgentTurnStarted { AgentTurnId = turn; Cause = TriggeredBy asked })
+            events.Add (AgentMessageStarted { AgentTurnId = turn; MessageId = messageId; Antecedent = None })
+            if i % 4 = 0 then
+                let block : BlockId = BlockId.create (sprintf "block-open-%d" i) |> expect
+                events.Add (
+                    TerminalBlockStarted
+                        { TerminalId = terminal
+                          BlockId = block
+                          QueueId = None
+                          Authority = Authority.agentFor (PeerRef peerId)
+                          Command = sprintf "echo build %d" i
+                          FromSeq = seq
+                          Background = false })
+                for line in 1 .. 3 do
+                    records.Add { At = float seq; Kind = TranscriptOutput; Data = sprintf "build %d line %d\r\n" i line }
+                    seq <- seq + 1
+                events.Add (
+                    TerminalBlockCompleted
+                        { TerminalId = terminal; BlockId = block; Result = CommandSucceeded 0; ToSeq = seq })
+            let body = replyBody i
+            events.Add (AgentMessageDelta { AgentTurnId = turn; MessageId = messageId; Delta = body })
+            events.Add (AgentMessageCompleted { AgentTurnId = turn; MessageId = messageId; Body = body })
+    let envelope (offset: int) (event: SessionEvent) : EventEnvelope<SessionEvent> =
+        { EventId = EventId.fresh ()
+          SessionId = session
+          Offset = EventOffset.create (int64 offset) |> expect
+          Actor = ActorRef.SessionProcess
+          Timestamp = System.DateTimeOffset.UtcNow
+          Event = event }
+    // The kept answers: the log cut every `perAnswer` events, each encoded the way the server
+    // serves it, because a kept answer IS what the server returned (`EventFetch.decodeLines`).
+    let answers =
+        [ for first in 0 .. perAnswer .. events.Count - 1 ->
+            let last = min (events.Count - 1) (first + perAnswer - 1)
+            sprintf "events/%d-%d" first last,
+            [ for offset in first .. last ->
+                Codec.toString Codec.sessionEventEnvelope (envelope offset events.[offset]) ]
+            |> String.concat "\n" ]
+    let answered (value: 'a) : Async<'a> =
+        async {
+            do! Async.AwaitPromise (nextTask ())
+            return value
+        }
+    let history : Client.HistoryCache =
+        { Client.HistoryCache.Stored = fun () -> answered (List.map fst answers)
+          Client.HistoryCache.Read = fun url -> answered (answers |> List.tryPick (fun (u, body) -> if u = url then Some body else None))
+          Client.HistoryCache.Write = fun _ _ -> async.Return () }
+    // The transcript's kept answers, ten lines to each, the header on line 0 of the first.
+    let linesPerAnswer = 10
+    let lines =
+        (Codec.toString Codec.transcriptLine (TranscriptHeaderLine { Width = 80; Height = 24; Timestamp = 0L }))
+        :: [ for r in records -> Codec.toString Codec.transcriptLine (TranscriptRecordLine r) ]
+    let transcriptAnswers =
+        [ for first in 0 .. linesPerAnswer .. List.length lines - 1 ->
+            sprintf "transcript/%d" first,
+            (first, lines |> List.skip first |> List.truncate linesPerAnswer |> String.concat "\n") ]
+    let transcript : Client.TranscriptCache =
+        { Client.TranscriptCache.Stored = fun () -> answered (List.map fst transcriptAnswers)
+          Client.TranscriptCache.Read = fun url -> answered (transcriptAnswers |> List.tryPick (fun (u, answer) -> if u = url then Some answer else None))
+          Client.TranscriptCache.Write = fun _ _ _ -> async.Return () }
+    let transcripts : Client.TranscriptCaches =
+        { For = fun _ -> answered transcript
+          Kept = fun () -> answered [ terminal ] }
+    history, transcripts, EventOffset.create (int64 (events.Count - 1)) |> expect
 
 /// Every byte the live screen decided to send, for the E2E to read back. The keystroke
 /// translation is the whole of what a terminal front end does with a keyboard event, and it
@@ -1074,3 +1234,123 @@ do
             finish <- None
             report ()
         | None -> failwith "__benchScrollEnd without a __benchScrollBegin — nothing was being measured")
+
+    // --- Opening a session from what was kept (the `bench` open scenario) ---------------------
+    //
+    // A person opening a session they have been in before. Measured on the home deployment
+    // against a session of 97 items: the app folded 179 kept answers, one message and one
+    // render each, in a single 1.15s task (3s at a phone's pace) during which the page showed
+    // an empty conversation under a "not connected" banner; then the conversation; then the
+    // banner left and the conversation's box grew into its place; then the connection landed.
+    // "It renders a couple of times before settling" is those pictures, and the freeze between
+    // the first two.
+    //
+    // So what is recorded is what a person can see. Every frame, the conversation is looked
+    // at the way an eye would — where its box is, what is scrolled into it, and which item is
+    // under the middle of it — and a frame whose look changed is a PAINT. The item that was
+    // under the middle last frame is measured again this frame, and how far it moved is the
+    // JUMP: words a person was reading, somewhere else now. The longest gap between two
+    // frames is how long the page sat frozen. And the renders are the app's own count.
+    //
+    // The open itself is the app's (`Client.LocalOpen.replay` — the kept events, the kept
+    // transcripts, `Connecting`), over fixture stores, followed by the accepted connection.
+    // What is NOT here is the network: the probe, the handshake, the sync that follows it.
+    let anchorTop (el: Browser.Types.Element) = el.getBoundingClientRect().top
+    let sameElement (a: Browser.Types.Element option) (b: Browser.Types.Element option) =
+        match a, b with
+        | Some a, Some b -> obj.ReferenceEquals (a, b)
+        | None, None -> true
+        | _ -> false
+    let look () =
+        let surface = conversation ()
+        let rect = surface.getBoundingClientRect ()
+        // The middle of what is ON SCREEN of the conversation, not of its box: the eye is
+        // somewhere in the visible part, wherever the box's own middle has gone.
+        let visibleTop = max rect.top 0.0
+        let visibleBottom = min rect.bottom Browser.Dom.window.innerHeight
+        let anchor =
+            Browser.Dom.document.elementFromPoint (rect.left + rect.width / 2.0, (visibleTop + visibleBottom) / 2.0)
+            |> Option.ofObj
+            |> Option.bind (fun el -> el.closest "[data-conversation] > *")
+        { Look.Top = rect.top
+          Look.ScrollTop = surface.scrollTop
+          Look.ScrollHeight = surface.scrollHeight
+          Look.Items = int surface.children.length
+          Look.Chars = surface.textContent.Length
+          Look.PageChars = Browser.Dom.document.body.textContent.Length
+          Look.Anchor = anchor }
+    exposeOpen (fun items perAnswer ->
+        JS.Constructors.Promise.Create (fun resolve reject ->
+            let history, transcripts, last = openFixture items perAnswer
+            let peer : PeerState = { PeerId = PeerId.create "ada" |> expect; DisplayName = "swift-heron" }
+            model <- ClientModel.init peer
+            // The shell on screen, as the app's is: the harness page keeps other fixtures
+            // above it, and a conversation below the fold has nothing under the eye.
+            (shellHost :?> Browser.Types.HTMLElement).scrollIntoView ()
+            let rendersBefore = appRenders ()
+            let started = now ()
+            let mutable paints = 0
+            let mutable jumps = 0
+            let mutable jump = 0.0
+            let mutable replaced = 0
+            let mutable blocked = 0.0
+            let mutable lastFrame = started
+            let mutable lastLook : Look option = None
+            let mutable lastAnchor : (Browser.Types.Element * float) option = None
+            let mutable lastRenders = rendersBefore
+            let mutable opened = false
+            let mutable quiet = 0
+            let rec frame () =
+                let t = now ()
+                blocked <- max blocked (t - lastFrame)
+                lastFrame <- t
+                let seen = look ()
+                let changed =
+                    match lastLook with
+                    | None -> true
+                    | Some before ->
+                        before.Top <> seen.Top || before.ScrollTop <> seen.ScrollTop || before.ScrollHeight <> seen.ScrollHeight
+                        || before.Items <> seen.Items || before.Chars <> seen.Chars || before.PageChars <> seen.PageChars
+                        || not (sameElement before.Anchor seen.Anchor)
+                if changed then paints <- paints + 1
+                match lastAnchor with
+                | Some (el, top) when isConnected el ->
+                    let moved = abs (anchorTop el - top)
+                    if moved > 1.0 then
+                        jumps <- jumps + 1
+                        jump <- jump + moved
+                | Some _ -> replaced <- replaced + 1
+                | None -> ()
+                lastLook <- Some seen
+                lastAnchor <- seen.Anchor |> Option.map (fun a -> a, anchorTop a)
+                let renders = appRenders ()
+                if opened && renders = lastRenders && not changed then quiet <- quiet + 1 else quiet <- 0
+                lastRenders <- renders
+                // Ten still frames after the connection landed: settled.
+                if quiet >= 10 then
+                    resolve (
+                        openReport
+                            (renders - rendersBefore) paints jumps jump blocked (t - started)
+                            (int (conversation ()).children.length)
+                            (match model.Connection with
+                             | Connected -> "Connected"
+                             | Connecting -> "Connecting"
+                             | Reconnecting -> "Reconnecting"
+                             | Disconnected _ -> "Disconnected")
+                            replaced)
+                else onFrame frame
+            onFrame frame
+            // The first paint: the shell with nothing in it, as a fresh page shows before its
+            // stores have answered.
+            render ()
+            async {
+                try
+                    do! Client.LocalOpen.replay history transcripts dispatch
+                    // The accepted connection lands from the network, never in the task that
+                    // asked for it — a task later at the very least.
+                    do! Async.AwaitPromise (nextTask ())
+                    dispatch (ConnectedMsg { SessionId = SessionId.create "harness" |> expect; AssignedDisplayName = "swift-heron"; LatestOffset = Some last })
+                    opened <- true
+                with e -> reject e
+            }
+            |> Async.StartImmediate))

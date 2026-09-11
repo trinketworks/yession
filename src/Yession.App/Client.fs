@@ -669,6 +669,25 @@ module Client =
             attempt.Retrying
             |> Option.map (fun _ -> FeedRetrying (attempt.Number, FeedFault.describe attempt.Error))
 
+    /// What a client does with what it already holds, before the network has answered — the
+    /// local-first half of opening a session, and everything a page shows between its first
+    /// paint and its connection.
+    ///
+    /// One function rather than three calls in the browser's boot, because this sequence is
+    /// what a person WATCHES on a phone: the kept history folded, the kept transcripts folded
+    /// after it (a terminal exists because an event said so), and then the truth of the
+    /// interval about to start (`Connecting` — see the probe's deadline). The harness runs
+    /// this same function over fixture stores and counts what the page did, so the order
+    /// here and the messages it dispatches are measured, not just read.
+    module LocalOpen =
+
+        let replay (history: HistoryCache) (transcripts: TranscriptCaches) (dispatch: ClientMsg -> unit) : Async<unit> =
+            async {
+                do! EventFetch.replay history dispatch
+                do! TranscriptFetch.replay transcripts dispatch
+                dispatch ConnectingMsg
+            }
+
     /// Opening the session transport. The browser's WebRTC handshake is a promise that used
     /// to settle ONLY on success, so a session that never answered left the shell in
     /// `Connecting` forever — the same silent dead end the event feed had, one leg over. As a
