@@ -634,7 +634,15 @@ type RepoCapabilities =
       UnwatchPr : UnwatchPr
       /// Opening one. Beside the watch verbs because it is the same kind of act on the same
       /// kind of thing — and the answer it gives is what `WatchPr` takes.
-      CreatePr : CreatePr }
+      CreatePr : CreatePr
+      /// Tools a provider adds beyond the generic verbs above -- GitHub's `create_pr`,
+      /// `watch_pr`, `unwatch_pr` today, contributed by `app/GitHubPrs.fs` and nothing else
+      /// in this list. The same seam `QueryCapabilities.Declared` already is for queries:
+      /// the registry (`AgentTools.fs`) merges these in without knowing what provider, or
+      /// how many, filled them in. Empty for a repo capability with no provider wired
+      /// (`AgentCapabilities.none`), which is what makes it safe to add without breaking
+      /// every other constructor of this record.
+      ProviderTools : (ToolDescriptor * (string -> Async<Result<ToolAnswer, string>>)) list }
 
 /// which named sandboxes exist, and where a shell opened in one starts.
 /// NOT what runs in them — `Terminals.Execute` is still the one door into a sandbox.
@@ -722,7 +730,8 @@ module AgentCapabilities =
               Diff = fun _ -> async { return Error "no repos capability" }
               WatchPr = fun _ _ -> async { return Error "no repos capability" }
               UnwatchPr = fun _ _ -> async { return Error "no repos capability" }
-              CreatePr = fun _ -> async { return Error "no repos capability" } }
+              CreatePr = fun _ -> async { return Error "no repos capability" }
+              ProviderTools = [] }
           Sandboxes =
             { Start = fun _ _ -> async { return Error "no sandbox capability" }
               Stop = fun _ -> async { return Error "no sandbox capability" }
