@@ -74,7 +74,7 @@ let createFull
                     |> Option.map (fun make ->
                         let createSandbox = make request.SessionId
                         fun log ->
-                            let create (name: SandboxRef) (spec: EnvironmentSpec) (extraEnv: Map<string, string>) =
+                            let create (name: SandboxRef) (spec: EnvironmentSpec) (provision: WorkSandboxes.Provision) =
                                 let prepare =
                                     Sandboxes.preparePolicy
                                         HostBackend
@@ -99,7 +99,13 @@ let createFull
                                             async {
                                                 match! prepare () with
                                                 | Error e -> return Error e
-                                                | Ok policy -> return Ok { policy with Env = Sandboxes.mergeEnv policy.Env extraEnv }
+                                                | Ok policy ->
+                                                    return
+                                                        Ok
+                                                            { policy with
+                                                                Env =
+                                                                    Sandboxes.mergeEnv policy.Env provision.Env
+                                                                    |> Sandboxes.withGitConfig provision.GitConfig }
                                             })
                                         (Sandboxes.summaryFor HostBackend spec)
                                         (sprintf "env-%s-%s" (SessionId.value request.SessionId) (SandboxRef.render name)))

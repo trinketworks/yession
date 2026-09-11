@@ -121,6 +121,9 @@ type [<AllowNullLiteral>] ServerResponse =
     abstract writeHead : int * obj -> ServerResponse
     abstract write : string -> bool
     abstract ``end`` : string -> unit
+    /// Whether a head has gone out — what decides if an error can still be said on this
+    /// response or has to close it.
+    abstract headersSent : bool
 
 type [<AllowNullLiteral>] HttpServer =
     abstract listen : int * string * (unit -> unit) -> HttpServer

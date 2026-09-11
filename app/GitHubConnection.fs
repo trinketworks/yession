@@ -90,11 +90,6 @@ let classifyPasted (deviceFlowConfigured: bool) (raw: string) : Result<string, s
             else "github_pat_…/ghp_… personal access token, or a ghu_…/gho_… user token"
         Error (sprintf "expected a GitHub credential (%s)" kinds)
 
-/// The environment variable a resolved credential rides into a git invocation. One
-/// name for every kind: git credential helpers and `gh` both read `GITHUB_TOKEN`.
-let envVarFor (_kind: ConnectionKind) (value: string) : string * string =
-    "GITHUB_TOKEN", value
-
 /// The two sign-in scopes the panel offers — identical to the Claude mapping.
 let targetFor (sessionId: SessionId) (owner: CredentialOwner) (scopeChoice: string) : Result<SecretId, string> =
     match scopeChoice with

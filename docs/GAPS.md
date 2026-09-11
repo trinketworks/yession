@@ -639,6 +639,19 @@ first's.
     terminals do local git only until somebody starts a named sandbox. Commit/push
     attribution machinery (author = requesting user, `Co-Authored-By`) is absent
     everywhere, forwarded credential or not.
+  - **A forwarded `github` credential reaches docker and host sandboxes, not srt ones.**
+    Forwarding is a route through the session's git gateway (`app/GitGateway.fs`): the
+    sandbox's git is told one `insteadOf` and the credential never enters it. The route has
+    to be REACHABLE, and `Sandboxes.hostAddressFrom` is the backend's answer: docker's
+    `host.docker.internal` (bound to the daemon's `host-gateway`, which is why the gateway
+    binds every interface — under a native Linux daemon that alias is the bridge address,
+    not loopback), the host backend's loopback, and for srt nothing yet. srt's egress is a
+    filtering proxy whose `NO_PROXY` covers loopback and every private range, and on Linux
+    its network namespace has no route to the host at all; a name the proxy will carry and
+    the host will answer to (the box's own hostname, or srt's credential masking, which
+    sentinel-swaps a value at its own MITM proxy) is the open question. Until it is
+    answered, `forward: ["github"]` into a session-owned srt sandbox refuses the start,
+    saying so — it does not fall back to injecting the token.
   - **Under `YESSION_SESSION_AGENT_BACKEND=host` the git verbs run unconfined** — the
     operator's explicitly lax choice, as everywhere `host` is chosen. The per-invocation
     hardening (hooks/fsmonitor/ext off, no global config, protocol pinned) still
@@ -713,15 +726,17 @@ first's.
     nothing stands between an agent turn and any command except the work sandbox's confinement.
     Manual approval was removed deliberately, not lost: the queue stays visible and editable,
     refusals stay recorded and attributed, and the seam is where the real classifier plugs in.
-  - **A forwarded credential lives in a sandbox's env for that sandbox's lifetime** (Plan 15
-    stage 2), readable by everyone in the session and by everything running in it — the same
-    shared trust boundary Plan 14 states. Revoking at the provider does not claw back what was
-    injected; `stop_work_sandbox` is what removes it. Only `github` is forwardable so far. Now
-    that such a token can EXPIRE (Plan 21), the same freeze cuts the other way: a refreshed
-    token never reaches a sandbox already running, so terminal git in one older than the
-    token's life starts failing auth and a new sandbox is the fix. Withholding refreshable
-    credentials instead would break terminal git for everyone today to fix it for the
-    long-lived case.
+  - **A forwarded credential is a route, and the route's cap lives in the sandbox's env for
+    that sandbox's lifetime** (Plan 15 stage 2, reshaped by the git gateway). The VALUE no
+    longer enters the sandbox: `github` forwards as one `insteadOf` naming the session's git
+    gateway under a per-sandbox capability, the gateway resolves the credential on every
+    request (so a refresh under Plan 21 reaches a running sandbox, and a revocation at the
+    provider is felt on the next push), and `stop_work_sandbox` revokes the route. What the
+    sandbox holds is the cap: readable by everyone in the session and everything running in
+    it — the same shared trust boundary Plan 14 states — and worth exactly "act as this
+    sandbox's git at this session's gateway" for as long as the sandbox runs. Only `github`
+    is forwardable so far, and the gateway admits only git's three smart-HTTP requests to a
+    repository path, so a cap is not a token for the rest of github.com.
   - **An external MCP server's read-only tools are not queries yet.** `readOnlyHint` is
     declared, not inferred, precisely so a third-party server's queries could be listed into
     the registry without a yession-specific convention — but only the in-process
