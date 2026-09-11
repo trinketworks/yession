@@ -1134,6 +1134,34 @@ let private registryPublishTests =
                 cancel.Stop ()
                 do! pm.StopAll ()
             }
+
+        // The registry outlives the Manager; the hub does not. A restart loads the file and
+        // then, until something launches, exits or writes, hands every subscriber whatever the
+        // hub was CREATED with — and created empty, that was "no sessions yet" over a full
+        // registry, swapped in over the page's correct server-rendered list, every morning
+        // after an overnight promotion. So this boots a SECOND Manager over the first one's
+        // data dir and asks nothing of it but the first frame.
+        testCaseAsync "a subscriber connecting to a Manager restarted over a registry is handed it" <|
+            async {
+                let dataDir =
+                    sprintf "tests/Yession.Tests/out/.data/pub-restart-%d" (int (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds ()) % 1000000)
+                let boot () =
+                    ProcessManager.create
+                        { ProcessManager.Options.defaults dataDir nodePath [ "app/SessionMain.js" ] with
+                            Strategy = Some Strategy.localhost }
+                let! before = boot ()
+                before.CreateSession "pub-restart" "Survives the restart" |> expect |> ignore
+                do! before.StopAll ()
+                let! after = boot ()
+                let mutable first : ProcessManager.SessionView list option = None
+                let cancel = after.SubscribeSessions (fun f -> if first.IsNone then first <- Some f)
+                Expect.equal
+                    (first |> Option.map (List.map (fun v -> SessionId.value v.Record.SessionId)))
+                    (Some [ "pub-restart" ])
+                    "the first frame after a restart is the registry the Manager loaded, not the empty hub it was born with"
+                cancel.Stop ()
+                do! after.StopAll ()
+            }
     ]
 
 // A session that is nothing but its readiness line: writes its pid to `ledger`, prints the
