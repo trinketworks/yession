@@ -30,6 +30,7 @@ open System.IO
 open System.Text.Json
 open Microsoft.Playwright
 
+open Yession.Domain
 open Yession.Tests.Browser
 
 /// Its own port, away from the E2E's block: the benchmark and the gate can then run at the
@@ -64,6 +65,13 @@ let private conversationSizes = [ 20; 60; 200 ]
 /// and distances a person would see, and the first open of a fresh page is the one with a
 /// cold JIT in it.
 let private eventsPerAnswer = 4
+/// And from nothing: the cold open reads the log over the network a page at a time, and a
+/// page is what the server's cursor answers with (`EventChunk.size`).
+let private coldPageSize = EventChunk.size
+/// A round trip: what a page costs to ask for over the home deployment's tailnet, measured
+/// at twenty-five milliseconds from the phone's side. Pages arrive one per round trip because
+/// the read loop asks for the next only once it has folded this one.
+let private coldRoundTripMs = 25
 let private openRepeats = 6
 let private openWarmup = 1
 
@@ -328,41 +336,47 @@ let tests =
                         // The open, first and unthrottled: what it records is mostly counts
                         // and distances, which a slower main thread does not change, and the
                         // one wait in it (the freeze) is judged against history on this runner
-                        // like every other wait here.
-                        for items in conversationSizes do
-                            let opens = ResizeArray<Collections.Generic.Dictionary<string, float>> ()
-                            for _ in 1 .. openRepeats do
-                                let! report =
-                                    await (phonePage.EvaluateAsync<string> (
-                                        sprintf "() => window.__benchOpen(%d, %d)" items eventsPerAnswer))
-                                use doc = JsonDocument.Parse report
-                                let number (name: string) = doc.RootElement.GetProperty(name).GetDouble ()
-                                let connection = doc.RootElement.GetProperty("connection").GetString ()
-                                // Anti-vacuity: an open that folded nothing, drew nothing, or
-                                // never connected would report a page that opened beautifully.
-                                if int (number "items") < items then
-                                    failwithf "opening %d kept items put %d on the page — the fold did not fold" items (int (number "items"))
-                                if number "renders" < 1.0 || number "paints" < 1.0 then
-                                    failwithf "opening %d kept items rendered %.0f times and painted %.0f — nothing was measured" items (number "renders") (number "paints")
-                                if connection <> "Connected" then
-                                    failwithf "opening %d kept items settled %s rather than Connected" items connection
-                                let point = Collections.Generic.Dictionary<string, float> ()
-                                for key in [ "renders"; "paints"; "jumps"; "jump"; "blocked"; "time" ] do
-                                    point.[key] <- number key
-                                opens.Add point
-                            let last = opens.[opens.Count - 1]
-                            printfn
-                                "  opened %d kept items: %.0f renders, %.0f paints, %.0f jumps moving %.0fpx, frozen %.0fms, settled in %.0fms"
-                                items last.["renders"] last.["paints"] last.["jumps"] last.["jump"] last.["blocked"] last.["time"]
-                            let series (key: string) (metric: string) (unit: string) =
-                                { Series.Metric = metric; Series.Unit = unit; Series.Size = items
-                                  Series.Values = opens |> Seq.skip openWarmup |> Seq.map (fun p -> p.[key]) |> List.ofSeq }
-                            collected.AddRange
-                                [ series "renders" "open.renders" "renders"
-                                  series "paints" "open.paints" "paints"
-                                  series "jump" "open.jump" "px"
-                                  series "blocked" "open.blocked" "ms"
-                                  series "time" "open.time" "ms" ]
+                        // like every other wait here. Twice: from what the client kept, and
+                        // from nothing — the cold open, everything over the network a page at
+                        // a time, which is where the words under the eye move.
+                        let opens =
+                            [ "open", (fun items -> sprintf "__benchOpen(%d, %d)" items eventsPerAnswer)
+                              "cold", (fun items -> sprintf "__benchOpenCold(%d, %d, %d)" items coldPageSize coldRoundTripMs) ]
+                        for (prefix, call) in opens do
+                            for items in conversationSizes do
+                                let opens = ResizeArray<Collections.Generic.Dictionary<string, float>> ()
+                                for _ in 1 .. openRepeats do
+                                    let! report =
+                                        await (phonePage.EvaluateAsync<string> (
+                                            "() => window." + call items))
+                                    use doc = JsonDocument.Parse report
+                                    let number (name: string) = doc.RootElement.GetProperty(name).GetDouble ()
+                                    let connection = doc.RootElement.GetProperty("connection").GetString ()
+                                    // Anti-vacuity: an open that folded nothing, drew nothing, or
+                                    // never connected would report a page that opened beautifully.
+                                    if int (number "items") < items then
+                                        failwithf "%s of %d items put %d on the page — the fold did not fold" prefix items (int (number "items"))
+                                    if number "renders" < 1.0 || number "paints" < 1.0 then
+                                        failwithf "%s of %d items rendered %.0f times and painted %.0f — nothing was measured" prefix items (number "renders") (number "paints")
+                                    if connection <> "Connected" then
+                                        failwithf "%s of %d items settled %s rather than Connected" prefix items connection
+                                    let point = Collections.Generic.Dictionary<string, float> ()
+                                    for key in [ "renders"; "paints"; "jumps"; "jump"; "blocked"; "time" ] do
+                                        point.[key] <- number key
+                                    opens.Add point
+                                let last = opens.[opens.Count - 1]
+                                printfn
+                                    "  %s of %d items: %.0f renders, %.0f paints, %.0f jumps moving %.0fpx, frozen %.0fms, settled in %.0fms"
+                                    prefix items last.["renders"] last.["paints"] last.["jumps"] last.["jump"] last.["blocked"] last.["time"]
+                                let series (key: string) (metric: string) (unit: string) =
+                                    { Series.Metric = prefix + "." + metric; Series.Unit = unit; Series.Size = items
+                                      Series.Values = opens |> Seq.skip openWarmup |> Seq.map (fun p -> p.[key]) |> List.ofSeq }
+                                collected.AddRange
+                                    [ series "renders" "renders" "renders"
+                                      series "paints" "paints" "paints"
+                                      series "jump" "jump" "px"
+                                      series "blocked" "blocked" "ms"
+                                      series "time" "time" "ms" ]
 
                         let! cdp = await (phonePage.Context.NewCDPSessionAsync phonePage)
                         let throttle = Collections.Generic.Dictionary<string, obj> ()

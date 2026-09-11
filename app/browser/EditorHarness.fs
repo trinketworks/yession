@@ -333,6 +333,11 @@ let private scrollReport
 [<Emit("(function(f){ window.__benchOpen = f; })($0)")>]
 let private exposeOpen (f: int -> int -> JS.Promise<string>) : unit = jsNative
 
+/// Open a session the way the app opens one it has never seen — everything over the
+/// network, `pageSize` events to a page, a page every `everyMs` — and say what the page did.
+[<Emit("(function(f){ window.__benchOpenCold = f; })($0)")>]
+let private exposeOpenCold (f: int -> int -> int -> JS.Promise<string>) : unit = jsNative
+
 /// How many times the app has rendered, ever — `Render.countRender`'s own count, read back so
 /// the open scenario counts the renders the APP made rather than a count of its own.
 [<Emit("globalThis.__yessionRenders || 0")>]
@@ -909,11 +914,21 @@ let private shellModel : ClientModel = shellModelOf Lines 16
 /// every message is a render — and a model built by hand has no fold to measure.
 ///
 /// The conversation is the `Replies` shape: a person and the agent taking turns, the agent
-/// in the same prose `replyBody` gives the shell model, with a command run every second
-/// reply so a task card, a terminal chip and a transcript are all part of what opens.
-/// `perAnswer` is how many events each kept answer holds; a session somebody watched live
-/// keeps one answer per poll, and a poll answers with the few events that arrived since.
-let private openFixture (items: int) (perAnswer: int) : Client.HistoryCache * Client.TranscriptCaches * EventOffset =
+/// in the same prose `replyBody` gives the shell model — STREAMED, a delta every few words,
+/// because that is what the log holds (the session this was measured on had 97 items and
+/// eleven thousand events) — with a command run every second reply so a task card, a
+/// terminal chip and a transcript are all part of what opens. `perAnswer` is how many
+/// events each kept answer holds; a session somebody watched live keeps one answer per
+/// poll, and a poll answers with the few events that arrived since.
+[<RequireQualifiedAccess>]
+type private OpenFixture =
+    { History : Client.HistoryCache
+      Transcripts : Client.TranscriptCaches
+      /// The log itself, in order — what the kept answers were cut from, and what a cold
+      /// open reads over the network a page at a time.
+      Log : EventEnvelope<SessionEvent> list }
+
+let private openFixture (items: int) (perAnswer: int) : OpenFixture =
     let peerId : PeerId = PeerId.create "ada" |> expect
     let session : SessionId = SessionId.create "harness" |> expect
     let terminal : TerminalId = TerminalId.create "term-open" |> expect
@@ -962,24 +977,25 @@ let private openFixture (items: int) (perAnswer: int) : Client.HistoryCache * Cl
                     TerminalBlockCompleted
                         { TerminalId = terminal; BlockId = block; Result = CommandSucceeded 0; ToSeq = seq })
             let body = replyBody i
-            events.Add (AgentMessageDelta { AgentTurnId = turn; MessageId = messageId; Delta = body })
+            for delta in body.Split ' ' |> Array.chunkBySize 3 do
+                events.Add (AgentMessageDelta { AgentTurnId = turn; MessageId = messageId; Delta = String.concat " " delta + " " })
             events.Add (AgentMessageCompleted { AgentTurnId = turn; MessageId = messageId; Body = body })
-    let envelope (offset: int) (event: SessionEvent) : EventEnvelope<SessionEvent> =
-        { EventId = EventId.fresh ()
-          SessionId = session
-          Offset = EventOffset.create (int64 offset) |> expect
-          Actor = ActorRef.SessionProcess
-          Timestamp = System.DateTimeOffset.UtcNow
-          Event = event }
+    let log =
+        [ for offset in 0 .. events.Count - 1 ->
+            { EventId = EventId.fresh ()
+              SessionId = session
+              Offset = EventOffset.create (int64 offset) |> expect
+              Actor = ActorRef.SessionProcess
+              Timestamp = System.DateTimeOffset.UtcNow
+              Event = events.[offset] } ]
     // The kept answers: the log cut every `perAnswer` events, each encoded the way the server
     // serves it, because a kept answer IS what the server returned (`EventFetch.decodeLines`).
     let answers =
-        [ for first in 0 .. perAnswer .. events.Count - 1 ->
-            let last = min (events.Count - 1) (first + perAnswer - 1)
+        [ for chunk in log |> List.chunkBySize perAnswer ->
+            let first = EventOffset.value (List.head chunk).Offset
+            let last = EventOffset.value (List.last chunk).Offset
             sprintf "events/%d-%d" first last,
-            [ for offset in first .. last ->
-                Codec.toString Codec.sessionEventEnvelope (envelope offset events.[offset]) ]
-            |> String.concat "\n" ]
+            chunk |> List.map (Codec.toString Codec.sessionEventEnvelope) |> String.concat "\n" ]
     let answered (value: 'a) : Async<'a> =
         async {
             do! Async.AwaitPromise (nextTask ())
@@ -1005,7 +1021,7 @@ let private openFixture (items: int) (perAnswer: int) : Client.HistoryCache * Cl
     let transcripts : Client.TranscriptCaches =
         { For = fun _ -> answered transcript
           Kept = fun () -> answered [ terminal ] }
-    history, transcripts, EventOffset.create (int64 (events.Count - 1)) |> expect
+    { OpenFixture.History = history; OpenFixture.Transcripts = transcripts; OpenFixture.Log = log }
 
 /// Every byte the live screen decided to send, for the E2E to read back. The keystroke
 /// translation is the whole of what a terminal front end does with a keyboard event, and it
@@ -1284,9 +1300,11 @@ do
           Look.Chars = surface.textContent.Length
           Look.PageChars = Browser.Dom.document.body.textContent.Length
           Look.Anchor = anchor }
-    exposeOpen (fun items perAnswer ->
+    /// One open, watched: the sampler above the shell from the first render until ten still
+    /// frames after `opening` has finished, then the report. `opening` is the open itself —
+    /// what arrives, in what order, a task apart where the network or a store would put one.
+    let measureOpen (opening: Async<unit>) : JS.Promise<string> =
         JS.Constructors.Promise.Create (fun resolve reject ->
-            let history, transcripts, last = openFixture items perAnswer
             let peer : PeerState = { PeerId = PeerId.create "ada" |> expect; DisplayName = "swift-heron" }
             model <- ClientModel.init peer
             // The shell on screen, as the app's is: the harness page keeps other fixtures
@@ -1331,7 +1349,7 @@ do
                 let renders = appRenders ()
                 if opened && renders = lastRenders && not changed then quiet <- quiet + 1 else quiet <- 0
                 lastRenders <- renders
-                // Ten still frames after the connection landed: settled.
+                // Ten still frames after the open has finished: settled.
                 if quiet >= 10 then
                     resolve (
                         openReport
@@ -1350,12 +1368,56 @@ do
             render ()
             async {
                 try
-                    do! Client.LocalOpen.replay history transcripts dispatch
-                    // The accepted connection lands from the network, never in the task that
-                    // asked for it — a task later at the very least.
-                    do! Async.AwaitPromise (nextTask ())
-                    dispatch (ConnectedMsg { SessionId = SessionId.create "harness" |> expect; AssignedDisplayName = "swift-heron"; LatestOffset = Some last })
+                    do! opening
                     opened <- true
                 with e -> reject e
             }
-            |> Async.StartImmediate))
+            |> Async.StartImmediate)
+    let accepted (fixture: OpenFixture) =
+        ConnectedMsg
+            { SessionId = SessionId.create "harness" |> expect
+              AssignedDisplayName = "swift-heron"
+              LatestOffset = fixture.Log |> List.tryLast |> Option.map (fun e -> e.Offset) }
+    exposeOpen (fun items perAnswer ->
+        let fixture = openFixture items perAnswer
+        measureOpen (
+            async {
+                do! Client.LocalOpen.replay fixture.History fixture.Transcripts dispatch
+                // The accepted connection lands from the network, never in the task that
+                // asked for it — a task later at the very least.
+                do! Async.AwaitPromise (nextTask ())
+                dispatch (accepted fixture)
+            }))
+
+    // --- Opening a session from nothing (the `bench` cold-open scenario) ---------------------
+    //
+    // The same person on a phone whose store holds none of this session — a first visit, an
+    // evicted store, a hole the replay stopped at. Everything comes over the network, a page
+    // at a time from the oldest: the read loop (`Client.connect`) asks from its cursor, folds
+    // the answer, and asks again until the page it folded was the end. Measured on the home
+    // deployment against that same session of 97 items: eleven thousand events, 116 pages,
+    // 116 renders, and the conversation pinned to its foot the whole way — 65 frames on
+    // which the words under the eye were somewhere else, forty-nine thousand pixels of it.
+    //
+    // The loop itself needs a channel; what is here is what it dispatches, in its order, a
+    // round trip apart (`everyMs` — the driver says what a round trip is): the connection
+    // accepted (which is what tells the model how far behind it is), then the pages. Pacing
+    // a render while the client is catching up is the change this would show, and it lives
+    // in `Render`, which this runs.
+    exposeOpenCold (fun items pageSize everyMs ->
+        let fixture = openFixture items pageSize
+        let pages = fixture.Log |> List.chunkBySize pageSize
+        let last = List.length pages - 1
+        measureOpen (
+            async {
+                dispatch ConnectingMsg
+                do! Async.AwaitPromise (nextTask ())
+                dispatch (accepted fixture)
+                for (i, page) in List.indexed pages do
+                    do! Async.Sleep everyMs
+                    dispatch (
+                        EventsPageMsg
+                            { Events = page
+                              LastOffset = Some (List.last page).Offset
+                              IsEnd = i = last })
+            }))
