@@ -692,18 +692,27 @@ module Client =
     /// paint and its connection.
     ///
     /// One function rather than three calls in the browser's boot, because this sequence is
-    /// what a person WATCHES on a phone: the kept history folded, the kept transcripts folded
-    /// after it (a terminal exists because an event said so), and then the truth of the
-    /// interval about to start (`Connecting` — see the probe's deadline). The harness runs
-    /// this same function over fixture stores and counts what the page did, so the order
-    /// here and the messages it dispatches are measured, not just read.
+    /// what a person WATCHES on a phone: `Connecting` said first, then the kept history
+    /// folded, then the kept transcripts folded after it (a terminal exists because an event
+    /// said so). The harness runs this same function over fixture stores and counts what the
+    /// page did, so the order here and the messages it dispatches are measured, not just
+    /// read.
+    ///
+    /// `Connecting` FIRST. The model starts `Disconnected None`, which renders as "not
+    /// connected" with no reason and nothing to press, and that is what a page wore from its
+    /// first paint until the network was asked — which used to be after the replay, so a
+    /// phone opening a long session wore it for seconds (measured: three, on 97 items) and
+    /// then watched the banner leave. The interval the client is about to connect in starts
+    /// at the first paint, not at the probe, and `Connecting` is its truth throughout: it is
+    /// what the channel's own retries wear (`SessionChannel.policy`), and the probe's
+    /// deadline is what bounds it.
     module LocalOpen =
 
         let replay (history: HistoryCache) (transcripts: TranscriptCaches) (dispatch: ClientMsg -> unit) : Async<unit> =
             async {
+                dispatch ConnectingMsg
                 do! EventFetch.replay history dispatch
                 do! TranscriptFetch.replay transcripts dispatch
-                dispatch ConnectingMsg
             }
 
     /// Opening the session transport. The browser's WebRTC handshake is a promise that used

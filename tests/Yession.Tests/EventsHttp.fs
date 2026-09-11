@@ -292,6 +292,22 @@ let private storeTests =
                 Expect.equal offsets [ 0L; 1L; 2L; 3L; 4L; 5L ] "each kept event once, in log order"
             }
 
+        testCaseAsync "a local open says it is connecting before it folds what it kept" <|
+            async {
+                // The model starts "not connected", and a page wore that from its first paint
+                // until the network was asked. The interval the client is about to connect in
+                // starts at the first paint, so what the page wears through the replay — for
+                // seconds, on a phone with a long session kept — is `Connecting`.
+                let store = storeOf [ answerOf 0L 3 ]
+                let seen = ResizeArray ()
+                do! Client.LocalOpen.replay store Client.TranscriptCaches.none seen.Add
+                let connecting = seen |> Seq.tryFindIndex (function ConnectingMsg -> true | _ -> false)
+                let folded = seen |> Seq.tryFindIndex (function LocalHistoryMsg _ -> true | _ -> false)
+                match connecting, folded with
+                | Some c, Some f -> Expect.isTrue (c < f) "connecting is said before the first kept page lands"
+                | _ -> failwith "a local open over a kept store says it is connecting and folds a page"
+            }
+
         testCaseAsync "a hole stops the fold at its edge" <|
             async {
                 // An entry evicted from the middle leaves the rest kept. Folding over the gap

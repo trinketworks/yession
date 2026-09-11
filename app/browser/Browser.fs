@@ -1175,14 +1175,9 @@ let private start () =
 
         let! historyCache = openHistoryCache ()
         let! transcriptCaches = openTranscriptCaches ()
-        // The events, then the transcripts, then `Connecting` — the sequence a person watches
+        // `Connecting`, then the events, then the transcripts — the sequence a person watches
         // between the first paint and the connection, and the one the harness measures
-        // (`Client.LocalOpen`). Said before it is asked: the model starts `Disconnected None`,
-        // which renders as "not connected" with no reason and nothing to press, and until the
-        // probe settled that is what a page wore — for a hundred milliseconds on a laptop, and
-        // for as long as a hung fetch took on a phone. `Connecting` is the truth of the
-        // interval (it is what the channel's own retries wear, `Client.SessionChannel.policy`),
-        // and the deadline is what bounds it.
+        // (`Client.LocalOpen`, which says why the order is that).
         do! Client.LocalOpen.replay historyCache transcriptCaches (fun msg -> dispatchRef msg)
 
         // Authorization by renavigation: probe `/me` for a peer token. 401 -> bounce
