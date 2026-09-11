@@ -570,12 +570,6 @@ let createWithUi
     // by launch secret so a sink dies exactly when its launch does.
     let mcp = KeyedRetainedHub.create McpServerSet.empty
 
-    // Session changes, published on every launch, exit, and display-name
-    // change: the full session list with each status, retained so a new subscriber is current
-    // at once. Consumers project it — `/sessions/stream` to the registry's Running set for an
-    // operator's serving binding, the management page to its rendered table.
-    let sessions = RetainedHub.create ([] : SessionView list)
-
     let statusOf (record: SessionRecord) : SessionStatus =
         let key = SessionId.value record.SessionId
         match Map.tryFind key children with
@@ -594,6 +588,23 @@ let createWithUi
           Summary = Map.tryFind (SessionId.value record.SessionId) summaries }
 
     let viewsNow () : SessionView list = state.Sessions |> List.map viewOf
+
+    // Session changes, published on every launch, exit, and display-name
+    // change: the full session list with each status, retained so a new subscriber is current
+    // at once. Consumers project it — `/sessions/stream` to the registry's Running set for an
+    // operator's serving binding, the management page to its rendered table.
+    //
+    // Created OVER the registry just loaded, not empty. The retained value is what a
+    // subscriber is handed before anything has happened, and after a restart that is the
+    // whole of what it gets until the next launch, exit or write — which, over a registry
+    // whose default session is archived, is the next time somebody clicks Launch. Created
+    // empty, the rows stream handed every page that connected in that window a table
+    // saying "no sessions yet" over eighty-six records, and the page swapped its correct
+    // server-rendered list for it: a Manager promoted overnight showed zero sessions all
+    // morning, and they came back the moment one was launched. The same fault the MCP hub
+    // has its boot-time `publishMcpServers` for, below; here the hub's own initial value
+    // is the projection, so there is no boot call to forget.
+    let sessions = RetainedHub.create (viewsNow ())
 
     /// Publish the current session list. Call AFTER the runtime bookkeeping a change implies
     /// (`children`, `lastExit`): the value is computed here, so what a subscriber renders is
