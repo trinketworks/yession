@@ -1311,7 +1311,12 @@ let private benchSeries =
       "open.paints", items, "paints"
       "open.jump", items, "px"
       "open.blocked", items, "ms"
-      "open.time", items, "ms" ]
+      "open.time", items, "ms"
+      "cold.renders", items, "renders"
+      "cold.paints", items, "paints"
+      "cold.jump", items, "px"
+      "cold.blocked", items, "ms"
+      "cold.time", items, "ms" ]
 /// One hue per document size, darkest = largest. Ordered, because the sizes are.
 let private sizeColours = [ "#7fd0f5"; "#1ba1e2"; "#0b5f88" ]
 
