@@ -542,67 +542,74 @@ let private repoCapabilitiesFor
                   // TAKES that actor, so an agent-authored call with nobody's authority on it
                   // is not something this could be written to omit.
                   Authority = Authority.agentFor turnActor }
+        let capabilities =
+            { capabilities with
+                Repos =
+                  { capabilities.Repos with
+                      Add =
+                        fun repo ->
+                          gated addRepoTool [ RepoRef.value repo ] (sprintf "add_repo %s" (RepoRef.value repo))
+                      Remove =
+                        fun repo force ->
+                          // The cost is in the SUMMARY, because that is the sentence the classifier
+                          // reads and a person watching the queue sees BEFORE it happens rather than
+                          // after. A removal that would take uncommitted work with it must not look
+                          // like one that would not.
+                          let summary =
+                              if force then sprintf "remove_repo %s (deleting uncommitted changes)" (RepoRef.value repo)
+                              else sprintf "remove_repo %s" (RepoRef.value repo)
+                          gated removeRepoTool [ RepoRef.value repo; (if force then "true" else "false") ] summary
+                      SwitchBranch =
+                        fun repo branch create ->
+                          let summary =
+                              if create then sprintf "switch_branch %s -> new branch %s" (RepoRef.value repo) branch
+                              else sprintf "switch_branch %s -> %s" (RepoRef.value repo) branch
+                          gated switchBranchTool [ RepoRef.value repo; branch; (if create then "true" else "false") ] summary
+                      CreatePr =
+                        fun draft ->
+                          // The head, the base and the DRAFT flag are in the summary, because that
+                          // is the sentence the classifier reads and a person watching the queue
+                          // sees before it happens — and a pull request everybody can see is not
+                          // the same act as a draft nobody is asked to review yet.
+                          let summary =
+                              sprintf
+                                  "create_pr %s%s: %s"
+                                  (PrDraft.render draft)
+                                  (if draft.Draft then " as a draft" else "")
+                                  draft.Title
+                          gated
+                              createPrTool
+                              ([ RepoRef.value draft.Repo
+                                 draft.Head
+                                 draft.Base
+                                 draft.Title
+                                 (if draft.Draft then "true" else "false") ]
+                               @ Option.toList draft.Body)
+                              summary
+                      WatchPr =
+                        fun repo number ->
+                          gated
+                              watchPrTool
+                              [ RepoRef.value repo; string number ]
+                              (sprintf "watch_pr %s#%d" (RepoRef.value repo) number)
+                      UnwatchPr =
+                        fun repo number ->
+                          gated
+                              unwatchPrTool
+                              [ RepoRef.value repo; string number ]
+                              (sprintf "unwatch_pr %s#%d" (RepoRef.value repo) number)
+                      // The READS take no gate and no approver: they change nothing, so there is
+                      // nothing to approve and nothing to resume.
+                      Fetch = service.FetchRepo (Repos.agentCaller turnActor)
+                      Status = service.RepoStatus
+                      Log = service.RepoLog
+                      Diff = service.RepoDiff } }
+        // GitHub's three tools (`create_pr`, `watch_pr`, `unwatch_pr`) are declared
+        // here, against the GATED verbs just bound above, rather than in `AgentTools.fs`
+        // (Plan 16, part A cont'd): everything GitHub-specific about a session's pull
+        // requests lives in `GitHubPrs.fs` and nowhere else.
         { capabilities with
-            Repos =
-              { capabilities.Repos with
-                  Add =
-                    fun repo ->
-                      gated addRepoTool [ RepoRef.value repo ] (sprintf "add_repo %s" (RepoRef.value repo))
-                  Remove =
-                    fun repo force ->
-                      // The cost is in the SUMMARY, because that is the sentence the classifier
-                      // reads and a person watching the queue sees BEFORE it happens rather than
-                      // after. A removal that would take uncommitted work with it must not look
-                      // like one that would not.
-                      let summary =
-                          if force then sprintf "remove_repo %s (deleting uncommitted changes)" (RepoRef.value repo)
-                          else sprintf "remove_repo %s" (RepoRef.value repo)
-                      gated removeRepoTool [ RepoRef.value repo; (if force then "true" else "false") ] summary
-                  SwitchBranch =
-                    fun repo branch create ->
-                      let summary =
-                          if create then sprintf "switch_branch %s -> new branch %s" (RepoRef.value repo) branch
-                          else sprintf "switch_branch %s -> %s" (RepoRef.value repo) branch
-                      gated switchBranchTool [ RepoRef.value repo; branch; (if create then "true" else "false") ] summary
-                  CreatePr =
-                    fun draft ->
-                      // The head, the base and the DRAFT flag are in the summary, because that
-                      // is the sentence the classifier reads and a person watching the queue
-                      // sees before it happens — and a pull request everybody can see is not
-                      // the same act as a draft nobody is asked to review yet.
-                      let summary =
-                          sprintf
-                              "create_pr %s%s: %s"
-                              (PrDraft.render draft)
-                              (if draft.Draft then " as a draft" else "")
-                              draft.Title
-                      gated
-                          createPrTool
-                          ([ RepoRef.value draft.Repo
-                             draft.Head
-                             draft.Base
-                             draft.Title
-                             (if draft.Draft then "true" else "false") ]
-                           @ Option.toList draft.Body)
-                          summary
-                  WatchPr =
-                    fun repo number ->
-                      gated
-                          watchPrTool
-                          [ RepoRef.value repo; string number ]
-                          (sprintf "watch_pr %s#%d" (RepoRef.value repo) number)
-                  UnwatchPr =
-                    fun repo number ->
-                      gated
-                          unwatchPrTool
-                          [ RepoRef.value repo; string number ]
-                          (sprintf "unwatch_pr %s#%d" (RepoRef.value repo) number)
-                  // The READS take no gate and no approver: they change nothing, so there is
-                  // nothing to approve and nothing to resume.
-                  Fetch = service.FetchRepo (Repos.agentCaller turnActor)
-                  Status = service.RepoStatus
-                  Log = service.RepoLog
-                  Diff = service.RepoDiff } }
+            Repos = { capabilities.Repos with ProviderTools = GitHubPrs.providerTools capabilities } }
 
 /// The turn's sandbox commands (Plan 15, stage 2) and the shell profile (Plan 25), bound to
 /// the acting party.

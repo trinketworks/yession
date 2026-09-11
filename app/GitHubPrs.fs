@@ -501,3 +501,158 @@ let hooks
         fun id ->
             held
             |> List.tryPick (fun (repo, current) -> if current = Some id then Some repo else None) }
+
+// --- the agent tools: create_pr, watch_pr, unwatch_pr -----------------------------------
+//
+// The three GitHub-flavoured entries `AgentTools.fs`'s registry used to declare directly,
+// moved here for the reason this file's own header states: everything GitHub-specific
+// about a session's pull requests belongs in exactly one place, and "auto merge armed" and
+// "what a merge queue ejecting an entry looks like" are GitHub-specific sentences. The
+// `pull_requests` query just above (`PrWatches.fs`) is the precedent this follows for a
+// QUERY — declared by the file that knows the provider, merged in by a registry that does
+// not. This is the same move for three COMMANDS: contributed through
+// `AgentCapabilities.Repos.ProviderTools`, which `AgentTools.fs` merges into `yession`'s
+// tool list without knowing this file, or GitHub, exists. Wire names do not move — still
+// `mcp__yession__create_pr` and so on, because `yession` is the tool's namespace regardless
+// of who wrote its prose. A GitLab adapter contributes its own list the same way, through
+// the same field, and never touches this one.
+
+open Yession.Domain.Agent
+open Yession.Domain.Tools
+
+/// A body that always answers, the way every tool in `AgentTools.fs` does: `Error` is
+/// reserved for the call never happening (arguments that could not be read), not for a call
+/// that ran and went badly.
+let private ok (body: Async<string>) : Async<Result<ToolAnswer, string>> =
+    async {
+        let! text = body
+        return Ok (ToolAnswer.text text)
+    }
+
+let private withRepo (raw: string) (inner: RepoRef -> Async<string>) : Async<string> =
+    async {
+        match RepoRef.create raw with
+        | Error e -> return sprintf "not a repo name: %s" e
+        | Ok repo -> return! inner repo
+    }
+
+let private watchPr (capabilities: AgentCapabilities) (raw: string) (number: int) : Async<string> =
+    withRepo raw (fun repo ->
+        async {
+            match! capabilities.Repos.WatchPr repo number with
+            | Ok outcome -> return AgentTools.renderCommandOutcome outcome
+            | Error e -> return sprintf "could not watch that pull request: %s" e
+        })
+
+let private unwatchPr (capabilities: AgentCapabilities) (raw: string) (number: int) : Async<string> =
+    withRepo raw (fun repo ->
+        async {
+            match! capabilities.Repos.UnwatchPr repo number with
+            | Ok outcome -> return AgentTools.renderCommandOutcome outcome
+            | Error e -> return sprintf "could not stop watching that pull request: %s" e
+        })
+
+let private createPr
+    (capabilities: AgentCapabilities)
+    (raw: string)
+    (head: string)
+    (onto: string)
+    (title: string)
+    (body: string option)
+    (draft: bool)
+    : Async<string> =
+    withRepo raw (fun repo ->
+        async {
+            match PrDraft.create repo head onto title body draft with
+            // A draft the domain refused never reaches the gate: nothing was proposed,
+            // nobody was asked, and the sentence names the argument to fix.
+            | Error e -> return e
+            | Ok drafted ->
+                match! capabilities.Repos.CreatePr drafted with
+                | Ok outcome -> return AgentTools.renderCommandOutcome outcome
+                | Error e -> return sprintf "could not open the pull request: %s" e
+        })
+
+/// Reading a call's arguments, the way `AgentTools.fs`'s own `ToolArgs` does for every other
+/// tool: every body reads its own JSON, so a decode that lived elsewhere would have to know
+/// every tool's shape to do the same job.
+let private readArgs (decoder: Decoder<'a>) (json: string) : Result<'a, string> =
+    let json = if String.IsNullOrWhiteSpace json then "{}" else json
+    match Decode.fromString decoder json with
+    | Ok value -> Ok value
+    | Error e -> Error (sprintf "could not read the arguments: %s" e)
+
+/// `watch_pr`/`unwatch_pr`'s pair: which repo, and which pull request on it.
+let private repoNumberArgs (json: string) : Result<string * int, string> =
+    readArgs
+        (Decode.object (fun get ->
+            get.Required.Field "repo" Decode.string,
+            get.Required.Field "number" Decode.int))
+        json
+
+/// `create_pr`'s six: which repo, the branch the work is on, the branch it is for, what to
+/// call it, what to say about it, and whether it is a draft. The two branches are read as
+/// they were written and turned into a draft by the domain, which is where the refusals
+/// live (`PrDraft.create`).
+let private prDraftArgs (json: string) : Result<string * string * string * string * string option * bool, string> =
+    readArgs
+        (Decode.object (fun get ->
+            get.Required.Field "repo" Decode.string,
+            get.Required.Field "head" Decode.string,
+            get.Required.Field "base" Decode.string,
+            get.Required.Field "title" Decode.string,
+            get.Optional.Field "body" Decode.string |> Option.filter (fun s -> s <> ""),
+            get.Optional.Field "draft" Decode.bool |> Option.defaultValue false))
+        json
+
+/// The three tools, built from a turn's capabilities exactly the way `AgentTools.fs`'s
+/// `verbs` builds every other one — descriptor paired with body, so a tool cannot be
+/// declared without being callable. Merged into the `yession` registry through
+/// `AgentCapabilities.Repos.ProviderTools`.
+let providerTools (capabilities: AgentCapabilities) : (ToolDescriptor * (string -> Async<Result<ToolAnswer, string>>)) list =
+    let tool name description fields body : ToolDescriptor * (string -> Async<Result<ToolAnswer, string>>) =
+        ToolDescriptor.create AgentTools.Namespace name description (ToolSchema.ofFields fields), body
+    [ tool
+          "create_pr"
+          "Open a pull request on GitHub, from a branch that is already pushed. The commits have to be up there first — push from a terminal with execute_command; this opens the pull request and nothing else. It answers with the number, as `owner/repo#n`, which is what watch_pr takes: this session says nothing further about a pull request nobody watches. Opening one that is already open from the same branch onto the same base changes nothing and reports the one that exists, so calling it twice is safe. It spends the GitHub credential of whoever's turn this is, so a \"cannot see it\" on a repo that exists means their credential cannot reach that repo — say so rather than retrying; everyone in the session sees the pull request open in the timeline. What GitHub will not open it says why in its own words — no commits between the two branches, a head branch it cannot find — and that sentence is what comes back."
+          [ ToolField.required "repo" "string" "owner/name"
+            ToolField.required
+                "head"
+                "string"
+                "the branch the work is on, e.g. \"claude/fix-the-thing\"; \"owner:branch\" for a branch on a fork"
+            ToolField.required "base" "string" "the branch it is for, e.g. \"master\" — there is no default, name it"
+            ToolField.required "title" "string" "the pull request title, e.g. \"fix: a closed terminal ends its block\""
+            ToolField.optional "body" "string" "the description, in markdown; omit for none"
+            ToolField.optional
+                "draft"
+                "boolean"
+                "true to open it as a draft — on the record, and explicitly not asking for review yet" ]
+          (fun args ->
+              async {
+                  match prDraftArgs args with
+                  | Error e -> return Error e
+                  | Ok (repo, head, onto, title, body, draft) ->
+                      return! ok (createPr capabilities repo head onto title body draft)
+              })
+      tool
+          "watch_pr"
+          "Watch a pull request on GitHub. The session polls it and announces on the timeline when it merges, closes, reopens, when its checks pass or fail, and when auto merge is armed (queued) or stops being armed while it is still open (stalled — what a merge queue ejecting an entry looks like, which nothing else reports); the current state of every watched pull request is the pull_requests query. Reads it with the credential of whoever's turn this is, so a \"cannot see it\" on a pull request that exists means their GitHub credential cannot reach that repo. Watching one already watched reports its state and changes nothing."
+          [ ToolField.required "repo" "string" "owner/name"
+            ToolField.required "number" "integer" "the pull request number" ]
+          (fun args ->
+              async {
+                  match repoNumberArgs args with
+                  | Error e -> return Error e
+                  | Ok (repo, number) -> return! ok (watchPr capabilities repo number)
+              })
+      tool
+          "unwatch_pr"
+          "Stop watching a pull request. The session stops polling it and says nothing further about it; everyone sees the stop in the timeline."
+          [ ToolField.required "repo" "string" "owner/name"
+            ToolField.required "number" "integer" "the pull request number" ]
+          (fun args ->
+              async {
+                  match repoNumberArgs args with
+                  | Error e -> return Error e
+                  | Ok (repo, number) -> return! ok (unwatchPr capabilities repo number)
+              }) ]

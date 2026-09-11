@@ -307,84 +307,25 @@ let private sessionTests =
                 Expect.equal seen (Some ("octo/hello", true)) "the second decision reaches the thing that acts on it"
             }
 
-        // create_pr. What matters at this seam is that six adjacent strings arrive as the
-        // capability's own vocabulary — a draft, with the head in the head and the base in
-        // the base — because a pair swapped here would open a real pull request the wrong way
-        // round and no type below could tell.
-        testCaseAsync "create_pr hands the capability the draft it was given" <|
+        // create_pr, watch_pr and unwatch_pr no longer declare themselves here — GitHub's
+        // own prose and their draft/repo-number decoding moved to `GitHubPrs.fs`, which
+        // this module never opens. What is still this module's to guarantee is the SEAM
+        // they arrive through: a tool a repo capability contributes via
+        // `Repos.ProviderTools` is reachable by name exactly like one declared in `verbs`
+        // — the registry does not care, and must not need to, which provider filled it in.
+        testCaseAsync "a tool contributed through Repos.ProviderTools is reachable by name" <|
             async {
-                let mutable seen : PrDraft option = None
+                let contributed : ToolDescriptor * (string -> Async<Result<ToolAnswer, string>>) =
+                    ToolDescriptor.create "yession" "provider_tool" "" ToolSchema.none,
+                    (fun _ -> async { return Ok (ToolAnswer.text "answered by the provider") })
                 let registry =
                     AgentTools.registry
                         { AgentCapabilities.none with
-                            Repos =
-                              { AgentCapabilities.none.Repos with
-                                  CreatePr =
-                                    fun draft ->
-                                      async {
-                                          seen <- Some draft
-                                          return Ok { Status = CommandRan "opened"; Tool = "create_pr"; Summary = "s"; Handle = None }
-                                      } } }
-                let! _ =
-                    registry.Invoke (
-                        call
-                            "yession"
-                            "create_pr"
-                            """{"repo":"octo/hello","head":"topic","base":"master","title":"Add feature","body":"why","draft":true}""")
-                Expect.equal (seen |> Option.map (fun d -> RepoRef.value d.Repo)) (Some "octo/hello") "the repo"
-                Expect.equal (seen |> Option.map (fun d -> d.Head)) (Some "topic") "the branch the work is on"
-                Expect.equal (seen |> Option.map (fun d -> d.Base)) (Some "master") "the branch it is for"
-                Expect.equal (seen |> Option.map (fun d -> d.Title)) (Some "Add feature") "the title"
-                Expect.equal (seen |> Option.map (fun d -> d.Body)) (Some (Some "why")) "the description"
-                Expect.equal (seen |> Option.map (fun d -> d.Draft)) (Some true) "and that it is a draft"
-            }
-
-        // The two optional ones. An unmentioned `draft` must not reach the capability as a
-        // draft: a pull request nobody is asked to review is a different act from one they are.
-        testCaseAsync "create_pr without a body or a draft flag asks for neither" <|
-            async {
-                let mutable seen : PrDraft option = None
-                let registry =
-                    AgentTools.registry
-                        { AgentCapabilities.none with
-                            Repos =
-                              { AgentCapabilities.none.Repos with
-                                  CreatePr =
-                                    fun draft ->
-                                      async {
-                                          seen <- Some draft
-                                          return Ok { Status = CommandRan "opened"; Tool = "create_pr"; Summary = "s"; Handle = None }
-                                      } } }
-                let! _ =
-                    registry.Invoke (
-                        call "yession" "create_pr" """{"repo":"octo/hello","head":"topic","base":"master","title":"Add feature"}""")
-                Expect.equal (seen |> Option.map (fun d -> d.Body)) (Some None) "no body is a pull request with none"
-                Expect.equal (seen |> Option.map (fun d -> d.Draft)) (Some false) "and an unmentioned flag is a no"
-            }
-
-        // A draft the domain refuses is not an act: nothing is proposed, nobody is asked, and
-        // the answer says which argument to fix.
-        testCaseAsync "a create_pr the domain refuses never reaches the capability" <|
-            async {
-                let mutable asked = false
-                let registry =
-                    AgentTools.registry
-                        { AgentCapabilities.none with
-                            Repos =
-                              { AgentCapabilities.none.Repos with
-                                  CreatePr =
-                                    fun _ ->
-                                      async {
-                                          asked <- true
-                                          return Ok { Status = CommandRan "opened"; Tool = "create_pr"; Summary = "s"; Handle = None }
-                                      } } }
-                let! answer =
-                    registry.Invoke (
-                        call "yession" "create_pr" """{"repo":"octo/hello","head":"master","base":"master","title":"Add feature"}""")
-                Expect.isFalse asked "the capability was never called"
+                            Repos = { AgentCapabilities.none.Repos with ProviderTools = [ contributed ] } }
+                let! answer = registry.Invoke (call "yession" "provider_tool" "{}")
                 match answer with
-                | Ok said -> Expect.isTrue (said.Text.Contains "nothing to merge") "and the answer says why"
-                | Error e -> failwithf "expected an answer, got %s" e
+                | Ok said -> Expect.equal said.Text "answered by the provider" "a tool this module never declared still answers"
+                | Error e -> failwithf "expected the contributed tool to answer, got %s" e
             }
 
         // The shell profile (Plan 25). What matters at this seam is that the tool's

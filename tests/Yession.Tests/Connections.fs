@@ -15,6 +15,7 @@ open Yession.Domain.Chat
 open Yession.Domain.Hooks
 open Yession.Domain.Prs
 open Yession.Domain.Tools
+open Yession.Domain.Agent
 open Yession.Manager
 open Yession.Peer
 
@@ -3150,6 +3151,131 @@ let private prWatchVerbTests =
             }
     ]
 
+/// Reach one of `GitHubPrs.providerTools`' entries by name, the way the registry that
+/// merges `Repos.ProviderTools` in does — but directly, since the merge itself is pinned
+/// generically in `Tools.fs`, without GitHub.
+let private invokeProviderTool (capabilities: AgentCapabilities) (name: string) (args: string) =
+    match GitHubPrs.providerTools capabilities |> List.tryFind (fun (d, _) -> d.Name = name) with
+    | Some (_, body) -> body args
+    | None -> async { return Error (sprintf "no provider tool named %s" name) }
+
+let private prAgentToolTests =
+    testList "the create_pr/watch_pr/unwatch_pr agent tools" [
+        // create_pr. What matters at this seam is that six adjacent strings arrive as the
+        // capability's own vocabulary — a draft, with the head in the head and the base in
+        // the base — because a pair swapped here would open a real pull request the wrong
+        // way round and no type below could tell.
+        testCaseAsync "create_pr hands the capability the draft it was given" <|
+            async {
+                let mutable seen : PrDraft option = None
+                let capabilities =
+                    { AgentCapabilities.none with
+                        Repos =
+                          { AgentCapabilities.none.Repos with
+                              CreatePr =
+                                fun draft ->
+                                  async {
+                                      seen <- Some draft
+                                      return Ok { Status = CommandRan "opened"; Tool = "create_pr"; Summary = "s"; Handle = None }
+                                  } } }
+                let! _ =
+                    invokeProviderTool
+                        capabilities
+                        "create_pr"
+                        """{"repo":"octo/hello","head":"topic","base":"master","title":"Add feature","body":"why","draft":true}"""
+                Expect.equal (seen |> Option.map (fun d -> RepoRef.value d.Repo)) (Some "octo/hello") "the repo"
+                Expect.equal (seen |> Option.map (fun d -> d.Head)) (Some "topic") "the branch the work is on"
+                Expect.equal (seen |> Option.map (fun d -> d.Base)) (Some "master") "the branch it is for"
+                Expect.equal (seen |> Option.map (fun d -> d.Title)) (Some "Add feature") "the title"
+                Expect.equal (seen |> Option.map (fun d -> d.Body)) (Some (Some "why")) "the description"
+                Expect.equal (seen |> Option.map (fun d -> d.Draft)) (Some true) "and that it is a draft"
+            }
+
+        // The two optional ones. An unmentioned `draft` must not reach the capability as a
+        // draft: a pull request nobody is asked to review is a different act from one they are.
+        testCaseAsync "create_pr without a body or a draft flag asks for neither" <|
+            async {
+                let mutable seen : PrDraft option = None
+                let capabilities =
+                    { AgentCapabilities.none with
+                        Repos =
+                          { AgentCapabilities.none.Repos with
+                              CreatePr =
+                                fun draft ->
+                                  async {
+                                      seen <- Some draft
+                                      return Ok { Status = CommandRan "opened"; Tool = "create_pr"; Summary = "s"; Handle = None }
+                                  } } }
+                let! _ =
+                    invokeProviderTool
+                        capabilities
+                        "create_pr"
+                        """{"repo":"octo/hello","head":"topic","base":"master","title":"Add feature"}"""
+                Expect.equal (seen |> Option.map (fun d -> d.Body)) (Some None) "no body is a pull request with none"
+                Expect.equal (seen |> Option.map (fun d -> d.Draft)) (Some false) "and an unmentioned flag is a no"
+            }
+
+        // A draft the domain refuses is not an act: nothing is proposed, nobody is asked, and
+        // the answer says which argument to fix.
+        testCaseAsync "a create_pr the domain refuses never reaches the capability" <|
+            async {
+                let mutable asked = false
+                let capabilities =
+                    { AgentCapabilities.none with
+                        Repos =
+                          { AgentCapabilities.none.Repos with
+                              CreatePr =
+                                fun _ ->
+                                  async {
+                                      asked <- true
+                                      return Ok { Status = CommandRan "opened"; Tool = "create_pr"; Summary = "s"; Handle = None }
+                                  } } }
+                let! answer =
+                    invokeProviderTool
+                        capabilities
+                        "create_pr"
+                        """{"repo":"octo/hello","head":"master","base":"master","title":"Add feature"}"""
+                Expect.isFalse asked "the capability was never called"
+                match answer with
+                | Ok said -> Expect.isTrue (said.Text.Contains "nothing to merge") "and the answer says why"
+                | Error e -> failwithf "expected an answer, got %s" e
+            }
+
+        testCaseAsync "watch_pr reaches the capability with the repo and the number" <|
+            async {
+                let mutable seen : (string * int) option = None
+                let capabilities =
+                    { AgentCapabilities.none with
+                        Repos =
+                          { AgentCapabilities.none.Repos with
+                              WatchPr =
+                                fun repo number ->
+                                  async {
+                                      seen <- Some (RepoRef.value repo, number)
+                                      return Ok { Status = CommandRan "watched"; Tool = "watch_pr"; Summary = "s"; Handle = None }
+                                  } } }
+                let! _ = invokeProviderTool capabilities "watch_pr" """{"repo":"octo/hello","number":12}"""
+                Expect.equal seen (Some ("octo/hello", 12)) "the repo and the number it named"
+            }
+
+        testCaseAsync "unwatch_pr reaches the capability with the repo and the number" <|
+            async {
+                let mutable seen : (string * int) option = None
+                let capabilities =
+                    { AgentCapabilities.none with
+                        Repos =
+                          { AgentCapabilities.none.Repos with
+                              UnwatchPr =
+                                fun repo number ->
+                                  async {
+                                      seen <- Some (RepoRef.value repo, number)
+                                      return Ok { Status = CommandRan "unwatched"; Tool = "unwatch_pr"; Summary = "s"; Handle = None }
+                                  } } }
+                let! _ = invokeProviderTool capabilities "unwatch_pr" """{"repo":"octo/hello","number":12}"""
+                Expect.equal seen (Some ("octo/hello", 12)) "the repo and the number it named"
+            }
+    ]
+
 let tests =
     testList "Connections" [
         codecTests
@@ -3161,6 +3287,7 @@ let tests =
         githubTests
         prPollTests
         prHookTests
+        prAgentToolTests
         Tag.needs "Broker service" [ Tag.Ports ] (fun () -> brokerTests)
         Tag.needs "Connection control routes" [ Tag.Ports ] (fun () -> routeTests)
         Tag.needs "GitHub sign-in routes" [ Tag.Ports ] (fun () -> githubRouteTests)
