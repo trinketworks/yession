@@ -195,7 +195,8 @@ let private queueEntry (terminal: TerminalId) (author: ActorRef) (n: string) : P
       Authority = Authority.ofAuthor author
       Order = 1.0
       Size = None
-      Background = false }
+      Background = false
+      Stdin = false }
 
 /// The same, authored by the agent on a peer's credential — the only way an agent-authored
 /// act can be built, and what makes these cases about the agent rather than about a peer
@@ -563,6 +564,17 @@ let private agentLeaseTests =
                     Async.StartImmediate (terminals.RunBlock id (queueEntry id ada "2") "cat" ignore)
                     let! gaveUp = until 1500 (fun () -> not (terminals.Busy () |> Set.contains (TerminalId.value id)))
                     Expect.isFalse gaveUp "a person's cat is still waiting on their keyboard"
+                })
+
+        // The opt-in: the same `cat`, the agent's, with the ask made — and it waits like a
+        // person's would, because the terminal is now its to type into.
+        testCaseAsync "an agent's block that asked for stdin reads the terminal" <|
+            withPosixTerminal "stdinasked" (fun terminals id _ _ _ _ ->
+                async {
+                    let ada = PeerRef (PeerId.create "ada" |> expect)
+                    Async.StartImmediate (terminals.RunBlock id { agentEntry id ada "1" with Stdin = true } "cat" ignore)
+                    let! gaveUp = until 1500 (fun () -> not (terminals.Busy () |> Set.contains (TerminalId.value id)))
+                    Expect.isFalse gaveUp "asked for, so the cat waits on the agent's keyboard"
                 })
 
         // The wrapping is a brace group in THIS shell, so the two things blocks are typed into

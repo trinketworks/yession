@@ -230,6 +230,8 @@ module SyncedStateSync =
           /// type is where it becomes a bool. `None` when the field is absent, which reads
           /// as foreground.
           Background : string option
+          /// Whether the author asked for stdin, `"true"` when they did. Absent reads as no.
+          Stdin : string option
           /// The author's terminal width, `"120x40"`. `None` for an act with no viewport —
           /// the doc said nothing rather than said a blank.
           Size : string option }
@@ -249,6 +251,7 @@ module SyncedStateSync =
             let! author = Decode.object.required "author" Decode.string
             let! order = Decode.object.optional "order" Decode.float
             let! background = Decode.object.optional "background" Decode.string
+            let! stdin = Decode.object.optional "stdin" Decode.string
             let! size = Decode.object.optional "size" Decode.string
             return
                 { Subject = subject
@@ -256,6 +259,7 @@ module SyncedStateSync =
                   Author = author
                   Order = defaultArg order 0.0
                   Background = background
+                  Stdin = stdin
                   Size = size }
         }
 
@@ -356,6 +360,7 @@ module SyncedStateSync =
                       // Absent reads as foreground, which is what every entry a person
                       // writes is and what every entry written before Plan 20 was.
                       Background = (f.Background = Some "true")
+                      Stdin = (f.Stdin = Some "true")
                       // Unreadable or absent is NO claim rather than a guessed one: an entry
                       // written before the field existed, or by something that put nonsense
                       // there, leaves the terminal at the width it had.
@@ -483,6 +488,7 @@ module SyncedStateSync =
                   Author = entryString entry "author"
                   Order = entry.get "order" |> Option.map (unbox<float>) |> Option.defaultValue 0.0
                   Background = entryStringOpt entry "background"
+                  Stdin = entryStringOpt entry "stdin"
                   Size = entryStringOpt entry "size" })
         let landmarksH = foldRoot doc "landmarks" (fun entry -> entryStringOpt entry "marked")
         // Off the ARGLESS root map, not off a named root: a top-level register lives there
@@ -622,6 +628,9 @@ module SyncedStateSync =
         // the drain reads the doc — a flag the caller kept would not survive the hop, nor a
         // restart between the enqueue and the run.
         (background: bool)
+        // Whether the author asked for the terminal's stdin (`BlockStdinPolicy`); on the
+        // entry for the same reason `background` is.
+        (stdin: bool)
         : unit =
         doc.transact (
             (fun _ ->
@@ -633,6 +642,7 @@ module SyncedStateSync =
                 entry.set ("author", box (ActorRef.token (Authority.author authority))) |> ignore
                 entry.set ("order", box order) |> ignore
                 if background then entry.set ("background", box "true") |> ignore
+                if stdin then entry.set ("stdin", box "true") |> ignore
                 Authority.onBehalfOf authority
                 |> Option.iter (fun actor -> entry.set ("onBehalfOf", box (ActorRef.token actor)) |> ignore)),
             processOrigin)

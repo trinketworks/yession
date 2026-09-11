@@ -91,6 +91,7 @@ let private representativeModel : ClientModel =
                     Authority = Authority.agentFor (PeerRef ada)
                     Order = 1.0
                     Background = false
+                    Stdin = false
                     // An agent command, so no viewport and no claim about width.
                     Size = None } ]
           Model = Some pickedModel

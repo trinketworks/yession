@@ -1650,7 +1650,7 @@ module SessionTerminals =
                         // Where this command reads its input from — decided by who wrote it,
                         // applied to the text the shell sees, on both paths below alike.
                         let shellCommand =
-                            BlockStdin.wrap (BlockStdinPolicy.forAuthor (Authority.author entry.Authority)) command
+                            BlockStdin.wrap (BlockStdinPolicy.forAct (Authority.author entry.Authority) entry.Stdin) command
 
                         let mutable written = 0
                         let mutable dropped = 0
@@ -2662,6 +2662,7 @@ module TerminalCommands =
                             (TerminalQueueOrder.nextFor terminal synced.Pending)
                             command
                             request.Background
+                            request.Stdin
                         if not request.Background then return! awaitOutcome terminal handle (now ()) None
                         else
                             // Answer with what is true NOW rather than waiting: the caller

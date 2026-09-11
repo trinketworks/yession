@@ -258,13 +258,17 @@ type CommandRequest =
       /// wake instead of a returned outcome. It changes who WAITS and nothing else — a
       /// background command is queued, editable and refusable exactly as every other one is,
       /// and it runs through the same one door.
-      Background : bool }
+      Background : bool
+      /// Whether the command should read the terminal's stdin (`BlockStdinPolicy`). False is
+      /// end-of-file, and is what a command that names its files wants; true is for the one
+      /// that prompts, which the agent then answers by typing into its block.
+      Stdin : bool }
 
 module CommandRequest =
 
     /// The plain case: a command, waited for, in the default sandbox's agent terminal.
     let ofCommand (command: string) : CommandRequest =
-        { Command = command; Target = None; Background = false }
+        { Command = command; Target = None; Background = false; Stdin = false }
 
 type ExecuteCommand = CommandRequest -> Async<Result<TerminalCommandOutcome, string>>
 

@@ -76,6 +76,10 @@ type PendingAct =
       /// and it rides the queue entry because the drain is what reads the doc and mints the
       /// block that records it.
       Background : bool
+      /// Whether the author asked for the terminal's stdin (`BlockStdinPolicy`). Only the
+      /// agent's answer matters — a person's block reads the terminal regardless — and it
+      /// rides the entry for the reason `Background` does: the drain reads the doc.
+      Stdin : bool
       /// How wide the author's terminal was when they asked for this, if they had one.
       ///
       /// The size rides the ACT rather than sitting in a register beside the terminal, and

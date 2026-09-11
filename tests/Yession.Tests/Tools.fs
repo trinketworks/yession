@@ -488,6 +488,26 @@ let private sessionTests =
                 Expect.equal target (Some (InTerminal (TerminalId.create "T1" |> expect))) "routed to that terminal, not a sandbox's own"
             }
 
+        // The one argument `BlockStdinPolicy` reads. Absent is false — the agent that says
+        // nothing gets end-of-file — and the sentence that tells it so is in the description,
+        // pinned here because a description is the only place the model learns it from.
+        testCaseAsync "stdin is asked for by name, and not asking is the default" <|
+            async {
+                let asked = ResizeArray<bool> ()
+                let registry =
+                    AgentTools.registry (capabilities (fun (request: CommandRequest) ->
+                        async {
+                            asked.Add request.Stdin
+                            return Ok (ran request.Command)
+                        }))
+                let! _ = registry.Invoke (call "yession" "execute_command" """{"command":"npx create-thing","stdin":true}""")
+                let! _ = registry.Invoke (call "yession" "execute_command" """{"command":"ls"}""")
+                Expect.equal (List.ofSeq asked) [ true; false ] "the ask reaches the request, and only when made"
+                let description =
+                    registry.Tools |> List.find (fun t -> t.Name = "execute_command") |> fun t -> t.Description
+                Expect.stringContains description "stdin: true" "and the description says how to ask"
+            }
+
         testCaseAsync "a terminal and a sandbox together are refused, and nothing runs" <|
             async {
                 let mutable ran' = false

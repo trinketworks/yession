@@ -1918,6 +1918,9 @@ module ClientModel =
                       // A person's composer never waits on a command, so there is nothing
                       // for a background flag to spare them (Plan 20, stage 2).
                       Background = false
+                      // Nor asks for stdin: a person's block reads the terminal regardless
+                      // (`BlockStdinPolicy`), so the ask is the agent's alone to make.
+                      Stdin = false
                       // The width of the box this author is looking at, so the output is laid
                       // out for the screen it will be read on. Absent when nothing has been
                       // measured — a terminals column that has never been opened — which is a
