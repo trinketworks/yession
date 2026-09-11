@@ -639,19 +639,17 @@ first's.
     terminals do local git only until somebody starts a named sandbox. Commit/push
     attribution machinery (author = requesting user, `Co-Authored-By`) is absent
     everywhere, forwarded credential or not.
-  - **A forwarded `github` credential reaches docker and host sandboxes, not srt ones.**
-    Forwarding is a route through the session's git gateway (`app/GitGateway.fs`): the
-    sandbox's git is told one `insteadOf` and the credential never enters it. The route has
-    to be REACHABLE, and `Sandboxes.hostAddressFrom` is the backend's answer: docker's
-    `host.docker.internal` (bound to the daemon's `host-gateway`, which is why the gateway
-    binds every interface — under a native Linux daemon that alias is the bridge address,
-    not loopback), the host backend's loopback, and for srt nothing yet. srt's egress is a
-    filtering proxy whose `NO_PROXY` covers loopback and every private range, and on Linux
-    its network namespace has no route to the host at all; a name the proxy will carry and
-    the host will answer to (the box's own hostname, or srt's credential masking, which
-    sentinel-swaps a value at its own MITM proxy) is the open question. Until it is
-    answered, `forward: ["github"]` into a session-owned srt sandbox refuses the start,
-    saying so — it does not fall back to injecting the token.
+  - **A forwarded `github` credential reaches an srt sandbox by this box's hostname.**
+    Forwarding is a route through the session's git gateway (`app/GitGateway.fs`); the
+    sandbox's git is told one `insteadOf` and the credential never enters it. The route
+    has to be REACHABLE, and `Sandboxes.hostAddressFrom` is the backend's answer: docker's
+    `host.docker.internal`, the host backend's loopback, and for srt `os.hostname()` —
+    because srt's proxy sets `NO_PROXY` over loopback and every private range, so any of
+    those is dialled directly into a namespace with no route, while the hostname goes
+    through the proxy and is resolved on the parent side. That resolution is the
+    assumption: a box whose own hostname does not resolve (no `/etc/hosts` entry, no DNS)
+    gives a confined git a proxy error naming the host, not a route. Verified on macOS
+    and on the PR runner; an operator's box is on its own.
   - **Under `YESSION_SESSION_AGENT_BACKEND=host` the git verbs run unconfined** — the
     operator's explicitly lax choice, as everywhere `host` is chosen. The per-invocation
     hardening (hooks/fsmonitor/ext off, no global config, protocol pinned) still

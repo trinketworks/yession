@@ -283,7 +283,13 @@ let private makeSandboxes
                                             { policy with
                                                 Env =
                                                     Sandboxes.mergeEnv policy.Env provision.Env
-                                                    |> Sandboxes.withGitConfig provision.GitConfig }
+                                                    |> Sandboxes.withGitConfig provision.GitConfig
+                                                // A backend that filters egress admits what
+                                                // the provision names; `None` filters nothing
+                                                // and has nothing to widen.
+                                                AllowedDomains =
+                                                    policy.AllowedDomains
+                                                    |> Option.map (fun domains -> List.distinct (domains @ provision.Domains)) }
                             })
                         (Sandboxes.summaryFor backend workSpec)
                         (sprintf "env-%s" (SandboxRef.objectName sessionId sandbox)))
@@ -1067,12 +1073,12 @@ Async.StartImmediate (
                             if not (holdsGitHubToken owner) then return WorkSandboxes.CredentialForwarding.NotHeld
                             else
                                 let backend = SandboxRuntime.scopedBackend workBackend (SandboxRef.scope sandbox)
-                                match Sandboxes.hostAddressFrom backend with
+                                match Sandboxes.hostAddressFrom (Interop.hostname ()) backend with
                                 | None ->
                                     return
                                         WorkSandboxes.CredentialForwarding.Unforwardable (
                                             sprintf
-                                                "github cannot be forwarded into a %s sandbox yet: its git would have no route to this session's gateway"
+                                                "github cannot be forwarded into a %s sandbox: its git would have no route to this session's gateway"
                                                 (SandboxBackend.describe backend))
                                 | Some host ->
                                     let cap =
@@ -1083,7 +1089,11 @@ Async.StartImmediate (
                                               Refused = fun () -> reportGitHubNetworkFailure owner "the git gateway was answered 401" }
                                     return
                                         WorkSandboxes.CredentialForwarding.Forwarded
-                                            { Env = Map.empty; GitConfig = GitGateway.gitConfig host gitGateway.Port cap }
+                                            { Env = Map.empty
+                                              GitConfig = GitGateway.gitConfig host gitGateway.Port cap
+                                              // The route's host, for a backend whose egress
+                                              // would otherwise refuse it.
+                                              Domains = [ host ] }
                         }
                 Revoke = gitGateway.Revoke } ]
         let! host = Host.startFull runAgent (Some (makeSandboxes forwardableCredentials)) (secretsCapabilitiesFor sessionId) (Some log) (Some docStore) (Some transcriptStore) reportName reportActivity telemetry.Emit subscribeNotifications mcpServers connectionRoutes sessionId auth sessionMount managerOrigin ephemeralStorage (resourceProfile |> Option.bind (fun file -> file.Guidance)) port

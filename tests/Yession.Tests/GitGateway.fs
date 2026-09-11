@@ -428,8 +428,73 @@ let private pushTests =
         }
     ]
 
+// --- [Srt]: from inside a confined sandbox -------------------------------------------------
+//
+// An srt sandbox's only way out is srt's filtering proxy, and the proxy's `NO_PROXY` covers
+// loopback and every private range — so `127.0.0.1` and `host.docker.internal` are names
+// its git would try to dial DIRECTLY, into a namespace with no route (Linux) or a seatbelt
+// deny (macOS). The name that works is this box's own hostname: not in `NO_PROXY`, carried
+// by the proxy when the sandbox's egress allows it, and resolved on the PARENT side to an
+// address the every-interface listener answers on.
+
+let private srtTools () =
+    match Sandboxes.SrtSandbox.toolsFrom (Sandboxes.ambientEnv ()) with
+    | Ok tools -> tools
+    | Error reason -> failwithf "srt tools: %s" reason
+
+let private srtTests =
+    testList "from an srt sandbox" [
+
+        testCaseAsync "a confined git reaches the gateway by this box's name, through srt's proxy" <| async {
+            let! upstream = startUpstream ()
+            do!
+                withGateway upstream.Origin (fun gateway ->
+                    async {
+                        let host =
+                            match Sandboxes.hostAddressFrom (Interop.hostname ()) SrtBackend with
+                            | Some host -> host
+                            | None -> failwith "srt is a backend with a route to the host"
+                        let cap = gateway.Grant (sandbox "dev") (lenderOf (lending (Some "ghu_lent")))
+                        // Canonical, because seatbelt matches the path as written and
+                        // `/tmp` is a symlink here (the note in GitIntegration.fs).
+                        let workspace =
+                            match Fs.canonical (mkdtemp nodeFs nodeOs) with
+                            | Some path -> path
+                            | None -> failwith "the workspace does not resolve"
+                        let policy : SandboxPolicy =
+                            { ReadPaths = [ workspace ]
+                              WritePaths = [ workspace ]
+                              AllowedDomains = Some [ host ]
+                              Sockets = []
+                              Binds = []
+                              Volumes = []
+                              Realisation = []
+                              // A home of its own, as a session gives every sandbox: git
+                              // reads `$HOME`'s config, and the operator's is denied.
+                              Env =
+                                Sandboxes.hostBaseline (Sandboxes.ambientEnv ())
+                                |> Map.add "HOME" workspace
+                                |> Sandboxes.withGitConfig (GitGateway.gitConfig host gateway.Port cap)
+                              WorkingDirectory = Some workspace
+                              Filesystem = Confined }
+                        match! Sandboxes.SrtSandbox.create (srtTools ()) policy with
+                        | Error reason -> failwithf "srt sandbox failed: %s" reason
+                        | Ok confined ->
+                            let! run, out, err =
+                                runInSandbox confined "git" [ "ls-remote"; "https://github.com/octo/hello.git" ] (Map.ofList [ "GIT_TERMINAL_PROMPT", "0" ]) None
+                            Expect.equal run (SandboxExited 0) (sprintf "ls-remote succeeded from inside: %s" err)
+                            Expect.isTrue (out.Contains "refs/heads/main") "and read the upstream's refs"
+                            Expect.equal (List.ofSeq upstream.Authorizations) [ Some (basic "ghu_lent") ] "github.com saw the lent credential"
+                            do! confined.Dispose ()
+                        rmrf nodeFs workspace
+                    })
+            do! upstream.Close ()
+        }
+    ]
+
 let tests =
     testList "The git gateway" [
         routeTests
         Tag.needs "The git gateway, driven by git" [ Tag.Ports ] (fun () -> testList "with a real git" [ portsTests; pushTests ])
+        Tag.needs "The git gateway, from srt" [ Tag.Srt ] (fun () -> srtTests)
     ]

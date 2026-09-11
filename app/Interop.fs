@@ -149,6 +149,16 @@ let bufferToString (chunk: obj) : string = jsNative
 [<Emit("($0.headers[$1] ?? null)")>]
 let headerOf (req: IncomingMessage) (name: string) : string option = jsNative
 
+[<ImportAll("node:os")>]
+let private nodeOs : obj = jsNative
+
+[<Emit("$0.hostname()")>]
+let private hostnameOf (os: obj) : string = jsNative
+
+/// This box's own name — what a confined sandbox's git names to reach a listener here
+/// through srt's proxy (`Sandboxes.hostAddressFrom`).
+let hostname () : string = hostnameOf nodeOs
+
 /// A cryptographically random identifier (per-launch control secrets).
 [<Emit("crypto.randomUUID()")>]
 let randomSecret () : string = jsNative

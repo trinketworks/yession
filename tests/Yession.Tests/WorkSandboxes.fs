@@ -126,7 +126,7 @@ let private githubSource (value: string option) : WorkSandboxes.CredentialSource
                     match value with
                     | None -> WorkSandboxes.CredentialForwarding.NotHeld
                     | Some v ->
-                        WorkSandboxes.CredentialForwarding.Forwarded { Env = Map.ofList [ "GITHUB_ROUTE", v ]; GitConfig = [] }
+                        WorkSandboxes.CredentialForwarding.Forwarded { Env = Map.ofList [ "GITHUB_ROUTE", v ]; GitConfig = []; Domains = [] }
             }
       Revoke = fun ref -> revoked.Add (SandboxRef.render ref) },
     revoked

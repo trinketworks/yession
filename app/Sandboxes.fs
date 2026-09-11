@@ -427,14 +427,16 @@ let limitsHere (backend: SandboxBackend) : HostLimits = limitsFor backend (platf
 /// daemon's `host-gateway`. That is the host's loopback under Colima and Docker Desktop and
 /// the bridge address under a native Linux daemon — which is why a listener meant for a
 /// container binds every interface, not loopback. host: loopback, there being no boundary.
-/// srt: none yet. Its egress is a filtering proxy whose `NO_PROXY` covers loopback and every
-/// private range, and on Linux its network namespace has no route to the host at all; a name
-/// the proxy will carry and the host will answer to is a question for a later change.
-let hostAddressFrom (backend: SandboxBackend) : string option =
+/// srt: this box's own hostname. Its egress is a filtering proxy whose `NO_PROXY` covers
+/// loopback and every private range, so `127.0.0.1` would be dialled DIRECTLY — into a
+/// namespace with no route on Linux, a seatbelt deny on macOS. The hostname is in neither
+/// list, the proxy carries it once the sandbox's egress allows it, and it is resolved on
+/// the PARENT side to an address the every-interface listener answers on.
+let hostAddressFrom (hostname: string) (backend: SandboxBackend) : string option =
     match backend with
     | DockerBackend -> Some "host.docker.internal"
     | HostBackend -> Some "127.0.0.1"
-    | SrtBackend -> None
+    | SrtBackend -> Some hostname
 
 /// What one set of granted leaves comes to, each channel beside the others because they
 /// are one fact read by different consumers: the host family closes path SETS over the
