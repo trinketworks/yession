@@ -1087,9 +1087,32 @@ Async.StartImmediate (
                                             { Owner = owner
                                               Resolve = fun () -> resolveGitHubToken owner
                                               Refused = fun () -> reportGitHubNetworkFailure owner "the git gateway was answered 401" }
+                                    // Who commits made in there are BY: the account behind
+                                    // the credential that will push them, asked of GitHub
+                                    // once, at the start. Not a condition of the start — a
+                                    // sandbox whose author could not be read still has its
+                                    // route, and git's own "please tell me who you are" is
+                                    // the legible answer to the one thing missing.
+                                    let! identity =
+                                        async {
+                                            match! resolveGitHubToken owner with
+                                            | None -> return Map.empty
+                                            | Some token ->
+                                                match! GitHubConnection.profile token with
+                                                | Ok profile ->
+                                                    let name, email = GitHubConnection.commitIdentity profile
+                                                    return Repos.identityEnv name email
+                                                | Error reason ->
+                                                    eprintfn
+                                                        "[session %s] no commit identity for sandbox '%s': %s"
+                                                        (SessionId.value sessionId)
+                                                        (SandboxRef.render sandbox)
+                                                        reason
+                                                    return Map.empty
+                                        }
                                     return
                                         WorkSandboxes.CredentialForwarding.Forwarded
-                                            { Env = Map.empty
+                                            { Env = identity
                                               GitConfig = GitGateway.gitConfig host gitGateway.Port cap
                                               // The route's host, for a backend whose egress
                                               // would otherwise refuse it.
