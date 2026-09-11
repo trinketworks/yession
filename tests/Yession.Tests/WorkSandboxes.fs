@@ -423,6 +423,61 @@ let private ensureTests =
                     Expect.isTrue (reason.Contains "start_work_sandbox") "and how to get one"
             }
 
+        // What an agent writes after reading "started sandbox octo/hello:dev" is `dev`, and
+        // there is nothing else it could mean. Three sessions were told to start one instead.
+        testCaseAsync "a bare name finds the one repo sandbox that carries it" <|
+            async {
+                let log = newLog ()
+                let sandboxes, _ = registry log []
+                let! _ = sandboxes.Ensure caller (sandbox "octo/hello:dev") SandboxRequest.defaults
+                match! (sandboxes.EnvironmentFor (sandbox "dev")).Ensure None "a terminal was opened" with
+                | EnvironmentAvailable -> ()
+                | EnvironmentUnavailable reason -> failwithf "expected octo/hello:dev to answer for 'dev': %s" reason
+            }
+
+        testCaseAsync "a bare name two repos both carry is refused, naming both" <|
+            async {
+                let log = newLog ()
+                let sandboxes, _ = registry log []
+                let! _ = sandboxes.Ensure caller (sandbox "octo/hello:dev") SandboxRequest.defaults
+                let! _ = sandboxes.Ensure caller (sandbox "octo/world:dev") SandboxRequest.defaults
+                match! (sandboxes.EnvironmentFor (sandbox "dev")).Ensure None "a terminal was opened" with
+                | EnvironmentAvailable -> failwith "expected a refusal"
+                | EnvironmentUnavailable reason ->
+                    Expect.isTrue (reason.Contains "'octo/hello:dev'") "names the one"
+                    Expect.isTrue (reason.Contains "'octo/world:dev'") "and the other"
+            }
+
+        // The refusal says what there IS. "start_work_sandbox creates one" to somebody
+        // whose sandbox is running under a name they mis-spelt sends them to create a
+        // second, which the repo's file then refuses.
+        testCaseAsync "an unknown name is refused naming the sandboxes that exist" <|
+            async {
+                let log = newLog ()
+                let sandboxes, _ = registry log []
+                let! _ = sandboxes.Ensure caller (sandbox "octo/hello:gate") SandboxRequest.defaults
+                match! (sandboxes.EnvironmentFor (sandbox "dev")).Ensure None "a terminal was opened" with
+                | EnvironmentAvailable -> failwith "expected a refusal"
+                | EnvironmentUnavailable reason ->
+                    Expect.isTrue (reason.Contains "'default'") "the session's own"
+                    Expect.isTrue (reason.Contains "'octo/hello:gate'") "and the repo's"
+                match! sandboxes.Stop caller (sandbox "dev") with
+                | Ok () -> failwith "expected a refusal"
+                | Error reason -> Expect.isTrue (reason.Contains "'octo/hello:gate'") "a stop says the same"
+            }
+
+        testCaseAsync "a bare name stops the one repo sandbox that carries it" <|
+            async {
+                let log = newLog ()
+                let sandboxes, _ = registry log []
+                let! _ = sandboxes.Ensure caller (sandbox "octo/hello:dev") SandboxRequest.defaults
+                let! stopped = sandboxes.Stop caller (sandbox "dev")
+                expect stopped
+                Expect.isFalse
+                    (sandboxes.Listed () |> List.exists (fun entry -> entry.Ref = sandbox "octo/hello:dev"))
+                    "octo/hello:dev is gone"
+            }
+
         // What the sandbox HOLDS is asked of the sandbox. This manager never sees a policy —
         // it hands a spec to a backend and is told an environment came up — so the one thing
         // it could have done wrong here is compute an answer of its own, and the one thing

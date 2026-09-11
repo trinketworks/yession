@@ -587,7 +587,7 @@ module AgentTools =
             "Run a shell command in one of this session's terminals, where the people in the session can see it and edit it while it queues, and every run is on the record. This is the only way to run anything. Pass `sandbox` to run in a named work sandbox (start_work_sandbox creates one); omit it for the default sandbox, which is where everything runs unless you say otherwise. Each sandbox has one terminal of yours that runs one command at a time; pass `terminal` to run in a terminal you opened with open_terminal instead, which is how work runs beside something long. It waits for the result and returns the exit code and output; if the terminal is busy, or the command is still going, it says so and returns a handle for check_pending instead of hanging. Your commands have no stdin unless you pass `stdin: true`: anything that reads it gets end-of-file at once, so name files and pass flags rather than expecting a prompt — and when a command genuinely has to prompt, pass `stdin: true` and answer it. Read what it returns: every answer states which of those happened."
             [ ToolField.required "command" "string" "the shell command line to run, e.g. \"npm test -- --watch=false\""
               ToolField.optional "terminal" "string" "the id of a terminal to run in, as open_terminal or list_terminals gave it; omit for your own terminal in the sandbox"
-              ToolField.optional "sandbox" "string" "the work sandbox to run in, e.g. \"test\"; omit for the default one"
+              ToolField.optional "sandbox" "string" "the work sandbox to run in — the session's own by name (\"test\"), a repo's as \"owner/repo:name\" (its bare name also finds it when only one repo declares that name); omit for the default one"
               ToolField.optional
                   "background"
                   "boolean"
@@ -613,7 +613,7 @@ module AgentTools =
               "open_terminal"
               "Open a terminal of your own and say what it is for. Use it to work on several things at once: each terminal runs one command at a time, so a build in one does not hold up a test in another. The name is what everyone in the session reads, so name it for the job (\"tests\", \"docs build\"). You get a terminal id back; pass it to execute_command as `terminal` to run there. There is a limit per sandbox — if you have reached it, this says so, and close_terminal is how you make room."
               [ ToolField.required "name" "string" "what this terminal is for, e.g. \"tests\""
-                ToolField.optional "sandbox" "string" "the work sandbox to open it in; omit for the default one" ]
+                ToolField.optional "sandbox" "string" "the work sandbox to open it in — \"owner/repo:name\" for a repo's, or its bare name when only one repo declares it; omit for the default one" ]
               (fun args ->
                   async {
                       match ToolArgs.nameSandbox args with
@@ -853,7 +853,7 @@ module AgentTools =
           tool
               "start_work_sandbox"
               "Make sure a named work sandbox exists for this session, and get it back. Asking twice for the same name with the same forwarding returns the one already running and changes nothing — safe to call every time. Asking for the same name with DIFFERENT forwarding is refused rather than silently recreated, because recreating kills whatever is running inside it: stop_work_sandbox first. `forward` names credentials to put inside the sandbox (currently \"github\", which is what lets git push work from a terminal there); it uses the credentials of the person whose turn this is, and everyone in the session sees which were forwarded and whose."
-              [ ToolField.required "name" "string" "the sandbox name, e.g. \"default\" or \"test\""
+              [ ToolField.required "name" "string" "the sandbox name, e.g. \"default\" or \"test\"; a repo's is \"owner/repo:name\""
                 ToolField.optionalList "forward" "string" "credential names to forward, e.g. [\"github\"]" ]
               (fun args ->
                   async {
