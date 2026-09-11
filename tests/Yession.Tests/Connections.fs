@@ -605,6 +605,31 @@ let private startStatusEndpoint () : Async<StatusEndpoint> =
               SetStatus = fun s -> status <- s }
     }
 
+/// A stand-in for GitHub's `/user` with a body: one fixed account, its email hidden the way
+/// most are, recording how it was asked. Separate from the status-only one above because
+/// that one exists to say nothing but a status.
+type private ProfileEndpoint =
+    { Url : string
+      SetStatus : int -> unit
+      Authorizations : ResizeArray<string option> }
+
+let private startProfileEndpoint () : Async<ProfileEndpoint> =
+    async {
+        let mutable status = 200
+        let authorizations = ResizeArray<string option> ()
+        let handler (req: Interop.IncomingMessage) (res: Interop.ServerResponse) =
+            authorizations.Add (Interop.headerOf req "authorization")
+            res.writeHead (status, Fable.Core.JsInterop.createObj [ "content-type", box "application/json" ]) |> ignore
+            res.``end`` """{"login":"octocat","id":583231,"name":"The Octocat","email":null}"""
+        let server = Interop.createServer handler
+        let! listening =
+            Async.FromContinuations (fun (cont, _, _) -> server.listen (0, "127.0.0.1", fun () -> cont server) |> ignore)
+        return
+            { Url = sprintf "http://127.0.0.1:%d/user" (Interop.serverPort listening)
+              SetStatus = fun s -> status <- s
+              Authorizations = authorizations }
+    }
+
 let private openEphemeral () =
     async {
         let! opened = SecretStore.openStore None (KeyStore.random ())
@@ -1292,6 +1317,45 @@ let private routeTests =
                 Expect.isNone fine "and a token it accepts is not refused"
                 let! broken = check 500
                 Expect.isNone broken "a provider having a bad minute is not a verdict either"
+            }
+
+        // Who a credential IS, for the commits a sandbox makes with it. The name is the
+        // account's; the email is the one GitHub itself credits — public if shown, else the
+        // noreply address its own web commits carry — so a push from a sandbox is attributed
+        // the way a commit made on github.com would be.
+        testCase "a commit is authored as github's account: its name, and the email github credits" <| fun () ->
+            let shown : GitHubConnection.Profile = { Login = "octocat"; Id = 583231L; Name = Some "The Octocat"; Email = Some "octo@example.com" }
+            Expect.equal (GitHubConnection.commitIdentity shown) ("The Octocat", "octo@example.com") "a public email is used as given"
+            let hidden = { shown with Email = None }
+            Expect.equal (GitHubConnection.commitIdentity hidden) ("The Octocat", "583231+octocat@users.noreply.github.com") "no public email: github's own noreply form"
+            let nameless = { hidden with Name = None }
+            Expect.equal (fst (GitHubConnection.commitIdentity nameless)) "octocat" "no display name: the login"
+            let blank = { hidden with Name = Some "  "; Email = Some "" }
+            Expect.equal (GitHubConnection.commitIdentity blank) ("octocat", "583231+octocat@users.noreply.github.com") "blank counts as absent"
+
+        testCase "an identity reaches git as author and committer both" <| fun () ->
+            let env = Repos.identityEnv "The Octocat" "583231+octocat@users.noreply.github.com"
+            for key in [ "GIT_AUTHOR_NAME"; "GIT_COMMITTER_NAME" ] do
+                Expect.equal (Map.tryFind key env) (Some "The Octocat") key
+            for key in [ "GIT_AUTHOR_EMAIL"; "GIT_COMMITTER_EMAIL" ] do
+                Expect.equal (Map.tryFind key env) (Some "583231+octocat@users.noreply.github.com") key
+
+        testCaseAsync "the profile behind a token is read from github, and a non-answer says why" <|
+            async {
+                let! endpoint = startProfileEndpoint ()
+                let! profile = GitHubConnection.profileAt endpoint.Url "ghu_token"
+                Expect.equal
+                    profile
+                    (Ok { GitHubConnection.Profile.Login = "octocat"; Id = 583231L; Name = Some "The Octocat"; Email = None })
+                    "the profile as github wrote it, null email included"
+                Expect.equal (List.ofSeq endpoint.Authorizations) [ Some "Bearer ghu_token" ] "asked as the credential"
+                endpoint.SetStatus 401
+                match! GitHubConnection.profileAt endpoint.Url "ghu_token" with
+                | Error reason -> Expect.isTrue (reason.Contains "401") "a refusal names the status"
+                | Ok _ -> failwith "a 401 is not a profile"
+                match! GitHubConnection.profileAt "http://127.0.0.1:1/user" "ghu_token" with
+                | Error reason -> Expect.isTrue (reason.Contains "reached") "unreachable says so"
+                | Ok _ -> failwith "nothing listening is not a profile"
             }
 
         testCaseAsync "a github check that cannot reach github is not a verdict" <|
