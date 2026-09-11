@@ -57,6 +57,16 @@ let private recordsPerBlock = 10
 /// back through is. The session the stutter was reported from held 57.
 let private conversationSizes = [ 20; 60; 200 ]
 
+/// The open scenario: the same conversation sizes, kept as EVENTS in the client's own store,
+/// `eventsPerAnswer` to each kept answer — a session somebody watched live keeps one answer
+/// per poll, and a poll answers with the few events that arrived since (the session this was
+/// measured on held 179 answers for 97 items). Repeated, because what comes out is counts
+/// and distances a person would see, and the first open of a fresh page is the one with a
+/// cold JIT in it.
+let private eventsPerAnswer = 4
+let private openRepeats = 6
+let private openWarmup = 1
+
 /// The scroll scenario's viewport and stream. A phone's screen, because that is where a
 /// fling is made with a thumb and where the stutter was seen; and records at twenty a second,
 /// which is the rate a working turn's terminal output and events arrived at on that session
@@ -88,8 +98,10 @@ let private percentile (p: float) (xs: float list) : float =
         let rank = int (ceil (p * float sorted.Length)) - 1
         sorted.[max 0 (min (sorted.Length - 1) rank)]
 
-/// A measured series, named for what a person was waiting for.
-type private Series = { Metric : string; Size : int; Values : float list }
+/// A measured series, named for what a person was waiting for, in the unit it was taken in —
+/// milliseconds for a wait, a count for renders and paints, pixels for how far the page moved.
+[<RequireQualifiedAccess>]
+type private Series = { Metric : string; Unit : string; Size : int; Values : float list }
 
 let private seriesFrom (json: string) (size: int) (names: (string * string) list) : Series list =
     use doc = JsonDocument.Parse json
@@ -101,7 +113,7 @@ let private seriesFrom (json: string) (size: int) (names: (string * string) list
         // Drop the warm-up, but never everything: a series that came back short is better
         // reported short — the sample-count check below is what refuses to report it at all.
         let values = if List.length all > warmup then List.skip warmup all else all
-        { Metric = metric; Size = size; Values = values } ]
+        { Series.Metric = metric; Series.Unit = "ms"; Series.Size = size; Series.Values = values } ]
 
 /// A number that is not a series: a slope across a sweep, or a count. Name, unit, value, and
 /// what it was taken over.
@@ -128,7 +140,7 @@ let private writeReport (all: Series list) (ratios: Ratio list) =
         for (p, label) in [ 0.5, "p50"; 0.95, "p95" ] do
             point
                 (sprintf "%s.%s@%d" s.Metric label s.Size)
-                "ms"
+                s.Unit
                 (percentile p s.Values)
                 (sprintf "%d samples" (List.length s.Values))
     for r in ratios do
@@ -138,11 +150,11 @@ let private writeReport (all: Series list) (ratios: Ratio list) =
 
 let private table (all: Series list) (ratios: Ratio list) =
     printfn ""
-    printfn "  %-16s %8s %9s %9s" "metric" "size" "p50 (ms)" "p95 (ms)"
+    printfn "  %-16s %8s %9s %9s %5s" "metric" "size" "p50" "p95" "unit"
     for s in all do
         printfn
-            "  %-16s %8d %9.2f %9.2f"
-            s.Metric s.Size (percentile 0.5 s.Values) (percentile 0.95 s.Values)
+            "  %-16s %8d %9.2f %9.2f %5s"
+            s.Metric s.Size (percentile 0.5 s.Values) (percentile 0.95 s.Values) s.Unit
     for r in ratios do
         printfn "  %-16s %8s %9.2f%s" r.Name r.Over r.Value r.Unit
     printfn ""
@@ -227,7 +239,7 @@ let private flingWhileStreaming (page: IPage) (cdp: ICDPSession) (records: int) 
 
 let tests =
     testList "Client performance" [
-        testCaseAsync "the editor, the collaboration path, the transcript read and the scroll, swept by size" <|
+        testCaseAsync "the editor, the collaboration path, the transcript read, the scroll and the open, swept by size" <|
             async {
                 let server = serveStatic harnessRoot BENCH_PORT
                 let! pw = await (Playwright.CreateAsync ())
@@ -312,6 +324,46 @@ let tests =
                         let! phonePage = await (phoneContext.NewPageAsync ())
                         let! _ = await (phonePage.GotoAsync (sprintf "http://127.0.0.1:%d/" BENCH_PORT))
                         let! _ = await (phonePage.WaitForSelectorAsync "#shell [data-conversation]")
+
+                        // The open, first and unthrottled: what it records is mostly counts
+                        // and distances, which a slower main thread does not change, and the
+                        // one wait in it (the freeze) is judged against history on this runner
+                        // like every other wait here.
+                        for items in conversationSizes do
+                            let opens = ResizeArray<Collections.Generic.Dictionary<string, float>> ()
+                            for _ in 1 .. openRepeats do
+                                let! report =
+                                    await (phonePage.EvaluateAsync<string> (
+                                        sprintf "() => window.__benchOpen(%d, %d)" items eventsPerAnswer))
+                                use doc = JsonDocument.Parse report
+                                let number (name: string) = doc.RootElement.GetProperty(name).GetDouble ()
+                                let connection = doc.RootElement.GetProperty("connection").GetString ()
+                                // Anti-vacuity: an open that folded nothing, drew nothing, or
+                                // never connected would report a page that opened beautifully.
+                                if int (number "items") < items then
+                                    failwithf "opening %d kept items put %d on the page — the fold did not fold" items (int (number "items"))
+                                if number "renders" < 1.0 || number "paints" < 1.0 then
+                                    failwithf "opening %d kept items rendered %.0f times and painted %.0f — nothing was measured" items (number "renders") (number "paints")
+                                if connection <> "Connected" then
+                                    failwithf "opening %d kept items settled %s rather than Connected" items connection
+                                let point = Collections.Generic.Dictionary<string, float> ()
+                                for key in [ "renders"; "paints"; "jumps"; "jump"; "blocked"; "time" ] do
+                                    point.[key] <- number key
+                                opens.Add point
+                            let last = opens.[opens.Count - 1]
+                            printfn
+                                "  opened %d kept items: %.0f renders, %.0f paints, %.0f jumps moving %.0fpx, frozen %.0fms, settled in %.0fms"
+                                items last.["renders"] last.["paints"] last.["jumps"] last.["jump"] last.["blocked"] last.["time"]
+                            let series (key: string) (metric: string) (unit: string) =
+                                { Series.Metric = metric; Series.Unit = unit; Series.Size = items
+                                  Series.Values = opens |> Seq.skip openWarmup |> Seq.map (fun p -> p.[key]) |> List.ofSeq }
+                            collected.AddRange
+                                [ series "renders" "open.renders" "renders"
+                                  series "paints" "open.paints" "paints"
+                                  series "jump" "open.jump" "px"
+                                  series "blocked" "open.blocked" "ms"
+                                  series "time" "open.time" "ms" ]
+
                         let! cdp = await (phonePage.Context.NewCDPSessionAsync phonePage)
                         let throttle = Collections.Generic.Dictionary<string, obj> ()
                         throttle.["rate"] <- box scrollThrottle
@@ -386,8 +438,8 @@ let tests =
                               // because each record is dispatched and each dispatch renders.
                               // Holding renders while a surface scrolls is the change that
                               // would move it, and this is where that change would show.
-                              { Ratio.Name = "scroll.renders"; Unit = "x"
-                                Value = (Seq.sum rendersPerRecord) / float rendersPerRecord.Count
+                              { Ratio.Name = "scroll.renders"; Ratio.Unit = "x"
+                                Ratio.Value = (Seq.sum rendersPerRecord) / float rendersPerRecord.Count
                                 Ratio.Over = sprintf "%d records at %dms" streamRecords streamEveryMs } ]
 
                         // Anti-vacuity. Every one of these has a silent failure that produces a
