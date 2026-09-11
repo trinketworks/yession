@@ -1436,19 +1436,6 @@ module ClientModel =
         | "" -> Dom.Text.unnamedChapter
         | said -> said
 
-    /// The items a chapter opens at, oldest first — the conversation's own order, which is the
-    /// order the strokes are rendered in and the order the rail reads them back in.
-    ///
-    /// No position here, and that is a deliberate subtraction rather than an omission. The
-    /// rail used to space its strokes by RANK on a log scale, which made it an index of the
-    /// chapters: readable in isolation, and beside a column of per-item controls sharing the same
-    /// margin, two rows of near-identical dashes with nothing saying which was which. A stroke
-    /// now stands where its MESSAGE stands, which no model can know — a pixel is a measurement
-    /// of a laid-out page, and this list is the same on a phone and a desk. `Rail.place` is the
-    /// arithmetic and `RailSync` is what measures its inputs.
-    let chapters (model: ClientModel) : ConversationItem list =
-        Chapters.over model.Synced.Chapters model.Conversation.Items
-
     /// What this session's pull-request watches currently stand at, read off the
     /// `pull_requests` query — the only shape a browser has them in, since the query stream
     /// is what delivers them.

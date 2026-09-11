@@ -948,14 +948,12 @@ module Style =
     /// scroller's padding box — so a top padding here is a strip the pinned author line can
     /// never reach, and scrolled text rides up through it above the name. Carried in flow
     /// instead, the gap scrolls away with everything else and the line pins flush.
-    /// What the rail is positioned against: the chat's box, standing exactly where the
-    /// timeline used to stand in `mainColumn` (a column flex child that fills it). The
-    /// timeline keeps every class it had, so this changes no layout of its own — it exists
-    /// only to give an absolute child a box that does not scroll.
-    let timelineFrame = "relative flex-1 flex flex-col min-h-0"
-
+    /// `min-h-0` is what the frame around this used to carry. The frame existed to give the
+    /// rail an absolute box that did not scroll; with the rail gone it was a wrapper around
+    /// one child, and a flex child that scrolls has to be allowed to shrink or it grows past
+    /// the column instead.
     let timeline =
-        "flex-1 overflow-y-auto px-8 pb-6 flex flex-col gap-6 [&>*:first-child]:mt-6 "
+        "flex-1 min-h-0 overflow-y-auto px-8 pb-6 flex flex-col gap-6 [&>*:first-child]:mt-6 "
         + "max-md:px-4 max-md:pb-4 max-md:gap-5 max-md:[&>*:first-child]:mt-4 break-words"
 
     /// How wide anything in the timeline is allowed to get.
@@ -1152,66 +1150,49 @@ module Style =
     /// them so the glyphs sit on the text's line rather than floating above it.
     let chatTaskCounts = "flex items-baseline gap-2 shrink-0"
 
-    // --- The chapter rail ---------------------------------------------------------------
+    // --- Chapters: where the session divides ------------------------------------------
 
-    /// The rail: strokes down the left of the chat, one per chapter.
+    /// The rule a chapter draws across the transcript.
     ///
-    /// ABSOLUTE over the scroller's own left padding rather than a column beside it, and that
-    /// is load bearing twice. The timeline already reserves 32px there (`timeline`'s `px-8`)
-    /// and nothing is drawn in it, so the rail costs the conversation no width and moves no
-    /// geometry anything else has pinned. And it is what lets a stroke one day carry a
-    /// SUMMARY: text beside a mark has to reach over the reading column, which an absolute
-    /// layer can do on hover and a flex sibling could only do by reflowing the page.
+    /// This replaced a RAIL: hairlines in the timeline's left padding, each placed by
+    /// measuring the laid-out page on every scroll frame and eased once its message passed
+    /// the top of the screen. A mark that has to be positioned against moving text is a mark
+    /// that is wrong for part of every scroll, and none of the arithmetic could carry a word.
+    /// A rule is in the flow, so there is nothing left to place and the name is simply there.
     ///
-    /// Outside the scroller, so it stays put while the conversation moves under it — a rail
-    /// that scrolled away would be a list, and the list is already on the screen.
+    /// A top BORDER rather than a pair of hairlines around the name, because what a chapter
+    /// divides is the COLUMN: the line runs the measure and the name hangs under it, which is
+    /// how a document says "new section" and how an eye skimming finds one.
     ///
-    /// `pointer-events-none` here and `auto` on the strokes: the gutter stays as dead as it
-    /// was except exactly where a mark is, so this cannot become an invisible sheet swallowing
-    /// clicks meant for the text.
-    /// `inset-y-0` and not an inset band, which is load bearing rather than tidiness: a stroke
-    /// is placed by how far its message's top sits above the RAIL's bottom, so a rail whose
-    /// ends did not stand on the scrollport's would offset every stroke on the screen by the
-    /// difference. The breathing room the old `top-6 bottom-6` bought is now bought by the
-    /// arithmetic instead — `Rail.place` reserves a band at each end and never reaches either.
-    let chapterRail = "absolute inset-y-0 left-0 w-8 max-md:w-4 pointer-events-none z-10"
+    /// The space above is larger than the space below — the timeline's own `gap-6`, plus this
+    /// `mt-6`, against `-mb-1` — because the rule belongs to what FOLLOWS it. Spaced evenly, a
+    /// divider reads as sitting between two messages without saying which one it opens.
+    ///
+    /// `readingColumn`, the same measure a message group wears, because what it divides is
+    /// that column: a rule running the whole scroller while the words stop at 38rem reads as
+    /// a line drawn on the page rather than a break in the conversation.
+    let chapterRule =
+        cls [ "flex items-center gap-2.5 border-t border-hair pt-3 mt-6 -mb-1 max-md:mt-4"
+              readingColumn; "max-md:max-w-none" ]
 
-    /// Where one stroke sits: a custom property the browser layer writes on each stroke, read
-    /// here so the stylesheet still owns the rule and the measurement owns only the number.
-    ///
-    /// From the BOTTOM, because that is the end the conversation is anchored to — the newest
-    /// mark must not move as older ones accumulate above it.
-    ///
-    /// The fallback is the top of the foot band, which is where an unmeasured stroke would sit
-    /// if its message were exactly at the fold. It is only ever seen by a stroke that has not
-    /// been measured yet, and nothing paints between a render and its measurement.
-    let chapterAt = "bottom:var(--rail-at,12px)"
+    /// The mark on it: a dot at the reading edge, so a chapter has an anchor the eye finds
+    /// on the way past. Decorative — the name beside it is what says which chapter this is.
+    let chapterDot = "w-1.5 h-1.5 rounded-full bg-ink-faint shrink-0"
 
-    /// One stroke. The BUTTON is the hit area and is deliberately taller than the mark inside
-    /// it: a target the size of its own hairline is a target for nobody, and two marks on
-    /// consecutive messages are a few pixels apart however the rail places them.
-    /// A finger is not a hairline, so the target grows where there is no pointer to aim one.
-    /// The hit areas then overlap where the marks are dense, and the topmost of them wins —
-    /// which is the right way round: what is crowded is what has scrolled away, and what has
-    /// scrolled away is not what a finger is reaching for.
+    /// The name, worn by a text input for the reason the session title is: it is editable
+    /// text, and a control that only becomes editable once you have pressed it is a control
+    /// nobody presses. The same arrangement as `titleInput` — transparent at rest, the
+    /// surface lifting under the pointer and while focused, so the line becomes a box you are
+    /// typing in exactly when you are typing in it.
     ///
-    /// `translate-y-1/2` and not a hand-tuned negative margin: `bottom` places the box's
-    /// EDGE, and the mark has to sit on the place the arithmetic named. A margin that
-    /// corrected for one height would silently miscentre at the other.
-    let chapterStroke =
-        cls [ "absolute left-0 w-full h-3.5 max-md:h-6 translate-y-1/2"
-              "flex items-center pointer-events-auto"
-              "cursor-pointer bg-transparent group/mark"
-              focusRing ]
-
-    /// The mark itself: a hairline, dim until the pointer is on it. Length rather than colour
-    /// is what a rail this narrow has to work with, so a stroke reaching for the reading edge
-    /// is how one says "here".
-    let chapterMark =
-        cls [ "block h-px w-3 max-md:w-2 bg-ink-faint"
-              "transition-all duration-150 ease-out"
-              "group-hover/mark:w-5 group-hover/mark:bg-ink group-hover/mark:h-0.5"
-              "group-focus-visible/mark:w-5 group-focus-visible/mark:bg-ink" ]
+    /// `truncate` rather than wrap: a rule is one line, and a name long enough to wrap has
+    /// stopped being a name. `touchType` because a keyboard is coming, and a phone zooms into
+    /// anything under 16px it focuses and never zooms back out.
+    let chapterName =
+        cls [ "flex-1 min-w-0 bg-transparent border-0 px-1.5 py-0.5"
+              "hover:bg-surface-2 focus:bg-surface-2 transition-colors"; focusRing
+              "font-ui font-light text-small text-ink-dim focus:text-ink truncate"
+              touchType ]
 
     /// What a person can DO to one item, behind an ellipsis at its top-right.
     ///
