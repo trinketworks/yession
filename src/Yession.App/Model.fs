@@ -702,11 +702,11 @@ type ClientMsg =
     /// provider. One register, written like a gate: the reducer sets it and the Ylmish
     /// binding carries it to every peer.
     | SetModelMsg of ModelId option
-    /// Mark this message for the rail, or take its mark off — one message, because there is
-    /// one act. Which way it goes is `Landmarks.toggle`'s to decide, from the item and the
+    /// Open a chapter at this message, or close the one there — one message, because there is
+    /// one act. Which way it goes is `Chapters.toggle`'s to decide, from the item and the
     /// verdicts already recorded: a message carrying the desired state would be a message
-    /// whose sender had to know what an unmarked-by-nature act defaults to.
-    | ToggleLandmarkMsg of MessageId
+    /// whose sender had to know what an act that opens one by nature defaults to.
+    | ToggleChapterMsg of MessageId
     /// One frame off the multiplexed query stream (Plan 15) — the declarations, or one
     /// query's current value. ONE message for the whole read surface, however many
     /// queries there are: a message per query would be a message per FUTURE query too.
@@ -1423,14 +1423,14 @@ module ClientModel =
     /// What a stroke on the rail is called, for a reader who cannot see where it points.
     ///
     /// An act note's headline is already a short sentence and arrives whole. A message is not:
-    /// it is somebody's markdown, and a rail whose every stroke announced a paragraph would be
-    /// a rail nobody could tab through. So a message is named by its FIRST line, cut at a
+    /// it is somebody's markdown, and a chapter whose name was a paragraph would be a chapter
+    /// nobody could read in a list. So a message is named by its FIRST line, cut at a
     /// length a person can hear in one breath — which is also how a person recognises their
     /// own message in a list.
     ///
     /// An ellipsis marks the cut, because a sentence that simply stops reads as a sentence
     /// that was garbled rather than one that was shortened.
-    let landmarkLabel (item: ConversationItem) : string =
+    let chapterName (item: ConversationItem) : string =
         let firstLine =
             match item.Body.IndexOf '\n' with
             | -1 -> item.Body.Trim ()
@@ -1438,18 +1438,18 @@ module ClientModel =
         if firstLine.Length <= 72 then firstLine
         else (firstLine.Substring (0, 71)).TrimEnd () + "…"
 
-    /// The marked items, oldest first — the conversation's own order, which is the order the
-    /// strokes are rendered in and the order the rail reads them back in.
+    /// The items a chapter opens at, oldest first — the conversation's own order, which is the
+    /// order the strokes are rendered in and the order the rail reads them back in.
     ///
     /// No position here, and that is a deliberate subtraction rather than an omission. The
     /// rail used to space its strokes by RANK on a log scale, which made it an index of the
-    /// marks: readable in isolation, and beside a column of per-item controls sharing the same
+    /// chapters: readable in isolation, and beside a column of per-item controls sharing the same
     /// margin, two rows of near-identical dashes with nothing saying which was which. A stroke
     /// now stands where its MESSAGE stands, which no model can know — a pixel is a measurement
     /// of a laid-out page, and this list is the same on a phone and a desk. `Rail.place` is the
     /// arithmetic and `RailSync` is what measures its inputs.
-    let landmarks (model: ClientModel) : ConversationItem list =
-        Landmarks.over model.Synced.Landmarks model.Conversation.Items
+    let chapters (model: ClientModel) : ConversationItem list =
+        Chapters.over model.Synced.Chapters model.Conversation.Items
 
     /// What this session's pull-request watches currently stand at, read off the
     /// `pull_requests` query — the only shape a browser has them in, since the query stream
@@ -1949,9 +1949,9 @@ module ClientModel =
         | ModelCatalogueMsg catalogue -> { model with Models = catalogue }
         | SetModelMsg choice -> model |> withSynced { model.Synced with Model = choice }
         // An id this client's window does not hold is a page boundary, not a bug — and
-        // there is nothing to toggle, because what the mark would default to is on the item.
-        | ToggleLandmarkMsg messageId ->
-            // The menu shuts either way. It is the surface the mark is chosen from, and one
+        // there is nothing to toggle, because what the verdict would default to is on the item.
+        | ToggleChapterMsg messageId ->
+            // The menu shuts either way. It is the surface a chapter is opened from, and one
             // left standing over an act it has already performed is a menu asking to be
             // pressed again — including when the item was not found, where leaving it open
             // would be a menu offering something that cannot happen.
@@ -1960,5 +1960,5 @@ module ClientModel =
             | Some item ->
                 model
                 |> withSynced
-                    { model.Synced with Landmarks = Landmarks.toggle item model.Synced.Landmarks }
+                    { model.Synced with Chapters = Chapters.toggle item model.Synced.Chapters }
             | None -> model

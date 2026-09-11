@@ -654,7 +654,7 @@ let create (deps: Deps) : Renderer =
         // model, because unlike the sidebar this column's visibility is something the app
         // itself changes (selecting a terminal opens it).
         PaneShell.setOpen model.TerminalsOpen
-        // Where the landmark rail's strokes stand, measured against the conversation this
+        // Where the chapter rail's strokes stand, measured against the conversation this
         // render just wrote. Here rather than a frame later: a stroke reads its position
         // from a custom property, and a frame with none written is a frame of hairlines
         // stacked on the rail's foot.

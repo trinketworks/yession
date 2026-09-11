@@ -146,17 +146,18 @@ type SyncedSessionState =
       /// default is the absence again, so a session nobody has configured carries nothing
       /// restating what the provider already decides.
       Model       : ModelId option
-      /// Which messages somebody has marked for the rail, and which they have unmarked.
+      /// Where the session is divided into chapters: which messages open one, and which
+      /// have had the one they opened by themselves closed again.
       ///
-      /// Collaborative because a landmark is a property of the SESSION: the rail is the same
-      /// rail for everybody reading it, and a mark one person could not see would be a
-      /// bookmark in a shared book that only opens for one reader. Keyed by message, so two
-      /// peers marking different things — even across a partition — never conflict.
+      /// Collaborative because a chapter is a property of the SESSION, not of whoever drew
+      /// it: everybody reads the same transcript, and a division one person could not see
+      /// would be a chapter break pencilled into a shared book. Keyed by message, so two
+      /// peers dividing different places — even across a partition — never conflict.
       ///
-      /// A VERDICT rather than a set of marked ids: `false` is how somebody takes the mark
-      /// off an act that wears one by nature (`Landmarks`), which a set cannot say. Absent
-      /// is "nobody has decided", which is not the same as "no".
-      Landmarks   : Map<MessageId, bool> }
+      /// A VERDICT rather than a set of ids: `false` is how somebody closes a chapter an act
+      /// opens by nature (`Chapters`), which a set cannot say. Absent is "nobody has
+      /// decided", which is not the same as "no".
+      Chapters   : Map<MessageId, bool> }
 
 module SyncedSessionState =
 
@@ -170,7 +171,7 @@ module SyncedSessionState =
           TerminalDrafts = Map.empty
           Pending = Map.empty
           Model = None
-          Landmarks = Map.empty }
+          Chapters = Map.empty }
 
 /// The queue's total order. `Order` is a float register; ties (possible when two peers
 /// mint concurrently) are broken by `QueueId`, so the order is always a total,

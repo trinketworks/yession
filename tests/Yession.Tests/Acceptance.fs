@@ -95,7 +95,7 @@ let private representativeModel : ClientModel =
                     // An agent command, so no viewport and no claim about width.
                     Size = None } ]
           Model = Some pickedModel
-          Landmarks = Map.empty }
+          Chapters = Map.empty }
       Conversation =
         { Items =
             [ { MessageId = MessageId.create "msg-1" |> expect
@@ -242,13 +242,13 @@ let private prRow (number: int) (state: string) (status: QueryCell) : (string * 
       PrStatus.Columns.state, CellStatus (state, ToneMuted)
       PrStatus.Columns.status, status ]
 
-/// A session with some of its timeline marked for the rail. The verdicts are what the rail
+/// A session divided into chapters at some of its timeline. The verdicts are what the rail
 /// reads, so this is the only shape it needs.
-let private withMarks (ids: string list) : ClientModel =
+let private withChapters (ids: string list) : ClientModel =
     { representativeModel with
         Synced =
             { representativeModel.Synced with
-                Landmarks = ids |> List.map (fun id -> MessageId.create id |> expect, true) |> Map.ofList } }
+                Chapters = ids |> List.map (fun id -> MessageId.create id |> expect, true) |> Map.ofList } }
 
 /// How many times a hook appears in a rendered page. Counting MOUNTS rather than words: what
 /// these cases promise is one control per item and one stroke per mark, and a substring of
@@ -1182,14 +1182,14 @@ let private uiChecklistTests =
             Expect.isTrue (html.Contains "#377 unreachable") "the strip says nobody is driving it"
             Expect.isFalse (html.Contains "#377 queued") "and not the state it is stuck in"
 
-        // --- The landmark rail ---------------------------------------------------------
+        // --- The chapter rail ---------------------------------------------------------
 
-        testCase "only what is marked is on the rail" <| fun () ->
-            Expect.equal (ClientModel.landmarks representativeModel) [] "nothing marked, nothing drawn"
+        testCase "only where a chapter opens is on the rail" <| fun () ->
+            Expect.equal (ClientModel.chapters representativeModel) [] "no chapters, nothing drawn"
             Expect.equal
-                (ClientModel.landmarks (withMarks [ "msg-1" ]) |> List.map (fun i -> MessageId.value i.MessageId))
+                (ClientModel.chapters (withChapters [ "msg-1" ]) |> List.map (fun i -> MessageId.value i.MessageId))
                 [ "msg-1" ]
-                "one mark, one stroke, on the item that carries it"
+                "one chapter, one stroke, on the item it opens at"
 
         // The promise the whole rail rests on, and the one a person sees: tap a stroke, the
         // message arrives, and the stroke is level with it. In the exact zone the placement IS
@@ -1202,7 +1202,7 @@ let private uiChecklistTests =
                     (sprintf "a message %fpx above the fold is a stroke %fpx up" aboveFold aboveFold)
 
         // The rail may not run off either end, however far a message is from the fold. A
-        // stroke outside its own box is a bookmark nobody can click.
+        // stroke outside its own box is a chapter nobody can click.
         testCase "no message is far enough away to put its stroke off the rail" <| fun () ->
             for aboveFold in [ -1e6; -900.0; -1.0; 0.0; 801.0; 5000.0; 1e6 ] do
                 let place = Rail.place 800.0 aboveFold
@@ -1262,7 +1262,7 @@ let private uiChecklistTests =
                   Kind = ConversationItemKind.Message
                   Offset = EventOffset.create 1L |> expect
                   Woke = None; Replying = None }
-            let label = ClientModel.landmarkLabel long
+            let label = ClientModel.chapterName long
             Expect.isTrue (label.Length <= 72) (sprintf "cut to a hearable length, got %d" label.Length)
             Expect.isTrue (label.EndsWith "…") "and says it was cut"
 
@@ -1275,18 +1275,18 @@ let private uiChecklistTests =
                   Kind = ConversationItemKind.ActNote { Detail = None; Notable = true }
                   Offset = EventOffset.create 1L |> expect
                   Woke = None; Replying = None }
-            Expect.equal (ClientModel.landmarkLabel act) "PR octo/hello#12 merged" "nothing to cut"
+            Expect.equal (ClientModel.chapterName act) "PR octo/hello#12 merged" "nothing to cut"
 
-        testCase "the rail draws one stroke per mark, and is not there when nothing is marked" <| fun () ->
+        testCase "the rail draws one stroke per chapter, and is not there when there are none" <| fun () ->
             let bare = Support.render representativeModel
-            Expect.isFalse (bare.Contains Dom.Hooks.landmarkRail) "no marks, no rail"
-            let marked = Support.render (withMarks [ "msg-1"; "msg-agent" ])
-            Expect.isTrue (marked.Contains Dom.Hooks.landmarkRail) "a rail once something is marked"
-            Expect.equal (occurrences "data-landmark=" marked) 2 "one stroke per mark"
+            Expect.isFalse (bare.Contains Dom.Hooks.chapterRail) "no chapters, no rail"
+            let divided = Support.render (withChapters [ "msg-1"; "msg-agent" ])
+            Expect.isTrue (divided.Contains Dom.Hooks.chapterRail) "a rail once the session is divided"
+            Expect.equal (occurrences "data-chapter=" divided) 2 "one stroke per chapter"
 
-        // "Mark any of it" is the promise, so the control is on every item that has an id —
-        // a message and an act alike. A rail whose contents were chosen for the reader would
-        // be a table of contents rather than a bookmark.
+        // "Divide it anywhere" is the promise, so the control is on every item that has an id —
+        // a message and an act alike. Chapters chosen for the reader would be somebody else's
+        // account of the session rather than the reader's own.
         testCase "every item in the timeline offers its actions, said and done alike" <| fun () ->
             // Both kinds explicitly: the representative fixture is all messages, so a case
             // counting only it would pass with the control missing from every act note in the
@@ -1313,11 +1313,11 @@ let private uiChecklistTests =
         // A menu entry is READ before it is chosen, so it can say which way it goes — which a
         // toggle wearing `aria-pressed` could not, since a name that flips as well as a state
         // announces itself twice and in two voices.
-        testCase "the bookmark entry names which way it will go" <| fun () ->
+        testCase "the chapter entry names which way it will go" <| fun () ->
             let opened (marks: string list) : string =
-                Support.render { (withMarks marks) with ItemMenu = Some (MessageId.create "msg-1" |> expect) }
-            Expect.isTrue ((opened [ "msg-1" ]).Contains Dom.Text.removeBookmark) "a marked item offers to remove it"
-            Expect.isTrue ((opened []).Contains Dom.Text.addBookmark) "an unmarked one offers to add it"
+                Support.render { (withChapters marks) with ItemMenu = Some (MessageId.create "msg-1" |> expect) }
+            Expect.isTrue ((opened [ "msg-1" ]).Contains Dom.Text.removeChapter) "an item that opens one offers to close it"
+            Expect.isTrue ((opened []).Contains Dom.Text.makeChapter) "one that does not offers to open it"
 
         // The menu exists only while it is open. Kept in the document and hidden, a twenty
         // message conversation would ship twenty menus to the accessibility tree, and twenty

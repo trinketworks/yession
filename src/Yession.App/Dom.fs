@@ -81,20 +81,20 @@ module Dom =
         /// Marks the ref that is a JUMP — a live control, as against the inert one whose source
         /// paged out of the loaded conversation. Presence is the difference a test reads.
         let replyJump = "data-reply-jump"
-        /// The landmark rail beside the timeline, and one stroke on it valued by the message
-        /// it points at. Beside them, the per-item control that puts a mark there — valued by
-        /// the same id, and carrying whether the mark is currently on, so a test can read the
-        /// state without reading a class.
-        let landmarkRail = "data-landmark-rail"
-        let landmark = "data-landmark"
+        /// The chapter rail beside the timeline, and one stroke on it valued by the message
+        /// whose chapter it points at. Beside them, the per-item control that opens a chapter
+        /// there — valued by the same id, and carrying whether this item already opens one, so
+        /// a test can read the state without reading a class.
+        let chapterRail = "data-chapter-rail"
+        let chapter = "data-chapter"
         /// The per-item actions control, valued by the message it acts on, and the menu it
-        /// opens. `data-item-marked` rides the BOOKMARK entry rather than the control: what
+        /// opens. `data-item-is-chapter` rides the CHAPTER entry rather than the control: what
         /// a test wants to read is which way the entry will go, and that is a property of
         /// the entry.
         let itemActions = "data-item-actions"
         let itemMenu = "data-item-menu"
-        let itemBookmark = "data-item-bookmark"
-        let itemMarked = "data-item-marked"
+        let itemChapter = "data-item-chapter"
+        let itemIsChapter = "data-item-is-chapter"
         // What a turn in flight looks like, in the three places it is legible: the mark the
         // agent writes behind (one, in the timeline), the live region that says the same
         // thing to a reader who cannot see it, and the control that stops it.
@@ -348,20 +348,21 @@ module Dom =
         let catchingUp = "Catching up"
         let upToDate = "Up to date"
 
-        // The landmark rail, and the menu a mark is put on from.
+        // The chapter rail, and the menu a chapter is opened from.
         //
-        // "Bookmark" rather than the domain's "landmark": a landmark is what the code calls
-        // the thing because some of them arrive without anybody asking, and a bookmark is
-        // what a person is doing when they put one there. The surfaces say the second.
+        // ONE word, on the surface and in the code alike. It used to be "bookmark" here and
+        // "landmark" underneath — the code's word admitting that some of them arrive without
+        // anybody asking, the surface's word describing the person who put one there — and a
+        // feature with two names is a feature nobody can search for.
         //
         // The entry NAMES which way it goes, unlike the toggle this replaced — a menu entry
         // is read before it is chosen, so it can afford the longer name that a control
         // wearing `aria-pressed` could not.
         let itemActions = "More actions"
-        let addBookmark = "Bookmark"
-        let removeBookmark = "Remove bookmark"
+        let makeChapter = "Make chapter"
+        let removeChapter = "Remove chapter"
         let dismissMenu = "Close menu"
-        let bookmarks = "Bookmarks"
+        let chapters = "Chapters"
 
         /// What a copy control says once it has copied, IN THE BOX that held the value —
         /// the confirmation lands where the eye already is, rather than beside it. A moment
