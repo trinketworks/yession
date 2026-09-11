@@ -815,6 +815,21 @@ let private start () =
         // A caret moved: reported once per frame, to whichever connection there is by then.
         let sendFocus = Render.focusReporter (fun focus -> connectionRef |> Option.iter (fun c -> c.ReportPresence focus))
 
+        // The collaborative text behind a field somebody's caret is in, for the fields worn by
+        // a plain `<input>` — which report char offsets and so need the type to measure them
+        // against. A body reports its own relative selection from inside its editor
+        // (`Links.ReportFocus`) and never asks here.
+        //
+        // Neither path is reconstructed locally: the title is a named root and a chapter's
+        // name rides its chapter's entry, and where each lives is the codec's answer
+        // (`SyncedStateSync`), not a second one kept in step by hand.
+        let textOfField (field: FocusField) : obj option =
+            match field with
+            | Title -> Some (box (doc.getText "title"))
+            | ChapterName messageId ->
+                SyncedStateSync.chapterNameText doc (MessageId.value messageId) |> Option.map box
+            | DraftBody _ | QueueBody _ | TerminalDraftBody _ | TerminalQueuedBody _ -> None
+
         // The Claude connection panel's round-trips (Plan 08). Status is polled: once
         // after connect-probe, after every action, and every few seconds while a flow
         // awaits its callback (completion happens in the claude.ai tab, landing at the
@@ -991,16 +1006,22 @@ let private start () =
                     revealSettings ()
                     refreshClaude ()
                     refreshGitHub ()
-              ReportTitleSelection =
-                fun sel ->
-                    // The title lives in the `title` Y.Text root; turn the input's char offsets
-                    // into relative positions over it, so a title caret survives concurrent edits
-                    // exactly like a body one. rAF-throttled through the same path as bodies.
+              ReportFieldSelection =
+                fun field sel ->
+                    // A collaborative input's caret, turned into relative positions over the
+                    // `Y.Text` behind that field, so it survives concurrent edits exactly like
+                    // a body one. rAF-throttled through the same path as bodies.
+                    //
+                    // No text, no report: a chapter whose entry has not reached this doc yet
+                    // has nothing to measure against, and a position taken against the wrong
+                    // type would encode, relay and decode into a caret somewhere else.
                     let focus =
-                        sel |> Option.map (fun (anchor, head) ->
-                            let title = box (doc.getText "title")
-                            let enc i = ProseMirror.relPosFromTypeIndex title i |> ProseMirror.encodeRel
-                            { Field = Title; Pos = { Anchor = enc anchor; Head = enc head } })
+                        sel
+                        |> Option.bind (fun (anchor, head) ->
+                            textOfField field
+                            |> Option.map (fun text ->
+                                let enc i = ProseMirror.relPosFromTypeIndex text i |> ProseMirror.encodeRel
+                                { Field = field; Pos = { Anchor = enc anchor; Head = enc head } }))
                     sendFocus focus
               ClaudeConnect =
                 fun () ->

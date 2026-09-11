@@ -43,10 +43,17 @@ type ViewActions =
       /// model; the browser also remembers a desktop collapse and moves focus to whichever
       /// control replaces the one that was pressed).
       ToggleNav : unit -> unit
-      /// Broadcast the local selection in the title as `(anchor, head)` UTF-16 indices
-      /// (`None` = caret left the title), so collaborators see the cursor. The Browser turns
-      /// the indices into relative positions and relays them; ephemeral presence.
-      ReportTitleSelection : (int * int) option -> unit
+      /// Broadcast the local selection in a collaborative INPUT — the session title, a
+      /// chapter's name — as `(anchor, head)` UTF-16 indices (`None` = the caret left it),
+      /// so collaborators see the cursor. The Browser resolves the field to the `Y.Text`
+      /// behind it, turns the indices into relative positions over that text, and relays
+      /// them; ephemeral presence.
+      ///
+      /// One action for every such field rather than one per field: the indices mean the
+      /// same thing in each, and a second reporter would be a second thing that can forget
+      /// to clear. Bodies do not come through here — an editor knows its own relative
+      /// selection and reports it through `Links.ReportFocus`.
+      ReportFieldSelection : FocusField -> (int * int) option -> unit
       /// Turn the sidebar column to its settings face, or back (a presentation bit on the
       /// shell root, like the nav); the browser also brings that column on screen and
       /// re-probes the Claude status on toggle, so settings always opens fresh.
@@ -164,7 +171,7 @@ module ViewActions =
           DiscardDraft = ignore
           Interrupt = ignore
           ToggleNav = ignore
-          ReportTitleSelection = ignore
+          ReportFieldSelection = fun _ _ -> ()
           ToggleSettings = ignore
           RevealSettings = ignore
           ClaudeConnect = ignore
@@ -1333,11 +1340,11 @@ module View =
                        .value={titleStr}
                        @input={EvVal(fun v -> dispatch (EditTitleMsg (Ylmish.Text.edit v model.Synced.Title)))}
                        @keydown={Ev(fun e -> commitOnEnter e)}
-                       @keyup={Ev(fun e -> actions.ReportTitleSelection (selectionOf e))}
-                       @click={Ev(fun e -> actions.ReportTitleSelection (selectionOf e))}
-                       @select={Ev(fun e -> actions.ReportTitleSelection (selectionOf e))}
-                       @focus={Ev(fun e -> actions.ReportTitleSelection (selectionOf e))}
-                       @blur={Ev(fun _ -> actions.ReportTitleSelection None)}>
+                       @keyup={Ev(fun e -> actions.ReportFieldSelection Title (selectionOf e))}
+                       @click={Ev(fun e -> actions.ReportFieldSelection Title (selectionOf e))}
+                       @select={Ev(fun e -> actions.ReportFieldSelection Title (selectionOf e))}
+                       @focus={Ev(fun e -> actions.ReportFieldSelection Title (selectionOf e))}
+                       @blur={Ev(fun _ -> actions.ReportFieldSelection Title None)}>
                 {cursors}
                 <span class="{Style.titleId}" data-session-id>{sessionIdText}</span>
               </div>
@@ -1857,7 +1864,12 @@ module View =
                          value="{named}"
                          .value={named}
                          @input={EvVal(fun v -> dispatch (EditChapterNameMsg (item.MessageId, Ylmish.Text.edit v held)))}
-                         @keydown={Ev(fun e -> commitOnEnter e)}>
+                         @keydown={Ev(fun e -> commitOnEnter e)}
+                         @keyup={Ev(fun e -> actions.ReportFieldSelection (ChapterName item.MessageId) (selectionOf e))}
+                         @click={Ev(fun e -> actions.ReportFieldSelection (ChapterName item.MessageId) (selectionOf e))}
+                         @select={Ev(fun e -> actions.ReportFieldSelection (ChapterName item.MessageId) (selectionOf e))}
+                         @focus={Ev(fun e -> actions.ReportFieldSelection (ChapterName item.MessageId) (selectionOf e))}
+                         @blur={Ev(fun _ -> actions.ReportFieldSelection (ChapterName item.MessageId) None)}>
                 </div>"""
         let rows = TimelineProjection.rows model.Conversation model.Timeline
         // Every row resolved to (whose act it is, its rendering) BEFORE grouping, so a row
