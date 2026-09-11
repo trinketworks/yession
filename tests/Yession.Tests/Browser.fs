@@ -2122,6 +2122,30 @@ let editorTests =
                 Expect.isNotNull uncovered "the drawer stood aside, so the chapter is on the screen"
                 return ()
             }
+        // A page that lands with the client still behind is not a picture anybody asked for:
+        // a cold open reads the log from the oldest a page per round trip, pinned to its
+        // foot, and every page rendered was history scrolling past under the eye (116 on a
+        // session of 97 items). Only a browser can say whether the page RENDERED — the model
+        // folds every page either way, and the render is the app's own count — so this
+        // drives the harness's cold open, fifteen pages a round trip apart, well inside the
+        // window a render is held for, and asks how many times the app drew.
+        editorCaseIn 390 844 "pages that leave the client behind are folded but not drawn" (EDITOR_PORT + 40) <| fun page ->
+            async {
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-conversation]")
+                // 60 items of streamed replies is ~1,500 events: fifteen pages of a hundred,
+                // twenty-five milliseconds apart — three hundred and seventy-five of the five
+                // hundred a render is held for.
+                let! report = await (page.EvaluateAsync<string> "() => window.__benchOpenCold(60, 100, 25)")
+                use doc = System.Text.Json.JsonDocument.Parse report
+                let renders = doc.RootElement.GetProperty("renders").GetInt32 ()
+                let items = doc.RootElement.GetProperty("items").GetInt32 ()
+                Expect.isTrue (items >= 60) "every page was folded: the whole conversation is on the page"
+                // The shell, the connection, and the catch-up's end — never one per page. A
+                // ceiling with room in it, because what it pins is the pages NOT drawing;
+                // one per page is fifteen more than this.
+                Expect.isTrue (renders <= 5) (sprintf "the pages in between were folded without a render each — %d renders for fifteen pages" renders)
+                return ()
+            }
         // The name on a rule is an INPUT at rest, which is a promise no markup test can
         // settle: a field that renders but never takes a keystroke, or one whose value the
         // next render puts back, reads in the DOM exactly like one that works. So this types
