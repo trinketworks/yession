@@ -593,6 +593,14 @@ module Client =
         /// the feed's health. Nothing has been read from the network at this point, so a
         /// `FeedStalled` here says the read loop gave up before it had started, which is how a
         /// cold open flashed a red "history paused" at everyone whose store was out of order.
+        ///
+        /// **The whole contiguous run is ONE page**, whatever it was kept as — the transcript
+        /// replay's rule (`TranscriptFetch.replay`), for the same reason: every message is a
+        /// full render, and a session somebody watched live keeps one answer per poll, each
+        /// holding the few events that arrived since. Measured on a session of 97 items: 179
+        /// kept answers, so 179 renders in one task — 1.15s on a laptop, three seconds on a
+        /// phone, spent showing an empty conversation under a "not connected" banner. The
+        /// bench's `open.renders` is what this number is now.
         let replay (cache: HistoryCache) (dispatch: ClientMsg -> unit) : Async<unit> =
             async {
                 let! stored = cache.Stored ()
@@ -609,10 +617,14 @@ module Client =
                         | Error _ | Ok [] -> ()
                         | Ok envelopes -> kept.Add (EventOffset.value (List.head envelopes).Offset, envelopes)
                 let ordered = kept |> Seq.sortBy fst |> List.ofSeq
+                // The run, each event once: two answers that overlap (two tabs fetching one
+                // range) both hold the events where they meet, and a page that carried an
+                // event twice would fold it twice.
+                let page = ResizeArray<EventEnvelope<SessionEvent>> ()
                 let mutable folded : EventOffset option = None
-                let mutable stop = false
+                let mutable gap : EventOffset option = None
                 for (first, envelopes) in ordered do
-                    if not stop then
+                    if gap.IsNone then
                         let expected =
                             match folded with
                             | Some o -> EventOffset.value o + 1L
@@ -621,19 +633,25 @@ module Client =
                             // Where the kept history resumes. Everything between the cursor —
                             // which is `expected - 1`, exactly where the fill has to start —
                             // and this offset is not on this device.
-                            dispatch (LocalHistoryGapMsg (List.head envelopes).Offset)
-                            stop <- true
+                            gap <- Some (List.head envelopes).Offset
                         else
-                            dispatch (
-                                LocalHistoryMsg
-                                    { Events = envelopes
-                                      LastOffset =
-                                        envelopes |> List.tryLast |> Option.map (fun e -> e.Offset)
-                                      // The end of what is KEPT, never a claim about the
-                                      // log: the cursor decides that, and it has not
-                                      // been asked yet.
-                                      IsEnd = true })
-                            folded <- EventOffset.maxOption folded (Some (List.last envelopes).Offset)
+                            for envelope in envelopes do
+                                let fresh =
+                                    match folded with
+                                    | Some o -> EventOffset.value envelope.Offset > EventOffset.value o
+                                    | None -> true
+                                if fresh then
+                                    page.Add envelope
+                                    folded <- Some envelope.Offset
+                if page.Count > 0 then
+                    dispatch (
+                        LocalHistoryMsg
+                            { Events = List.ofSeq page
+                              LastOffset = folded
+                              // The end of what is KEPT, never a claim about the log: the
+                              // cursor decides that, and it has not been asked yet.
+                              IsEnd = true })
+                gap |> Option.iter (fun at -> dispatch (LocalHistoryGapMsg at))
                 // Looked. Said even when nothing was kept and even when a gap cut the walk
                 // short: what the timeline needs to know is whether this client has been to
                 // look, not whether looking found anything.
