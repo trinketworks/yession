@@ -366,9 +366,9 @@ let foldTests =
                 let seen = ResizeArray<GatedCall> ()
                 let folded =
                     RepoSandboxes.create dir (cell (Some (reposOver dir [ r ]))) (cell WorkSandboxes.unavailable) (recordingGate seen) (foldLog ()) noCapabilities
-                let ada = UserRef (UserId.create "ada" |> expect)
+                let ada = Principal.User (UserId.create "ada" |> expect)
                 do! folded.Fold (Some ada)
-                Expect.equal (Authority.effective seen.[0].Authority) ada "whose credential a forward: resolves against"
+                Expect.equal (Authority.principal seen.[0].Authority) (Some ada) "whose credential a forward: resolves against"
             }
 
         // `start_work_sandbox` decides "already running?" before it starts anything, and a
@@ -379,7 +379,7 @@ let foldTests =
             async {
                 let r = repo "octo/hello"
                 let dir = checkout r (Some "version: 2\nsandboxes:\n  dev: {}\n")
-                let seen = ResizeArray<ActorRef option> ()
+                let seen = ResizeArray<Principal option> ()
                 let mutable release : (unit -> unit) option = None
                 // A gate whose FIRST call holds until released, so the first fold is
                 // caught mid-flight with a second one asked for.
@@ -393,7 +393,7 @@ let foldTests =
                         }
                 let folded =
                     RepoSandboxes.create dir (cell (Some (reposOver dir [ r ]))) (cell WorkSandboxes.unavailable) holding (foldLog ()) noCapabilities
-                let ada = UserRef (UserId.create "ada" |> expect)
+                let ada = Principal.User (UserId.create "ada" |> expect)
                 let! first = Async.StartChild (folded.Fold None)
                 do! Async.Sleep 20
                 let! second = Async.StartChild (folded.Fold (Some ada))

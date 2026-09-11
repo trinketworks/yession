@@ -18,7 +18,7 @@ open Yession.Host.Interop
 open Yession.Tests.Support
 
 let private sandbox (raw: string) = SandboxRef.parse raw |> expect
-let private ada = UserRef (UserId.create "ada" |> expect)
+let private ada = Principal.User (UserId.create "ada" |> expect)
 
 // --- cheap: what is admitted, and what a sandbox is told ------------------------------------
 
@@ -191,7 +191,7 @@ type private Lend =
 let private lending (token: string option) : Lend = { Token = token; Refusals = 0 }
 
 let private lenderOf (lend: Lend) : GitGateway.Lender =
-    { Owner = ada
+    { Owner = Some ada
       Resolve = fun () -> async { return lend.Token }
       Refused = fun () -> async { lend.Refusals <- lend.Refusals + 1 } }
 

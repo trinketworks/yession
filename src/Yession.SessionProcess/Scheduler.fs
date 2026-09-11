@@ -65,12 +65,15 @@ module Scheduler =
         (doc: Yjs.Y.Doc)
         (log: EventLog<SessionEvent>)
         (runAgent: unit -> RunAgent option)
-        (capabilitiesFor: AgentTurnId -> ActorRef -> AgentCapabilities)
+        (capabilitiesFor: AgentTurnId -> Principal -> AgentCapabilities)
         // Telemetry sink (Plan 04): passed straight to `AgentTurn.run`. Default `ignore`.
         (emitUsage: AgentTurnId -> AgentUsage -> unit)
         (mintTurnId: unit -> AgentTurnId)
         (mintMessageId: unit -> MessageId)
-        (actorFor: PeerId -> ActorRef)
+        // Who a peer IS, for stamping what they said. A `Principal` because every peer is one
+        // — attributed to a user or standing as itself — and the turn their message starts
+        // runs on that principal's credential.
+        (actorFor: PeerId -> Principal)
         // How a block's output is read back for the agent's terminal digest (Plan 13,
         // stage 3a). Injected rather than reached for, so a session with no transcript
         // storage still runs turns — it simply reports blocks with empty output.
@@ -130,23 +133,24 @@ module Scheduler =
                             //    QueueId as the exactly-once anchor) BEFORE the doc
                             //    removal — a crash here leaves only a repairable
                             //    leftover, never a lost or doubled message.
-                            let mutable lastMessage : MessageSent option = None
+                            let mutable lastMessage : (Principal * MessageSent) option = None
                             for entry in plan.Batch do
+                                let author = actorFor entry.Author
                                 let message =
                                     { MessageId = mintMessageId ()
                                       QueueId = Some entry.QueueId
-                                      Author = actorFor entry.Author
+                                      Author = Principal.toActor author
                                       Body = SyncedStateSync.queuedBodyMarkdown doc entry.QueueId }
-                                let! _ = log.Append (actorFor entry.Author) (MessageSent message)
+                                let! _ = log.Append (Principal.toActor author) (MessageSent message)
                                 consumed <- Set.add (QueueId.value entry.QueueId) consumed
-                                lastMessage <- Some message
+                                lastMessage <- Some (author, message)
                             // 2. Visible: one transaction under the process origin;
                             //    the removal relays to every peer like any update.
                             SyncedStateSync.removeQueued doc plan.Removals
                             // 3. Run one coalesced turn, triggered by the batch tail.
                             match runAgent (), lastMessage with
-                            | Some agent, Some trigger ->
-                                let trigger = AgentTurn.FromMessage trigger
+                            | Some agent, Some (author, trigger) ->
+                                let trigger = AgentTurn.TurnTrigger.ofMessage author trigger
                                 generation <- generation + 1
                                 let turn =
                                     { Generation = generation
@@ -239,7 +243,7 @@ module Scheduler =
                                     terminals
                                     (selectedModel ())
                                     guidance
-                                    (AgentTurn.FromWake (reason, turnActor))
+                                    (AgentTurn.TurnTrigger.ofWake reason turnActor)
                             match running with
                             | Some current when current.Generation = turn.Generation ->
                                 running <- None
@@ -271,7 +275,7 @@ module Scheduler =
                     async {
                         let! _ =
                             log.Append
-                                (actorFor peerId)
+                                (Principal.toActor (actorFor peerId))
                                 (AgentTurnInterrupted { AgentTurnId = turnId; RequestedBy = peerId })
                         return ()
                     })

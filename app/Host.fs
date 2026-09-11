@@ -208,7 +208,8 @@ let startFull
         let mutable attribution : Attribution.State = Attribution.empty
         let recordAttribution (event: SessionEvent) : unit =
             attribution <- Attribution.applyEvent attribution event
-        let actorFor (peerId: PeerId) : ActorRef = Attribution.actorFor attribution.PeerUsers peerId
+        let principalFor (peerId: PeerId) : Principal = Attribution.principalFor attribution.PeerUsers peerId
+        let actorFor (peerId: PeerId) : ActorRef = Principal.toActor (principalFor peerId)
 
         // The terminal projection as the Process itself has it, folded forward on every
         // append. The Process is the log's only writer, so this is complete and ordered by
@@ -528,7 +529,7 @@ let startFull
                         terminals.Open ActorRef.Agent (Attached offer) title
                   IsOpen = terminals.IsOpen }
 
-        let capabilitiesFor (turnId: AgentTurnId) (turnActor: ActorRef) : AgentCapabilities =
+        let capabilitiesFor (turnId: AgentTurnId) (turnActor: Principal) : AgentCapabilities =
             { Terminals =
                 // Bound to THIS turn's actor (Plan 20), which is what a queued command records
                 // as the authority it borrows and what a WOKEN turn later resolves its own
@@ -612,7 +613,7 @@ let startFull
         // `Scheduler` (shared with the property harness); the Host wires it to this
         // session's doc, log, environment capabilities, and command surface.
         let scheduler =
-            Scheduler.create sessionId doc log runAgent capabilitiesFor emitUsage mintTurnId mintMessageId actorFor transcripts.ReadRange guidance initialConsumed
+            Scheduler.create sessionId doc log runAgent capabilitiesFor emitUsage mintTurnId mintMessageId principalFor transcripts.ReadRange guidance initialConsumed
         let drain () = scheduler.Drain ()
         let requestInterrupt = scheduler.RequestInterrupt
 

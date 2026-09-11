@@ -48,7 +48,7 @@ type RepoSandboxes =
       /// asked. `None` is the fold at boot, which nobody triggered — and the one that runs
       /// again, on THEIR authority, when somebody arrives. One fold runs at a time; a
       /// second asked for while one is in flight waits for it.
-      Fold : ActorRef option -> Async<unit>
+      Fold : Principal option -> Async<unit>
       /// What the last fold made of each repo, in a stable order — the query's rows.
       Outcomes : unit -> FoldOutcome list
       /// Sandboxes this session is running that no file declares any more. Named rather
@@ -198,7 +198,7 @@ let create
     let mutable describedRefs : Map<string, string> = Map.empty
     let mutable reposAtRefs : Map<string, string> = Map.empty
 
-    let foldOnce (onBehalfOf: ActorRef option) : Async<unit> =
+    let foldOnce (onBehalfOf: Principal option) : Async<unit> =
         async {
             match repos () with
             | None ->
@@ -378,7 +378,7 @@ let create
     let mutable folding = false
     let waiting = System.Collections.Generic.Queue<unit -> unit> ()
 
-    let fold (onBehalfOf: ActorRef option) : Async<unit> =
+    let fold (onBehalfOf: Principal option) : Async<unit> =
         async {
             if folding then
                 do! Async.FromContinuations (fun (cont, _, _) -> waiting.Enqueue cont)
@@ -407,9 +407,9 @@ let create
 
     /// Consent to what a repo asks for.
     ///
-    /// A PERSON may, and `ActorRef` already says which kind: `UserRef` is somebody who signed
-    /// in, `PeerRef` somebody at a browser who did not. Both are people, and the record keeps
-    /// them apart rather than flattening one into the other — a deployment that trusts
+    /// A PERSON may, and `Principal` is exactly that distinction: a user is somebody who
+    /// signed in, a peer somebody at a browser who did not. Both are people, and the record
+    /// keeps them apart rather than flattening one into the other — a deployment that trusts
     /// whoever reaches it is a real trust model, and calling that person a signed-in user
     /// would be this code pretending to know something it does not.
     ///
@@ -418,9 +418,8 @@ let create
     /// nobody is deciding about, which is the whole reason it is a separate principal.
     let approve (actor: ActorRef) (repo: RepoRef) (granted: string list) : Async<Result<unit, string>> =
         async {
-            match actor with
-            | UserRef _
-            | PeerRef _ ->
+            match Principal.ofActor actor with
+            | Some approver ->
                 match repos () with
                 | None -> return Error "this session has no repos"
                 | Some service ->
@@ -459,9 +458,9 @@ let create
                             // construction: it re-asks for what is already running and
                             // records nothing when nothing changed. It runs on the authority
                             // of whoever approved, which is the truth of why it ran.
-                            do! fold (Some actor)
+                            do! fold (Some approver)
                             return Ok ()
-            | _ ->
+            | None ->
                 return
                     Error
                         "only a person in this session can approve what a repo asks for — an agent cannot consent on a checkout's behalf"

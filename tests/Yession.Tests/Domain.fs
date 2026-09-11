@@ -255,7 +255,7 @@ let private frameSerializationTests =
                       Description = None
                       Checkout = None
                       Forwarded = [ "github" ]
-                      CredentialOwner = Some (UserRef (UserId.create "alice" |> expect))
+                      CredentialOwner = Some (Principal.User (UserId.create "alice" |> expect))
                       Realisation = [ "the socket at /run/docker.sock — this host cannot scope that" ]
                       Actor = ActorRef.Agent }
                   // A repo-declared start, carrying both the things only a sandbox settles:
@@ -316,7 +316,8 @@ let private frameSerializationTests =
                           Checks = ChecksPending
                           Queued = true
                           Mergeable = Some true }
-                      Actor = PeerRef peerId }
+                      Actor = PeerRef peerId
+                      Watcher = Principal.Peer peerId }
                   PrWatched
                     { MessageId = messageId
                       Pr = { Repo = RepoRef.create "octo/hello" |> expect; Number = 13 }
@@ -327,7 +328,10 @@ let private frameSerializationTests =
                           Checks = ChecksNone
                           Queued = false
                           Mergeable = None }
-                      Actor = ActorRef.Agent }
+                      // The agent's watch, on the turn human's credential: the two halves
+                      // differ, and the wire carries both.
+                      Actor = ActorRef.Agent
+                      Watcher = Principal.Peer peerId }
                   PrUnwatched
                     { MessageId = messageId
                       Pr = { Repo = RepoRef.create "octo/hello" |> expect; Number = 12 }
@@ -338,7 +342,7 @@ let private frameSerializationTests =
                       Transition = PrTransition.ChecksFailed
                       State = PrOpen
                       Checks = ChecksRed
-                      Watcher = PeerRef peerId } ]
+                      Watcher = Principal.Peer peerId } ]
             for event in everyCase do
                 let env = { sampleEnvelope with Event = event }
                 let roundTripped =
@@ -346,6 +350,23 @@ let private frameSerializationTests =
                     |> Codec.fromString Codec.sessionEventEnvelope
                     |> expect
                 Expect.equal roundTripped env "event round-trip"
+
+        testCase "a watcher that is not a person does not decode as one" <| fun () ->
+            // The wire shape of a principal is an actor's, so a stored person reads back
+            // unchanged — and a stored agent, which older logs DO carry as the watcher of
+            // an agent-started watch, is refused rather than resolved into something. The
+            // fault this type closed was exactly a watcher the agent; letting one back in
+            // through the decoder would reopen it one restart later.
+            let stored (watcher: string) =
+                sprintf
+                    """{"type":"prTransitioned","payload":{"messageId":"t1","pr":{"repo":"octo/hello","number":12},"transition":"merged","state":"merged","checks":"green","watcher":%s}}"""
+                    watcher
+            Expect.isOk
+                (Codec.fromString Codec.sessionEvent (stored """{"kind":"peer","peerId":"ada"}"""))
+                "a person reads back"
+            Expect.isError
+                (Codec.fromString Codec.sessionEvent (stored """{"kind":"agent"}"""))
+                "the agent is not a watcher this version can represent"
 
         testCase "a MessageSent persisted before Phase 3 (no queueId field) still decodes" <| fun () ->
             // Wire compatibility: event-log lines written by earlier versions carry no
@@ -809,6 +830,7 @@ let private prWatchTests =
     let repo = RepoRef.create "octo/hello" |> expect
     let pr = PrRef.create repo 12 |> expect
     let ada = PeerId.create "ada" |> expect
+    let bob = PeerId.create "bob" |> expect
     let snapshotOf state checks queued : PrSnapshot =
         { State = state; Title = "Add feature"; HeadSha = "abc123"; Checks = checks; Queued = queued; Mergeable = None }
     let snapshot state checks : PrSnapshot = snapshotOf state checks false
@@ -817,10 +839,10 @@ let private prWatchTests =
     /// ...and as one that has: auto merge armed, the last thing anybody was told.
     let queued state checks : PrKnown = { State = state; Checks = checks; Queue = Queued }
     let started state checks : SessionEvent =
-        PrWatched { MessageId = msg "w1"; Pr = pr; Initial = snapshot state checks; Actor = PeerRef ada }
+        PrWatched { MessageId = msg "w1"; Pr = pr; Initial = snapshot state checks; Actor = PeerRef ada; Watcher = Principal.Peer ada }
     let transitioned transition state checks : SessionEvent =
         PrTransitioned
-            { MessageId = msg "t1"; Pr = pr; Transition = transition; State = state; Checks = checks; Watcher = PeerRef ada }
+            { MessageId = msg "t1"; Pr = pr; Transition = transition; State = state; Checks = checks; Watcher = Principal.Peer ada }
     /// The projection folds ENVELOPES, because when a watch last moved is the envelope's
     /// timestamp and nothing in a payload says it. Minute-apart stamps, so a test can tell
     /// which event a `Since` came from.
@@ -1003,7 +1025,7 @@ let private prWatchTests =
             Expect.equal
                 folded.Watches
                 [ { Pr = pr
-                    Watcher = PeerRef ada
+                    Watcher = Principal.Peer ada
                     Known = (known PrOpen ChecksPending)
                     Since = DateTimeOffset (2026, 8, 27, 10, 0, 0, TimeSpan.Zero) } ]
                 "a watch starts from its Initial baseline"
@@ -1019,11 +1041,15 @@ let private prWatchTests =
                     (at
                         9
                         (PrWatched
-                            { MessageId = msg "w2"; Pr = pr; Initial = snapshot PrOpen ChecksNone; Actor = ActorRef.Agent }))
+                            { MessageId = msg "w2"
+                              Pr = pr
+                              Initial = snapshot PrOpen ChecksNone
+                              Actor = ActorRef.Agent
+                              Watcher = Principal.Peer bob }))
             Expect.equal
                 rewatched.Watches
                 [ { Pr = pr
-                    Watcher = ActorRef.Agent
+                    Watcher = Principal.Peer bob
                     Known = (known PrOpen ChecksNone)
                     Since = DateTimeOffset (2026, 8, 27, 10, 9, 0, TimeSpan.Zero) } ]
                 "re-watch replaces in place, newest baseline and watcher win"
@@ -1109,14 +1135,18 @@ let private prWatchTests =
                 | ConversationItemKind.Message -> false
             let envelopes =
                 [ SessionEvent.PrWatched
-                    { MessageId = msg "w1"; Pr = pr; Initial = snapshotOf PrOpen ChecksPending false; Actor = PeerRef ada }
+                    { MessageId = msg "w1"
+                      Pr = pr
+                      Initial = snapshotOf PrOpen ChecksPending false
+                      Actor = PeerRef ada
+                      Watcher = Principal.Peer ada }
                   SessionEvent.PrTransitioned
                     { MessageId = msg "w2"
                       Pr = pr
                       Transition = PrTransition.Merged
                       State = PrMerged
                       Checks = ChecksGreen
-                      Watcher = PeerRef ada }
+                      Watcher = Principal.Peer ada }
                   SessionEvent.PrUnwatched { MessageId = msg "w3"; Pr = pr; Actor = PeerRef ada } ]
                 |> List.mapi (fun i event ->
                     { EventId = EventId.fresh ()
@@ -1150,15 +1180,15 @@ let private authorityTests =
         testCase "a person's act borrows nothing, so it resolves to themselves" <| fun () ->
             let authority = Authority.ofAuthor (PeerRef ada)
             Expect.equal (Authority.onBehalfOf authority) None "there is no authority to state"
-            Expect.equal (Authority.effective authority) (PeerRef ada) "and it runs as its own author"
+            Expect.equal (Authority.principal authority) (Some (Principal.Peer ada)) "and it runs as its own author"
 
         testCase "an agent's act resolves to the authority it was built with, never to itself" <| fun () ->
             // The rule that went missing, as the only thing `agentFor` can produce: the agent
             // is the acting party and the credential is the turn human's. There is no
             // agent-authored act without one, so the omission would not compile.
-            let authority = Authority.agentFor (PeerRef ada)
+            let authority = Authority.agentFor (Principal.Peer ada)
             Expect.equal (Authority.author authority) ActorRef.Agent "the agent is who acted"
-            Expect.equal (Authority.effective authority) (PeerRef ada) "on the turn human's credential"
+            Expect.equal (Authority.principal authority) (Some (Principal.Peer ada)) "on the turn human's credential"
 
         testCase "an act recovered without its owner invents no other one" <| fun () ->
             // The decode path's safe direction, and why it does not go through the authoring
@@ -1168,16 +1198,27 @@ let private authorityTests =
             let recovered = Authority.rehydrate ActorRef.Agent None
             Expect.equal (Authority.onBehalfOf recovered) None "no authority is conjured"
             Expect.equal
-                (Authority.effective recovered)
-                ActorRef.Agent
-                "so it resolves to the agent, which has no scope of its own — not to a person"
+                (Authority.principal recovered)
+                None
+                "so it resolves to nobody — the agent has no scope of its own, and is not a person"
+
+        testCase "an act by something that is not a person resolves to nobody" <| fun () ->
+            // A repo's file at boot, the process, the deployment: none of them is a principal,
+            // so none of them is an author a credential can be resolved for. `None` here is
+            // what a caller reads as "the session's own and the deployment's, and nothing
+            // else" — never as the author standing in.
+            for actor in [ ActorRef.System; ActorRef.SessionProcess; ActorRef.Configured (RepoRef.create "octo/hello" |> expect) ] do
+                Expect.equal
+                    (Authority.principal (Authority.ofAuthor actor))
+                    None
+                    (sprintf "%s holds no credential" (ActorRef.token actor))
     ]
 
 /// A catalogue cache over a stub provider: a frozen clock, a ten-minute window, and one
 /// model. Hoisted because three of the cases below differ only in what they MOVE — the
 /// credential, the clock, or the kept answer itself — and a setup written out three times
 /// hides which line is the case.
-let private keeping (onAsk: unit -> unit) (keyOf: ActorRef -> string option) : ModelCatalogueCache =
+let private keeping (onAsk: unit -> unit) (keyOf: Principal option -> string option) : ModelCatalogueCache =
     ModelCatalogue.keyed
         (fun () -> DateTimeOffset (2026, 1, 1, 0, 0, 0, TimeSpan.Zero))
         (TimeSpan.FromMinutes 10.0)
@@ -1224,8 +1265,8 @@ let private modelTests =
             async {
                 let mutable asked = 0
                 let cache = keeping (fun () -> asked <- asked + 1) (fun _ -> Some "alice")
-                let! first = cache.List ActorRef.Agent
-                let! second = cache.List ActorRef.Agent
+                let! first = cache.List None
+                let! second = cache.List None
                 Expect.equal asked 1 "the provider is asked once"
                 Expect.equal second first "and every later reader gets the same answer"
             }
@@ -1247,9 +1288,9 @@ let private modelTests =
                                 if asked = 1 then return Error "not connected"
                                 else return Ok [ AgentModel.create (ModelId.create "a-model" |> expect) "A" ]
                             })
-                let! failed = cache.List ActorRef.Agent
+                let! failed = cache.List None
                 Expect.isError failed "the first ask reports why it could not"
-                let! second = cache.List ActorRef.Agent
+                let! second = cache.List None
                 Expect.isOk second "and the next ask tries again"
             }
 
@@ -1261,9 +1302,9 @@ let private modelTests =
                 let mutable asked = 0
                 let mutable who = "alice"
                 let cache = keeping (fun () -> asked <- asked + 1) (fun _ -> Some who)
-                let! _ = cache.List ActorRef.Agent
+                let! _ = cache.List None
                 who <- "bob"
-                let! _ = cache.List ActorRef.Agent
+                let! _ = cache.List None
                 Expect.equal asked 2 "a different credential is a different question"
             }
 
@@ -1283,12 +1324,12 @@ let private modelTests =
                                 asked <- asked + 1
                                 return Ok [ AgentModel.create (ModelId.create "a-model" |> expect) "A" ]
                             })
-                let! _ = cache.List ActorRef.Agent
+                let! _ = cache.List None
                 at <- at.AddMinutes 9.0
-                let! _ = cache.List ActorRef.Agent
+                let! _ = cache.List None
                 Expect.equal asked 1 "inside the window the kept answer stands"
                 at <- at.AddMinutes 2.0
-                let! _ = cache.List ActorRef.Agent
+                let! _ = cache.List None
                 Expect.equal asked 2 "past it the provider is asked again"
             }
 
@@ -1298,9 +1339,9 @@ let private modelTests =
                 // different account. Whoever holds that state says so.
                 let mutable asked = 0
                 let cache = keeping (fun () -> asked <- asked + 1) (fun _ -> Some "alice")
-                let! _ = cache.List ActorRef.Agent
+                let! _ = cache.List None
                 cache.Forget ()
-                let! _ = cache.List ActorRef.Agent
+                let! _ = cache.List None
                 Expect.equal asked 2 "what was forgotten is asked for again"
             }
     ]

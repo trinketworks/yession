@@ -205,7 +205,7 @@ type ReposConfig =
       /// The GitHub token for the network verbs, resolved for the CREDENTIAL actor a
       /// caller names (Plan 08 precedence, applied by the composition). None =
       /// anonymous — public repos still clone; a private one fails with git's own words.
-      ResolveToken : ActorRef -> Async<string option>
+      ResolveToken : Principal option -> Async<string option>
       /// A network verb failed while spending the credential resolved for this actor.
       ///
       /// Beside `ResolveToken` deliberately, because they are two halves of one story: a
@@ -214,7 +214,7 @@ type ReposConfig =
       /// decides what the failure MEANS — git's stderr cannot tell "your token expired" from
       /// "that repo does not exist" (`Repository not found` is what github.com says for
       /// both), so the composition asks the provider, which is the only place that knows.
-      OnNetworkFailure : ActorRef -> string -> Async<unit>
+      OnNetworkFailure : Principal option -> string -> Async<unit>
       Log : EventLog<SessionEvent> }
 
 /// Who is calling a mutating/network verb. The two halves genuinely differ for the
@@ -224,7 +224,7 @@ type ReposConfig =
 [<RequireQualifiedAccess>]
 type RepoCaller =
     { Actor : ActorRef
-      Credential : ActorRef }
+      Credential : Principal option }
 
 /// The Process-side repo manager. Caller-taking members append the acting party onto
 /// the event; the read-only inspectors take none because they record nothing.
@@ -637,8 +637,8 @@ let create (config: ReposConfig) : Result<ReposService, string> =
 /// The agent-facing capability set for one turn: events attribute the AGENT (it is
 /// the acting party), the token is the TURN HUMAN's (Plan 08 — no borrowing across
 /// actors, and the agent has no scope of its own).
-let agentCaller (turnActor: ActorRef) : RepoCaller =
-    { Actor = ActorRef.Agent; Credential = turnActor }
+let agentCaller (turnActor: Principal) : RepoCaller =
+    { Actor = ActorRef.Agent; Credential = Some turnActor }
 
 // --- the `repos` query (Plan 15) ----------------------------------------------------------
 // What was the Repos PANEL is now a registered query, and the panel's three write actions

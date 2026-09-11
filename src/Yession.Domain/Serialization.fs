@@ -124,6 +124,20 @@ module Codec =
                 | "configured" -> Decode.field "repo" repoRef.Decode |> Decode.map Configured
                 | other -> Decode.fail (sprintf "Unknown actor kind: %s" other)) }
 
+    /// A principal on the wire is the actor it is — the same tagged object, so a field that
+    /// narrowed from `ActorRef` to `Principal` reads every event already written by a
+    /// person. What it refuses is the other kinds: a stored `agent` where a principal is
+    /// required is a fact this version cannot represent, and a decode that answered
+    /// something else for it would be the fault the narrowing closed, coming back in.
+    let principal : Codec<Principal> =
+        { Encode = Principal.toActor >> actor.Encode
+          Decode =
+            actor.Decode
+            |> Decode.andThen (fun a ->
+                match Principal.ofActor a with
+                | Some p -> Decode.succeed p
+                | None -> Decode.fail (sprintf "Not a principal: %s" (ActorRef.token a))) }
+
     let terminalId : Codec<TerminalId> =
         { Encode = TerminalId.value >> Encode.string
           Decode = viaSmartCtor TerminalId.create Decode.string }
@@ -139,7 +153,7 @@ module Codec =
     /// how the three came to disagree in the first place.
     let private authorityFields (authority: Authority) =
         [ "author", actor.Encode (Authority.author authority)
-          "onBehalfOf", Encode.option actor.Encode (Authority.onBehalfOf authority) ]
+          "onBehalfOf", Encode.option principal.Encode (Authority.onBehalfOf authority) ]
 
     /// Recovered, never authored — `rehydrate`'s reason. `onBehalfOf` is optional on the way
     /// in because events written before Plan 20 have no such key, and a `Required` field would
@@ -149,7 +163,7 @@ module Codec =
     let private authorityOf (get: Decode.IGetters) : Authority =
         Authority.rehydrate
             (get.Required.Field "author" actor.Decode)
-            (get.Optional.Field "onBehalfOf" (Decode.option actor.Decode) |> Option.flatten)
+            (get.Optional.Field "onBehalfOf" (Decode.option principal.Decode) |> Option.flatten)
 
     let private sessionCreated : Codec<SessionCreated> =
         { Encode = fun (p: SessionCreated) -> Encode.object [ "sessionId", sessionId.Encode p.SessionId ]
@@ -1077,13 +1091,15 @@ module Codec =
                     [ "messageId", messageId.Encode p.MessageId
                       "pr", prRef.Encode p.Pr
                       "initial", prSnapshot.Encode p.Initial
-                      "actor", actor.Encode p.Actor ]
+                      "actor", actor.Encode p.Actor
+                      "watcher", principal.Encode p.Watcher ]
           Decode =
             Decode.object (fun get ->
                 { PrWatched.MessageId = get.Required.Field "messageId" messageId.Decode
                   PrWatched.Pr = get.Required.Field "pr" prRef.Decode
                   PrWatched.Initial = get.Required.Field "initial" prSnapshot.Decode
-                  PrWatched.Actor = get.Required.Field "actor" actor.Decode }) }
+                  PrWatched.Actor = get.Required.Field "actor" actor.Decode
+                  PrWatched.Watcher = get.Required.Field "watcher" principal.Decode }) }
 
     let private prUnwatched : Codec<PrUnwatched> =
         { Encode =
@@ -1107,7 +1123,7 @@ module Codec =
                       "transition", prTransition.Encode p.Transition
                       "state", prState.Encode p.State
                       "checks", checksRollup.Encode p.Checks
-                      "watcher", actor.Encode p.Watcher ]
+                      "watcher", principal.Encode p.Watcher ]
           Decode =
             Decode.object (fun get ->
                 { PrTransitioned.MessageId = get.Required.Field "messageId" messageId.Decode
@@ -1115,7 +1131,7 @@ module Codec =
                   PrTransitioned.Transition = get.Required.Field "transition" prTransition.Decode
                   PrTransitioned.State = get.Required.Field "state" prState.Decode
                   PrTransitioned.Checks = get.Required.Field "checks" checksRollup.Decode
-                  PrTransitioned.Watcher = get.Required.Field "watcher" actor.Decode }) }
+                  PrTransitioned.Watcher = get.Required.Field "watcher" principal.Decode }) }
 
     let private sandboxSetupQueued : Codec<SandboxSetupQueued> =
         { Encode =
@@ -1151,7 +1167,7 @@ module Codec =
                       // credential VALUE, which is the point: the log is replicated to
                       // every peer, and a shape that could hold a token eventually does.
                       "forwarded", Encode.list (p.Forwarded |> List.map Encode.string)
-                      "credentialOwner", Encode.option actor.Encode p.CredentialOwner
+                      "credentialOwner", Encode.option principal.Encode p.CredentialOwner
                       "realisation", Encode.list (p.Realisation |> List.map Encode.string)
                       "actor", actor.Encode p.Actor ]
           Decode =
@@ -1168,7 +1184,7 @@ module Codec =
                   WorkSandboxStarted.Checkout =
                     get.Optional.Field "checkout" (Decode.option Decode.string) |> Option.flatten
                   WorkSandboxStarted.Forwarded = get.Required.Field "forwarded" (Decode.list Decode.string)
-                  WorkSandboxStarted.CredentialOwner = get.Required.Field "credentialOwner" (Decode.option actor.Decode)
+                  WorkSandboxStarted.CredentialOwner = get.Required.Field "credentialOwner" (Decode.option principal.Decode)
                   // Optional on the way in, and this is the only backward-compatible reading
                   // available: a start written before this field existed has no answer, and
                   // absent is the right one — nothing was measured, so nothing is claimed.

@@ -138,7 +138,7 @@ module SyncedStateSync =
               "onBehalfOf",
               Encode.string
                   (AVal.constant
-                      (Authority.onBehalfOf q.Authority |> Option.map ActorRef.token |> Option.defaultValue ""))
+                      (Authority.onBehalfOf q.Authority |> Option.map Principal.token |> Option.defaultValue ""))
               "author", Encode.string (AVal.constant (ActorRef.token (Authority.author q.Authority)))
               "order", Encode.float (AVal.constant q.Order)
               // `"120x40"`, the same spelling the transcript's `r` record uses
@@ -373,7 +373,7 @@ module SyncedStateSync =
                       Authority =
                         Authority.rehydrate
                             author
-                            (f.OnBehalfOf |> Option.bind ActorRef.ofToken)
+                            (f.OnBehalfOf |> Option.bind Principal.ofToken)
                       // Absent reads as foreground, which is what every entry a person
                       // writes is and what every entry written before Plan 20 was.
                       Background = (f.Background = Some "true")
@@ -689,7 +689,7 @@ module SyncedStateSync =
                 if background then entry.set ("background", box "true") |> ignore
                 if stdin then entry.set ("stdin", box "true") |> ignore
                 Authority.onBehalfOf authority
-                |> Option.iter (fun actor -> entry.set ("onBehalfOf", box (ActorRef.token actor)) |> ignore)),
+                |> Option.iter (fun principal -> entry.set ("onBehalfOf", box (Principal.token principal)) |> ignore)),
             processOrigin)
 
     /// Remove consumed pending entries in one transaction under the process origin — the

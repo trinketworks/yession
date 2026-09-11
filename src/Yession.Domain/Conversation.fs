@@ -446,7 +446,7 @@ module ConversationProjection =
                 match s.Forwarded, s.CredentialOwner with
                 | [], _ -> None
                 | names, Some owner ->
-                    Some (sprintf "forwarding %s from %s" (String.concat ", " names) (ActorRef.token owner))
+                    Some (sprintf "forwarding %s from %s" (String.concat ", " names) (Principal.token owner))
                 | names, None -> Some (sprintf "forwarding %s" (String.concat ", " names))
             // And where this host could not give what the sandbox's resources named. On the
             // start NOTE rather than a note of its own, because it is a property of THIS
@@ -706,7 +706,7 @@ module ConversationProjection =
                 Items =
                     proj.Items
                     @ [ { MessageId = p.MessageId
-                          Author = p.Watcher
+                          Author = Principal.toActor p.Watcher
                           Body = sprintf "PR %s %s" (PrRef.render p.Pr) (PrTransition.describe p.Transition)
                           Status = Complete
                           Kind = ConversationItemKind.ActNote { Detail = None; Notable = true }

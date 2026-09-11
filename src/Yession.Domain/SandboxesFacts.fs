@@ -85,8 +85,10 @@ and WorkSandboxStarted =
       /// Whose credentials were forwarded. Distinct from `Actor` on purpose: for an
       /// agent-issued start the AGENT is the acting party while the credentials are the
       /// turn human's (Plan 08 — no borrowing, and the agent has no scope of its own).
-      /// `None` when nothing was forwarded, because then nobody's were.
-      CredentialOwner : ActorRef option
+      /// `None` when nothing was forwarded, because then nobody's were — or when what was
+      /// forwarded was the deployment's own, which a file's boot fold reaches with nobody
+      /// named.
+      CredentialOwner : Principal option
       /// Where this host could not give exactly what the sandbox's resources named, one line
       /// each. Empty is the ordinary case and says nothing.
       ///

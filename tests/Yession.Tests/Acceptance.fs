@@ -88,7 +88,7 @@ let private representativeModel : ClientModel =
                     // What the product actually writes for an agent command: the agent acts,
                     // on the turn human's authority. There is no other agent-shaped way to
                     // build one.
-                    Authority = Authority.agentFor (PeerRef ada)
+                    Authority = Authority.agentFor (Principal.Peer ada)
                     Order = 1.0
                     Background = false
                     Stdin = false

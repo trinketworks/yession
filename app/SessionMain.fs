@@ -458,7 +458,7 @@ let mutable private queryRegistry : Queries.QueryRegistry = Queries.empty
 /// told to whoever is reading. Every fold this file triggers goes through here — the
 /// boot one, a repo verb's, an arrival's — so "fold, then invalidate the two queries it
 /// feeds" is written once rather than at each of them.
-let private foldFor (authorities: ActorRef option list) : Async<unit> =
+let private foldFor (authorities: Principal option list) : Async<unit> =
     async {
         for onBehalfOf in authorities do
             do! repoSandboxes.Fold onBehalfOf
@@ -549,7 +549,7 @@ let private mcpServers =
 /// targets. Two copies of this precedence would eventually disagree, and the way they would
 /// disagree is the worst one available: marking a credential nobody used, while the one that
 /// actually failed goes on reading as healthy.
-let private githubTargetFor (credentialActor: ActorRef) : SecretId option =
+let private githubTargetFor (credentialActor: Principal option) : SecretId option =
     GitHubConnection.turnTargets sessionId credentialActor
     |> List.filter (fun target -> Map.containsKey target connectionStatus)
     |> List.tryHead
@@ -565,10 +565,10 @@ let private ambientGitHubToken () : string option =
 /// at a sandbox's start so the refusal is said then, in words; the VALUE is resolved later,
 /// per request, by `resolveGitHubToken`, and a connected credential that will not resolve is
 /// reported there as the fault it is.
-let private holdsGitHubToken (credentialActor: ActorRef) : bool =
+let private holdsGitHubToken (credentialActor: Principal option) : bool =
     (githubTargetFor credentialActor).IsSome || (ambientGitHubToken ()).IsSome
 
-let private resolveGitHubToken (credentialActor: ActorRef) : Async<string option> =
+let private resolveGitHubToken (credentialActor: Principal option) : Async<string option> =
     async {
         let targets = githubTargetFor credentialActor |> Option.toList
         let ambient = ambientGitHubToken
@@ -598,7 +598,7 @@ let private resolveGitHubToken (credentialActor: ActorRef) : Async<string option
 ///
 /// One extra request, only on a path that has already failed — and it is what turns four
 /// days of a green panel over a dead credential into a panel that says "sign in again".
-let private reportGitHubNetworkFailure (credentialActor: ActorRef) (_gitSaid: string) : Async<unit> =
+let private reportGitHubNetworkFailure (credentialActor: Principal option) (_gitSaid: string) : Async<unit> =
     async {
         match connectionsClient, githubTargetFor credentialActor with
         | Some client, Some target ->
@@ -672,12 +672,12 @@ let private commandServices : Commands.CommandServices =
 /// The stored Claude credential this actor's calls run on, if any. Named once, for the same
 /// reason `githubTargetFor` is: spending a credential and reporting one refused must never
 /// pick different targets.
-let private claudeTargetFor (actor: ActorRef) : SecretId option =
+let private claudeTargetFor (actor: Principal option) : SecretId option =
     ClaudeConnection.turnTargets sessionId actor
     |> List.filter (fun target -> Map.containsKey target connectionStatus)
     |> List.tryHead
 
-let private resolveCredential (actor: ActorRef) : Async<Result<(string * string) option, string>> =
+let private resolveCredential (actor: Principal option) : Async<Result<(string * string) option, string>> =
     async {
         let targets = claudeTargetFor actor |> Option.toList
         match connectionsClient, targets with
@@ -774,7 +774,7 @@ let private dispatching (inner: (string * string) option -> RunAgent) : RunAgent
             // said nothing failed into a silent red item — which by then meant every such
             // failure was printed twice, once as the body and once joined to it.
             let fail (reason: string) = AgentFailed (reason, None)
-            match! resolveCredential context.TurnActor with
+            match! resolveCredential (Some context.TurnActor) with
             | Ok credential -> return! inner credential context capabilities signal onChunk
             | Error reason -> return fail reason
         }
@@ -882,7 +882,7 @@ Async.StartImmediate (
             GitHubPrs.fetchOver githubApi (githubSpending spend)
         do
             let recordPrTransitions
-                (watcher: ActorRef)
+                (watcher: Principal)
                 (pr: PrRef)
                 (snapshot: PrSnapshot)
                 (transitions: PrTransition list)

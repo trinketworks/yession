@@ -182,9 +182,18 @@ type PrWatched =
       /// makes a restart re-announce nothing and a merge that happened while the process
       /// was down still get announced: the log says what was last known, not memory.
       Initial : PrSnapshot
-      /// Whose watch: the note's attribution, the credential every later poll resolves
-      /// on behalf of, and the actor any wake this watch causes would run as.
-      Actor : ActorRef }
+      /// Who asked: the note's attribution. The agent, when it was the agent's `watch_pr`.
+      Actor : ActorRef
+      /// Whose watch it is: the credential every later poll resolves on behalf of, and the
+      /// principal any wake this watch causes runs as. The turn human's when the agent
+      /// asked — the same split `RepoCaller` and `SandboxCaller` make, and for the same
+      /// reason: the agent acts, and has no credential of its own.
+      ///
+      /// These were ONE field, and it held whoever appended the event. For a watch the agent
+      /// started that was the agent, so the polls ran on nobody's credential and the wake
+      /// the merge caused dispatched a turn as the agent, which failed saying "sign in".
+      /// A `Principal` cannot be the agent, which is what closes it.
+      Watcher : Principal }
 
 and PrUnwatched =
     { MessageId : MessageId
@@ -203,4 +212,6 @@ and PrTransitioned =
       /// and so the fold can advance its baseline from the event alone.
       State : PrState
       Checks : ChecksRollup
-      Watcher : ActorRef }
+      /// `PrWatched.Watcher`, carried forward: whose credential noticed, and who the turn
+      /// this wakes runs as.
+      Watcher : Principal }
