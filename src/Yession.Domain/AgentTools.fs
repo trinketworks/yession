@@ -44,13 +44,14 @@ module private ToolArgs =
     /// default one, which is what the optional parameter degrades to.
     /// `execute_command`'s arguments: the line, where to run it (a terminal by id, or a
     /// sandbox's own), and whether to wait.
-    let commandWhere (json: string) : Result<string * string option * string option * bool, string> =
+    let commandWhere (json: string) : Result<string * string option * string option * bool * bool, string> =
         read
             (Decode.object (fun get ->
                 get.Required.Field "command" Decode.string,
                 get.Optional.Field "terminal" Decode.string |> Option.filter (fun s -> s <> ""),
                 get.Optional.Field "sandbox" Decode.string |> Option.filter (fun s -> s <> ""),
-                get.Optional.Field "background" Decode.bool |> Option.defaultValue false))
+                get.Optional.Field "background" Decode.bool |> Option.defaultValue false,
+                get.Optional.Field "stdin" Decode.bool |> Option.defaultValue false))
             json
 
     /// `start_work_sandbox`'s pair: the sandbox name, and the credentials to forward.
@@ -289,6 +290,7 @@ module AgentTools =
         (terminal: string option)
         (sandbox: string option)
         (background: bool)
+        (stdin: bool)
         : Async<ToolAnswer> =
         async {
             // A terminal already sits in a sandbox, so naming both is a question with two
@@ -303,7 +305,7 @@ module AgentTools =
             match target with
             | Error e -> return ToolAnswer.text e
             | Ok target ->
-                match! capabilities.Terminals.Execute { Command = command; Target = target; Background = background } with
+                match! capabilities.Terminals.Execute { Command = command; Target = target; Background = background; Stdin = stdin } with
                 | Ok outcome -> return { Text = renderOutcome outcome; Block = outcome.Block; Stream = None }
                 | Error reason -> return ToolAnswer.text (sprintf "could not run the command: %s" reason)
         }
@@ -582,20 +584,24 @@ module AgentTools =
                 }
         [ tool
             "execute_command"
-            "Run a shell command in one of this session's terminals, where the people in the session can see it and edit it while it queues, and every run is on the record. This is the only way to run anything. Pass `sandbox` to run in a named work sandbox (start_work_sandbox creates one); omit it for the default sandbox, which is where everything runs unless you say otherwise. Each sandbox has one terminal of yours that runs one command at a time; pass `terminal` to run in a terminal you opened with open_terminal instead, which is how work runs beside something long. It waits for the result and returns the exit code and output; if the terminal is busy, or the command is still going, it says so and returns a handle for check_pending instead of hanging. Your commands have no stdin: anything that reads it gets end-of-file at once, so name files and pass flags rather than expecting a prompt to answer. Read what it returns: every answer states which of those happened."
+            "Run a shell command in one of this session's terminals, where the people in the session can see it and edit it while it queues, and every run is on the record. This is the only way to run anything. Pass `sandbox` to run in a named work sandbox (start_work_sandbox creates one); omit it for the default sandbox, which is where everything runs unless you say otherwise. Each sandbox has one terminal of yours that runs one command at a time; pass `terminal` to run in a terminal you opened with open_terminal instead, which is how work runs beside something long. It waits for the result and returns the exit code and output; if the terminal is busy, or the command is still going, it says so and returns a handle for check_pending instead of hanging. Your commands have no stdin unless you pass `stdin: true`: anything that reads it gets end-of-file at once, so name files and pass flags rather than expecting a prompt — and when a command genuinely has to prompt, pass `stdin: true` and answer it. Read what it returns: every answer states which of those happened."
             [ ToolField.required "command" "string" "the shell command line to run, e.g. \"npm test -- --watch=false\""
               ToolField.optional "terminal" "string" "the id of a terminal to run in, as open_terminal or list_terminals gave it; omit for your own terminal in the sandbox"
               ToolField.optional "sandbox" "string" "the work sandbox to run in, e.g. \"test\"; omit for the default one"
               ToolField.optional
                   "background"
                   "boolean"
-                  "true to start it and carry on without waiting — use it for long work, and for work that can run alongside other work. You will be told when it finishes." ]
+                  "true to start it and carry on without waiting — use it for long work, and for work that can run alongside other work. You will be told when it finishes."
+              ToolField.optional
+                  "stdin"
+                  "boolean"
+                  "true to let the command read the terminal's input, for the rare command that has to prompt; omit it and anything that reads stdin gets end-of-file at once" ]
             (fun args ->
                 async {
                     match ToolArgs.commandWhere args with
                     | Error e -> return Error e
-                    | Ok (command, terminal, sandbox, background) ->
-                        return! answered (executeCommand capabilities command terminal sandbox background)
+                    | Ok (command, terminal, sandbox, background, stdin) ->
+                        return! answered (executeCommand capabilities command terminal sandbox background stdin)
                 })
 
           // The terminal verbs a person already has (Plan 20, stage 3). Deliberately the same

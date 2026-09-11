@@ -48,12 +48,15 @@ module BlockStdin =
 /// Whose blocks read from the terminal.
 module BlockStdinPolicy =
 
-    /// The agent's do not. It cannot type into a terminal — its commands arrive whole, as
-    /// blocks — so a command of its that reads stdin is never going to be answered, and
-    /// end-of-file is the true state of affairs said promptly rather than discovered by a
-    /// timeout. Everyone else's do: a person queuing `sudo` is at the keyboard for the
-    /// password prompt, and a repo's `setup:` runs in a terminal a person can still reach.
-    let forAuthor (author: ActorRef) : BlockStdin =
+    /// The agent's do not, unless it ASKED. Its commands arrive whole, as blocks, and the one
+    /// that hung a real session's terminal for a day (`perl -i` with no filename) was not
+    /// meant to read anything — so an agent that says nothing gets end-of-file, the true
+    /// state of affairs said promptly rather than discovered by a timeout. An agent that
+    /// knows it is running a prompt says so (`stdin: true` on `execute_command`), and then
+    /// the terminal is its to answer. Everyone else's read the terminal whatever they said: a
+    /// person queuing `sudo` is at the keyboard for the password prompt, and a repo's
+    /// `setup:` runs in a terminal a person can still reach.
+    let forAct (author: ActorRef) (askedForStdin: bool) : BlockStdin =
         match author with
-        | ActorRef.Agent -> BlockStdin.Closed
+        | ActorRef.Agent when not askedForStdin -> BlockStdin.Closed
         | _ -> BlockStdin.Terminal
