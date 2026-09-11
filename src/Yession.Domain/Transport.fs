@@ -172,6 +172,10 @@ type FocusField =
     | TerminalDraftBody of TerminalId * PeerId
     /// A queued terminal command's line, still editable while it waits for approval.
     | TerminalQueuedBody of QueueId
+    /// A chapter's name, on the rule that opens it. The name is collaborative text like the
+    /// session title, so it carries carets for the same reason: a name two people are writing
+    /// at once is one nobody can see the other in.
+    | ChapterName of MessageId
 
 /// A peer's caret+selection within its focused field, as base64-encoded Yjs *relative positions*
 /// over that field's shared type (the title `Y.Text` / a body `Y.XmlFragment`). Relative positions

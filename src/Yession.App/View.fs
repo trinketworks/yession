@@ -510,6 +510,13 @@ module View =
         | QueueBody _ -> Dom.Text.atQueued, Dom.Text.editingQueued
         | TerminalDraftBody _ -> Dom.Text.atTerminal, terminalWords ()
         | TerminalQueuedBody _ -> Dom.Text.atTerminalQueued, terminalWords ()
+        // A chapter is NAMED when this client has the message it opens, for the same reason a
+        // terminal is — and says plainly that it does not when it does not.
+        | ChapterName messageId ->
+            Dom.Text.atChapter,
+            ClientModel.chapterNameAt messageId model
+            |> Option.map Dom.Text.namingChapter
+            |> Option.defaultValue Dom.Text.atSomeChapter
 
     /// Who is in this session — and, when the agent is not, the ONE place the product asks for
     /// a connection. A missing member belongs in the membership list, so all three agent states
