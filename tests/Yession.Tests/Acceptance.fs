@@ -132,8 +132,7 @@ let private representativeModel : ClientModel =
       Presence = Map.ofList [ bob, { DisplayName = "brave-owl"; Focus = { Field = Title; Pos = { Anchor = "AQI="; Head = "AwQ=" } } } ]
       // The roster names a draft's author even when they are not here: a label, never a peer id.
       Peers = Map.ofList [ ada, "swift-heron"; bob, "brave-owl" ]
-      PeerUsers = Map.empty
-      UserPeers = Map.empty
+      Attribution = Attribution.empty
       Composer = Unchosen
       Environment = EnvironmentNotStarted
       Terminals =
@@ -2020,8 +2019,7 @@ let private semanticsTests =
                 Support.render
                     { representativeModel with
                         Peers = Map.ofList [ bob, "quiet-otter" ]
-                        PeerUsers = Map.ofList [ bob, carol ]
-                        UserPeers = Map.ofList [ carol, bob ]
+                        Attribution = { PeerUsers = Map.ofList [ bob, carol ]; UserPeers = Map.ofList [ carol, bob ] }
                         Presence = Map.empty
                         Conversation =
                             { Items =
@@ -2047,8 +2045,7 @@ let private semanticsTests =
                 Support.render
                     { representativeModel with
                         Peers = Map.empty
-                        PeerUsers = Map.empty
-                        UserPeers = Map.empty
+                        Attribution = Attribution.empty
                         Presence = Map.empty
                         Conversation =
                             { Items =
@@ -2078,8 +2075,7 @@ let private semanticsTests =
                 Support.render
                     { representativeModel with
                         Peers = Map.ofList [ bob, "lucid-tern"; dora, "warm-tern" ]
-                        PeerUsers = Map.ofList [ bob, carol; dora, carol ]
-                        UserPeers = Map.ofList [ carol, dora ]
+                        Attribution = { PeerUsers = Map.ofList [ bob, carol; dora, carol ]; UserPeers = Map.ofList [ carol, dora ] }
                         Presence = Map.empty
                         Conversation =
                             { Items =
