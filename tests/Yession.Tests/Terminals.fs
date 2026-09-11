@@ -1860,15 +1860,20 @@ let private managerTests =
                     |> List.choose (function TranscriptRecordLine r when r.Kind = kind -> Some r.Data | _ -> None)
                 Expect.equal (recordsOf TranscriptInput) [ "echo hello\r\n" ] "what was typed is recorded too"
                 Expect.equal (recordsOf TranscriptOutput) [ "hello\r\n" ] "stdout"
-                Expect.equal (recordsOf TranscriptStderr) [ "warn\r\n" ] "and stderr, still told apart"
+                // This fixture's sandbox has no pty, and a terminal says so at open (stderr,
+                // line 1) — before the block, so the block's own stderr is what follows it.
+                Expect.equal
+                    (recordsOf TranscriptStderr |> List.filter (fun said -> not (said.StartsWith "yession: no shell")))
+                    [ "warn\r\n" ]
+                    "and stderr, still told apart"
                 match transcript with
                 | TranscriptHeaderLine _ :: _ -> ()
                 | other -> failwithf "a transcript starts with its header, got %A" other
 
                 Expect.equal
                     (records |> Seq.map (fun (_, seq, _) -> seq) |> List.ofSeq)
-                    [ 1; 2; 3 ]
-                    "every record is broadcast with the line index it was written at"
+                    [ 1; 2; 3; 4 ]
+                    "every record is broadcast with the line index it was written at — the no-shell notice first"
             }
 
         testCaseAsync "output captured off a pipe is recorded as a tty would have shown it" <|
@@ -3346,6 +3351,34 @@ let private shellProfileTests =
     let ptyDirectories (ptySpawned: ResizeArray<SandboxExec>) =
         ptySpawned |> Seq.map (fun e -> e.WorkingDirectory) |> List.ofSeq
     testList "The shell profile" [
+
+        // A terminal whose shell would not start says so in its own transcript, naming the
+        // reason, and its write refusal points at that. Silence here is how a whole host ran
+        // per-block for weeks with nobody told — the reason was one line nobody could read.
+        testCaseAsync "a terminal whose shell would not start says why, and its refusal points there" <|
+            async {
+                let log = newLog ()
+                let environment, _, release = blockingEnvironment ()
+                let openTranscript, linesOf, _, _, readTranscript = recordingTranscripts ()
+                let terminals, _, _ = makeTerminals log environment openTranscript readTranscript []
+                let! opened = terminals.Open (PeerRef ada) (SandboxShell SandboxRef.defaultRef) (TerminalTitle.fromProse "build")
+                let id = opened |> expect
+                let said =
+                    linesOf id
+                    |> List.choose (function TranscriptRecordLine r when r.Kind = TranscriptStderr -> Some r.Data | _ -> None)
+                    |> String.concat ""
+                Expect.stringContains said "no shell" "the transcript says the terminal has none"
+                Expect.stringContains said "no pty in this fixture" "and names the reason the sandbox gave"
+                // The author of a running block may type into it — and here there is no
+                // shell to carry the keystrokes, which is the refusal that has to say so.
+                let started, awaitStarted = latch ()
+                Async.StartImmediate (terminals.RunBlock id (entry "a1" id (PeerRef ada) 1.0) "read x" started)
+                do! awaitStarted
+                match! terminals.Write id (PeerRef ada) "yes\r" with
+                | Ok () -> failwith "there is nothing to type into"
+                | Error reason -> Expect.stringContains reason "no shell" "and the refusal says why, not merely that"
+                release ()
+            }
 
         testCaseAsync "a terminal opened afterwards starts its shell there" <|
             async {

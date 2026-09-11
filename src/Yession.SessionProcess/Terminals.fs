@@ -1264,7 +1264,22 @@ module SessionTerminals =
                             }
                         | _ -> async { return attempted }
                     match spawned with
-                    | Error _ -> return ()
+                    | Error reason ->
+                        // Said where everyone reads it, like the cwd fallback above. A
+                        // terminal with no shell still answers every command — as its own
+                        // process, with no `cd` carrying and nothing to type into — and that
+                        // quiet degradation ran on a deployed host for weeks, every terminal,
+                        // because this arm said nothing: the reason was `posix_spawnp failed`
+                        // and the only trace of it was an agent being told "nothing to type
+                        // into" by a block that was plainly waiting.
+                        emit
+                            id
+                            terminal
+                            TranscriptStderr
+                            (sprintf
+                                "yession: no shell for this terminal (%s) — each command runs as its own process, so nothing carries between them and nothing can be typed into one\r\n"
+                                reason)
+                        return ()
                     | Ok pty ->
                         terminal.Shell <- Some pty
                         terminal.MarksCommandStart <- instrumentation.MarksCommandStart
@@ -1311,7 +1326,13 @@ module SessionTerminals =
                         let! instrumented = await 3000
                         if not instrumented then
                             // Uninstrumented. Tear the shell down and keep the per-block
-                            // path, which answers a smaller question completely.
+                            // path, which answers a smaller question completely — and say
+                            // so, for the reason the spawn failure above does.
+                            emit
+                                id
+                                terminal
+                                TranscriptStderr
+                                "yession: the shell never printed an instrumented prompt, so it was closed — each command runs as its own process instead\r\n"
                             pty.Kill ()
                             terminal.Shell <- None
                             terminal.MarksCommandStart <- false
@@ -1879,6 +1900,13 @@ module SessionTerminals =
         /// Refused on an instrumented terminal: there, a command is a block, blocks are what
         /// the classifier reads and the record keeps, and typing raw bytes into one would be
         /// the door around that gate.
+        /// The refusal for a terminal that has no shell. It says WHY rather than "nothing to
+        /// type into", because to the agent those are different situations: the first is a
+        /// terminal it should stop typing at and whose transcript header names the cause; the
+        /// second read as a bug in the verb, and was retried with every line ending there is.
+        let noShell =
+            "this terminal has no shell: each command here runs as its own process, so there is nothing to type into — its first lines say why"
+
         let write (id: TerminalId) (by: ActorRef) (data: string) : Async<Result<unit, string>> =
             async {
                 let key = TerminalId.value id
@@ -1899,7 +1927,7 @@ module SessionTerminals =
                     if not (Typing.admits holder running by) then
                         return Error "this terminal runs commands as blocks — run it with execute_command, where they are classified and on the record"
                     elif holder = Some by then
-                        return (if input id by data then Ok () else Error "this terminal has nothing to type into")
+                        return (if input id by data then Ok () else Error noShell)
                     else
                         // The author's own block, with no lease in play: straight to the
                         // shell, whose foreground process is the block. Nothing to touch
@@ -1910,12 +1938,12 @@ module SessionTerminals =
                             | Some pty ->
                                 pty.Write data
                                 return Ok ()
-                            | None -> return Error "this terminal has nothing to type into"
+                            | None -> return Error noShell
                         | _ -> return Error "terminal is not open"
                 else
                     match! take id by with
                     | Error reason -> return Error reason
-                    | Ok () -> return (if input id by data then Ok () else Error "this terminal has nothing to type into")
+                    | Ok () -> return (if input id by data then Ok () else Error noShell)
             }
 
         /// The tail of what a live-only terminal has said (Plan 19).
