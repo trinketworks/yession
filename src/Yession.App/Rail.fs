@@ -1,6 +1,6 @@
 namespace Yession.App
 
-/// Where a stroke sits on the landmark rail, given where its message actually is.
+/// Where a stroke sits on the chapter rail, given where the message it opens at actually is.
 ///
 /// The rail used to be an INDEX: strokes spaced by rank on a log scale, so a stroke was never
 /// level with the message it pointed at. That was defensible on its own and unreadable beside

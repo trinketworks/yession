@@ -27,14 +27,13 @@ type ConversationItemStatus =
 /// long one.
 type ActNoteFacts =
     { Detail : string option
-      /// Whether this act is a landmark BY NATURE — worth a stroke on the rail without
-      /// anybody having marked it.
+      /// Whether this act opens a chapter BY NATURE — one nobody had to ask for.
       ///
       /// It is the fold's to say, for the same reason `Detail` is: the fold matched the
       /// event, and a renderer deciding this would be deciding it by reading the finished
-      /// sentence. What is notable is deliberately a short list — a rail that marks
-      /// everything marks nothing — and `Landmarks` is where a person's own verdict
-      /// overrides it in either direction.
+      /// sentence. What is notable is deliberately a short list — a transcript where
+      /// everything opens a chapter has none — and `Chapters` is where a person's own
+      /// verdict overrides it in either direction.
       Notable : bool }
 
 /// What an item in the timeline IS (Plan 14). A message is something someone said; a
@@ -123,22 +122,26 @@ module ConversationItem =
         | ConversationItemKind.ActNote _
         | ConversationItemKind.Message -> item.Body
 
-/// Which items in a conversation wear a mark on the rail.
+/// Where a chapter opens in a conversation.
 ///
-/// Two sources, and the order between them is the whole design. Some acts are landmarks by
+/// Two sources, and the order between them is the whole design. Some acts open one by
 /// NATURE — a pull request's news is one, because a watch is the reason somebody is waiting
-/// — and nobody should have to mark those by hand. But a default nobody can refuse becomes
+/// — and nobody should have to ask for those by hand. But a default nobody can refuse becomes
 /// noise the first time it is wrong, so a person's own verdict, recorded per message, wins
-/// over it in either direction: it can take a mark off an act that wears one, and put one on
-/// anything else that was said.
+/// over it in either direction: it can close a chapter an act opened by itself, and open one
+/// anywhere else that was said.
 ///
 /// The verdict is stored, not the difference from the default. What is notable by nature is a
 /// rule this repository will change, and a stored difference would silently flip every
 /// message somebody had already decided about the moment it did.
-module Landmarks =
+///
+/// Not a RECORDING's chapters, which are the markers a cast carries to name the commands
+/// inside one terminal (`Serialization.castWithMarkers`). These are the session's own, over
+/// what was said.
+module Chapters =
 
-    /// Whether this item is marked, as the rail draws it.
-    let marked (verdicts: Map<MessageId, bool>) (item: ConversationItem) : bool =
+    /// Whether a chapter opens at this item.
+    let opens (verdicts: Map<MessageId, bool>) (item: ConversationItem) : bool =
         match verdicts |> Map.tryFind item.MessageId with
         | Some said -> said
         | None ->
@@ -146,17 +149,18 @@ module Landmarks =
             | ConversationItemKind.ActNote facts -> facts.Notable
             | ConversationItemKind.Message -> false
 
-    /// Mark this item, or unmark it.
+    /// Open a chapter here, or close the one that is open.
     ///
     /// ONE verb, and it takes the item rather than the answer. A caller that read the current
     /// state and wrote the opposite would be a caller holding the only copy of the rule about
-    /// what an unmarked-by-nature act defaults to — and the second caller has not read it.
+    /// what an act that opens one by nature defaults to — and the second caller has not read
+    /// it.
     let toggle (item: ConversationItem) (verdicts: Map<MessageId, bool>) : Map<MessageId, bool> =
-        verdicts |> Map.add item.MessageId (not (marked verdicts item))
+        verdicts |> Map.add item.MessageId (not (opens verdicts item))
 
-    /// The marked items of a conversation, in the order the conversation holds them.
+    /// The items a chapter opens at, in the order the conversation holds them.
     let over (verdicts: Map<MessageId, bool>) (items: ConversationItem list) : ConversationItem list =
-        items |> List.filter (marked verdicts)
+        items |> List.filter (opens verdicts)
 
 type ConversationProjection =
     { Items : ConversationItem list
@@ -573,7 +577,7 @@ module ConversationProjection =
                                             "%s, %s"
                                             (PrState.describe p.Initial.State)
                                             (ChecksRollup.describe p.Initial.Checks))
-                                  // Where the waiting began. A landmark by nature, like the
+                                  // Where the waiting began. A chapter by nature, like the
                                   // news that follows it — and unlike the unwatch below,
                                   // which is where the story stops being told rather than a
                                   // place worth coming back to.

@@ -1224,7 +1224,7 @@ let [<Literal>] private groundSpare =
 let [<Literal>] private settledOffset =
     """() => new Promise(done => {
          const measure = () => {
-           const stroke = document.querySelector("#shell [data-landmark='msg-filler-8']")
+           const stroke = document.querySelector("#shell [data-chapter='msg-filler-8']")
            const item = document.querySelector("#shell [data-conversation] [data-message-id='msg-filler-8']")
            const s = stroke.getBoundingClientRect()
            const i = item.getBoundingClientRect()
@@ -2005,7 +2005,7 @@ let editorTests =
                 let! after = await (viewport ())
                 Expect.notEqual after before "the width the next command would claim follows the pane"
             }
-        // The landmark rail lives in the timeline's own left padding — 32px the scroller
+        // The chapter rail lives in the timeline's own left padding — 32px the scroller
         // already reserves and draws nothing in — rather than in a column of its own. That is
         // the arrangement that costs the conversation no width, and it is also the one whose
         // failure is silent: nothing in the markup says whether a stroke has ended up on top
@@ -2018,11 +2018,11 @@ let editorTests =
         // nothing, which no rendered string can tell from one that works.
         editorCaseIn 1440 900 "a rail stroke stands clear of the words it points at, and takes you to them" (EDITOR_PORT + 22) <| fun page ->
             async {
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-landmark-rail] [data-landmark]")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-chapter-rail] [data-chapter]")
                 let! clear =
                     await (page.EvaluateAsync<bool>
                             """() => {
-                                 const stroke = document.querySelector('#shell [data-landmark] > *')
+                                 const stroke = document.querySelector('#shell [data-chapter] > *')
                                  const body = document.querySelector('#shell [data-conversation] [data-message-body]')
                                  return stroke.getBoundingClientRect().right <= body.getBoundingClientRect().left
                                }""")
@@ -2034,7 +2034,7 @@ let editorTests =
                 let! painted =
                     await (page.EvaluateAsync<bool>
                             """() => {
-                                 const mark = document.querySelector('#shell [data-landmark] > *')
+                                 const mark = document.querySelector('#shell [data-chapter] > *')
                                  const box = mark.getBoundingClientRect()
                                  const paint = getComputedStyle(mark).backgroundColor
                                  return box.width > 0 && box.height > 0
@@ -2042,14 +2042,14 @@ let editorTests =
                                }""")
                 Expect.isTrue painted "the stroke is a mark on the screen, not a box with nothing in it"
 
-                // Away from the marked message first, so the click has a real scroll to make
+                // Away from the chapter first, so the click has a real scroll to make
                 // and the author line is pinned over the top of the column when it lands.
                 let! _ =
                     await (page.EvaluateAsync<bool>
                             """() => { const t = document.querySelector('#shell [data-conversation]')
                                        t.scrollTop = t.scrollHeight
                                        return t.scrollTop > 0 }""")
-                do! awaitU (page.ClickAsync "#shell [data-landmark]")
+                do! awaitU (page.ClickAsync "#shell [data-chapter]")
                 let! _ =
                     await (page.WaitForFunctionAsync
                         """document.querySelector("#shell [data-conversation] [data-message-id='msg-harness']")
@@ -2109,8 +2109,8 @@ let editorTests =
         // case and the ref's together, which is what says they are the one function.
         editorCaseIn 1440 900 "a rail stroke lands the cursor on its message, the same jump the ref makes" (EDITOR_PORT + 35) <| fun page ->
             async {
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-landmark-rail] [data-landmark]")
-                do! awaitU (page.ClickAsync "#shell [data-landmark='msg-filler-8']")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-chapter-rail] [data-chapter]")
+                do! awaitU (page.ClickAsync "#shell [data-chapter='msg-filler-8']")
                 let! _ =
                     await (page.WaitForFunctionAsync
                         """document.querySelector("#shell [data-conversation] [data-message-id='msg-filler-8']")
@@ -2131,8 +2131,8 @@ let editorTests =
         // stroke, the message arrives, and the two are on one line.
         editorCaseIn 1440 900 "a stroke stands level with the message it marks" (EDITOR_PORT + 29) <| fun page ->
             async {
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-landmark-rail] [data-landmark]")
-                do! awaitU (page.ClickAsync "#shell [data-landmark='msg-filler-8']")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-chapter-rail] [data-chapter]")
+                do! awaitU (page.ClickAsync "#shell [data-chapter='msg-filler-8']")
                 let! _ =
                     await (page.WaitForFunctionAsync
                         """document.querySelector("#shell [data-conversation] [data-message-id='msg-filler-8']")
@@ -2152,8 +2152,8 @@ let editorTests =
         // passes the case above and then slides off its message on the first scroll.
         editorCaseIn 1440 900 "a stroke follows its message while the timeline scrolls" (EDITOR_PORT + 30) <| fun page ->
             async {
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-landmark-rail] [data-landmark]")
-                do! awaitU (page.ClickAsync "#shell [data-landmark='msg-filler-8']")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-chapter-rail] [data-chapter]")
+                do! awaitU (page.ClickAsync "#shell [data-chapter='msg-filler-8']")
                 let! _ =
                     await (page.WaitForFunctionAsync
                         """document.querySelector("#shell [data-conversation] [data-message-id='msg-filler-8']")
@@ -2235,7 +2235,7 @@ let editorTests =
                 do! awaitU (page.Keyboard.PressAsync "Tab")
                 let! _ =
                     await (page.WaitForFunctionAsync
-                        """document.activeElement?.hasAttribute('data-item-bookmark') === true""")
+                        """document.activeElement?.hasAttribute('data-item-chapter') === true""")
 
                 do! awaitU (page.Keyboard.PressAsync "Escape")
                 let! _ = await (page.WaitForFunctionAsync """!document.querySelector('#shell [data-item-menu]')""")
@@ -2251,12 +2251,12 @@ let editorTests =
             async {
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-conversation] [data-item-actions]")
                 do! awaitU (page.ClickAsync "#shell [data-conversation] [data-item-actions]")
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-item-bookmark]")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-item-chapter]")
 
                 do! awaitU (page.Keyboard.PressAsync "Tab")
                 let! _ =
                     await (page.WaitForFunctionAsync
-                        """document.activeElement?.hasAttribute('data-item-bookmark') === true""")
+                        """document.activeElement?.hasAttribute('data-item-chapter') === true""")
                 do! awaitU (page.Keyboard.PressAsync "Enter")
 
                 let! _ = await (page.WaitForFunctionAsync """!document.querySelector('#shell [data-item-menu]')""")

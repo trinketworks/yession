@@ -595,7 +595,7 @@ let private harnessTerminal : TerminalId = TerminalId.create "term-harness" |> e
 /// to have something to show.
 ///
 /// `fillerItems` is how long the conversation is, and `filler` what it is made of. Sixteen
-/// lines is what the browser-tier cases were written against (`msg-filler-8` is a landmark, a
+/// lines is what the browser-tier cases were written against (`msg-filler-8` is a chapter, a
 /// jump target, and the middle of a column those cases scroll to); the scroll scenario sweeps
 /// the length over replies, because what a render costs while a person scrolls grows with
 /// what is on the page, and one length of one-liners cannot show that growing.
@@ -666,7 +666,7 @@ let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
     { ClientModel.init { PeerId = peerId; DisplayName = "swift-heron" } with
         Connection = Connected
         Session = Some (SessionId.create "harness" |> expect)
-        // Two marked messages, so the landmark rail has strokes to draw. Where a stroke
+        // Two chapters, so the chapter rail has strokes to draw. Where a stroke
         // LANDS is arithmetic a model test settles; whether it lands beside the reading
         // column or on top of it is geometry, and only a rendered page knows that.
         //
@@ -676,7 +676,7 @@ let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
         // against it is only ever measured outside the zone where the placement is exact.
         Synced =
             { SyncedSessionState.empty with
-                Landmarks =
+                Chapters =
                     Map.ofList [ messageId, true; MessageId.create "msg-filler-8" |> expect, true ] }
         Conversation =
             { Items =

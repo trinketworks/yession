@@ -146,8 +146,8 @@ type ViewActions =
       /// is: the model moves the reader's position, and only the document can scroll.
       RevealBlock : TerminalId -> BlockId -> unit
       /// Scroll the conversation to one message and mark it — the rail's half of "take me
-      /// back there". Imperative for the reason `RevealBlock` is: the model says which
-      /// moments are marked, and only the document can scroll to one.
+      /// back there". Imperative for the reason `RevealBlock` is: the model says where the
+      /// chapters are, and only the document can scroll to one.
       RevealMessage : MessageId -> unit
       /// Put focus back on one item's actions control, after the menu it opened has gone.
       /// Imperative for the reason every focus move here is: the model says the menu is
@@ -1526,9 +1526,9 @@ module View =
     /// block finishes — the timeline holds where it goes, the projection holds what it says.
     let private chat (actions: ViewActions) (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
         // What can be done to one item, behind an ellipsis at its top-right. It goes on
-        // every item that HAS an id — a message and an act alike — because "mark any of it"
-        // is the promise, and a rail whose contents were chosen for the reader would be a
-        // table of contents rather than a bookmark.
+        // every item that HAS an id — a message and an act alike — because "divide it
+        // anywhere" is the promise, and chapters chosen for the reader would be somebody
+        // else's account of the session rather than the reader's own.
         //
         // A MENU rather than the bare toggle this replaced, and not only because more will
         // hang off it. The toggle wore the rail's own hairline, so the margin carried two
@@ -1536,11 +1536,11 @@ module View =
         // conversation, one by the rail's own arithmetic, and nothing on the screen saying
         // which was which.
         //
-        // The dispatch carries the id alone: which way the mark goes is `Landmarks.toggle`'s
+        // The dispatch carries the id alone: which way the verdict goes is `Chapters.toggle`'s
         // to work out from the item, so this control never holds a second copy of what an act
-        // defaults to (see `Landmarks`).
+        // defaults to (see `Chapters`).
         let itemActions (item: ConversationItem) =
-            let marked = Landmarks.marked model.Synced.Landmarks item
+            let isChapter = Chapters.opens model.Synced.Chapters item
             let opened = model.ItemMenu = Some item.MessageId
             let dress =
                 if opened then Style.cls [ Style.itemActions; Style.itemActionsOpen ] else Style.itemActions
@@ -1556,16 +1556,16 @@ module View =
                                 @click={Ev(fun _ -> dispatch CloseItemMenuMsg)}></button>
                         <div class="{Style.itemMenu}" role="menu" data-item-menu="{MessageId.value item.MessageId}">
                           <button type="button" role="menuitem" class="{Style.itemMenuEntry}"
-                                  data-item-bookmark="{MessageId.value item.MessageId}"
-                                  data-item-marked="{if marked then "yes" else "no"}"
+                                  data-item-chapter="{MessageId.value item.MessageId}"
+                                  data-item-is-chapter="{if isChapter then "yes" else "no"}"
                                   @click={Ev(fun _ ->
-                                                 dispatch (ToggleLandmarkMsg item.MessageId)
+                                                 dispatch (ToggleChapterMsg item.MessageId)
                                                  // Choosing strands focus exactly as Escape
                                                  // does: the entry is removed by the render
                                                  // that follows, and a keyboard that pressed
                                                  // Enter on it is left on `body`.
                                                  actions.FocusItemActions item.MessageId)}>
-                            {if marked then Dom.Text.removeBookmark else Dom.Text.addBookmark}
+                            {if isChapter then Dom.Text.removeChapter else Dom.Text.makeChapter}
                           </button>
                         </div>"""
             // Escape on the WRAPPER, so it fires wherever focus is inside the menu — and on
@@ -1657,7 +1657,7 @@ module View =
             // body — the parent's own words, truncated to one line, plain not rich, so it
             // reads as the context it is and cannot grow taller than the message it heads.
             //
-            // It jumps to its source through the SAME `RevealMessage` the landmark rail uses —
+            // It jumps to its source through the SAME `RevealMessage` the chapter rail uses —
             // scroll it to the middle, flash it, put the cursor on it — but only when the
             // source is on hand to jump to. A target still in the loaded conversation is a
             // button; one paged off (the quote falls back to a bare label) is inert, because a
@@ -1925,26 +1925,26 @@ module View =
                 | None ->
                     [ html $"""<div class="{Style.timelineIdle}" aria-hidden="true"><span class="{Style.caretIdle}"></span></div>""" ]
             | _ -> Option.toList missing @ items
-        // One stroke per marked moment, standing level with its message. WHERE that is cannot
+        // One stroke per chapter, standing level with the message it opens at. WHERE that is cannot
         // be rendered: it is a measurement of a laid-out page that changes on every scroll
         // frame, so each stroke reads a custom property the browser layer writes (`RailSync`),
-        // and this puts the `data-landmark` hook on it that says which message to measure.
+        // and this puts the `data-chapter` hook on it that says which message to measure.
         let rail =
-            match ClientModel.landmarks model with
+            match ClientModel.chapters model with
             | [] -> Lit.nothing
-            | marks ->
+            | chapters ->
                 let stroke (item: ConversationItem) =
-                    let label = ClientModel.landmarkLabel item
+                    let label = ClientModel.chapterName item
                     html $"""
-                        <button type="button" class="{Style.landmarkStroke}"
-                                style="{Style.landmarkAt}"
-                                data-landmark="{MessageId.value item.MessageId}" aria-label="{label}"
+                        <button type="button" class="{Style.chapterStroke}"
+                                style="{Style.chapterAt}"
+                                data-chapter="{MessageId.value item.MessageId}" aria-label="{label}"
                                 @click={Ev(fun _ -> actions.RevealMessage item.MessageId)}>
-                          <span class="{Style.landmarkMark}"></span>
+                          <span class="{Style.chapterMark}"></span>
                         </button>"""
                 html $"""
-                    <nav class="{Style.landmarkRail}" aria-label="{Dom.Text.bookmarks}" data-landmark-rail>
-                      {marks |> List.map stroke}
+                    <nav class="{Style.chapterRail}" aria-label="{Dom.Text.chapters}" data-chapter-rail>
+                      {chapters |> List.map stroke}
                     </nav>"""
         html $"""
             <div class="{Style.timelineFrame}">

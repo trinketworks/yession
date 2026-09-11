@@ -33,7 +33,7 @@ open Yession.Peer
 let private ada = PeerId.create "ada" |> expect
 
 /// One page holding one thing Ada said. The client folds its conversation from event pages,
-/// and a mark needs an item to sit on — `Landmarks.toggle` reads the item's own default.
+/// and a chapter needs an item to open at — `Chapters.toggle` reads the item's own default.
 let private said (messageId: MessageId) (body: string) : EventPage<SessionEvent> =
     let envelope : EventEnvelope<SessionEvent> =
         { EventId = EventId.fresh ()
@@ -251,34 +251,33 @@ let private codecTests =
                 ClientModel.init (peer "ada" "Ada")
                 |> ClientModel.update (EventsPageMsg (said messageId "ship it"))
                 |> ClientModel.update (ToggleItemMenuMsg messageId)
-                |> ClientModel.update (ToggleLandmarkMsg messageId)
+                |> ClientModel.update (ToggleChapterMsg messageId)
             Expect.isNone model.ItemMenu "the menu is gone"
-            Expect.equal (Map.tryFind messageId model.Synced.Landmarks) (Some true) "and the mark was made"
+            Expect.equal (Map.tryFind messageId model.Synced.Chapters) (Some true) "and the chapter was opened"
 
-        // A landmark is a property of the SESSION, so it has to reach the doc: a mark one
-        // person could not see would be a bookmark in a shared book that only opens for one
-        // reader.
-        testCase "a mark crosses the sync boundary" <| fun () ->
+        // A chapter is a property of the SESSION, so it has to reach the doc: a division one
+        // person could not see would be a chapter break pencilled into a shared book.
+        testCase "a chapter crosses the sync boundary" <| fun () ->
             let doc = Y.Doc.Create ()
             let p = Harness.run (Client.makeProgram doc (ClientModel.init (peer "ada" "Ada")))
             let messageId = MessageId.create "msg-1" |> expect
             p.Dispatch (user (EventsPageMsg (said messageId "ship it")))
-            p.Dispatch (user (ToggleLandmarkMsg messageId))
+            p.Dispatch (user (ToggleChapterMsg messageId))
             let decoded = SyncedStateSync.ofDoc doc |> Result.mapError (sprintf "%A") |> expect
-            Expect.equal (Map.tryFind messageId decoded.Landmarks) (Some true) "the doc carries what was marked"
+            Expect.equal (Map.tryFind messageId decoded.Chapters) (Some true) "the doc carries where the session divides"
 
-        // And the answer that a set could not have carried. Taking the mark off an act that
-        // wears one by nature has to reach the doc as a NO — as an absence it would read as
-        // "nobody has decided", and the act's own default would put the mark straight back.
-        testCase "taking a mark off crosses as a no, never as an absence" <| fun () ->
+        // And the answer that a set could not have carried. Closing a chapter an act opens by
+        // nature has to reach the doc as a NO — as an absence it would read as "nobody has
+        // decided", and the act's own default would open it straight back.
+        testCase "closing one crosses as a no, never as an absence" <| fun () ->
             let doc = Y.Doc.Create ()
             let p = Harness.run (Client.makeProgram doc (ClientModel.init (peer "ada" "Ada")))
             let messageId = MessageId.create "msg-1" |> expect
             p.Dispatch (user (EventsPageMsg (said messageId "ship it")))
-            p.Dispatch (user (ToggleLandmarkMsg messageId))
-            p.Dispatch (user (ToggleLandmarkMsg messageId))
+            p.Dispatch (user (ToggleChapterMsg messageId))
+            p.Dispatch (user (ToggleChapterMsg messageId))
             let decoded = SyncedStateSync.ofDoc doc |> Result.mapError (sprintf "%A") |> expect
-            Expect.equal (Map.tryFind messageId decoded.Landmarks) (Some false) "an answer, not a gap"
+            Expect.equal (Map.tryFind messageId decoded.Chapters) (Some false) "an answer, not a gap"
 
         testCase "the collaborative title round-trips through the codec" <| fun () ->
             let doc = Y.Doc.Create ()

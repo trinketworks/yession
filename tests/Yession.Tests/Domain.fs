@@ -676,7 +676,7 @@ let private repoTests =
             | other -> failwithf "expected one note, got %A" other
     ]
 
-let private landmarkTests =
+let private chapterTests =
     let item id kind : ConversationItem =
         { MessageId = MessageId.create id |> expect
           Author = ActorRef.Agent
@@ -688,44 +688,45 @@ let private landmarkTests =
     let notable = item "n" (ConversationItemKind.ActNote { Detail = None; Notable = true })
     let ordinary = item "o" (ConversationItemKind.ActNote { Detail = None; Notable = false })
     let said = item "s" ConversationItemKind.Message
-    testList "Landmarks (the rail's marks)" [
-        // The default half. A watch is the reason somebody is waiting, so its news is worth a
-        // stroke without anybody having asked for one.
-        testCase "an act that is notable by nature is marked with nobody having said anything" <| fun () ->
-            Expect.isTrue (Landmarks.marked Map.empty notable) "marked"
-            Expect.isFalse (Landmarks.marked Map.empty ordinary) "and an ordinary act is not"
+    testList "Chapters (where the session divides)" [
+        // The default half. A watch is the reason somebody is waiting, so its news opens a
+        // chapter without anybody having asked for one.
+        testCase "an act that is notable by nature opens one with nobody having said anything" <| fun () ->
+            Expect.isTrue (Chapters.opens Map.empty notable) "a chapter opens here"
+            Expect.isFalse (Chapters.opens Map.empty ordinary) "and an ordinary act is not"
 
         // The half that makes the default affordable. A default nobody can refuse becomes
         // noise the first time it is wrong.
-        testCase "a person's no takes the mark off an act that wears one by nature" <| fun () ->
+        testCase "a person's no closes a chapter an act opens by nature" <| fun () ->
             let verdicts = Map.ofList [ notable.MessageId, false ]
-            Expect.isFalse (Landmarks.marked verdicts notable) "their answer, not the act's"
+            Expect.isFalse (Chapters.opens verdicts notable) "their answer, not the act's"
 
-        // And the other direction: anything said can be marked, which is what makes the rail
-        // a bookmark rather than a feed of what this repository thinks is important.
-        testCase "a person's yes marks something nothing would have marked" <| fun () ->
+        // And the other direction: a chapter can open anywhere something was said, which is
+        // what makes these the reader's own divisions rather than a feed of what this
+        // repository thinks is important.
+        testCase "a person's yes opens one where nothing would have" <| fun () ->
             let verdicts = Map.ofList [ said.MessageId, true ]
-            Expect.isTrue (Landmarks.marked verdicts said) "a message somebody chose"
+            Expect.isTrue (Chapters.opens verdicts said) "a message somebody chose"
 
         // `toggle` takes the ITEM, so the caller never has to know what it defaulted to —
         // which is the whole reason the default and the verdict are read in one place.
         testCase "toggling an act that is notable by nature records the no" <| fun () ->
-            let verdicts = Landmarks.toggle notable Map.empty
+            let verdicts = Chapters.toggle notable Map.empty
             Expect.equal (Map.tryFind notable.MessageId verdicts) (Some false) "recorded, not merely absent"
 
         // Absence and no are different answers, so coming back from a no is a yes rather
         // than a delete — and a later change to what is notable by nature cannot silently
         // reverse a decision somebody has already made.
         testCase "toggling it back records the yes, rather than forgetting the answer" <| fun () ->
-            let verdicts = Map.empty |> Landmarks.toggle notable |> Landmarks.toggle notable
+            let verdicts = Map.empty |> Chapters.toggle notable |> Chapters.toggle notable
             Expect.equal (Map.tryFind notable.MessageId verdicts) (Some true) "an answer either way"
 
-        testCase "the marked items keep the order the conversation holds them in" <| fun () ->
+        testCase "the chapters keep the order the conversation holds them in" <| fun () ->
             let verdicts = Map.ofList [ said.MessageId, true ]
             Expect.equal
-                (Landmarks.over verdicts [ said; ordinary; notable ] |> List.map (fun i -> i.MessageId))
+                (Chapters.over verdicts [ said; ordinary; notable ] |> List.map (fun i -> i.MessageId))
                 [ said.MessageId; notable.MessageId ]
-                "both marks, in timeline order"
+                "both chapters, in timeline order"
     ]
 
 let private prWatchTests =
@@ -1023,10 +1024,10 @@ let private prWatchTests =
                 "all notes"
 
         // Which acts arrive on the rail without anybody asking. Deliberately a short list:
-        // a rail that marks everything marks nothing. A watch and its news are on it because
+        // a transcript where everything opens a chapter has none. A watch and its news do because
         // a watch is the reason somebody is waiting; the unwatch is not, because it is where
         // the story stops being told rather than a place worth coming back to.
-        testCase "a watch and its news are landmarks; letting it go is not" <| fun () ->
+        testCase "a watch and its news are chapters; letting it go is not" <| fun () ->
             let notable (item: ConversationItem) =
                 match item.Kind with
                 | ConversationItemKind.ActNote facts -> facts.Notable
@@ -2084,7 +2085,7 @@ let tests =
         envelopeSerializationTests
         conversationProjectionTests
         repoTests
-        landmarkTests
+        chapterTests
         prWatchTests
         deliveryFilterTests
         shellProfileTests

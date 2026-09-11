@@ -1152,9 +1152,9 @@ module Style =
     /// them so the glyphs sit on the text's line rather than floating above it.
     let chatTaskCounts = "flex items-baseline gap-2 shrink-0"
 
-    // --- The landmark rail ---------------------------------------------------------------
+    // --- The chapter rail ---------------------------------------------------------------
 
-    /// The rail: strokes down the left of the chat, one per marked moment.
+    /// The rail: strokes down the left of the chat, one per chapter.
     ///
     /// ABSOLUTE over the scroller's own left padding rather than a column beside it, and that
     /// is load bearing twice. The timeline already reserves 32px there (`timeline`'s `px-8`)
@@ -1174,7 +1174,7 @@ module Style =
     /// ends did not stand on the scrollport's would offset every stroke on the screen by the
     /// difference. The breathing room the old `top-6 bottom-6` bought is now bought by the
     /// arithmetic instead — `Rail.place` reserves a band at each end and never reaches either.
-    let landmarkRail = "absolute inset-y-0 left-0 w-8 max-md:w-4 pointer-events-none z-10"
+    let chapterRail = "absolute inset-y-0 left-0 w-8 max-md:w-4 pointer-events-none z-10"
 
     /// Where one stroke sits: a custom property the browser layer writes on each stroke, read
     /// here so the stylesheet still owns the rule and the measurement owns only the number.
@@ -1185,7 +1185,7 @@ module Style =
     /// The fallback is the top of the foot band, which is where an unmeasured stroke would sit
     /// if its message were exactly at the fold. It is only ever seen by a stroke that has not
     /// been measured yet, and nothing paints between a render and its measurement.
-    let landmarkAt = "bottom:var(--rail-at,12px)"
+    let chapterAt = "bottom:var(--rail-at,12px)"
 
     /// One stroke. The BUTTON is the hit area and is deliberately taller than the mark inside
     /// it: a target the size of its own hairline is a target for nobody, and two marks on
@@ -1198,7 +1198,7 @@ module Style =
     /// `translate-y-1/2` and not a hand-tuned negative margin: `bottom` places the box's
     /// EDGE, and the mark has to sit on the place the arithmetic named. A margin that
     /// corrected for one height would silently miscentre at the other.
-    let landmarkStroke =
+    let chapterStroke =
         cls [ "absolute left-0 w-full h-3.5 max-md:h-6 translate-y-1/2"
               "flex items-center pointer-events-auto"
               "cursor-pointer bg-transparent group/mark"
@@ -1207,7 +1207,7 @@ module Style =
     /// The mark itself: a hairline, dim until the pointer is on it. Length rather than colour
     /// is what a rail this narrow has to work with, so a stroke reaching for the reading edge
     /// is how one says "here".
-    let landmarkMark =
+    let chapterMark =
         cls [ "block h-px w-3 max-md:w-2 bg-ink-faint"
               "transition-all duration-150 ease-out"
               "group-hover/mark:w-5 group-hover/mark:bg-ink group-hover/mark:h-0.5"

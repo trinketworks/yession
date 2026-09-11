@@ -1,6 +1,6 @@
 module Yession.Browser.RailSync
 
-// The landmark rail's other half: where `Rail` says a stroke goes, this says what its inputs
+// The chapter rail's other half: where `Rail` says a stroke goes, this says what its inputs
 // are. Measuring is all it does — the rail's box, and the top of every marked message — and
 // then it writes one number per stroke as a custom property the stylesheet positions from.
 //
@@ -28,7 +28,7 @@ let private find (selector: string) : HTMLElement option =
     | element -> Some (element :?> HTMLElement)
 
 let private strokesIn (rail: HTMLElement) : HTMLElement list =
-    let found = rail.querySelectorAll "[data-landmark]"
+    let found = rail.querySelectorAll "[data-chapter]"
     [ for i in 0 .. found.length - 1 -> found.[i] :?> HTMLElement ]
 
 /// Place every stroke against the conversation as it stands right now.
@@ -42,14 +42,14 @@ let private strokesIn (rail: HTMLElement) : HTMLElement list =
 /// today — the view renders every item and marks only exist on items — and the alternative is
 /// inventing a position for a message nobody can see.
 let sync () : unit =
-    find "[data-landmark-rail]"
+    find "[data-chapter-rail]"
     |> Option.iter (fun rail ->
         let box = rail.getBoundingClientRect ()
         let measured =
             strokesIn rail
             |> List.choose (fun stroke ->
                 let selector =
-                    sprintf "[data-conversation] [data-message-id=\"%s\"]" (stroke.getAttribute "data-landmark")
+                    sprintf "[data-conversation] [data-message-id=\"%s\"]" (stroke.getAttribute "data-chapter")
                 find selector
                 |> Option.map (fun item ->
                     stroke, Rail.place box.height (box.bottom - (item.getBoundingClientRect ()).top)))
