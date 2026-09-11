@@ -242,7 +242,7 @@ let private prRow (number: int) (state: string) (status: QueryCell) : (string * 
       PrStatus.Columns.state, CellStatus (state, ToneMuted)
       PrStatus.Columns.status, status ]
 
-/// A session divided into chapters at some of its timeline. The verdicts are what the rail
+/// A session divided into chapters at some of its timeline. The verdicts are what a rule
 /// reads, so this is the only shape it needs.
 let private withChapters (ids: string list) : ClientModel =
     { representativeModel with
@@ -1703,6 +1703,40 @@ let private presenceTests =
                 (html.Contains (Dom.hookText (Dom.attr Dom.Hooks.peerAt Dom.Text.atTerminalQueued) (Dom.Text.inTerminal "build")))
                 "the queued command's terminal is resolved through the entry"
             Expect.isTrue (html.Contains (Dom.attr Dom.Hooks.terminalTabPeer "bob")) "and shows on that terminal's tab"
+
+        // A chapter's name is collaborative text like the session title, so the roster places
+        // somebody in it the same way — and says WHICH chapter, because "a chapter" in a
+        // session divided into eight is not what anyone wanted to know.
+        testCase "a peer naming a chapter is placed at the chapter they are naming" <| fun () ->
+            let messageId = MessageId.create "msg-1" |> expect
+            let model = withChapters [ "msg-1" ]
+            let html =
+                Support.render
+                    { model with
+                        Synced =
+                            { model.Synced with
+                                Chapters =
+                                    model.Synced.Chapters
+                                    |> Map.add messageId { Opens = true; Name = Ylmish.Text.ofString "The rollback" } }
+                        Presence =
+                            Map.ofList
+                                [ bob,
+                                  { DisplayName = "brave-owl"
+                                    Focus = { Field = ChapterName messageId; Pos = { Anchor = "AQI="; Head = "AQI=" } } } ] }
+            Expect.isTrue
+                (html.Contains
+                    (Dom.hookText (Dom.attr Dom.Hooks.peerAt Dom.Text.atChapter) (Dom.Text.namingChapter "The rollback")))
+                "the roster names the chapter, not just 'a chapter'"
+
+        // Presence is relayed live; the conversation is caught up over the event feed. A caret
+        // can therefore arrive in a chapter this client has never seen, and the roster has to
+        // say something true about it rather than invent a name or go quiet.
+        testCase "a peer naming a chapter this client has not seen is still placed" <| fun () ->
+            let unseen = MessageId.create "msg-not-here" |> expect
+            let html = Support.render (withBobIn (ChapterName unseen))
+            Expect.isTrue
+                (html.Contains (Dom.hookText (Dom.attr Dom.Hooks.peerAt Dom.Text.atChapter) Dom.Text.atSomeChapter))
+                "they are at a chapter, unnamed"
 
         // Presence is who is here NOW. `Peers` deliberately keeps the departed so a draft's
         // author still has a name — reporting them as present would make the roster a

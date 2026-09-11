@@ -396,6 +396,7 @@ module Dom =
         let atQueued = "queued"
         let atTerminal = "terminal"
         let atTerminalQueued = "terminal-queued"
+        let atChapter = "chapter"
 
         let renamingSession = "renaming"
         /// Writing their own message — the plain case, and the one worth the fewest words.
@@ -406,6 +407,9 @@ module Dom =
         /// In a terminal, named when the terminal is known to this client.
         let inTerminal (title: string) : string = "in " + title
         let atSomeTerminal = "at a terminal"
+        /// Writing a chapter's name, named when this client knows the chapter.
+        let namingChapter (name: string) : string = "naming " + name
+        let atSomeChapter = "naming a chapter"
         // Event-feed health tokens (the HTTP leg that carries history). `IsCatchingUp` says
         // there is more to read; these say whether reading is getting through.
         let feedLive = "live"

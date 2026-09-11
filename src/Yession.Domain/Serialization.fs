@@ -1890,7 +1890,9 @@ module Codec =
                           "terminalId", terminalId.Encode t
                           "peerId", peerId.Encode p ]
                 | TerminalQueuedBody q ->
-                    Encode.object [ "kind", Encode.string "terminalQueued"; "queueId", queueId.Encode q ])
+                    Encode.object [ "kind", Encode.string "terminalQueued"; "queueId", queueId.Encode q ]
+                | ChapterName m ->
+                    Encode.object [ "kind", Encode.string "chapterName"; "messageId", messageId.Encode m ])
           Decode =
             Decode.field "kind" Decode.string
             |> Decode.andThen (function
@@ -1903,6 +1905,7 @@ module Codec =
                         (Decode.field "terminalId" terminalId.Decode)
                         (Decode.field "peerId" peerId.Decode)
                 | "terminalQueued" -> Decode.field "queueId" queueId.Decode |> Decode.map TerminalQueuedBody
+                | "chapterName" -> Decode.field "messageId" messageId.Decode |> Decode.map ChapterName
                 | other -> Decode.fail (sprintf "Unknown focus field: %s" other)) }
 
     let private cursorPos : Codec<CursorPos> =

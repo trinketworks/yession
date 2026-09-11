@@ -1381,7 +1381,7 @@ module ClientModel =
         | TerminalDraftBody (terminal, _) -> Some terminal
         | TerminalQueuedBody queueId ->
             model.Synced.Pending |> Map.tryFind queueId |> Option.map (fun act -> act.Terminal)
-        | Title | DraftBody _ | QueueBody _ -> None
+        | Title | DraftBody _ | QueueBody _ | ChapterName _ -> None
 
     /// Who is in a given terminal right now — whether writing a new command or editing a
     /// queued one, because from the strip they are the same fact: someone is in there.
@@ -1438,6 +1438,19 @@ module ClientModel =
         match Chapters.name model.Synced.Chapters item with
         | "" -> Dom.Text.unnamedChapter
         | said -> said
+
+    /// What the chapter at this message is called, for a surface that has an id and not the
+    /// item — presence, which reports a `MessageId` because that is what identifies a chapter
+    /// on the wire.
+    ///
+    /// `None` when this client has not folded that message yet. A peer's caret can arrive
+    /// before the message it is in: presence is relayed live and the conversation is caught
+    /// up over the event feed, so the two legs are not in step. Saying "a chapter" then is
+    /// honest; inventing a name for one nobody here has seen is not.
+    let chapterNameAt (messageId: MessageId) (model: ClientModel) : string option =
+        model.Conversation.Items
+        |> List.tryFind (fun item -> item.MessageId = messageId)
+        |> Option.map (fun item -> chapterName model item)
 
     /// Every chapter in the session, oldest first — the conversation's own order, which is
     /// the order the contents lists them in and the order a reader walking the session would
