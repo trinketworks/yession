@@ -31,6 +31,9 @@
          because it is the same shape of thing — a gated session surface with a stub
          provider behind it — and it reuses that suite's identity stub idiom. -->
     <Compile Include="Models.fs" />
+    <!-- Writing a few words: the provider end of the `Summarize` seam. Beside Models.fs
+         because it is the same conversation with the same provider on the same credential. -->
+    <Compile Include="Summaries.fs" />
     <!-- Finding a repository: the provider lookups and the gated route over them. The same
          shape as Models.fs — a stub provider behind a session surface — for the same reason. -->
     <Compile Include="GitHubRepos.fs" />
