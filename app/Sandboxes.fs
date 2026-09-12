@@ -658,15 +658,31 @@ let policyFor
         // developer tools were found" while the session held a working one in
         // `YESSION_BIN_GIT` the whole time. The read scope already admits it
         // (`SrtSandbox.toolsFrom`); this is the half that lets a terminal FIND it.
+        // Only for the host-family backends, where the sandbox runs on the HOST's
+        // filesystem and `YESSION_BIN_GIT` is a path a spawn there can actually exec — the
+        // whole point being to put the session's git ahead of macOS's xcode-select shim
+        // (`Repos.gitExecutable`). Under DOCKER it is neither needed nor safe: the container
+        // brings its own git on its own PATH, the host store path is only reachable at all
+        // because /nix is volume-mounted, and — the fault this guard exists for — a docker
+        // env with no other grant had NO PATH from `fromGrants`, so the container used the
+        // IMAGE's PATH (where cat/rm/mv/tail live). Adding a directory here made `fromGrants`
+        // set PATH to that dir plus the MANAGER's launchd PATH (`/usr/bin:/bin:…`), which
+        // has none of those, so the keepalive's `exec tail -f /dev/null` exited 127 and every
+        // new docker sandbox died at start — surfacing three steps later as a 409 on the
+        // exec that found the container already gone.
         let namedGitDirectory =
-            ambient
-            |> Map.tryFind "YESSION_BIN_GIT"
-            |> Option.map (fun path -> path.Trim ())
-            |> Option.filter (fun path -> path <> "")
-            |> Option.bind (fun path ->
-                match path.LastIndexOf '/' with
-                | index when index > 0 -> Some (path.Substring (0, index))
-                | _ -> None)
+            match backend with
+            | DockerBackend -> None
+            | HostBackend
+            | SrtBackend ->
+                ambient
+                |> Map.tryFind "YESSION_BIN_GIT"
+                |> Option.map (fun path -> path.Trim ())
+                |> Option.filter (fun path -> path <> "")
+                |> Option.bind (fun path ->
+                    match path.LastIndexOf '/' with
+                    | index when index > 0 -> Some (path.Substring (0, index))
+                    | _ -> None)
         let fromGrants =
             match grantedPath granted @ Option.toList namedGitDirectory |> List.distinct with
             | [] -> grantedEnv

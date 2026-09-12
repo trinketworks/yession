@@ -418,6 +418,24 @@ let private sandboxPolicyTests =
                 |> expect
             Expect.equal (unnamed.Env |> Map.tryFind "PATH") (Some "/usr/bin:/bin") "nothing named, nothing added"
 
+        // The container brings its own git on its own PATH, so the host's YESSION_BIN_GIT is
+        // not added under docker — and MUST not be, because doing so made `fromGrants` set
+        // PATH to that dir plus the manager's host PATH, DROPPING the image's own bins. The
+        // keepalive then could not find `cat`/`tail`, the container exited 127 at start, and
+        // every new docker sandbox failed with a 409 on the exec that found it already gone.
+        testCase "the host's named git is not forced onto a docker sandbox's PATH" <| fun () ->
+            let ambient = Map.ofList [ "PATH", "/usr/bin:/bin"; "YESSION_BIN_GIT", "/nix/store/x-git/bin/git" ]
+            let policy =
+                Sandboxes.policyFor
+                    DockerBackend (Sandboxes.limitsFor DockerBackend "linux") ambient Map.empty None None None
+                    []
+                    Set.empty
+                    EnvironmentSpec.defaults
+                |> expect
+            // No PATH from policy means the image's own PATH stands — the whole reason the
+            // keepalive's cat/rm/mv/tail resolve. A PATH here at all is the regression.
+            Expect.equal (policy.Env |> Map.tryFind "PATH") None "docker keeps the image's PATH; the host git is not imposed"
+
         testCase "a spec that names the git trio still wins over the docker baseline" <| fun () ->
             let policy =
                 Sandboxes.policyFor
