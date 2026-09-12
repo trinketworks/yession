@@ -31,6 +31,9 @@
          because it is the same shape of thing — a gated session surface with a stub
          provider behind it — and it reuses that suite's identity stub idiom. -->
     <Compile Include="Models.fs" />
+    <!-- Finding a repository: the provider lookups and the gated route over them. The same
+         shape as Models.fs — a stub provider behind a session surface — for the same reason. -->
+    <Compile Include="GitHubRepos.fs" />
     <Compile Include="WorkSandboxes.fs" />
     <Compile Include="CommandGates.fs" />
     <Compile Include="Tools.fs" />

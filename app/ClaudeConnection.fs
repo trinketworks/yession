@@ -263,17 +263,9 @@ let ownerOf (identity: CookieIdentity) : CredentialOwner =
     | AttributedUser user -> UserOwner user
     | UnattributedAccess -> LocalOwner
 
-/// The party a browser request's provider calls run on, so the catalogue it is answered
-/// with is the one this person's credential can actually see.
-///
-/// `None` where the deployment attributes nobody: an unattributed browser IS the
-/// deployment asking, and it reaches exactly the credentials a deployment may — the
-/// session's own and the local one — because that is what the turn-target precedence
-/// resolves nobody to. There is no separate rule here to keep in step.
-let private actorOf (identity: CookieIdentity) : Principal option =
-    match identity.Attribution with
-    | AttributedUser user -> Some (Principal.User user)
-    | UnattributedAccess -> None
+/// The party a browser request's provider calls run on (`PeerAttribution.principal`), so
+/// the catalogue it is answered with is the one this person's credential can actually see.
+let private actorOf (identity: CookieIdentity) : Principal option = PeerAttribution.principal identity.Attribution
 
 /// Build the /claude* route handler. `statusOf` reads the session's live status cache
 /// (fed by the Manager's connection stream); `agentAvailable` is the agent gate's own

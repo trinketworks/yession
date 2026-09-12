@@ -306,6 +306,7 @@ let start
     // paths it serves, the paths the shell emits, and the paths the browser fetches are
     // one declaration, and a route added there fails this build until it is handled here.
     // The connection-panel routes (`ClaudeStatus`/`Claude`, `GitHubStatus`/`GitHub`), the
+    // repo picker's (`GitHubRepos`/`GitHubBranches`), the
     // query stream and the model catalogue are the session's too but live in `extraRoutes`
     // (defined later in compile order), so they fall through to it exactly as an unknown
     // path does.
@@ -488,6 +489,8 @@ let start
         | Some (Claude _)
         | Some GitHubStatus
         | Some (GitHub _)
+        | Some GitHubRepos
+        | Some (GitHubBranches _)
         | Some Queries
         | None -> handleWithExtraRoutes ()
 
