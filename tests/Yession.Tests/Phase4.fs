@@ -33,6 +33,10 @@ let private existsSync (fs: obj) (path: string) : bool = Fable.Core.Util.jsNativ
 [<Emit("$0.writeFileSync($1, $2)")>]
 let private writeFileSync (fs: obj) (path: string) (text: string) : unit = Fable.Core.Util.jsNative
 
+/// What a browser makes of a link on a page: the href resolved against the page's own URL.
+[<Emit("new URL($1, $0).href")>]
+let private resolveUrl (pageUrl: string) (href: string) : string = Fable.Core.Util.jsNative
+
 let private statePath (name: string) =
     sprintf "tests/Yession.Tests/out/.data/%s-%d.manager.json" name (int (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds ()) % 1000000)
 
@@ -1040,18 +1044,31 @@ let private readinessTests =
         // stylesheet the Manager page does, since the ground is declared there, on `<html>`,
         // once for every surface. Asserted on the refusal page, because it is the one a test
         // can land on without a proxy in front, and both pages come from one template.
-        testCaseAsync "a standalone page links the stylesheet the Manager page links" <|
+        //
+        // RESOLVED from each page's own address, then fetched — not compared as text. The
+        // first version of this case compared the two `href`s and passed while the page was
+        // still white: the Manager page links the sheet relatively, which is right at `/` and
+        // a 404 from `/sessions/{id}/open`. Equal text, different files. The link a page
+        // carries is only a promise once the browser can follow it from where the page is.
+        testCaseAsync "a standalone page links the stylesheet the Manager page links, and it resolves from there" <|
             async {
                 let! pm = managerWithUi "open-sheet"
                 let baseUrl = sprintf "http://127.0.0.1:%d" pm.EndpointPort.Value
+                let managerUrl = baseUrl + "/"
+                let standaloneUrl = baseUrl + "/sessions/no-such-session/open"
                 let stylesheetOf (page: string) =
                     let m = System.Text.RegularExpressions.Regex.Match (page, "<link rel=\"stylesheet\" href=\"([^\"]+)\">")
                     if m.Success then Some m.Groups.[1].Value else None
-                let! manager = getReply (baseUrl + "/") |> Async.AwaitPromise
-                let! standalone = getReply (baseUrl + "/sessions/no-such-session/open") |> Async.AwaitPromise
-                let expected = stylesheetOf (bodyOfReply manager)
+                let resolvedFrom (pageUrl: string) (page: string) =
+                    stylesheetOf page |> Option.map (fun href -> resolveUrl pageUrl href)
+                let! manager = getReply managerUrl |> Async.AwaitPromise
+                let! standalone = getReply standaloneUrl |> Async.AwaitPromise
+                let expected = resolvedFrom managerUrl (bodyOfReply manager)
                 Expect.isSome expected "the Manager page links its stylesheet"
-                Expect.equal (stylesheetOf (bodyOfReply standalone)) expected "the standalone page links the same one"
+                let linked = resolvedFrom standaloneUrl (bodyOfReply standalone)
+                Expect.equal linked expected "from where each page lives, both links name the same file"
+                let! sheet = getReply linked.Value |> Async.AwaitPromise
+                Expect.equal (statusOfReply sheet) 200 "and the browser can follow it from the standalone page"
                 do! pm.StopAll ()
             }
     ]
