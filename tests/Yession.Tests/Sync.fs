@@ -356,6 +356,47 @@ let private codecTests =
                 (Some 4.0)
                 "the caret still stands where it was put, in the text it was put in"
 
+        // What the Session Process writes when something has written a few words for a
+        // chapter nobody named. The words replace the guess in the session, so every peer
+        // reads them and anybody can edit them afterwards — a name that only the writer
+        // could see would not be a name the session holds.
+        testCase "a chapter nobody named takes the words that were written for it" <| fun () ->
+            let doc = Y.Doc.Create ()
+            let p = Harness.run (Client.makeProgram doc (ClientModel.init (peer "ada" "Ada")))
+            let messageId = MessageId.create "msg-1" |> expect
+            p.Dispatch (user (EventsPageMsg (said messageId "ship it")))
+            p.Dispatch (user (ToggleChapterMsg messageId))
+            Expect.isTrue
+                (SyncedStateSync.nameChapter doc messageId "ship it" "Where it was settled")
+                "it still wore the guess, so the words went in"
+            let decoded = SyncedStateSync.ofDoc doc |> Result.mapError (sprintf "%A") |> expect
+            Expect.equal
+                (decoded.Chapters |> Map.tryFind messageId |> Option.map (fun mark -> Text.toString mark.Name))
+                (Some "Where it was settled")
+                "the session holds the written name"
+
+        // The race the write exists to lose. A second passes between reading a name and
+        // having something to put there, and somebody typing in that second has named the
+        // chapter themselves — so the answer arriving after them is dropped rather than
+        // applied over their words.
+        testCase "a name written while the model was thinking is the one that stays" <| fun () ->
+            let doc = Y.Doc.Create ()
+            let p = Harness.run (Client.makeProgram doc (ClientModel.init (peer "ada" "Ada")))
+            let messageId = MessageId.create "msg-1" |> expect
+            p.Dispatch (user (EventsPageMsg (said messageId "ship it")))
+            p.Dispatch (user (ToggleChapterMsg messageId))
+            let seeded = (p.Model ()).Synced.Chapters |> Map.find messageId
+            // Somebody types, after the pass that read "ship it" and before its answer lands.
+            p.Dispatch (user (EditChapterNameMsg (messageId, Text.edit "Mine" seeded.Name)))
+            Expect.isFalse
+                (SyncedStateSync.nameChapter doc messageId "ship it" "Where it was settled")
+                "the name it was told to replace is not the name that is there"
+            let decoded = SyncedStateSync.ofDoc doc |> Result.mapError (sprintf "%A") |> expect
+            Expect.equal
+                (decoded.Chapters |> Map.tryFind messageId |> Option.map (fun mark -> Text.toString mark.Name))
+                (Some "Mine")
+                "theirs, and nothing wrote over it"
+
         // Both halves of an entry at once, through the decoder the app itself binds rather
         // than the structural read above: a nested text that encoded but did not decode would
         // be a name every peer wrote and none could read back.

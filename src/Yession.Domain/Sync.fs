@@ -570,6 +570,49 @@ module SyncedStateSync =
                     ids |> List.iter (fun id -> queue.delete (QueueId.value id))),
                 processOrigin)
 
+    /// The chapters a doc holds, without reading the rest of it.
+    ///
+    /// `ofDoc` answers this too, and reads everything else on the way. What asks for this asks
+    /// on every doc update — a keystroke in somebody's draft, a terminal record landing — so
+    /// what it costs is the only reason it is a function of its own.
+    let chaptersOf (doc: Yjs.Y.Doc) : Map<MessageId, ChapterMark> =
+        foldRoot doc "chapters" (fun entry -> entryStringOpt entry "opens", entryText entry "name")
+        |> chaptersToDomain
+
+    /// Write a chapter's name — but only while it still reads `expected`.
+    ///
+    /// A compare-and-set rather than a write, because what asks for this asks a model first,
+    /// and a second passes between reading a name and having something to put there. Somebody
+    /// typing in that second has named the chapter themselves, and the answer arriving after
+    /// them must not be what the session keeps. The read and the write are one transaction, so
+    /// there is no window between them here either.
+    ///
+    /// Answers whether it wrote, so a caller can tell "named it" from "somebody got there
+    /// first" rather than assuming.
+    let nameChapter (doc: Yjs.Y.Doc) (messageId: MessageId) (expected: string) (name: string) : bool =
+        let mutable wrote = false
+        doc.transact (
+            (fun _ ->
+                let chapters : Yjs.Y.Map<obj> = doc.getMap "chapters"
+                match chapters.get (MessageId.value messageId) with
+                | Some entryObj when not (isNull entryObj) ->
+                    match (unbox<Yjs.Y.Map<obj>> entryObj).get "name" with
+                    | Some textObj when not (isNull textObj) ->
+                        let text = unbox<Yjs.Y.Text> textObj
+                        let held = textString text
+                        if held = expected && held <> name then
+                            // Delete then insert, which is what replacing a whole name is. A
+                            // splice against the words would be the intent-preserving edit a
+                            // person's keystroke is — and there is no intent to preserve here:
+                            // these are not the same name shortened, they are other words.
+                            if held.Length > 0 then text.delete (0, held.Length)
+                            text.insert (0, name)
+                            wrote <- true
+                    | _ -> ()
+                | _ -> ()),
+            processOrigin)
+        wrote
+
     /// The Markdown of a queue entry's rich body, read straight from its top-level fragment
     /// root — the drain's snapshot into the durable `MessageSent` (the Session Process observes
     /// the doc without a Ylmish binding, so it reads the body fragment directly). An entry whose

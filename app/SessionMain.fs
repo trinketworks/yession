@@ -811,6 +811,28 @@ let private connectedSomewhere () =
             | PeerScope _ -> false
             | SessionScope _ | UserScope _ | LocalScope -> true))
 
+/// Writing a few words, read at each pass (Plan 25) — the same gate a turn has, because it is
+/// the same credential and the same question about whether this session can reach a model.
+///
+/// On the DEPLOYMENT's credential, not a person's: naming a chapter is nobody's turn. No one
+/// asked for it, a chapter mark carries no author, and a session that spent whichever human
+/// happened to be connected would be attributing a request to somebody who did not make it.
+let private summarize () : Summarize option =
+    if not (envCreds || connectedSomewhere ()) then None
+    else
+        Some (fun ask ->
+            async {
+                match! resolveCredential CredentialFor.Deployment with
+                | Error reason -> return Error reason
+                | Ok (Some credential) -> return! ClaudeConnection.summarize credential ask
+                | Ok None ->
+                    match ambientCredential () with
+                    | Some credential -> return! ClaudeConnection.summarize credential ask
+                    // Unreachable, as at the catalogue: `Ok None` means the ambient credential
+                    // is what this would run on, and that is what `ambientCredential` answers.
+                    | None -> return Error "no credential to write with"
+            })
+
 let private runAgent () : RunAgent option =
     match Interop.envOr "YESSION_SESSION_AGENT" "" with
     | "diagnostic" -> Some diagnosticAgent
@@ -1125,7 +1147,7 @@ Async.StartImmediate (
                                               GitConfig = GitGateway.gitConfig host gitGateway.Port cap }
                         }
                 Revoke = gitGateway.Revoke } ]
-        let! host = Host.startFull runAgent (Some (makeSandboxes forwardableCredentials)) (secretsCapabilitiesFor sessionId) (Some log) (Some docStore) (Some transcriptStore) reportName reportActivity telemetry.Emit subscribeNotifications mcpServers connectionRoutes sessionId auth sessionMount managerOrigin ephemeralStorage (resourceProfile |> Option.bind (fun file -> file.Guidance)) port
+        let! host = Host.startFull runAgent summarize (Some (makeSandboxes forwardableCredentials)) (secretsCapabilitiesFor sessionId) (Some log) (Some docStore) (Some transcriptStore) reportName reportActivity telemetry.Emit subscribeNotifications mcpServers connectionRoutes sessionId auth sessionMount managerOrigin ephemeralStorage (resourceProfile |> Option.bind (fun file -> file.Guidance)) port
         // The Host built the sandbox registry (it owns the log), so the cell the turn
         // capabilities and the `work_sandboxes` query read is filled here — before the
         // readiness line, and therefore before any turn or any browser can ask.
