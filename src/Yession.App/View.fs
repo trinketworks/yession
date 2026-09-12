@@ -1599,6 +1599,70 @@ module View =
         | LeaseHolderGone -> html $"""<span class="{Style.statusFaint}">holder left</span>"""
         | LeaseIdle -> html $"""<span class="{Style.statusFaint}">went idle</span>"""
 
+    /// Which hold a queued command is under, and how that hold reads.
+    ///
+    /// One function because two surfaces say this one fact — the chip in the chat and the
+    /// card in the terminal's own band — and a three-way verdict written twice agrees only
+    /// until somebody edits one of them.
+    ///
+    /// A held act is a WAIT, and the pulse dot is the wait — the word only names the blocker
+    /// (the same status voice every other wait in the product wears). The not-marking banner
+    /// over a held queue already says what resolves it.
+    let private pendingStatus (model: ClientModel) (entry: PendingAct) : string * TemplateResult =
+        if ClientModel.awaitsIntegration entry model then
+            Dom.Text.queuedAwaitingIntegration,
+            html $"""<span class="{Style.statusRun}"><span class="{Style.statusDotPulse}"></span>not marking</span>"""
+        elif ClientModel.awaitsTerminal entry model then
+            Dom.Text.queuedAwaitingTerminal,
+            html $"""<span class="{Style.statusRun}"><span class="{Style.statusDotPulse}"></span>terminal busy</span>"""
+        else Dom.Text.queuedReady, html $"""<span class="{Style.statusOk}">queued</span>"""
+
+    /// What the terminal this act is queued in is CALLED — its title, or its id while this
+    /// client has not folded the terminal yet. Words, never a raw id when a name exists, for
+    /// the reason every other author and subject on screen is.
+    let private pendingSubject (model: ClientModel) (entry: PendingAct) : string =
+        Projection.tryFind entry.Terminal model.Terminals
+        |> Option.map (fun view -> TerminalTitle.value view.Title)
+        |> Option.defaultValue (TerminalId.value entry.Terminal)
+
+    /// A command the agent has queued, in the chat: the SAME chip its block will leave behind
+    /// once it has run, drawn where that block will land.
+    ///
+    /// It replaced a card that stood in a dock above the composer, editable and withdrawable
+    /// in place. The card is not gone — it is in the terminal's own band, which is where the
+    /// rest of that terminal's queue already was — and this is the read of it: an agent
+    /// reaching for a terminal is the same kind of act as an agent reaching for a tool, and
+    /// it should read like one rather than take a sixth of a phone's screen to say so. So
+    /// tapping it opens the terminal it is queued in, where it can be edited, reordered or
+    /// withdrawn.
+    ///
+    /// No author of its own, for the reason a block chip has none: WHO asked for it is the
+    /// group's author line above it.
+    let private pendingChip
+        (actions: ViewActions)
+        (dispatch: ClientMsg -> unit)
+        (model: ClientModel)
+        (entry: PendingAct)
+        : TemplateResult =
+        let statusToken, statusLine = pendingStatus model entry
+        let what = pendingSubject model entry
+        // The command itself lives in a `Y.Text` root, not in the model — it is editable by
+        // every peer until it drains — so the text is pushed in by the browser half
+        // (`Render.syncTerminalInputs`) rather than rendered here. A `<code>` and not a
+        // read-only `<input>`: a form control inside a button is not legal content, and it
+        // would eat the press this button exists for.
+        html $"""
+            <button type="button" class="{Style.chatChip}"
+                    data-chat-pending="{QueueId.value entry.QueueId}"
+                    data-chat-pending-status="{statusToken}"
+                    data-terminal-id="{TerminalId.value entry.Terminal}"
+                    @click={Ev(fun _ -> dispatch (ShowInPaneMsg (Reading (TerminalTab entry.Terminal))); actions.FocusPane ())}>
+              <span class="{Style.terminalPrompt}">$</span>
+              <code class="{Style.chatChipCommand}" data-terminal-text="{BodyKey.terminalQueued entry.QueueId}"></code>
+              <span class="{Style.chatChipWho}" data-pending-subject="terminal:{TerminalId.value entry.Terminal}">{what}</span>
+              <span class="shrink-0">{statusLine}</span>
+            </button>"""
+
     /// A stretch's length, in the coarsest unit that still says something. Sub-second is not
     /// a session someone had; it is a lease that bounced.
     let private durationText (span: System.TimeSpan) : string =
@@ -2103,15 +2167,26 @@ module View =
                     | [ (terminalId, block) ] ->
                         Some (Some (Authority.author block.Authority), blockChip terminalId block)
                     | many -> Some (Some ActorRef.Agent, taskCard turn many)
+        // What is about to run, at the tail — after everything that has happened, which is
+        // where it happens. `rows` is a fold over EVENTS and a pending act is not one, so it
+        // is not a row and cannot be: it joins the timeline as a block when it drains, and
+        // this chip is replaced by that block's own in the same place. The two mounts it used
+        // to have (a dock above the composer, a card in the terminal) are now the read and
+        // the write of it — see `pendingChip`.
+        let pending : (ActorRef option * TemplateResult) list =
+            ClientModel.pendingActs model
+            |> List.map (fun entry ->
+                Some (Authority.author entry.Authority), pendingChip actions dispatch model entry)
         let entries : (ActorRef option * TemplateResult) list =
-            rows
-            |> List.collect (fun row ->
-                let rule =
-                    match row with
-                    | RowItem (TimelineMessage item) when Chapters.opens model.Synced.Chapters item ->
-                        [ None, chapterRule item ]
-                    | _ -> []
-                rule @ Option.toList (entryOf row))
+            (rows
+             |> List.collect (fun row ->
+                 let rule =
+                     match row with
+                     | RowItem (TimelineMessage item) when Chapters.opens model.Synced.Chapters item ->
+                         [ None, chapterRule item ]
+                     | _ -> []
+                 rule @ Option.toList (entryOf row)))
+            @ pending
         // Consecutive acts by ONE actor fold under one author line — the avatar and name a
         // message used to repeat per turn, said once where the speaker changes. The line is
         // sticky (`Style.messageGroupHead`), so a run longer than the screen keeps saying
@@ -2150,7 +2225,10 @@ module View =
         //
         // Keyed on the ROWS, not on the rendered list: the mapping above answers a bare tool
         // use and an empty run with `Lit.nothing`, so a timeline can hold rows and still draw
-        // nothing — and "has rows" would then hide the caret on a screen that is blank.
+        // nothing — and "has rows" would then hide the caret on a screen that is blank. What
+        // is DRAWN is the other half of the same test, because a pending chip is not a row:
+        // a session whose first act is a queued command has nothing folded and something on
+        // screen, and the caret would stand over it.
         //
         // `aria-hidden`, because it is a typographic mark rather than content: a reader that
         // cannot see it is told the timeline is empty by the timeline being empty.
@@ -2174,13 +2252,13 @@ module View =
                         </p>""")
             | Some _, _, _ -> None
         let body =
-            match rows, model.HistoryRead with
+            match rows, items, model.HistoryRead with
             // Nothing here, and this client has not looked yet — which after the local store
             // (Plan 20) is the ordinary cold open. The idle caret would say "nothing was ever
             // said here", so it says the opposite of what is known. A pulse says the true
             // thing: someone is reading. `role="status"` because it is a state, not a mark —
             // a reader that cannot see the pulse is told in words.
-            | [], false ->
+            | [], [], false ->
                 [ html $"""<div class="{Style.timelineIdle}" role="status" data-history-loading>
                        <span class="{Style.caretWorking}"></span>
                        <span class="{Style.srOnly}">{Dom.Text.readingHistory}</span>
@@ -2191,12 +2269,14 @@ module View =
             // than empty, and the line saying so stands where the caret would have.
             // Nothing here, and there will be: the launch surface stands where the first line
             // will land, for a client that is connected and has read to the log's end.
-            | [], true when ClientModel.launchOffered model -> [ repoPicker actions dispatch model ]
-            | [], true ->
+            | [], [], true when ClientModel.launchOffered model -> [ repoPicker actions dispatch model ]
+            | [], [], true ->
                 match missing with
                 | Some line -> [ line ]
                 | None ->
-                    [ html $"""<div class="{Style.timelineIdle}" aria-hidden="true"><span class="{Style.caretIdle}"></span></div>""" ]
+                    // Hooked like its sibling above, and for the same reason: what a mark
+                    // MEANS is not readable from the mark, and these two mean opposite things.
+                    [ html $"""<div class="{Style.timelineIdle}" data-timeline-empty aria-hidden="true"><span class="{Style.caretIdle}"></span></div>""" ]
             // Rows, and still no repo and nothing said — a launch that failed, and its note:
             // the surface stays at the head, so the next attempt is a click rather than a
             // conversation.
@@ -2297,44 +2377,26 @@ module View =
               {body}
             </article>"""
 
-    /// ONE card for a queued act (Plan 15, stage 3c): what is about to run, editable and
-    /// withdrawable while it waits its turn.
+    /// ONE card for a queued act (Plan 15, stage 3c): what is about to run, editable,
+    /// reorderable and withdrawable while it waits its turn.
     ///
-    /// Rendered at two mount points from this one function: the chat column, where every
-    /// pending act appears with the chip that says what it is about, and a terminal's own
-    /// panel, where the list is filtered to that terminal and the chip would only repeat the
-    /// heading above it.
+    /// The WRITE of a pending act, and the only one. Its read is the chip in the chat
+    /// (`pendingChip`), which is where a person finds out that something is queued at all;
+    /// this is where they answer it, in the terminal it is queued in, beside the rest of that
+    /// terminal's queue and the line they would type the next command on. The card used to
+    /// stand in the chat column as well, which put the same three controls in two places and
+    /// spent a band of the composer's dock saying what one line says.
     let private pendingCard
         (actions: ViewActions)
         (dispatch: ClientMsg -> unit)
         (model: ClientModel)
-        (showSubject: bool)
         (entry: PendingAct)
         : TemplateResult =
         let id = entry.QueueId
-        let statusToken =
-            if ClientModel.awaitsIntegration entry model then Dom.Text.queuedAwaitingIntegration
-            elif ClientModel.awaitsTerminal entry model then Dom.Text.queuedAwaitingTerminal
-            else Dom.Text.queuedReady
-        // A held act is a WAIT, and the pulse dot is the wait — the word only names the
-        // blocker (the same status voice every other wait in the product wears). The
-        // not-marking banner over a held queue already says what resolves it.
-        let statusLine =
-            if statusToken = Dom.Text.queuedAwaitingIntegration then
-                html $"""<span class="{Style.statusRun}"><span class="{Style.statusDotPulse}"></span>not marking</span>"""
-            elif statusToken = Dom.Text.queuedAwaitingTerminal then
-                html $"""<span class="{Style.statusRun}"><span class="{Style.statusDotPulse}"></span>terminal busy</span>"""
-            else html $"""<span class="{Style.statusOk}">queued</span>"""
-        // What this act IS, in words — used both as the chip and as the accessible name on
-        // the controls, because a screen reader hearing "Delete" eleven times learns
-        // nothing about which one it is on.
-        let what =
-            Projection.tryFind entry.Terminal model.Terminals
-            |> Option.map (fun view -> TerminalTitle.value view.Title)
-            |> Option.defaultValue (TerminalId.value entry.Terminal)
-        let subject =
-            if not showSubject then Lit.nothing
-            else html $"""<span class="{Style.chatChipWho}" data-pending-subject="terminal:{TerminalId.value entry.Terminal}">{what}</span>"""
+        let statusToken, statusLine = pendingStatus model entry
+        // What this act IS, in words — the accessible name on the controls, because a screen
+        // reader hearing "Delete" eleven times learns nothing about which one it is on.
+        let what = pendingSubject model entry
         // The command line is characters, so it is an input any peer can fix before it runs.
         let body =
             html $"""
@@ -2355,7 +2417,6 @@ module View =
               {body}
               <div class="{Style.terminalQueuedRow}">
                 {statusLine}
-                {subject}
                 <span class="{Style.small}">{authorName model (Authority.author entry.Authority)}</span>
                 <div class="ml-auto flex items-center gap-2">
                   {ordering}
@@ -2363,25 +2424,10 @@ module View =
               </div>
             </article>"""
 
-    /// A terminal's own pending list: the same card, filtered to this terminal, with the
-    /// chip off because the heading above it already says which terminal this is.
+    /// A terminal's own pending list: every card for this terminal, in run order. No chip
+    /// saying which terminal — the heading above it already does.
     let private terminalQueue (actions: ViewActions) (dispatch: ClientMsg -> unit) (model: ClientModel) (terminal: TerminalId) : TemplateResult list =
-        ClientModel.terminalQueue terminal model |> List.map (pendingCard actions dispatch model false)
-
-    /// Everything queued, in the chat column, directly under the timeline (Plan 15, stage
-    /// 3c). Not INSIDE the timeline: that is a fold over events, and a pending act is not
-    /// one — it is the tail, and acts join the timeline when they resolve.
-    ///
-    /// Terminal commands appear here too, and that is the point rather than a side effect:
-    /// reading what the agent is about to run is the same act as reading what it is about
-    /// to say, and it should not require having the right panel open.
-    let private pendingActs (actions: ViewActions) (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
-        match ClientModel.pendingActs model with
-        | [] -> Lit.nothing
-        | acts ->
-            let cards = acts |> List.map (pendingCard actions dispatch model true)
-            html $"""
-                <section class="{Style.queue}" data-pending-acts aria-label="Queued commands">{cards}</section>"""
+        ClientModel.terminalQueue terminal model |> List.map (pendingCard actions dispatch model)
 
     /// The lease bar (Plan 13, stage 2e): who is typing here, and the one control that
     /// changes it. Shown in place of the command lines — never in place of the queue, which
@@ -3270,7 +3316,6 @@ module View =
               {header actions dispatch model}
               {signInPrompt actions model}
               {chat actions dispatch model}
-              {pendingActs actions dispatch model}
               {queue dispatch model.Synced}
               {drafts actions dispatch model}
             </div>

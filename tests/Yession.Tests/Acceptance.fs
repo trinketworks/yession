@@ -756,7 +756,10 @@ let private uiChecklistTests =
             let empty =
                 { representativeModel with
                     Conversation = ConversationProjection.empty
-                    Timeline = TimelineProjection.empty }
+                    Timeline = TimelineProjection.empty
+                    // Nothing queued either: a command waiting to run is something ON the
+                    // screen, and a session with one is not the empty one this is about.
+                    Synced = { representativeModel.Synced with Pending = Map.empty } }
             let looking = Support.render { empty with HistoryRead = false }
             Expect.isTrue
                 (looking.Contains "data-history-loading")
@@ -774,6 +777,25 @@ let private uiChecklistTests =
             Expect.isFalse
                 (full.Contains "data-history-loading")
                 "a timeline with messages in it is not an empty one"
+            // Nor is one whose only act has not run yet. Nothing is FOLDED in this session —
+            // its first command is still queued — so a caret keyed on the fold would stand
+            // over the one thing on the screen and say the session was empty.
+            let queuedOnly =
+                Support.render
+                    { empty with
+                        HistoryRead = true
+                        Synced = representativeModel.Synced }
+            Expect.isTrue
+                (queuedOnly.Contains Dom.Hooks.chatPending)
+                "a session whose first act is queued shows it"
+            Expect.isFalse
+                (queuedOnly.Contains "data-timeline-empty")
+                "and does not also say it is empty"
+            // …which the same session with nothing queued does say, so the line above is a
+            // verdict rather than a hook that never renders.
+            Expect.isTrue
+                ((Support.render { empty with HistoryRead = true }).Contains "data-timeline-empty")
+                "an empty one still says so"
 
         testCase "a client that cannot keep history says so; one that can says nothing" <| fun () ->
             // The availability invariant, not the wording: a client whose context denies it a
@@ -1405,21 +1427,36 @@ let private uiChecklistTests =
             // octo/hello" pair under it spends two lines of a narrow lane saying one thing.
             Expect.isFalse (record.Contains ">repo<") "the naming column is not also a labelled pair"
 
-        // The one approval card, at both mount points (Plan 15, stage 3c). What is worth
-        // pinning is that the CHAT column carries the terminal's pending commands too: the
-        // whole claim of this stage is that approving what the agent is about to run is the
-        // same act as reading what it is about to say, and a card only a panel shows would
-        // quietly make it a different one again.
-        testCase "everything waiting on a verdict appears in the chat column" <| fun () ->
+        // The one pending act, at both mount points (Plan 15, stage 3c). What is worth
+        // pinning is that the CHAT carries the terminal's pending commands too: the whole
+        // claim of this stage is that reading what the agent is about to run is the same act
+        // as reading what it is about to say, and a card only a panel shows would quietly
+        // make it a different one again.
+        //
+        // In the CONVERSATION rather than in a dock of its own above the composer, which is
+        // the half that changed: a command about to run is the same kind of act as one that
+        // has run, so it reads as one — the chip its block will leave behind, in the place
+        // that block will land.
+        testCase "what is about to run reads as a chip in the conversation" <| fun () ->
             let html = Support.render representativeModel
-            Expect.isTrue (html.Contains "data-pending-acts") "the chat column carries the pending list"
-            let listStart = html.IndexOf "data-pending-acts"
-            Expect.isTrue (listStart > 0) "the list is rendered"
-            let list = html.Substring (listStart, min 2000 (html.Length - listStart))
             // The representative model's one pending act is the AGENT's terminal command
             // under the default mode — the case the gate exists for.
-            Expect.isTrue (list.Contains "data-terminal-queued") "with the terminal's own queued command in it"
-            Expect.isTrue (list.Contains "data-pending-subject") "and a chip saying what it is about"
+            let chip = html.IndexOf (Dom.attr Dom.Hooks.chatPending (QueueId.value terminalQueueId))
+            let timeline = html.IndexOf Dom.Hooks.conversation
+            let dock = html.IndexOf Dom.Hooks.messageQueue
+            Expect.isTrue (chip > 0) "the chat carries a chip for what is queued"
+            Expect.isTrue (timeline >= 0 && dock > timeline) "the timeline and the composer's dock both render"
+            Expect.isTrue (chip > timeline && chip < dock) "the chip is in the timeline, not in a dock above the composer"
+            Expect.isTrue (html.Contains "data-pending-subject") "and says which terminal it is queued in"
+            // No author line of its own: it wears the group's, exactly as a block chip does.
+            // A chip that named its own author would be the one act in the conversation whose
+            // attribution came from somewhere else.
+            let before = html.Substring (timeline, chip - timeline)
+            let named = before.LastIndexOf Dom.Hooks.messageAuthor
+            Expect.isTrue (named > 0) "something above it says whose turn this is"
+            Expect.isTrue
+                ((before.Substring named).StartsWith (Dom.attr Dom.Hooks.messageAuthor Dom.Text.agent))
+                "and it is the agent's, because the agent is what queued this"
 
         // The structure an answer owes a screen reader (CLAUDE.md, UI baseline). Held in the
         // renderer, so it is held for every query — the reason the surface is generated.

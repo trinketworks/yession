@@ -1317,10 +1317,10 @@ module ClientModel =
         TerminalQueueOrder.sortedFor terminal model.Synced.Pending
 
     /// Every act waiting on a verdict, in a stable total order (Plan 15, stage 3c): by
-    /// subject, then by the subject's own order, then by id. What the chat column shows,
-    /// and it deliberately includes the TERMINAL ones — approving a command the agent is
-    /// about to run is the same act as reading what it is about to say, so it belongs where
-    /// the reading happens rather than only inside a panel you may not have open.
+    /// subject, then by the subject's own order, then by id. What the CHAT shows, at the tail
+    /// of the conversation, and it deliberately includes the TERMINAL ones — reading a command
+    /// the agent is about to run is the same act as reading what it is about to say, so it
+    /// belongs where the reading happens rather than only inside a panel you may not have open.
     let pendingActs (model: ClientModel) : PendingAct list =
         model.Synced.Pending
         |> Map.toList

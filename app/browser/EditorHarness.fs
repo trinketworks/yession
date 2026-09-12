@@ -645,6 +645,16 @@ type private Filler =
 /// the model, and the scroll scenario below that streams records into it.
 let private harnessTerminal : TerminalId = TerminalId.create "term-harness" |> expect
 
+/// A command the agent has QUEUED in it and that has not run yet. Module-level for the same
+/// reason the terminal is: the model puts the act in the queue, and the mount below seeds the
+/// `Y.Text` root holding its command — which is the only place that text can come from, since
+/// a pending command is editable by every peer and so lives in the doc rather than the model.
+let private harnessQueued : QueueId = QueueId.create "queue-harness" |> expect
+
+/// What it is about to run. A command nothing in this fixture has run, so a case reading it
+/// off the chip cannot be satisfied by a block that happens to say the same thing.
+let private harnessQueuedCommand = "npm run lint"
+
 /// What the agent says in reply number `i`: paragraphs, a list and a fence — the prose a
 /// working session's replies are made of, and so what a render of one costs. Shared by the
 /// shell model's `Replies` filler and the open scenario's event fixture, so the two sweeps
@@ -743,7 +753,20 @@ let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
                     Map.ofList
                         [ messageId, { Opens = true; Name = Ylmish.Text.ofString "Where it was settled" }
                           MessageId.create "msg-filler-8" |> expect,
-                          { Opens = true; Name = Ylmish.Text.empty } ] }
+                          { Opens = true; Name = Ylmish.Text.empty } ]
+                // One command the agent has asked for and that has not run: the chip at the
+                // tail of the conversation, which is the only surface whose text comes out
+                // of the doc rather than out of the model.
+                Pending =
+                    Map.ofList
+                        [ harnessQueued,
+                          { QueueId = harnessQueued
+                            Terminal = terminalId
+                            Authority = Authority.agentFor (Principal.Peer peerId)
+                            Order = 1.0
+                            Background = false
+                            Stdin = false
+                            Size = None } ] }
         Conversation =
             { Items =
                 [ { MessageId = messageId
@@ -1113,11 +1136,17 @@ do
     // the render.
     let mutable dispatchRef : ClientMsg -> unit = ignore
     let shellDoc = Y.Doc.Create ()
+    let shellTexts = TextRegistry shellDoc
+    // The queued command's own text. The model holds the ENTRY; what it will run is a `Y.Text`
+    // root every peer may edit until it drains, so a fixture that only put the act in the
+    // queue would render a chip with nothing in it — and a case reading the command off that
+    // chip would be asserting against the render's silence rather than against the doc.
+    TerminalText.setTo shellTexts (BodyKey.terminalQueued harnessQueued) harnessQueuedCommand
     let renderer =
         Render.create
             { Doc = shellDoc
               Registry = BodyRegistry shellDoc
-              Texts = TextRegistry shellDoc
+              Texts = shellTexts
               PeerId = shellModel.Peer.PeerId
               Root = shellHost
               Actions = actions

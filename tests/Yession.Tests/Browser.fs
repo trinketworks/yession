@@ -2527,6 +2527,34 @@ let editorTests =
                 return ()
             }
 
+        // A command the agent has queued, in the chat. Two promises here that no rendered
+        // string can settle, and the first is the reason this chip exists in the shape it
+        // does: what it is about to run comes out of the DOC — a `Y.Text` root every peer may
+        // edit until it drains — so the markup carries an empty element and only a browser
+        // that has bound it says the command. The second is the tap: the chip is the read,
+        // the terminal's own card is where it is answered, and a read that could not reach
+        // the answer would be the half of this that quietly does not work.
+        editorCase "a queued command says what it will run, and opens the terminal it waits in" (EDITOR_PORT + 40) <| fun page ->
+            async {
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-chat-pending]")
+                let! _ =
+                    await (page.WaitForFunctionAsync
+                        """document.querySelector('#shell [data-chat-pending]').textContent.includes('npm run lint')""")
+
+                do! awaitU (page.ClickAsync "#shell [data-chat-pending]")
+
+                // The pane is on the terminal it is queued in — not some terminal, that one.
+                let! _ =
+                    await (page.WaitForFunctionAsync
+                        """document.querySelector('#shell [data-pane-panel]')?.getAttribute('data-pane-panel') === 'terminal:term-harness'""")
+                // Focus followed it in, as it does for a block's chip: the reader was moved,
+                // so their keyboard was too.
+                let! _ = await (page.WaitForFunctionAsync """document.activeElement?.hasAttribute('data-pane-panel') === true""")
+                // And what they arrived at is the card that can answer it.
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-terminal-queued='queue-harness']")
+                return ()
+            }
+
         // Pins (Plan 20, stage 1). The pin's STATE is a rendered attribute the cheap tier can
         // read; what needs a browser is the keyboard release — Delete on a focused tab
         // removes that tab from the document, and focus has to land on what took its place
