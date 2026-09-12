@@ -2169,6 +2169,79 @@ let editorTests =
                 Expect.isNotNull kept "what was typed is what the rule says, after the render that followed it"
                 return ()
             }
+        // A collaborator's caret in that same name. Nothing in the markup can settle where a
+        // marker LANDS: it is absolutely positioned by measurement after the render, so a
+        // marker placed against the wrong box, or against a stylesheet's idea of the field,
+        // renders exactly the same string as one placed right — and lands on the message
+        // below, or on the dot, or nowhere at all.
+        //
+        // What is pinned is the promise rather than the pixels: the caret is inside the name
+        // it is in, at a non-zero height, and further right for a later index than an earlier
+        // one. A reference image would fail on a font tweak, which is the coupling this tier
+        // exists to avoid.
+        editorCaseIn 1440 900 "a collaborator's caret in a chapter's name stands in that name" (EDITOR_PORT + 40) <| fun page ->
+            async {
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-chapter-name='msg-filler-8']")
+                do! awaitU (page.EvaluateAsync "() => window.__chapterCaret('msg-filler-8', 3, 3)")
+                // Waited for by EXISTENCE, not visibility: a bare caret is a zero-width
+                // highlight with the caret bar inside it, which every "is it visible" check
+                // in a driver calls hidden.
+                let! _ =
+                    await (page.WaitForFunctionAsync
+                            """!!document.querySelector("#shell [data-chapter-rule='msg-filler-8'] [data-cursor-peer='brave-owl']")""")
+                let! inside =
+                    await (page.EvaluateAsync<bool>
+                            """() => {
+                                 const name = document.querySelector("#shell [data-chapter-name='msg-filler-8']")
+                                 const mark = document.querySelector("#shell [data-chapter-rule='msg-filler-8'] [data-cursor-peer='brave-owl']")
+                                 const n = name.getBoundingClientRect(), m = mark.getBoundingClientRect()
+                                 return m.height > 0
+                                     && m.top >= n.top - 1 && m.bottom <= n.bottom + 1
+                                     && m.left >= n.left - 1 && m.left <= n.right + 1
+                               }""")
+                Expect.isTrue inside "the caret is drawn inside the field it is a caret in"
+
+                // The same caret further along the name is further along the SCREEN. This is
+                // what says the offset is being measured rather than the marker parked at the
+                // start of the field, which every check above would pass.
+                let! at3 =
+                    await (page.EvaluateAsync<float>
+                            """() => document.querySelector("#shell [data-chapter-rule='msg-filler-8'] [data-cursor-peer='brave-owl']").getBoundingClientRect().left""")
+                do! awaitU (page.EvaluateAsync "() => window.__chapterCaret('msg-filler-8', 9, 9)")
+                let! moved =
+                    await (page.WaitForFunctionAsync
+                            (sprintf
+                                """document.querySelector("#shell [data-chapter-rule='msg-filler-8'] [data-cursor-peer='brave-owl']").getBoundingClientRect().left > %f"""
+                                at3))
+                Expect.isNotNull moved "a caret later in the name is drawn further into it"
+                return ()
+            }
+        // Where a peer is can now be as long as a chapter's name — up to the heuristic's own
+        // 48 characters, where "renaming" and "in build" were a word or two. The roster row is
+        // a name and a right-aligned slot, and the slot never shrank, so a long one ran off
+        // the side of the sidebar taking the peer's name with it. Markup cannot see that: the
+        // words are all present and correct in a string, and only a laid-out column knows they
+        // did not fit in it.
+        editorCaseIn 1440 900 "where a peer is never runs off the side of the roster" (EDITOR_PORT + 41) <| fun page ->
+            async {
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-chapter-name='msg-filler-8']")
+                // The chapter whose name nobody has written, so what the roster says is the
+                // heuristic's guess at a whole line of somebody's message — the longest thing
+                // this slot can be asked to hold.
+                do! awaitU (page.EvaluateAsync "() => window.__chapterCaret('msg-filler-8', 0, 0)")
+                let! _ =
+                    await (page.WaitForFunctionAsync
+                            """!!document.querySelector("#shell [data-peer-presence='brave-owl'] [data-peer-at]")""")
+                let! fits =
+                    await (page.EvaluateAsync<bool>
+                            """() => {
+                                 const row = document.querySelector("#shell [data-peer-presence='brave-owl']")
+                                 const at = row.querySelector('[data-peer-at]')
+                                 return at.getBoundingClientRect().right <= row.getBoundingClientRect().right + 1
+                               }""")
+                Expect.isTrue fits "the words stop inside the row rather than running past it"
+                return ()
+            }
         // The ground a message stands on, and the three promises it makes that only a laid-out
         // page can settle. Every cheap tier reads markup, and markup with a control overlapping
         // its own text reads exactly like markup where it does not.

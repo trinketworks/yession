@@ -653,7 +653,13 @@ module View =
                     <div class="{Style.person}" data-peer-presence="{PeerId.value peer}">
                       <span class="{Style.cls [ Style.avatar; Style.humanAvatar (PeerId.value peer); Style.personAvatar ]}"></span>
                       <span class="truncate min-w-0">{name}</span>
-                      <span class="{Style.label} ml-auto shrink-0" data-peer-at="{token}">{words}</span>
+                      <!-- The slot TRUNCATES rather than holding its width: where a peer is
+                           used to be a word or two, and a chapter's name made it a line of
+                           somebody's message — which pushed itself, and the peer's name with
+                           it, off the side of the sidebar. Capped at half the row because
+                           truncation alone spends the row on the longer of the two, and the
+                           one that has to survive is WHOSE row it is. -->
+                      <span class="{Style.cls [ Style.label; "ml-auto min-w-0 max-w-1/2 truncate" ]}" data-peer-at="{token}">{words}</span>
                     </div>""")
         html $"""
             <section class="{Style.cls [ Style.sideSection; Style.navLane1 ]}">
@@ -1853,6 +1859,14 @@ module View =
         let chapterRule (item: ConversationItem) =
             let held = Chapters.written model.Synced.Chapters item
             let named = ClientModel.chapterName model item
+            // Only peers whose caret is in THIS chapter's name get a marker here, the way the
+            // header takes the title's. A name is a field like any other, and a marker in the
+            // wrong one is a collaborator apparently standing somewhere they are not.
+            let cursors =
+                model.Presence
+                |> Map.toList
+                |> List.filter (fun (_, p) -> p.Focus.Field = ChapterName item.MessageId)
+                |> List.map (fun (peerId, p) -> remoteCursor peerId p)
             html $"""
                 <div class="{Style.chapterRule}" data-chapter-rule="{MessageId.value item.MessageId}">
                   <span class="{Style.chapterDot}" aria-hidden="true"></span>
@@ -1870,6 +1884,7 @@ module View =
                          @select={Ev(fun e -> actions.ReportFieldSelection (ChapterName item.MessageId) (selectionOf e))}
                          @focus={Ev(fun e -> actions.ReportFieldSelection (ChapterName item.MessageId) (selectionOf e))}
                          @blur={Ev(fun _ -> actions.ReportFieldSelection (ChapterName item.MessageId) None)}>
+                  {cursors}
                 </div>"""
         let rows = TimelineProjection.rows model.Conversation model.Timeline
         // Every row resolved to (whose act it is, its rendering) BEFORE grouping, so a row

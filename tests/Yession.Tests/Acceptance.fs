@@ -1728,6 +1728,41 @@ let private presenceTests =
                     (Dom.hookText (Dom.attr Dom.Hooks.peerAt Dom.Text.atChapter) (Dom.Text.namingChapter "The rollback")))
                 "the roster names the chapter, not just 'a chapter'"
 
+        // A caret is placed against the box its field lives in, so the marker has to be inside
+        // that box — and inside the RIGHT one, since a position taken in one chapter's name
+        // would land at a real-looking offset in another's. The rule the marker sits in is the
+        // only thing that says which name it is a caret in.
+        testCase "a caret in a chapter's name is drawn on that chapter's rule" <| fun () ->
+            let here = MessageId.create "msg-1" |> expect
+            let elsewhere = MessageId.create "msg-agent" |> expect
+            let model = withChapters [ "msg-1"; "msg-agent" ]
+            let html =
+                Support.render
+                    { model with
+                        Presence =
+                            Map.ofList
+                                [ bob,
+                                  { DisplayName = "brave-owl"
+                                    Focus = { Field = ChapterName here; Pos = { Anchor = "AQI="; Head = "AQI=" } } } ] }
+            let ruleOf (messageId: MessageId) =
+                let opens = html.IndexOf (Dom.attr Dom.Hooks.chapterRule (MessageId.value messageId))
+                html.Substring (opens, html.IndexOf ("</div>", opens) - opens)
+            Expect.isTrue
+                ((ruleOf here).Contains (Dom.attr Dom.Hooks.cursorPeer "bob"))
+                "their caret is on the rule of the chapter they are naming"
+            Expect.isFalse
+                ((ruleOf elsewhere).Contains (Dom.attr Dom.Hooks.cursorPeer "bob"))
+                "and on no other chapter's"
+
+        // The title and a chapter's name are both collaborative inputs, and a marker that
+        // appeared in every one of them at once would put one person in several places.
+        testCase "a caret in the title is drawn on no chapter's rule" <| fun () ->
+            let html = Support.render { (withChapters [ "msg-1" ]) with Presence = (withBobIn Title).Presence }
+            let opens = html.IndexOf (Dom.attr Dom.Hooks.chapterRule "msg-1")
+            let rule = html.Substring (opens, html.IndexOf ("</div>", opens) - opens)
+            Expect.isFalse (rule.Contains (Dom.attr Dom.Hooks.cursorPeer "bob")) "the rule carries no caret"
+            Expect.isTrue (html.Contains (Dom.attr Dom.Hooks.cursorPeer "bob")) "the title still does"
+
         // Presence is relayed live; the conversation is caught up over the event feed. A caret
         // can therefore arrive in a chapter this client has never seen, and the roster has to
         // say something true about it rather than invent a name or go quiet.
