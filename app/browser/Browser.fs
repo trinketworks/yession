@@ -14,6 +14,7 @@ open Fable.Core.JsInterop
 open Yjs
 open Yession.Domain
 open Yession.Domain.Link
+open Yession.Domain.Repos
 open Yession.Domain.Terminals
 open Yession.Domain.Collab
 open Yession.App
@@ -763,7 +764,7 @@ let private parseDeviceBegin (body: string) : {| userCode: string; verificationU
 let private parseDevicePoll (body: string) : {| status: string; interval: int |} = jsNative
 
 // --- The launch surface's reads ---------------------------------------------------------------
-// Two GETs, answered on this person's own credential by the session, read in the codec the
+// Three GETs, answered on this person's own credential by the session, read in the codec the
 // session encoded them with. A failure carries its status, because a 401 is the one answer
 // with a button (connect GitHub) rather than a retry.
 
@@ -797,6 +798,18 @@ let private fetchRepoBranches (repo: RepoRef) : Async<LaunchBranches> =
             match Codec.fromString Codec.branchNames reply.body with
             | Ok branches -> return BranchesLoaded branches
             | Error reason -> return BranchesUnavailable reason
+    }
+
+/// Where a pull request comes from, so a pasted link to one can be launched: the one link
+/// that has to be asked about before it can be sent.
+let private fetchPullHead (repo: RepoRef) (number: int) : Async<Result<PullHead, string>> =
+    async {
+        let owner, name = RepoRef.owner repo, RepoRef.repo repo
+        let! reply = getText (SessionRoute.relative (GitHubPullHead (owner, name, string number))) |> Async.AwaitPromise
+        if not reply.ok then
+            return Error (if reply.body = "" then sprintf "the session answered %d" reply.status else reply.body)
+        else
+            return Codec.fromString Codec.pullHead reply.body
     }
 
 // --- The read surface's stream (Plan 15) --------------------------------------------------
@@ -1172,9 +1185,27 @@ let private start () =
                             dispatchRef (LaunchMsg (LaunchBranchesArrived (repo, branches)))
                         })
               LaunchStart =
-                fun repo branch ->
+                fun target ->
                     connectionRef
-                    |> Option.iter (fun c -> dispatchRef (LaunchMsg (LaunchSent (c.AddRepo repo branch))))
+                    |> Option.iter (fun c -> dispatchRef (LaunchMsg (LaunchSent (c.AddRepo target.Repo target.Branch, target))))
+              LaunchLink =
+                fun link ->
+                    match Launch.targetOfLink link, link with
+                    | Some target, _ ->
+                        connectionRef
+                        |> Option.iter (fun c -> dispatchRef (LaunchMsg (LaunchSent (c.AddRepo target.Repo target.Branch, target))))
+                    | None, RepoLink.PullRequest (repo, number) ->
+                        dispatchRef (LaunchMsg (LaunchResolving link))
+                        Async.StartImmediate (
+                            async {
+                                match! fetchPullHead repo number with
+                                | Ok head ->
+                                    let target = { LaunchTarget.Repo = head.Repo; LaunchTarget.Branch = Some head.Branch }
+                                    connectionRef
+                                    |> Option.iter (fun c -> dispatchRef (LaunchMsg (LaunchSent (c.AddRepo target.Repo target.Branch, target))))
+                                | Error reason -> dispatchRef (LaunchMsg (LaunchFailed reason))
+                            })
+                    | None, _ -> ()
               CloseTerminal = fun id -> connectionRef |> Option.iter (fun c -> c.CloseTerminal id)
               TakeTerminal = fun id -> connectionRef |> Option.iter (fun c -> c.TakeTerminal id)
               ReleaseTerminal = fun id -> connectionRef |> Option.iter (fun c -> c.ReleaseTerminal id)

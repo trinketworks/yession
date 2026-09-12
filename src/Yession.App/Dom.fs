@@ -162,18 +162,17 @@ module Dom =
         let signInRequired = "data-signin-required"
         let signInAgain = "data-signin-again"
         /// The launch surface — choosing the session's first repo — valued by where the act
-        /// stands (`choosing` | `sent` | `cloning`). Present only while it is offered: a
-        /// surface that stands where the timeline's first line will, and steps aside the
-        /// moment there is one.
+        /// stands (`choosing` | `resolving` | `sent` | `cloning`). Present only while it is
+        /// offered: a surface that stands where the timeline's next line will, and steps
+        /// aside the moment the session has begun.
         let repoPicker = "data-repo-picker"
         let repoPickerSearch = "data-repo-picker-search"
-        /// One repo a person can choose, valued by its canonical name.
+        /// One repo a person can choose, valued by its canonical name. The row IS the launch.
         let repoCandidate = "data-repo-candidate"
-        let repoPickerBranch = "data-repo-picker-branch"
-        let repoPickerStart = "data-repo-picker-start"
-        let repoPickerBack = "data-repo-picker-back"
-        /// The way past the picker without a repo.
-        let repoPickerSkip = "data-repo-picker-skip"
+        /// A row's branch mark, valued by the row's name: opens its branches.
+        let repoCandidateBranches = "data-repo-candidate-branches"
+        /// A row's branch menu, valued by the row's name: offered once its branches are here.
+        let repoCandidateBranch = "data-repo-candidate-branch"
         /// What went wrong with the last launch, in the session's words.
         let repoPickerProblem = "data-repo-picker-problem"
         /// The listing's own way out when there is no credential: the settings face.
@@ -513,17 +512,15 @@ module Dom =
         /// What the timeline's pulse means, for a reader who cannot see it pulse (Plan 20).
         let readingHistory = "Reading this session's history"
         // The launch surface.
-        let repoPickerTitle = "start with a repository"
-        let repoPickerLead = "Choose the repository this session works in. It is cloned for everyone here, and terminals open inside it."
-        let repoPickerSearchLabel = "search repositories"
-        let repoPickerSearchPlaceholder = "search github, or pick one of yours"
+        let repoPickerTitle = "no repository yet"
+        let repoPickerSearchLabel = "search repositories, or paste a link"
+        let repoPickerSearchPlaceholder = "search github, or paste a link"
         let repoPickerLooking = "looking…"
         let repoPickerNothing = "nothing by that name"
-        let repoPickerBranchLabel = "branch"
-        let repoPickerStart = "Start"
-        let repoPickerBack = "Back"
-        let repoPickerSkip = "start without a repository"
+        let repoPickerBranchLabel = "branch of"
+        let repoPickerBranchesLabel = "choose a branch of"
         let repoPickerConnect = "Connect GitHub"
+        let repoPickerOrSay = "or write a message to start without one"
         let repoPickerCloning = "cloning…"
         /// What stands where history this device does not hold would be (Plan 20). Said only
         /// while nothing is coming to fill it — see `View.chat` — so it is a fact about this
