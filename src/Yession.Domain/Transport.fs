@@ -54,6 +54,18 @@ type SessionCommand =
     /// now, and refuses if they differ. Approving something other than what you read is the
     /// failure this exists to prevent, and it would be the easy one to build.
     | ApproveRepoCapabilities of repo: RepoRef * granted: string list
+    /// Put the first repo into this session (the launch surface's act): clone it, and start
+    /// on `branch` when one other than its default is named.
+    ///
+    /// The one human-authored repo verb. Plan 15 retired the mid-session buttons because the
+    /// agent already had the verbs and asking costs a sentence; at a session's start no turn
+    /// has run and which repo it is FOR is the person's to say. Same gated `add_repo`, same
+    /// attribution, a second caller — admitted only while the session has no repo, so a
+    /// second one is still the agent's to add. Rejected with the reason when it is not
+    /// admitted; ACCEPTED means the clone has begun, and its outcome reaches everyone as
+    /// `RepoAdded` or `GatedCommandFailed`, never in this response — a clone is not something to
+    /// hold a peer's command pump for.
+    | AddRepo of repo: RepoRef * branch: string option
 
 type SessionCommandResult =
     | CommandAccepted

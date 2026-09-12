@@ -595,6 +595,18 @@ module ConversationProjection =
                           Kind = ConversationItemKind.ActNote { Detail = c.Reason; Notable = false }
                           Offset = envelope.Offset
                           Woke = None; Replying = None } ] }
+        // Its sibling, said by the process: nobody refused it; it ran and did not succeed.
+        | SessionEvent.GatedCommandFailed c ->
+            { proj with
+                Items =
+                    proj.Items
+                    @ [ { MessageId = c.MessageId
+                          Author = ActorRef.System
+                          Body = sprintf "failed %s" c.Summary
+                          Status = Complete
+                          Kind = ConversationItemKind.ActNote { Detail = Some c.Reason; Notable = false }
+                          Offset = envelope.Offset
+                          Woke = None; Replying = None } ] }
         // A repo's `setup:`, said because nobody in the session asked for it. Every other
         // block on this timeline is somebody here running something; this one appears in a
         // terminal they will find busy, holding it until it finishes. The DETAIL carries the

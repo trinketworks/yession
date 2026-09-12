@@ -115,6 +115,9 @@ type SessionEvent =
     // The approval gate's refusal (Plan 15, stage 3). Only the refusal: an approval is
     // recorded on the event of the command it released.
     | CommandRefused of CommandRefused
+    // Its sibling: released, run, and failed — recorded only for an author that has no tool
+    // result to read the failure from.
+    | GatedCommandFailed of GatedCommandFailed
     // Tool use (Plan 16, part C): every call the agent makes, recorded. Two events rather
     // than one, and for the same reason a block has two — a call that takes four minutes
     // must hold its place in the chat WHILE it is the only thing happening, so the start

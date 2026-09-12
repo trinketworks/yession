@@ -83,6 +83,19 @@ let private envelopeSerializationTests =
         testCase "Decoding malformed JSON yields an Error" <| fun () ->
             Expect.isError (Codec.fromString Codec.sessionEventEnvelope "{ not valid json ") "malformed JSON should fail"
 
+        testCase "a gated command's failure round-trips through the envelope codec" <| fun () ->
+            let original =
+                { sampleEnvelope () with
+                    Event =
+                        GatedCommandFailed
+                            { MessageId = MessageId.create "f1" |> expect
+                              Tool = "add_repo"
+                              Summary = "add_repo octo/hello"
+                              Author = UserRef (UserId.create "ada" |> expect)
+                              Reason = "github says not found" } }
+            let json = Codec.toString Codec.sessionEventEnvelope original
+            Expect.equal (Codec.fromString Codec.sessionEventEnvelope json) (Ok original) "round-trip should be identical"
+
         testCase "UserRef actor round-trips through the envelope codec" <| fun () ->
             let user = UserId.create "nick@example.com" |> expect
             let original = { sampleEnvelope () with Actor = UserRef user }
@@ -611,6 +624,33 @@ let private repoTests =
                 [ Some "on branch main"; None; None ]
                 "and the particulars a headline left out are still on the note"
             Expect.equal (proj.Items |> List.map (fun i -> i.Author)) [ PeerRef ada; ActorRef.Agent; PeerRef ada ] "attributed to the acting party"
+
+        // A person's command has no tool result for its failure to come back in, so the
+        // record is the only place it is said — and it is said by the process, as a failure,
+        // not as anybody's refusal.
+        testCase "a gated command that ran and failed folds in as a note saying which, and why" <| fun () ->
+            let sessionId = SessionId.create "repo-session" |> expect
+            let ada = UserRef (UserId.create "ada" |> expect)
+            let envelope =
+                { EventId = EventId.fresh ()
+                  SessionId = sessionId
+                  Offset = EventOffset.create 1L |> expect
+                  Actor = ActorRef.SessionProcess
+                  Timestamp = DateTimeOffset(2026, 8, 8, 10, 0, 0, TimeSpan.Zero)
+                  Event =
+                    GatedCommandFailed
+                        { MessageId = MessageId.create "f1" |> expect
+                          Tool = "add_repo"
+                          Summary = "add_repo octo/hello"
+                          Author = ada
+                          Reason = "github says not found" } }
+            let proj, _ = ConversationProjection.applyEvents None [ envelope ] ConversationProjection.empty
+            match proj.Items with
+            | [ item ] ->
+                Expect.equal item.Body "failed add_repo octo/hello" "the headline names the act"
+                Expect.equal (noteDetail item) (Some "github says not found") "the particulars say why"
+                Expect.equal item.Author ActorRef.System "said by the process: nobody refused it"
+            | other -> failwithf "one note expected, got %A" other
 
         // The split is for a screen. Every other reader — the agent's prompt above all — has
         // to be handed both halves, because the half a headline holds back is which

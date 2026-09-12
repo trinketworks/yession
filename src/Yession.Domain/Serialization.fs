@@ -1304,6 +1304,23 @@ module Codec =
                   CommandRefused.RejectedBy = get.Required.Field "rejectedBy" actor.Decode
                   CommandRefused.Reason = get.Required.Field "reason" (Decode.option Decode.string) }) }
 
+    let private gatedCommandFailed : Codec<GatedCommandFailed> =
+        { Encode =
+            fun (p: GatedCommandFailed) ->
+                Encode.object
+                    [ "messageId", messageId.Encode p.MessageId
+                      "tool", Encode.string p.Tool
+                      "summary", Encode.string p.Summary
+                      "author", actor.Encode p.Author
+                      "reason", Encode.string p.Reason ]
+          Decode =
+            Decode.object (fun get ->
+                { GatedCommandFailed.MessageId = get.Required.Field "messageId" messageId.Decode
+                  GatedCommandFailed.Tool = get.Required.Field "tool" Decode.string
+                  GatedCommandFailed.Summary = get.Required.Field "summary" Decode.string
+                  GatedCommandFailed.Author = get.Required.Field "author" actor.Decode
+                  GatedCommandFailed.Reason = get.Required.Field "reason" Decode.string }) }
+
     /// Whether the CALL happened. Tagged rather than a nullable reason, so "it went fine"
     /// and "it failed with an empty message" stay distinguishable on the wire.
     let private toolOutcome : Codec<ToolOutcome> =
@@ -1452,6 +1469,8 @@ module Codec =
                     Encode.object [ "type", Encode.string "shellProfileSet"; "payload", shellProfileSet.Encode p ]
                 | SessionEvent.CommandRefused p ->
                     Encode.object [ "type", Encode.string "commandRefused"; "payload", commandRefused.Encode p ]
+                | SessionEvent.GatedCommandFailed p ->
+                    Encode.object [ "type", Encode.string "gatedCommandFailed"; "payload", gatedCommandFailed.Encode p ]
                 | ToolUseStarted p ->
                     Encode.object [ "type", Encode.string "toolUseStarted"; "payload", toolUseStarted.Encode p ]
                 | ToolUseFinished p ->
@@ -1518,6 +1537,7 @@ module Codec =
                 | "workSandboxStopped" -> Decode.field "payload" workSandboxStopped.Decode |> Decode.map WorkSandboxStopped
                 | "shellProfileSet" -> Decode.field "payload" shellProfileSet.Decode |> Decode.map ShellProfileSet
                 | "commandRefused" -> Decode.field "payload" commandRefused.Decode |> Decode.map SessionEvent.CommandRefused
+                | "gatedCommandFailed" -> Decode.field "payload" gatedCommandFailed.Decode |> Decode.map SessionEvent.GatedCommandFailed
                 | "toolUseStarted" -> Decode.field "payload" toolUseStarted.Decode |> Decode.map ToolUseStarted
                 | "toolUseFinished" -> Decode.field "payload" toolUseFinished.Decode |> Decode.map ToolUseFinished
                 | "mcpServerAvailable" ->
@@ -1747,7 +1767,12 @@ module Codec =
                     Encode.object
                         [ "kind", Encode.string "approveRepoCapabilities"
                           "repo", repoRef.Encode repo
-                          "granted", Encode.list (granted |> List.map Encode.string) ])
+                          "granted", Encode.list (granted |> List.map Encode.string) ]
+                | AddRepo (repo, branch) ->
+                    Encode.object
+                        [ "kind", Encode.string "addRepo"
+                          "repo", repoRef.Encode repo
+                          "branch", Encode.option Encode.string branch ])
           Decode =
             Decode.field "kind" Decode.string
             |> Decode.andThen (function
@@ -1757,6 +1782,11 @@ module Codec =
                         (fun repo granted -> ApproveRepoCapabilities (repo, granted))
                         (Decode.field "repo" repoRef.Decode)
                         (Decode.field "granted" (Decode.list Decode.string))
+                | "addRepo" ->
+                    Decode.map2
+                        (fun repo branch -> AddRepo (repo, branch))
+                        (Decode.field "repo" repoRef.Decode)
+                        (Decode.optional "branch" Decode.string)
                 | "openTerminal" -> Decode.field "title" Decode.string |> Decode.map OpenTerminal
                 | "closeTerminal" -> Decode.field "terminalId" terminalId.Decode |> Decode.map CloseTerminal
                 | "takeTerminalLease" -> Decode.field "terminalId" terminalId.Decode |> Decode.map TakeTerminalLease
