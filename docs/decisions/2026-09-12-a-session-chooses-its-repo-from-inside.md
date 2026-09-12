@@ -13,9 +13,9 @@
 Which repository a session is FOR is chosen **inside the session**, on its first screen,
 by the person who opened it. The Manager's create form stays one press with no fields: it
 launches an empty session, and the session's own launch surface — the repositories the
-person's credential reaches, a search of the provider by name, one repository's branches
-— produces the one command that begins it (`AddRepo`), through the same gate the agent's
-`add_repo` goes through, attributed to the person.
+person's credential reaches, a search of the provider by name, a link pasted from the
+provider's own pages — produces the one command that begins it (`AddRepo`), through the
+same gate the agent's `add_repo` goes through, attributed to the person.
 
 The Manager learns nothing new. It does not list repositories, does not hold a
 provider's credential, does not carry a choice into a launch, and does not remember what
@@ -63,6 +63,25 @@ still the agent's to add, and the surface does not come back once anything has h
 It is the same gated `add_repo` — classified, attributed, on the timeline — with a second
 caller rather than a second implementation.
 
+## One gesture, not a form
+
+The first cut of the surface was a wizard: choose a row, then a branch, then Start, with
+Back beside it and "start without a repository" below — three stages and three buttons
+over a paragraph explaining them, in a product whose every other act is one line said to
+a composer. It was replaced the same day by a list and a field. A row IS the launch, on
+the branch its trailing mark shows (the provider's default, until the mark is opened and
+another picked); the field is a search or a paste — `owner/name`, a github.com page, a
+`tree/<branch>` page, a `pull/<n>` page, a clone URL — and Enter on a link copied from
+the provider launches it as it stands. A pull request is the one link that has to be
+asked about first, because which fork its branch lives in only the provider knows.
+
+There is no Start, no Back, and no "start without one": the composer beside the surface
+is already the way to begin a session that is not about a repository, and the surface
+says so in one muted line. It stands at the FOOT of the timeline, where the next line
+lands and where a thumb is, not at its head. A bare `owner/name` typed into the field
+searches rather than launches, deliberately: a name half typed still parses as a name,
+and a search shows what it matched where a launch would fail against it.
+
 ## What the surface promises, and what it does not
 
 It is offered only to a client that is connected, has read the log to where the session
@@ -88,5 +107,5 @@ the `ToolUseFinished` line, which is why the gate records nothing for the agent'
 and this is recorded only where nothing else would say it.
 
 And the session's first screen is now a screen, where it used to be a caret. A session
-that is not about a repository — a conversation, a terminal on this machine — has one
-more button to press ("start without a repository") than it had.
+that is not about a repository — a conversation, a terminal on this machine — begins the
+way it always did, by saying something, with a list above the composer it did not ask for.

@@ -12,7 +12,10 @@ module Yession.Tests.LaunchSurface
 //     is the agent's (Plan 15), and this surface does not come back — while a launch that
 //     FAILED leaves it standing, over its own note, for the next try;
 //   * what it shows to choose from is named as the provider names it, so what is picked is
-//     what `add_repo` clones;
+//     what `add_repo` clones — and a row IS the launch, on its default unless another of
+//     its branches was picked;
+//   * a link copied from the forge is a launch; anything else typed is a search, because a
+//     name half typed still parses as a name;
 //   * the session's answer to THIS command is the one it acts on — another command's
 //     rejection is not its problem — and a failed clone reaches the screen that asked;
 //   * with no credential, the way out is on the surface (connect GitHub), not a blank list.
@@ -89,11 +92,6 @@ let private offeredTests =
             let spoken =
                 clientAt 2L (fresh @ [ at 2L (MessageSent { MessageId = MessageId.create "m1" |> expect; QueueId = None; Author = Principal.Peer ada; Body = "hi" }) ])
             Expect.isFalse (ClientModel.launchOffered spoken) "so is a message"
-
-        testCase "starting without a repo steps it aside for this client" <| fun () ->
-            let dismissed = clientAt 1L fresh |> launch LaunchDismissed
-            Expect.isFalse (ClientModel.launchOffered dismissed) "dismissed"
-            Expect.isFalse ((render dismissed).Contains "data-repo-picker") "and gone from the screen"
     ]
 
 let private choosingTests =
@@ -111,29 +109,56 @@ let private choosingTests =
             let other = clientAt 1L fresh |> launch (LaunchListingArrived (ListingUnavailable ("github could not be reached", false)))
             Expect.isFalse ((render other).Contains "data-repo-picker-connect") "which a fault that is not a sign-in does not offer"
 
-        testCase "a chosen repo starts on its default branch, and only another is asked for" <| fun () ->
-            let chosen = clientAt 1L fresh |> launch (LaunchChosen (candidate "octo/hello"))
-            let choice = chosen.Launch.Choice |> Option.get
-            Expect.equal choice.Branch "main" "the provider's default"
-            Expect.equal (Launch.branchToAsk choice) None "which the command does not name: it is not a switch"
-            let picked = chosen |> launch (LaunchBranchPicked "feature/x")
-            Expect.equal (Launch.branchToAsk (picked.Launch.Choice |> Option.get)) (Some "feature/x") "another is"
+        testCase "a row launches on its default branch, and only another is asked for" <| fun () ->
+            let listed = clientAt 1L fresh |> launch (LaunchListingArrived (ListingLoaded [ candidate "octo/hello" ]))
+            Expect.equal (Launch.targetOf listed.Launch (candidate "octo/hello")) { LaunchTarget.Repo = hello; LaunchTarget.Branch = None } "the default is not a switch, and the command does not name it"
+            let picked = listed |> launch (LaunchBranchPicked (hello, "feature/x"))
+            Expect.equal (Launch.targetOf picked.Launch (candidate "octo/hello")) { LaunchTarget.Repo = hello; LaunchTarget.Branch = Some "feature/x" } "another is"
 
-        testCase "branches that arrive for a repo since abandoned do not land on the next" <| fun () ->
+        testCase "a row's branches are offered only once they are here" <| fun () ->
+            // A menu that opened over one option and grew while it was open would, on a
+            // phone, show the one option — so the row offers a mark that fetches, and the
+            // menu only once there is something to choose from.
+            let listed = clientAt 1L fresh |> launch (LaunchListingArrived (ListingLoaded [ candidate "octo/hello" ]))
+            Expect.stringContains (render listed) "data-repo-candidate-branches=\"octo/hello\"" "the mark"
+            Expect.isFalse ((render listed).Contains "data-repo-candidate-branch=\"octo/hello\"") "no menu yet"
+            let loaded = listed |> launch (LaunchBranchesOpened hello) |> launch (LaunchBranchesArrived (hello, BranchesLoaded [ "main"; "feature/x" ]))
+            Expect.stringContains (render loaded) "data-repo-candidate-branch=\"octo/hello\"" "the menu, once they are here"
+
+        testCase "branches that arrive for one row do not land on another" <| fun () ->
+            let other = RepoRef.create "octo/other" |> expect
             let model =
                 clientAt 1L fresh
-                |> launch (LaunchChosen (candidate "octo/hello"))
-                |> launch LaunchUnchosen
-                |> launch (LaunchChosen (candidate "octo/other"))
+                |> launch (LaunchListingArrived (ListingLoaded [ candidate "octo/hello"; candidate "octo/other" ]))
                 |> launch (LaunchBranchesArrived (hello, BranchesLoaded [ "main"; "stale" ]))
-            Expect.equal (model.Launch.Choice |> Option.get).Branches BranchesUnknown "hello's branches are not other's"
+            Expect.equal (model.Launch.Branches |> Map.tryFind other) None "other's are still unknown"
+
+        testCase "a link copied from the forge is a launch; anything else typed is a search" <| fun () ->
+            Expect.equal (Launch.linkOf "https://github.com/octo/hello/tree/fix") (Some (RepoLink.Branch (hello, "fix"))) "a branch page"
+            Expect.equal (Launch.linkOf "git@github.com:octo/hello.git") (Some (RepoLink.Repo hello)) "a clone url"
+            Expect.equal (Launch.linkOf "octo/hello") None "a bare name is a search: half of one still parses as one"
+            Expect.equal (Launch.linkOf "hello") None "so is a word"
+
+        testCase "a link to a repo or a branch is sent as it stands; a pull request has to be asked about" <| fun () ->
+            Expect.equal (Launch.targetOfLink (RepoLink.Repo hello)) (Some { LaunchTarget.Repo = hello; LaunchTarget.Branch = None }) "a repo"
+            Expect.equal (Launch.targetOfLink (RepoLink.Branch (hello, "fix"))) (Some { LaunchTarget.Repo = hello; LaunchTarget.Branch = Some "fix" }) "a branch"
+            Expect.equal (Launch.targetOfLink (RepoLink.PullRequest (hello, 42))) None "a pull request's head is the provider's to say"
+            let resolving = clientAt 1L fresh |> launch (LaunchResolving (RepoLink.PullRequest (hello, 42)))
+            Expect.stringContains (render resolving) "data-repo-picker=\"resolving\"" "and the surface says it is asking"
+            let failed = resolving |> launch (LaunchFailed "github does not show that repository to this credential")
+            Expect.equal failed.Launch.Stage Choosing "a link that could not be resolved opens choosing again"
+            Expect.stringContains (render failed) "data-repo-picker-problem" "with the reason on the surface"
     ]
 
 let private answerTests =
     testList "the session's answer" [
 
         let request = RequestId.fresh ()
-        let waiting = clientAt 1L fresh |> launch (LaunchChosen (candidate "octo/hello")) |> launch (LaunchSent request)
+        let target = { LaunchTarget.Repo = hello; LaunchTarget.Branch = None }
+        let waiting =
+            clientAt 1L fresh
+            |> launch (LaunchListingArrived (ListingLoaded [ candidate "octo/hello"; candidate "octo/other" ]))
+            |> launch (LaunchSent (request, target))
 
         testCase "a rejection at the door is shown, and choosing is open again" <| fun () ->
             let rejected = ClientModel.update (CommandAnsweredMsg (request, CommandRejected "this session already has octo/other")) waiting
@@ -143,13 +168,14 @@ let private answerTests =
 
         testCase "another command's answer is not this surface's" <| fun () ->
             let other = ClientModel.update (CommandAnsweredMsg (RequestId.fresh (), CommandRejected "no")) waiting
-            Expect.equal other.Launch.Stage (Sent request) "still waiting on its own"
+            Expect.equal other.Launch.Stage (Sent (request, target)) "still waiting on its own"
             Expect.equal other.Launch.Problem None "and nothing to say"
 
-        testCase "admitted, the surface waits on the clone" <| fun () ->
+        testCase "admitted, the surface waits on the clone, on the row that was tapped" <| fun () ->
             let admitted = ClientModel.update (CommandAnsweredMsg (request, CommandAccepted)) waiting
-            Expect.equal admitted.Launch.Stage Cloning "cloning"
+            Expect.equal admitted.Launch.Stage (Cloning target) "cloning"
             Expect.stringContains (render admitted) "data-repo-picker=\"cloning\"" "and says so"
+            Expect.isTrue (Launch.busy admitted.Launch) "and no other row is for tapping meanwhile"
 
         testCase "a clone that failed reaches the screen that asked, while it is waiting" <| fun () ->
             let admitted = ClientModel.update (CommandAnsweredMsg (request, CommandAccepted)) waiting

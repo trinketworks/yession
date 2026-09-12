@@ -901,7 +901,6 @@ module ClientModel =
             model.EventConsumer.LatestKnownOffset
             model.EventConsumer.IsCatchingUp
             begun
-            model.Launch
 
     /// Whose draft the composer is showing — the resolved answer to `ComposerChoice`, and the
     /// only place the "join what is already being written" default lives.
@@ -1632,7 +1631,7 @@ module ClientModel =
                 |> List.fold
                     (fun (launch: LaunchViewState) e ->
                         match e.Event, launch.Stage with
-                        | SessionEvent.GatedCommandFailed failed, (Sent _ | Cloning) when failed.Tool = "add_repo" ->
+                        | SessionEvent.GatedCommandFailed failed, (Sent _ | Cloning _) when failed.Tool = "add_repo" ->
                             Launch.update (LaunchFailed failed.Reason) launch
                         | _ -> launch)
                     model.Launch

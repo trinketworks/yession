@@ -1117,20 +1117,32 @@ module Style =
     let timelineIdle = "pl-8 max-md:pl-8"
 
     // --- The launch surface ---------------------------------------------------------------
-    // Stands where the timeline's first line will: on the timeline's own rail, in the
+    // Stands where the timeline's next line will: on the timeline's own rail, in the
     // timeline's own type, so it reads as the session's first page rather than a dialog over
-    // it. A candidate is a listed row (`rowBase`'s idiom without the leading edge — a row
-    // that is not yet anything has no state to show on one), lifting under the pointer.
-    let launch = "flex flex-col gap-3 pl-8 max-md:pl-8 pr-8 max-md:pr-4 py-2 max-w-2xl"
-    let launchLead = cls [ body; "text-ink-dim" ]
+    // it — and at the timeline's FOOT (`mt-auto`), beside the composer, where a thumb is. A
+    // candidate is a listed row (`rowBase`'s idiom without the leading edge — a row that is
+    // not yet anything has no state to show on one), lifting under the pointer, with its
+    // branch at the trailing edge in the terminal's type: a fact about the row, not a form.
+    // `mt-auto!` because the timeline gives its first child `mt-6`, and on an empty timeline
+    // this is the first child.
+    let launch = "mt-auto! flex flex-col gap-3 pl-8 max-md:pl-8 pr-8 max-md:pr-4 py-2 max-w-2xl"
     let launchList = "flex flex-col"
+    let launchRow = "flex items-baseline gap-3 min-w-0"
     let launchCandidate =
-        cls [ "w-full text-left flex items-baseline gap-3 px-2 -mx-2 py-1.5 bg-transparent border-0 cursor-pointer"
+        cls [ "flex-1 min-w-0 text-left flex items-baseline gap-3 px-2 -mx-2 py-1.5 bg-transparent border-0 cursor-pointer"
               "hover:bg-surface-2 focus-visible:bg-surface-2 transition-colors"; focusRing ]
     let launchCandidateName = "font-terminal text-code text-ink shrink-0"
     let launchCandidateDescription = cls [ small; "truncate min-w-0" ]
-    let launchChoice = "flex flex-col gap-3"
-    let launchChoiceName = "font-terminal text-code text-ink"
+    /// The branch on a row: the name, in the same type as the repo's, and the mark that
+    /// opens its menu. Faint until the pointer is on it — it is the secondary act on a row
+    /// whose primary one is the name.
+    let launchBranch = cls [ "font-terminal text-code text-ink-faint shrink-0 inline-flex items-center gap-1" ]
+    let launchBranchButton =
+        cls [ launchBranch; "bg-transparent border-0 cursor-pointer px-1 -mx-1 hover:text-ink transition-colors"; focusRing ]
+    let launchBranchWidth = "w-40 max-md:w-32 shrink-0"
+    let launchBranchSelect = cls [ fieldFace; "font-terminal text-code text-ink w-full pr-8 h-8 py-0" ]
+    /// What the field itself is waiting on, when the launch came from it rather than a row.
+    let launchFieldStatus = "flex flex-wrap items-baseline gap-x-3 gap-y-1 min-w-0"
     let launchActions = "flex flex-wrap items-center gap-2"
     let caretIdle = caret + " opacity-50"
 
