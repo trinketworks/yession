@@ -42,6 +42,12 @@ keeping from one goes next to the code it governs, where a test can contradict i
 check never goes stale because master moved, and a check conclusion is not proof of either
 outcome — read the PR's merge state. The skill's Merge semantics section is the detail.
 
+**Stacked PRs** (B branched from A, both targeting master): once A squash-merges, B reads
+DIRTY — its history still holds A's original commit, which conflicts with the squash. Fix
+is `git rebase --onto origin/master <A-sha>` and a force-push. Do not arm auto-merge on B
+before A lands, or B's squash carries A's diff. The one exception: if B has already entered
+the queue, its branch is locked (a push is refused) and it merges fine as-is — leave it.
+
 ## Bootstrap
 
 The dev environment, tasks, and build outputs are all declared in **devenv.nix**: Node 24 +
