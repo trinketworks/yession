@@ -43,6 +43,9 @@ let all =
         // reply, and the session's own gated route — and neither has an in-memory
         // stand-in that would exercise what the cases turn on.
         Tag.needs "Model catalogue" [ Tag.Ports ] (fun () -> Models.portsTests)
+        // Writing a few words is an HTTP conversation and nothing else: what is sent, how the
+        // credential presents itself, and which useless answers are told apart.
+        Tag.needs "Writing a few words" [ Tag.Ports ] (fun () -> Summaries.portsTests)
         Tag.needs "GitHubRepos" [] (fun () -> GitHubRepos.tests)
         Tag.needs "Launch surface" [] (fun () -> LaunchSurface.tests)
         // Finding a repo is an HTTP conversation on both sides — the provider's listing and

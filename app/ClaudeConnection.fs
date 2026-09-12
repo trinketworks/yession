@@ -133,6 +133,29 @@ type private ModelsOutcome =
 /// is a fact about this request and belongs nowhere but the picker's note.
 type ModelsFailure = { Message : string; Refused : bool }
 
+/// How one credential presents itself to this provider, and the version every request
+/// declares — the whole of what talking to Claude's API looks like from outside a request
+/// body.
+///
+/// One function because there are now two requests (the catalogue and the summarizer), and a
+/// second copy of this rule is a second way to send a token the wrong way: an OAuth grant
+/// offered as an API key is refused with a 401, which reads exactly like a credential that
+/// has gone stale.
+let headersFor (credential: string * string) : (string * string) [] =
+    let envVar, value = credential
+    [| yield "anthropic-version", "2023-06-01"
+       if envVar = "ANTHROPIC_API_KEY" then yield "x-api-key", value
+       else
+           yield "authorization", "Bearer " + value
+           // The beta Claude Code's own client sends: an OAuth grant is not an API key, and
+           // the provider wants telling which it is holding.
+           yield "anthropic-beta", "oauth-2025-04-20" |]
+
+/// Those headers as a request sends them. Both requests build the object the same way, so
+/// there is one answer to "what does a Claude request carry" rather than one per verb.
+let private headerObject (headers: (string * string) []) : obj =
+    headers |> Array.map (fun (name, value) -> name, box value) |> createObj
+
 /// GET the catalogue on one credential, following the API's paging.
 ///
 /// The credential PAIR decides the dialect, which is why this takes the same
@@ -143,14 +166,11 @@ type ModelsFailure = { Message : string; Refused : bool }
 ///
 /// The page bound is a runaway guard, not a coverage cap: the API's own maximum page is
 /// 1000, so ten pages is ten thousand models and no provider is near it.
-[<Emit("""(async function (envVar, value, url) {
+[<Emit("""(async function (headers, url) {
   try {
     // Bounded, because the connection panel's status reply waits on this: a provider
     // that accepts a socket and never answers would otherwise take the panel with it,
     // and a lookup that cannot finish IS a lookup that failed.
-    const headers = { 'anthropic-version': '2023-06-01' }
-    if (envVar === 'ANTHROPIC_API_KEY') headers['x-api-key'] = value
-    else { headers['authorization'] = 'Bearer ' + value; headers['anthropic-beta'] = 'oauth-2025-04-20' }
     const models = []
     // Not `url`: Fable names the substituted argument after its F# parameter, so a local of
     // the same name shadows it into a temporal dead zone and every lookup throws.
@@ -170,8 +190,8 @@ type ModelsFailure = { Message : string; Refused : bool }
   } catch (err) {
     return { ok: false, reason: String((err && err.message) || err), status: 0, models: [] }
   }
-})($0, $1, $2)""")>]
-let private fetchModels (envVar: string) (value: string) (url: string) : JS.Promise<ModelsOutcome> = jsNative
+})($0, $1)""")>]
+let private fetchModels (headers: obj) (url: string) : JS.Promise<ModelsOutcome> = jsNative
 
 /// The models one credential can see at one endpoint, as the provider-neutral pair the
 /// rest of the session speaks. An id the smart constructor refuses is DROPPED rather than
@@ -183,8 +203,7 @@ let private fetchModels (envVar: string) (value: string) (url: string) : JS.Prom
 /// and the only way to do it without a suite writing the process environment.
 let modelsAt (url: string) (credential: string * string) : Async<Result<AgentModel list, ModelsFailure>> =
     async {
-        let envVar, value = credential
-        let! outcome = fetchModels envVar value url |> Interop.awaitPromise
+        let! outcome = fetchModels (headerObject (headersFor credential)) url |> Interop.awaitPromise
         if not outcome.ok then
             // Only 401. A 403 here is an org policy or a scope this key does not carry, both
             // of which happen to a credential that is otherwise perfectly alive, and a 5xx or
@@ -205,6 +224,121 @@ let modelsAt (url: string) (credential: string * string) : Async<Result<AgentMod
 /// its OAuth endpoints are.
 let models (credential: string * string) : Async<Result<AgentModel list, ModelsFailure>> =
     modelsAt (envOr "YESSION_CLAUDE_MODELS_URL" modelsUrl) credential
+
+// --- writing a few words ------------------------------------------------------------------
+// The second Claude-shaped thing, behind the second provider-neutral seam (`Summarize`). The
+// ask says what the words are for and how long they may be; everything below is how THIS
+// provider is asked, and nothing above it knows any of it.
+
+/// Anthropic's messages endpoint. Overridable for the reason the catalogue's is: a test needs
+/// somewhere to point it that is not the live provider.
+let private messagesUrl = "https://api.anthropic.com/v1/messages"
+
+/// The model a name is written by: the smallest one there is.
+///
+/// Naming a chapter is a classification-shaped task over a few hundred characters, and what
+/// the smallest model buys is that this can run on the way past — a name that costs a
+/// fraction of a cent and lands in a second is one a session can afford for every chapter
+/// nobody has named, which is the only way the feature is worth having. Not a knob: a
+/// slower, dearer model here would be a worse version of this rather than a different one.
+let private summaryModel = "claude-haiku-4-5"
+
+/// The most a name may run to, in tokens. A budget is characters where it is asked for and
+/// tokens where it is spent, and this is the spending end: enough for a line of words, and
+/// nothing like enough for the paragraph a model writes when it has misread the question.
+let private summaryTokens = 64
+
+type private SummaryReply =
+    { /// Why the model stopped, when it said. Read before the words, because a refusal is the
+      /// one answer that arrives as a success and holds nothing to use.
+      Stopped : string option
+      /// Every text block, joined — which is the whole of an answer this short.
+      Text : string }
+
+/// A content block's words, when it is a block of words at all. `None` for anything else, so
+/// nothing that is not text can arrive as text that says nothing.
+let private textBlock : Decoder<string option> =
+    Decode.object (fun get ->
+        match get.Optional.Field "type" Decode.string with
+        | Some "text" -> get.Optional.Field "text" Decode.string
+        | _ -> None)
+
+let private summaryDecoder : Decoder<SummaryReply> =
+    Decode.object (fun get ->
+        { Stopped = get.Optional.Field "stop_reason" Decode.string
+          Text =
+            get.Optional.Field "content" (Decode.list textBlock)
+            |> Option.defaultValue []
+            |> List.choose id
+            |> String.concat "" })
+
+type private MessageReply =
+    abstract reachable : bool
+    abstract status : int
+    abstract body : string
+
+/// One POST, and nothing else: the headers and the body are composed above, and what the
+/// answer MEANS is decided below. A request that never landed is a reply like any other
+/// (`reachable = false`), because a name that did not get written is one outcome however it
+/// failed to happen.
+///
+/// Bounded like the catalogue's fetch, for a smaller reason: nothing waits on this, but a
+/// request nobody closes is a socket nobody closes, once per chapter.
+[<Emit("""fetch($0, { method: 'POST', headers: $1, body: $2, signal: AbortSignal.timeout(15000) })
+  .then(async r => ({ reachable: true, status: r.status, body: await r.text() }))
+  .catch(e => ({ reachable: false, status: 0, body: String((e && e.message) || e) }))""")>]
+let private postMessage (url: string) (headers: obj) (body: string) : JS.Promise<MessageReply> = jsNative
+
+/// What one ask looks like on the wire: the task as the system prompt, the lines as the
+/// message, and a ceiling on the answer.
+///
+/// The budget reaches the model as a sentence as well as a token ceiling, because the ceiling
+/// is not the same request: `max_tokens` cuts an answer off mid-word, which is a truncation
+/// and not a short name. The cut that makes a name fit belongs to whoever asked
+/// (`Chapters.shaped`); this only has to ask for roughly the right thing.
+let private summaryBody (ask: SummaryAsk) : string =
+    Encode.object
+        [ "model", Encode.string summaryModel
+          "max_tokens", Encode.int summaryTokens
+          "system", Encode.string (sprintf "%s Keep it under %d characters." ask.Task ask.Budget)
+          "messages",
+          Encode.list
+              [ Encode.object
+                    [ "role", Encode.string "user"
+                      "content", Encode.string (String.concat "\n\n" ask.Lines) ] ] ]
+    |> Encode.toString 0
+
+/// A `Summarize` on one credential, at one endpoint.
+///
+/// An ask with nothing to read is refused here rather than sent: a model handed no lines
+/// writes a name for a conversation it never saw, and that name reads exactly like one it
+/// did see.
+let summarizeAt (url: string) (credential: string * string) : Summarize =
+    fun ask ->
+        async {
+            match ask.Lines with
+            | [] -> return Error "nothing to summarize"
+            | _ ->
+                let headers =
+                    headerObject (Array.append [| "content-type", "application/json" |] (headersFor credential))
+                let! reply = postMessage url headers (summaryBody ask) |> Interop.awaitPromise
+                if not reply.reachable then return Error reply.body
+                elif reply.status < 200 || reply.status >= 300 then
+                    let detail = reply.body.Substring (0, min 200 reply.body.Length)
+                    return Error (sprintf "the provider answered %d: %s" reply.status detail)
+                else
+                    match Decode.fromString summaryDecoder reply.body with
+                    | Error e -> return Error (sprintf "unrecognised reply: %s" e)
+                    | Ok answer ->
+                        match answer.Stopped with
+                        | Some "refusal" -> return Error "the model declined to answer"
+                        | _ -> return Ok answer.Text
+        }
+
+/// The summarizer as the session composes it: this provider's endpoint, overridable the way
+/// the catalogue's is.
+let summarize (credential: string * string) : Summarize =
+    summarizeAt (envOr "YESSION_CLAUDE_MESSAGES_URL" messagesUrl) credential
 
 /// A human label for whose credential a call ran on, for the "not connected" failure
 /// message. `None` is a call on nobody's — a deployment that attributes nobody, acting as
