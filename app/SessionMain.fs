@@ -830,6 +830,10 @@ Async.StartImmediate (
         // Filled before anything that could read it runs: the command table was built above
         // and holds a getter, not this value.
         openedLog <- Some log
+        // Read once, spent by the repo manager's name check and both endpoints below: a
+        // second read of the same variable is a second default, and the two would disagree
+        // the first time one moved.
+        let githubApi = Interop.envOr "YESSION_GITHUB_API_URL" "https://api.github.com"
         // The repo manager (Plan 14), over the same log and the agent backend's sandbox
         // family. A backend that cannot host it fails the boot — the same fail-closed
         // stance as the WorkSandbox composition above.
@@ -858,6 +862,13 @@ Async.StartImmediate (
                       AllowProtocol = "https"
                       CloneUrl = RepoRef.cloneUrl
                       ResolveToken = resolveGitHubToken
+                      Canonical =
+                        fun token repo ->
+                            async {
+                                match! GitHubRepos.canonicalOver githubApi token repo with
+                                | Ok current -> return Some current
+                                | Error _ -> return None
+                            }
                       OnNetworkFailure = reportGitHubNetworkFailure
                       Log = log } with
             | Ok service -> reposService <- Some service
@@ -873,9 +884,6 @@ Async.StartImmediate (
         // why reading the provider's own counter needs no coordination and a count of our
         // own would need all of it.
         let githubLedger = Resilience.Ledger.create ()
-        // Read once, spent by both endpoints below: a second read of the same variable is a
-        // second default, and the two would disagree the first time one moved.
-        let githubApi = Interop.envOr "YESSION_GITHUB_API_URL" "https://api.github.com"
         let githubSpending (spend: Resilience.Spend) =
             GitHubPrs.Spending.over githubLedger (fun () -> System.DateTimeOffset.UtcNow) spend
         let githubLooking (spend: Resilience.Spend) =

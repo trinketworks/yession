@@ -163,6 +163,19 @@ let searchOver (apiBase: string) (token: string option) (text: string) : Async<R
                 pageSize)
             token
 
+/// One repository as GitHub names it NOW, or why it could not say.
+///
+/// The one question `add_repo` cannot answer from a clone: github.com follows a renamed
+/// repository's old name with a redirect, so a clone under the old name lands and keeps an
+/// `origin` the provider no longer answers to by that name. Asked before cloning, so a
+/// stale name is refused with the current one rather than kept.
+let canonicalOver (apiBase: string) (token: string option) (repo: RepoRef) : Async<Result<RepoRef, LookupFailure>> =
+    async {
+        match! read candidateDecoder (sprintf "%s/repos/%s" (apiBase.TrimEnd '/') (RepoRef.value repo)) token with
+        | Ok candidate -> return Ok candidate.Repo
+        | Error failure -> return Error failure
+    }
+
 /// The branches a repository has. One page of a hundred, which is every branch of nearly
 /// every repository and the first hundred of the rest.
 let branchesOver (apiBase: string) (token: string option) (repo: RepoRef) : Async<Result<string list, LookupFailure>> =
