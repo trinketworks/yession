@@ -69,6 +69,7 @@
          lookup runs on an actor's authority) and before Agent.fs, which carries the
          session's choice into a turn. -->
     <Compile Include="Models.fs" />
+    <Compile Include="Summaries.fs" />
     <Compile Include="Conversation.fs" />
     <Compile Include="Repos.fs" />
     <!-- Watched pull requests (the projection and the transition algebra). After
