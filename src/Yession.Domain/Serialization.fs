@@ -2178,6 +2178,34 @@ module Codec =
         { Encode = (fun models -> Encode.object [ "models", Encode.list (models |> List.map agentModel.Encode) ])
           Decode = Decode.field "models" (Decode.list agentModel.Decode) }
 
+    let private repoCandidate : Codec<Repos.RepoCandidate> =
+        { Encode =
+            fun (candidate: Repos.RepoCandidate) ->
+                Encode.object
+                    [ "repo", repoRef.Encode candidate.Repo
+                      "description", Encode.option Encode.string candidate.Description
+                      "defaultBranch", Encode.string candidate.DefaultBranch
+                      "private", Encode.bool candidate.Private
+                      "pushedAt", Encode.option Encode.string candidate.PushedAt ]
+          Decode =
+            Decode.object (fun get ->
+                { Repos.RepoCandidate.Repo = get.Required.Field "repo" repoRef.Decode
+                  Repos.RepoCandidate.Description = get.Optional.Field "description" Decode.string
+                  Repos.RepoCandidate.DefaultBranch = get.Required.Field "defaultBranch" Decode.string
+                  Repos.RepoCandidate.Private = get.Optional.Field "private" Decode.bool |> Option.defaultValue false
+                  Repos.RepoCandidate.PushedAt = get.Optional.Field "pushedAt" Decode.string }) }
+
+    /// What a person chooses a repo FROM, as the session serves it to the picker — the
+    /// `modelCatalogue` shape, for its reason: an object around the list, with room to grow.
+    let repoCandidates : Codec<Repos.RepoCandidate list> =
+        { Encode = (fun candidates -> Encode.object [ "repos", Encode.list (candidates |> List.map repoCandidate.Encode) ])
+          Decode = Decode.field "repos" (Decode.list repoCandidate.Decode) }
+
+    /// The branches of one repo, by name.
+    let branchNames : Codec<string list> =
+        { Encode = (fun branches -> Encode.object [ "branches", Encode.list (branches |> List.map Encode.string) ])
+          Decode = Decode.field "branches" (Decode.list Decode.string) }
+
     /// Serialize a value to a compact JSON string.
     let toString (codec: Codec<'a>) (value: 'a) : string =
         codec.Encode value |> Encode.toString 0

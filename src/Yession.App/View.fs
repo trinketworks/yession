@@ -161,7 +161,17 @@ type ViewActions =
       /// shut, and only the document knows where the cursor went. Without it, dismissing a
       /// menu strands focus on `body` — the failure the WCAG floor names, and the one a
       /// keyboard reader hits on the very first Escape.
-      FocusItemActions : MessageId -> unit }
+      FocusItemActions : MessageId -> unit
+      /// The launch surface's three effects. Ask the session for the repos this person can
+      /// choose from — theirs when the text is empty, a search otherwise; the answer comes
+      /// back as `LaunchListingArrived`.
+      LaunchSearch : string -> unit
+      /// Ask for one repo's branches (`LaunchBranchesArrived`).
+      LaunchBranches : RepoRef -> unit
+      /// Send the choice: the `AddRepo` command, on the branch when one other than the
+      /// default was picked. The request leaves as `LaunchSent`; its admission comes back as
+      /// `CommandAnsweredMsg`, and its outcome as events.
+      LaunchStart : RepoRef -> string option -> unit }
 
 module ViewActions =
     /// A no-op action set for rendering the view to a string (SSR + tests). The handlers
@@ -182,6 +192,9 @@ module ViewActions =
           GitHubPasteToken = ignore
           GitHubDisconnect = ignore
           Copy = fun _ _ -> ()
+          LaunchSearch = ignore
+          LaunchBranches = ignore
+          LaunchStart = fun _ _ -> ()
           RetryNow = ignore
           OpenTerminal = ignore
           ApproveRepoCapabilities = fun _ _ -> ()
@@ -1599,6 +1612,139 @@ module View =
     /// Terminal items are resolved against `Projection` at render time rather than
     /// copied into the timeline, which is what makes a running chip mutate in place as its
     /// block finishes — the timeline holds where it goes, the projection holds what it says.
+    /// The launch surface: a person choosing which repository this session is FOR, standing
+    /// where the timeline's first line will (`ClientModel.launchOffered`).
+    ///
+    /// The list is what the person's own credential can see — theirs, most recently pushed
+    /// first, or a search of GitHub by name — so a repo shown here is one their `add_repo`
+    /// can clone. Choosing one shows its branches with the provider's default picked, and
+    /// Start sends the one command; from then on the surface only waits, and the outcome is
+    /// the timeline's first line (the repo note, or the failure it says instead).
+    let private repoPicker (actions: ViewActions) (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
+        let launch = model.Launch
+        let waiting =
+            match launch.Stage with
+            | Choosing -> false
+            | Sent _ | Cloning -> true
+        let stage =
+            match launch.Stage with
+            | Choosing -> "choosing"
+            | Sent _ -> "sent"
+            | Cloning -> "cloning"
+        let search () = actions.LaunchSearch launch.Query
+        let onSearchKey (e: Browser.Types.Event) =
+            let key : string = (e :?> Browser.Types.KeyboardEvent).key
+            if key = "Enter" then
+                e.preventDefault ()
+                search ()
+        let candidateRow (candidate: Repos.RepoCandidate) =
+            let name = RepoRef.value candidate.Repo
+            // A repo with no description renders none — not an empty span standing where one
+            // would be.
+            let description =
+                candidate.Description
+                |> Option.map (fun said -> html $"""<span class="{Style.launchCandidateDescription}">{said}</span>""")
+                |> Option.toList
+            html $"""
+                <li>
+                  <button type="button" class="{Style.launchCandidate}" data-repo-candidate="{name}" ?disabled={waiting}
+                          @click={Ev(fun _ ->
+                              dispatch (LaunchMsg (LaunchChosen candidate))
+                              actions.LaunchBranches candidate.Repo)}>
+                    <span class="{Style.launchCandidateName}">{name}</span>
+                    {description}
+                  </button>
+                </li>"""
+        let listing =
+            match launch.Listing with
+            | ListingUnknown ->
+                html $"""<span class="{Style.statusRun}" role="status"><span class="{Style.statusDotPulse}"></span>{Dom.Text.repoPickerLooking}</span>"""
+            | ListingUnavailable (reason, true) ->
+                html $"""
+                    <span class="{Style.small}">{reason}</span>
+                    <div class="{Style.launchActions}">
+                      <button type="button" class="{Style.btnPrimary}" data-repo-picker-connect @click={Ev(fun _ -> actions.RevealSettings ())}>{Dom.Text.repoPickerConnect}</button>
+                    </div>"""
+            | ListingUnavailable (reason, false) ->
+                html $"""<span class="{Style.statusErr}" role="status">{reason}</span>"""
+            | ListingLoaded [] ->
+                html $"""<span class="{Style.small}">{Dom.Text.repoPickerNothing}</span>"""
+            | ListingLoaded candidates ->
+                html $"""<ul class="{Style.launchList}">{candidates |> List.map candidateRow}</ul>"""
+        let choosing =
+            html $"""
+                <label class="{Style.srOnly}" for="repo-picker-search">{Dom.Text.repoPickerSearchLabel}</label>
+                <input id="repo-picker-search" type="search" class="{Style.field}" data-repo-picker-search
+                       placeholder="{Dom.Text.repoPickerSearchPlaceholder}"
+                       autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false"
+                       enterkeyhint="search"
+                       .value={launch.Query}
+                       @input={EvVal(fun v -> dispatch (LaunchMsg (LaunchQueryTyped v)))}
+                       @keydown={Ev onSearchKey} />
+                {listing}"""
+        let chosen (choice: LaunchChoice) =
+            let name = RepoRef.value choice.Repo.Repo
+            // The provider's default is always offered — it is what the clone comes up on —
+            // and the rest are whatever the provider listed. A choice already made stays
+            // offered whatever arrived, so the control never shows something other than the
+            // setting behind it.
+            let branches =
+                match choice.Branches with
+                | BranchesLoaded names -> names
+                | BranchesUnknown | BranchesUnavailable _ -> []
+            let offered = (choice.Repo.DefaultBranch :: choice.Branch :: branches) |> List.distinct
+            let options =
+                offered
+                |> List.map (fun branch ->
+                    html $"""<option value="{branch}" ?selected={branch = choice.Branch}>{branch}</option>""")
+            let branchesNote =
+                match choice.Branches with
+                | BranchesUnavailable reason -> html $"""<span class="{Style.small}">{reason}</span>"""
+                | BranchesUnknown | BranchesLoaded _ -> html $""""""
+            let status =
+                if waiting then
+                    html $"""<span class="{Style.statusRun}" role="status"><span class="{Style.statusDotPulse}"></span>{Dom.Text.repoPickerCloning}</span>"""
+                else html $""""""
+            html $"""
+                <div class="{Style.launchChoice}">
+                  <span class="{Style.launchChoiceName}">{name}</span>
+                  <label class="{Style.label}" for="repo-picker-branch">{Dom.Text.repoPickerBranchLabel}</label>
+                  <div class="{Style.fieldSelectWrap}">
+                    <select id="repo-picker-branch" class="{Style.fieldSelect}" data-repo-picker-branch ?disabled={waiting}
+                            @change={EvVal(fun v -> dispatch (LaunchMsg (LaunchBranchPicked v)))}>
+                      {options}
+                    </select>
+                    <span class="{Style.fieldSelectMark}" aria-hidden="true">{Icon.down}</span>
+                  </div>
+                  {branchesNote}
+                  <div class="{Style.launchActions}">
+                    <button type="button" class="{Style.btnPrimary}" data-repo-picker-start ?disabled={waiting}
+                            @click={Ev(fun _ -> actions.LaunchStart choice.Repo.Repo (Launch.branchToAsk choice))}>{Dom.Text.repoPickerStart}</button>
+                    <button type="button" class="{Style.btn}" data-repo-picker-back ?disabled={waiting}
+                            @click={Ev(fun _ -> dispatch (LaunchMsg LaunchUnchosen))}>{Dom.Text.repoPickerBack}</button>
+                    {status}
+                  </div>
+                </div>"""
+        let body =
+            match launch.Choice with
+            | Some choice -> chosen choice
+            | None -> choosing
+        let problem =
+            match launch.Problem with
+            | Some reason -> html $"""<span class="{Style.statusErr}" role="alert" data-repo-picker-problem>{reason}</span>"""
+            | None -> html $""""""
+        html $"""
+            <section class="{Style.launch}" data-repo-picker="{stage}" aria-labelledby="repo-picker-title">
+              <span id="repo-picker-title" class="{Style.label}">{Dom.Text.repoPickerTitle}</span>
+              <p class="{Style.launchLead}">{Dom.Text.repoPickerLead}</p>
+              {problem}
+              {body}
+              <div class="{Style.launchActions}">
+                <button type="button" class="{Style.btn}" data-repo-picker-skip ?disabled={waiting}
+                        @click={Ev(fun _ -> dispatch (LaunchMsg LaunchDismissed))}>{Dom.Text.repoPickerSkip}</button>
+              </div>
+            </section>"""
+
     let private chat (actions: ViewActions) (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
         // What can be done to one item, behind an ellipsis at its top-right. It goes on
         // every item that HAS an id — a message and an act alike — because "divide it
@@ -2043,11 +2189,18 @@ module View =
             // has always said, which is why it can stay wordless and decorative. Unless what
             // is known is that history is missing — then the timeline is truncated rather
             // than empty, and the line saying so stands where the caret would have.
+            // Nothing here, and there will be: the launch surface stands where the first line
+            // will land, for a client that is connected and has read to the log's end.
+            | [], true when ClientModel.launchOffered model -> [ repoPicker actions dispatch model ]
             | [], true ->
                 match missing with
                 | Some line -> [ line ]
                 | None ->
                     [ html $"""<div class="{Style.timelineIdle}" aria-hidden="true"><span class="{Style.caretIdle}"></span></div>""" ]
+            // Rows, and still no repo and nothing said — a launch that failed, and its note:
+            // the surface stays at the head, so the next attempt is a click rather than a
+            // conversation.
+            | _ when ClientModel.launchOffered model -> repoPicker actions dispatch model :: Option.toList missing @ items
             | _ -> Option.toList missing @ items
         html $"""<section class="{Style.timeline}" data-conversation>{body}</section>"""
 

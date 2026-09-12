@@ -21,6 +21,7 @@ module Yession.Tests.GitHubRepos
 open Fable.Core
 open Fable.Pyxpecto
 open Yession.Domain
+open Yession.Domain.Repos
 open Yession.App
 open Yession.Host
 open Yession.SessionProcess
@@ -213,8 +214,9 @@ let private routeTests =
                 let! url = startRoutes api [ alice, "ghp_alice" ]
                 let! reply = get (url + "/github/repos") "who=alice" |> Async.AwaitPromise
                 Expect.equal reply.status 200 "answered"
-                Expect.isTrue (reply.body.Contains "\"repo\":\"mine/recent\"") "the provider's name for it"
-                Expect.isTrue (reply.body.Contains "\"defaultBranch\":\"trunk\"") "and its default branch"
+                let listing = Codec.fromString Codec.repoCandidates reply.body |> expect
+                Expect.equal (listing |> List.map (fun c -> c.Repo)) [ repo "mine/recent" ] "the provider's name for it, in the codec the picker reads"
+                Expect.equal (listing |> List.map (fun c -> c.DefaultBranch)) [ "trunk" ] "and its default branch"
                 let _, bearer = api.Requests.[0]
                 Expect.equal bearer (Some "Bearer ghp_alice") "alice's token, not anyone else's"
             }
@@ -235,7 +237,8 @@ let private routeTests =
                 let! url = startRoutes api []
                 let! reply = get (url + "/github/repos?q=hello") "who=alice" |> Async.AwaitPromise
                 Expect.equal reply.status 200 "answered anonymously"
-                Expect.isTrue (reply.body.Contains "\"repo\":\"found/by-name\"") "from the search endpoint"
+                let listing = Codec.fromString Codec.repoCandidates reply.body |> expect
+                Expect.equal (listing |> List.map (fun c -> c.Repo)) [ repo "found/by-name" ] "from the search endpoint"
             }
 
         testCaseAsync "branches are read for the repo the path names" <|
@@ -244,7 +247,7 @@ let private routeTests =
                 let! url = startRoutes api [ alice, "ghp_alice" ]
                 let! reply = get (url + "/github/repos/octo/hello/branches") "who=alice" |> Async.AwaitPromise
                 Expect.equal reply.status 200 "answered"
-                Expect.equal reply.body """["main","next"]""" "the names"
+                Expect.equal (Codec.fromString Codec.branchNames reply.body) (Ok [ "main"; "next" ]) "the names, in the codec the picker reads"
                 let! gone = get (url + "/github/repos/octo/gone/branches") "who=alice" |> Async.AwaitPromise
                 Expect.equal gone.status 404 "and a repo the credential cannot see is a 404 with words"
             }

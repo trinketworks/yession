@@ -1115,6 +1115,23 @@ module Style =
     /// real message appears exactly where the caret was standing, rather than stepping sideways
     /// as it replaces it.
     let timelineIdle = "pl-8 max-md:pl-8"
+
+    // --- The launch surface ---------------------------------------------------------------
+    // Stands where the timeline's first line will: on the timeline's own rail, in the
+    // timeline's own type, so it reads as the session's first page rather than a dialog over
+    // it. A candidate is a listed row (`rowBase`'s idiom without the leading edge — a row
+    // that is not yet anything has no state to show on one), lifting under the pointer.
+    let launch = "flex flex-col gap-3 pl-8 max-md:pl-8 pr-8 max-md:pr-4 py-2 max-w-2xl"
+    let launchLead = cls [ body; "text-ink-dim" ]
+    let launchList = "flex flex-col"
+    let launchCandidate =
+        cls [ "w-full text-left flex items-baseline gap-3 px-2 -mx-2 py-1.5 bg-transparent border-0 cursor-pointer"
+              "hover:bg-surface-2 focus-visible:bg-surface-2 transition-colors"; focusRing ]
+    let launchCandidateName = "font-terminal text-code text-ink shrink-0"
+    let launchCandidateDescription = cls [ small; "truncate min-w-0" ]
+    let launchChoice = "flex flex-col gap-3"
+    let launchChoiceName = "font-terminal text-code text-ink"
+    let launchActions = "flex flex-wrap items-center gap-2"
     let caretIdle = caret + " opacity-50"
 
 
