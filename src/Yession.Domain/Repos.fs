@@ -59,6 +59,25 @@ type RepoListing =
       /// how a clone turns into `ls ~/repos`, twice, and then a turn that ran out of steps.
       Path : string }
 
+/// One repository a person could choose, as the provider lists it — enough to choose it
+/// and to clone it. Provider-neutral by construction: a forge's listing is decoded into
+/// this in the session, and the browser's picker reads only this.
+///
+/// The name is the one the PROVIDER calls canonical, which is the fact a clone cannot
+/// learn: github.com follows a renamed repository's old name with a redirect, so a
+/// checkout made from one clones fine and keeps an `origin` the provider no longer answers
+/// to by that name. A repo chosen from a listing was named by the provider.
+[<RequireQualifiedAccess>]
+type RepoCandidate =
+    { Repo : RepoRef
+      Description : string option
+      DefaultBranch : string
+      /// Whether the credential is what makes it visible: a private repo chosen here will
+      /// not clone for a session whose credential cannot see it.
+      Private : bool
+      /// When it was last pushed to, as the provider reports it — what "recent" is ordered by.
+      PushedAt : string option }
+
 module RepoListing =
 
     /// Render one listing line the way both interfaces say it.

@@ -10,6 +10,8 @@
     <Compile Include="Routes.fs" />
     <Compile Include="WebApp.fs" />
     <Compile Include="PeerColour.fs" />
+    <!-- The launch surface's own state and fold: pure, before the model that holds it. -->
+    <Compile Include="Launch.fs" />
     <Compile Include="Model.fs" />
     <Compile Include="DraftSlot.fs" />
     <Compile Include="Connection.fs" />

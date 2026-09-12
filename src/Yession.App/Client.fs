@@ -76,6 +76,10 @@ module Client =
           /// Consent to what a repo asks for (Plan 27). Carries the set that was SHOWN, so
           /// the Process can refuse if the file moved between the screen and the button.
           ApproveRepoCapabilities : RepoRef -> string list -> unit
+          /// Put the first repo into the session (the launch surface). Answers with the
+          /// request's id, so the surface can tell the session's reply to THIS command from
+          /// any other's (`CommandAnsweredMsg`); the outcome itself arrives as events.
+          AddRepo : RepoRef -> string option -> RequestId
           /// Ask the Session Process to close a terminal.
           CloseTerminal : TerminalId -> unit
           /// Take a terminal's stdin — enter live mode, stealing the lease if another peer
@@ -807,9 +811,11 @@ module Client =
             DocSync.onLocalUpdate doc (fun payload ->
                 Async.StartImmediate (channel.Send (State (StateSync payload))))
 
-        // No commands are issued by the client anymore (sending is a CRDT write);
-        // responses to any future commands are currently uncorrelated.
-        let onResponse (_requestId: RequestId) (_result: SessionCommandResult) = ()
+        // A response is folded into the model, which correlates the one it is waiting on —
+        // the launch's — by request id and lets the rest go: every other command's outcome
+        // is an event, and the response adds nothing to it.
+        let onResponse (requestId: RequestId) (result: SessionCommandResult) =
+            dispatch (CommandAnsweredMsg (requestId, result))
 
         // The consumption loop's own read position (seeded for reconnect catch-up).
         let mutable lastProcessed : EventOffset option = options.ResumeAfter
@@ -1017,6 +1023,11 @@ module Client =
             fun repo granted ->
                 Async.StartImmediate (
                     channel.Send (Command (Request (RequestId.fresh (), ApproveRepoCapabilities (repo, granted)))))
+          AddRepo =
+            fun repo branch ->
+                let request = RequestId.fresh ()
+                Async.StartImmediate (channel.Send (Command (Request (request, AddRepo (repo, branch)))))
+                request
           CloseTerminal =
             fun terminalId ->
                 Async.StartImmediate (channel.Send (Command (Request (RequestId.fresh (), CloseTerminal terminalId))))

@@ -56,6 +56,8 @@ let private representativeModel : ClientModel =
       Connection = Connected
       Session = Some sessionId
       Approvals = RepoApprovals.empty
+      Launch = Launch.empty
+      Repos = ReposProjection.empty
       // Connected, so the reconnect offer (Plan 11) is not showing — but the origin is
       // present, which is the interesting case: the offer must be gated on the CONNECTION,
       // not merely on whether a Manager is known.

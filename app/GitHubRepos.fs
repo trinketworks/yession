@@ -16,6 +16,7 @@ open System
 open Fable.Core
 open Fable.Core.JsInterop
 open Yession.Domain
+open Yession.Domain.Repos
 open Yession.SessionProcess
 open Yession.Host.Interop
 
@@ -24,18 +25,6 @@ open Thoth.Json
 #else
 open Thoth.Json.Net
 #endif
-
-/// One repository as the provider lists it — enough to choose one and to clone it.
-[<RequireQualifiedAccess>]
-type RepoCandidate =
-    { Repo : RepoRef
-      Description : string option
-      DefaultBranch : string
-      /// Whether the credential is what makes it visible: a private repo chosen here will
-      /// not clone for a session whose credential cannot see it.
-      Private : bool
-      /// When it was last pushed to, as GitHub reports it — what "recent" is ordered by.
-      PushedAt : string option }
 
 /// Why a look could not answer. Words a person acts on rather than statuses, and one case
 /// per distinct thing to do about it.
@@ -187,21 +176,11 @@ let private respondText (res: ServerResponse) (status: int) (text: string) =
     res.writeHead (status, createObj [ "content-type", box "text/plain"; "cache-control", box "no-store" ]) |> ignore
     res.``end`` text
 
-let private encodeCandidate (candidate: RepoCandidate) : JsonValue =
-    Encode.object
-        [ "repo", Encode.string (RepoRef.value candidate.Repo)
-          "description", (match candidate.Description with Some d -> Encode.string d | None -> Encode.nil)
-          "defaultBranch", Encode.string candidate.DefaultBranch
-          "private", Encode.bool candidate.Private
-          "pushedAt", (match candidate.PushedAt with Some p -> Encode.string p | None -> Encode.nil) ]
+/// The JSON the browser reads a listing as: the codec the picker decodes with, so the
+/// browser reads one wire shape rather than two.
+let encodeListing (candidates: RepoCandidate list) : string = Codec.toString Codec.repoCandidates candidates
 
-/// The JSON the browser reads a listing as. One encoder for both routes' shapes, beside
-/// the decoders the client uses (`Yession.App.GitHubRepos`), and pinned by the route suite.
-let encodeListing (candidates: RepoCandidate list) : string =
-    candidates |> List.map encodeCandidate |> Encode.list |> Encode.toString 0
-
-let encodeBranches (branches: string list) : string =
-    branches |> List.map Encode.string |> Encode.list |> Encode.toString 0
+let encodeBranches (branches: string list) : string = Codec.toString Codec.branchNames branches
 
 /// Which HTTP status a failure is said with. A missing credential and a dead one are both
 /// 401 — the browser's answer to either is the sign-in panel — but with different words.

@@ -44,6 +44,7 @@ let all =
         // stand-in that would exercise what the cases turn on.
         Tag.needs "Model catalogue" [ Tag.Ports ] (fun () -> Models.portsTests)
         Tag.needs "GitHubRepos" [] (fun () -> GitHubRepos.tests)
+        Tag.needs "Launch surface" [] (fun () -> LaunchSurface.tests)
         // Finding a repo is an HTTP conversation on both sides — the provider's listing and
         // the session's own gated route — with no in-memory stand-in for what the cases turn on.
         Tag.needs "GitHubRepos over HTTP" [ Tag.Ports ] (fun () -> GitHubRepos.portsTests)

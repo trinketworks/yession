@@ -51,6 +51,8 @@
     <Compile Include="Terminals.fs" />
     <Compile Include="Attach.fs" />
     <Compile Include="Timeline.fs" />
+    <!-- The launch surface, through the model a browser folds and the renderer it serves. -->
+    <Compile Include="LaunchSurface.fs" />
     <Compile Include="Editor.fs" />
     <Compile Include="Agent.fs" />
     <Compile Include="Telemetry.fs" />
