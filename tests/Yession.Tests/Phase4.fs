@@ -1309,10 +1309,12 @@ let private uiFlowTests =
                 // addressed by a digest of its own bytes, so a hardcoded URL would be a second
                 // spelling of it, wrong the moment the stylesheet changes. Following the link
                 // is also the stronger assertion — it proves the page and the route agree.
-                let styleSheetUrl =
-                    System.Text.RegularExpressions.Regex.Match(page, "href=\"(assets/[^\"]+/app\\.css)\"").Groups.[1].Value
-                Expect.notEqual styleSheetUrl "" "the page names a stylesheet"
-                let! css = Interop.getText (baseUrl + "/" + styleSheetUrl) |> Async.AwaitPromise
+                // Resolved from the page's own address, as a browser would, rather than
+                // re-anchored here: how the page spells the link is the page's business.
+                let styleSheetLink =
+                    System.Text.RegularExpressions.Regex.Match(page, "href=\"([^\"]+/app\\.css)\"")
+                Expect.isTrue styleSheetLink.Success "the page names a stylesheet"
+                let! css = Interop.getText (resolveUrl (baseUrl + "/") styleSheetLink.Groups.[1].Value) |> Async.AwaitPromise
                 Expect.isTrue (css.Length > 500) "the shared local stylesheet serves from the endpoint (no CDN)"
 
                 // Create over the form endpoint. The answer is where the session now IS —

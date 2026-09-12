@@ -143,16 +143,17 @@ let start
     // function of this build and this mount, and a per-request render could only drift from
     // the document that registers it.
     let serviceWorkerScript =
+        let inWorker (route: SessionRoute) = RelativeUrl.inDocument DocumentBase.serviceWorker (SessionRoute.relative route)
         WebApp.serviceWorker
             (AssetBuild.digest assets.Build)
-            (SessionRoute.relative Shell)
+            (inWorker Shell)
             SessionRoute.assetsPrefix
             // The set this build actually left on disk, read from the same map the server
             // answers from. A list written by hand here would be a second thing that has to
             // agree with the build, which is exactly what the set-wide digest exists to avoid.
             (assets.Files
              |> Map.toList
-             |> List.map (fun (path, _) -> SessionRoute.relative (Asset (AssetBuild.digest assets.Build, path))))
+             |> List.map (fun (path, _) -> inWorker (Asset (AssetBuild.digest assets.Build, path))))
     // Every accepted peer connection, so a stopping Host can drain them. Never pruned
     // mid-life (closePeerConnection resolves immediately for already-closed ones, and a
     // session hosts a bounded handful of peers).
@@ -192,7 +193,7 @@ let start
     /// One function for both feeds, because both cursors mean the same thing and a second
     /// copy of this would be a second chance to get the mount or the token wrong.
     let redirectTo (url: string) (route: SessionRoute) (res: ServerResponse) =
-        let path = (if mount = "" then "" else mount) + "/" + SessionRoute.relative route
+        let path = RelativeUrl.under mount (SessionRoute.relative route)
         let target =
             match queryOf url "token" with
             | Some token -> sprintf "%s?token=%s" path (encodeUriComponent token)
