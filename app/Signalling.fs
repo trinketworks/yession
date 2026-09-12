@@ -491,6 +491,7 @@ let start
         | Some (GitHub _)
         | Some GitHubRepos
         | Some (GitHubBranches _)
+        | Some (GitHubPullHead _)
         | Some Queries
         | None -> handleWithExtraRoutes ()
 

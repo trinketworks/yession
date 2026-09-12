@@ -91,6 +91,16 @@ let private decoderTests =
         testCase "branches are read by name" <| fun () ->
             let branches = Decode.fromString GitHubRepos.branchesDecoder """[{"name":"main"},{"name":"feature/x"}]""" |> expect
             Expect.equal branches [ "main"; "feature/x" ] "names only"
+
+        testCase "a pull request's head is the fork's repo and branch, not the repo the link named" <| fun () ->
+            let pr = """{"number":42,"head":{"ref":"fix/thing","repo":{"full_name":"fork-owner/hello"}},"base":{"repo":{"full_name":"octo/hello"}}}"""
+            let head = Decode.fromString GitHubPrs.pullHeadDecoder pr |> expect
+            Expect.equal head.Repo (repo "fork-owner/hello") "where the branch lives"
+            Expect.equal head.Branch "fix/thing" "and which branch"
+
+        testCase "a pull request whose fork is gone has no head to check out" <| fun () ->
+            let pr = """{"number":42,"head":{"ref":"fix/thing","repo":null}}"""
+            Expect.isError (Decode.fromString GitHubPrs.pullHeadDecoder pr) "refused rather than pointed at nothing"
     ]
 
 // --- a stand-in for api.github.com ------------------------------------------------------------
@@ -113,6 +123,8 @@ let private startStubApi () : Async<StubApi> =
                 else json res 200 (sprintf "[%s]" (candidate "mine/recent"))
             elif url.StartsWith "/search/repositories" then json res 200 (sprintf """{"items":[%s]}""" (candidate "found/by-name"))
             elif url.StartsWith "/repos/octo/hello/branches" then json res 200 """[{"name":"main"},{"name":"next"}]"""
+            elif url.StartsWith "/repos/octo/hello/pulls/42" then
+                json res 200 """{"number":42,"head":{"ref":"fix/thing","repo":{"full_name":"fork-owner/hello"}}}"""
             elif url.StartsWith "/repos/" then json res 404 """{"message":"Not Found"}"""
             else json res 500 "{}"
         let! url = serving handler
@@ -250,6 +262,22 @@ let private routeTests =
                 Expect.equal (Codec.fromString Codec.branchNames reply.body) (Ok [ "main"; "next" ]) "the names, in the codec the picker reads"
                 let! gone = get (url + "/github/repos/octo/gone/branches") "who=alice" |> Async.AwaitPromise
                 Expect.equal gone.status 404 "and a repo the credential cannot see is a 404 with words"
+            }
+
+        testCaseAsync "a pull request's head is read for the number the path names" <|
+            async {
+                let! api = startStubApi ()
+                let! url = startRoutes api [ alice, "ghp_alice" ]
+                let! reply = get (url + "/github/repos/octo/hello/pulls/42") "who=alice" |> Async.AwaitPromise
+                Expect.equal reply.status 200 "answered"
+                Expect.equal
+                    (Codec.fromString Codec.pullHead reply.body)
+                    (Ok { PullHead.Repo = repo "fork-owner/hello"; PullHead.Branch = "fix/thing" })
+                    "the fork and its branch, in the codec the picker reads"
+                let! notNumber = get (url + "/github/repos/octo/hello/pulls/latest") "who=alice" |> Async.AwaitPromise
+                Expect.equal notNumber.status 400 "a number is what the path takes"
+                let! gone = get (url + "/github/repos/octo/hello/pulls/7") "who=alice" |> Async.AwaitPromise
+                Expect.equal gone.status 404 "and one the credential cannot see is a 404 with words"
             }
     ]
 

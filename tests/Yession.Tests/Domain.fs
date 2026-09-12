@@ -583,6 +583,43 @@ let private repoTests =
             Expect.isError (RepoRef.create "owner/..") "dot-dot cannot traverse"
             Expect.isError (RepoRef.create (String.replicate 40 "a" + "/repo")) "owner over GitHub's cap"
 
+        testCase "a repo link reads what a person copied: a name, a page, a git url" <| fun () ->
+            let hello = RepoRef.create "octo/hello" |> expect
+            for text in
+                [ "octo/hello"
+                  "  octo/hello.git "
+                  "github.com/octo/hello"
+                  "https://github.com/octo/hello"
+                  "https://www.github.com/octo/hello/"
+                  "http://github.com/octo/hello.git"
+                  "git@github.com:octo/hello.git" ] do
+                Expect.equal (RepoLink.parse text) (Some (RepoLink.Repo hello)) text
+
+        testCase "a branch link keeps every segment of the branch, and drops what follows the page" <| fun () ->
+            let hello = RepoRef.create "octo/hello" |> expect
+            Expect.equal (RepoLink.parse "https://github.com/octo/hello/tree/main") (Some (RepoLink.Branch (hello, "main"))) "one segment"
+            Expect.equal
+                (RepoLink.parse "https://github.com/octo/hello/tree/feature/x?search=1#readme")
+                (Some (RepoLink.Branch (hello, "feature/x")))
+                "a branch with a slash, and the query and fragment gone"
+            Expect.equal (RepoLink.parse "https://github.com/octo/hello/tree/") None "a tree page with no branch is not a branch link"
+
+        testCase "a pull request link is the number, whichever tab it was copied from" <| fun () ->
+            let hello = RepoRef.create "octo/hello" |> expect
+            Expect.equal (RepoLink.parse "https://github.com/octo/hello/pull/42") (Some (RepoLink.PullRequest (hello, 42))) "the conversation"
+            Expect.equal (RepoLink.parse "https://github.com/octo/hello/pull/42/files#diff-1") (Some (RepoLink.PullRequest (hello, 42))) "the files tab"
+            Expect.equal (RepoLink.parse "https://github.com/octo/hello/pull/x") None "not a number"
+
+        testCase "what is not a repo link is nothing, not a guess" <| fun () ->
+            for text in
+                [ ""
+                  "hello there"
+                  "https://gitlab.com/octo/hello"
+                  "https://github.com/octo"
+                  "https://github.com/octo/hello/blob/main/README.md"
+                  "https://github.com/octo/hello/issues/3" ] do
+                Expect.equal (RepoLink.parse text) None text
+
         testCase "the repos projection folds add, re-add, switch, and remove" <| fun () ->
             let msg n = MessageId.create n |> expect
             let repo = RepoRef.create "octo/hello" |> expect

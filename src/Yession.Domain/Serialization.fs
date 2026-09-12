@@ -2234,6 +2234,16 @@ module Codec =
         { Encode = (fun branches -> Encode.object [ "branches", Encode.list (branches |> List.map Encode.string) ])
           Decode = Decode.field "branches" (Decode.list Decode.string) }
 
+    /// Where a pull request comes from: the repository holding its head, and the branch.
+    let pullHead : Codec<Repos.PullHead> =
+        { Encode =
+            fun (head: Repos.PullHead) ->
+                Encode.object [ "repo", repoRef.Encode head.Repo; "branch", Encode.string head.Branch ]
+          Decode =
+            Decode.object (fun get ->
+                { Repos.PullHead.Repo = get.Required.Field "repo" repoRef.Decode
+                  Repos.PullHead.Branch = get.Required.Field "branch" Decode.string }) }
+
     /// Serialize a value to a compact JSON string.
     let toString (codec: Codec<'a>) (value: 'a) : string =
         codec.Encode value |> Encode.toString 0

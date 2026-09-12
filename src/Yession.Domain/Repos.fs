@@ -88,3 +88,83 @@ module RepoListing =
             listing.Branch
             (if listing.Dirty then ", uncommitted changes" else "")
             listing.Path
+
+/// What a pasted link, or a typed name, asks for: a repository, one of its branches, or a
+/// pull request — the three things a person copies out of a forge's address bar.
+///
+/// A link is read here rather than sent to the provider to resolve, because two of the
+/// three need no provider at all: `owner/name` is already what `add_repo` takes, and a
+/// branch link is that plus a switch. Only a pull request has to be asked about, since
+/// which repository and branch it comes FROM is a fact only the provider holds — a fork's
+/// as often as not.
+[<RequireQualifiedAccess>]
+type RepoLink =
+    | Repo of RepoRef
+    | Branch of RepoRef * branch: string
+    | PullRequest of RepoRef * number: int
+
+module RepoLink =
+
+    /// The hosts a link is recognised under. github.com is the one this session clones from
+    /// (`RepoRef.cloneUrl`), so a link anywhere else is not a repo link, whatever its path.
+    let private hosts = [ "github.com"; "www.github.com" ]
+
+    let private stripPrefix (prefix: string) (text: string) : string option =
+        if text.StartsWith prefix then Some (text.Substring prefix.Length) else None
+
+    /// The path under the host, when `text` is a URL to one of `hosts`: `https://`,
+    /// `http://`, or bare — because a URL copied from a browser has a scheme and one read
+    /// off a page often does not.
+    let private hostedPath (text: string) : string option =
+        let unschemed =
+            stripPrefix "https://" text
+            |> Option.orElse (stripPrefix "http://" text)
+            |> Option.defaultValue text
+        hosts
+        |> List.tryPick (fun host -> stripPrefix (host + "/") unschemed)
+
+    /// A path's tail with the query and fragment gone — a link to a pull request's files
+    /// tab, or a branch link with a search in it, is still a link to that thing.
+    let private untailed (text: string) : string =
+        let cut (c: char) (s: string) =
+            match s.IndexOf c with
+            | -1 -> s
+            | i -> s.Substring (0, i)
+        text |> cut '?' |> cut '#'
+
+    /// Read what a link asks for, or nothing when it is not one. The forms:
+    ///
+    ///   owner/name                       owner/name.git
+    ///   github.com/owner/name            https://github.com/owner/name/
+    ///   git@github.com:owner/name.git
+    ///   https://github.com/owner/name/tree/<branch>      branches carry `/`
+    ///   https://github.com/owner/name/pull/<n>           and anything after the number
+    ///
+    /// A `blob` link is deliberately not one: `blob/main/src/x.fs` does not say where the
+    /// branch ends and the path begins, and GitHub itself only knows by asking. A link that
+    /// names a branch this way is pasted as a `tree` link instead, which every branch page
+    /// offers.
+    let parse (text: string) : RepoLink option =
+        let trimmed = if isNull text then "" else text.Trim ()
+        let repoOf (segment: string) = RepoRef.create segment |> Result.toOption
+        let segments =
+            match stripPrefix "git@github.com:" trimmed with
+            | Some rest -> Some (untailed rest)
+            | None -> hostedPath trimmed |> Option.map untailed |> Option.orElse (Some trimmed)
+        match segments |> Option.map (fun s -> s.TrimEnd('/').Split '/' |> Array.toList) with
+        | Some [ owner; name ] -> repoOf (owner + "/" + name) |> Option.map RepoLink.Repo
+        | Some (owner :: name :: "tree" :: branch) when not branch.IsEmpty ->
+            repoOf (owner + "/" + name) |> Option.map (fun repo -> RepoLink.Branch (repo, String.concat "/" branch))
+        | Some (owner :: name :: "pull" :: number :: _) ->
+            match System.Int32.TryParse number with
+            | true, n when n > 0 -> repoOf (owner + "/" + name) |> Option.map (fun repo -> RepoLink.PullRequest (repo, n))
+            | _ -> None
+        | _ -> None
+
+/// Where a pull request comes FROM, as the provider says: the repository holding its head
+/// branch — the fork, when it is one — and that branch. What a link to a pull request
+/// becomes once asked about, and all `add_repo` needs to check it out.
+[<RequireQualifiedAccess>]
+type PullHead =
+    { Repo : RepoRef
+      Branch : string }

@@ -133,6 +133,10 @@ type SessionRoute =
     /// carried raw for the terminal routes' reason: a route is a path, and making a
     /// `RepoRef` of them is the server's job at dispatch.
     | GitHubBranches of owner: string * repo: string
+    /// Where one pull request comes from — the repository holding its head and the
+    /// branch — so a pasted link to one can be checked out. The number is carried raw
+    /// with the segments, for the same reason.
+    | GitHubPullHead of owner: string * repo: string * number: string
     /// The session's read-only query surface (Plan 15): one multiplexed SSE stream
     /// carrying every registered query's declaration and value. It is a STREAM rather
     /// than a fetch-plus-stream pair because its opening burst already is the snapshot,
@@ -202,6 +206,7 @@ module SessionRoute =
         | GitHub action -> "github/" + githubSegment action
         | GitHubRepos -> "github/repos"
         | GitHubBranches (owner, repo) -> sprintf "github/repos/%s/%s/branches" owner repo
+        | GitHubPullHead (owner, repo, number) -> sprintf "github/repos/%s/%s/pulls/%s" owner repo number
         | Queries -> "queries"
 
     /// A route as an absolute URL under a session's address — what a client outside a
@@ -287,6 +292,8 @@ module SessionRoute =
         | "GET", [ "github"; "repos" ] -> Some GitHubRepos
         | "GET", [ "github"; "repos"; owner; repo; "branches" ] when owner <> "" && repo <> "" ->
             Some (GitHubBranches (owner, repo))
+        | "GET", [ "github"; "repos"; owner; repo; "pulls"; number ] when owner <> "" && repo <> "" && number <> "" ->
+            Some (GitHubPullHead (owner, repo, number))
         | "GET", [ "queries" ] -> Some Queries
         | _ -> None
 
