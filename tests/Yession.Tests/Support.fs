@@ -10,6 +10,7 @@ module Yession.Tests.Support
 // and a full-client connector (WebRTC channel + Yjs doc + withYlmish program + drivers)
 // parameterized by host, so every E2E suite composes the same way. No sleeps, no polling.
 
+open System
 open Elmish
 open Fable.Core
 open Fable.Pyxpecto
@@ -59,6 +60,50 @@ let emptyPolicy : SandboxPolicy =
 
 let preparedEmptyPolicy : unit -> Async<Result<SandboxPolicy, string>> =
     fun () -> async { return Ok emptyPolicy }
+
+/// A clock a test turns by hand.
+///
+/// `After` parks the caller until `Advance` has carried the clock past its due time; timers
+/// fire in due order, each with `Now` standing at its own due time, so a component that
+/// re-arms itself from inside a timer sees the time it expects. Nothing fires on its own:
+/// a window that has to pass is a call to `Advance`, and a case takes the time it takes to
+/// do its I/O rather than the time its windows are wide.
+type VirtualClock =
+    { Clock : Clock
+      /// Move the clock forward, firing every timer that comes due on the way.
+      Advance : TimeSpan -> unit
+      /// How many waits are parked — what a case asserts when it expects a component to
+      /// have armed (or not armed) a timer.
+      Pending : unit -> int }
+
+let virtualClock (start: DateTimeOffset) : VirtualClock =
+    let mutable now = start
+    let timers = ResizeArray<DateTimeOffset * (unit -> unit)> ()
+    let advance (by: TimeSpan) =
+        let target = now + by
+        let rec fire () =
+            let due =
+                timers
+                |> Seq.indexed
+                |> Seq.filter (fun (_, (at, _)) -> at <= target)
+                |> Seq.sortBy (fun (_, (at, _)) -> at)
+                |> Seq.tryHead
+            match due with
+            | Some (index, (at, resume)) ->
+                timers.RemoveAt index
+                now <- max now at
+                resume ()
+                fire ()
+            | None -> ()
+        fire ()
+        now <- target
+    { Clock =
+        { Now = fun () -> now
+          After =
+            fun delay ->
+                Async.FromContinuations (fun (cont, _, _) -> timers.Add ((now + delay), (fun () -> cont ()))) }
+      Advance = advance
+      Pending = fun () -> timers.Count }
 
 /// A Session Process as production composes it — `Host.startFull`'s own wiring: its shell,
 /// its nonce, its drain, its command path — over ONE sandbox built by `createSandbox`
