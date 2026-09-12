@@ -1107,22 +1107,27 @@ module Codec =
                 | "stalled" -> Decode.succeed PrTransition.Stalled
                 | other -> Decode.fail (sprintf "Unknown pull request transition: %s" other)) }
 
+    /// The watcher is not on the wire: it is derived from the authority by the one rule
+    /// `PrWatched.create` applies, and a second key could only agree with it or contradict
+    /// it. The parties ride the same two top-level keys a terminal block's do.
     let private prWatched : Codec<PrWatched> =
         { Encode =
             fun (p: PrWatched) ->
-                Encode.object
-                    [ "messageId", messageId.Encode p.MessageId
-                      "pr", prRef.Encode p.Pr
-                      "initial", prSnapshot.Encode p.Initial
-                      "actor", actor.Encode p.Actor
-                      "watcher", principal.Encode p.Watcher ]
+                Encode.object (
+                    [ "messageId", messageId.Encode (PrWatched.messageId p)
+                      "pr", prRef.Encode (PrWatched.pr p)
+                      "initial", prSnapshot.Encode (PrWatched.initial p) ]
+                    @ authorityFields (PrWatched.authority p))
           Decode =
             Decode.object (fun get ->
-                { PrWatched.MessageId = get.Required.Field "messageId" messageId.Decode
-                  PrWatched.Pr = get.Required.Field "pr" prRef.Decode
-                  PrWatched.Initial = get.Required.Field "initial" prSnapshot.Decode
-                  PrWatched.Actor = get.Required.Field "actor" actor.Decode
-                  PrWatched.Watcher = get.Required.Field "watcher" principal.Decode }) }
+                get.Required.Field "messageId" messageId.Decode,
+                get.Required.Raw authorityOf,
+                get.Required.Field "pr" prRef.Decode,
+                get.Required.Field "initial" prSnapshot.Decode)
+            |> Decode.andThen (fun (messageId, authority, pr, initial) ->
+                match PrWatched.create messageId authority pr initial with
+                | Ok watched -> Decode.succeed watched
+                | Error reason -> Decode.fail reason) }
 
     let private prUnwatched : Codec<PrUnwatched> =
         { Encode =

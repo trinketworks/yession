@@ -2535,12 +2535,9 @@ let private prPollTests =
             let folded =
                 [ at
                     0
-                    (SessionEvent.PrWatched
-                        { MessageId = msg "w1"
-                          Pr = prOne
-                          Initial = snapshotOf PrOpen ChecksPending
-                          Actor = Principal.toActor ada
-                          Watcher = ada })
+                    (PrWatched.create (msg "w1") (Authority.ofAuthor ada) prOne (snapshotOf PrOpen ChecksPending)
+                     |> expect
+                     |> SessionEvent.PrWatched)
                   at
                     6
                     (SessionEvent.PrTransitioned
@@ -3060,13 +3057,13 @@ let private prWatchVerbTests =
                 Expect.equal outcome (Ok "octo/hello#12 watched (open, checks green)") "it says what it found"
                 match! eventsOf log with
                 | [ SessionEvent.PrWatched started ] ->
-                    Expect.equal started.Pr prOne "the pull request asked for"
-                    Expect.equal started.Actor ada "attributed to the asker"
-                    Expect.equal started.Watcher (Principal.Peer (PeerId.create "ada" |> expect)) "and hers to keep looking as"
+                    Expect.equal (PrWatched.pr started) prOne "the pull request asked for"
+                    Expect.equal (PrWatched.actor started) ada "attributed to the asker"
+                    Expect.equal (PrWatched.watcher started) (Principal.Peer (PeerId.create "ada" |> expect)) "and hers to keep looking as"
                     // The validating look IS the baseline — there is no second fetch, and
                     // no window where a watch exists with nothing to compare against.
-                    Expect.equal started.Initial.State PrOpen "the state it was in"
-                    Expect.equal started.Initial.Checks ChecksGreen "and its checks"
+                    Expect.equal (PrWatched.initial started).State PrOpen "the state it was in"
+                    Expect.equal (PrWatched.initial started).Checks ChecksGreen "and its checks"
                 | events -> failwithf "expected one watch event, got %A" events
                 Expect.equal (applied.Count) 1 "the poller was handed the new watch"
             }
@@ -3083,8 +3080,8 @@ let private prWatchVerbTests =
                 let! _ = service.Watch agentForAda prOne
                 match! eventsOf log with
                 | [ SessionEvent.PrWatched started ] ->
-                    Expect.equal started.Actor ActorRef.Agent "the agent asked"
-                    Expect.equal started.Watcher (Principal.Peer (PeerId.create "ada" |> expect)) "on Ada's credential, and it is Ada who is woken"
+                    Expect.equal (PrWatched.actor started) ActorRef.Agent "the agent asked"
+                    Expect.equal (PrWatched.watcher started) (Principal.Peer (PeerId.create "ada" |> expect)) "on Ada's credential, and it is Ada who is woken"
                 | events -> failwithf "expected one watch event, got %A" events
             }
 

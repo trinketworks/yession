@@ -320,32 +320,32 @@ let private frameSerializationTests =
                   McpServerUnavailable { MessageId = messageId; Name = McpServerName.create "printer" |> expect }
                   // Watched pull requests: a start (with its baseline snapshot), a stop,
                   // and a transition — including the optional-mergeable both ways.
-                  PrWatched
-                    { MessageId = messageId
-                      Pr = { Repo = RepoRef.create "octo/hello" |> expect; Number = 12 }
-                      Initial =
-                        { State = PrOpen
-                          Title = "Add feature"
-                          HeadSha = "abc123"
-                          Checks = ChecksPending
-                          Queued = true
-                          Mergeable = Some true }
-                      Actor = PeerRef peerId
-                      Watcher = Principal.Peer peerId }
-                  PrWatched
-                    { MessageId = messageId
-                      Pr = { Repo = RepoRef.create "octo/hello" |> expect; Number = 13 }
-                      Initial =
-                        { State = PrClosed
-                          Title = "Old"
-                          HeadSha = "def456"
-                          Checks = ChecksNone
-                          Queued = false
-                          Mergeable = None }
-                      // The agent's watch, on the turn human's credential: the two halves
-                      // differ, and the wire carries both.
-                      Actor = ActorRef.Agent
-                      Watcher = Principal.Peer peerId }
+                  PrWatched.create
+                      messageId
+                      (Authority.ofAuthor (Principal.Peer peerId))
+                      { Repo = RepoRef.create "octo/hello" |> expect; Number = 12 }
+                      { State = PrOpen
+                        Title = "Add feature"
+                        HeadSha = "abc123"
+                        Checks = ChecksPending
+                        Queued = true
+                        Mergeable = Some true }
+                  |> expect
+                  |> PrWatched
+                  // The agent's watch, on the turn human's credential: the two halves
+                  // differ, and the wire carries the authority they are both read off.
+                  PrWatched.create
+                      messageId
+                      (Authority.agentFor (Principal.Peer peerId))
+                      { Repo = RepoRef.create "octo/hello" |> expect; Number = 13 }
+                      { State = PrClosed
+                        Title = "Old"
+                        HeadSha = "def456"
+                        Checks = ChecksNone
+                        Queued = false
+                        Mergeable = None }
+                  |> expect
+                  |> PrWatched
                   PrUnwatched
                     { MessageId = messageId
                       Pr = { Repo = RepoRef.create "octo/hello" |> expect; Number = 12 }
@@ -880,7 +880,9 @@ let private prWatchTests =
     /// ...and as one that has: auto merge armed, the last thing anybody was told.
     let queued state checks : PrKnown = { State = state; Checks = checks; Queue = Queued }
     let started state checks : SessionEvent =
-        PrWatched { MessageId = msg "w1"; Pr = pr; Initial = snapshot state checks; Actor = PeerRef ada; Watcher = Principal.Peer ada }
+        PrWatched.create (msg "w1") (Authority.ofAuthor (Principal.Peer ada)) pr (snapshot state checks)
+        |> expect
+        |> PrWatched
     let transitioned transition state checks : SessionEvent =
         PrTransitioned
             { MessageId = msg "t1"; Pr = pr; Transition = transition; State = state; Checks = checks; Watcher = Principal.Peer ada }
@@ -1061,6 +1063,20 @@ let private prWatchTests =
                 (Some ("#12", PrStatus.unreachable))
                 "but one that cannot be read is, whether or not it was ever read"
 
+        testCase "a watch cannot be built on the deployment's own credential" <| fun () ->
+            // The rule lives on the event, where every construction goes through it: the
+            // verb refuses before it looks, and the decoder refuses a stored line that says
+            // it, for the same reason from the same function. A watch keeps looking as
+            // somebody and wakes them; nobody is not a somebody.
+            Expect.isError
+                (PrWatched.create (msg "w1") (Authority.configuredBy repo CredentialFor.Deployment) pr (snapshot PrOpen ChecksNone))
+                "a boot fold's authority starts no watch"
+            match PrWatched.create (msg "w1") (Authority.agentFor (Principal.Peer ada)) pr (snapshot PrOpen ChecksNone) with
+            | Ok watched ->
+                Expect.equal (PrWatched.actor watched) ActorRef.Agent "the agent asked"
+                Expect.equal (PrWatched.watcher watched) (Principal.Peer ada) "on Ada's credential"
+            | Error e -> failwithf "the agent on a person's authority is exactly a watch: %s" e
+
         testCase "the watches projection folds start, re-watch, transition and stop" <| fun () ->
             let folded = fold [ at 0 (started PrOpen ChecksPending) ]
             Expect.equal
@@ -1081,12 +1097,9 @@ let private prWatchTests =
                     advanced
                     (at
                         9
-                        (PrWatched
-                            { MessageId = msg "w2"
-                              Pr = pr
-                              Initial = snapshot PrOpen ChecksNone
-                              Actor = ActorRef.Agent
-                              Watcher = Principal.Peer bob }))
+                        (PrWatched.create (msg "w2") (Authority.agentFor (Principal.Peer bob)) pr (snapshot PrOpen ChecksNone)
+                         |> expect
+                         |> PrWatched))
             Expect.equal
                 rewatched.Watches
                 [ { Pr = pr
@@ -1175,12 +1188,9 @@ let private prWatchTests =
                 | ConversationItemKind.ActNote facts -> facts.Notable
                 | ConversationItemKind.Message -> false
             let envelopes =
-                [ SessionEvent.PrWatched
-                    { MessageId = msg "w1"
-                      Pr = pr
-                      Initial = snapshotOf PrOpen ChecksPending false
-                      Actor = PeerRef ada
-                      Watcher = Principal.Peer ada }
+                [ PrWatched.create (msg "w1") (Authority.ofAuthor (Principal.Peer ada)) pr (snapshotOf PrOpen ChecksPending false)
+                  |> expect
+                  |> SessionEvent.PrWatched
                   SessionEvent.PrTransitioned
                     { MessageId = msg "w2"
                       Pr = pr

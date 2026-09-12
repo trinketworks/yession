@@ -828,19 +828,20 @@ let private closedNow (id: TerminalId) =
 let private prWatcher = Principal.Peer (PeerId.create "ada" |> expect)
 let private watchedPr = PrRef.create (RepoRef.create "octo/hello" |> expect) 12 |> expect
 
-let private prWatched =
-    SessionEvent.PrWatched
-        { MessageId = MessageId.create "w1" |> expect
-          Pr = watchedPr
-          Initial =
-            { State = PrOpen
-              Title = "Add feature"
-              HeadSha = "abc"
-              Checks = ChecksPending
-              Queued = false
-              Mergeable = None }
-          Actor = Principal.toActor prWatcher
-          Watcher = prWatcher }
+let private prSnapshot : PrSnapshot =
+    { State = PrOpen
+      Title = "Add feature"
+      HeadSha = "abc"
+      Checks = ChecksPending
+      Queued = false
+      Mergeable = None }
+
+let private watchedBy (authority: Authority) =
+    PrWatched.create (MessageId.create "w1" |> expect) authority watchedPr prSnapshot
+    |> expect
+    |> SessionEvent.PrWatched
+
+let private prWatched = watchedBy (Authority.ofAuthor prWatcher)
 
 let private prTransitioned transition =
     SessionEvent.PrTransitioned
@@ -873,19 +874,7 @@ let private prWakeTests =
             // is owed to somebody a credential resolves for. This is a `Principal` by type
             // now; the case stands so the split between author and watcher is not quietly
             // collapsed again.
-            let agentsWatch =
-                SessionEvent.PrWatched
-                    { MessageId = MessageId.create "w1" |> expect
-                      Pr = watchedPr
-                      Initial =
-                        { State = PrOpen
-                          Title = "Add feature"
-                          HeadSha = "abc"
-                          Checks = ChecksPending
-                          Queued = false
-                          Mergeable = None }
-                      Actor = ActorRef.Agent
-                      Watcher = prWatcher }
+            let agentsWatch = watchedBy (Authority.agentFor prWatcher)
             Expect.equal
                 (AgentWake.pendingReason [ turnStarted "1"; agentsWatch; prTransitioned PrTransition.Merged ])
                 (Some (PrChanged watchedPr, prWatcher))
