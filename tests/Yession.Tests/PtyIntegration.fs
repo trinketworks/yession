@@ -222,6 +222,26 @@ let private until (budgetMs: int) (condition: unit -> bool) : Async<bool> =
         }
     go budgetMs
 
+/// Wait until a block has PRINTED `text` — the only evidence that the command is running.
+/// "Busy" is set before the line is even typed, and a keystroke sent on that alone can land
+/// at the line editor instead of the command (a ^D there ends the shell; a ^C discards the
+/// line), or before the line does. Output only: the input record carries the command's own
+/// words too.
+let private printedOutput (records: ResizeArray<TranscriptRecord>) (text: string) : Async<bool> =
+    until 5000 (fun () -> records |> Seq.exists (fun r -> r.Kind = TranscriptOutput && r.Data.Contains text))
+
+/// The results every block on this terminal ended with, in order, off the log.
+let private blockResults (log: EventLog<SessionEvent>) : Async<CommandResult list> =
+    async {
+        let! page = log.Read None 1000
+        return
+            page.Events
+            |> List.choose (fun e ->
+                match e.Event with
+                | SessionEvent.TerminalBlockCompleted c -> Some c.Result
+                | _ -> None)
+    }
+
 let private integrationLostTests =
     testList "Integration lost over a real pty (Plan 13, stage 2f)" [
         testCaseAsync "a shell replaced mid-session is detected, holds the queue, and is repaired by re-arming" <|
@@ -552,33 +572,46 @@ let private agentLeaseTests =
         // person's, the same text in the same shell, still waits, because the keyboard is
         // theirs. `cat` stands in for perl — the same read, and present on every box.
         testCaseAsync "an agent's block that reads stdin ends at once; a person's waits" <|
-            withPosixTerminal "stdin" (fun terminals id _ log _ _ ->
+            withPosixTerminal "stdin" (fun terminals id records log _ _ ->
                 async {
                     let ada = Principal.Peer (PeerId.create "ada" |> expect)
                     let! agents = Async.StartChild (terminals.RunBlock id (agentEntry id ada "1") "cat" ignore, 10000)
                     do! agents
-                    let! page = log.Read None 1000
-                    let results =
-                        page.Events
-                        |> List.choose (fun e ->
-                            match e.Event with
-                            | SessionEvent.TerminalBlockCompleted c -> Some c.Result
-                            | _ -> None)
+                    let! results = blockResults log
                     Expect.equal results [ CommandSucceeded 0 ] "end-of-file: cat copied nothing and exited clean"
-                    Async.StartImmediate (terminals.RunBlock id (queueEntry id ada "2") "cat" ignore)
-                    let! gaveUp = until 1500 (fun () -> not (terminals.Busy () |> Set.contains (TerminalId.value id)))
-                    Expect.isFalse gaveUp "a person's cat is still waiting on their keyboard"
+                    // The person's `cat` is proved to be waiting on the terminal by what ends
+                    // it: their own end-of-file, typed once it is seen running. "Still busy
+                    // after a while" was the old assertion, and it is what any hung block says.
+                    let! block =
+                        Async.StartChild (terminals.RunBlock id (queueEntry id ada "2") "printf reading:; cat" ignore, 10000)
+                    let! reading = printedOutput records "reading:"
+                    Expect.isTrue reading "the person's cat is up"
+                    Expect.isTrue (terminals.Busy () |> Set.contains (TerminalId.value id)) "and waiting on their keyboard"
+                    match! terminals.Write id (PeerRef (PeerId.create "ada" |> expect)) "\u0004" with
+                    | Error e -> failwithf "the block is the person's, so they may type into it: %s" e
+                    | Ok () -> do! block
+                    let! results = blockResults log
+                    Expect.equal results [ CommandSucceeded 0; CommandSucceeded 0 ] "and their end-of-file is what ended it"
                 })
 
         // The opt-in: the same `cat`, the agent's, with the ask made — and it waits like a
         // person's would, because the terminal is now its to type into.
         testCaseAsync "an agent's block that asked for stdin reads the terminal" <|
-            withPosixTerminal "stdinasked" (fun terminals id _ _ _ _ ->
+            withPosixTerminal "stdinasked" (fun terminals id records log _ _ ->
                 async {
                     let ada = Principal.Peer (PeerId.create "ada" |> expect)
-                    Async.StartImmediate (terminals.RunBlock id { agentEntry id ada "1" with Stdin = true } "cat" ignore)
-                    let! gaveUp = until 1500 (fun () -> not (terminals.Busy () |> Set.contains (TerminalId.value id)))
-                    Expect.isFalse gaveUp "asked for, so the cat waits on the agent's keyboard"
+                    let! block =
+                        Async.StartChild (
+                            terminals.RunBlock id { agentEntry id ada "1" with Stdin = true } "printf reading:; cat" ignore,
+                            10000)
+                    let! reading = printedOutput records "reading:"
+                    Expect.isTrue reading "the agent's cat is up"
+                    Expect.isTrue (terminals.Busy () |> Set.contains (TerminalId.value id)) "asked for, so it waits on the agent's keyboard"
+                    match! terminals.Write id ActorRef.Agent "\u0004" with
+                    | Error e -> failwithf "the block is the agent's, so it may type into it: %s" e
+                    | Ok () -> do! block
+                    let! results = blockResults log
+                    Expect.equal results [ CommandSucceeded 0 ] "and the agent's end-of-file is what ended it"
                 })
 
         // What the opt-in is FOR: an agent's block that prompts, answered by the agent — no
@@ -590,9 +623,9 @@ let private agentLeaseTests =
                     let ada = Principal.Peer (PeerId.create "ada" |> expect)
                     let! block =
                         Async.StartChild (
-                            terminals.RunBlock id { agentEntry id ada "1" with Stdin = true } "read -r answer; echo \"answered:$answer\"" ignore,
+                            terminals.RunBlock id { agentEntry id ada "1" with Stdin = true } "printf ask:; read -r answer; echo \"answered:$answer\"" ignore,
                             10000)
-                    let! running = until 5000 (fun () -> terminals.Busy () |> Set.contains (TerminalId.value id))
+                    let! running = printedOutput records "ask:"
                     Expect.isTrue running "the prompt is up"
                     match! terminals.Write id ActorRef.Agent "yes\r" with
                     | Error e -> failwithf "the block is the agent's, so it may type into it: %s" e
@@ -623,22 +656,13 @@ let private agentLeaseTests =
                         Async.StartChild (
                             terminals.RunBlock id (agentEntry id ada "1") "sh -c 'echo started; sleep 60'" ignore,
                             10000)
-                    // Its OUTPUT — the input record carries the same word, as the command.
-                    let! running =
-                        until 5000 (fun () ->
-                            records |> Seq.exists (fun r -> r.Kind = TranscriptOutput && r.Data.Contains "started"))
+                    let! running = printedOutput records "started"
                     Expect.isTrue running "it is running"
                     match! terminals.Write id ActorRef.Agent "\u0003" with
                     | Error e -> failwithf "the block is the agent's, so it may end it: %s" e
                     | Ok () ->
                         do! block
-                        let! page = log.Read None 1000
-                        let results =
-                            page.Events
-                            |> List.choose (fun e ->
-                                match e.Event with
-                                | SessionEvent.TerminalBlockCompleted c -> Some c.Result
-                                | _ -> None)
+                        let! results = blockResults log
                         // Non-zero, and not pinned further: bash says 130, dash says 1 for
                         // a group whose child the signal took. What matters is that it ended,
                         // on the record, as a failure.
