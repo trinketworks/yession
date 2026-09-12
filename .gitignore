@@ -73,3 +73,9 @@ tests/browser/.data*
 # Release packaging output
 dist/
 tools/Yession.Probe/out/
+
+# Scratch git worktrees a Claude Code session creates when it runs work in parallel. One per
+# agent, each a full checkout on its own branch, removed when the agent finishes. Transient by
+# construction and never part of a change: an agent's branch reaches master through its own
+# pull request, not through a directory committed inside somebody else's.
+.claude/worktrees/
