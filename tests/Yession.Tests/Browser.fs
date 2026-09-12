@@ -2146,6 +2146,48 @@ let editorTests =
                 Expect.isTrue (renders <= 5) (sprintf "the pages in between were folded without a render each — %d renders for fifteen pages" renders)
                 return ()
             }
+        // A scroll in progress survives the renders that land during it. A render puts each
+        // pinned surface's scroll back where the reader had it, and a write to `scrollTop`
+        // — even of the value it already holds — ends whatever scroll the browser has in
+        // flight. Records landing in a terminal the conversation does not draw are a render
+        // each and move nothing on it; under the unconditional write, a scroll started from
+        // the end stayed at the end for as long as they kept coming (`Render.fs`,
+        // `restoreSurfaceScroll`). Only a browser has a scroll in flight to take away, so
+        // only a browser can watch it survive. Smooth rather than flung: the same in-flight
+        // scroll, and one with a stated destination to check against.
+        editorCaseIn 390 844 "a scroll in progress is not taken away by the renders that land during it" (EDITOR_PORT + 42) <| fun page ->
+            async {
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-conversation]")
+                // Two hundred items, a record a frame for four hundred frames — the scroll has
+                // to reach the top well inside that, so every frame of it has a render in it.
+                do! awaitU (page.EvaluateAsync "() => window.__benchScrollBegin(200, 400, 16, true)")
+                let! reached =
+                    await (page.EvaluateAsync<float>
+                            """() => new Promise((done) => {
+                                 const el = document.querySelector('#shell [data-conversation]')
+                                 el.scrollIntoView()
+                                 el.scrollTop = el.scrollHeight
+                                 requestAnimationFrame(() => {
+                                   el.scrollTo({ top: 0, behavior: 'smooth' })
+                                   // Until it stops moving for three frames, wherever that is.
+                                   let last = el.scrollTop, still = 0
+                                   const tick = () => {
+                                     if (el.scrollTop === last) still++; else { still = 0; last = el.scrollTop }
+                                     if (still >= 3) done(el.scrollTop); else requestAnimationFrame(tick) }
+                                   requestAnimationFrame(tick)
+                                 })
+                               })""")
+                let! report = await (page.EvaluateAsync<string> "() => window.__benchScrollEnd()")
+                use doc = System.Text.Json.JsonDocument.Parse report
+                let renders = doc.RootElement.GetProperty("renders").GetInt32 ()
+                let startedAt = doc.RootElement.GetProperty("scrolledFrom").GetDouble ()
+                Expect.equal reached 0.0 "the scroll reached the top it was sent to, through every render on the way"
+                // Anti-vacuity: a conversation that fit the screen had no scroll to lose, and
+                // a stream that never rendered had nothing to lose it to.
+                Expect.isTrue (startedAt > 0.0) "the conversation scrolls, so there was a scroll to take away"
+                Expect.isTrue (renders >= 10) (sprintf "records landed while the scroll ran — %d renders" renders)
+                return ()
+            }
         // The name on a rule is an INPUT at rest, which is a promise no markup test can
         // settle: a field that renders but never takes a keystroke, or one whose value the
         // next render puts back, reads in the DOM exactly like one that works. So this types

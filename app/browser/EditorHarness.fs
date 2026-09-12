@@ -307,8 +307,13 @@ let private exposeSettle (f: unit -> JS.Promise<unit>) : unit = jsNative
 /// Begin the scroll scenario: a conversation of `items`, `records` transcript records arriving
 /// one every `everyMs`, and the frame clock and render clock running. The FLING is the driver's
 /// to make, with real touch input, once this returns.
+///
+/// `elsewhere` sends the records to a terminal the conversation does not draw — a sandbox
+/// running its setup behind a shut pane — so every one of them is a render that leaves the
+/// conversation exactly as it was. Off, they land in the burst card's running block, and the
+/// conversation grows under the reader with each.
 [<Emit("(function(f){ window.__benchScrollBegin = f; })($0)")>]
-let private exposeScrollBegin (f: int -> int -> int -> unit) : unit = jsNative
+let private exposeScrollBegin (f: int -> int -> int -> bool -> unit) : unit = jsNative
 
 /// How many records the stream has sent so far. The driver flings until the stream is spent,
 /// so every size is measured over the same records rather than over however long one fling
@@ -1268,7 +1273,8 @@ do
         Browser.Dom.document.querySelector "#shell [data-conversation]" :?> Browser.Types.HTMLElement
     let mutable finish : (unit -> string) option = None
     let mutable sentSoFar : unit -> int = fun () -> 0
-    exposeScrollBegin (fun items records everyMs ->
+    let elsewhereTerminal : TerminalId = TerminalId.create "term-elsewhere" |> expect
+    exposeScrollBegin (fun items records everyMs elsewhere ->
         model <- shellModelOf Replies items
         render ()
         let surface = conversation ()
@@ -1296,7 +1302,7 @@ do
                         sent <- sent + 1
                         dispatch (
                             TerminalRecordMsg (
-                                harnessTerminal,
+                                (if elsewhere then elsewhereTerminal else harnessTerminal),
                                 seq,
                                 { At = float seq; Kind = TranscriptOutput; Data = sprintf "line %d\r\n" seq }))),
                 everyMs)
