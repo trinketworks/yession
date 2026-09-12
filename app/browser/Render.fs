@@ -195,6 +195,21 @@ let private terminalInputKey (el: obj) : string = jsNative
 [<Emit("$0.readOnly === true")>]
 let private terminalInputReadOnly (el: obj) : bool = jsNative
 
+// The READ of the same roots: a surface that SHOWS a command without offering to change it —
+// the chat's chip for a queued command, which is a `<button>` and so cannot hold an input.
+
+[<Emit("Array.from(document.querySelectorAll('[data-terminal-text]'))")>]
+let private terminalTexts () : obj[] = jsNative
+
+[<Emit("$0.getAttribute('data-terminal-text')")>]
+let private terminalTextKey (el: obj) : string = jsNative
+
+[<Emit("""(function (node, value) {
+  const __yNode = node, __yNext = value;
+  if (__yNode.textContent !== __yNext) __yNode.textContent = __yNext;
+})($0, $1)""")>]
+let private setTextContent (node: obj) (value: string) : unit = jsNative
+
 [<Emit("$0.value")>]
 let private inputValue (el: obj) : string = jsNative
 
@@ -435,6 +450,11 @@ let create (deps: Deps) : Renderer =
     /// (`TerminalText.setTo` — anything coarser would clobber a collaborator rather than
     /// merge with them), and report the caret as presence.
     ///
+    /// The read-only mounts (`data-terminal-text`) are filled in the same pass rather than
+    /// in one of their own, because they read the roots these lines write: two passes is two
+    /// callers to keep in step, and the one that forgot would show a command nobody is
+    /// typing any more.
+    ///
     /// Called after every render AND on every doc update, because a terminal command
     /// line is a root the Ylmish codec does not carry (it holds only the slot's
     /// identity), so a remote keystroke in one does not necessarily reach the model.
@@ -489,6 +509,9 @@ let create (deps: Deps) : Renderer =
             |> ignore
             let key = terminalInputKey el
             if not (isNull (box key)) && key <> "" then setInputValue el (TerminalText.read texts key)
+        for el in terminalTexts () do
+            let key = terminalTextKey el
+            if not (isNull (box key)) && key <> "" then setTextContent el (TerminalText.read texts key)
 
     /// Fetch the keyframes the open tabs need, once each (Plan 14, stage 4). A keyframe
     /// is immutable at a position that never moves, so the browser cache serves the

@@ -203,6 +203,11 @@ module Dom =
         let terminalOutput = "data-terminal-output"
         let terminalTruncated = "data-terminal-truncated"
         let terminalInput = "data-terminal-input"
+        /// The READ half of the same `Y.Text` roots `terminalInput` writes: a mount that shows
+        /// a command without offering to change it. An input would be the obvious way to do
+        /// that and cannot be — a read-only field inside a `<button>` is not legal content and
+        /// would swallow the press the button exists for.
+        let terminalText = "data-terminal-text"
         let terminalSend = "data-terminal-send"
         let terminalDiscard = "data-terminal-discard"
         let terminalDraftAuthor = "data-terminal-draft-author"
@@ -258,6 +263,14 @@ module Dom =
         /// The call's outcome, in the SAME tokens a block's status uses (`running` / `ok` /
         /// `failed`) rather than a parallel vocabulary meaning the same three things.
         let chatToolStatus = "data-chat-tool-status"
+        /// A command WAITING to run, in the chat: the same chip a finished one leaves behind,
+        /// carrying its queue id, drawn where the block will be. Tapping it opens the terminal
+        /// it is queued in, which is where it can be edited, reordered or withdrawn — so the
+        /// chat reads what is about to run and the terminal is where it is answered.
+        let chatPending = "data-chat-pending"
+        /// Which hold it is under, in the same tokens the terminal's own card uses
+        /// (`terminalQueuedStatus`): one vocabulary for one fact on two surfaces.
+        let chatPendingStatus = "data-chat-pending-status"
         /// The pane's tab strip (Plan 14, stage 2). One hook for every tab whatever it shows
         /// — a terminal, a block's read-only view, a stretch's replay — because they are one
         /// tablist and a test asserting keyboard order should not have to know which is which.
