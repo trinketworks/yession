@@ -265,10 +265,11 @@ let private makeBareFixture (root: string) (name: string) : string =
 /// The service, with the git it runs, the credential it spends, and somewhere to record a
 /// network failure. The credential and the recorder are the caller's because whether a verb
 /// spent a credential is exactly what decides whether a failure says anything about one.
-let private serviceSpending
+let private serviceAsking
     (git: string)
     (token: string option)
-    (failures: ResizeArray<ActorRef * string>)
+    (failures: ResizeArray<CredentialFor * string>)
+    (canonical: string option -> RepoRef -> Async<RepoRef option>)
     (root: string)
     (log: EventLog<SessionEvent>)
     : Repos.ReposService =
@@ -291,9 +292,21 @@ let private serviceSpending
           AllowProtocol = "file"
           CloneUrl = fun ref -> sprintf "file://%s/%s.git" fixtures (RepoRef.repo ref)
           ResolveToken = fun _ -> async { return token }
+          Canonical = canonical
           OnNetworkFailure = fun actor said -> async { failures.Add (actor, said) }
           Log = log }
     |> expect
+
+/// The service over a provider that cannot be asked what it calls a repo — every case that
+/// is not about the name.
+let private serviceSpending
+    (git: string)
+    (token: string option)
+    (failures: ResizeArray<CredentialFor * string>)
+    (root: string)
+    (log: EventLog<SessionEvent>)
+    : Repos.ReposService =
+    serviceAsking git token failures (fun _ _ -> async { return None }) root log
 
 /// This box's git, as a session would resolve it.
 let private namedGit = Repos.gitExecutable (Sandboxes.ambientEnv ())
@@ -311,7 +324,7 @@ let private freshLog () =
     InMemoryEventLog.create (SessionId.create "git-suite" |> expect) (fun () -> DateTimeOffset.UtcNow)
 
 let private ada = PeerId.create "ada" |> expect
-let private caller : Repos.RepoCaller = { Actor = ActorRef.Agent; Credential = PeerRef ada }
+let private caller : Repos.RepoCaller = { Actor = ActorRef.Agent; Credential = CredentialFor.Person (Principal.Peer ada) }
 
 let private eventsOf (log: EventLog<SessionEvent>) : Async<SessionEvent list> =
     async {
@@ -428,6 +441,7 @@ let private srtTests =
                       AllowProtocol = "file"
                       CloneUrl = fun ref -> sprintf "file://%s/%s.git" (fixturesIn fixtures) (RepoRef.repo ref)
                       ResolveToken = fun _ -> async { return None }
+                      Canonical = fun _ _ -> async { return None }
                       OnNetworkFailure = fun _ _ -> async { return () }
                       Log = log }
                 |> expect
@@ -489,7 +503,7 @@ let private srtTests =
         // from a repo that is not there); this only has to say that one was spent.
         testCaseAsync "a network verb that fails while spending a credential says so" <| async {
             let root = mkdtemp nodeFs nodeOs
-            let failures = ResizeArray<ActorRef * string> ()
+            let failures = ResizeArray<CredentialFor * string> ()
             // No fixture made, so the clone has nothing to clone.
             let service = serviceSpending namedGit (Some "ghu_whatever") failures root (freshLog ())
             let! added = service.AddRepo caller (RepoRef.create "octo/missing" |> expect)
@@ -500,11 +514,54 @@ let private srtTests =
 
         testCaseAsync "a network verb that fails anonymously says nothing about anyone's sign-in" <| async {
             let root = mkdtemp nodeFs nodeOs
-            let failures = ResizeArray<ActorRef * string> ()
+            let failures = ResizeArray<CredentialFor * string> ()
             let service = serviceSpending namedGit None failures root (freshLog ())
             let! added = service.AddRepo caller (RepoRef.create "octo/missing" |> expect)
             Expect.isError added "the clone still fails"
             Expect.isEmpty failures "no credential was spent, so none can have been refused"
+        }
+
+        // A clone follows a renamed repo's old name through the provider's redirect and
+        // keeps an origin the provider no longer answers to by that name — which a session
+        // then never notices. Asked first, the provider's current name is what is refused
+        // with, and nothing is cloned under the old one.
+        testCaseAsync "a name the provider has moved on from is refused with the current one, before any clone" <| async {
+            let root = mkdtemp nodeFs nodeOs
+            makeBareFixture root "hello" |> ignore
+            let current = RepoRef.create "trinketworks/hello" |> expect
+            let asked = ResizeArray<RepoRef> ()
+            let service =
+                serviceAsking
+                    namedGit
+                    None
+                    (ResizeArray ())
+                    (fun _ repo ->
+                        async {
+                            asked.Add repo
+                            return Some current
+                        })
+                    root
+                    (freshLog ())
+            let stale = RepoRef.create "octo/hello" |> expect
+            let! added = service.AddRepo caller stale
+            match added with
+            | Ok _ -> failwith "cloned under a stale name"
+            | Error said ->
+                Expect.stringContains said "trinketworks/hello" "the refusal names what the provider calls it now"
+            Expect.equal (List.ofSeq asked) [ stale ] "the provider was asked about the name that was given"
+            let! listed = service.ListRepos ()
+            Expect.isEmpty (expect listed) "and nothing was cloned"
+            // The current name, asked the same way, is what it is: it clones, under itself.
+            let! addedCurrent = service.AddRepo caller current
+            Expect.equal (expect addedCurrent).Repo current "the checkout is under the provider's name"
+        }
+
+        testCaseAsync "a provider that cannot say does not stand in the way of a clone" <| async {
+            let root = mkdtemp nodeFs nodeOs
+            makeBareFixture root "hello" |> ignore
+            let service = serviceAsking namedGit None (ResizeArray ()) (fun _ _ -> async { return None }) root (freshLog ())
+            let! added = service.AddRepo caller (RepoRef.create "octo/hello" |> expect)
+            Expect.equal (expect added).Branch "main" "cloned as before"
         }
 
         testCaseAsync "a clone brings no hook templates with it" <| async {
@@ -711,7 +768,7 @@ let private srtTests =
             let service = serviceIn root log
             let repo = RepoRef.create "octo/hello" |> expect
             let! _ = service.AddRepo caller repo
-            let human : Repos.RepoCaller = { Actor = PeerRef ada; Credential = PeerRef ada }
+            let human : Repos.RepoCaller = { Actor = PeerRef ada; Credential = CredentialFor.Person (Principal.Peer ada) }
             let! removed = service.RemoveRepo human repo false
             expect removed |> ignore
             Expect.isFalse (exists nodeFs (sprintf "%s/octo/hello" (reposIn root))) "checkout gone"

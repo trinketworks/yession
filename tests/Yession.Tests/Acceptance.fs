@@ -56,6 +56,8 @@ let private representativeModel : ClientModel =
       Connection = Connected
       Session = Some sessionId
       Approvals = RepoApprovals.empty
+      Launch = Launch.empty
+      Repos = ReposProjection.empty
       // Connected, so the reconnect offer (Plan 11) is not showing — but the origin is
       // present, which is the interesting case: the offer must be gated on the CONNECTION,
       // not merely on whether a Manager is known.
@@ -88,7 +90,7 @@ let private representativeModel : ClientModel =
                     // What the product actually writes for an agent command: the agent acts,
                     // on the turn human's authority. There is no other agent-shaped way to
                     // build one.
-                    Authority = Authority.agentFor (PeerRef ada)
+                    Authority = Authority.agentFor (Principal.Peer ada)
                     Order = 1.0
                     Background = false
                     Stdin = false
@@ -150,7 +152,7 @@ let private representativeModel : ClientModel =
                 Blocks =
                   [ { BlockId = blockId
                       QueueId = None
-                      Authority = Authority.ofAuthor (PeerRef ada)
+                      Authority = Authority.ofAuthor (Principal.Peer ada)
                       Command = "ls -la"
                       Background = false
                       FromSeq = 0
@@ -326,7 +328,7 @@ let private lostIntegrationModel : ClientModel =
             { representativeModel.Synced with
                 Pending =
                     representativeModel.Synced.Pending
-                    |> Map.map (fun _ entry -> { entry with Authority = Authority.ofAuthor (PeerRef ada) }) }
+                    |> Map.map (fun _ entry -> { entry with Authority = Authority.ofAuthor (Principal.Peer ada) }) }
         Terminals =
             { Terminals =
                 representativeModel.Terminals.Terminals
@@ -839,7 +841,7 @@ let private uiChecklistTests =
                         { leasedTerminalModel.Synced with
                             Pending =
                                 leasedTerminalModel.Synced.Pending
-                                |> Map.map (fun _ entry -> { entry with Authority = Authority.ofAuthor (PeerRef ada) }) } }
+                                |> Map.map (fun _ entry -> { entry with Authority = Authority.ofAuthor (Principal.Peer ada) }) } }
             let html = Support.render model
             Expect.isTrue
                 (html.Contains (Dom.attr Dom.Hooks.terminalQueuedStatus Dom.Text.queuedAwaitingTerminal))
@@ -1765,6 +1767,41 @@ let private presenceTests =
                     (Dom.hookText (Dom.attr Dom.Hooks.peerAt Dom.Text.atChapter) (Dom.Text.namingChapter "The rollback")))
                 "the roster names the chapter, not just 'a chapter'"
 
+        // A caret is placed against the box its field lives in, so the marker has to be inside
+        // that box — and inside the RIGHT one, since a position taken in one chapter's name
+        // would land at a real-looking offset in another's. The rule the marker sits in is the
+        // only thing that says which name it is a caret in.
+        testCase "a caret in a chapter's name is drawn on that chapter's rule" <| fun () ->
+            let here = MessageId.create "msg-1" |> expect
+            let elsewhere = MessageId.create "msg-agent" |> expect
+            let model = withChapters [ "msg-1"; "msg-agent" ]
+            let html =
+                Support.render
+                    { model with
+                        Presence =
+                            Map.ofList
+                                [ bob,
+                                  { DisplayName = "brave-owl"
+                                    Focus = { Field = ChapterName here; Pos = { Anchor = "AQI="; Head = "AQI=" } } } ] }
+            let ruleOf (messageId: MessageId) =
+                let opens = html.IndexOf (Dom.attr Dom.Hooks.chapterRule (MessageId.value messageId))
+                html.Substring (opens, html.IndexOf ("</div>", opens) - opens)
+            Expect.isTrue
+                ((ruleOf here).Contains (Dom.attr Dom.Hooks.cursorPeer "bob"))
+                "their caret is on the rule of the chapter they are naming"
+            Expect.isFalse
+                ((ruleOf elsewhere).Contains (Dom.attr Dom.Hooks.cursorPeer "bob"))
+                "and on no other chapter's"
+
+        // The title and a chapter's name are both collaborative inputs, and a marker that
+        // appeared in every one of them at once would put one person in several places.
+        testCase "a caret in the title is drawn on no chapter's rule" <| fun () ->
+            let html = Support.render { (withChapters [ "msg-1" ]) with Presence = (withBobIn Title).Presence }
+            let opens = html.IndexOf (Dom.attr Dom.Hooks.chapterRule "msg-1")
+            let rule = html.Substring (opens, html.IndexOf ("</div>", opens) - opens)
+            Expect.isFalse (rule.Contains (Dom.attr Dom.Hooks.cursorPeer "bob")) "the rule carries no caret"
+            Expect.isTrue (html.Contains (Dom.attr Dom.Hooks.cursorPeer "bob")) "the title still does"
+
         // Presence is relayed live; the conversation is caught up over the event feed. A caret
         // can therefore arrive in a chapter this client has never seen, and the roster has to
         // say something true about it rather than invent a name or go quiet.
@@ -1822,6 +1859,17 @@ let private syncStatusTests =
             let html = Support.render representativeModel
             Expect.isTrue (html.Contains (Dom.hookText Dom.Hooks.catchUp Dom.Text.catchingUp)) "the sidebar names it"
             Expect.isTrue (html.Contains Dom.Hooks.lastProcessedOffset) "with how far it has got"
+
+        // The sidebar's line is behind a drawer on a phone, which is where a long catch-up is
+        // waited through. The header's bottom rule is on every screen, so the same catch-up
+        // is drawn along it — as a progress bar with its value, not a line changing colour,
+        // because a bar with no value is decoration to a screen reader.
+        testCase "a catch-up worth waiting on is drawn along the header's edge, with its value" <| fun () ->
+            let html = Support.render representativeModel
+            Expect.isTrue (html.Contains Dom.Hooks.catchUpBar) "the header carries the bar"
+            Expect.isTrue (html.Contains "role=\"progressbar\"") "which is a progress bar"
+            let folded = representativeModel.EventConsumer.LastProcessedOffset |> Option.map (fun o -> EventOffset.value o + 1L) |> Option.defaultValue 0L
+            Expect.isTrue (html.Contains (sprintf "aria-valuenow=\"%d\"" folded)) "carrying how far it has got"
 
         // The flag describes a catch-up that is RUNNING, so it cannot outlive one: a timer
         // that fires just as the page lands must not leave a status nothing can clear.

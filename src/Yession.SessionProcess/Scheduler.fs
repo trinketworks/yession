@@ -65,12 +65,15 @@ module Scheduler =
         (doc: Yjs.Y.Doc)
         (log: EventLog<SessionEvent>)
         (runAgent: unit -> RunAgent option)
-        (capabilitiesFor: AgentTurnId -> ActorRef -> AgentCapabilities)
+        (capabilitiesFor: AgentTurnId -> Principal -> AgentCapabilities)
         // Telemetry sink (Plan 04): passed straight to `AgentTurn.run`. Default `ignore`.
         (emitUsage: AgentTurnId -> AgentUsage -> unit)
         (mintTurnId: unit -> AgentTurnId)
         (mintMessageId: unit -> MessageId)
-        (actorFor: PeerId -> ActorRef)
+        // Who a peer IS, for stamping what they said. A `Principal` because every peer is one
+        // — attributed to a user or standing as itself — and the turn their message starts
+        // runs on that principal's credential.
+        (actorFor: PeerId -> Principal)
         // How a block's output is read back for the agent's terminal digest (Plan 13,
         // stage 3a). Injected rather than reached for, so a session with no transcript
         // storage still runs turns — it simply reports blocks with empty output.
@@ -137,7 +140,7 @@ module Scheduler =
                                       QueueId = Some entry.QueueId
                                       Author = actorFor entry.Author
                                       Body = SyncedStateSync.queuedBodyMarkdown doc entry.QueueId }
-                                let! _ = log.Append (actorFor entry.Author) (MessageSent message)
+                                let! _ = log.Append (Principal.toActor message.Author) (MessageSent message)
                                 consumed <- Set.add (QueueId.value entry.QueueId) consumed
                                 lastMessage <- Some message
                             // 2. Visible: one transaction under the process origin;
@@ -271,7 +274,7 @@ module Scheduler =
                     async {
                         let! _ =
                             log.Append
-                                (actorFor peerId)
+                                (Principal.toActor (actorFor peerId))
                                 (AgentTurnInterrupted { AgentTurnId = turnId; RequestedBy = peerId })
                         return ()
                     })

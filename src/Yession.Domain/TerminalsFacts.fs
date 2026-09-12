@@ -193,8 +193,11 @@ and TerminalCommandRejected =
       /// its outcome, not a process — so a refusal has one, and a handle that is
       /// addressable later does not depend on a derivation rule living nowhere in the data.
       BlockId : BlockId
-      /// Whose command it was. Usually the agent's; that is the point of recording this.
-      Author : ActorRef
+      /// Whose command it was, and on whose authority. Usually the agent's on a turn
+      /// human's; that is the point of recording this — and recording the whole authority
+      /// rather than the author alone is what lets the projection put a refused block
+      /// beside a started one without inventing an agent act that names nobody.
+      Authority : Authority
       RejectedBy : ActorRef
       /// The command line, snapshotted because the doc entry is deleted immediately after.
       /// A record saying *something* was rejected is not a record.

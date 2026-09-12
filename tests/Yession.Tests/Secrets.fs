@@ -171,13 +171,12 @@ let private connectionPolicyTests =
                 denies (sprintf "%A on local" action) (request callerALocal action (SecretResource { Scope = LocalScope; Name = name }))
             denies "list local" (request callerALocal ListSecrets (SecretCollection LocalScope))
 
-        testCase "CredentialOwner maps actors and scopes" <| fun () ->
-            Expect.equal (CredentialOwner.ofActor (UserRef alice)) (Some (UserOwner alice)) "user actor"
+        testCase "CredentialOwner maps principals and scopes" <| fun () ->
+            Expect.equal (CredentialOwner.ofPrincipal (Principal.User alice)) (Some (UserOwner alice)) "user"
             // A peer is nobody the Manager verified, so they own nothing of their own —
-            // their turn falls through to whatever the DEPLOYMENT holds.
-            Expect.equal (CredentialOwner.ofActor (PeerRef peer1)) None "peer actor owns nothing"
-            Expect.equal (CredentialOwner.ofActor ActorRef.Agent) None "agent owns nothing"
-            Expect.equal (CredentialOwner.ofActor ActorRef.System) None "system owns nothing"
+            // their turn falls through to whatever the DEPLOYMENT holds. The agent, the
+            // process and the deployment are not principals at all, so they cannot be asked.
+            Expect.equal (CredentialOwner.ofPrincipal (Principal.Peer peer1)) None "peer owns nothing"
             Expect.equal (CredentialOwner.scope (UserOwner alice)) (UserScope alice) "user scope"
             Expect.equal (CredentialOwner.scope LocalOwner) LocalScope "local scope"
     ]

@@ -1032,6 +1032,28 @@ let private readinessTests =
                 Expect.stringContains (contentTypeOfReply missing) "text/html" "and it is a page a browser can show"
                 do! pm.StopAll ()
             }
+
+        // The page a browser is looking at WHILE a session launches sits between two surfaces
+        // that paint one ground, and it used to paint the browser's default instead: an inline
+        // sheet that said nothing about the document, so every launch was a white page between
+        // two black ones. The invariant is not a colour — it is that these pages link the SAME
+        // stylesheet the Manager page does, since the ground is declared there, on `<html>`,
+        // once for every surface. Asserted on the refusal page, because it is the one a test
+        // can land on without a proxy in front, and both pages come from one template.
+        testCaseAsync "a standalone page links the stylesheet the Manager page links" <|
+            async {
+                let! pm = managerWithUi "open-sheet"
+                let baseUrl = sprintf "http://127.0.0.1:%d" pm.EndpointPort.Value
+                let stylesheetOf (page: string) =
+                    let m = System.Text.RegularExpressions.Regex.Match (page, "<link rel=\"stylesheet\" href=\"([^\"]+)\">")
+                    if m.Success then Some m.Groups.[1].Value else None
+                let! manager = getReply (baseUrl + "/") |> Async.AwaitPromise
+                let! standalone = getReply (baseUrl + "/sessions/no-such-session/open") |> Async.AwaitPromise
+                let expected = stylesheetOf (bodyOfReply manager)
+                Expect.isSome expected "the Manager page links its stylesheet"
+                Expect.equal (stylesheetOf (bodyOfReply standalone)) expected "the standalone page links the same one"
+                do! pm.StopAll ()
+            }
     ]
 
 /// The half of archiving that cannot be decided purely: it stops a real child, and the

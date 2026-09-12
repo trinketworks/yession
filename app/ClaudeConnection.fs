@@ -101,9 +101,10 @@ let targetFor (sessionId: SessionId) (owner: CredentialOwner) (scopeChoice: stri
 /// is never granted local access, so the candidate filter drops it before anything is
 /// resolved. The Manager's readable set is the single authority; a second copy of that
 /// judgement here could only drift from it.
-let turnTargets (sessionId: SessionId) (actor: ActorRef) : SecretId list =
+let turnTargets (sessionId: SessionId) (credential: CredentialFor) : SecretId list =
     [ Some { SecretId.Scope = SessionScope sessionId; SecretId.Name = secretName }
-      CredentialOwner.ofActor actor
+      CredentialFor.person credential
+      |> Option.bind CredentialOwner.ofPrincipal
       |> Option.map (fun owner -> { SecretId.Scope = CredentialOwner.scope owner; SecretId.Name = secretName })
       Some { SecretId.Scope = LocalScope; SecretId.Name = secretName } ]
     |> List.choose id
@@ -205,20 +206,15 @@ let modelsAt (url: string) (credential: string * string) : Async<Result<AgentMod
 let models (credential: string * string) : Async<Result<AgentModel list, ModelsFailure>> =
     modelsAt (envOr "YESSION_CLAUDE_MODELS_URL" modelsUrl) credential
 
-/// A human label for a turn actor, for the "not connected" failure message.
-let actorLabel (actor: ActorRef) : string =
-    match actor with
-    | UserRef u -> UserId.value u
-    | PeerRef p -> sprintf "peer %s" (PeerId.value p)
-    | ActorRef.Agent -> "the agent"
-    | ActorRef.SessionProcess -> "the session process"
-    // What `System` MEANS wherever this label is read: a deployment that attributes nobody,
-    // acting as itself. "the system" is what the actor is called in the log; it is not what
-    // a person reading "no Claude account connected for …" needs to be told.
-    | ActorRef.System -> "this deployment"
-    // Reached only if a fold ever asked for something needing a connection. It has none of
-    // its own — see `CredentialOwner.ofActor` — so the sentence names the file, not a party.
-    | ActorRef.Configured repo -> sprintf "%s's %s" (RepoRef.value repo) ConfigFile.FileName
+/// A human label for whose credential a call ran on, for the "not connected" failure
+/// message. `None` is a call on nobody's — a deployment that attributes nobody, acting as
+/// itself — and "the system" is what that is called in the log, not what a person reading
+/// "no Claude account connected for …" needs to be told.
+let actorLabel (credential: CredentialFor) : string =
+    match credential with
+    | CredentialFor.Person (Principal.User u) -> UserId.value u
+    | CredentialFor.Person (Principal.Peer p) -> sprintf "peer %s" (PeerId.value p)
+    | CredentialFor.Deployment -> "this deployment"
 
 // --- the browser-facing /claude* routes -----------------------------------------------
 // Thin proxies over the Manager's broker, gated by the same cookie identity as /me.
@@ -267,17 +263,9 @@ let ownerOf (identity: CookieIdentity) : CredentialOwner =
     | AttributedUser user -> UserOwner user
     | UnattributedAccess -> LocalOwner
 
-/// The party a browser request's provider calls run on, so the catalogue it is answered
-/// with is the one this person's credential can actually see.
-///
-/// `ActorRef.System` where the deployment attributes nobody: an unattributed browser IS
-/// the deployment asking, and it reaches exactly the credentials a deployment may — the
-/// session's own and the local one — because that is what the turn-target precedence
-/// resolves it to. There is no separate rule here to keep in step.
-let private actorOf (identity: CookieIdentity) : ActorRef =
-    match identity.Attribution with
-    | AttributedUser user -> UserRef user
-    | UnattributedAccess -> ActorRef.System
+/// The party a browser request's provider calls run on (`PeerAttribution.credential`), so
+/// the catalogue it is answered with is the one this person's credential can actually see.
+let private actorOf (identity: CookieIdentity) : CredentialFor = PeerAttribution.credential identity.Attribution
 
 /// Build the /claude* route handler. `statusOf` reads the session's live status cache
 /// (fed by the Manager's connection stream); `agentAvailable` is the agent gate's own

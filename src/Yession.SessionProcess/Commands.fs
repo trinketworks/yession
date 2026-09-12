@@ -35,15 +35,25 @@ module SessionCommands =
         (reattachTerminal: TerminalId -> Async<Result<TerminalId, string>>)
         // Consent to a repo's capability set (Plan 27). A function like the rest, so a
         // session composed without repos simply cannot be asked.
-        (approveCapabilities: ActorRef -> RepoRef -> string list -> Async<Result<unit, string>>)
-        (actorFor: PeerId -> ActorRef)
+        (approveCapabilities: Principal -> RepoRef -> string list -> Async<Result<unit, string>>)
+        // The launch surface's act. Answers ADMISSION only — the clone it starts reports
+        // through the log — so a function whose `Ok` means "begun", never "done".
+        (addRepo: Principal -> RepoRef -> string option -> Async<Result<unit, string>>)
+        // Who a peer is. A `Principal`, because every peer is one, and the two acts above
+        // are a PERSON's — consent to what a repo asks for, a repo brought in on their
+        // credential — which the type then says outright rather than a check inside each.
+        (principalFor: PeerId -> Principal)
         (peerId: PeerId)
         (command: SessionCommand)
         : Async<SessionCommandResult> =
         async {
             match command with
             | ApproveRepoCapabilities (repo, granted) ->
-                match! approveCapabilities (actorFor peerId) repo granted with
+                match! approveCapabilities (principalFor peerId) repo granted with
+                | Ok () -> return CommandAccepted
+                | Error reason -> return CommandRejected reason
+            | AddRepo (repo, branch) ->
+                match! addRepo (principalFor peerId) repo branch with
                 | Ok () -> return CommandAccepted
                 | Error reason -> return CommandRejected reason
             | InterruptAgentTurn turnId ->
@@ -65,7 +75,7 @@ module SessionCommands =
                 // Choosing a NAMED sandbox is likewise a command, and commands are the
                 // agent's (Plan 15) — a human who wants a terminal in `test` asks for one,
                 // and sees the act-line for it.
-                match! openTerminal (actorFor peerId) (SandboxShell SandboxRef.defaultRef) title with
+                match! openTerminal (Principal.toActor (principalFor peerId)) (SandboxShell SandboxRef.defaultRef) title with
                 | Ok _ -> return CommandAccepted
                 | Error reason -> return CommandRejected reason
             | CloseTerminal terminalId ->
@@ -78,11 +88,11 @@ module SessionCommands =
             // the holder can, because releasing someone else's lease is a steal wearing a
             // polite word, and a steal has its own verb.
             | TakeTerminalLease terminalId ->
-                match! takeLease terminalId (actorFor peerId) with
+                match! takeLease terminalId (Principal.toActor (principalFor peerId)) with
                 | Ok () -> return CommandAccepted
                 | Error reason -> return CommandRejected reason
             | ReleaseTerminalLease terminalId ->
-                match! releaseLease terminalId (actorFor peerId) with
+                match! releaseLease terminalId (Principal.toActor (principalFor peerId)) with
                 | Ok () -> return CommandAccepted
                 | Error reason -> return CommandRejected reason
             // Unattributed, and deliberately: re-arming repairs a terminal rather than taking

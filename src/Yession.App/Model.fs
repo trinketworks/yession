@@ -605,7 +605,14 @@ type ClientModel =
       ///
       /// Folded from the same events the Process gates on, so what a person is asked and
       /// what a sandbox is waiting for are two readings of one log rather than two answers.
-      Approvals     : RepoApprovals.Pending }
+      Approvals     : RepoApprovals.Pending
+      /// The launch surface's state — choosing the session's first repo. View state, local
+      /// to this client: choosing is one person's act on one screen, and what it produces
+      /// reaches everyone through the log.
+      Launch        : LaunchViewState
+      /// The session's repos, folded from the same events the timeline's repo notes come
+      /// from: what the launch surface asks to know whether the session has one.
+      Repos         : Repos.ReposProjection }
 
 /// Messages that drive the client model. Connection-lifecycle messages are produced by
 /// the connection driver (Connection.fs); the suffix avoids clashing with the
@@ -697,6 +704,11 @@ type ClientMsg =
     | GitHubFlowMsg of GitHubFlowState
     /// What /models answered: the catalogue, or why there isn't one.
     | ModelCatalogueMsg of ModelCatalogueState
+    /// The launch surface moved (typed, listed, chose, sent, answered, failed, dismissed).
+    | LaunchMsg of LaunchMsg
+    /// The session answered a command this client sent. Uncorrelated for every command but
+    /// the launch's, which is the one whose rejection has a screen waiting to say it.
+    | CommandAnsweredMsg of RequestId * SessionCommandResult
     /// Pick the model this session's turns run on — `None` hands the choice back to the
     /// provider. One register, written like a gate: the reducer sets it and the Ylmish
     /// binding carries it to every peer.
@@ -826,6 +838,8 @@ module ClientModel =
           Synced = SyncedSessionState.empty
           Conversation = ConversationProjection.empty
           Approvals = RepoApprovals.empty
+          Launch = Launch.empty
+          Repos = Repos.ReposProjection.empty
           Timeline = TimelineProjection.empty
           EventConsumer =
             { LastProcessedOffset = None
@@ -873,6 +887,21 @@ module ClientModel =
 
     let private withSynced (synced: SyncedSessionState) (model: ClientModel) : ClientModel =
         { model with Synced = synced }
+
+    /// Whether the launch surface stands at the head of the timeline (`Launch.offered`): a
+    /// connected client that has read the log to its end, in a session with no repo and
+    /// nothing said.
+    let launchOffered (model: ClientModel) : bool =
+        let begun =
+            not (List.isEmpty model.Repos.Repos)
+            || model.Conversation.Items |> List.exists (fun item -> item.Kind = ConversationItemKind.Message)
+        Launch.offered
+            (model.Connection = Connected)
+            model.HistoryRead
+            model.EventConsumer.LatestKnownOffset
+            model.EventConsumer.IsCatchingUp
+            begun
+            model.Launch
 
     /// Whose draft the composer is showing — the resolved answer to `ComposerChoice`, and the
     /// only place the "join what is already being written" default lives.
@@ -1595,6 +1624,18 @@ module ClientModel =
             let environment =
                 freshEvents
                 |> List.fold (fun status e -> EnvironmentStatus.applyEvent status e.Event) model.Environment
+            // The one fact the launch surface reads off the log: its clone failed. Only while
+            // it is waiting on one — a failure from before this client arrived is history,
+            // and history is the timeline's to show.
+            let launch =
+                freshEvents
+                |> List.fold
+                    (fun (launch: LaunchViewState) e ->
+                        match e.Event, launch.Stage with
+                        | SessionEvent.GatedCommandFailed failed, (Sent _ | Cloning) when failed.Tool = "add_repo" ->
+                            Launch.update (LaunchFailed failed.Reason) launch
+                        | _ -> launch)
+                    model.Launch
             let terminals =
                 freshEvents
                 |> List.fold (fun proj e -> Projection.applyEvent proj e.Event) model.Terminals
@@ -1653,6 +1694,8 @@ module ClientModel =
             let latestKnown = EventOffset.maxOption model.EventConsumer.LatestKnownOffset highWater
             { model with
                 Conversation = conversation
+                Launch = launch
+                Repos = freshEvents |> List.fold (fun proj e -> Repos.ReposProjection.applyEvent proj e.Event) model.Repos
                 Approvals = RepoApprovals.apply model.Approvals (freshEvents |> List.map (fun e -> e.Event))
                 Timeline = timeline
                 Agent = agent
@@ -1926,7 +1969,7 @@ module ClientModel =
                       // `ofAuthor`, so it runs as its own author: a terminal command is a
                       // shell line in a sandbox, not a call against somebody's credential —
                       // and a person's act cannot accidentally carry one.
-                      Authority = Authority.ofAuthor (PeerRef author)
+                      Authority = Authority.ofAuthor (Principal.Peer author)
                       // A person's composer never waits on a command, so there is nothing
                       // for a background flag to spare them (Plan 20, stage 2).
                       Background = false
@@ -1959,6 +2002,9 @@ module ClientModel =
                         Pending = Map.add queueId { entry with Order = order } model.Synced.Pending }
             | None -> model
         | ModelCatalogueMsg catalogue -> { model with Models = catalogue }
+        | LaunchMsg msg -> { model with Launch = Launch.update msg model.Launch }
+        | CommandAnsweredMsg (request, result) ->
+            { model with Launch = Launch.update (LaunchAnswered (request, result)) model.Launch }
         | SetModelMsg choice -> model |> withSynced { model.Synced with Model = choice }
         // An id this client's window does not hold is a page boundary, not a bug — and
         // there is nothing to toggle, because what the verdict would default to is on the item.

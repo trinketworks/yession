@@ -60,6 +60,31 @@ let emptyPolicy : SandboxPolicy =
 let preparedEmptyPolicy : unit -> Async<Result<SandboxPolicy, string>> =
     fun () -> async { return Ok emptyPolicy }
 
+/// A Session Process as production composes it — `Host.startFull`'s own wiring: its shell,
+/// its nonce, its drain, its command path — over ONE sandbox built by `createSandbox`
+/// under `policy`, standing as the session's default.
+///
+/// For the tests that ask "does what ships work?" rather than "does this seam hold?".
+/// Nothing here re-lists a collaborator the Host already chooses, and that is the point:
+/// a fixture that composes `SessionTerminals` itself has to name a nonce and a shell, and
+/// the ones it names are the ones it tests. Every pty case in the suite minted a short
+/// nonce; production mints a UUID; the `sh` dialect's prompt broke at exactly that width,
+/// on every terminal of a deployed host, with the suite green.
+let hostOver
+    (createSandbox: CreateSandbox)
+    (policy: SandboxPolicy)
+    (name: string)
+    : Async<Host.SessionHost> =
+    let makeSandboxes (log: Yession.SessionProcess.EventLog<SessionEvent>) =
+        Yession.SessionProcess.SessionEnvironment.create
+            log
+            createSandbox
+            (fun () -> async { return Ok policy })
+            name
+            name
+        |> WorkSandboxes.singleton name
+    Host.startWithEnvironment None (Some makeSandboxes) None (SessionId.create name |> expect) 0
+
 /// A deterministic in-memory sandbox: creations/disposals are counted, spawns are
 /// delegated to an injected script. The seam analogue of the old InMemoryBackend.
 let scriptedSandbox

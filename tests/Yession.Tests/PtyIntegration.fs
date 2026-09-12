@@ -157,7 +157,11 @@ let private withShellTerminal
                     at
                     (fun () -> TerminalId.create ("term-" + name) |> expect)
                     (let mutable n = 0 in fun () -> n <- n + 1; BlockId.create (sprintf "b-%d" n) |> expect)
-                    (fun () -> name + "-nonce")
+                    // Production's own minter, not a stand-in. A short fixture nonce hid a
+                    // whole class of failure: the `sh` dialect rides its marks in PS1, and a
+                    // prompt readline believes is wider than the terminal gets a line-wrap
+                    // typed into the middle of the mark. What ships is what this composes.
+                    Interop.randomSecret
                     (let mutable n = 0 in fun () -> n <- n + 1; MessageId.create (sprintf "m-%d" n) |> expect)
                     (fun _ _ _ -> ())
                     // What a peer would be told; this fixture has none.
@@ -189,7 +193,7 @@ let private withPosixTerminal (name: string) body =
     withShellTerminal SessionTerminals.TerminalShell.posix (fun _ -> async { return () }) name body
 
 /// A queue entry for a terminal, as the drain would hand one over.
-let private queueEntry (terminal: TerminalId) (author: ActorRef) (n: string) : PendingAct =
+let private queueEntry (terminal: TerminalId) (author: Principal) (n: string) : PendingAct =
     { QueueId = QueueId.create n |> expect
       Terminal = terminal
       Authority = Authority.ofAuthor author
@@ -201,7 +205,7 @@ let private queueEntry (terminal: TerminalId) (author: ActorRef) (n: string) : P
 /// The same, authored by the agent on a peer's credential — the only way an agent-authored
 /// act can be built, and what makes these cases about the agent rather than about a peer
 /// wearing its name.
-let private agentEntry (terminal: TerminalId) (turnActor: ActorRef) (n: string) : PendingAct =
+let private agentEntry (terminal: TerminalId) (turnActor: Principal) (n: string) : PendingAct =
     { queueEntry terminal turnActor n with Authority = Authority.agentFor turnActor }
 
 /// Poll until `condition` holds or the budget runs out. Bounded rather than a fixed sleep:
@@ -223,7 +227,7 @@ let private integrationLostTests =
         testCaseAsync "a shell replaced mid-session is detected, holds the queue, and is repaired by re-arming" <|
             withLiveTerminal "lost" (fun terminals id _ log reDrains _ ->
                 async {
-                    let ada = PeerRef (PeerId.create "ada" |> expect)
+                    let ada = Principal.Peer (PeerId.create "ada" |> expect)
                     // A genuinely long-running command must NOT trip the detector — the `C`
                     // mark comes when the shell STARTS a command, so runtime is irrelevant.
                     // Run it in the background so the block does not hold this test open.
@@ -233,7 +237,7 @@ let private integrationLostTests =
                     // Now replace the instrumented shell while the pty stays open. `Exited`
                     // never fires and the marks simply stop — the exact failure this detects.
                     let before = reDrains ()
-                    match! terminals.Take id ada with
+                    match! terminals.Take id (Principal.toActor ada) with
                     | Error e -> failwith e
                     | Ok () ->
                         // A fresh, UNINSTRUMENTED shell — the case the plan describes: an
@@ -241,7 +245,7 @@ let private integrationLostTests =
                         // what makes it uninstrumented rather than accidentally inheriting
                         // anything, and `exec` is what makes `Exited` never fire: the pty
                         // stays open around a process we never bootstrapped.
-                        terminals.Input id ada "exec bash --noprofile --norc -i\r" |> ignore
+                        terminals.Input id (Principal.toActor ada) "exec bash --noprofile --norc -i\r" |> ignore
                         // Let the shell ACT on what was just typed before typing the next
                         // thing. The drain never has to: it awaits a block's `D` before
                         // starting the next, so the previous command's `C` has always landed.
@@ -249,7 +253,7 @@ let private integrationLostTests =
                         // that has no such barrier, and without this the `C` bash emits for
                         // `exec cat` arrives inside the next block's window and looks like it.
                         do! Async.Sleep 1000
-                        match! terminals.Release id ada with
+                        match! terminals.Release id (Principal.toActor ada) with
                         | Error e -> failwith e
                         | Ok () ->
                             // A command written into the shell that is there now produces no
@@ -290,15 +294,15 @@ let private liveModeTests =
         testCaseAsync "only the lease holder's keystrokes reach the shell, and none are recorded as input" <|
             withLiveTerminal "lease" (fun terminals id records _ _ _ ->
                 async {
-                    let ada = PeerRef (PeerId.create "ada" |> expect)
+                    let ada = Principal.Peer (PeerId.create "ada" |> expect)
                     let bob = PeerRef (PeerId.create "bob" |> expect)
                     // Nobody holds it yet: even the peer who opened it is not typing into it.
-                    Expect.isFalse (terminals.Input id ada "echo nope\r") "no lease, no input"
-                    match! terminals.Take id ada with
+                    Expect.isFalse (terminals.Input id (Principal.toActor ada) "echo nope\r") "no lease, no input"
+                    match! terminals.Take id (Principal.toActor ada) with
                     | Error e -> failwith e
                     | Ok () ->
                         Expect.isFalse (terminals.Input id bob "echo stolen\r") "a non-holder is dropped"
-                        Expect.isTrue (terminals.Input id ada "echo held\r") "the holder's keystrokes land"
+                        Expect.isTrue (terminals.Input id (Principal.toActor ada) "echo held\r") "the holder's keystrokes land"
                         let printed () =
                             records
                             |> Seq.filter (fun r -> r.Kind = TranscriptOutput)
@@ -315,7 +319,7 @@ let private liveModeTests =
                             "no input record exists for anything typed in live mode"
                         // ...while the DRAIN's command line still is one, because the Process
                         // composed that and knows exactly what it wrote.
-                        match! terminals.Release id ada with
+                        match! terminals.Release id (Principal.toActor ada) with
                         | Error e -> failwith e
                         | Ok () ->
                             do! terminals.RunBlock id (queueEntry id ada "1") "echo drained" ignore
@@ -331,17 +335,17 @@ let private liveModeTests =
         testCaseAsync "a lease gates the drain and its release re-arms it" <|
             withLiveTerminal "gate" (fun terminals id _ _ reDrains _ ->
                 async {
-                    let ada = PeerRef (PeerId.create "ada" |> expect)
+                    let ada = Principal.Peer (PeerId.create "ada" |> expect)
                     Expect.isEmpty (terminals.Leased ()) "nothing is held to begin with"
                     let before = reDrains ()
-                    match! terminals.Take id ada with
+                    match! terminals.Take id (Principal.toActor ada) with
                     | Error e -> failwith e
                     | Ok () ->
                         Expect.equal
                             (terminals.Leased ())
                             (Set.singleton (TerminalId.value id))
                             "the drain's `leased` set names it"
-                        match! terminals.Release id ada with
+                        match! terminals.Release id (Principal.toActor ada) with
                         | Error e -> failwith e
                         | Ok () ->
                             Expect.isEmpty (terminals.Leased ()) "and gives it back"
@@ -354,7 +358,7 @@ let private liveModeTests =
         testCaseAsync "a block that takes the alternate screen hands its author the terminal, and gives it back" <|
             withLiveTerminal "altscreen" (fun terminals id _ log _ _ ->
                 async {
-                    let ada = PeerRef (PeerId.create "ada" |> expect)
+                    let ada = Principal.Peer (PeerId.create "ada" |> expect)
                     // A real TUI's entry and exit, without depending on `vim` being installed:
                     // DECSET 1049 is exactly what one writes, and the emulator does not care
                     // who wrote it.
@@ -388,7 +392,7 @@ let private liveModeTests =
                     let! seen = settle 5000
                     Expect.equal
                         seen
-                        [ "taken", ada; "released", ada ]
+                        [ "taken", Principal.toActor ada; "released", Principal.toActor ada ]
                         "entry gave ada the terminal; exit gave it back, because detection took it"
                 })
 
@@ -420,11 +424,11 @@ let private liveModeTests =
         testCaseAsync "an idle lease is reclaimed only when something is queued behind it" <|
             withLiveTerminal "idle" (fun terminals id _ log reDrains advance ->
                 async {
-                    let ada = PeerRef (PeerId.create "ada" |> expect)
+                    let ada = Principal.Peer (PeerId.create "ada" |> expect)
                     let nothingQueued (_: TerminalId) = None
                     let queuedBehindIt (_: TerminalId) = Some TerminalQueueDrain.AwaitingTerminal
                     let stillHeld () = terminals.Leased () = Set.singleton (TerminalId.value id)
-                    match! terminals.Take id ada with
+                    match! terminals.Take id (Principal.toActor ada) with
                     | Error e -> failwith e
                     | Ok () ->
                         // Long past the window, but nobody is waiting. THE gate: a bare timer
@@ -436,7 +440,7 @@ let private liveModeTests =
 
                         // Ada types: the window runs from the last keystroke, so the queue
                         // appearing now does not make her instantly idle.
-                        Expect.isTrue (terminals.Input id ada "\r") "the holder's keystroke lands"
+                        Expect.isTrue (terminals.Input id (Principal.toActor ada) "\r") "the holder's keystroke lands"
                         do! terminals.ReclaimIdle queuedBehindIt
                         Expect.isTrue (stillHeld ()) "queued, but she just typed"
 
@@ -453,7 +457,7 @@ let private liveModeTests =
                              |> List.exists (fun e ->
                                  match e.Event with
                                  | SessionEvent.TerminalLeaseReleased r ->
-                                     r.Was = ada && r.Reason = LeaseIdle
+                                     r.Was = Principal.toActor ada && r.Reason = LeaseIdle
                                  | _ -> false))
                             "recorded under its own reason: she did not decide anything, she stopped"
                 })
@@ -480,7 +484,7 @@ let private agentLeaseTests =
         testCaseAsync "an agent's block that takes the alternate screen hands the AGENT the terminal" <|
             withLiveTerminal "agentflip" (fun terminals id _ log _ _ ->
                 async {
-                    let ada = PeerRef (PeerId.create "ada" |> expect)
+                    let ada = Principal.Peer (PeerId.create "ada" |> expect)
                     do!
                         terminals.RunBlock
                             id
@@ -516,7 +520,7 @@ let private agentLeaseTests =
         testCaseAsync "the agent answers its own wedged block, and the block finishes" <|
             withLiveTerminal "agenttype" (fun terminals id records _ _ _ ->
                 async {
-                    let ada = PeerRef (PeerId.create "ada" |> expect)
+                    let ada = Principal.Peer (PeerId.create "ada" |> expect)
                     // Enters the alternate screen and waits for a line, exactly as an editor
                     // or an installer prompt does — without depending on either being present.
                     // From `/dev/tty`, which is where a program that insists on a person reads
@@ -550,7 +554,7 @@ let private agentLeaseTests =
         testCaseAsync "an agent's block that reads stdin ends at once; a person's waits" <|
             withPosixTerminal "stdin" (fun terminals id _ log _ _ ->
                 async {
-                    let ada = PeerRef (PeerId.create "ada" |> expect)
+                    let ada = Principal.Peer (PeerId.create "ada" |> expect)
                     let! agents = Async.StartChild (terminals.RunBlock id (agentEntry id ada "1") "cat" ignore, 10000)
                     do! agents
                     let! page = log.Read None 1000
@@ -571,7 +575,7 @@ let private agentLeaseTests =
         testCaseAsync "an agent's block that asked for stdin reads the terminal" <|
             withPosixTerminal "stdinasked" (fun terminals id _ _ _ _ ->
                 async {
-                    let ada = PeerRef (PeerId.create "ada" |> expect)
+                    let ada = Principal.Peer (PeerId.create "ada" |> expect)
                     Async.StartImmediate (terminals.RunBlock id { agentEntry id ada "1" with Stdin = true } "cat" ignore)
                     let! gaveUp = until 1500 (fun () -> not (terminals.Busy () |> Set.contains (TerminalId.value id)))
                     Expect.isFalse gaveUp "asked for, so the cat waits on the agent's keyboard"
@@ -583,7 +587,7 @@ let private agentLeaseTests =
         testCaseAsync "the agent answers a plain prompt in its own block" <|
             withPosixTerminal "stdinanswer" (fun terminals id records _ _ _ ->
                 async {
-                    let ada = PeerRef (PeerId.create "ada" |> expect)
+                    let ada = Principal.Peer (PeerId.create "ada" |> expect)
                     let! block =
                         Async.StartChild (
                             terminals.RunBlock id { agentEntry id ada "1" with Stdin = true } "read -r answer; echo \"answered:$answer\"" ignore,
@@ -604,7 +608,7 @@ let private agentLeaseTests =
         testCaseAsync "the agent interrupts its own stuck block, and the terminal lives on" <|
             withPosixTerminal "stdinintr" (fun terminals id _ log _ _ ->
                 async {
-                    let ada = PeerRef (PeerId.create "ada" |> expect)
+                    let ada = Principal.Peer (PeerId.create "ada" |> expect)
                     let! block = Async.StartChild (terminals.RunBlock id (agentEntry id ada "1") "sleep 60" ignore, 10000)
                     let! running = until 5000 (fun () -> terminals.Busy () |> Set.contains (TerminalId.value id))
                     Expect.isTrue running "it is running"
@@ -637,7 +641,7 @@ let private agentLeaseTests =
         testCaseAsync "an agent's heredoc and cd work as before under closed stdin" <|
             withPosixTerminal "stdinshape" (fun terminals id records _ _ _ ->
                 async {
-                    let ada = PeerRef (PeerId.create "ada" |> expect)
+                    let ada = Principal.Peer (PeerId.create "ada" |> expect)
                     let dir = mkdtemp nodeFs nodeOs
                     do! terminals.RunBlock id (agentEntry id ada "1") ("cd " + dir) ignore
                     do! terminals.RunBlock id (agentEntry id ada "2") "cat <<'EOF' # note\nHEREDOC:$PWD\nEOF" ignore
@@ -670,7 +674,7 @@ let private agentLeaseTests =
                         Async.StartChild (
                             terminals.RunBlock
                                 id
-                                (agentEntry id (PeerRef (PeerId.create "ada" |> expect)) "1")
+                                (agentEntry id (Principal.Peer (PeerId.create "ada" |> expect)) "1")
                                 // `/dev/tty` for the reason the case above gives.
                                 "printf '\\033[?1049h'; read -r answer </dev/tty; printf '\\033[?1049l'"
                                 ignore,
@@ -686,8 +690,43 @@ let private agentLeaseTests =
                 })
     ]
 
+/// Through the Session Process as production composes it (`hostOver`): the agent's one
+/// execution path, `TerminalCommands.Execute`, over a terminal the Host opens with ITS shell
+/// and ITS nonce. The fixtures below compose `SessionTerminals` by hand to reach seams this
+/// cannot — a scripted clock, a counted re-drain — and each of them names things production
+/// chooses; this one names nothing, so it fails the way a deployment does.
+let private throughTheHostTests =
+    testList "Through the Host as it ships" [
+        testCaseAsync "a terminal the Host opens carries cd into the next block" <|
+            async {
+                let policy =
+                    { emptyPolicy with
+                        Env = Sandboxes.hostBaseline (Sandboxes.ambientEnv ()) }
+                let! host = hostOver (Sandboxes.HostSandbox.create ()) policy "host-shell"
+                let agent = Authority.agentFor (Principal.Peer (PeerId.create "ada" |> expect))
+                let dir = mkdtemp nodeFs nodeOs
+                match! host.TerminalCommands.Execute (CommandRequest.ofCommand ("cd " + dir)) agent with
+                | Error e -> failwithf "cd did not run: %s" e
+                | Ok first ->
+                    Expect.equal first.Status (TerminalCommandRan (CommandSucceeded 0)) "cd ran as a block"
+                    match!
+                        host.TerminalCommands.Execute
+                            { CommandRequest.ofCommand "echo \"IN:$PWD\"" with Target = Some (InTerminal first.Terminal) }
+                            agent
+                        with
+                    | Error e -> failwithf "the second block did not run: %s" e
+                    | Ok second ->
+                        Expect.isTrue
+                            (second.Output.Contains ("IN:" + dir))
+                            (sprintf "the second block ran where the first left the shell (%s); it printed: %s" dir second.Output)
+                do! host.Stop ()
+            }
+    ]
+
 let tests =
     testList "Pty (Plan 13)" [
+        throughTheHostTests
+
         testCaseAsync "the host backend offers a pty at all" <|
             async {
                 let policy =
@@ -816,7 +855,7 @@ let tests =
                 // launch it, emits marks the real scanner recognises — with the real exit
                 // codes. An emitter and a parser that agree only with each other would pass
                 // every cheap-tier case and close no block at all in production.
-                let nonce = "probe-nonce"
+                let nonce = Interop.randomSecret ()
                 let rc = (Marks.rcFor "bash" nonce |> Option.get).Rc
                 let dir = mkdtemp nodeFs nodeOs
                 let rcPath = dir + "/yrc"
@@ -889,7 +928,7 @@ let tests =
             // returns — the same wait the profile case below uses.
             withLiveTerminal "cd" (fun terminals id records _ _ _ ->
                 async {
-                    let ada = PeerRef (PeerId.create "ada" |> expect)
+                    let ada = Principal.Peer (PeerId.create "ada" |> expect)
                     let dir = mkdtemp nodeFs nodeOs
                     do! terminals.RunBlock id (queueEntry id ada "1") ("cd " + dir) ignore
                     do! terminals.RunBlock id (queueEntry id ada "2") "echo \"IN:$PWD\"" ignore
@@ -908,7 +947,7 @@ let tests =
             // died with each one. Green above under bash, broken on every box that ships.
             withPosixTerminal "cdposix" (fun terminals id records _ _ _ ->
                 async {
-                    let ada = PeerRef (PeerId.create "ada" |> expect)
+                    let ada = Principal.Peer (PeerId.create "ada" |> expect)
                     let dir = mkdtemp nodeFs nodeOs
                     do! terminals.RunBlock id (queueEntry id ada "1") ("cd " + dir) ignore
                     do! terminals.RunBlock id (queueEntry id ada "2") "echo \"IN:$PWD\"" ignore
@@ -926,7 +965,7 @@ let tests =
             // runs a command past that window and asserts the terminal is not marked lost.
             withPosixTerminal "slowposix" (fun terminals id _ log _ _ ->
                 async {
-                    let ada = PeerRef (PeerId.create "ada" |> expect)
+                    let ada = Principal.Peer (PeerId.create "ada" |> expect)
                     // Longer than the 2s window, short enough for the suite's budget.
                     do! terminals.RunBlock id (queueEntry id ada "1") "sleep 3; echo done" ignore
                     let! page = log.Read None 1000
@@ -948,7 +987,7 @@ let tests =
             // order is the claim, not a number a shell happened to report.
             withLiveTerminal "sized" (fun terminals id records _ _ _ ->
                 async {
-                    let ada = PeerRef (PeerId.create "ada" |> expect)
+                    let ada = Principal.Peer (PeerId.create "ada" |> expect)
                     let entry = { queueEntry id ada "1" with Size = Some { Cols = 132; Rows = 43 } }
                     do! terminals.RunBlock id entry "echo sized" ignore
                     let ordered = List.ofSeq records
@@ -968,7 +1007,7 @@ let tests =
             // pass by resizing NOTHING — against a fresh terminal it would pass either way.
             withLiveTerminal "unsized" (fun terminals id records _ _ _ ->
                 async {
-                    let ada = PeerRef (PeerId.create "ada" |> expect)
+                    let ada = Principal.Peer (PeerId.create "ada" |> expect)
                     let wide = { queueEntry id ada "1" with Size = Some { Cols = 120; Rows = 40 } }
                     do! terminals.RunBlock id wide "echo wide" ignore
                     do! terminals.RunBlock id { queueEntry id ada "2" with Size = None } "echo after" ignore
@@ -1025,7 +1064,7 @@ let tests =
                  "profile"
                  (fun terminals id records _ _ _ ->
                      async {
-                         let ada = PeerRef (PeerId.create "ada" |> expect)
+                         let ada = Principal.Peer (PeerId.create "ada" |> expect)
                          do! terminals.RunBlock id (queueEntry id ada "1") "pwd" ignore
                          let printed () = records |> Seq.map (fun r -> r.Data) |> String.concat ""
                          let! saw = until 5000 (fun () -> (printed ()).Contains directory)

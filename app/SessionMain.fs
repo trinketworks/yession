@@ -458,7 +458,7 @@ let mutable private queryRegistry : Queries.QueryRegistry = Queries.empty
 /// told to whoever is reading. Every fold this file triggers goes through here — the
 /// boot one, a repo verb's, an arrival's — so "fold, then invalidate the two queries it
 /// feeds" is written once rather than at each of them.
-let private foldFor (authorities: ActorRef option list) : Async<unit> =
+let private foldFor (authorities: CredentialFor list) : Async<unit> =
     async {
         for onBehalfOf in authorities do
             do! repoSandboxes.Fold onBehalfOf
@@ -549,7 +549,7 @@ let private mcpServers =
 /// targets. Two copies of this precedence would eventually disagree, and the way they would
 /// disagree is the worst one available: marking a credential nobody used, while the one that
 /// actually failed goes on reading as healthy.
-let private githubTargetFor (credentialActor: ActorRef) : SecretId option =
+let private githubTargetFor (credentialActor: CredentialFor) : SecretId option =
     GitHubConnection.turnTargets sessionId credentialActor
     |> List.filter (fun target -> Map.containsKey target connectionStatus)
     |> List.tryHead
@@ -565,10 +565,10 @@ let private ambientGitHubToken () : string option =
 /// at a sandbox's start so the refusal is said then, in words; the VALUE is resolved later,
 /// per request, by `resolveGitHubToken`, and a connected credential that will not resolve is
 /// reported there as the fault it is.
-let private holdsGitHubToken (credentialActor: ActorRef) : bool =
+let private holdsGitHubToken (credentialActor: CredentialFor) : bool =
     (githubTargetFor credentialActor).IsSome || (ambientGitHubToken ()).IsSome
 
-let private resolveGitHubToken (credentialActor: ActorRef) : Async<string option> =
+let private resolveGitHubToken (credentialActor: CredentialFor) : Async<string option> =
     async {
         let targets = githubTargetFor credentialActor |> Option.toList
         let ambient = ambientGitHubToken
@@ -598,7 +598,7 @@ let private resolveGitHubToken (credentialActor: ActorRef) : Async<string option
 ///
 /// One extra request, only on a path that has already failed — and it is what turns four
 /// days of a green panel over a dead credential into a panel that says "sign in again".
-let private reportGitHubNetworkFailure (credentialActor: ActorRef) (_gitSaid: string) : Async<unit> =
+let private reportGitHubNetworkFailure (credentialActor: CredentialFor) (_gitSaid: string) : Async<unit> =
     async {
         match connectionsClient, githubTargetFor credentialActor with
         | Some client, Some target ->
@@ -672,12 +672,12 @@ let private commandServices : Commands.CommandServices =
 /// The stored Claude credential this actor's calls run on, if any. Named once, for the same
 /// reason `githubTargetFor` is: spending a credential and reporting one refused must never
 /// pick different targets.
-let private claudeTargetFor (actor: ActorRef) : SecretId option =
+let private claudeTargetFor (actor: CredentialFor) : SecretId option =
     ClaudeConnection.turnTargets sessionId actor
     |> List.filter (fun target -> Map.containsKey target connectionStatus)
     |> List.tryHead
 
-let private resolveCredential (actor: ActorRef) : Async<Result<(string * string) option, string>> =
+let private resolveCredential (actor: CredentialFor) : Async<Result<(string * string) option, string>> =
     async {
         let targets = claudeTargetFor actor |> Option.toList
         match connectionsClient, targets with
@@ -774,7 +774,7 @@ let private dispatching (inner: (string * string) option -> RunAgent) : RunAgent
             // said nothing failed into a silent red item — which by then meant every such
             // failure was printed twice, once as the body and once joined to it.
             let fail (reason: string) = AgentFailed (reason, None)
-            match! resolveCredential context.TurnActor with
+            match! resolveCredential (CredentialFor.Person context.TurnActor) with
             | Ok credential -> return! inner credential context capabilities signal onChunk
             | Error reason -> return fail reason
         }
@@ -830,6 +830,10 @@ Async.StartImmediate (
         // Filled before anything that could read it runs: the command table was built above
         // and holds a getter, not this value.
         openedLog <- Some log
+        // Read once, spent by the repo manager's name check and both endpoints below: a
+        // second read of the same variable is a second default, and the two would disagree
+        // the first time one moved.
+        let githubApi = Interop.envOr "YESSION_GITHUB_API_URL" "https://api.github.com"
         // The repo manager (Plan 14), over the same log and the agent backend's sandbox
         // family. A backend that cannot host it fails the boot — the same fail-closed
         // stance as the WorkSandbox composition above.
@@ -858,6 +862,13 @@ Async.StartImmediate (
                       AllowProtocol = "https"
                       CloneUrl = RepoRef.cloneUrl
                       ResolveToken = resolveGitHubToken
+                      Canonical =
+                        fun token repo ->
+                            async {
+                                match! GitHubRepos.canonicalOver githubApi token repo with
+                                | Ok current -> return Some current
+                                | Error _ -> return None
+                            }
                       OnNetworkFailure = reportGitHubNetworkFailure
                       Log = log } with
             | Ok service -> reposService <- Some service
@@ -873,16 +884,13 @@ Async.StartImmediate (
         // why reading the provider's own counter needs no coordination and a count of our
         // own would need all of it.
         let githubLedger = Resilience.Ledger.create ()
-        // Read once, spent by both endpoints below: a second read of the same variable is a
-        // second default, and the two would disagree the first time one moved.
-        let githubApi = Interop.envOr "YESSION_GITHUB_API_URL" "https://api.github.com"
         let githubSpending (spend: Resilience.Spend) =
             GitHubPrs.Spending.over githubLedger (fun () -> System.DateTimeOffset.UtcNow) spend
         let githubLooking (spend: Resilience.Spend) =
             GitHubPrs.fetchOver githubApi (githubSpending spend)
         do
             let recordPrTransitions
-                (watcher: ActorRef)
+                (watcher: Principal)
                 (pr: PrRef)
                 (snapshot: PrSnapshot)
                 (transitions: PrTransition list)
@@ -1044,7 +1052,14 @@ Async.StartImmediate (
                 match auth with
                 | Some a -> Some (Queries.routes a queryRegistry sessionMount)
                 | None -> None
-            [ claudeRoutes; githubRoutes; queryRoutes ]
+            // What a person chooses a repo FROM: the provider's listing, on the caller's
+            // credential by the same precedence a repo verb spends, against the same API
+            // base the watches read.
+            let repoRoutes =
+                match auth with
+                | Some a -> Some (GitHubRepos.routes a resolveGitHubToken githubApi sessionMount)
+                | None -> None
+            [ claudeRoutes; githubRoutes; queryRoutes; repoRoutes ]
             |> List.choose id
             |> function
                | [] -> None
@@ -1150,6 +1165,8 @@ Async.StartImmediate (
         host.SetCommandDispatch (Commands.dispatch commandServices)
         // Consent reaches the fold that knows what each repo asks for.
         host.SetApproveCapabilities (fun actor repo granted -> repoSandboxes.Approve actor repo granted)
+        // A person's first repo goes through the same gate the agent's `add_repo` does.
+        host.SetLaunchRepo (Commands.launchRepo commandServices host.RunGated host.ResumeGated)
         // The reverse leg starts LAST, after the query registry exists and the Host is up:
         // a set frame rebuilds a registry and invalidates a query, and both of those have
         // to be there before the first frame can arrive.
@@ -1297,5 +1314,5 @@ Async.StartImmediate (
         // happened to run. Read off the same frame the stream keeps, so the two cannot
         // disagree about who is here.
         Async.StartImmediate (
-            foldFor (List.distinct (None :: ConnectionStatusList.arrivals Map.empty connectionStatus)))
+            foldFor (List.distinct (CredentialFor.Deployment :: ConnectionStatusList.arrivals Map.empty connectionStatus)))
     })

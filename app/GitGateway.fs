@@ -52,7 +52,7 @@ let private prefix = "git"
 /// Whose credential answers a route, resolved PER REQUEST — never captured.
 type Lender =
     { /// Whose it is, for the sentences git prints.
-      Owner : ActorRef
+      Owner : CredentialFor
       /// The credential now. `None` = the owner has none (any more).
       Resolve : unit -> Async<string option>
       /// github.com refused it: tell whoever tracks the credential's health.
@@ -185,6 +185,9 @@ let private forwardWith
 /// The credential as github.com's git endpoint takes it: HTTP basic, `x-access-token` as
 /// the user. (A bearer header is what the API takes and what the git endpoint answers 401
 /// to — another thing the motivating session learnt by trying.)
+/// Whose credential a sentence git prints is about.
+let private ownerLabel (owner: CredentialFor) : string = CredentialFor.token owner
+
 let private basicAuthorization (token: string) : string =
     "Basic " + Convert.ToBase64String (Text.Encoding.UTF8.GetBytes ("x-access-token:" + token))
 
@@ -232,7 +235,7 @@ let start (upstream: string) : Async<Gateway> =
                                 refuse (
                                     sprintf
                                         "the github credential this sandbox was lent (%s's) is gone — connect one on the settings panel and start the sandbox again"
-                                        (ActorRef.token lender.Owner))
+                                        (ownerLabel lender.Owner))
                             | Some token ->
                                 let target = upstream.TrimEnd '/' + "/" + request.Path + searchOf url
                                 let! outcome =
@@ -244,7 +247,7 @@ let start (upstream: string) : Async<Gateway> =
                                     refuse (
                                         sprintf
                                             "github rejected %s's credential — sign in again on the settings panel"
-                                            (ActorRef.token lender.Owner))
+                                            (ownerLabel lender.Owner))
                                 | 0 when not outcome.answered ->
                                     refuse (sprintf "%s could not be reached from this session: %s" remoteHost outcome.error)
                                 | _ -> ()

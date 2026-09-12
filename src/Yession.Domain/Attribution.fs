@@ -45,11 +45,16 @@ module Attribution =
     let ofEvents (events: SessionEvent list) : State =
         events |> List.fold applyEvent empty
 
-    /// Who to credit a peer's act to: their durable `UserRef` when their join was
-    /// attributed, or the peer connection itself when it was not. This is the one rule —
-    /// used to stamp `MessageSent.Author` and to resolve the roster's own "you" row, so
-    /// the two can no longer disagree about who somebody is.
-    let actorFor (peerUsers: Map<PeerId, UserId>) (peer: PeerId) : ActorRef =
+    /// Who a peer IS: their durable user when their join was attributed, or the peer
+    /// connection itself when it was not. This is the one rule — used to stamp
+    /// `MessageSent.Author` and to resolve the roster's own "you" row, so the two can no
+    /// longer disagree about who somebody is. A `Principal`, because a peer is always
+    /// somebody a turn can run as; `actorFor` is the same answer where an actor is what is
+    /// being written.
+    let principalFor (peerUsers: Map<PeerId, UserId>) (peer: PeerId) : Principal =
         match Map.tryFind peer peerUsers with
-        | Some user -> UserRef user
-        | None -> PeerRef peer
+        | Some user -> Principal.User user
+        | None -> Principal.Peer peer
+
+    let actorFor (peerUsers: Map<PeerId, UserId>) (peer: PeerId) : ActorRef =
+        Principal.toActor (principalFor peerUsers peer)

@@ -85,7 +85,7 @@ type OpenPr = string option -> PrDraft -> Async<PrOpenOutcome>
 /// One watched pull request as the `pull_requests` query reports it.
 type PrWatchRow =
     { Pr : PrRef
-      Watcher : ActorRef
+      Watcher : Principal
       Snapshot : PrSnapshot option
       /// The durable baseline. Carried because `stalled` is a fact about HISTORY — a
       /// snapshot alone can only say whether a pull request is queued right now, never
@@ -130,7 +130,7 @@ let TickIntervalMs = PendingIntervalMs
 
 type private WatchEntry =
     { Pr : PrRef
-      Watcher : ActorRef
+      Watcher : Principal
       mutable Known : PrKnown
       /// Overwritten from the projection beside `Known`, and only from there: the two are
       /// halves of one fact — what was last recorded, and when.
@@ -202,9 +202,9 @@ let create
     (provider: string)
     (now: unit -> DateTimeOffset)
     (fetch: FetchPr)
-    (resolveToken: ActorRef -> Async<string option>)
-    (onUnauthorized: ActorRef -> Async<unit>)
-    (record: ActorRef -> PrRef -> PrSnapshot -> PrTransition list -> Async<unit>)
+    (resolveToken: CredentialFor -> Async<string option>)
+    (onUnauthorized: CredentialFor -> Async<unit>)
+    (record: Principal -> PrRef -> PrSnapshot -> PrTransition list -> Async<unit>)
     : PrWatchers =
 
     let mutable entries : WatchEntry list = []
@@ -251,7 +251,7 @@ let create
             if heldByProvider || (not force && entry.DueAtEpoch > nowEpoch) then return false
             else
                 entry.SkipUntilEpoch <- None
-                let! token = resolveToken entry.Watcher
+                let! token = resolveToken (CredentialFor.Person entry.Watcher)
                 let! outcome = fetch token entry.Pr entry.Etags entry.Snapshot
                 // Whatever the look found, this watch has had its turn: the next one is
                 // scheduled from what it now knows, so a suite finishing drops the watch
@@ -284,7 +284,7 @@ let create
                         | PrRateLimited _ -> sprintf "rate limited by %s — waiting for the window to reset" provider
                         | PrUnreachable reason -> reason
                     match failure with
-                    | PrUnauthorized -> do! onUnauthorized entry.Watcher
+                    | PrUnauthorized -> do! onUnauthorized (CredentialFor.Person entry.Watcher)
                     | PrRateLimited reset ->
                         // The provider names the moment it will answer again, which beats any
                         // backoff invented here. Absent, wait a window's worth.
@@ -362,7 +362,13 @@ type PrService =
     { /// Begin watching. Validates by LOOKING once with the caller's credential, which is
       /// also where the baseline comes from: a watch whose provider cannot be read is a
       /// watch that would never say anything, and refusing now beats a silent row.
-      Watch : ActorRef -> ActorRef -> PrRef -> Async<Result<string, string>>
+      ///
+      /// Takes the whole `Authority` because a watch needs both halves of it — who asked,
+      /// for the note, and whose credential, for every poll and the wake a change causes —
+      /// and the second half is what this verb REFUSES without: an act on the deployment's
+      /// own credential (a file's boot fold) can be many things, but it cannot be a watch,
+      /// because there would be nobody to keep looking as and nobody to wake.
+      Watch : Authority -> PrRef -> Async<Result<string, string>>
       Unwatch : ActorRef -> PrRef -> Async<Result<string, string>>
       /// Open one, on the credential of whoever's turn it is — the only argument, because
       /// this records no event of its own: what it makes lives at the provider, and the act
@@ -370,7 +376,7 @@ type PrService =
       ///
       /// Nothing is watched as a result. Watching is a decision about what this session will
       /// keep saying, and the number this hands back is what `Watch` takes.
-      Create : ActorRef -> PrDraft -> Async<Result<string, string>> }
+      Create : CredentialFor -> PrDraft -> Async<Result<string, string>> }
 
 /// Build the watch verbs over the session's log and the poller they reconcile into.
 ///
@@ -383,7 +389,7 @@ let service
     (watchesNow: unit -> Async<PrWatch list>)
     (fetch: FetchPr)
     (openPr: OpenPr)
-    (resolveToken: ActorRef -> Async<string option>)
+    (resolveToken: CredentialFor -> Async<string option>)
     (refold: PrWatch list -> unit)
     : PrService =
 
@@ -415,13 +421,16 @@ let service
             (ChecksRollup.describe snapshot.Checks)
 
     { Watch =
-        fun actor credential pr ->
+        fun authority pr ->
             async {
                 let! watches = watchesNow ()
-                match watches |> List.tryFind (fun w -> w.Pr = pr) with
+                // Whose watch this would be is the event's own rule (`PrWatched.watcherOf`),
+                // asked here before the look because the look is made on that credential —
+                // and a refusal is said now, before a request is spent on it.
+                match watches |> List.tryFind (fun w -> w.Pr = pr), PrWatched.watcherOf pr authority with
                 // Already watched: a repeated ask is a question, not an act (the
                 // `add_repo` rule). Answer what is known and record nothing.
-                | Some existing ->
+                | Some existing, _ ->
                     return
                         Ok (
                             sprintf
@@ -429,8 +438,9 @@ let service
                                 (PrRef.render pr)
                                 (PrState.describe existing.Known.State)
                                 (ChecksRollup.describe existing.Known.Checks))
-                | None ->
-                    let! token = resolveToken credential
+                | None, Error reason -> return Error reason
+                | None, Ok watcher ->
+                    let! token = resolveToken (CredentialFor.Person watcher)
                     let! outcome = fetch token pr PrEtags.none None
                     match outcome with
                     | PrFetchFailed failure -> return Error (cannotReach (PrRef.render pr) failure)
@@ -439,14 +449,10 @@ let service
                     // start a baseline from.
                     | PrUnchanged -> return Error (sprintf "%s answered nothing about that pull request" provider)
                     | PrChanged (snapshot, _) ->
-                        match mintId () with
+                        match mintId () |> Result.bind (fun id -> PrWatched.create id authority pr snapshot) with
                         | Error e -> return Error e
-                        | Ok messageId ->
-                            do!
-                                append
-                                    actor
-                                    (SessionEvent.PrWatched
-                                        { MessageId = messageId; Pr = pr; Initial = snapshot; Actor = actor })
+                        | Ok watched ->
+                            do! append (PrWatched.actor watched) (SessionEvent.PrWatched watched)
                             let! watches = watchesNow ()
                             refold watches
                             return Ok (describe pr snapshot)
@@ -607,7 +613,7 @@ let query (current: unit -> PrWatchers) : Queries.QueryRegistration =
                                        // No checks is not a verdict about anything.
                                        | ChecksNone -> ToneMuted)
                                | None -> CellAbsent)
-                              "watcher", CellText (ActorRef.token row.Watcher)
+                              "watcher", CellText (Principal.token row.Watcher)
                               PrStatus.Columns.status,
                               (match row.Health, row.Pushed with
                                // A watch that has stopped moving, and why. The one cell in

@@ -124,6 +124,37 @@ module Codec =
                 | "configured" -> Decode.field "repo" repoRef.Decode |> Decode.map Configured
                 | other -> Decode.fail (sprintf "Unknown actor kind: %s" other)) }
 
+    /// A principal on the wire is the actor it is — the same tagged object, so a field that
+    /// narrowed from `ActorRef` to `Principal` reads every event already written by a
+    /// person. What it refuses is the other kinds: a stored `agent` where a principal is
+    /// required is a fact this version cannot represent, and a decode that answered
+    /// something else for it would be the fault the narrowing closed, coming back in.
+    let principal : Codec<Principal> =
+        { Encode = Principal.toActor >> actor.Encode
+          Decode =
+            actor.Decode
+            |> Decode.andThen (fun a ->
+                match Principal.ofActor a with
+                | Some p -> Decode.succeed p
+                | None -> Decode.fail (sprintf "Not a principal: %s" (ActorRef.token a))) }
+
+    /// Whose credential: a person is the principal's tagged object, the deployment its own
+    /// kind. Not an actor kind — the deployment is not a party that acts in the log, it is
+    /// whose credentials an act ran on when nobody's were named — so the actor decoder is
+    /// asked second, for the shape it knows.
+    let credentialFor : Codec<CredentialFor> =
+        { Encode =
+            fun credential ->
+                match credential with
+                | CredentialFor.Person p -> principal.Encode p
+                | CredentialFor.Deployment -> Encode.object [ "kind", Encode.string "deployment" ]
+          Decode =
+            Decode.field "kind" Decode.string
+            |> Decode.andThen (fun kind ->
+                match kind with
+                | "deployment" -> Decode.succeed CredentialFor.Deployment
+                | _ -> principal.Decode |> Decode.map CredentialFor.Person) }
+
     let terminalId : Codec<TerminalId> =
         { Encode = TerminalId.value >> Encode.string
           Decode = viaSmartCtor TerminalId.create Decode.string }
@@ -139,17 +170,23 @@ module Codec =
     /// how the three came to disagree in the first place.
     let private authorityFields (authority: Authority) =
         [ "author", actor.Encode (Authority.author authority)
-          "onBehalfOf", Encode.option actor.Encode (Authority.onBehalfOf authority) ]
+          "onBehalfOf", Encode.option principal.Encode (Authority.onBehalfOf authority) ]
 
-    /// Recovered, never authored — `rehydrate`'s reason. `onBehalfOf` is optional on the way
-    /// in because events written before Plan 20 have no such key, and a `Required` field would
-    /// make those pages undecodable, which is a session that will not open. Keys this stopped
-    /// asking for (`approvedBy`, Plan 23) are simply ignored where old events still carry
-    /// them — the property the pinned legacy-JSON tests hold.
-    let private authorityOf (get: Decode.IGetters) : Authority =
-        Authority.rehydrate
-            (get.Required.Field "author" actor.Decode)
-            (get.Optional.Field "onBehalfOf" (Decode.option actor.Decode) |> Option.flatten)
+    /// Recovered, never authored — `recover`'s reason. `onBehalfOf` is optional on the way in
+    /// because a person's act has none, and events written before Plan 20 have no such key at
+    /// all; what `recover` then refuses — an agent act with nobody named — fails the event,
+    /// which is a page that will not open. Deliberate: that act was never one this version
+    /// can run, and a decoder that stood something in for the missing owner would put back the
+    /// degraded state the sum took out. Keys this stopped asking for (`approvedBy`, Plan 23)
+    /// are simply ignored where old events still carry them.
+    let private authorityOf : Decoder<Authority> =
+        Decode.object (fun get ->
+            get.Required.Field "author" actor.Decode,
+            get.Optional.Field "onBehalfOf" (Decode.option principal.Decode) |> Option.flatten)
+        |> Decode.andThen (fun (author, onBehalfOf) ->
+            match Authority.recover author onBehalfOf with
+            | Ok authority -> Decode.succeed authority
+            | Error reason -> Decode.fail reason)
 
     let private sessionCreated : Codec<SessionCreated> =
         { Encode = fun (p: SessionCreated) -> Encode.object [ "sessionId", sessionId.Encode p.SessionId ]
@@ -182,13 +219,13 @@ module Codec =
                 Encode.object
                     [ "messageId", messageId.Encode p.MessageId
                       "queueId", Encode.option queueId.Encode p.QueueId
-                      "author", actor.Encode p.Author
+                      "author", principal.Encode p.Author
                       "body", Encode.string p.Body ]
           Decode =
             Decode.object (fun get ->
                 { MessageSent.MessageId = get.Required.Field "messageId" messageId.Decode
                   MessageSent.QueueId = get.Optional.Field "queueId" queueId.Decode
-                  MessageSent.Author = get.Required.Field "author" actor.Decode
+                  MessageSent.Author = get.Required.Field "author" principal.Decode
                   MessageSent.Body = get.Required.Field "body" Decode.string }) }
 
     let private prRef : Codec<PrRef> =
@@ -823,7 +860,7 @@ module Codec =
                 { TerminalBlockStarted.TerminalId = get.Required.Field "terminalId" terminalId.Decode
                   TerminalBlockStarted.BlockId = get.Required.Field "blockId" blockId.Decode
                   TerminalBlockStarted.QueueId = get.Required.Field "queueId" (Decode.option queueId.Decode)
-                  TerminalBlockStarted.Authority = authorityOf get
+                  TerminalBlockStarted.Authority = get.Required.Raw authorityOf
                   TerminalBlockStarted.Command = get.Required.Field "command" Decode.string
                   TerminalBlockStarted.FromSeq = get.Required.Field "fromSeq" Decode.int
                   // Optional on the way IN and required on the way out: every block written
@@ -925,20 +962,20 @@ module Codec =
     let private terminalCommandRejected : Codec<TerminalCommandRejected> =
         { Encode =
             fun (p: TerminalCommandRejected) ->
-                Encode.object
+                Encode.object (
                     [ "terminalId", terminalId.Encode p.TerminalId
                       "queueId", queueId.Encode p.QueueId
                       "blockId", blockId.Encode p.BlockId
-                      "author", actor.Encode p.Author
                       "rejectedBy", actor.Encode p.RejectedBy
                       "command", Encode.string p.Command
                       "reason", Encode.option Encode.string p.Reason ]
+                    @ authorityFields p.Authority)
           Decode =
             Decode.object (fun get ->
                 { TerminalCommandRejected.TerminalId = get.Required.Field "terminalId" terminalId.Decode
                   TerminalCommandRejected.QueueId = get.Required.Field "queueId" queueId.Decode
                   TerminalCommandRejected.BlockId = get.Required.Field "blockId" blockId.Decode
-                  TerminalCommandRejected.Author = get.Required.Field "author" actor.Decode
+                  TerminalCommandRejected.Authority = get.Required.Raw authorityOf
                   TerminalCommandRejected.RejectedBy = get.Required.Field "rejectedBy" actor.Decode
                   TerminalCommandRejected.Command = get.Required.Field "command" Decode.string
                   TerminalCommandRejected.Reason = get.Required.Field "reason" (Decode.option Decode.string) }) }
@@ -1070,20 +1107,27 @@ module Codec =
                 | "stalled" -> Decode.succeed PrTransition.Stalled
                 | other -> Decode.fail (sprintf "Unknown pull request transition: %s" other)) }
 
+    /// The watcher is not on the wire: it is derived from the authority by the one rule
+    /// `PrWatched.create` applies, and a second key could only agree with it or contradict
+    /// it. The parties ride the same two top-level keys a terminal block's do.
     let private prWatched : Codec<PrWatched> =
         { Encode =
             fun (p: PrWatched) ->
-                Encode.object
-                    [ "messageId", messageId.Encode p.MessageId
-                      "pr", prRef.Encode p.Pr
-                      "initial", prSnapshot.Encode p.Initial
-                      "actor", actor.Encode p.Actor ]
+                Encode.object (
+                    [ "messageId", messageId.Encode (PrWatched.messageId p)
+                      "pr", prRef.Encode (PrWatched.pr p)
+                      "initial", prSnapshot.Encode (PrWatched.initial p) ]
+                    @ authorityFields (PrWatched.authority p))
           Decode =
             Decode.object (fun get ->
-                { PrWatched.MessageId = get.Required.Field "messageId" messageId.Decode
-                  PrWatched.Pr = get.Required.Field "pr" prRef.Decode
-                  PrWatched.Initial = get.Required.Field "initial" prSnapshot.Decode
-                  PrWatched.Actor = get.Required.Field "actor" actor.Decode }) }
+                get.Required.Field "messageId" messageId.Decode,
+                get.Required.Raw authorityOf,
+                get.Required.Field "pr" prRef.Decode,
+                get.Required.Field "initial" prSnapshot.Decode)
+            |> Decode.andThen (fun (messageId, authority, pr, initial) ->
+                match PrWatched.create messageId authority pr initial with
+                | Ok watched -> Decode.succeed watched
+                | Error reason -> Decode.fail reason) }
 
     let private prUnwatched : Codec<PrUnwatched> =
         { Encode =
@@ -1107,7 +1151,7 @@ module Codec =
                       "transition", prTransition.Encode p.Transition
                       "state", prState.Encode p.State
                       "checks", checksRollup.Encode p.Checks
-                      "watcher", actor.Encode p.Watcher ]
+                      "watcher", principal.Encode p.Watcher ]
           Decode =
             Decode.object (fun get ->
                 { PrTransitioned.MessageId = get.Required.Field "messageId" messageId.Decode
@@ -1115,7 +1159,7 @@ module Codec =
                   PrTransitioned.Transition = get.Required.Field "transition" prTransition.Decode
                   PrTransitioned.State = get.Required.Field "state" prState.Decode
                   PrTransitioned.Checks = get.Required.Field "checks" checksRollup.Decode
-                  PrTransitioned.Watcher = get.Required.Field "watcher" actor.Decode }) }
+                  PrTransitioned.Watcher = get.Required.Field "watcher" principal.Decode }) }
 
     let private sandboxSetupQueued : Codec<SandboxSetupQueued> =
         { Encode =
@@ -1151,7 +1195,7 @@ module Codec =
                       // credential VALUE, which is the point: the log is replicated to
                       // every peer, and a shape that could hold a token eventually does.
                       "forwarded", Encode.list (p.Forwarded |> List.map Encode.string)
-                      "credentialOwner", Encode.option actor.Encode p.CredentialOwner
+                      "credentialOwner", Encode.option credentialFor.Encode p.CredentialOwner
                       "realisation", Encode.list (p.Realisation |> List.map Encode.string)
                       "actor", actor.Encode p.Actor ]
           Decode =
@@ -1168,7 +1212,7 @@ module Codec =
                   WorkSandboxStarted.Checkout =
                     get.Optional.Field "checkout" (Decode.option Decode.string) |> Option.flatten
                   WorkSandboxStarted.Forwarded = get.Required.Field "forwarded" (Decode.list Decode.string)
-                  WorkSandboxStarted.CredentialOwner = get.Required.Field "credentialOwner" (Decode.option actor.Decode)
+                  WorkSandboxStarted.CredentialOwner = get.Required.Field "credentialOwner" (Decode.option credentialFor.Decode)
                   // Optional on the way in, and this is the only backward-compatible reading
                   // available: a start written before this field existed has no answer, and
                   // absent is the right one — nothing was measured, so nothing is claimed.
@@ -1287,6 +1331,23 @@ module Codec =
                   CommandRefused.Author = get.Required.Field "author" actor.Decode
                   CommandRefused.RejectedBy = get.Required.Field "rejectedBy" actor.Decode
                   CommandRefused.Reason = get.Required.Field "reason" (Decode.option Decode.string) }) }
+
+    let private gatedCommandFailed : Codec<GatedCommandFailed> =
+        { Encode =
+            fun (p: GatedCommandFailed) ->
+                Encode.object
+                    [ "messageId", messageId.Encode p.MessageId
+                      "tool", Encode.string p.Tool
+                      "summary", Encode.string p.Summary
+                      "author", actor.Encode p.Author
+                      "reason", Encode.string p.Reason ]
+          Decode =
+            Decode.object (fun get ->
+                { GatedCommandFailed.MessageId = get.Required.Field "messageId" messageId.Decode
+                  GatedCommandFailed.Tool = get.Required.Field "tool" Decode.string
+                  GatedCommandFailed.Summary = get.Required.Field "summary" Decode.string
+                  GatedCommandFailed.Author = get.Required.Field "author" actor.Decode
+                  GatedCommandFailed.Reason = get.Required.Field "reason" Decode.string }) }
 
     /// Whether the CALL happened. Tagged rather than a nullable reason, so "it went fine"
     /// and "it failed with an empty message" stay distinguishable on the wire.
@@ -1436,6 +1497,8 @@ module Codec =
                     Encode.object [ "type", Encode.string "shellProfileSet"; "payload", shellProfileSet.Encode p ]
                 | SessionEvent.CommandRefused p ->
                     Encode.object [ "type", Encode.string "commandRefused"; "payload", commandRefused.Encode p ]
+                | SessionEvent.GatedCommandFailed p ->
+                    Encode.object [ "type", Encode.string "gatedCommandFailed"; "payload", gatedCommandFailed.Encode p ]
                 | ToolUseStarted p ->
                     Encode.object [ "type", Encode.string "toolUseStarted"; "payload", toolUseStarted.Encode p ]
                 | ToolUseFinished p ->
@@ -1502,6 +1565,7 @@ module Codec =
                 | "workSandboxStopped" -> Decode.field "payload" workSandboxStopped.Decode |> Decode.map WorkSandboxStopped
                 | "shellProfileSet" -> Decode.field "payload" shellProfileSet.Decode |> Decode.map ShellProfileSet
                 | "commandRefused" -> Decode.field "payload" commandRefused.Decode |> Decode.map SessionEvent.CommandRefused
+                | "gatedCommandFailed" -> Decode.field "payload" gatedCommandFailed.Decode |> Decode.map SessionEvent.GatedCommandFailed
                 | "toolUseStarted" -> Decode.field "payload" toolUseStarted.Decode |> Decode.map ToolUseStarted
                 | "toolUseFinished" -> Decode.field "payload" toolUseFinished.Decode |> Decode.map ToolUseFinished
                 | "mcpServerAvailable" ->
@@ -1731,7 +1795,12 @@ module Codec =
                     Encode.object
                         [ "kind", Encode.string "approveRepoCapabilities"
                           "repo", repoRef.Encode repo
-                          "granted", Encode.list (granted |> List.map Encode.string) ])
+                          "granted", Encode.list (granted |> List.map Encode.string) ]
+                | AddRepo (repo, branch) ->
+                    Encode.object
+                        [ "kind", Encode.string "addRepo"
+                          "repo", repoRef.Encode repo
+                          "branch", Encode.option Encode.string branch ])
           Decode =
             Decode.field "kind" Decode.string
             |> Decode.andThen (function
@@ -1741,6 +1810,11 @@ module Codec =
                         (fun repo granted -> ApproveRepoCapabilities (repo, granted))
                         (Decode.field "repo" repoRef.Decode)
                         (Decode.field "granted" (Decode.list Decode.string))
+                | "addRepo" ->
+                    Decode.map2
+                        (fun repo branch -> AddRepo (repo, branch))
+                        (Decode.field "repo" repoRef.Decode)
+                        (Decode.optional "branch" Decode.string)
                 | "openTerminal" -> Decode.field "title" Decode.string |> Decode.map OpenTerminal
                 | "closeTerminal" -> Decode.field "terminalId" terminalId.Decode |> Decode.map CloseTerminal
                 | "takeTerminalLease" -> Decode.field "terminalId" terminalId.Decode |> Decode.map TakeTerminalLease
@@ -2131,6 +2205,34 @@ module Codec =
     let modelCatalogue : Codec<AgentModel list> =
         { Encode = (fun models -> Encode.object [ "models", Encode.list (models |> List.map agentModel.Encode) ])
           Decode = Decode.field "models" (Decode.list agentModel.Decode) }
+
+    let private repoCandidate : Codec<Repos.RepoCandidate> =
+        { Encode =
+            fun (candidate: Repos.RepoCandidate) ->
+                Encode.object
+                    [ "repo", repoRef.Encode candidate.Repo
+                      "description", Encode.option Encode.string candidate.Description
+                      "defaultBranch", Encode.string candidate.DefaultBranch
+                      "private", Encode.bool candidate.Private
+                      "pushedAt", Encode.option Encode.string candidate.PushedAt ]
+          Decode =
+            Decode.object (fun get ->
+                { Repos.RepoCandidate.Repo = get.Required.Field "repo" repoRef.Decode
+                  Repos.RepoCandidate.Description = get.Optional.Field "description" Decode.string
+                  Repos.RepoCandidate.DefaultBranch = get.Required.Field "defaultBranch" Decode.string
+                  Repos.RepoCandidate.Private = get.Optional.Field "private" Decode.bool |> Option.defaultValue false
+                  Repos.RepoCandidate.PushedAt = get.Optional.Field "pushedAt" Decode.string }) }
+
+    /// What a person chooses a repo FROM, as the session serves it to the picker — the
+    /// `modelCatalogue` shape, for its reason: an object around the list, with room to grow.
+    let repoCandidates : Codec<Repos.RepoCandidate list> =
+        { Encode = (fun candidates -> Encode.object [ "repos", Encode.list (candidates |> List.map repoCandidate.Encode) ])
+          Decode = Decode.field "repos" (Decode.list repoCandidate.Decode) }
+
+    /// The branches of one repo, by name.
+    let branchNames : Codec<string list> =
+        { Encode = (fun branches -> Encode.object [ "branches", Encode.list (branches |> List.map Encode.string) ])
+          Decode = Decode.field "branches" (Decode.list Decode.string) }
 
     /// Serialize a value to a compact JSON string.
     let toString (codec: Codec<'a>) (value: 'a) : string =

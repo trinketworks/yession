@@ -38,6 +38,18 @@ module PeerAttribution =
         | AttributedUser user -> Some user
         | UnattributedAccess -> None
 
+    /// The party a browser request's provider calls run on, so what it is answered with is
+    /// what this person's credential can actually see.
+    ///
+    /// The deployment's own where it attributes nobody: an unattributed browser IS the
+    /// deployment asking, and it reaches exactly the credentials a deployment may — the
+    /// session's own and the local one — because that is what the turn-target precedence
+    /// resolves the deployment to. There is no separate rule here to keep in step.
+    let credential (attribution: PeerAttribution) : CredentialFor =
+        match attribution with
+        | AttributedUser user -> CredentialFor.Person (Principal.User user)
+        | UnattributedAccess -> CredentialFor.Deployment
+
 /// The identity behind an established browser session: the validated ID token's subject
 /// plus the claims the session needs downstream. `Attribution` distinguishes a real user
 /// (the token said `yession_attribution = "user"`) from shared unattributed access.

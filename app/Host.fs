@@ -60,7 +60,13 @@ type SessionHost =
       /// Tell the peer command surface how a person's consent to a repo's capability set is
       /// carried out (Plan 27). Set once, from SessionMain, for the same reason the dispatch
       /// table is: the fold that knows what a repo asks for is composed a layer above this.
-      SetApproveCapabilities : (ActorRef -> RepoRef -> string list -> Async<Result<unit, string>>) -> unit
+      SetApproveCapabilities : (Principal -> RepoRef -> string list -> Async<Result<unit, string>>) -> unit
+      /// Tell the peer command surface how a person's choice of first repo is carried out
+      /// (the launch surface). Set once, from SessionMain, where the repo service is. The
+      /// Host runs the work it is handed back in the background and records a failure as
+      /// `GatedCommandFailed` — the Host's to do because the log is its, and because a person's
+      /// command has no tool result for a failure to come back in.
+      SetLaunchRepo : Commands.LaunchRepo -> unit
       /// What to do with a Manager→Session notification. A SETTER for the reason the
       /// command dispatch is one: the subscription is opened here, at start, and what
       /// should happen to a notification is composed later — out of the services the entry
@@ -77,6 +83,9 @@ type SessionHost =
       /// calls do — which is the reason the gate was made a capability rather than a detail
       /// of the MCP adapter, and the reason there is no second path to a sandbox.
       RunGated : RunGatedCommand
+      /// Resume a handle `RunGated` yielded with `CommandRunning`. For the one caller that
+      /// sequences gated calls and so has to wait each one out: the launch.
+      ResumeGated : QueueId -> Async<Result<CommandOutcome, string>>
       /// The agent's terminal capabilities (Plan 13, stage 3b), exposed so a test can drive
       /// the agent's HALF of the approval flow without a model in the loop. Production reaches
       /// them through `AgentCapabilities`, which is built from this same value.
@@ -208,7 +217,8 @@ let startFull
         let mutable attribution : Attribution.State = Attribution.empty
         let recordAttribution (event: SessionEvent) : unit =
             attribution <- Attribution.applyEvent attribution event
-        let actorFor (peerId: PeerId) : ActorRef = Attribution.actorFor attribution.PeerUsers peerId
+        let principalFor (peerId: PeerId) : Principal = Attribution.principalFor attribution.PeerUsers peerId
+        let actorFor (peerId: PeerId) : ActorRef = Principal.toActor (principalFor peerId)
 
         // The terminal projection as the Process itself has it, folded forward on every
         // append. The Process is the log's only writer, so this is complete and ordered by
@@ -390,9 +400,37 @@ let startFull
         // Until SessionMain sets it, nothing can be consented to — which is the honest state
         // for a session whose repos are not composed yet, rather than a silent yes.
         let approveCapabilitiesRef
-            : (ActorRef -> RepoRef -> string list -> Async<Result<unit, string>>) ref =
+            : (Principal -> RepoRef -> string list -> Async<Result<unit, string>>) ref =
             ref (fun _ _ _ -> async { return Error "this session cannot approve anything yet" })
         let approveCapabilities actor repo granted = approveCapabilitiesRef.Value actor repo granted
+        // Likewise nothing can be launched into until SessionMain says how.
+        let launchRepoRef : Commands.LaunchRepo ref =
+            ref (fun _ _ _ -> async { return Error "this session cannot add a repo yet" })
+        /// Admission answers the peer; the work runs on, and only its failure needs saying
+        /// here — success is the `RepoAdded` the repo service records.
+        let launchRepo (actor: Principal) (repo: RepoRef) (branch: string option) : Async<Result<unit, string>> =
+            async {
+                match! launchRepoRef.Value actor repo branch with
+                | Error reason -> return Error reason
+                | Ok work ->
+                    Async.StartImmediate (
+                        async {
+                            match! work with
+                            | Ok () -> ()
+                            | Error (failure: Commands.LaunchFailure) ->
+                                let! _ =
+                                    log.Append
+                                        ActorRef.System
+                                        (SessionEvent.GatedCommandFailed
+                                            { MessageId = mintMessageId ()
+                                              Tool = failure.Tool
+                                              Summary = failure.Summary
+                                              Author = Principal.toActor actor
+                                              Reason = failure.Reason })
+                                ()
+                        })
+                    return Ok ()
+            }
 
         // The gate for structured commands (Plan 15, stage 3b; Plan 23): every command
         // passes the classifier on its way to the dispatch table, and hands back the same
@@ -528,7 +566,7 @@ let startFull
                         terminals.Open ActorRef.Agent (Attached offer) title
                   IsOpen = terminals.IsOpen }
 
-        let capabilitiesFor (turnId: AgentTurnId) (turnActor: ActorRef) : AgentCapabilities =
+        let capabilitiesFor (turnId: AgentTurnId) (turnActor: Principal) : AgentCapabilities =
             { Terminals =
                 // Bound to THIS turn's actor (Plan 20), which is what a queued command records
                 // as the authority it borrows and what a WOKEN turn later resolves its own
@@ -612,7 +650,7 @@ let startFull
         // `Scheduler` (shared with the property harness); the Host wires it to this
         // session's doc, log, environment capabilities, and command surface.
         let scheduler =
-            Scheduler.create sessionId doc log runAgent capabilitiesFor emitUsage mintTurnId mintMessageId actorFor transcripts.ReadRange guidance initialConsumed
+            Scheduler.create sessionId doc log runAgent capabilitiesFor emitUsage mintTurnId mintMessageId principalFor transcripts.ReadRange guidance initialConsumed
         let drain () = scheduler.Drain ()
         let requestInterrupt = scheduler.RequestInterrupt
 
@@ -789,7 +827,8 @@ let startFull
                         terminals.Rearm
                         streamAttacher.Reattach
                         approveCapabilities
-                        actorFor
+                        launchRepo
+                        principalFor
                   OnPresence = fun payload -> broadcastPresenceExcept connectionId payload
                   // Live-mode traffic (Plan 13, stage 2e). Only the two peer-authored frames
                   // are acted on; a peer replaying a `TerminalRecord` or a `TerminalSnapshot`
@@ -949,9 +988,11 @@ let startFull
               Terminals = terminals
               SetCommandDispatch = fun table -> commandDispatch.Value <- table
               SetApproveCapabilities = fun approve -> approveCapabilitiesRef.Value <- approve
+              SetLaunchRepo = fun launch -> launchRepoRef.Value <- launch
               SetNotificationHandler = fun handle -> notificationHandler.Value <- Some handle
               Wake = scheduler.Wake
               RunGated = commandGate.Run
+              ResumeGated = commandGate.Read
               TerminalCommands = terminalCommands
               WaitForNextSessionEnd = waitForNextSessionEnd
               Connect = onConnection

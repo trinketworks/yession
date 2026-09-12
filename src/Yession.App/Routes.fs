@@ -125,6 +125,14 @@ type SessionRoute =
     | GitHubStatus
     /// One of the GitHub panel's write actions.
     | GitHub of action: GitHubAction
+    /// The repositories the caller's GitHub credential reaches, most recently pushed
+    /// first — or, with `?q=`, the ones whose name matches. What a person chooses a repo
+    /// FROM, answered on their own credential so the list is what `add_repo` can clone.
+    | GitHubRepos
+    /// The branches of one repository, so a choice can name one. The two segments are
+    /// carried raw for the terminal routes' reason: a route is a path, and making a
+    /// `RepoRef` of them is the server's job at dispatch.
+    | GitHubBranches of owner: string * repo: string
     /// The session's read-only query surface (Plan 15): one multiplexed SSE stream
     /// carrying every registered query's declaration and value. It is a STREAM rather
     /// than a fetch-plus-stream pair because its opening burst already is the snapshot,
@@ -192,6 +200,8 @@ module SessionRoute =
         | Claude action -> "claude/" + claudeSegment action
         | GitHubStatus -> "github"
         | GitHub action -> "github/" + githubSegment action
+        | GitHubRepos -> "github/repos"
+        | GitHubBranches (owner, repo) -> sprintf "github/repos/%s/%s/branches" owner repo
         | Queries -> "queries"
 
     /// A route as an absolute URL under a session's address — what a client outside a
@@ -274,6 +284,9 @@ module SessionRoute =
         | "POST", [ "github"; "poll" ] -> Some (GitHub GitHubAction.Poll)
         | "POST", [ "github"; "token" ] -> Some (GitHub GitHubAction.Token)
         | "POST", [ "github"; "disconnect" ] -> Some (GitHub GitHubAction.Disconnect)
+        | "GET", [ "github"; "repos" ] -> Some GitHubRepos
+        | "GET", [ "github"; "repos"; owner; repo; "branches" ] when owner <> "" && repo <> "" ->
+            Some (GitHubBranches (owner, repo))
         | "GET", [ "queries" ] -> Some Queries
         | _ -> None
 

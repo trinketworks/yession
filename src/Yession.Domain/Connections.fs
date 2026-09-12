@@ -32,19 +32,19 @@ module CredentialOwner =
         | UserOwner user -> UserScope user
         | LocalOwner -> LocalScope
 
-    /// The owner an event/turn actor holds credentials as. Only an attributed actor names
-    /// one: a `PeerRef` author is by definition someone nobody verified, so they own
-    /// nothing of their own — under an unattributed deployment their turn falls through to
+    /// The owner a turn's principal holds credentials as. Only an attributed one names
+    /// an owner: a peer is by definition someone nobody verified, so they own nothing of
+    /// their own — under an unattributed deployment their turn falls through to
     /// `LocalScope`, which the Manager grants that launch, and under an attributed one it
-    /// falls through to nothing at all. `None` for the non-human actors — an agent or
-    /// process can never own a connection credential.
-    let ofActor (actor: ActorRef) : CredentialOwner option =
-        match actor with
-        | UserRef user -> Some (UserOwner user)
-        | PeerRef _ -> None
-        // Nor a repo's file: what a `forward:` resolves against is the human whose
-        // launch the fold ran under, never the file that asked for it.
-        | ActorRef.Agent | SessionProcess | System | Configured _ -> None
+    /// falls through to nothing at all.
+    ///
+    /// Takes a `Principal` rather than an actor, so the actors that can never own a
+    /// credential — the agent, a process, the deployment, a repo's file — are not a case
+    /// answered `None` here but a value that cannot reach here.
+    let ofPrincipal (principal: Principal) : CredentialOwner option =
+        match principal with
+        | Principal.User user -> Some (UserOwner user)
+        | Principal.Peer _ -> None
 
     /// A stable one-line rendering for logs ("user:<sub>" / "local"). Never a value.
     let describe (owner: CredentialOwner) : string =
@@ -102,21 +102,21 @@ module ConnectionStatusList =
     /// told by the Manager, because the frame is the one thing the session is already
     /// given about this.
     ///
-    /// A peer's scope is not an arrival: `CredentialOwner.ofActor` refuses a peer, so a
+    /// A peer's scope is not an arrival: `CredentialOwner.ofPrincipal` refuses a peer, so a
     /// fold on a peer's authority would resolve exactly what the boot fold did. And a
     /// connection that LEFT is not one either — what a departure calls for is nothing,
     /// since a sandbox already started keeps what it was given.
     let arrivals
         (before: Map<SecretId, ConnectionStatus>)
         (after: Map<SecretId, ConnectionStatus>)
-        : ActorRef option list =
+        : CredentialFor list =
         after
         |> Map.toList
         |> List.choose (fun (id, _) ->
             if Map.containsKey id before then None
             else
                 match id.Scope with
-                | UserScope user -> Some (Some (UserRef user))
-                | SessionScope _ | LocalScope -> Some None
+                | UserScope user -> Some (CredentialFor.Person (Principal.User user))
+                | SessionScope _ | LocalScope -> Some CredentialFor.Deployment
                 | PeerScope _ -> None)
         |> List.distinct

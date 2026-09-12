@@ -28,7 +28,7 @@ open Yession.Peer
 /// the turn human's authority. These cases drive the capability directly, so they stand in
 /// for that binding — and there is no agent-shaped act without somebody named on it.
 let private agentActing =
-    Authority.agentFor (PeerRef (PeerId.create "turn-human" |> expect))
+    Authority.agentFor (Principal.Peer (PeerId.create "turn-human" |> expect))
 
 let private sid () = SessionId.create "in-memory-session" |> expect
 
@@ -101,7 +101,7 @@ let tests =
                     |> List.choose (fun e -> match e.Event with MessageSent m -> Some m | _ -> None)
                 match sent with
                 | [ message ] ->
-                    Expect.equal message.Author (PeerRef ada) "attributed to the peer whose draft it was"
+                    Expect.equal message.Author (Principal.Peer ada) "attributed to the peer whose draft it was"
                     Expect.equal message.Body "we should ask it to re-run the migration" "the co-written body"
                 | other -> failwithf "expected exactly one MessageSent, got %A" other
                 do! host.Stop ()
@@ -227,7 +227,7 @@ let tests =
                     |> expect
                 let! host = Host.startWithEnvironment None (Some makeSandboxes) None (sid ()) 0
 
-                let caller : WorkSandboxes.SandboxCaller = { Actor = ActorRef.Agent; Credential = ActorRef.Agent }
+                let caller : WorkSandboxes.SandboxCaller = { Actor = ActorRef.Agent; Credential = CredentialFor.Deployment }
                 let test = SandboxRef.parse "test" |> expect
                 let! started = host.Sandboxes.Ensure caller test SandboxRequest.defaults
                 Expect.isTrue (Result.isOk started) "the sandbox starts"

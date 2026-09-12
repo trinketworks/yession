@@ -138,7 +138,7 @@ module SyncedStateSync =
               "onBehalfOf",
               Encode.string
                   (AVal.constant
-                      (Authority.onBehalfOf q.Authority |> Option.map ActorRef.token |> Option.defaultValue ""))
+                      (Authority.onBehalfOf q.Authority |> Option.map Principal.token |> Option.defaultValue ""))
               "author", Encode.string (AVal.constant (ActorRef.token (Authority.author q.Authority)))
               "order", Encode.float (AVal.constant q.Order)
               // `"120x40"`, the same spelling the transcript's `r` record uses
@@ -357,23 +357,24 @@ module SyncedStateSync =
     let private pendingToDomain (h: HashMap<string, PendingFields>) : Map<QueueId, PendingAct> =
         (Map.empty, HashMap.toSeq h)
         ||> Seq.fold (fun acc (key, f) ->
-            match QueueId.create key, subjectTerminal f.Subject, ActorRef.ofToken f.Author with
-            | Ok id, Some terminal, Some author ->
+            // Recovered rather than authored, and DROPPED when it cannot be: an agent entry
+            // whose owner did not read back is not an act this process can run on anybody's
+            // credential, and the doc is shared with peers we do not control — so it is left
+            // where it is, like every other entry nobody can interpret, rather than run on a
+            // guess.
+            let authority =
+                ActorRef.ofToken f.Author
+                |> Option.bind (fun author ->
+                    Authority.recover author (f.OnBehalfOf |> Option.bind Principal.ofToken) |> Result.toOption)
+            match QueueId.create key, subjectTerminal f.Subject, authority with
+            | Ok id, Some terminal, Some authority ->
                 acc
                 |> Map.add
                     id
                     { QueueId = id
                       Terminal = terminal
                       Order = f.Order
-                      // Recovered rather than authored: an unreadable credential owner reads
-                      // as NONE, which makes the act run on nothing rather than on somebody
-                      // else's — the safe direction, and the dispatch refuses it with a
-                      // reason. The authoring constructors cannot express that state, which
-                      // is exactly why decoding does not go through them.
-                      Authority =
-                        Authority.rehydrate
-                            author
-                            (f.OnBehalfOf |> Option.bind ActorRef.ofToken)
+                      Authority = authority
                       // Absent reads as foreground, which is what every entry a person
                       // writes is and what every entry written before Plan 20 was.
                       Background = (f.Background = Some "true")
@@ -689,7 +690,7 @@ module SyncedStateSync =
                 if background then entry.set ("background", box "true") |> ignore
                 if stdin then entry.set ("stdin", box "true") |> ignore
                 Authority.onBehalfOf authority
-                |> Option.iter (fun actor -> entry.set ("onBehalfOf", box (ActorRef.token actor)) |> ignore)),
+                |> Option.iter (fun principal -> entry.set ("onBehalfOf", box (Principal.token principal)) |> ignore)),
             processOrigin)
 
     /// Remove consumed pending entries in one transaction under the process origin — the

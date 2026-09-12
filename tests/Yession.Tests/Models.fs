@@ -234,7 +234,7 @@ let private routeTests =
 
         testCaseAsync "the catalogue crosses as the shared codec, on the asking party's authority" <|
             async {
-                let mutable askedFor : ActorRef option = None
+                let mutable askedFor : CredentialFor option = None
                 let! url, server =
                     startClaudeRoutes (fun actor ->
                         async {
@@ -250,7 +250,7 @@ let private routeTests =
                     "and it is the catalogue, decoded by the codec the browser uses"
                 Expect.equal
                     askedFor
-                    (Some (UserRef (UserId.create "ada" |> expect)))
+                    (Some (CredentialFor.Person (Principal.User (UserId.create "ada" |> expect))))
                     "asked on the credential of whoever is looking"
             }
 

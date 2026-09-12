@@ -763,6 +763,16 @@ module Style =
         + "max-md:h-14 max-md:items-center max-md:gap-2 max-md:px-4 max-md:pb-4 "
         + Stroke.dividerBottom
 
+    /// A slow catch-up's progress, drawn ON the header's bottom rule: the rule is the one
+    /// line every screen has under the title, and a bar growing along it says "loading, this
+    /// far" without taking a pixel of room from the band — which on a phone is 56px and
+    /// geometry-pinned. Two pixels tall over the one-pixel rule, so it reads as a bar and not
+    /// as the rule changing colour. Its width moves once per paced render (`Render`, every
+    /// half second while a client stays behind), and the transition carries it between.
+    let catchUpBar =
+        "absolute left-0 -bottom-px h-0.5 bg-blue pointer-events-none "
+        + "transition-[width] duration-500 ease-linear motion-reduce:transition-none"
+
     /// The header's right-hand group: sync status, and — only while the sidebar is off screen —
     /// the agent's absence. `pb-[1px]` is optical, not rhythm: it drops the 11px caps line's
     /// baseline onto the wordmark/title baseline (pb-1 left it 3px high, measured live). On a
@@ -1105,6 +1115,23 @@ module Style =
     /// real message appears exactly where the caret was standing, rather than stepping sideways
     /// as it replaces it.
     let timelineIdle = "pl-8 max-md:pl-8"
+
+    // --- The launch surface ---------------------------------------------------------------
+    // Stands where the timeline's first line will: on the timeline's own rail, in the
+    // timeline's own type, so it reads as the session's first page rather than a dialog over
+    // it. A candidate is a listed row (`rowBase`'s idiom without the leading edge — a row
+    // that is not yet anything has no state to show on one), lifting under the pointer.
+    let launch = "flex flex-col gap-3 pl-8 max-md:pl-8 pr-8 max-md:pr-4 py-2 max-w-2xl"
+    let launchLead = cls [ body; "text-ink-dim" ]
+    let launchList = "flex flex-col"
+    let launchCandidate =
+        cls [ "w-full text-left flex items-baseline gap-3 px-2 -mx-2 py-1.5 bg-transparent border-0 cursor-pointer"
+              "hover:bg-surface-2 focus-visible:bg-surface-2 transition-colors"; focusRing ]
+    let launchCandidateName = "font-terminal text-code text-ink shrink-0"
+    let launchCandidateDescription = cls [ small; "truncate min-w-0" ]
+    let launchChoice = "flex flex-col gap-3"
+    let launchChoiceName = "font-terminal text-code text-ink"
+    let launchActions = "flex flex-wrap items-center gap-2"
     let caretIdle = caret + " opacity-50"
 
 
@@ -1186,8 +1213,10 @@ module Style =
     /// `readingColumn`, the same measure a message group wears, because what it divides is
     /// that column: a rule running the whole scroller while the words stop at 38rem reads as
     /// a line drawn on the page rather than a break in the conversation.
+    /// `relative` because a collaborator's caret in the name is placed against this box: the
+    /// marker is positioned from the input's own offsets, and those are its offset parent's.
     let chapterRule =
-        cls [ "flex items-center gap-2.5 border-t border-hair pt-3 mt-6 -mb-1 max-md:mt-4"
+        cls [ "relative flex items-center gap-2.5 border-t border-hair pt-3 mt-6 -mb-1 max-md:mt-4"
               readingColumn; "max-md:max-w-none" ]
 
     /// The mark on it: a dot at the reading edge, so a chapter has an anchor the eye finds
@@ -1969,6 +1998,13 @@ module Style =
     /// height. On a viewport that never changes (every desktop, and the test harnesses) the
     /// two units are the same number.
     let app = "flex h-dvh overflow-hidden bg-bg text-ink font-ui antialiased"
+
+    /// The same ground and face as `app`, on a page that is a DOCUMENT rather than a shell: the
+    /// Manager's standalone pages (`/open` while a session launches, a refusal with a way
+    /// back). No `h-dvh`/`overflow-hidden` — a few paragraphs scroll like paragraphs — but the
+    /// colours are `app`'s exactly, because the one thing these pages must not do is flash a
+    /// different ground between two surfaces that share one.
+    let standalone = "bg-bg text-ink font-ui antialiased"
 
     /// Tailwind, built locally into a stylesheet and served by both the Session Process and
     /// the Manager UI — never a CDN (local first). The utilities and the theme tokens come

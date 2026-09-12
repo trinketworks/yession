@@ -173,20 +173,70 @@ module PrTransition =
 // --- event payloads (the RepoFacts shape: MessageId + payload + attribution) -----------
 
 /// A party started watching a pull request.
+///
+/// Private, with `PrWatched.create` the only way to build one, because the record holds a
+/// derived fact beside the fact it is derived from: WHOSE watch this is comes from the
+/// authority it was started on, and a watch on nobody's credential — the deployment's own,
+/// which a repo file's boot fold acts on — is not a watch, because there would be nobody to
+/// keep looking as and nobody to wake. Two public fields let a caller write them apart; one
+/// constructor asks the question once, and the readers below get the answer it gave.
+///
+/// The watcher used to be whoever appended the event. For a watch the agent started that
+/// was the agent, so the polls ran on nobody's credential and the wake the merge caused
+/// dispatched a turn as the agent, which failed saying "sign in". A `Principal` cannot be
+/// the agent, and a constructor cannot be skipped — which between them is what closes it.
 type PrWatched =
-    { /// The timeline note's identity, minted by the Process at append time.
-      MessageId : MessageId
-      Pr : PrRef
-      /// The state at the moment the watch began — the durable BASELINE transition
-      /// detection compares against. Folded from the log (`PrWatches.fs`), this is what
-      /// makes a restart re-announce nothing and a merge that happened while the process
-      /// was down still get announced: the log says what was last known, not memory.
-      Initial : PrSnapshot
-      /// Whose watch: the note's attribution, the credential every later poll resolves
-      /// on behalf of, and the actor any wake this watch causes would run as.
-      Actor : ActorRef }
+    private
+        { /// The timeline note's identity, minted by the Process at append time.
+          PwMessageId : MessageId
+          PwPr : PrRef
+          /// The state at the moment the watch began — the durable BASELINE transition
+          /// detection compares against. Folded from the log (`PrWatches.fs`), this is what
+          /// makes a restart re-announce nothing and a merge that happened while the process
+          /// was down still get announced: the log says what was last known, not memory.
+          PwInitial : PrSnapshot
+          /// Who asked, and on whose authority: the note's attribution is the author (the
+          /// agent, when it was the agent's `watch_pr`); the credential is what the watcher
+          /// below was read off.
+          PwAuthority : Authority
+          /// Whose watch it is: the credential every later poll resolves on behalf of, and the
+          /// principal any wake this watch causes runs as. The turn human's when the agent
+          /// asked — the same split `RepoCaller` and `SandboxCaller` make, and for the same
+          /// reason: the agent acts, and has no credential of its own.
+          PwWatcher : Principal }
 
-and PrUnwatched =
+module PrWatched =
+
+    /// Whose watch an authority would start, or why it cannot start one. The rule, stated
+    /// once: `create` applies it, and the verb that has to refuse BEFORE it has a snapshot
+    /// to create with asks it directly.
+    let watcherOf (pr: PrRef) (authority: Authority) : Result<Principal, string> =
+        match Authority.credential authority with
+        | CredentialFor.Person watcher -> Ok watcher
+        | CredentialFor.Deployment ->
+            Error (
+                sprintf
+                    "%s cannot be watched on the deployment's own credential — a watch keeps looking as somebody, and wakes them"
+                    (PrRef.render pr))
+
+    let create (messageId: MessageId) (authority: Authority) (pr: PrRef) (initial: PrSnapshot) : Result<PrWatched, string> =
+        watcherOf pr authority
+        |> Result.map (fun watcher ->
+            { PwMessageId = messageId
+              PwPr = pr
+              PwInitial = initial
+              PwAuthority = authority
+              PwWatcher = watcher })
+
+    let messageId (p: PrWatched) : MessageId = p.PwMessageId
+    let pr (p: PrWatched) : PrRef = p.PwPr
+    let initial (p: PrWatched) : PrSnapshot = p.PwInitial
+    let authority (p: PrWatched) : Authority = p.PwAuthority
+    /// The note's attribution: who asked.
+    let actor (p: PrWatched) : ActorRef = Authority.author p.PwAuthority
+    let watcher (p: PrWatched) : Principal = p.PwWatcher
+
+type PrUnwatched =
     { MessageId : MessageId
       Pr : PrRef
       Actor : ActorRef }
@@ -195,7 +245,7 @@ and PrUnwatched =
 /// `ActorRef.System` — nobody in the session did it — while the payload names whose
 /// watch noticed, because the projection reads events, not envelopes, and "whose news
 /// is this" is the fact attribution and credentials both hang off.
-and PrTransitioned =
+type PrTransitioned =
     { MessageId : MessageId
       Pr : PrRef
       Transition : PrTransition
@@ -203,4 +253,6 @@ and PrTransitioned =
       /// and so the fold can advance its baseline from the event alone.
       State : PrState
       Checks : ChecksRollup
-      Watcher : ActorRef }
+      /// `PrWatched.watcher`, carried forward: whose credential noticed, and who the turn
+      /// this wakes runs as.
+      Watcher : Principal }

@@ -30,6 +30,8 @@ let private expect result =
 
 let private sessionId = SessionId.create "sess-sandboxes" |> expect
 let private ada = UserRef (UserId.create "ada" |> expect)
+/// Ada as a credential is lent on: the same person, where the type asks for a principal.
+let private adasCredential = CredentialFor.Person (Principal.User (UserId.create "ada" |> expect))
 let private fixedClock () = DateTimeOffset (2026, 1, 1, 0, 0, 0, TimeSpan.Zero)
 let private newLog () : EventLog<SessionEvent> = InMemoryEventLog.create sessionId fixedClock
 
@@ -111,7 +113,7 @@ let private registry (log: EventLog<SessionEvent>) (credentials: WorkSandboxes.C
     let sandboxes, built, _ = registryWithSpecs log credentials
     sandboxes, built
 
-let private caller : WorkSandboxes.SandboxCaller = { Actor = ActorRef.Agent; Credential = ada }
+let private caller : WorkSandboxes.SandboxCaller = { Actor = ActorRef.Agent; Credential = adasCredential }
 
 /// A source that provisions the given env into any sandbox, for any actor, or holds nothing.
 /// Records what it gave and what it was asked to take back, which is the pair the revoke
@@ -423,6 +425,61 @@ let private ensureTests =
                     Expect.isTrue (reason.Contains "start_work_sandbox") "and how to get one"
             }
 
+        // What an agent writes after reading "started sandbox octo/hello:dev" is `dev`, and
+        // there is nothing else it could mean. Three sessions were told to start one instead.
+        testCaseAsync "a bare name finds the one repo sandbox that carries it" <|
+            async {
+                let log = newLog ()
+                let sandboxes, _ = registry log []
+                let! _ = sandboxes.Ensure caller (sandbox "octo/hello:dev") SandboxRequest.defaults
+                match! (sandboxes.EnvironmentFor (sandbox "dev")).Ensure None "a terminal was opened" with
+                | EnvironmentAvailable -> ()
+                | EnvironmentUnavailable reason -> failwithf "expected octo/hello:dev to answer for 'dev': %s" reason
+            }
+
+        testCaseAsync "a bare name two repos both carry is refused, naming both" <|
+            async {
+                let log = newLog ()
+                let sandboxes, _ = registry log []
+                let! _ = sandboxes.Ensure caller (sandbox "octo/hello:dev") SandboxRequest.defaults
+                let! _ = sandboxes.Ensure caller (sandbox "octo/world:dev") SandboxRequest.defaults
+                match! (sandboxes.EnvironmentFor (sandbox "dev")).Ensure None "a terminal was opened" with
+                | EnvironmentAvailable -> failwith "expected a refusal"
+                | EnvironmentUnavailable reason ->
+                    Expect.isTrue (reason.Contains "'octo/hello:dev'") "names the one"
+                    Expect.isTrue (reason.Contains "'octo/world:dev'") "and the other"
+            }
+
+        // The refusal says what there IS. "start_work_sandbox creates one" to somebody
+        // whose sandbox is running under a name they mis-spelt sends them to create a
+        // second, which the repo's file then refuses.
+        testCaseAsync "an unknown name is refused naming the sandboxes that exist" <|
+            async {
+                let log = newLog ()
+                let sandboxes, _ = registry log []
+                let! _ = sandboxes.Ensure caller (sandbox "octo/hello:gate") SandboxRequest.defaults
+                match! (sandboxes.EnvironmentFor (sandbox "dev")).Ensure None "a terminal was opened" with
+                | EnvironmentAvailable -> failwith "expected a refusal"
+                | EnvironmentUnavailable reason ->
+                    Expect.isTrue (reason.Contains "'default'") "the session's own"
+                    Expect.isTrue (reason.Contains "'octo/hello:gate'") "and the repo's"
+                match! sandboxes.Stop caller (sandbox "dev") with
+                | Ok () -> failwith "expected a refusal"
+                | Error reason -> Expect.isTrue (reason.Contains "'octo/hello:gate'") "a stop says the same"
+            }
+
+        testCaseAsync "a bare name stops the one repo sandbox that carries it" <|
+            async {
+                let log = newLog ()
+                let sandboxes, _ = registry log []
+                let! _ = sandboxes.Ensure caller (sandbox "octo/hello:dev") SandboxRequest.defaults
+                let! stopped = sandboxes.Stop caller (sandbox "dev")
+                expect stopped
+                Expect.isFalse
+                    (sandboxes.Listed () |> List.exists (fun entry -> entry.Ref = sandbox "octo/hello:dev"))
+                    "octo/hello:dev is gone"
+            }
+
         // What the sandbox HOLDS is asked of the sandbox. This manager never sees a policy —
         // it hands a spec to a backend and is told an environment came up — so the one thing
         // it could have done wrong here is compute an answer of its own, and the one thing
@@ -467,7 +524,7 @@ let private credentialTests =
                 match startedEvents events with
                 | [ e ] ->
                     Expect.equal e.Forwarded [ "github" ] "the event names the credential"
-                    Expect.equal e.CredentialOwner (Some ada) "and whose it is — the turn human's, not the agent's"
+                    Expect.equal e.CredentialOwner (Some adasCredential) "and whose it is — the turn human's, not the agent's"
                     Expect.equal e.Actor ActorRef.Agent "while the acting party is the agent"
                 | other -> failwithf "expected one start, got %A" other
 
@@ -515,7 +572,7 @@ let private credentialTests =
                 let sandboxes, built = registry log [ githubCredential None ]
                 let repo = RepoRef.create "octo/hello" |> expect
                 let file : WorkSandboxes.SandboxCaller =
-                    { Actor = ActorRef.Configured repo; Credential = ActorRef.Configured repo }
+                    { Actor = ActorRef.Configured repo; Credential = CredentialFor.Deployment }
                 match! sandboxes.Ensure file (sandbox "octo/hello:dev") (forwarding [ "github" ]) with
                 | Ok _ -> failwith "expected a refusal"
                 | Error e ->
@@ -719,7 +776,7 @@ let private timelineTests =
                           Description = None
                           Checkout = None
                           Forwarded = [ "github" ]
-                          CredentialOwner = Some ada
+                          CredentialOwner = Some adasCredential
                           Realisation = []
                           Actor = ActorRef.Agent } }
             let proj, _ = ConversationProjection.applyEvents None [ envelope ] ConversationProjection.empty

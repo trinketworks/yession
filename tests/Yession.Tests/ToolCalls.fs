@@ -38,7 +38,7 @@ let private expect result =
     | Error e -> failwithf "invariant: %A" e
 
 let private sessionId = SessionId.create "sess-tool-calls" |> expect
-let private ada = UserRef (UserId.create "ada" |> expect)
+let private ada = Principal.User (UserId.create "ada" |> expect)
 
 // --- the harness -------------------------------------------------------------------------
 
@@ -55,7 +55,10 @@ type ToolSession =
       Events : unit -> Async<SessionEvent list>
       /// Move the session's clock. The gate's deadline is measured against this, so a test
       /// crosses it without spending it, and without depending on how long anything took.
-      Advance : TimeSpan -> unit }
+      Advance : TimeSpan -> unit
+      /// A person's first repo, through the same gate a turn's `add_repo` goes through —
+      /// composed the way `SessionMain` composes it, over the same gate as `Call`.
+      Launch : Commands.LaunchRepo }
 
 /// Compose a session's tool surface over the services it runs against. The composition is
 /// the production one — the gate the Host builds, the dispatch table and per-turn bindings
@@ -125,7 +128,8 @@ let openToolSession (services: Commands.CommandServices) : ToolSession =
       Advance =
         fun span ->
             clock <- clock + span
-            notifyChanged () }
+            notifyChanged ()
+      Launch = Commands.launchRepo services gate.Run gate.Read }
 
 /// A repo service that answers `add_repo` with whatever the test says, and refuses
 /// everything else — the leaf substituted, and nothing above it.
@@ -143,7 +147,7 @@ let private reposAnswering (add: RepoRef -> Async<Result<RepoListing, string>>) 
 /// A pull request service that answers `create_pr` with whatever the test says, and refuses
 /// the rest — the leaf substituted, like the repo service above it.
 let private prsOpening (create: PrDraft -> Async<Result<string, string>>) : PrWatches.PrService =
-    { Watch = fun _ _ _ -> async { return Error "not part of this test" }
+    { Watch = fun _ _ -> async { return Error "not part of this test" }
       Unwatch = fun _ _ -> async { return Error "not part of this test" }
       Create = fun _ draft -> create draft }
 
@@ -414,4 +418,198 @@ let private tests' =
 
     ]
 
-let tests = testList "Tool calls" [ tests' ]
+// --- a person's first repo -----------------------------------------------------------------
+// The launch surface's one act, through the same gate. What the chain has to hold here is
+// different from a turn's: there is no tool result, so what the ATTRIBUTION says and what a
+// failure becomes are the only record — and the act is three gated calls in sequence, each
+// waited out, which is the one thing no single tool call does.
+
+/// A repo service that HOLDS its listing, so the launch's admission rule has something to
+/// read, and records who each verb was called as.
+type private HeldRepos =
+    { Service : Repos.ReposService
+      Calls : ResizeArray<string * ActorRef> }
+
+let private reposHolding (initial: RepoListing list) (clone: RepoRef -> Result<RepoListing, string>) : HeldRepos =
+    let mutable listings = initial
+    let calls = ResizeArray<string * ActorRef> ()
+    let denied _ = async { return Error "not part of this test" }
+    { Calls = calls
+      Service =
+        { AddRepo =
+            fun caller repo ->
+                async {
+                    calls.Add ("add_repo " + RepoRef.value repo, caller.Actor)
+                    match clone repo with
+                    | Error e -> return Error e
+                    | Ok listing ->
+                        listings <- listings @ [ listing ]
+                        return Ok listing
+                }
+          ListRepos = fun () -> async { return Ok listings }
+          SwitchBranch =
+            fun caller repo branch _ ->
+                async {
+                    calls.Add (sprintf "switch_branch %s -> %s" (RepoRef.value repo) branch, caller.Actor)
+                    listings <- listings |> List.map (fun l -> if l.Repo = repo then { l with Branch = branch } else l)
+                    return Ok (listings |> List.find (fun l -> l.Repo = repo))
+                }
+          FetchRepo = fun _ _ -> async { return Error "not part of this test" }
+          RepoStatus = denied
+          RepoLog = denied
+          RepoDiff = denied
+          RemoveRepo = fun _ _ _ -> async { return Error "not part of this test" } } }
+
+/// Services over a held repo service whose profile writes land in the same call record.
+let private servicesRecording (held: HeldRepos) : Commands.CommandServices =
+    { servicesOver held.Service with
+        Terminals =
+            fun () ->
+                { SessionTerminals.unavailable with
+                    SetProfile =
+                        fun actor sandbox cwd ->
+                            async {
+                                held.Calls.Add (
+                                    sprintf "set_shell_profile %s %s" (SandboxRef.render sandbox) (defaultArg cwd "(cleared)"),
+                                    actor)
+                                return Ok "set"
+                            } } }
+
+let private hello = RepoRef.create "octo/hello" |> expect
+
+/// The person, as an act is attributed to them.
+let private adaActs = ada
+/// Ada as the log records her.
+let private adaActor = Principal.toActor ada
+
+let private cloned (branch: string) (repo: RepoRef) : Result<RepoListing, string> =
+    Ok { Repo = repo; Branch = branch; Dirty = false; Path = "repos/octo/hello" }
+
+/// Admit, then run the work in line — what the Host does in the background.
+let private launched (session: ToolSession) (repo: RepoRef) (branch: string option) =
+    async {
+        match! session.Launch adaActs repo branch with
+        | Error reason -> return Error (sprintf "not admitted: %s" reason)
+        | Ok work ->
+            match! work with
+            | Ok () -> return Ok ()
+            | Error (failure: Commands.LaunchFailure) -> return Error (sprintf "%s: %s" failure.Summary failure.Reason)
+    }
+
+let private launchTests =
+    testList "A person's first repo" [
+
+        testCaseAsync "a session that already has a repo is not launched into, and names the one it has" <|
+            async {
+                let held = reposHolding [ { Repo = hello; Branch = "main"; Dirty = false; Path = "repos/octo/hello" } ] (cloned "main")
+                let session = openToolSession (servicesRecording held)
+                let! admitted = session.Launch adaActs (RepoRef.create "octo/other" |> expect) None
+                match admitted with
+                | Ok _ -> failwith "admitted a second repo"
+                | Error reason -> Expect.stringContains reason "octo/hello" "the refusal says which repo is already here"
+                Expect.isEmpty held.Calls "and nothing was proposed to the gate"
+            }
+
+        testCaseAsync "the clone is attributed to the person, not the agent" <|
+            async {
+                let held = reposHolding [] (cloned "main")
+                let session = openToolSession (servicesRecording held)
+                let! outcome = launched session hello None
+                expect outcome
+                let addCall = held.Calls |> Seq.find (fun (call, _) -> call = "add_repo octo/hello")
+                Expect.equal (snd addCall) adaActor "the repo service was called as ada"
+            }
+
+        testCaseAsync "a choice of the clone's own branch is not a switch; another is" <|
+            async {
+                let held = reposHolding [] (cloned "main")
+                let session = openToolSession (servicesRecording held)
+                let! sameBranch = launched session hello (Some "main")
+                expect sameBranch
+                Expect.isFalse
+                    (held.Calls |> Seq.exists (fun (call, _) -> call.StartsWith "switch_branch"))
+                    "the default branch was chosen, so no switch was made"
+
+                let other = reposHolding [] (cloned "main")
+                let another = openToolSession (servicesRecording other)
+                let! switched = launched another hello (Some "feature/x")
+                expect switched
+                Expect.isTrue
+                    (other.Calls |> Seq.exists (fun (call, who) -> call = "switch_branch octo/hello -> feature/x" && who = adaActor))
+                    "a branch other than the clone's is switched to, as the person"
+            }
+
+        testCaseAsync "terminals start in the checkout afterwards" <|
+            async {
+                let held = reposHolding [] (cloned "main")
+                let session = openToolSession (servicesRecording held)
+                let! outcome = launched session hello None
+                expect outcome
+                Expect.equal
+                    (held.Calls |> Seq.last)
+                    ("set_shell_profile default repos/octo/hello", adaActor)
+                    "the default sandbox's profile points at the path the clone answered with"
+            }
+
+        // A turn's `add_repo` YIELDS at the process deadline and the model picks it up; a
+        // launch has nobody to pick it up, and the next call depends on the clone being
+        // there — so the yield is resumed, however many deadlines the clone outlives.
+        testCaseAsync "a clone that outlives the gate's deadline is waited out, not abandoned" <|
+            async {
+                let mutable finish : unit -> unit = ignore
+                let cloning = Async.FromContinuations (fun (cont, _, _) -> finish <- fun () -> cont ())
+                let held : HeldRepos =
+                    let slow = reposHolding [] (cloned "main")
+                    { Calls = slow.Calls
+                      Service =
+                        { slow.Service with
+                            AddRepo =
+                                fun caller repo ->
+                                    async {
+                                        do! cloning
+                                        return! slow.Service.AddRepo caller repo
+                                    } } }
+                let session = openToolSession (servicesRecording held)
+                let! work =
+                    async {
+                        match! session.Launch adaActs hello None with
+                        | Error reason -> return failwithf "not admitted: %s" reason
+                        | Ok work -> return work
+                    }
+                let! running = Async.StartChild work
+                do! Async.Sleep 50
+                session.Advance (TimeSpan.FromSeconds 600.0)
+                do! Async.Sleep 50
+                session.Advance (TimeSpan.FromSeconds 600.0)
+                do! Async.Sleep 50
+                Expect.isFalse
+                    (held.Calls |> Seq.exists (fun (call, _) -> call.StartsWith "set_shell_profile"))
+                    "two deadlines on, the clone is still the thing being waited for"
+                finish ()
+                let! outcome = running
+                expect outcome
+                Expect.isTrue
+                    (held.Calls |> Seq.exists (fun (call, _) -> call.StartsWith "set_shell_profile"))
+                    "and once it lands, the rest follows"
+            }
+
+        testCaseAsync "a clone that fails is a failure that names the call and the reason" <|
+            async {
+                let held = reposHolding [] (fun _ -> Error "github says not found")
+                let session = openToolSession (servicesRecording held)
+                match! session.Launch adaActs hello None with
+                | Error reason -> failwithf "not admitted: %s" reason
+                | Ok work ->
+                    match! work with
+                    | Ok () -> failwith "a failed clone reported success"
+                    | Error failure ->
+                        Expect.equal failure.Tool "add_repo" "which call"
+                        Expect.equal failure.Summary "add_repo octo/hello" "as the record will show it"
+                        Expect.equal failure.Reason "github says not found" "and why"
+                Expect.isFalse
+                    (held.Calls |> Seq.exists (fun (call, _) -> call.StartsWith "set_shell_profile"))
+                    "nothing after the failed step ran"
+            }
+    ]
+
+let tests = testList "Tool calls" [ tests'; launchTests ]

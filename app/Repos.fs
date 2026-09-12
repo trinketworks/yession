@@ -205,7 +205,13 @@ type ReposConfig =
       /// The GitHub token for the network verbs, resolved for the CREDENTIAL actor a
       /// caller names (Plan 08 precedence, applied by the composition). None =
       /// anonymous — public repos still clone; a private one fails with git's own words.
-      ResolveToken : ActorRef -> Async<string option>
+      ResolveToken : CredentialFor -> Async<string option>
+      /// What the provider calls this repo NOW, on this credential — `None` when it cannot
+      /// say (unreachable, rate-limited, or a repo this credential cannot see, which the
+      /// clone will say in its own words). A clone follows a renamed repo's old name with a
+      /// redirect and keeps an `origin` the provider no longer answers to, so a name the
+      /// provider has moved on from is refused before it is cloned, with the current one.
+      Canonical : string option -> RepoRef -> Async<RepoRef option>
       /// A network verb failed while spending the credential resolved for this actor.
       ///
       /// Beside `ResolveToken` deliberately, because they are two halves of one story: a
@@ -214,7 +220,7 @@ type ReposConfig =
       /// decides what the failure MEANS — git's stderr cannot tell "your token expired" from
       /// "that repo does not exist" (`Repository not found` is what github.com says for
       /// both), so the composition asks the provider, which is the only place that knows.
-      OnNetworkFailure : ActorRef -> string -> Async<unit>
+      OnNetworkFailure : CredentialFor -> string -> Async<unit>
       Log : EventLog<SessionEvent> }
 
 /// Who is calling a mutating/network verb. The two halves genuinely differ for the
@@ -224,7 +230,7 @@ type ReposConfig =
 [<RequireQualifiedAccess>]
 type RepoCaller =
     { Actor : ActorRef
-      Credential : ActorRef }
+      Credential : CredentialFor }
 
 /// The Process-side repo manager. Caller-taking members append the acting party onto
 /// the event; the read-only inspectors take none because they record nothing.
@@ -453,6 +459,16 @@ let create (config: ReposConfig) : Result<ReposService, string> =
         let cloneIntoPlace (caller: RepoCaller) (repo: RepoRef) : Async<Result<RepoListing, string>> =
             async {
                 let! token = config.ResolveToken caller.Credential
+                match! config.Canonical token repo with
+                | Some current when current <> repo ->
+                    return
+                        Error (
+                            sprintf
+                                "github now calls %s %s — add %s instead. A checkout made under the old name clones through a redirect and keeps an origin the provider no longer answers to by that name."
+                                (RepoRef.value repo)
+                                (RepoRef.value current)
+                                (RepoRef.value current))
+                | _ ->
                 // Relative, because the sandbox's working directory is the repos dir; git
                 // creates the leading directories itself.
                 let relative = sprintf "%s/%s" stagingDirName (string (Guid.NewGuid ()))
@@ -637,8 +653,8 @@ let create (config: ReposConfig) : Result<ReposService, string> =
 /// The agent-facing capability set for one turn: events attribute the AGENT (it is
 /// the acting party), the token is the TURN HUMAN's (Plan 08 — no borrowing across
 /// actors, and the agent has no scope of its own).
-let agentCaller (turnActor: ActorRef) : RepoCaller =
-    { Actor = ActorRef.Agent; Credential = turnActor }
+let agentCaller (turnActor: Principal) : RepoCaller =
+    { Actor = ActorRef.Agent; Credential = CredentialFor.Person turnActor }
 
 // --- the `repos` query (Plan 15) ----------------------------------------------------------
 // What was the Repos PANEL is now a registered query, and the panel's three write actions

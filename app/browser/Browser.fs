@@ -755,6 +755,43 @@ let private parseDeviceBegin (body: string) : {| userCode: string; verificationU
 [<Emit("(function (body) { try { const o = JSON.parse(body); return { status: o.status || '', interval: o.interval || 0 } } catch { return { status: '', interval: 0 } } })($0)")>]
 let private parseDevicePoll (body: string) : {| status: string; interval: int |} = jsNative
 
+// --- The launch surface's reads ---------------------------------------------------------------
+// Two GETs, answered on this person's own credential by the session, read in the codec the
+// session encoded them with. A failure carries its status, because a 401 is the one answer
+// with a button (connect GitHub) rather than a retry.
+
+[<Emit("""fetch($0, { cache: 'no-store' })
+  .then(async r => ({ ok: r.ok, status: r.status, body: await r.text() }))
+  .catch(e => ({ ok: false, status: 0, body: String((e && e.message) || e) }))""")>]
+let private getText (url: string) : JS.Promise<{| ok: bool; status: int; body: string |}> = jsNative
+
+let private fetchRepoListing (query: string) : Async<LaunchListing> =
+    async {
+        let url =
+            match query.Trim () with
+            | "" -> SessionRoute.relative GitHubRepos
+            | text -> SessionRoute.relative GitHubRepos + "?q=" + urlEncode text
+        let! reply = getText url |> Async.AwaitPromise
+        if not reply.ok then
+            return ListingUnavailable ((if reply.body = "" then sprintf "the session answered %d" reply.status else reply.body), reply.status = 401)
+        else
+            match Codec.fromString Codec.repoCandidates reply.body with
+            | Ok candidates -> return ListingLoaded candidates
+            | Error reason -> return ListingUnavailable (reason, false)
+    }
+
+let private fetchRepoBranches (repo: RepoRef) : Async<LaunchBranches> =
+    async {
+        let owner, name = RepoRef.owner repo, RepoRef.repo repo
+        let! reply = getText (SessionRoute.relative (GitHubBranches (owner, name))) |> Async.AwaitPromise
+        if not reply.ok then
+            return BranchesUnavailable (if reply.body = "" then sprintf "the session answered %d" reply.status else reply.body)
+        else
+            match Codec.fromString Codec.branchNames reply.body with
+            | Ok branches -> return BranchesLoaded branches
+            | Error reason -> return BranchesUnavailable reason
+    }
+
 // --- The read surface's stream (Plan 15) --------------------------------------------------
 // `EventSource` rather than the repo's fetch-based SSE reader: it is the browser's own SSE
 // client, it reconnects on its own, and it carries the session cookie same-origin — which
@@ -1112,6 +1149,25 @@ let private start () =
               OpenTerminal = fun title -> connectionRef |> Option.iter (fun c -> c.OpenTerminal title)
               ApproveRepoCapabilities =
                 fun repo granted -> connectionRef |> Option.iter (fun c -> c.ApproveRepoCapabilities repo granted)
+              LaunchSearch =
+                fun query ->
+                    dispatchRef (LaunchMsg (LaunchListingArrived ListingUnknown))
+                    Async.StartImmediate (
+                        async {
+                            let! listing = fetchRepoListing query
+                            dispatchRef (LaunchMsg (LaunchListingArrived listing))
+                        })
+              LaunchBranches =
+                fun repo ->
+                    Async.StartImmediate (
+                        async {
+                            let! branches = fetchRepoBranches repo
+                            dispatchRef (LaunchMsg (LaunchBranchesArrived (repo, branches)))
+                        })
+              LaunchStart =
+                fun repo branch ->
+                    connectionRef
+                    |> Option.iter (fun c -> dispatchRef (LaunchMsg (LaunchSent (c.AddRepo repo branch))))
               CloseTerminal = fun id -> connectionRef |> Option.iter (fun c -> c.CloseTerminal id)
               TakeTerminal = fun id -> connectionRef |> Option.iter (fun c -> c.TakeTerminal id)
               ReleaseTerminal = fun id -> connectionRef |> Option.iter (fun c -> c.ReleaseTerminal id)
@@ -1157,10 +1213,17 @@ let private start () =
                       ReportFocus = sendFocus
                       ResizeTerminal = fun id cols rows -> connectionRef |> Option.iter (fun c -> c.ResizeTerminal id cols rows)
                       Http = httpGet } }
+        // The launch surface's listing is asked for ONCE, the first time the surface is
+        // offered: it has no mount hook of its own, and asking on every render would ask on
+        // every keystroke.
+        let mutable launchListingAsked = false
         let setState (model: ClientModel) (dispatch: Ylmish.Program.Message<ClientMsg> -> unit) =
             dispatchRef <- fun msg -> dispatch (Ylmish.Program.Message.User msg)
             latestModel <- model
             renderer.SetState model
+            if not launchListingAsked && ClientModel.launchOffered model then
+                launchListingAsked <- true
+                actions.LaunchSearch model.Launch.Query
 
         Client.makeProgram doc initial
         |> Program.withSetState setState

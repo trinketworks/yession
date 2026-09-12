@@ -77,7 +77,7 @@ type CommandServices =
       /// is idempotent — a declaration that is already a running sandbox is an ask that
       /// changes nothing and records nothing, which is what every mutating command being
       /// ensure-shaped bought.
-      Refold : ActorRef option -> Async<unit> }
+      Refold : CredentialFor -> Async<unit> }
 
 let private encodeArgs (values: string list) : string = Codec.toString Codec.gatedArgs values
 
@@ -104,7 +104,7 @@ let private andRefold
         match result with
         // Whoever the verb ran on the authority of. A `forward:` in a file the fold picks up
         // resolves for THEM, by the same Plan 08 precedence the verb itself used.
-        | Ok _ -> do! services.Refold (Some (Authority.effective invocation.Authority))
+        | Ok _ -> do! services.Refold (Authority.credential invocation.Authority)
         | Error _ -> ()
         return result
     }
@@ -161,11 +161,12 @@ let dispatch (services: CommandServices) : CommandDispatch =
     // otherwise. It used to be a `defaultArg` per call site with `ActorRef.Agent` written in
     // as the fallback — which was right only because the agent is what authored every one of
     // these, a coincidence each site had to keep re-establishing.
-    let repoCaller (invocation: GatedInvocation) =
-        Repos.agentCaller (Authority.effective invocation.Authority)
+    let repoCaller (invocation: GatedInvocation) : Repos.RepoCaller =
+        { Actor = Authority.author invocation.Authority
+          Credential = Authority.credential invocation.Authority }
     let sandboxCaller (invocation: GatedInvocation) : WorkSandboxes.SandboxCaller =
         { Actor = Authority.author invocation.Authority
-          Credential = Authority.effective invocation.Authority }
+          Credential = Authority.credential invocation.Authority }
     Map.ofList
         [ addRepoTool,
           fun (invocation: GatedInvocation) ->
@@ -315,7 +316,7 @@ let dispatch (services: CommandServices) : CommandDispatch =
                         // answer this changed.
                         match PrDraft.create repo head onto title body (draft = "true") with
                         | Error e -> return Error e
-                        | Ok drafted -> return! service.Create (Authority.effective invocation.Authority) drafted
+                        | Ok drafted -> return! service.Create (Authority.credential invocation.Authority) drafted
             }
 
           watchPrTool,
@@ -333,10 +334,7 @@ let dispatch (services: CommandServices) : CommandDispatch =
                         | Ok pr ->
                             return!
                                 andPublish services PrWatches.queryName (
-                                    service.Watch
-                                        (Authority.author invocation.Authority)
-                                        (Authority.effective invocation.Authority)
-                                        pr)
+                                    service.Watch invocation.Authority pr)
                 | Some _, other ->
                     return Error (sprintf "watch_pr takes a repo and a number, got %d arguments" (List.length other))
             }
@@ -521,13 +519,129 @@ let dispatch (services: CommandServices) : CommandDispatch =
                                 (services.Terminals ()).SetProfile (Authority.author invocation.Authority) name cwd)
             } ]
 
+/// How a PERSON puts the first repo into a session — the launch surface's one act, and the
+/// one human-authored repo verb there is.
+///
+/// Plan 15 retired the human add/remove/switch buttons because they were a second surface
+/// over verbs the agent already had, mid-session, where asking costs one sentence. At a
+/// session's start there is nobody to ask: no turn has run, and which repo this session is
+/// FOR is the person's to say. So this is the same verb, gated and attributed the same way,
+/// with a second caller rather than a second implementation — and admitted only while the
+/// session has no repo. A second repo is still the agent's to add; that keeps the line Plan
+/// 15 drew where it was.
+///
+/// Two stages, and the split is the point: ADMISSION answers at once (a peer's command
+/// pump is held for the answer, and a clone is not something to hold it for), and the WORK
+/// is handed back for the caller to run wherever it can wait — the Host in the background,
+/// a test in line. The work is three gated calls in sequence, each waited out past the
+/// gate's deadline because the next depends on it: `add_repo`, then `switch_branch` when a
+/// branch other than the clone's was chosen, then `set_shell_profile` so the terminals
+/// everyone opens start in the checkout. That last one is the default the agent's
+/// `add_repo` leaves to a following call, made here because a person who chose a repo did
+/// not choose to `cd` into it forty times.
+[<RequireQualifiedAccess>]
+type LaunchFailure =
+    { /// Which of the launch's calls did not succeed, as the gate knew it.
+      Tool : string
+      /// Its summary — the sentence the record carries for it.
+      Summary : string
+      Reason : string }
+
+type LaunchRepo = Principal -> RepoRef -> string option -> Async<Result<Async<Result<unit, LaunchFailure>>, string>>
+
+let launchRepo
+    (services: CommandServices)
+    (run: RunGatedCommand)
+    (resume: QueueId -> Async<Result<CommandOutcome, string>>)
+    : LaunchRepo =
+    fun actor repo branch ->
+        let authority = Authority.ofAuthor actor
+        /// One gated call, waited to a verdict. `CommandRunning` is a yield, not an outcome —
+        /// the gate hands back a handle and the work runs on — so it is resumed until it is one.
+        let rec settle (outcome: Result<CommandOutcome, string>) : Async<Result<string, string>> =
+            async {
+                match outcome with
+                | Error e -> return Error e
+                | Ok { Status = CommandRefusedBy (_, reason) } -> return Error (defaultArg reason "refused")
+                | Ok { Status = CommandRan text } when text.StartsWith "failed: " -> return Error (text.Substring 8)
+                | Ok { Status = CommandRan text } -> return Ok text
+                | Ok { Status = CommandRunning; Handle = Some handle } ->
+                    let! next = resume handle
+                    return! settle next
+                | Ok { Status = CommandRunning; Handle = None } -> return Error "the command yielded with no handle to resume it"
+            }
+        let gated (tool: string) (args: string list) (summary: string) : Async<Result<string, LaunchFailure>> =
+            async {
+                let! outcome = run { Tool = tool; Args = encodeArgs args; Summary = summary; Authority = authority }
+                match! settle outcome with
+                | Ok text -> return Ok text
+                | Error reason -> return Error { LaunchFailure.Tool = tool; Summary = summary; Reason = reason }
+            }
+        async {
+            match services.Repos () with
+            | None -> return Error "this session has no repos"
+            | Some service ->
+                match! service.ListRepos () with
+                | Error e -> return Error e
+                | Ok (existing :: _) ->
+                    return
+                        Error (
+                            sprintf
+                                "this session already has %s — ask the agent to add another"
+                                (RepoRef.value existing.Repo))
+                | Ok [] ->
+                    return
+                        Ok (
+                            async {
+                                match! gated addRepoTool [ RepoRef.value repo ] (sprintf "add_repo %s" (RepoRef.value repo)) with
+                                | Error e -> return Error e
+                                | Ok _ ->
+                                    // What the clone came up on, read back rather than assumed:
+                                    // the default branch is the provider's to say, and a choice
+                                    // that names it is not a switch.
+                                    let added = sprintf "add_repo %s" (RepoRef.value repo)
+                                    let listingFailure (reason: string) : LaunchFailure =
+                                        { LaunchFailure.Tool = addRepoTool; Summary = added; Reason = reason }
+                                    match! service.ListRepos () with
+                                    | Error e -> return Error (listingFailure e)
+                                    | Ok listings ->
+                                        match listings |> List.tryFind (fun l -> l.Repo = repo) with
+                                        | None ->
+                                            return
+                                                Error (
+                                                    listingFailure (
+                                                        sprintf "%s was added and is not in the listing" (RepoRef.value repo)))
+                                        | Some listing ->
+                                            let! switched =
+                                                match branch with
+                                                | Some wanted when wanted <> listing.Branch ->
+                                                    gated
+                                                        switchBranchTool
+                                                        [ RepoRef.value repo; wanted; "false" ]
+                                                        (sprintf "switch_branch %s -> %s" (RepoRef.value repo) wanted)
+                                                | _ -> async { return Ok "" }
+                                            match switched with
+                                            | Error e -> return Error e
+                                            | Ok _ ->
+                                                let sandbox = SandboxRef.render SandboxRef.defaultRef
+                                                match!
+                                                    gated
+                                                        setShellProfileTool
+                                                        [ sandbox; listing.Path ]
+                                                        (sprintf "set_shell_profile %s %s" sandbox listing.Path)
+                                                with
+                                                | Error e -> return Error e
+                                                | Ok _ -> return Ok ()
+                            })
+        }
+
 /// The turn's repo verbs (Plan 14), bound to the acting party. The MUTATING ones are three
 /// lines each: encode the arguments, render the summary, hand both to the gate. What they
 /// used to do lives in `dispatch` above, where a process that did not propose the act can
 /// still reach it.
 let private repoCapabilitiesFor
     (services: CommandServices)
-    (turnActor: ActorRef)
+    (turnActor: Principal)
     (capabilities: AgentCapabilities)
     : AgentCapabilities =
     match services.Repos () with
@@ -542,71 +656,78 @@ let private repoCapabilitiesFor
                   // TAKES that actor, so an agent-authored call with nobody's authority on it
                   // is not something this could be written to omit.
                   Authority = Authority.agentFor turnActor }
+        let capabilities =
+            { capabilities with
+                Repos =
+                  { capabilities.Repos with
+                      Add =
+                        fun repo ->
+                          gated addRepoTool [ RepoRef.value repo ] (sprintf "add_repo %s" (RepoRef.value repo))
+                      Remove =
+                        fun repo force ->
+                          // The cost is in the SUMMARY, because that is the sentence the classifier
+                          // reads and a person watching the queue sees BEFORE it happens rather than
+                          // after. A removal that would take uncommitted work with it must not look
+                          // like one that would not.
+                          let summary =
+                              if force then sprintf "remove_repo %s (deleting uncommitted changes)" (RepoRef.value repo)
+                              else sprintf "remove_repo %s" (RepoRef.value repo)
+                          gated removeRepoTool [ RepoRef.value repo; (if force then "true" else "false") ] summary
+                      SwitchBranch =
+                        fun repo branch create ->
+                          let summary =
+                              if create then sprintf "switch_branch %s -> new branch %s" (RepoRef.value repo) branch
+                              else sprintf "switch_branch %s -> %s" (RepoRef.value repo) branch
+                          gated switchBranchTool [ RepoRef.value repo; branch; (if create then "true" else "false") ] summary
+                      CreatePr =
+                        fun draft ->
+                          // The head, the base and the DRAFT flag are in the summary, because that
+                          // is the sentence the classifier reads and a person watching the queue
+                          // sees before it happens — and a pull request everybody can see is not
+                          // the same act as a draft nobody is asked to review yet.
+                          let summary =
+                              sprintf
+                                  "create_pr %s%s: %s"
+                                  (PrDraft.render draft)
+                                  (if draft.Draft then " as a draft" else "")
+                                  draft.Title
+                          gated
+                              createPrTool
+                              ([ RepoRef.value draft.Repo
+                                 draft.Head
+                                 draft.Base
+                                 draft.Title
+                                 (if draft.Draft then "true" else "false") ]
+                               @ Option.toList draft.Body)
+                              summary
+                      WatchPr =
+                        fun repo number ->
+                          gated
+                              watchPrTool
+                              [ RepoRef.value repo; string number ]
+                              (sprintf "watch_pr %s#%d" (RepoRef.value repo) number)
+                      UnwatchPr =
+                        fun repo number ->
+                          gated
+                              unwatchPrTool
+                              [ RepoRef.value repo; string number ]
+                              (sprintf "unwatch_pr %s#%d" (RepoRef.value repo) number)
+                      // The READS take no gate and no approver: they change nothing, so there is
+                      // nothing to approve and nothing to resume.
+                      Fetch = service.FetchRepo (Repos.agentCaller turnActor)
+                      Status = service.RepoStatus
+                      Log = service.RepoLog
+                      Diff = service.RepoDiff } }
+        // GitHub's three tools (`create_pr`, `watch_pr`, `unwatch_pr`) are declared
+        // here, against the GATED verbs just bound above, rather than in `AgentTools.fs`
+        // (Plan 16, part A cont'd): everything GitHub-specific about a session's pull
+        // requests lives in `GitHubPrs.fs` and nowhere else.
         { capabilities with
-            Repos =
-              { capabilities.Repos with
-                  Add =
-                    fun repo ->
-                      gated addRepoTool [ RepoRef.value repo ] (sprintf "add_repo %s" (RepoRef.value repo))
-                  Remove =
-                    fun repo force ->
-                      // The cost is in the SUMMARY, because that is the sentence the classifier
-                      // reads and a person watching the queue sees BEFORE it happens rather than
-                      // after. A removal that would take uncommitted work with it must not look
-                      // like one that would not.
-                      let summary =
-                          if force then sprintf "remove_repo %s (deleting uncommitted changes)" (RepoRef.value repo)
-                          else sprintf "remove_repo %s" (RepoRef.value repo)
-                      gated removeRepoTool [ RepoRef.value repo; (if force then "true" else "false") ] summary
-                  SwitchBranch =
-                    fun repo branch create ->
-                      let summary =
-                          if create then sprintf "switch_branch %s -> new branch %s" (RepoRef.value repo) branch
-                          else sprintf "switch_branch %s -> %s" (RepoRef.value repo) branch
-                      gated switchBranchTool [ RepoRef.value repo; branch; (if create then "true" else "false") ] summary
-                  CreatePr =
-                    fun draft ->
-                      // The head, the base and the DRAFT flag are in the summary, because that
-                      // is the sentence the classifier reads and a person watching the queue
-                      // sees before it happens — and a pull request everybody can see is not
-                      // the same act as a draft nobody is asked to review yet.
-                      let summary =
-                          sprintf
-                              "create_pr %s%s: %s"
-                              (PrDraft.render draft)
-                              (if draft.Draft then " as a draft" else "")
-                              draft.Title
-                      gated
-                          createPrTool
-                          ([ RepoRef.value draft.Repo
-                             draft.Head
-                             draft.Base
-                             draft.Title
-                             (if draft.Draft then "true" else "false") ]
-                           @ Option.toList draft.Body)
-                          summary
-                  WatchPr =
-                    fun repo number ->
-                      gated
-                          watchPrTool
-                          [ RepoRef.value repo; string number ]
-                          (sprintf "watch_pr %s#%d" (RepoRef.value repo) number)
-                  UnwatchPr =
-                    fun repo number ->
-                      gated
-                          unwatchPrTool
-                          [ RepoRef.value repo; string number ]
-                          (sprintf "unwatch_pr %s#%d" (RepoRef.value repo) number)
-                  // The READS take no gate and no approver: they change nothing, so there is
-                  // nothing to approve and nothing to resume.
-                  Fetch = service.FetchRepo (Repos.agentCaller turnActor)
-                  Status = service.RepoStatus
-                  Log = service.RepoLog
-                  Diff = service.RepoDiff } }
+            Repos = { capabilities.Repos with ProviderTools = GitHubPrs.providerTools capabilities } }
 
 /// The turn's sandbox commands (Plan 15, stage 2) and the shell profile (Plan 25), bound to
 /// the acting party.
-let private sandboxCapabilitiesFor (turnActor: ActorRef) (capabilities: AgentCapabilities) : AgentCapabilities =
+let private sandboxCapabilitiesFor (turnActor: Principal) (capabilities: AgentCapabilities) : AgentCapabilities =
     let gated (tool: string) (args: string list) (summary: string) =
         capabilities.RunGated
             { Tool = tool
@@ -636,5 +757,5 @@ let private sandboxCapabilitiesFor (turnActor: ActorRef) (capabilities: AgentCap
 /// the credential is the turn human's (Plan 08). The Host leaves these as denials because
 /// only the per-turn dispatcher knows who the turn is for; this is where they stop being
 /// denials, and it is one call so a turn cannot pick up half of them.
-let bindFor (services: CommandServices) (turnActor: ActorRef) (capabilities: AgentCapabilities) : AgentCapabilities =
+let bindFor (services: CommandServices) (turnActor: Principal) (capabilities: AgentCapabilities) : AgentCapabilities =
     capabilities |> repoCapabilitiesFor services turnActor |> sandboxCapabilitiesFor turnActor

@@ -43,6 +43,11 @@ let all =
         // reply, and the session's own gated route — and neither has an in-memory
         // stand-in that would exercise what the cases turn on.
         Tag.needs "Model catalogue" [ Tag.Ports ] (fun () -> Models.portsTests)
+        Tag.needs "GitHubRepos" [] (fun () -> GitHubRepos.tests)
+        Tag.needs "Launch surface" [] (fun () -> LaunchSurface.tests)
+        // Finding a repo is an HTTP conversation on both sides — the provider's listing and
+        // the session's own gated route — with no in-memory stand-in for what the cases turn on.
+        Tag.needs "GitHubRepos over HTTP" [ Tag.Ports ] (fun () -> GitHubRepos.portsTests)
         Tag.needs "Tools" [] (fun () -> Tools.tests)
         // The layers above join here: what a model calls, and what it is told back.
         Tag.needs "Tool calls" [] (fun () -> ToolCalls.tests)

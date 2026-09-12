@@ -60,18 +60,20 @@ type CredentialSource =
       /// Provision for one actor into one sandbox. `NotHeld` is a legible refusal rather
       /// than a silent start without it: a sandbox that was asked to forward `github` and
       /// did not is a sandbox whose `git push` fails much later, somewhere less informative.
-      Provision : ActorRef -> SandboxRef -> Async<CredentialForwarding>
+      Provision : CredentialFor -> SandboxRef -> Async<CredentialForwarding>
       /// Take back what `Provision` gave. Called when the sandbox stops, so that whatever a
       /// provision opened (a gateway route) lives exactly as long as the sandbox does.
       Revoke : SandboxRef -> unit }
 
 /// Who is asking. The two halves differ for the agent exactly as they do for the repo
 /// verbs: the AGENT is the acting party the event records, the CREDENTIAL owner is the
-/// turn human, because the agent has no scope of its own.
+/// turn human, because the agent has no scope of its own. `None` is a start on nobody's
+/// credential — a repo file's boot fold — which reaches the session's own and the
+/// deployment's, and nothing else.
 [<RequireQualifiedAccess>]
 type SandboxCaller =
     { Actor : ActorRef
-      Credential : ActorRef }
+      Credential : CredentialFor }
 
 /// One sandbox the session has. Present in the registry does NOT mean started — the
 /// environment underneath is lazy, and `default` exists from boot without a sandbox
@@ -176,13 +178,22 @@ let normaliseForward (names: string list) : string list =
 let normalise (request: SandboxRequest) : SandboxRequest =
     { request with Forward = normaliseForward request.Forward }
 
+/// Why a name found nothing, said with what WOULD have: the sandboxes there are. Three
+/// sessions running spelt a repo's `dev` as `dev` and were told to start one — which the
+/// repo's file had already done, under `owner/repo:dev`. The sentence has to name that.
+let private unknownSandbox (name: SandboxRef) (existing: SandboxRef list) : string =
+    match existing with
+    | [] ->
+        sprintf "there is no sandbox named '%s' in this session — start_work_sandbox creates one" (SandboxRef.render name)
+    | existing ->
+        sprintf
+            "there is no sandbox named '%s' in this session — there is %s; start_work_sandbox creates another"
+            (SandboxRef.render name)
+            (existing |> List.map (fun ref -> sprintf "'%s'" (SandboxRef.render ref)) |> String.concat ", ")
+
 /// An environment for a name the session does not have. Refuses in the same shape a real
 /// one does, naming what is wrong rather than the generic "no environment".
-let private missing (name: SandboxRef) : SessionEnvironment.SessionEnvironment =
-    let reason =
-        sprintf
-            "there is no sandbox named '%s' in this session — start_work_sandbox creates one"
-            (SandboxRef.render name)
+let private missing (reason: string) : SessionEnvironment.SessionEnvironment =
     { Ensure = fun _ _ -> async { return EnvironmentUnavailable reason }
       Spawn = fun _ _ -> async { return Error reason }
       SpawnPty = fun _ _ _ _ -> async { return Error reason }
@@ -211,6 +222,22 @@ let create (config: WorkSandboxesConfig) : Result<WorkSandboxes, string> =
     let find (name: SandboxRef) =
         entries |> List.tryFind (fun (key, _) -> key = name) |> Option.map snd
 
+    /// A bare name, when the session has no sandbox of its own by it but exactly one repo
+    /// declares one: that one. `dev` for `octo/hello:dev` is what an agent writes after
+    /// reading "started sandbox octo/hello:dev", and there is nothing else it could mean.
+    /// Two repos both declaring `dev` is ambiguous and stays a refusal that names both.
+    let resolve (name: SandboxRef) : RunningSandbox option =
+        match find name, SandboxRef.scope name with
+        | Some entry, _ -> Some entry
+        | None, SessionOwned ->
+            match
+                entries
+                |> List.filter (fun (key, _) -> SandboxRef.scope key <> SessionOwned && SandboxRef.name key = SandboxRef.name name)
+            with
+            | [ _, only ] -> Some only
+            | _ -> None
+        | None, RepoOwned _ -> None
+
     let mintMessageId () : MessageId =
         match MessageId.create (string (Guid.NewGuid ())) with
         | Ok id -> id
@@ -232,7 +259,7 @@ let create (config: WorkSandboxesConfig) : Result<WorkSandboxes, string> =
 
     /// Provision every named credential for one actor into one sandbox, or say which one
     /// could not be — revoking whatever was provisioned before the one that refused.
-    let provisionForward (owner: ActorRef) (name: SandboxRef) (names: string list) : Async<Result<Provision, string>> =
+    let provisionForward (owner: CredentialFor) (name: SandboxRef) (names: string list) : Async<Result<Provision, string>> =
         async {
             let mutable provisioned = Provision.empty
             let mutable failure = None
@@ -258,16 +285,16 @@ let create (config: WorkSandboxesConfig) : Result<WorkSandboxes, string> =
                             // own when they arrive, and the sentence has to say so.
                             let reason =
                                 match owner with
-                                | Configured _ ->
+                                | CredentialFor.Deployment ->
                                     sprintf
                                         "nobody was signed in to lend a '%s' credential — it starts on its own \
                                          the moment someone who has connected %s opens this session"
                                         credential
                                         credential
-                                | _ ->
+                                | CredentialFor.Person owner ->
                                     sprintf
                                         "%s has not connected %s — connect it on the settings panel and ask again"
-                                        (ActorRef.token owner)
+                                        (Principal.token owner)
                                         credential
                             failure <- Some reason
                         | CredentialForwarding.Forwarded provision ->
@@ -345,10 +372,10 @@ let create (config: WorkSandboxesConfig) : Result<WorkSandboxes, string> =
 
     let stop (caller: SandboxCaller) (name: SandboxRef) : Async<Result<unit, string>> =
         async {
-            match find name with
-            | None ->
-                return Error (sprintf "there is no sandbox named '%s' in this session" (SandboxRef.render name))
+            match resolve name with
+            | None -> return Error (unknownSandbox name (entries |> List.map fst))
             | Some entry ->
+                let name = entry.Ref
                 do! entry.Environment.Stop ()
                 revoke name entry.Request.Forward
                 // `default` keeps its ENTRY — it is the sandbox every session has, and a
@@ -374,9 +401,9 @@ let create (config: WorkSandboxesConfig) : Result<WorkSandboxes, string> =
         }
 
     let environmentFor (name: SandboxRef) : SessionEnvironment.SessionEnvironment =
-        match find name with
+        match resolve name with
         | Some entry -> entry.Environment
-        | None -> missing name
+        | None -> missing (unknownSandbox name (entries |> List.map fst))
 
     let stopAll () : Async<unit> =
         async {

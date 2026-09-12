@@ -337,7 +337,7 @@ module ConversationProjection =
                 Items =
                     proj.Items
                     @ [ { MessageId = m.MessageId
-                          Author = m.Author
+                          Author = Principal.toActor m.Author
                           Body = m.Body
                           Status = Complete
                           Kind = ConversationItemKind.Message
@@ -446,7 +446,7 @@ module ConversationProjection =
                 match s.Forwarded, s.CredentialOwner with
                 | [], _ -> None
                 | names, Some owner ->
-                    Some (sprintf "forwarding %s from %s" (String.concat ", " names) (ActorRef.token owner))
+                    Some (sprintf "forwarding %s from %s" (String.concat ", " names) (CredentialFor.token owner))
                 | names, None -> Some (sprintf "forwarding %s" (String.concat ", " names))
             // And where this host could not give what the sandbox's resources named. On the
             // start NOTE rather than a note of its own, because it is a property of THIS
@@ -595,6 +595,18 @@ module ConversationProjection =
                           Kind = ConversationItemKind.ActNote { Detail = c.Reason; Notable = false }
                           Offset = envelope.Offset
                           Woke = None; Replying = None } ] }
+        // Its sibling, said by the process: nobody refused it; it ran and did not succeed.
+        | SessionEvent.GatedCommandFailed c ->
+            { proj with
+                Items =
+                    proj.Items
+                    @ [ { MessageId = c.MessageId
+                          Author = ActorRef.System
+                          Body = sprintf "failed %s" c.Summary
+                          Status = Complete
+                          Kind = ConversationItemKind.ActNote { Detail = Some c.Reason; Notable = false }
+                          Offset = envelope.Offset
+                          Woke = None; Replying = None } ] }
         // A repo's `setup:`, said because nobody in the session asked for it. Every other
         // block on this timeline is somebody here running something; this one appears in a
         // terminal they will find busy, holding it until it finishes. The DETAIL carries the
@@ -666,12 +678,13 @@ module ConversationProjection =
         // session-shaping act, and a transition is exactly what a joining human or the
         // agent's next turn needs to be told — the news arrived through no other door.
         | SessionEvent.PrWatched p ->
+            let initial = PrWatched.initial p
             { proj with
                 Items =
                     proj.Items
-                    @ [ { MessageId = p.MessageId
-                          Author = p.Actor
-                          Body = sprintf "PR %s watched" (PrRef.render p.Pr)
+                    @ [ { MessageId = PrWatched.messageId p
+                          Author = PrWatched.actor p
+                          Body = sprintf "PR %s watched" (PrRef.render (PrWatched.pr p))
                           Status = Complete
                           Kind =
                             ConversationItemKind.ActNote
@@ -679,8 +692,8 @@ module ConversationProjection =
                                     Some (
                                         sprintf
                                             "%s, %s"
-                                            (PrState.describe p.Initial.State)
-                                            (ChecksRollup.describe p.Initial.Checks))
+                                            (PrState.describe initial.State)
+                                            (ChecksRollup.describe initial.Checks))
                                   // Where the waiting began. A chapter by nature, like the
                                   // news that follows it — and unlike the unwatch below,
                                   // which is where the story stops being told rather than a
@@ -706,7 +719,7 @@ module ConversationProjection =
                 Items =
                     proj.Items
                     @ [ { MessageId = p.MessageId
-                          Author = p.Watcher
+                          Author = Principal.toActor p.Watcher
                           Body = sprintf "PR %s %s" (PrRef.render p.Pr) (PrTransition.describe p.Transition)
                           Status = Complete
                           Kind = ConversationItemKind.ActNote { Detail = None; Notable = true }

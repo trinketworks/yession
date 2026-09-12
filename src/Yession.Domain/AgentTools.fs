@@ -129,29 +129,6 @@ module private ToolArgs =
                 get.Optional.Field "force" Decode.bool |> Option.defaultValue false))
             json
 
-    /// `watch_pr`'s pair: which repo, and which pull request on it.
-    let repoNumber (json: string) : Result<string * int, string> =
-        read
-            (Decode.object (fun get ->
-                get.Required.Field "repo" Decode.string,
-                get.Required.Field "number" Decode.int))
-            json
-
-    /// `create_pr`'s six: which repo, the branch the work is on, the branch it is for, what
-    /// to call it, what to say about it, and whether it is a draft. The two branches are read
-    /// as they were written and turned into a draft by the domain, which is where the refusals
-    /// live (`PrDraft.create`).
-    let prDraft (json: string) : Result<string * string * string * string * string option * bool, string> =
-        read
-            (Decode.object (fun get ->
-                get.Required.Field "repo" Decode.string,
-                get.Required.Field "head" Decode.string,
-                get.Required.Field "base" Decode.string,
-                get.Required.Field "title" Decode.string,
-                get.Optional.Field "body" Decode.string |> Option.filter (fun s -> s <> ""),
-                get.Optional.Field "draft" Decode.bool |> Option.defaultValue false))
-            json
-
     let repoBranchCreate (json: string) : Result<string * string * bool, string> =
         read
             (Decode.object (fun get ->
@@ -462,43 +439,6 @@ module AgentTools =
                 | Error e -> return sprintf "could not remove the repo: %s" e
             })
 
-    let private watchPr (capabilities: AgentCapabilities) (raw: string) (number: int) : Async<string> =
-        withRepo raw (fun repo ->
-            async {
-                match! capabilities.Repos.WatchPr repo number with
-                | Ok outcome -> return renderCommandOutcome outcome
-                | Error e -> return sprintf "could not watch that pull request: %s" e
-            })
-
-    let private unwatchPr (capabilities: AgentCapabilities) (raw: string) (number: int) : Async<string> =
-        withRepo raw (fun repo ->
-            async {
-                match! capabilities.Repos.UnwatchPr repo number with
-                | Ok outcome -> return renderCommandOutcome outcome
-                | Error e -> return sprintf "could not stop watching that pull request: %s" e
-            })
-
-    let private createPr
-        (capabilities: AgentCapabilities)
-        (raw: string)
-        (head: string)
-        (onto: string)
-        (title: string)
-        (body: string option)
-        (draft: bool)
-        : Async<string> =
-        withRepo raw (fun repo ->
-            async {
-                match PrDraft.create repo head onto title body draft with
-                // A draft the domain refused never reaches the gate: nothing was proposed,
-                // nobody was asked, and the sentence names the argument to fix.
-                | Error e -> return e
-                | Ok drafted ->
-                    match! capabilities.Repos.CreatePr drafted with
-                    | Ok outcome -> return renderCommandOutcome outcome
-                    | Error e -> return sprintf "could not open the pull request: %s" e
-            })
-
     let private switchBranch (capabilities: AgentCapabilities) (raw: string) (branch: string) (create: bool) : Async<string> =
         withRepo raw (fun repo ->
             async {
@@ -587,7 +527,7 @@ module AgentTools =
             "Run a shell command in one of this session's terminals, where the people in the session can see it and edit it while it queues, and every run is on the record. This is the only way to run anything. Pass `sandbox` to run in a named work sandbox (start_work_sandbox creates one); omit it for the default sandbox, which is where everything runs unless you say otherwise. Each sandbox has one terminal of yours that runs one command at a time; pass `terminal` to run in a terminal you opened with open_terminal instead, which is how work runs beside something long. It waits for the result and returns the exit code and output; if the terminal is busy, or the command is still going, it says so and returns a handle for check_pending instead of hanging. Your commands have no stdin unless you pass `stdin: true`: anything that reads it gets end-of-file at once, so name files and pass flags rather than expecting a prompt — and when a command genuinely has to prompt, pass `stdin: true` and answer it. Read what it returns: every answer states which of those happened."
             [ ToolField.required "command" "string" "the shell command line to run, e.g. \"npm test -- --watch=false\""
               ToolField.optional "terminal" "string" "the id of a terminal to run in, as open_terminal or list_terminals gave it; omit for your own terminal in the sandbox"
-              ToolField.optional "sandbox" "string" "the work sandbox to run in, e.g. \"test\"; omit for the default one"
+              ToolField.optional "sandbox" "string" "the work sandbox to run in — the session's own by name (\"test\"), a repo's as \"owner/repo:name\" (its bare name also finds it when only one repo declares that name); omit for the default one"
               ToolField.optional
                   "background"
                   "boolean"
@@ -613,7 +553,7 @@ module AgentTools =
               "open_terminal"
               "Open a terminal of your own and say what it is for. Use it to work on several things at once: each terminal runs one command at a time, so a build in one does not hold up a test in another. The name is what everyone in the session reads, so name it for the job (\"tests\", \"docs build\"). You get a terminal id back; pass it to execute_command as `terminal` to run there. There is a limit per sandbox — if you have reached it, this says so, and close_terminal is how you make room."
               [ ToolField.required "name" "string" "what this terminal is for, e.g. \"tests\""
-                ToolField.optional "sandbox" "string" "the work sandbox to open it in; omit for the default one" ]
+                ToolField.optional "sandbox" "string" "the work sandbox to open it in — \"owner/repo:name\" for a repo's, or its bare name when only one repo declares it; omit for the default one" ]
               (fun args ->
                   async {
                       match ToolArgs.nameSandbox args with
@@ -791,51 +731,6 @@ module AgentTools =
                       | Ok (repo, branch, create) -> return! ok (switchBranch capabilities repo branch create)
                   })
           tool
-              "create_pr"
-              "Open a pull request on GitHub, from a branch that is already pushed. The commits have to be up there first — push from a terminal with execute_command; this opens the pull request and nothing else. It answers with the number, as `owner/repo#n`, which is what watch_pr takes: this session says nothing further about a pull request nobody watches. Opening one that is already open from the same branch onto the same base changes nothing and reports the one that exists, so calling it twice is safe. It spends the GitHub credential of whoever's turn this is, so a \"cannot see it\" on a repo that exists means their credential cannot reach that repo — say so rather than retrying; everyone in the session sees the pull request open in the timeline. What GitHub will not open it says why in its own words — no commits between the two branches, a head branch it cannot find — and that sentence is what comes back."
-              [ ToolField.required "repo" "string" "owner/name"
-                ToolField.required
-                    "head"
-                    "string"
-                    "the branch the work is on, e.g. \"claude/fix-the-thing\"; \"owner:branch\" for a branch on a fork"
-                ToolField.required "base" "string" "the branch it is for, e.g. \"master\" — there is no default, name it"
-                ToolField.required "title" "string" "the pull request title, e.g. \"fix: a closed terminal ends its block\""
-                ToolField.optional "body" "string" "the description, in markdown; omit for none"
-                ToolField.optional
-                    "draft"
-                    "boolean"
-                    "true to open it as a draft — on the record, and explicitly not asking for review yet" ]
-              (fun args ->
-                  async {
-                      match ToolArgs.prDraft args with
-                      | Error e -> return Error e
-                      | Ok (repo, head, onto, title, body, draft) ->
-                          return! ok (createPr capabilities repo head onto title body draft)
-                  })
-          tool
-              "watch_pr"
-              "Watch a pull request on GitHub. The session polls it and announces on the timeline when it merges, closes, reopens, when its checks pass or fail, and when auto merge is armed (queued) or stops being armed while it is still open (stalled — what a merge queue ejecting an entry looks like, which nothing else reports); the current state of every watched pull request is the pull_requests query. Reads it with the credential of whoever's turn this is, so a \"cannot see it\" on a pull request that exists means their GitHub credential cannot reach that repo. Watching one already watched reports its state and changes nothing."
-              [ ToolField.required "repo" "string" "owner/name"
-                ToolField.required "number" "integer" "the pull request number" ]
-              (fun args ->
-                  async {
-                      match ToolArgs.repoNumber args with
-                      | Error e -> return Error e
-                      | Ok (repo, number) -> return! ok (watchPr capabilities repo number)
-                  })
-          tool
-              "unwatch_pr"
-              "Stop watching a pull request. The session stops polling it and says nothing further about it; everyone sees the stop in the timeline."
-              [ ToolField.required "repo" "string" "owner/name"
-                ToolField.required "number" "integer" "the pull request number" ]
-              (fun args ->
-                  async {
-                      match ToolArgs.repoNumber args with
-                      | Error e -> return Error e
-                      | Ok (repo, number) -> return! ok (unwatchPr capabilities repo number)
-                  })
-
-          tool
               "fetch_repo"
               "Fetch a repo's remote refs (prune, no submodules). Use before switching to a branch that only exists on the remote."
               repoArg
@@ -853,7 +748,7 @@ module AgentTools =
           tool
               "start_work_sandbox"
               "Make sure a named work sandbox exists for this session, and get it back. Asking twice for the same name with the same forwarding returns the one already running and changes nothing — safe to call every time. Asking for the same name with DIFFERENT forwarding is refused rather than silently recreated, because recreating kills whatever is running inside it: stop_work_sandbox first. `forward` names credentials to put inside the sandbox (currently \"github\", which is what lets git push work from a terminal there); it uses the credentials of the person whose turn this is, and everyone in the session sees which were forwarded and whose."
-              [ ToolField.required "name" "string" "the sandbox name, e.g. \"default\" or \"test\""
+              [ ToolField.required "name" "string" "the sandbox name, e.g. \"default\" or \"test\"; a repo's is \"owner/repo:name\""
                 ToolField.optionalList "forward" "string" "credential names to forward, e.g. [\"github\"]" ]
               (fun args ->
                   async {
@@ -901,9 +796,12 @@ module AgentTools =
             (fun _ -> ok (readQuery capabilities def ())))
 
     /// Every tool of the `yession` namespace: its descriptor, and the body that answers a
-    /// call to it. One list — a tool cannot be declared without being callable, and cannot
-    /// be callable without being declared.
-    let private declared (capabilities: AgentCapabilities) = verbs capabilities @ queryTools capabilities
+    /// call to it. One list -- a tool cannot be declared without being callable, and cannot
+    /// be callable without being declared. `Repos.ProviderTools` is where a provider (today
+    /// only `GitHubPrs.fs`) contributes its own -- `create_pr`, `watch_pr`, `unwatch_pr`
+    /// today -- without this module knowing what provider, or how many, filled it in.
+    let private declared (capabilities: AgentCapabilities) =
+        verbs capabilities @ queryTools capabilities @ capabilities.Repos.ProviderTools
 
     /// The `yession` registry for one turn's capabilities.
     let registry (capabilities: AgentCapabilities) : ToolRegistry =

@@ -138,8 +138,8 @@ module PrStatus =
 
 type PrWatch =
     { Pr : PrRef
-      /// Whose watch — see `PrWatched.Actor`.
-      Watcher : ActorRef
+      /// Whose watch — see `PrWatched.watcher`.
+      Watcher : Principal
       Known : PrKnown
       /// When this pull request last became what it now is: the envelope timestamp of the
       /// watch's start, advanced by each recorded transition. Read from the LOG for the
@@ -229,13 +229,14 @@ module PrWatchesProjection =
     let applyEvent (proj: PrWatchesProjection) (envelope: EventEnvelope<SessionEvent>) : PrWatchesProjection =
         match envelope.Event with
         | PrWatched p ->
+            let pr = PrWatched.pr p
             let entry =
-                { Pr = p.Pr
-                  Watcher = p.Actor
-                  Known = PrTransitions.knownOf p.Initial
+                { Pr = pr
+                  Watcher = PrWatched.watcher p
+                  Known = PrTransitions.knownOf (PrWatched.initial p)
                   Since = envelope.Timestamp }
-            if proj.Watches |> List.exists (fun w -> w.Pr = p.Pr) then
-                { Watches = proj.Watches |> List.map (fun w -> if w.Pr = p.Pr then entry else w) }
+            if proj.Watches |> List.exists (fun w -> w.Pr = pr) then
+                { Watches = proj.Watches |> List.map (fun w -> if w.Pr = pr then entry else w) }
             else
                 { Watches = proj.Watches @ [ entry ] }
         | PrUnwatched p ->

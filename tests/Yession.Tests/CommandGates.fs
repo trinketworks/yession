@@ -23,7 +23,7 @@ let private expect result =
     | Error e -> failwithf "invariant: %A" e
 
 let private sessionId = SessionId.create "sess-gates" |> expect
-let private ada' = UserRef (UserId.create "ada" |> expect)
+let private ada' = Principal.User (UserId.create "ada" |> expect)
 let private fixedClock () = DateTimeOffset (2026, 1, 1, 0, 0, 0, TimeSpan.Zero)
 let private newLog () : EventLog<SessionEvent> = InMemoryEventLog.create sessionId fixedClock
 
@@ -98,8 +98,8 @@ let private gateTests =
                 let outcome = expect outcome
                 Expect.equal (Seq.length seen) 1 "it ran"
                 Expect.equal
-                    (Authority.effective (Seq.head seen).Authority)
-                    ada'
+                    (Authority.credential (Seq.head seen).Authority)
+                    (CredentialFor.Person ada')
                     "on the turn actor's credential"
                 Expect.equal outcome.Status (CommandRan "done") "and answered with what it said"
                 let! events = eventsOf log

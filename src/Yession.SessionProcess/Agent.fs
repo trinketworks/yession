@@ -62,21 +62,22 @@ module AgentTurn =
     /// which is what makes this a choice rather than two optional arguments free to be both
     /// set or neither.
     ///
-    /// Both carry an ACTOR, and it is the same actor in both cases: whoever the turn runs
-    /// for. A message names its author; a wake names the party whose earlier turn queued the
-    /// work that finished. The agent is the acting party either way and has no scope of its
-    /// own (Plan 08), so a turn that could not name one would be a turn with no credentials
-    /// — which is why the wake resolves it from the log before it starts, rather than after.
+    /// Both arms name a `Principal`, and it is the same question in both: whoever the turn
+    /// runs for. A message's is its author; a wake's is the party whose earlier turn queued
+    /// the work that finished. The agent is the acting party either way and has no scope of
+    /// its own (Plan 08), so a turn that could not name one would be a turn with no
+    /// credentials — which is why it is a `Principal` and not an actor, and why the wake
+    /// resolves it from the log before the turn starts rather than after.
     type TurnTrigger =
         | FromMessage of MessageSent
-        | FromWake of WakeReason * ActorRef
+        | FromWake of WakeReason * Principal
 
     module TurnTrigger =
 
-        let actor =
-            function
+        let actor (trigger: TurnTrigger) : Principal =
+            match trigger with
             | FromMessage message -> message.Author
-            | FromWake (_, actor) -> actor
+            | FromWake (_, owner) -> owner
 
     /// Run one agent turn, appending the lifecycle events:
     ///
@@ -102,7 +103,7 @@ module AgentTurn =
         (signal: AgentAbortSignal)
         // Takes the turn's ACTOR as well as its id (Plan 20, stage 2): the credentials a
         // turn runs on are bound per turn, and a woken turn has no message to read them off.
-        (capabilitiesFor: AgentTurnId -> ActorRef -> AgentCapabilities)
+        (capabilitiesFor: AgentTurnId -> Principal -> AgentCapabilities)
         // Telemetry (Plan 04): fired with the turn's usage on completion. Injected (default
         // `ignore` off the Host) so this module stays OTel-free. Never throws into the turn.
         (emitUsage: AgentTurnId -> AgentUsage -> unit)
@@ -158,7 +159,7 @@ module AgentTurn =
                         |> List.tryFind (fun item -> item.MessageId = message.MessageId)
                         |> Option.defaultValue
                             { MessageId = message.MessageId
-                              Author = message.Author
+                              Author = Principal.toActor message.Author
                               Body = message.Body
                               Status = Complete
                               Kind = ConversationItemKind.Message

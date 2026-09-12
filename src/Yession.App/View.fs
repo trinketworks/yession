@@ -161,7 +161,17 @@ type ViewActions =
       /// shut, and only the document knows where the cursor went. Without it, dismissing a
       /// menu strands focus on `body` — the failure the WCAG floor names, and the one a
       /// keyboard reader hits on the very first Escape.
-      FocusItemActions : MessageId -> unit }
+      FocusItemActions : MessageId -> unit
+      /// The launch surface's three effects. Ask the session for the repos this person can
+      /// choose from — theirs when the text is empty, a search otherwise; the answer comes
+      /// back as `LaunchListingArrived`.
+      LaunchSearch : string -> unit
+      /// Ask for one repo's branches (`LaunchBranchesArrived`).
+      LaunchBranches : RepoRef -> unit
+      /// Send the choice: the `AddRepo` command, on the branch when one other than the
+      /// default was picked. The request leaves as `LaunchSent`; its admission comes back as
+      /// `CommandAnsweredMsg`, and its outcome as events.
+      LaunchStart : RepoRef -> string option -> unit }
 
 module ViewActions =
     /// A no-op action set for rendering the view to a string (SSR + tests). The handlers
@@ -182,6 +192,9 @@ module ViewActions =
           GitHubPasteToken = ignore
           GitHubDisconnect = ignore
           Copy = fun _ _ -> ()
+          LaunchSearch = ignore
+          LaunchBranches = ignore
+          LaunchStart = fun _ _ -> ()
           RetryNow = ignore
           OpenTerminal = ignore
           ApproveRepoCapabilities = fun _ _ -> ()
@@ -427,16 +440,36 @@ module View =
         | Connecting, FeedLive
         | Connected, FeedLive -> None
 
+    /// Whether a catch-up is worth showing: PROGRESS, not health, so it is the one thing that
+    /// still speaks while everything works — and only once it has lasted long enough to be
+    /// something somebody is waiting on (`CatchUpIsSlow`). Offline, freshness is unknowable
+    /// and nothing is said. One rule for its two faces, the sidebar's line and the header's
+    /// bar, so they cannot disagree about whether there is a catch-up to show.
+    let private showsCatchUp (model: ClientModel) : bool =
+        match model.Connection with
+        | Disconnected _ -> false
+        | _ -> model.EventConsumer.IsCatchingUp && model.EventConsumer.CatchUpIsSlow
+
+    /// The catch-up as a bar along the header's bottom rule (`Style.catchUpBar`): how much of
+    /// the log this client has folded, of what it knows the log holds. A `progressbar` with
+    /// its numbers on it, because a bar with no value is decoration to a screen reader; the
+    /// sidebar's line carries the same numbers as text.
+    let private catchUpBar (model: ClientModel) : TemplateResult =
+        if not (showsCatchUp model) then Lit.nothing
+        else
+            let consumer = model.EventConsumer
+            // Offsets count from zero, so the count folded is one past the last folded.
+            let folded = consumer.LastProcessedOffset |> Option.map (fun o -> EventOffset.value o + 1L) |> Option.defaultValue 0L
+            let known = consumer.LatestKnownOffset |> Option.map (fun o -> EventOffset.value o + 1L) |> Option.defaultValue 0L
+            let percent = if known <= 0L then 0.0 else 100.0 * float (min folded known) / float known
+            let width = sprintf "width: %.1f%%" percent
+            html $"""<div class="{Style.catchUpBar}" role="progressbar" aria-label="{Dom.Text.catchingUp}"
+                          aria-valuemin="0" aria-valuemax="{string known}" aria-valuenow="{string folded}"
+                          data-catch-up-bar style="{width}"></div>"""
+
     let private connectionSection (actions: ViewActions) (model: ClientModel) : TemplateResult =
         let consumer = model.EventConsumer
-        // Catch-up is PROGRESS, not health, so it is the one thing here that still speaks
-        // while everything works — and only once it has lasted long enough to be something
-        // somebody is waiting on (`CatchUpIsSlow`). Offline, freshness is unknowable and
-        // nothing is said either.
-        let showsCatchUp =
-            match model.Connection with
-            | Disconnected _ -> false
-            | _ -> consumer.IsCatchingUp && consumer.CatchUpIsSlow
+        let showsCatchUp = showsCatchUp model
         let catchUp =
             if not showsCatchUp then Lit.nothing
             else
@@ -653,7 +686,13 @@ module View =
                     <div class="{Style.person}" data-peer-presence="{PeerId.value peer}">
                       <span class="{Style.cls [ Style.avatar; Style.humanAvatar (PeerId.value peer); Style.personAvatar ]}"></span>
                       <span class="truncate min-w-0">{name}</span>
-                      <span class="{Style.label} ml-auto shrink-0" data-peer-at="{token}">{words}</span>
+                      <!-- The slot TRUNCATES rather than holding its width: where a peer is
+                           used to be a word or two, and a chapter's name made it a line of
+                           somebody's message — which pushed itself, and the peer's name with
+                           it, off the side of the sidebar. Capped at half the row because
+                           truncation alone spends the row on the longer of the two, and the
+                           one that has to survive is WHOSE row it is. -->
+                      <span class="{Style.cls [ Style.label; "ml-auto min-w-0 max-w-1/2 truncate" ]}" data-peer-at="{token}">{words}</span>
                     </div>""")
         html $"""
             <section class="{Style.cls [ Style.sideSection; Style.navLane1 ]}">
@@ -1353,6 +1392,7 @@ module View =
                 {agentAbsence actions model.Claude}
                 {terminalsReopen dispatch model}
               </div>
+              {catchUpBar model}
             </header>"""
 
     let private queue (dispatch: ClientMsg -> unit) (synced: SyncedSessionState) : TemplateResult =
@@ -1636,6 +1676,139 @@ module View =
     /// Terminal items are resolved against `Projection` at render time rather than
     /// copied into the timeline, which is what makes a running chip mutate in place as its
     /// block finishes — the timeline holds where it goes, the projection holds what it says.
+    /// The launch surface: a person choosing which repository this session is FOR, standing
+    /// where the timeline's first line will (`ClientModel.launchOffered`).
+    ///
+    /// The list is what the person's own credential can see — theirs, most recently pushed
+    /// first, or a search of GitHub by name — so a repo shown here is one their `add_repo`
+    /// can clone. Choosing one shows its branches with the provider's default picked, and
+    /// Start sends the one command; from then on the surface only waits, and the outcome is
+    /// the timeline's first line (the repo note, or the failure it says instead).
+    let private repoPicker (actions: ViewActions) (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
+        let launch = model.Launch
+        let waiting =
+            match launch.Stage with
+            | Choosing -> false
+            | Sent _ | Cloning -> true
+        let stage =
+            match launch.Stage with
+            | Choosing -> "choosing"
+            | Sent _ -> "sent"
+            | Cloning -> "cloning"
+        let search () = actions.LaunchSearch launch.Query
+        let onSearchKey (e: Browser.Types.Event) =
+            let key : string = (e :?> Browser.Types.KeyboardEvent).key
+            if key = "Enter" then
+                e.preventDefault ()
+                search ()
+        let candidateRow (candidate: Repos.RepoCandidate) =
+            let name = RepoRef.value candidate.Repo
+            // A repo with no description renders none — not an empty span standing where one
+            // would be.
+            let description =
+                candidate.Description
+                |> Option.map (fun said -> html $"""<span class="{Style.launchCandidateDescription}">{said}</span>""")
+                |> Option.toList
+            html $"""
+                <li>
+                  <button type="button" class="{Style.launchCandidate}" data-repo-candidate="{name}" ?disabled={waiting}
+                          @click={Ev(fun _ ->
+                              dispatch (LaunchMsg (LaunchChosen candidate))
+                              actions.LaunchBranches candidate.Repo)}>
+                    <span class="{Style.launchCandidateName}">{name}</span>
+                    {description}
+                  </button>
+                </li>"""
+        let listing =
+            match launch.Listing with
+            | ListingUnknown ->
+                html $"""<span class="{Style.statusRun}" role="status"><span class="{Style.statusDotPulse}"></span>{Dom.Text.repoPickerLooking}</span>"""
+            | ListingUnavailable (reason, true) ->
+                html $"""
+                    <span class="{Style.small}">{reason}</span>
+                    <div class="{Style.launchActions}">
+                      <button type="button" class="{Style.btnPrimary}" data-repo-picker-connect @click={Ev(fun _ -> actions.RevealSettings ())}>{Dom.Text.repoPickerConnect}</button>
+                    </div>"""
+            | ListingUnavailable (reason, false) ->
+                html $"""<span class="{Style.statusErr}" role="status">{reason}</span>"""
+            | ListingLoaded [] ->
+                html $"""<span class="{Style.small}">{Dom.Text.repoPickerNothing}</span>"""
+            | ListingLoaded candidates ->
+                html $"""<ul class="{Style.launchList}">{candidates |> List.map candidateRow}</ul>"""
+        let choosing =
+            html $"""
+                <label class="{Style.srOnly}" for="repo-picker-search">{Dom.Text.repoPickerSearchLabel}</label>
+                <input id="repo-picker-search" type="search" class="{Style.field}" data-repo-picker-search
+                       placeholder="{Dom.Text.repoPickerSearchPlaceholder}"
+                       autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false"
+                       enterkeyhint="search"
+                       .value={launch.Query}
+                       @input={EvVal(fun v -> dispatch (LaunchMsg (LaunchQueryTyped v)))}
+                       @keydown={Ev onSearchKey} />
+                {listing}"""
+        let chosen (choice: LaunchChoice) =
+            let name = RepoRef.value choice.Repo.Repo
+            // The provider's default is always offered — it is what the clone comes up on —
+            // and the rest are whatever the provider listed. A choice already made stays
+            // offered whatever arrived, so the control never shows something other than the
+            // setting behind it.
+            let branches =
+                match choice.Branches with
+                | BranchesLoaded names -> names
+                | BranchesUnknown | BranchesUnavailable _ -> []
+            let offered = (choice.Repo.DefaultBranch :: choice.Branch :: branches) |> List.distinct
+            let options =
+                offered
+                |> List.map (fun branch ->
+                    html $"""<option value="{branch}" ?selected={branch = choice.Branch}>{branch}</option>""")
+            let branchesNote =
+                match choice.Branches with
+                | BranchesUnavailable reason -> html $"""<span class="{Style.small}">{reason}</span>"""
+                | BranchesUnknown | BranchesLoaded _ -> html $""""""
+            let status =
+                if waiting then
+                    html $"""<span class="{Style.statusRun}" role="status"><span class="{Style.statusDotPulse}"></span>{Dom.Text.repoPickerCloning}</span>"""
+                else html $""""""
+            html $"""
+                <div class="{Style.launchChoice}">
+                  <span class="{Style.launchChoiceName}">{name}</span>
+                  <label class="{Style.label}" for="repo-picker-branch">{Dom.Text.repoPickerBranchLabel}</label>
+                  <div class="{Style.fieldSelectWrap}">
+                    <select id="repo-picker-branch" class="{Style.fieldSelect}" data-repo-picker-branch ?disabled={waiting}
+                            @change={EvVal(fun v -> dispatch (LaunchMsg (LaunchBranchPicked v)))}>
+                      {options}
+                    </select>
+                    <span class="{Style.fieldSelectMark}" aria-hidden="true">{Icon.down}</span>
+                  </div>
+                  {branchesNote}
+                  <div class="{Style.launchActions}">
+                    <button type="button" class="{Style.btnPrimary}" data-repo-picker-start ?disabled={waiting}
+                            @click={Ev(fun _ -> actions.LaunchStart choice.Repo.Repo (Launch.branchToAsk choice))}>{Dom.Text.repoPickerStart}</button>
+                    <button type="button" class="{Style.btn}" data-repo-picker-back ?disabled={waiting}
+                            @click={Ev(fun _ -> dispatch (LaunchMsg LaunchUnchosen))}>{Dom.Text.repoPickerBack}</button>
+                    {status}
+                  </div>
+                </div>"""
+        let body =
+            match launch.Choice with
+            | Some choice -> chosen choice
+            | None -> choosing
+        let problem =
+            match launch.Problem with
+            | Some reason -> html $"""<span class="{Style.statusErr}" role="alert" data-repo-picker-problem>{reason}</span>"""
+            | None -> html $""""""
+        html $"""
+            <section class="{Style.launch}" data-repo-picker="{stage}" aria-labelledby="repo-picker-title">
+              <span id="repo-picker-title" class="{Style.label}">{Dom.Text.repoPickerTitle}</span>
+              <p class="{Style.launchLead}">{Dom.Text.repoPickerLead}</p>
+              {problem}
+              {body}
+              <div class="{Style.launchActions}">
+                <button type="button" class="{Style.btn}" data-repo-picker-skip ?disabled={waiting}
+                        @click={Ev(fun _ -> dispatch (LaunchMsg LaunchDismissed))}>{Dom.Text.repoPickerSkip}</button>
+              </div>
+            </section>"""
+
     let private chat (actions: ViewActions) (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
         // What can be done to one item, behind an ellipsis at its top-right. It goes on
         // every item that HAS an id — a message and an act alike — because "divide it
@@ -1917,6 +2090,14 @@ module View =
         let chapterRule (item: ConversationItem) =
             let held = Chapters.written model.Synced.Chapters item
             let named = ClientModel.chapterName model item
+            // Only peers whose caret is in THIS chapter's name get a marker here, the way the
+            // header takes the title's. A name is a field like any other, and a marker in the
+            // wrong one is a collaborator apparently standing somewhere they are not.
+            let cursors =
+                model.Presence
+                |> Map.toList
+                |> List.filter (fun (_, p) -> p.Focus.Field = ChapterName item.MessageId)
+                |> List.map (fun (peerId, p) -> remoteCursor peerId p)
             html $"""
                 <div class="{Style.chapterRule}" data-chapter-rule="{MessageId.value item.MessageId}">
                   <span class="{Style.chapterDot}" aria-hidden="true"></span>
@@ -1934,6 +2115,7 @@ module View =
                          @select={Ev(fun e -> actions.ReportFieldSelection (ChapterName item.MessageId) (selectionOf e))}
                          @focus={Ev(fun e -> actions.ReportFieldSelection (ChapterName item.MessageId) (selectionOf e))}
                          @blur={Ev(fun _ -> actions.ReportFieldSelection (ChapterName item.MessageId) None)}>
+                  {cursors}
                 </div>"""
         let rows = TimelineProjection.rows model.Conversation model.Timeline
         // Every row resolved to (whose act it is, its rendering) BEFORE grouping, so a row
@@ -2085,6 +2267,9 @@ module View =
             // has always said, which is why it can stay wordless and decorative. Unless what
             // is known is that history is missing — then the timeline is truncated rather
             // than empty, and the line saying so stands where the caret would have.
+            // Nothing here, and there will be: the launch surface stands where the first line
+            // will land, for a client that is connected and has read to the log's end.
+            | [], [], true when ClientModel.launchOffered model -> [ repoPicker actions dispatch model ]
             | [], [], true ->
                 match missing with
                 | Some line -> [ line ]
@@ -2092,6 +2277,10 @@ module View =
                     // Hooked like its sibling above, and for the same reason: what a mark
                     // MEANS is not readable from the mark, and these two mean opposite things.
                     [ html $"""<div class="{Style.timelineIdle}" data-timeline-empty aria-hidden="true"><span class="{Style.caretIdle}"></span></div>""" ]
+            // Rows, and still no repo and nothing said — a launch that failed, and its note:
+            // the surface stays at the head, so the next attempt is a click rather than a
+            // conversation.
+            | _ when ClientModel.launchOffered model -> repoPicker actions dispatch model :: Option.toList missing @ items
             | _ -> Option.toList missing @ items
         html $"""<section class="{Style.timeline}" data-conversation>{body}</section>"""
 
