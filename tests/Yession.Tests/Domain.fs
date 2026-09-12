@@ -864,6 +864,98 @@ let private chapterTests =
             let chapters = Chapters.rename notable (Ylmish.Text.ofString "The watch begins") Map.empty
             Expect.equal (opensOf notable chapters) (Some true) "still open, by nature"
             Expect.equal (nameIn notable chapters) (Some "The watch begins") "and now it is called something"
+
+        // --- Whether anything may write over it ------------------------------------------
+
+        // The promise that lets something else write names at all, and the only thing
+        // standing behind it. `toggle` seeds the guess, so a chapter has words from the
+        // moment it exists — "has it got a name yet" is not a question about emptiness.
+        testCase "a chapter still wearing the guess is unwritten" <| fun () ->
+            Expect.isTrue (Chapters.unwritten (Chapters.toggle said Map.empty) said) "the guess is not a name"
+
+        testCase "a chapter somebody named is not" <| fun () ->
+            let chapters = Chapters.rename said (Ylmish.Text.ofString "Where it was settled") Map.empty
+            Expect.isFalse (Chapters.unwritten chapters said) "theirs, and nothing may type over it"
+
+        // An act that opens a chapter by nature has no entry at all until somebody touches
+        // it. That is the commonest unwritten chapter there is, and a test of the map alone
+        // would miss every one of them.
+        testCase "a chapter nobody has touched is unwritten" <| fun () ->
+            Expect.isTrue (Chapters.unwritten Map.empty notable) "no entry, no name"
+
+        // --- What a chapter covers --------------------------------------------------------
+
+        // What a reader takes a chapter to mean: this, and everything after it, until the
+        // next chapter starts. Which is therefore what naming one has to read.
+        testCase "a chapter covers its own stretch, up to where the next one begins" <| fun () ->
+            let a = itemSaying "a" "first" ConversationItemKind.Message
+            let b = itemSaying "b" "second" ConversationItemKind.Message
+            let c = itemSaying "c" "third" ConversationItemKind.Message
+            let d = itemSaying "d" "fourth" ConversationItemKind.Message
+            let chapters =
+                Map.ofList
+                    [ a.MessageId, { Opens = true; Name = Ylmish.Text.empty }
+                      c.MessageId, { Opens = true; Name = Ylmish.Text.empty } ]
+            Expect.equal
+                (Chapters.covers chapters [ a; b; c; d ] a |> List.map (fun i -> i.Body))
+                [ "first"; "second" ]
+                "up to the next chapter, and not past it"
+
+        testCase "the last chapter covers the rest of the session" <| fun () ->
+            let a = itemSaying "a" "first" ConversationItemKind.Message
+            let b = itemSaying "b" "second" ConversationItemKind.Message
+            let chapters = Map.ofList [ a.MessageId, { Opens = true; Name = Ylmish.Text.empty } ]
+            Expect.equal
+                (Chapters.covers chapters [ a; b ] a |> List.map (fun i -> i.Body))
+                [ "first"; "second" ]
+                "nothing after it to stop at"
+
+        // --- What to ask, and what to do with the answer -----------------------------------
+
+        testCase "the ask carries the chapter's own stretch" <| fun () ->
+            let a = itemSaying "a" "first" ConversationItemKind.Message
+            let b = itemSaying "b" "second" ConversationItemKind.Message
+            let c = itemSaying "c" "third" ConversationItemKind.Message
+            let chapters =
+                Map.ofList
+                    [ a.MessageId, { Opens = true; Name = Ylmish.Text.empty }
+                      c.MessageId, { Opens = true; Name = Ylmish.Text.empty } ]
+            Expect.equal (Chapters.summaryAsk chapters [ a; b; c ] a).Lines [ "first"; "second" ] "its own, and no more"
+
+        // A session can hold a stack trace, a diff, or forty messages. A name is made from
+        // the shape of a chapter, and an ask that sent all of it would spend a model's
+        // context on the part that moves a name least.
+        testCase "a chapter longer than anybody reads is not sent whole" <| fun () ->
+            let long = itemSaying "l" (String.replicate 500 "word ") ConversationItemKind.Message
+            let ask = Chapters.summaryAsk (Map.ofList [ long.MessageId, { Opens = true; Name = Ylmish.Text.empty } ]) [ long ] long
+            let sent = ask.Lines |> List.sumBy (fun line -> line.Length)
+            Expect.isTrue (sent < long.Body.Length) "bounded, rather than the whole of it"
+
+        // A model writes prose. Every shape it writes that a name cannot hold is something
+        // WRAPPING the words, so what comes back is unwrapped rather than rejected.
+        testCase "an answer in quotes is a name without them" <| fun () ->
+            Expect.equal (Chapters.shaped "\"The rollback\"") (Some "The rollback") "the words, not the quoting"
+
+        testCase "an answer with more than one line is named by the first" <| fun () ->
+            Expect.equal
+                (Chapters.shaped "The rollback\nand why we took it")
+                (Some "The rollback")
+                "a rule holds one line"
+
+        // The provider is told the budget, and a provider that ignores it cannot put a name
+        // on the rule that the rule will not hold — because the cut is the guess's own.
+        testCase "an answer longer than a rule holds is cut like the guess is" <| fun () ->
+            let long = "Upstream: capture under pipefail and refuse an empty result before publishing"
+            match Chapters.shaped long with
+            | None -> failwith "a long answer is still an answer"
+            | Some name ->
+                Expect.isTrue (name.EndsWith "…") (sprintf "a cut name says so, got %s" name)
+                Expect.isTrue (name.Length < long.Length) "and it is shorter than what came back"
+
+        // So a caller has one case for "no words this time" rather than a name that is an
+        // empty string, which every surface would then have to notice.
+        testCase "an answer with nothing in it is no name at all" <| fun () ->
+            Expect.isNone (Chapters.shaped "   \n  ") "nothing usable, nothing returned"
     ]
 
 let private prWatchTests =

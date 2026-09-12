@@ -176,6 +176,28 @@ module Chapters =
         | Some at -> line.Substring at
         | None -> ""
 
+    /// One line of somebody's writing, cut to what a rule can hold.
+    ///
+    /// Shared by the guess and by an agent's answer, because a name is a name whoever wrote
+    /// it: the two would otherwise be one length apart, and the rule would hold one of them.
+    let private cutToLimit (said: string) : string =
+        if said.Length <= Limit then said
+        else
+            let cut = said.Substring (0, Limit)
+            // A cut that would leave less than half a name is a cut taken mid-word on a long
+            // word, and half a word reads worse than a word too many.
+            match cut.LastIndexOf ' ' with
+            | at when at >= Limit / 2 -> cut.Substring(0, at).TrimEnd () + "…"
+            | _ -> cut.TrimEnd () + "…"
+
+    /// The first line of a body, without whatever markdown opened it.
+    let private headline (body: string) : string =
+        let firstLine =
+            match body.IndexOf '\n' with
+            | -1 -> body.Trim ()
+            | n -> (body.Substring (0, n)).Trim ()
+        (withoutLeader firstLine).Trim ()
+
     /// What a chapter is called until somebody names it.
     ///
     /// An act note's headline is already a short sentence and arrives whole. A message is not:
@@ -187,23 +209,10 @@ module Chapters =
     /// An ellipsis marks the cut, because a sentence that simply stops reads as one that was
     /// garbled rather than one that was shortened.
     ///
-    /// A HEURISTIC, and one place. It is what a chapter is called until something better is
-    /// written over it — by the person reading, or one day by an agent keeping a running
-    /// summary — and when that arrives it replaces this function rather than joining it.
-    let defaultName (item: ConversationItem) : string =
-        let firstLine =
-            match item.Body.IndexOf '\n' with
-            | -1 -> item.Body.Trim ()
-            | n -> (item.Body.Substring (0, n)).Trim ()
-        let said = (withoutLeader firstLine).Trim ()
-        if said.Length <= Limit then said
-        else
-            let cut = said.Substring (0, Limit)
-            // A cut that would leave less than half a name is a cut taken mid-word on a long
-            // word, and half a word reads worse than a word too many.
-            match cut.LastIndexOf ' ' with
-            | at when at >= Limit / 2 -> cut.Substring(0, at).TrimEnd () + "…"
-            | _ -> cut.TrimEnd () + "…"
+    /// A GUESS, and the only one. It stands until something better is written over it — by the
+    /// person reading, or by whatever answers `summaryAsk` below — and `unwritten` is what says
+    /// a chapter is still wearing it.
+    let defaultName (item: ConversationItem) : string = cutToLimit (headline item.Body)
 
     /// Whether a chapter opens at this item.
     let opens (chapters: Map<MessageId, ChapterMark>) (item: ConversationItem) : bool =
@@ -265,6 +274,87 @@ module Chapters =
     /// The items a chapter opens at, in the order the conversation holds them.
     let over (chapters: Map<MessageId, ChapterMark>) (items: ConversationItem list) : ConversationItem list =
         items |> List.filter (opens chapters)
+
+    /// Whether the chapter here is still wearing the guess rather than a name somebody chose.
+    ///
+    /// NOT "is the name empty": `toggle` seeds the guess into the session when a chapter is
+    /// made, so a chapter has written words from the moment it exists. What separates those
+    /// words from a person's is that they are still exactly what the guess says — which is
+    /// also why this is one function and not a test each caller writes: a writer that got it
+    /// wrong would type over somebody's name, and the person who lost theirs could not say
+    /// what had happened.
+    ///
+    /// An act that opens a chapter by nature has no entry at all until somebody touches it,
+    /// and that is unwritten too.
+    let unwritten (chapters: Map<MessageId, ChapterMark>) (item: ConversationItem) : bool =
+        match Ylmish.Text.toString (written chapters item) with
+        | "" -> true
+        | said -> said = defaultName item
+
+    /// The stretch a chapter covers: from the item it opens at, up to wherever the next
+    /// chapter begins. What a reader takes it to mean, and so what naming it has to read.
+    let covers
+        (chapters: Map<MessageId, ChapterMark>)
+        (items: ConversationItem list)
+        (item: ConversationItem)
+        : ConversationItem list =
+        match items |> List.skipWhile (fun i -> i.MessageId <> item.MessageId) with
+        | [] -> []
+        | head :: rest -> head :: (rest |> List.takeWhile (opens chapters >> not))
+
+    /// How much of a chapter is worth reading to name it. A name is made from the SHAPE of a
+    /// stretch — what it was about, where it went — and neither the fortieth message nor the
+    /// back half of a stack trace moves that. Bounded here rather than at a provider because
+    /// the bound is a judgement about chapters, and a provider that set its own would be a
+    /// second judgement nobody could find.
+    let [<Literal>] private ReadItems = 12
+    let [<Literal>] private ReadChars = 400
+
+    /// What to ask about the chapter here, for whatever can write a few words (`Summarize`).
+    ///
+    /// The task is spelled out rather than left to the provider: these words land on a rule
+    /// across a transcript, next to other chapters' names, and "summarize this" gets a
+    /// sentence about a conversation instead of a label for a section of one.
+    let summaryAsk
+        (chapters: Map<MessageId, ChapterMark>)
+        (items: ConversationItem list)
+        (item: ConversationItem)
+        : SummaryAsk =
+        { Task =
+            "Name this part of a working session, the way a chapter in a book is named: "
+            + "a few words saying what it is ABOUT, in the session's own vocabulary. "
+            + "Answer with the name alone — no quotes, no preamble, no full stop."
+          Lines =
+            covers chapters items item
+            |> List.truncate ReadItems
+            |> List.map (fun i ->
+                let body = i.Body.Trim ()
+                if body.Length <= ReadChars then body else body.Substring (0, ReadChars) + "…")
+            |> List.filter (fun line -> line <> "")
+          Budget = Limit }
+
+    /// An answer, made into a name — or nothing, when there is nothing usable in it.
+    ///
+    /// A model writes prose, and the things it writes that a name cannot hold are all one
+    /// shape: something WRAPPING the words. A quoted answer, a "Chapter: " preamble, two
+    /// lines where one was asked for. So the first line is taken, its wrapping is stripped,
+    /// and it goes through the cut the guess goes through — which is what stops a provider
+    /// that ignored the budget from writing a name the rule cannot hold.
+    ///
+    /// `None` when what is left says nothing, so a caller has one case for "no words this
+    /// time" rather than a name that is an empty string.
+    let shaped (answer: string) : string option =
+        let unquoted (said: string) =
+            let pairs = [ '"', '"'; '\'', '\''; '“', '”'; '‘', '’' ]
+            match pairs |> List.tryFind (fun (opens, closes) -> said.Length >= 2 && said.StartsWith (string opens) && said.EndsWith (string closes)) with
+            | Some _ -> said.Substring(1, said.Length - 2).Trim ()
+            | None -> said
+        match Option.ofObj answer with
+        | None -> None
+        | Some answer ->
+            match headline answer |> unquoted |> cutToLimit with
+            | "" -> None
+            | name -> Some name
 
 type ConversationProjection =
     { Items : ConversationItem list
