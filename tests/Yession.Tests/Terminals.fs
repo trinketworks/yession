@@ -419,6 +419,46 @@ let private markTests =
             let rc = (Marks.rcFor "sh" nonce |> Option.get).Rc
             Expect.isFalse (rc.Contains "\\007'") "no mark is left outside the printf for the shell to expand"
             Expect.equal (rc.Split("printf").Length - 1) 1 "and both ride in the one command substitution"
+
+        testCase "a POSIX sh brackets its prompt marks so readline gives them no width" <| fun () ->
+            // The failure this pins was invisible to every fixture with a short nonce.
+            // bash-as-sh prints PS1 through readline, which measures a prompt by its bytes
+            // unless told which to ignore: two marks with a UUID nonce are wider than an
+            // 80-column terminal, so readline wrapped the prompt — typing a line break into
+            // the middle of the `A` mark. `\001`/`\002` are readline's own ignore markers
+            // (what bash's `\[`/`\]` become), and they have to enclose EVERYTHING printf
+            // prints, or what is outside still counts.
+            let rc = (Marks.rcFor "sh" nonce |> Option.get).Rc
+            let printed = rc.Substring (rc.IndexOf "printf \"" + 8)
+            let printed = printed.Substring (0, printed.IndexOf "\"")
+            Expect.isTrue (printed.StartsWith "\\001\\033]133;") "the ignore-start bracket opens the printed text"
+            Expect.isTrue (printed.EndsWith "\\007\\002") "and the ignore-end bracket closes it after the last mark"
+
+        testCase "the readline brackets are stripped with a mark of ours and left with a foreign one" <| fun () ->
+            // A shell without readline (dash) prints the brackets as bytes. Around our mark
+            // they are protocol and come off with it; around anyone else's they are output.
+            let marks, output, carry = scan1 ("out\u0001" + mark "D;0" + mark "A" + "\u0002")
+            Expect.equal marks [ MarkCommandDone 0; MarkPromptStart ] "both marks are read"
+            Expect.equal output "out" "and neither bracket reaches the transcript"
+            Expect.equal carry "" "nothing hangs"
+            let _, foreignOut, _ = scan1 ("\u0001" + foreign "A" + "\u0002")
+            Expect.equal foreignOut ("\u0001" + foreign "A" + "\u0002") "a foreign mark keeps its brackets, verbatim"
+
+        testCase "an opening bracket split from its mark is carried with it" <| fun () ->
+            // The pty can hand over the `\001` in one read and the mark in the next; a
+            // bracket emitted as output on the first read would be a stray byte the next
+            // read cannot take back.
+            let marks1, out1, carry1 = Marks.scan nonce "" "x\u0001"
+            Expect.isEmpty marks1 "not a mark yet"
+            Expect.equal out1 "x" "the bracket is held back"
+            let marks2, out2, carry2 = Marks.scan nonce carry1 (mark "A" + "\u0002y")
+            Expect.equal marks2 [ MarkPromptStart ] "the mark arrives whole"
+            Expect.equal out2 "y" "with both brackets gone"
+            Expect.equal carry2 "" "and nothing left hanging"
+            let marks3, out3, carry3 = Marks.scan nonce "" ("x\u0001" + (mark "A").Substring (0, 6))
+            Expect.isEmpty marks3 "a truncated mark is not one yet"
+            Expect.equal out3 "x" "and its bracket travels with the fragment"
+            Expect.equal carry3 ("\u0001" + (mark "A").Substring (0, 6)) "to be finished by the next chunk"
     ]
 
 // --- The headless emulator (Plan 13, stage 2b) -------------------------------------------

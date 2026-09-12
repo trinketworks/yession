@@ -209,7 +209,10 @@ let tests =
                 | None -> failwith "srt reports no pty support"
                 | Some spawnPty ->
                     let output = System.Text.StringBuilder ()
-                    let nonce = "srt-nonce"
+                    // As wide as production's (`Interop.randomSecret` is a UUID): the `sh`
+                    // dialect's whole prompt is two of these inside escape sequences, and how
+                    // wide readline THINKS that is decides whether the mark survives.
+                    let nonce = string (System.Guid.NewGuid ())
                     let rc =
                         match Marks.rcFor "sh" nonce with
                         | Some instrumentation -> instrumentation.Rc
