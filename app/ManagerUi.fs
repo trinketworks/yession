@@ -695,6 +695,13 @@ let private answeredFor (status: int) : bool =
 /// impossible to reintroduce: whatever the ground becomes, these pages have it, because it
 /// is declared once, on the document, in the one file every surface links.
 ///
+/// Linked from the ROOT. The Manager page links the sheet by a relative address, which is
+/// right where it lives — `/` — and wrong here: these pages live under `/sessions/{id}/`, so
+/// the same relative address resolved to `/sessions/{id}/assets/…`, a 404, and the page was
+/// white with a stylesheet link in it. The Manager serves from the origin's root (every
+/// route this file writes — `/`, `/sessions/…` — says so), so the root-anchored address is
+/// the one that is true from every page it serves.
+///
 /// HTML, and that is the point rather than a detail. Every other answer this file gives is
 /// read by the page's script, so `text/plain` is right for them — but these are NAVIGATIONS
 /// by construction: a browser is the only thing that ever lands on `/open`. A browser that is
@@ -713,7 +720,7 @@ let private standalonePage (title: string) (body: string) : string =
 </main>
 </body></html>"""
         (Ssr.escapeText title)
-        (Style.headTags cssUrl)
+        (Style.headTags ("/" + cssUrl))
         Style.standalone
         Style.heading
         (Ssr.escapeText title)
