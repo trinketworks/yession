@@ -678,12 +678,13 @@ module ConversationProjection =
         // session-shaping act, and a transition is exactly what a joining human or the
         // agent's next turn needs to be told — the news arrived through no other door.
         | SessionEvent.PrWatched p ->
+            let initial = PrWatched.initial p
             { proj with
                 Items =
                     proj.Items
-                    @ [ { MessageId = p.MessageId
-                          Author = p.Actor
-                          Body = sprintf "PR %s watched" (PrRef.render p.Pr)
+                    @ [ { MessageId = PrWatched.messageId p
+                          Author = PrWatched.actor p
+                          Body = sprintf "PR %s watched" (PrRef.render (PrWatched.pr p))
                           Status = Complete
                           Kind =
                             ConversationItemKind.ActNote
@@ -691,8 +692,8 @@ module ConversationProjection =
                                     Some (
                                         sprintf
                                             "%s, %s"
-                                            (PrState.describe p.Initial.State)
-                                            (ChecksRollup.describe p.Initial.Checks))
+                                            (PrState.describe initial.State)
+                                            (ChecksRollup.describe initial.Checks))
                                   // Where the waiting began. A chapter by nature, like the
                                   // news that follows it — and unlike the unwatch below,
                                   // which is where the story stops being told rather than a

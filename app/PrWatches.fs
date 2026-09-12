@@ -424,7 +424,10 @@ let service
         fun authority pr ->
             async {
                 let! watches = watchesNow ()
-                match watches |> List.tryFind (fun w -> w.Pr = pr), Authority.credential authority with
+                // Whose watch this would be is the event's own rule (`PrWatched.watcherOf`),
+                // asked here before the look because the look is made on that credential —
+                // and a refusal is said now, before a request is spent on it.
+                match watches |> List.tryFind (fun w -> w.Pr = pr), PrWatched.watcherOf pr authority with
                 // Already watched: a repeated ask is a question, not an act (the
                 // `add_repo` rule). Answer what is known and record nothing.
                 | Some existing, _ ->
@@ -435,13 +438,8 @@ let service
                                 (PrRef.render pr)
                                 (PrState.describe existing.Known.State)
                                 (ChecksRollup.describe existing.Known.Checks))
-                | None, CredentialFor.Deployment ->
-                    return
-                        Error (
-                            sprintf
-                                "%s cannot be watched on the deployment's own credential — a watch keeps looking as somebody, and wakes them"
-                                (PrRef.render pr))
-                | None, CredentialFor.Person watcher ->
+                | None, Error reason -> return Error reason
+                | None, Ok watcher ->
                     let! token = resolveToken (CredentialFor.Person watcher)
                     let! outcome = fetch token pr PrEtags.none None
                     match outcome with
@@ -451,19 +449,10 @@ let service
                     // start a baseline from.
                     | PrUnchanged -> return Error (sprintf "%s answered nothing about that pull request" provider)
                     | PrChanged (snapshot, _) ->
-                        match mintId () with
+                        match mintId () |> Result.bind (fun id -> PrWatched.create id authority pr snapshot) with
                         | Error e -> return Error e
-                        | Ok messageId ->
-                            let actor = Authority.author authority
-                            do!
-                                append
-                                    actor
-                                    (SessionEvent.PrWatched
-                                        { MessageId = messageId
-                                          Pr = pr
-                                          Initial = snapshot
-                                          Actor = actor
-                                          Watcher = watcher })
+                        | Ok watched ->
+                            do! append (PrWatched.actor watched) (SessionEvent.PrWatched watched)
                             let! watches = watchesNow ()
                             refold watches
                             return Ok (describe pr snapshot)
