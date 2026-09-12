@@ -79,6 +79,13 @@ NEXT request properly.
   `dequeuePullRequest` then `enqueuePullRequest` mutations on the PR's node id.
 - **One push can carry several PRs**, so the `release` run in Step 4 may be a batch head that
   contains your commit rather than a run named for it.
+- **A stacked PR goes DIRTY when the one under it squash-merges.** B's history holds A's
+  original commit, which conflicts with A's squash. `git rebase --onto origin/master
+  <A-sha>` and force-push; arm B's auto-merge only after A lands, or B's squash carries A's
+  diff. If B already entered the queue its branch is locked (push refused, GH006) and it
+  merges as-is — leave it.
+- **PR CI checks out master+PR**, so a branch that builds locally can fail CI on a file
+  master added after you branched. Fetch and rebase before diagnosing.
 
 ## Step 1: Compare what you built to what was asked
 
