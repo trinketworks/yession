@@ -206,6 +206,12 @@ type ReposConfig =
       /// caller names (Plan 08 precedence, applied by the composition). None =
       /// anonymous — public repos still clone; a private one fails with git's own words.
       ResolveToken : Principal option -> Async<string option>
+      /// What the provider calls this repo NOW, on this credential — `None` when it cannot
+      /// say (unreachable, rate-limited, or a repo this credential cannot see, which the
+      /// clone will say in its own words). A clone follows a renamed repo's old name with a
+      /// redirect and keeps an `origin` the provider no longer answers to, so a name the
+      /// provider has moved on from is refused before it is cloned, with the current one.
+      Canonical : string option -> RepoRef -> Async<RepoRef option>
       /// A network verb failed while spending the credential resolved for this actor.
       ///
       /// Beside `ResolveToken` deliberately, because they are two halves of one story: a
@@ -453,6 +459,16 @@ let create (config: ReposConfig) : Result<ReposService, string> =
         let cloneIntoPlace (caller: RepoCaller) (repo: RepoRef) : Async<Result<RepoListing, string>> =
             async {
                 let! token = config.ResolveToken caller.Credential
+                match! config.Canonical token repo with
+                | Some current when current <> repo ->
+                    return
+                        Error (
+                            sprintf
+                                "github now calls %s %s — add %s instead. A checkout made under the old name clones through a redirect and keeps an origin the provider no longer answers to by that name."
+                                (RepoRef.value repo)
+                                (RepoRef.value current)
+                                (RepoRef.value current))
+                | _ ->
                 // Relative, because the sandbox's working directory is the repos dir; git
                 // creates the leading directories itself.
                 let relative = sprintf "%s/%s" stagingDirName (string (Guid.NewGuid ()))
