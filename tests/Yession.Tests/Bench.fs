@@ -386,7 +386,7 @@ let tests =
                         for items in conversationSizes do
                             do!
                                 awaitU (phonePage.EvaluateAsync (
-                                    sprintf "() => window.__benchScrollBegin(%d, %d, %d)" items streamRecords streamEveryMs))
+                                    sprintf "() => window.__benchScrollBegin(%d, %d, %d, false)" items streamRecords streamEveryMs))
                             let! carried = flingWhileStreaming phonePage cdp streamRecords
                             let! report = await (phonePage.EvaluateAsync<string> "() => window.__benchScrollEnd()")
                             use doc = JsonDocument.Parse report
