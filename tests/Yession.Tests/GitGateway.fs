@@ -57,6 +57,15 @@ let private routeTests =
                 Expect.equal value "https://github.com/" "of the address a remote is written as"
             | other -> failwithf "expected one entry, got %A" other
 
+        // Where a sandbox reaches this process is the backend's fact, and srt's splits by
+        // platform for a reason a test on either box can check: Linux loopback is 127/8 and
+        // macOS configures `.1` alone, while srt's `NO_PROXY` covers `127.0.0.1` on both.
+        testCase "each backend names the host by what its sandbox can reach" <| fun () ->
+            Expect.equal (Sandboxes.hostAddressFrom "box.local" "darwin" DockerBackend) (Some "host.docker.internal") "docker, by the daemon's alias"
+            Expect.equal (Sandboxes.hostAddressFrom "box.local" "linux" HostBackend) (Some "127.0.0.1") "host, loopback"
+            Expect.equal (Sandboxes.hostAddressFrom "box.local" "darwin" SrtBackend) (Some "box.local") "srt on macOS: the box's name"
+            Expect.equal (Sandboxes.hostAddressFrom "runner" "linux" SrtBackend) (Some "127.0.0.2") "srt on Linux: a loopback address NO_PROXY does not name"
+
         // The pkt-line header counts BYTES. A message with an em dash in it, counted in
         // characters, arrived at git one byte short and printed with its last letter gone.
         testCase "a pkt-line's length counts bytes, not characters" <| fun () ->
@@ -428,8 +437,74 @@ let private pushTests =
         }
     ]
 
+// --- [Srt]: from inside a confined sandbox -------------------------------------------------
+//
+// An srt sandbox's only way out is srt's filtering proxy, and the proxy's `NO_PROXY` covers
+// loopback and every private range — so the host address the backend hands out
+// (`hostAddressFrom`: `127.0.0.2` on Linux, the box's name on macOS) is the one that goes
+// THROUGH the proxy rather than being dialled directly into a namespace with no route. The
+// gateway's every-interface listener answers it on the parent side. This is the seam the
+// Ports suite cannot reach: it drives git directly; only a real confined sandbox proves the
+// route survives srt's egress.
+
+let private srtTools () =
+    match Sandboxes.SrtSandbox.toolsFrom (Sandboxes.ambientEnv ()) with
+    | Ok tools -> tools
+    | Error reason -> failwithf "srt tools: %s" reason
+
+let private srtTests =
+    testList "from an srt sandbox" [
+
+        testCaseAsync "a confined git reaches the gateway, through srt's proxy, by the backend's host" <| async {
+            let! upstream = startUpstream ()
+            do!
+                withGateway upstream.Origin (fun gateway ->
+                    async {
+                        let host =
+                            match Sandboxes.hostAddressHere (Interop.hostname ()) SrtBackend with
+                            | Some host -> host
+                            | None -> failwith "srt is a backend with a route to the host"
+                        let cap = gateway.Grant (sandbox "dev") (lenderOf (lending (Some "ghu_lent")))
+                        // Canonical, because seatbelt matches the path as written and `/tmp`
+                        // is a symlink here (the note in GitIntegration.fs).
+                        let workspace =
+                            match Fs.canonical (mkdtemp nodeFs nodeOs) with
+                            | Some path -> path
+                            | None -> failwith "the workspace does not resolve"
+                        let policy : SandboxPolicy =
+                            { ReadPaths = [ workspace ]
+                              WritePaths = [ workspace ]
+                              AllowedDomains = Some [ host ]
+                              Sockets = []
+                              Binds = []
+                              Volumes = []
+                              Realisation = []
+                              // A home of its own, as a session gives every sandbox: git
+                              // reads `$HOME`'s config, and the operator's is denied.
+                              Env =
+                                Sandboxes.hostBaseline (Sandboxes.ambientEnv ())
+                                |> Map.add "HOME" workspace
+                                |> Sandboxes.withGitConfig (GitGateway.gitConfig host gateway.Port cap)
+                              WorkingDirectory = Some workspace
+                              Filesystem = Confined }
+                        match! Sandboxes.SrtSandbox.create (srtTools ()) policy with
+                        | Error reason -> failwithf "srt sandbox failed: %s" reason
+                        | Ok confined ->
+                            let! run, out, err =
+                                runInSandbox confined "git" [ "ls-remote"; "https://github.com/octo/hello.git" ] (Map.ofList [ "GIT_TERMINAL_PROMPT", "0" ]) None
+                            Expect.equal run (SandboxExited 0) (sprintf "ls-remote succeeded from inside: %s" err)
+                            Expect.isTrue (out.Contains "refs/heads/main") "and read the upstream's refs"
+                            Expect.equal (List.ofSeq upstream.Authorizations) [ Some (basic "ghu_lent") ] "github.com saw the lent credential"
+                            do! confined.Dispose ()
+                        rmrf nodeFs workspace
+                    })
+            do! upstream.Close ()
+        }
+    ]
+
 let tests =
     testList "The git gateway" [
         routeTests
         Tag.needs "The git gateway, driven by git" [ Tag.Ports ] (fun () -> testList "with a real git" [ portsTests; pushTests ])
+        Tag.needs "The git gateway, from srt" [ Tag.Srt ] (fun () -> srtTests)
     ]
