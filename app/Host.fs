@@ -116,6 +116,11 @@ let startFull
     // A THUNK, read at every drain (Plan 08): agent availability is dynamic — a
     // credential connected mid-session enables turns without a relaunch.
     (runAgent: unit -> RunAgent option)
+    // The same, for the other thing a model is asked to do here: write a few words for a
+    // chapter nobody has named (Plan 25). A thunk for the same reason — a credential
+    // connected mid-session starts naming chapters without a relaunch — and `None` means
+    // the guesses stand, which is what a session with no credential has always shown.
+    (summarize: unit -> Summarize option)
     (makeSandboxes: (EventLog<SessionEvent> -> WorkSandboxes.WorkSandboxes) option)
     // Secrets (Plan 06): the Manager-granted, session-scoped secrets surface
     // (write/list/delete — never read). None = turns see the `none` denials.
@@ -677,11 +682,38 @@ let startFull
             connections |> Map.iter (fun _ channel -> sendState channel payload))
         |> ignore
 
+        // Naming the chapters nobody has named (Plan 25). The chapters are in the DOC and the
+        // items they are about are in the LOG, so the namer is handed a way to read the
+        // conversation rather than reaching for one — and reads it only when there is a
+        // chapter it has not asked about, which is once per chapter rather than once per
+        // keystroke anybody types.
+        let nameChapters =
+            ChapterNames.create
+                doc
+                (fun () ->
+                    async {
+                        let! page = log.Read None System.Int32.MaxValue
+                        // Qualified for the reason the tool-note read above is: this file
+                        // carries several records with an `Items`, and an `open` for one read
+                        // would decide which of them a label means everywhere below it.
+                        return
+                            Yession.Domain.Chat.ConversationProjection.applyEvents
+                                None
+                                page.Events
+                                Yession.Domain.Chat.ConversationProjection.empty
+                            |> fst
+                    })
+                summarize
+
         // The drain re-arms on every doc update observed while idle, so an enqueue can
         // never be missed (liveness; recursion during a drain's own removal is cut by the
         // single-flight guard). Drafts are ephemeral WIP in the synced state — never
         // durable facts (only their send is) — so a new draft appearing needs no append.
         DocSync.onAnyUpdate doc (fun () -> drain ())
+        // A chapter is made by a doc write and nothing else announces it, so the namer looks
+        // on the same signal — and its own write comes back through here, which its
+        // single-flight guard and its asked-once set are what make harmless.
+        DocSync.onAnyUpdate doc (fun () -> nameChapters ())
         // The terminal queue re-arms on the same signal, for the same liveness reason.
         DocSync.onAnyUpdate doc (fun () -> drainTerminals ())
         // ...and so does a command waiting on that queue: an approval a peer just granted is a
@@ -1025,7 +1057,7 @@ let startWithEnvironment
     // No mount: these helpers serve an unfronted, origin-root session. No transcript store
     // either — terminals fall back to the in-memory one, which is the right default for a
     // host with no data directory.
-    startFull (fun () -> runAgent) makeSandboxes None baseLog None None None None (fun _ _ -> ()) None McpClient.McpConnections.none None sessionId None "" None false None port
+    startFull (fun () -> runAgent) (fun () -> None) makeSandboxes None baseLog None None None None (fun _ _ -> ()) None McpClient.McpConnections.none None sessionId None "" None false None port
 
 /// `startWithEnvironment` without an environment — Step 08-era topology.
 let startWith (runAgent: RunAgent option) (sessionId: SessionId) (port: int) : Async<SessionHost> =
