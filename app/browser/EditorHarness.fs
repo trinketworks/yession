@@ -19,6 +19,7 @@ open Lit
 open Yjs
 open Yession.Domain
 open Yession.Domain.Agent
+open Yession.Domain.Link
 open Yession.Domain.Terminals
 open Yession.Domain.Collab
 open Yession.Domain.Chat
@@ -1076,6 +1077,19 @@ let private exposeAgentTurn (f: unit -> unit) : unit = jsNative
 [<Emit("(function(f){ window.__take = f })($0)")>]
 let private exposeTake (f: string -> unit) : unit = jsNative
 
+/// A collaborator's caret in a chapter's NAME, with no session to relay one from. The
+/// positions handed over are real relative positions over a real `Y.Text` on this page's doc,
+/// which is the whole of what the placement reads: it resolves them against the doc and
+/// measures the input's own value and box. So the question the browser is asked here is
+/// exactly the one the app asks it — given a caret that resolves, is the marker painted over
+/// the field it is in, at the offset it claims.
+///
+/// Where a name lives IN the doc is the codec's answer and is pinned where it can be tested
+/// for a penny (`SyncedStateSync.chapterNameText`), not restated here: a fixture that wrote
+/// the layout out by hand would be a second copy of it, and the wrong one the day it moved.
+[<Emit("(function(f){ window.__chapterCaret = f })($0)")>]
+let private exposeChapterCaret (f: string -> int -> int -> unit) : unit = jsNative
+
 do
     dressShell Style.app
     // Taking the keyboard is answered by the Session Process, which appends the lease event
@@ -1175,6 +1189,21 @@ do
         match TerminalId.create id with
         | Ok terminal -> takeRef terminal
         | Error _ -> ())
+    exposeChapterCaret (fun id anchor head ->
+        match MessageId.create id, PeerId.create "brave-owl" with
+        | Ok messageId, Ok peerId ->
+            let text = shellDoc.getText ("harness-chapter-name-" + id)
+            // Only a chapter this page HAS gets seeded: a name nobody here holds is not an
+            // empty one, and a caret taken over an empty text is a caret at index nothing.
+            if text.length = 0 then
+                ClientModel.chapterNameAt messageId model |> Option.iter (fun named -> text.insert (0, named))
+            let at (index: int) = ProseMirror.relPosFromTypeIndex (box text) index |> ProseMirror.encodeRel
+            dispatch (
+                RemotePresenceMsg
+                    { PeerId = peerId
+                      DisplayName = "brave-owl"
+                      Focus = Some { Field = ChapterName messageId; Pos = { Anchor = at anchor; Head = at head } } })
+        | _ -> ())
     exposeRecord (fun id seq kind data ->
         match TerminalId.create id, TranscriptKind.parse kind with
         | Ok terminal, Some kind ->

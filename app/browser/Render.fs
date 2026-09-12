@@ -114,21 +114,27 @@ let private keepSurfacesPinned (selector: string) : unit = jsNative
 // A native <input> has no per-character DOM geometry, so we measure the pixel offset of a
 // substring with a canvas using the input's own font. Given a peer's decoded selection
 // (`anchor`,`head` indices), size its highlight span to `lo..hi` and offset the caret bar to
-// `head`. Colour is set by the view (`PeerColour`); this only positions. Called per Title peer
-// after every render — the DOM is up to date synchronously.
+// `head`. Colour is set by the view (`PeerColour`); this only positions. Called per peer whose
+// caret is in a collaborative input after every render — the DOM is up to date synchronously.
 //
 // Everything the marker needs is READ OFF THE FIELD, never assumed from the stylesheet: the
-// marker is a sibling of the input inside the title block, and where the input's text sits in
-// that block is a function of the input's own offset, padding and content box. The title is a
-// 28/32 heading at one width and a 19/24 pivot at the other, and its padding is spent outward
-// so a fill can appear without moving a glyph — a marker placed from constants would be right
-// at exactly one of those and silently wrong at the rest.
-[<Emit("""(function(peer, a, h){
-  const input = document.querySelector('input[data-session-title]')
-  const marker = document.querySelector('[data-cursor-peer="' + peer + '"]')
-  if (!input || !marker) return
+// marker is a sibling of the input, and where the input's text sits in the block they share is
+// a function of the input's own offset, padding and content box. The title alone is a 28/32
+// heading at one width and a 19/24 pivot at the other, its padding spent outward so a fill can
+// appear without moving a glyph — and a chapter's name is a third type at a fourth size. A
+// marker placed from constants would be right at exactly one of them and silently wrong at the
+// rest, which is why the field is named by a SELECTOR here and nothing else about it is.
+//
+// The marker is found INSIDE the input's own block rather than on the page: the offsets it is
+// positioned by are its offset parent's, so a marker taken from somewhere else on the page
+// would be laid out against a box it does not live in.
+[<Emit("""(function(field, peer, a, h){
+  const input = document.querySelector(field)
+  if (!input || !input.parentElement) return
+  const marker = input.parentElement.querySelector('[data-cursor-peer="' + peer + '"]')
+  if (!marker) return
   const cs = getComputedStyle(input)
-  const canvas = (window.__yTitleCanvas || (window.__yTitleCanvas = document.createElement('canvas')))
+  const canvas = (window.__yInputCanvas || (window.__yInputCanvas = document.createElement('canvas')))
   const ctx = canvas.getContext('2d')
   ctx.font = cs.font && cs.font.trim() ? cs.font : (cs.fontStyle + ' ' + cs.fontWeight + ' ' + cs.fontSize + ' ' + cs.fontFamily)
   const value = input.value || ''
@@ -146,8 +152,8 @@ let private keepSurfacesPinned (selector: string) : unit = jsNative
   marker.style.height = height + 'px'
   marker.style.width = Math.max(0, xOf(up) - loX) + 'px'
   if (marker.firstElementChild) marker.firstElementChild.style.left = (xOf(head) - loX) + 'px'
-})($0, $1, $2)""")>]
-let private placeTitleCursor (peer: string) (anchor: int) (head: int) : unit = jsNative
+})($0, $1, $2, $3)""")>]
+let private placeInputCursor (field: string) (peer: string) (anchor: int) (head: int) : unit = jsNative
 
 [<Emit("requestAnimationFrame(() => $0())")>]
 let internal raf (f: unit -> unit) : unit = jsNative
@@ -623,15 +629,29 @@ let create (deps: Deps) : Renderer =
                         lastPushed.[key] <- cursors
                         handle.PushPresences cursors)
 
-    /// Place collaborators' title carets by measurement (native inputs have no per-character
-    /// geometry): decode each title-focused peer's relative anchor/head against the title
-    /// `Y.Text`, then size/offset its marker. A no-op when no remote caret is in the title.
-    let placeTitleCursorsAll (model: ClientModel) =
+    /// Place collaborators' carets in the collaborative INPUTS by measurement (a native input
+    /// has no per-character geometry): decode each such peer's relative anchor/head against the
+    /// doc, then size and offset its marker over the field it is in. A no-op when no remote
+    /// caret is in one.
+    ///
+    /// The field says which input, and the field is the only thing that does. A peer's position
+    /// is relative to the text it was taken in, so a caret in one chapter's name measured over
+    /// another's would land at a real-looking offset in the wrong name — the one way this can
+    /// be wrong that still looks right.
+    let placeInputCursorsAll (model: ClientModel) =
+        let selectorOf (field: FocusField) : string option =
+            match field with
+            | Title -> Some "input[data-session-title]"
+            | ChapterName messageId ->
+                Some (sprintf "input[data-chapter-name=\"%s\"]" (MessageId.value messageId))
+            | DraftBody _ | QueueBody _ | TerminalDraftBody _ | TerminalQueuedBody _ -> None
         for (peerId, p) in Map.toList model.Presence do
-            if p.Focus.Field = Title then
+            match selectorOf p.Focus.Field with
+            | Some selector ->
                 match ProseMirror.absIndexInDoc doc p.Focus.Pos.Anchor, ProseMirror.absIndexInDoc doc p.Focus.Pos.Head with
-                | Some a, Some h -> placeTitleCursor (PeerId.value peerId) a h
+                | Some a, Some h -> placeInputCursor selector (PeerId.value peerId) a h
                 | _ -> ()
+            | None -> ()
 
     // Render the Lit view on every model change. Lit diffs into the root, so the focused
     // textarea and its caret survive; only the timeline scroll is restored by hand.
@@ -693,7 +713,7 @@ let create (deps: Deps) : Renderer =
         syncTerminalSlots model
         syncCatchUpTimer model
         pushPresences ()
-        placeTitleCursorsAll model
+        placeInputCursorsAll model
         // The tab's name, which lives outside the root and so is the model's to push rather
         // than Lit's to render. The NAME is computed in the model (`tabTitle`); this only
         // applies it, and only on a change — assigning `document.title` every render is a

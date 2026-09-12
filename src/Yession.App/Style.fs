@@ -1196,8 +1196,10 @@ module Style =
     /// `readingColumn`, the same measure a message group wears, because what it divides is
     /// that column: a rule running the whole scroller while the words stop at 38rem reads as
     /// a line drawn on the page rather than a break in the conversation.
+    /// `relative` because a collaborator's caret in the name is placed against this box: the
+    /// marker is positioned from the input's own offsets, and those are its offset parent's.
     let chapterRule =
-        cls [ "flex items-center gap-2.5 border-t border-hair pt-3 mt-6 -mb-1 max-md:mt-4"
+        cls [ "relative flex items-center gap-2.5 border-t border-hair pt-3 mt-6 -mb-1 max-md:mt-4"
               readingColumn; "max-md:max-w-none" ]
 
     /// The mark on it: a dot at the reading edge, so a chapter has an anchor the eye finds
