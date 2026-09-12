@@ -384,11 +384,18 @@ let private fetchMe (url: string) (deadlineMs: float) : Async<ProbeOutcome> =
         | Choice1Of2 response -> return ProbeUnreachable (sprintf "HTTP %d" response.Status)
     }
 
-// `location.assign` resolves against the DOCUMENT's URL, not `<base href>` — the one
+// `location.replace`, not `assign`: the one navigation this shell performs on its own is the
+// sign-in bounce, which leaves THIS page and comes back to it — so it is a renavigation, not
+// a place a person can return to. `assign` pushed it, and a new session sat two entries deep:
+// Back landed on a shell with no cookie, which bounced forward again, and the Manager the
+// session was opened from was a second press away. Replaced, the session is the one entry
+// after wherever it was opened from.
+//
+// `location.replace` resolves against the DOCUMENT's URL, not `<base href>` — the one
 // place relative resolution does not follow the base — so resolve explicitly against
 // `document.baseURI` here, once, rather than at each call site.
-[<Emit("window.location.assign(new URL($0, document.baseURI).href)")>]
-let private navigateTo (url: string) : unit = jsNative
+[<Emit("window.location.replace(new URL($0, document.baseURI).href)")>]
+let private renavigateTo (url: string) : unit = jsNative
 
 
 // --- Client-side doc persistence (Step 20): IndexedDB via y-indexeddb ------------------
@@ -1277,7 +1284,7 @@ let private start () =
         | ProbeUnauthorized ->
             // The peer id rides the login bounce so the Manager can witness which peer
             // signed in for this session (Plan 07 — peer-scoped secrets).
-            navigateTo (SessionRoute.relative Login + "?peer_id=" + urlEncode (PeerId.value peerId))
+            renavigateTo (SessionRoute.relative Login + "?peer_id=" + urlEncode (PeerId.value peerId))
         | ProbeAuthorized me ->
             // Authenticated: the Claude panel's status is knowable now, and the read
             // surface's stream has a cookie that will be accepted.

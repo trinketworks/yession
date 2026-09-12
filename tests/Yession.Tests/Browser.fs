@@ -3165,6 +3165,53 @@ let mountedTests =
                 })
 
         // The probe settles four ways and each has a remedy; the fifth, never, had none. A
+        // A session is ONE step from wherever it was opened. Its first visit signs in by
+        // renavigation (session -> Manager -> callback -> session), and that bounce used to be
+        // a pushed entry: Back landed on a shell with no cookie, which bounced forward again,
+        // and the Manager was a second press away — every new session sat two entries deep.
+        // Pinned from the Manager's side, since that is the promise: open a session from the
+        // Manager, press Back, and it is the Manager you are looking at. Only a browser can
+        // answer this; the history stack is nothing the markup knows.
+        testCaseAsync "back from a freshly opened session is the Manager, not a sign-in bounce" <|
+            async {
+                if Directory.Exists mountDataDir then Directory.Delete (mountDataDir, true)
+                startMountedHost ()
+                let proxy = startMountProxy MOUNT_PROXY_PORT (fun () -> mountSessionPort)
+                let mutable browserToClose : IBrowser option = None
+                let mutable playwrightToDispose : IPlaywright option = None
+                try
+                    let managerUrl = sprintf "http://127.0.0.1:%d/" MOUNT_MANAGER_PORT
+                    let publicUrl = sprintf "http://127.0.0.1:%d/s/%s/" MOUNT_PROXY_PORT MOUNT_SESSION
+                    let! pw = await (Playwright.CreateAsync ())
+                    playwrightToDispose <- Some pw
+                    let! br =
+                        await (pw.Chromium.LaunchAsync (
+                            BrowserTypeLaunchOptions (
+                                ExecutablePath = chromiumPath (),
+                                Args = [| "--disable-features=WebRtcHideLocalIpsWithMdns" |])))
+                    browserToClose <- Some br
+                    let! context = await (br.NewContextAsync ())
+                    let! page = await (context.NewPageAsync ())
+                    page.SetDefaultTimeout 20000.0f
+                    let evidence = watching page
+                    do! reporting "back from a freshly opened session" page evidence <| async {
+                    let! _ = await (page.GotoAsync managerUrl)
+                    // The session, as a person reaches it from the Manager: the first visit,
+                    // with no cookie, so the sign-in bounce runs. `connected` is only true on
+                    // the shell after it, and re-arms across the navigations in between.
+                    let! _ = await (page.GotoAsync publicUrl)
+                    let! _ = await (page.WaitForFunctionAsync connected)
+                    let! _ = await (page.GoBackAsync ())
+                    do! waitFor "the Manager, one step back" page
+                            (sprintf "location.href === %s" (System.Text.Json.JsonSerializer.Serialize managerUrl))
+                    }
+                finally
+                    browserToClose |> Option.iter (fun b -> b.CloseAsync () |> ignore)
+                    playwrightToDispose |> Option.iter (fun p -> p.Dispose ())
+                    proxy.Stop ()
+                    try mountedHost.Kill true with _ -> ()
+            }
+
         // phone with its tunnel not yet up, a proxy whose upstream accepted and stalled, a
         // page suspended with the fetch in flight — each left the client wearing the state it
         // started in: "not connected", no reason, and nothing to press, for as long as that
