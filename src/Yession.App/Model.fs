@@ -1969,7 +1969,7 @@ module ClientModel =
                       // `ofAuthor`, so it runs as its own author: a terminal command is a
                       // shell line in a sandbox, not a call against somebody's credential —
                       // and a person's act cannot accidentally carry one.
-                      Authority = Authority.ofAuthor (PeerRef author)
+                      Authority = Authority.ofAuthor (Principal.Peer author)
                       // A person's composer never waits on a command, so there is nothing
                       // for a background flag to spare them (Plan 20, stage 2).
                       Background = false

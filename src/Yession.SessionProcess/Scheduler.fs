@@ -133,24 +133,23 @@ module Scheduler =
                             //    QueueId as the exactly-once anchor) BEFORE the doc
                             //    removal — a crash here leaves only a repairable
                             //    leftover, never a lost or doubled message.
-                            let mutable lastMessage : (Principal * MessageSent) option = None
+                            let mutable lastMessage : MessageSent option = None
                             for entry in plan.Batch do
-                                let author = actorFor entry.Author
                                 let message =
                                     { MessageId = mintMessageId ()
                                       QueueId = Some entry.QueueId
-                                      Author = Principal.toActor author
+                                      Author = actorFor entry.Author
                                       Body = SyncedStateSync.queuedBodyMarkdown doc entry.QueueId }
-                                let! _ = log.Append (Principal.toActor author) (MessageSent message)
+                                let! _ = log.Append (Principal.toActor message.Author) (MessageSent message)
                                 consumed <- Set.add (QueueId.value entry.QueueId) consumed
-                                lastMessage <- Some (author, message)
+                                lastMessage <- Some message
                             // 2. Visible: one transaction under the process origin;
                             //    the removal relays to every peer like any update.
                             SyncedStateSync.removeQueued doc plan.Removals
                             // 3. Run one coalesced turn, triggered by the batch tail.
                             match runAgent (), lastMessage with
-                            | Some agent, Some (author, trigger) ->
-                                let trigger = AgentTurn.TurnTrigger.ofMessage author trigger
+                            | Some agent, Some trigger ->
+                                let trigger = AgentTurn.FromMessage trigger
                                 generation <- generation + 1
                                 let turn =
                                     { Generation = generation
@@ -243,7 +242,7 @@ module Scheduler =
                                     terminals
                                     (selectedModel ())
                                     guidance
-                                    (AgentTurn.TurnTrigger.ofWake reason turnActor)
+                                    (AgentTurn.FromWake (reason, turnActor))
                             match running with
                             | Some current when current.Generation = turn.Generation ->
                                 running <- None

@@ -3016,7 +3016,7 @@ let private prWatchVerbTests =
     let ada = PeerRef (PeerId.create "ada" |> expect)
     /// Ada watching for herself, and the agent watching on her turn: two authorities, one
     /// watcher — the second is the one that used to record the agent as the watcher.
-    let adaHerself = Authority.ofAuthor ada
+    let adaHerself = Authority.ofAuthor (Principal.Peer (PeerId.create "ada" |> expect))
     let agentForAda = Authority.agentFor (Principal.Peer (PeerId.create "ada" |> expect))
     let adasCredential = CredentialFor.Person (Principal.Peer (PeerId.create "ada" |> expect))
     let watchSessionId = SessionId.create "pr-watch-suite" |> expect

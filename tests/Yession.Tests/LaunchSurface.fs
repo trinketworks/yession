@@ -87,7 +87,7 @@ let private offeredTests =
                 clientAt 2L (fresh @ [ at 2L (RepoAdded { MessageId = MessageId.create "r1" |> expect; Repo = hello; Branch = "main"; Actor = PeerRef ada }) ])
             Expect.isFalse (ClientModel.launchOffered begun) "a repo note is the session having begun"
             let spoken =
-                clientAt 2L (fresh @ [ at 2L (MessageSent { MessageId = MessageId.create "m1" |> expect; QueueId = None; Author = PeerRef ada; Body = "hi" }) ])
+                clientAt 2L (fresh @ [ at 2L (MessageSent { MessageId = MessageId.create "m1" |> expect; QueueId = None; Author = Principal.Peer ada; Body = "hi" }) ])
             Expect.isFalse (ClientModel.launchOffered spoken) "so is a message"
 
         testCase "starting without a repo steps it aside for this client" <| fun () ->

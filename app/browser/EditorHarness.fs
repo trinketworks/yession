@@ -799,7 +799,7 @@ let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
                     Blocks =
                       [ { BlockId = blockId
                           QueueId = None
-                          Authority = Authority.ofAuthor (PeerRef peerId)
+                          Authority = Authority.ofAuthor (Principal.Peer peerId)
                           Command = "ls -la"
                           Background = false
                           FromSeq = 0
@@ -837,7 +837,7 @@ let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
                           [ for i in 1 .. 24 ->
                               { BlockId = BlockId.create (sprintf "block-filler-%d" i) |> expect
                                 QueueId = None
-                                Authority = Authority.ofAuthor (PeerRef peerId)
+                                Authority = Authority.ofAuthor (Principal.Peer peerId)
                                 Command = sprintf "echo line %d" i
                                 Background = false
                                 FromSeq = 2
@@ -953,7 +953,7 @@ let private openFixture (items: int) (perAnswer: int) : OpenFixture =
                 MessageSent
                     { MessageId = messageId
                       QueueId = None
-                      Author = PeerRef peerId
+                      Author = Principal.Peer peerId
                       Body = sprintf "and then line %d, which is here to make the column long" i })
         else
             let turn : AgentTurnId = AgentTurnId.create (sprintf "turn-open-%d" i) |> expect

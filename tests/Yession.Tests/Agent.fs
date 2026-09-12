@@ -77,11 +77,11 @@ let private eventsOf (log: EventLog<SessionEvent>) =
 let private trigger : MessageSent =
     { MessageId = humanMessageId
       QueueId = None
-      Author = PeerRef ada
+      Author = Principal.Peer ada
       Body = "hi agent" }
 
 /// The turn that message asks for, run as its author.
-let private asked = AgentTurn.TurnTrigger.ofMessage (Principal.Peer ada) trigger
+let private asked = AgentTurn.FromMessage trigger
 
 let private triggerItem : ConversationItem =
     { MessageId = humanMessageId
@@ -669,7 +669,7 @@ let private liveTests =
                 let log = newLog ()
                 let mintLiveTurn () = AgentTurnId.create (string (Guid.NewGuid ())) |> expect
                 let mintLiveMessage () = MessageId.create (string (Guid.NewGuid ())) |> expect
-                do! AgentTurn.run log (Agent.run Launch.unlaunched.DataDir HostBackend) AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintLiveTurn mintLiveMessage sessionId [ probeItem ] [] None None (AgentTurn.TurnTrigger.ofMessage (Principal.Peer ada) probe)
+                do! AgentTurn.run log (Agent.run Launch.unlaunched.DataDir HostBackend) AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintLiveTurn mintLiveMessage sessionId [ probeItem ] [] None None (AgentTurn.FromMessage probe)
                 let! events = eventsOf log
                 match List.last events with
                 | AgentMessageCompleted completed ->
@@ -683,12 +683,12 @@ let private liveTests =
 
 // --- The wake (Plan 20, stage 2) ---------------------------------------------------------
 
-let private blockStarted (n: string) (background: bool) (owner: Principal option) =
+let private blockStarted (n: string) (background: bool) (owner: Principal) =
     SessionEvent.TerminalBlockStarted
         { TerminalId = TerminalId.create "term-a" |> expect
           BlockId = BlockId.create n |> expect
           QueueId = None
-          Authority = Authority.rehydrate ActorRef.Agent owner
+          Authority = Authority.agentFor owner
           Command = "make"
           FromSeq = 0
           Background = background }
@@ -718,7 +718,7 @@ let private wakeTests =
 
         testCase "a background command that finished owes the agent a turn" <| fun () ->
             Expect.isTrue
-                (AgentWake.due [ turnStarted "1"; blockStarted "b1" true (Some (Principal.Peer ada)); blockCompleted "b1" ])
+                (AgentWake.due [ turnStarted "1"; blockStarted "b1" true (Principal.Peer ada); blockCompleted "b1" ])
                 "nobody was waiting on it, so somebody has to be told"
 
         testCase "a foreground command that finished owes nothing" <| fun () ->
@@ -726,19 +726,19 @@ let private wakeTests =
             // back, and waking a turn to re-report it would be the second channel this
             // design does not have.
             Expect.isFalse
-                (AgentWake.due [ turnStarted "1"; blockStarted "b1" false (Some (Principal.Peer ada)); blockCompleted "b1" ])
+                (AgentWake.due [ turnStarted "1"; blockStarted "b1" false (Principal.Peer ada); blockCompleted "b1" ])
                 "its own call answered it"
 
         testCase "a background command still running owes nothing yet" <| fun () ->
             Expect.isFalse
-                (AgentWake.due [ turnStarted "1"; blockStarted "b1" true (Some (Principal.Peer ada)) ])
+                (AgentWake.due [ turnStarted "1"; blockStarted "b1" true (Principal.Peer ada) ])
                 "there is no outcome to be told about"
 
         testCase "the turn a wake started takes that wake with it" <| fun () ->
             // What makes the wake fire once without storing a cursor: an `AgentTurnStarted`
             // resets the window, exactly as it does for the digest that turn reads.
             Expect.isFalse
-                (AgentWake.due [ blockStarted "b1" true (Some (Principal.Peer ada)); blockCompleted "b1"; turnStarted "woken" ])
+                (AgentWake.due [ blockStarted "b1" true (Principal.Peer ada); blockCompleted "b1"; turnStarted "woken" ])
                 "the turn that was owed has run"
 
         testCase "a wake names whose turn it is, and it is whoever the work was queued for" <| fun () ->
@@ -748,17 +748,13 @@ let private wakeTests =
             // authority the queuing turn had, rather than inventing one.
             Expect.equal
                 (AgentWake.pending
-                    [ turnStarted "1"; blockStarted "b1" true (Some (Principal.Peer bob)); blockCompleted "b1" ])
+                    [ turnStarted "1"; blockStarted "b1" true (Principal.Peer bob); blockCompleted "b1" ])
                 (Some (Principal.Peer bob))
                 "the party whose turn queued the work"
 
-        testCase "work queued for nobody wakes nobody" <| fun () ->
-            // The safe direction, and the one every other reader of `OnBehalfOf` already
-            // takes: run on NOTHING rather than on somebody else's credential. Picking the
-            // most recent speaker instead would run one person's work as another.
-            Expect.isNone
-                (AgentWake.pending [ turnStarted "1"; blockStarted "b1" true None; blockCompleted "b1" ])
-                "no owner, no turn"
+        // "Work queued for nobody wakes nobody" was a case here. An agent block with no
+        // owner is no longer a value `Authority` can hold — a stored one fails to decode —
+        // so there is nothing for the wake to answer safely about.
 
         testCase "several finishing at once are ONE wake, and one turn sees them all" <| fun () ->
             // Coalescing is not a mechanism here, it is a consequence: the wake is a bool
@@ -766,8 +762,8 @@ let private wakeTests =
             // turn starts is in that turn's digest.
             let page =
                 [ turnStarted "1"
-                  blockStarted "b1" true (Some (Principal.Peer ada))
-                  blockStarted "b2" true (Some (Principal.Peer ada))
+                  blockStarted "b1" true (Principal.Peer ada)
+                  blockStarted "b2" true (Principal.Peer ada)
                   blockCompleted "b1"
                   blockCompleted "b2" ]
             Expect.isTrue (AgentWake.due page) "one wake"
@@ -782,7 +778,7 @@ let private wakeTests =
             // time — the very second channel the foreground case above exists to avoid.
             Expect.isFalse
                 (AgentWake.due
-                    [ turnStarted "1"; blockStarted "b1" true (Some (Principal.Peer ada)); blockCompleted "b1"; toolFinished (Some "b1") ])
+                    [ turnStarted "1"; blockStarted "b1" true (Principal.Peer ada); blockCompleted "b1"; toolFinished (Some "b1") ])
                 "its own check_pending already answered it"
 
         testCase "a still-running poll before completion does not pre-settle the debt" <| fun () ->
@@ -793,13 +789,13 @@ let private wakeTests =
             // nothing.
             Expect.isTrue
                 (AgentWake.due
-                    [ turnStarted "1"; blockStarted "b1" true (Some (Principal.Peer ada)); toolFinished (Some "b1"); blockCompleted "b1" ])
+                    [ turnStarted "1"; blockStarted "b1" true (Principal.Peer ada); toolFinished (Some "b1"); blockCompleted "b1" ])
                 "the completion after the poll is still owed"
 
         testCase "delivering a different block does not settle this one" <| fun () ->
             Expect.isTrue
                 (AgentWake.due
-                    [ turnStarted "1"; blockStarted "b1" true (Some (Principal.Peer ada)); blockCompleted "b1"; toolFinished (Some "b2") ])
+                    [ turnStarted "1"; blockStarted "b1" true (Principal.Peer ada); blockCompleted "b1"; toolFinished (Some "b2") ])
                 "b1 was never picked up"
     ]
 
@@ -813,12 +809,12 @@ let private openedIn (id: TerminalId) (sandbox: SandboxRef option) =
 
 /// A block in a NAMED terminal, so a case can put the agent's work somewhere other than the
 /// `term-a` every helper above is pinned to.
-let private blockStartedIn (id: TerminalId) (n: string) (background: bool) (owner: Principal option) =
+let private blockStartedIn (id: TerminalId) (n: string) (background: bool) (owner: Principal) =
     SessionEvent.TerminalBlockStarted
         { TerminalId = id
           BlockId = BlockId.create n |> expect
           QueueId = None
-          Authority = Authority.rehydrate ActorRef.Agent owner
+          Authority = Authority.agentFor owner
           Command = "make"
           FromSeq = 0
           Background = background }
@@ -919,7 +915,7 @@ let private prWakeTests =
                     [ turnStarted "1"
                       prWatched
                       prTransitioned PrTransition.Merged
-                      blockStartedIn terminalB "b1" true (Some (Principal.Peer bob))
+                      blockStartedIn terminalB "b1" true (Principal.Peer bob)
                       blockCompleted "b1" ]
                  |> Option.map fst)
                 (Some CommandFinished)
@@ -944,7 +940,7 @@ let private vocabularyTests =
                 (AgentWake.pendingReason
                     [ turnStarted "1"
                       openedIn terminalB None
-                      blockStartedIn terminalB "b1" false (Some (Principal.Peer bob))
+                      blockStartedIn terminalB "b1" false (Principal.Peer bob)
                       closedNow terminalB ]
                  |> Option.map fst)
                 (Some (StreamEnded terminalB))
@@ -957,7 +953,7 @@ let private vocabularyTests =
                 (AgentWake.pendingReason
                     [ turnStarted "1"
                       openedIn terminalB (Some SandboxRef.defaultRef)
-                      blockStartedIn terminalB "b1" false (Some (Principal.Peer bob))
+                      blockStartedIn terminalB "b1" false (Principal.Peer bob)
                       closedNow terminalB ])
                 "a sandbox shell is not a stream"
 
@@ -975,7 +971,7 @@ let private vocabularyTests =
                 (AgentWake.pendingReason
                     [ turnStarted "1"
                       openedIn terminalB (Some SandboxRef.defaultRef)
-                      blockStartedIn terminalB "b1" false (Some (Principal.Peer bob))
+                      blockStartedIn terminalB "b1" false (Principal.Peer bob)
                       integrationLost terminalB ]
                  |> Option.map fst)
                 (Some (IntegrationLost terminalB))
@@ -990,7 +986,7 @@ let private vocabularyTests =
                 (AgentWake.pendingReason
                     [ turnStarted "1"
                       openedIn terminalB (Some SandboxRef.defaultRef)
-                      blockStartedIn terminalB "b1" false (Some (Principal.Peer bob))
+                      blockStartedIn terminalB "b1" false (Principal.Peer bob)
                       integrationLost terminalB ]
                  |> Option.map snd)
                 (Some (Principal.Peer bob))
@@ -1004,9 +1000,9 @@ let private vocabularyTests =
                 (AgentWake.pendingReason
                     [ turnStarted "1"
                       openedIn terminalB (Some SandboxRef.defaultRef)
-                      blockStarted "b1" true (Some (Principal.Peer ada))
+                      blockStarted "b1" true (Principal.Peer ada)
                       blockCompleted "b1"
-                      blockStartedIn terminalB "b2" false (Some (Principal.Peer bob))
+                      blockStartedIn terminalB "b2" false (Principal.Peer bob)
                       integrationLost terminalB ]
                  |> Option.map fst)
                 (Some (IntegrationLost terminalB))
@@ -1017,8 +1013,8 @@ let private vocabularyTests =
             Expect.equal
                 (AgentWake.pendingReason
                     [ turnStarted "1"
-                      blockStarted "b1" true (Some (Principal.Peer ada))
-                      blockStartedIn terminalB "b2" true (Some (Principal.Peer bob))
+                      blockStarted "b1" true (Principal.Peer ada)
+                      blockStartedIn terminalB "b2" true (Principal.Peer bob)
                       blockCompleted "b1"
                       SessionEvent.TerminalBlockCompleted
                           { TerminalId = terminalB
@@ -1035,7 +1031,7 @@ let private vocabularyTests =
             Expect.isNone
                 (AgentWake.pendingReason
                     [ openedIn terminalB (Some SandboxRef.defaultRef)
-                      blockStartedIn terminalB "b1" false (Some (Principal.Peer bob))
+                      blockStartedIn terminalB "b1" false (Principal.Peer bob)
                       integrationLost terminalB
                       turnStarted "woken" ])
                 "the turn that was owed has run"
@@ -1047,7 +1043,7 @@ let private vocabularyTests =
             Expect.equal
                 (AgentWake.pendingReason
                     [ openedIn terminalB (Some SandboxRef.defaultRef)
-                      blockStartedIn terminalB "b1" false (Some (Principal.Peer bob))
+                      blockStartedIn terminalB "b1" false (Principal.Peer bob)
                       turnStarted "later"
                       integrationLost terminalB ]
                  |> Option.map snd)
@@ -1169,7 +1165,7 @@ let private attributionTests =
 // `Replying` is the whole "draw a ref" signal.
 let private replyRefTests =
     let humanSent (offset: int64) (id: string) =
-        envelope offset (MessageSent { MessageId = MessageId.create id |> expect; QueueId = None; Author = PeerRef ada; Body = "do a thing" })
+        envelope offset (MessageSent { MessageId = MessageId.create id |> expect; QueueId = None; Author = Principal.Peer ada; Body = "do a thing" })
     let turnFor (offset: int64) (trigger: string) =
         envelope offset (AgentTurnStarted { AgentTurnId = turnId; Cause = TurnCause.TriggeredBy (MessageId.create trigger |> expect) })
     let firstMessage (offset: int64) =
@@ -1229,7 +1225,7 @@ let private armTests =
             async {
                 let scheduler, log =
                     armedScheduler
-                        [ blockStarted "b1" true (Some (Principal.Peer ada)); blockCompleted "b1" ]
+                        [ blockStarted "b1" true (Principal.Peer ada); blockCompleted "b1" ]
                         ignore
                 scheduler.Wake ()
                 match! startedTurns log with
@@ -1243,7 +1239,7 @@ let private armTests =
                 // The boot call site fires on every session, most of which owe nothing. It has
                 // to be free of consequence, not merely cheap.
                 let scheduler, log =
-                    armedScheduler [ blockStarted "b1" false (Some (Principal.Peer ada)); blockCompleted "b1" ] ignore
+                    armedScheduler [ blockStarted "b1" false (Principal.Peer ada); blockCompleted "b1" ] ignore
                 scheduler.Wake ()
                 let! started = startedTurns log
                 Expect.isEmpty started "a foreground command answered its own caller"
@@ -1257,12 +1253,12 @@ let private armTests =
                 let mutable armed = false
                 let scheduler, log =
                     armedScheduler
-                        [ blockStarted "b1" true (Some (Principal.Peer ada)); blockCompleted "b1" ]
+                        [ blockStarted "b1" true (Principal.Peer ada); blockCompleted "b1" ]
                         (fun log ->
                             // Once: a second background command finishing under the running turn.
                             if not armed then
                                 armed <- true
-                                appendNow log (blockStarted "b2" true (Some (Principal.Peer ada)))
+                                appendNow log (blockStarted "b2" true (Principal.Peer ada))
                                 appendNow log (blockCompleted "b2"))
                 scheduler.Wake ()
                 let! started = startedTurns log
@@ -1284,7 +1280,7 @@ let private schedulerOverPickedModel (choice: ModelId option) =
     let picker = Harness.run (Client.makeProgram doc (ClientModel.init (peer "ada" "Ada")))
     picker.Dispatch (user (SetModelMsg choice))
     let log = newLog ()
-    appendNow log (blockStarted "b1" true (Some (Principal.Peer ada)))
+    appendNow log (blockStarted "b1" true (Principal.Peer ada))
     appendNow log (blockCompleted "b1")
     let mutable seen : ModelId option option = None
     let runner : RunAgent =

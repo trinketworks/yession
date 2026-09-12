@@ -337,7 +337,7 @@ module ConversationProjection =
                 Items =
                     proj.Items
                     @ [ { MessageId = m.MessageId
-                          Author = m.Author
+                          Author = Principal.toActor m.Author
                           Body = m.Body
                           Status = Complete
                           Kind = ConversationItemKind.Message

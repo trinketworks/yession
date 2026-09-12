@@ -715,7 +715,7 @@ let foldTests =
                         dir (cell (Some (reposOver dir [ r ]))) (cell WorkSandboxes.unavailable)
                         (recordingGate seen) log (sensitively [ "!net:anywhere" ])
                 do! folded.Fold CredentialFor.Deployment
-                let ada = UserRef (UserId.create "ada" |> expect)
+                let ada = Principal.User (UserId.create "ada" |> expect)
                 let! approved = folded.Approve ada r [ "!net:anywhere" ]
                 Expect.equal approved (Ok ()) "a signed-in person may consent"
                 Expect.equal seen.Count 1 "and that alone starts it"
@@ -723,23 +723,13 @@ let foldTests =
 
         // The agent must not consent on a checkout's behalf. That is the whole reason the
         // repo is a separate principal from the people in the session.
-        testCaseAsync "the agent cannot approve what a repo asks for" <|
-            async {
-                let r = repo "octo/hello"
-                let dir = checkout r (Some "version: 2\nsandboxes:\n  dev:\n    uses: [ web ]\n")
-                let folded =
-                    RepoSandboxes.create
-                        dir (cell (Some (reposOver dir [ r ]))) (cell WorkSandboxes.unavailable)
-                        (recordingGate (ResizeArray<GatedCall> ())) (foldLog ())
-                        (sensitively [ "!net:anywhere" ])
-                match! folded.Approve ActorRef.Agent r [ "!net:anywhere" ] with
-                | Ok () -> failwith "the agent must not be able to consent"
-                | Error e -> Expect.isTrue (e.Contains "a person") (sprintf "and is told why, said: %s" e)
-            }
+        // "The agent cannot approve what a repo asks for" was a case here. It is now the
+        // type: `Approve` takes a `Principal`, and there is no way to write the agent into
+        // one — so the refusal it pinned has no call to be made from.
 
         // A peer who did not sign in is still a PERSON, and on a deployment that trusts
         // whoever reaches it they are the only person there. What the record must not do is
-        // call them a signed-in user — `ActorRef` keeps the two apart, and the approval says
+        // call them a signed-in user — `Principal` keeps the two apart, and the approval says
         // which one actually consented.
         testCaseAsync "a peer who did not sign in may approve, and is recorded as a peer" <|
             async {
@@ -751,12 +741,12 @@ let foldTests =
                         dir (cell (Some (reposOver dir [ r ]))) (cell WorkSandboxes.unavailable)
                         (recordingGate (ResizeArray<GatedCall> ())) log
                         (sensitively [ "!net:anywhere" ])
-                let anonymous = PeerRef (PeerId.create "peer-1" |> expect)
+                let anonymous = Principal.Peer (PeerId.create "peer-1" |> expect)
                 let! approved = folded.Approve anonymous r [ "!net:anywhere" ]
                 Expect.equal approved (Ok ()) "a person at a browser is a person"
                 let! page = log.Read None System.Int32.MaxValue
                 match page.Events |> List.choose (fun e -> match e.Event with SessionEvent.RepoCapabilitiesApproved a -> Some a.Actor | _ -> None) with
-                | [ actor ] -> Expect.equal actor anonymous "recorded as the peer they are, not promoted to a user"
+                | [ actor ] -> Expect.equal actor (Principal.toActor anonymous) "recorded as the peer they are, not promoted to a user"
                 | other -> failwithf "expected one approval, got %A" other
             }
 
@@ -772,7 +762,7 @@ let foldTests =
                         dir (cell (Some (reposOver dir [ r ]))) (cell WorkSandboxes.unavailable)
                         (recordingGate (ResizeArray<GatedCall> ())) (foldLog ())
                         (sensitively [ "!net:anywhere" ])
-                let ada = UserRef (UserId.create "ada" |> expect)
+                let ada = Principal.User (UserId.create "ada" |> expect)
                 match! folded.Approve ada r [ "reaches nowhere much" ] with
                 | Ok () -> failwith "consent to a set that is not what is asked must not stand"
                 | Error e ->

@@ -101,7 +101,7 @@ let tests =
                     |> List.choose (fun e -> match e.Event with MessageSent m -> Some m | _ -> None)
                 match sent with
                 | [ message ] ->
-                    Expect.equal message.Author (PeerRef ada) "attributed to the peer whose draft it was"
+                    Expect.equal message.Author (Principal.Peer ada) "attributed to the peer whose draft it was"
                     Expect.equal message.Body "we should ask it to re-run the migration" "the co-written body"
                 | other -> failwithf "expected exactly one MessageSent, got %A" other
                 do! host.Stop ()

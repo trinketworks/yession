@@ -478,7 +478,9 @@ let private servicesRecording (held: HeldRepos) : Commands.CommandServices =
 let private hello = RepoRef.create "octo/hello" |> expect
 
 /// The person, as an act is attributed to them.
-let private adaActs = Principal.toActor ada
+let private adaActs = ada
+/// Ada as the log records her.
+let private adaActor = Principal.toActor ada
 
 let private cloned (branch: string) (repo: RepoRef) : Result<RepoListing, string> =
     Ok { Repo = repo; Branch = branch; Dirty = false; Path = "repos/octo/hello" }
@@ -515,7 +517,7 @@ let private launchTests =
                 let! outcome = launched session hello None
                 expect outcome
                 let addCall = held.Calls |> Seq.find (fun (call, _) -> call = "add_repo octo/hello")
-                Expect.equal (snd addCall) adaActs "the repo service was called as ada"
+                Expect.equal (snd addCall) adaActor "the repo service was called as ada"
             }
 
         testCaseAsync "a choice of the clone's own branch is not a switch; another is" <|
@@ -533,7 +535,7 @@ let private launchTests =
                 let! switched = launched another hello (Some "feature/x")
                 expect switched
                 Expect.isTrue
-                    (other.Calls |> Seq.exists (fun (call, who) -> call = "switch_branch octo/hello -> feature/x" && who = adaActs))
+                    (other.Calls |> Seq.exists (fun (call, who) -> call = "switch_branch octo/hello -> feature/x" && who = adaActor))
                     "a branch other than the clone's is switched to, as the person"
             }
 
@@ -545,7 +547,7 @@ let private launchTests =
                 expect outcome
                 Expect.equal
                     (held.Calls |> Seq.last)
-                    ("set_shell_profile default repos/octo/hello", adaActs)
+                    ("set_shell_profile default repos/octo/hello", adaActor)
                     "the default sandbox's profile points at the path the clone answered with"
             }
 

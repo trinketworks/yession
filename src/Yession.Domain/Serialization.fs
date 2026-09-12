@@ -172,15 +172,21 @@ module Codec =
         [ "author", actor.Encode (Authority.author authority)
           "onBehalfOf", Encode.option principal.Encode (Authority.onBehalfOf authority) ]
 
-    /// Recovered, never authored — `rehydrate`'s reason. `onBehalfOf` is optional on the way
-    /// in because events written before Plan 20 have no such key, and a `Required` field would
-    /// make those pages undecodable, which is a session that will not open. Keys this stopped
-    /// asking for (`approvedBy`, Plan 23) are simply ignored where old events still carry
-    /// them — the property the pinned legacy-JSON tests hold.
-    let private authorityOf (get: Decode.IGetters) : Authority =
-        Authority.rehydrate
-            (get.Required.Field "author" actor.Decode)
-            (get.Optional.Field "onBehalfOf" (Decode.option principal.Decode) |> Option.flatten)
+    /// Recovered, never authored — `recover`'s reason. `onBehalfOf` is optional on the way in
+    /// because a person's act has none, and events written before Plan 20 have no such key at
+    /// all; what `recover` then refuses — an agent act with nobody named — fails the event,
+    /// which is a page that will not open. Deliberate: that act was never one this version
+    /// can run, and a decoder that stood something in for the missing owner would put back the
+    /// degraded state the sum took out. Keys this stopped asking for (`approvedBy`, Plan 23)
+    /// are simply ignored where old events still carry them.
+    let private authorityOf : Decoder<Authority> =
+        Decode.object (fun get ->
+            get.Required.Field "author" actor.Decode,
+            get.Optional.Field "onBehalfOf" (Decode.option principal.Decode) |> Option.flatten)
+        |> Decode.andThen (fun (author, onBehalfOf) ->
+            match Authority.recover author onBehalfOf with
+            | Ok authority -> Decode.succeed authority
+            | Error reason -> Decode.fail reason)
 
     let private sessionCreated : Codec<SessionCreated> =
         { Encode = fun (p: SessionCreated) -> Encode.object [ "sessionId", sessionId.Encode p.SessionId ]
@@ -213,13 +219,13 @@ module Codec =
                 Encode.object
                     [ "messageId", messageId.Encode p.MessageId
                       "queueId", Encode.option queueId.Encode p.QueueId
-                      "author", actor.Encode p.Author
+                      "author", principal.Encode p.Author
                       "body", Encode.string p.Body ]
           Decode =
             Decode.object (fun get ->
                 { MessageSent.MessageId = get.Required.Field "messageId" messageId.Decode
                   MessageSent.QueueId = get.Optional.Field "queueId" queueId.Decode
-                  MessageSent.Author = get.Required.Field "author" actor.Decode
+                  MessageSent.Author = get.Required.Field "author" principal.Decode
                   MessageSent.Body = get.Required.Field "body" Decode.string }) }
 
     let private prRef : Codec<PrRef> =
@@ -854,7 +860,7 @@ module Codec =
                 { TerminalBlockStarted.TerminalId = get.Required.Field "terminalId" terminalId.Decode
                   TerminalBlockStarted.BlockId = get.Required.Field "blockId" blockId.Decode
                   TerminalBlockStarted.QueueId = get.Required.Field "queueId" (Decode.option queueId.Decode)
-                  TerminalBlockStarted.Authority = authorityOf get
+                  TerminalBlockStarted.Authority = get.Required.Raw authorityOf
                   TerminalBlockStarted.Command = get.Required.Field "command" Decode.string
                   TerminalBlockStarted.FromSeq = get.Required.Field "fromSeq" Decode.int
                   // Optional on the way IN and required on the way out: every block written
@@ -956,20 +962,20 @@ module Codec =
     let private terminalCommandRejected : Codec<TerminalCommandRejected> =
         { Encode =
             fun (p: TerminalCommandRejected) ->
-                Encode.object
+                Encode.object (
                     [ "terminalId", terminalId.Encode p.TerminalId
                       "queueId", queueId.Encode p.QueueId
                       "blockId", blockId.Encode p.BlockId
-                      "author", actor.Encode p.Author
                       "rejectedBy", actor.Encode p.RejectedBy
                       "command", Encode.string p.Command
                       "reason", Encode.option Encode.string p.Reason ]
+                    @ authorityFields p.Authority)
           Decode =
             Decode.object (fun get ->
                 { TerminalCommandRejected.TerminalId = get.Required.Field "terminalId" terminalId.Decode
                   TerminalCommandRejected.QueueId = get.Required.Field "queueId" queueId.Decode
                   TerminalCommandRejected.BlockId = get.Required.Field "blockId" blockId.Decode
-                  TerminalCommandRejected.Author = get.Required.Field "author" actor.Decode
+                  TerminalCommandRejected.Authority = get.Required.Raw authorityOf
                   TerminalCommandRejected.RejectedBy = get.Required.Field "rejectedBy" actor.Decode
                   TerminalCommandRejected.Command = get.Required.Field "command" Decode.string
                   TerminalCommandRejected.Reason = get.Required.Field "reason" (Decode.option Decode.string) }) }

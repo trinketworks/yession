@@ -60,7 +60,7 @@ type SessionHost =
       /// Tell the peer command surface how a person's consent to a repo's capability set is
       /// carried out (Plan 27). Set once, from SessionMain, for the same reason the dispatch
       /// table is: the fold that knows what a repo asks for is composed a layer above this.
-      SetApproveCapabilities : (ActorRef -> RepoRef -> string list -> Async<Result<unit, string>>) -> unit
+      SetApproveCapabilities : (Principal -> RepoRef -> string list -> Async<Result<unit, string>>) -> unit
       /// Tell the peer command surface how a person's choice of first repo is carried out
       /// (the launch surface). Set once, from SessionMain, where the repo service is. The
       /// Host runs the work it is handed back in the background and records a failure as
@@ -400,7 +400,7 @@ let startFull
         // Until SessionMain sets it, nothing can be consented to — which is the honest state
         // for a session whose repos are not composed yet, rather than a silent yes.
         let approveCapabilitiesRef
-            : (ActorRef -> RepoRef -> string list -> Async<Result<unit, string>>) ref =
+            : (Principal -> RepoRef -> string list -> Async<Result<unit, string>>) ref =
             ref (fun _ _ _ -> async { return Error "this session cannot approve anything yet" })
         let approveCapabilities actor repo granted = approveCapabilitiesRef.Value actor repo granted
         // Likewise nothing can be launched into until SessionMain says how.
@@ -408,7 +408,7 @@ let startFull
             ref (fun _ _ _ -> async { return Error "this session cannot add a repo yet" })
         /// Admission answers the peer; the work runs on, and only its failure needs saying
         /// here — success is the `RepoAdded` the repo service records.
-        let launchRepo (actor: ActorRef) (repo: RepoRef) (branch: string option) : Async<Result<unit, string>> =
+        let launchRepo (actor: Principal) (repo: RepoRef) (branch: string option) : Async<Result<unit, string>> =
             async {
                 match! launchRepoRef.Value actor repo branch with
                 | Error reason -> return Error reason
@@ -425,7 +425,7 @@ let startFull
                                             { MessageId = mintMessageId ()
                                               Tool = failure.Tool
                                               Summary = failure.Summary
-                                              Author = actor
+                                              Author = Principal.toActor actor
                                               Reason = failure.Reason })
                                 ()
                         })
@@ -828,7 +828,7 @@ let startFull
                         streamAttacher.Reattach
                         approveCapabilities
                         launchRepo
-                        actorFor
+                        principalFor
                   OnPresence = fun payload -> broadcastPresenceExcept connectionId payload
                   // Live-mode traffic (Plan 13, stage 2e). Only the two peer-authored frames
                   // are acted on; a peer replaying a `TerminalRecord` or a `TerminalSnapshot`

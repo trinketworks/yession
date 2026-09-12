@@ -58,35 +58,26 @@ module AgentTurn =
         | None -> systemPrompt
         | Some words -> systemPrompt + "\n\nThe operator of this host adds:\n\n" + words
 
-    /// Why a turn is running (Plan 20, stage 2), and for whom. A turn has exactly ONE
-    /// reason to exist, which is what makes the cause a choice rather than two optional
-    /// arguments free to be both set or neither.
+    /// Why a turn is running (Plan 20, stage 2). A turn has exactly ONE reason to exist,
+    /// which is what makes this a choice rather than two optional arguments free to be both
+    /// set or neither.
     ///
-    /// The principal sits BESIDE the cause rather than inside each arm, because it is the
-    /// same question whichever arm it is: whoever the turn runs for. A message's is its
-    /// author; a wake's is the party whose earlier turn queued the work that finished. The
-    /// agent is the acting party either way and has no scope of its own (Plan 08), so a turn
-    /// that could not name one would be a turn with no credentials — which is why it is a
-    /// `Principal` and not an actor, and why the wake resolves it from the log before the
-    /// turn starts rather than after.
+    /// Both arms name a `Principal`, and it is the same question in both: whoever the turn
+    /// runs for. A message's is its author; a wake's is the party whose earlier turn queued
+    /// the work that finished. The agent is the acting party either way and has no scope of
+    /// its own (Plan 08), so a turn that could not name one would be a turn with no
+    /// credentials — which is why it is a `Principal` and not an actor, and why the wake
+    /// resolves it from the log before the turn starts rather than after.
     type TurnTrigger =
-        { For : Principal
-          Cause : TurnStimulus }
-
-    and TurnStimulus =
         | FromMessage of MessageSent
-        | FromWake of WakeReason
+        | FromWake of WakeReason * Principal
 
     module TurnTrigger =
 
-        /// A turn somebody asked for, by saying something. The message's author IS the
-        /// principal, stated once here: a `MessageSent` is drained from the queue a peer
-        /// wrote to, and every peer resolves to a principal (`Attribution.actorFor`).
-        let ofMessage (author: Principal) (message: MessageSent) : TurnTrigger =
-            { For = author; Cause = FromMessage message }
-
-        let ofWake (reason: WakeReason) (owner: Principal) : TurnTrigger =
-            { For = owner; Cause = FromWake reason }
+        let actor (trigger: TurnTrigger) : Principal =
+            match trigger with
+            | FromMessage message -> message.Author
+            | FromWake (_, owner) -> owner
 
     /// Run one agent turn, appending the lifecycle events:
     ///
@@ -143,9 +134,9 @@ module AgentTurn =
                     let! _ = log.Append ActorRef.Agent event
                     return ()
                 }
-            let turnActor = trigger.For
+            let turnActor = TurnTrigger.actor trigger
             let triggeringMessage =
-                match trigger.Cause with
+                match trigger with
                 | FromMessage message -> Some message
                 | FromWake _ -> None
             do!
@@ -155,9 +146,9 @@ module AgentTurn =
                           // 1:1 with the trigger the scheduler handed in — the cause is the
                           // trigger, said durably, with no second field to keep consistent.
                           Cause =
-                            match trigger.Cause with
+                            match trigger with
                             | FromMessage message -> TurnCause.TriggeredBy message.MessageId
-                            | FromWake reason -> TurnCause.Woke reason })
+                            | FromWake (reason, _) -> TurnCause.Woke reason })
             try
                 // The agent's context is the event-log-derived projection — by
                 // construction it can never include Yjs/draft state.
@@ -168,7 +159,7 @@ module AgentTurn =
                         |> List.tryFind (fun item -> item.MessageId = message.MessageId)
                         |> Option.defaultValue
                             { MessageId = message.MessageId
-                              Author = message.Author
+                              Author = Principal.toActor message.Author
                               Body = message.Body
                               Status = Complete
                               Kind = ConversationItemKind.Message

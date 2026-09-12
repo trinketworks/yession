@@ -41,7 +41,7 @@ let private said (messageId: MessageId) (body: string) : EventPage<SessionEvent>
           Offset = EventOffset.zero
           Actor = PeerRef ada
           Timestamp = DateTimeOffset.UtcNow
-          Event = MessageSent { MessageId = messageId; QueueId = None; Author = PeerRef ada; Body = body } }
+          Event = MessageSent { MessageId = messageId; QueueId = None; Author = Principal.Peer ada; Body = body } }
     { Events = [ envelope ]; LastOffset = Some envelope.Offset; IsEnd = true }
 
 let private syncBoth (a: Y.Doc) (b: Y.Doc) =
@@ -492,7 +492,7 @@ let private queueUnitTests =
             let message =
                 { MessageId = MessageId.create "msg-1" |> expect
                   QueueId = Some (qid "q-1")
-                  Author = PeerRef ada
+                  Author = Principal.Peer ada
                   Body = "ship it" }
             let envelope =
                 { EventId = EventId.fresh ()
@@ -525,7 +525,7 @@ let private queueUnitTests =
                     MessageSent
                         { MessageId = MessageId.create "msg-1" |> expect
                           QueueId = None
-                          Author = PeerRef ada
+                          Author = Principal.Peer ada
                           Body = "once only" } }
             let page : EventPage<SessionEvent> =
                 { Events = [ envelope ]; LastOffset = Some envelope.Offset; IsEnd = true }
@@ -624,7 +624,7 @@ let private e2eTests =
                 match messagesIn page.Events with
                 | [ message ] ->
                     Expect.equal message.Body "ship it" "the body is the consumption-time snapshot"
-                    Expect.equal message.Author (PeerRef (PeerId.create "ada" |> expect)) "authored by the sender"
+                    Expect.equal message.Author (Principal.Peer (PeerId.create "ada" |> expect)) "authored by the sender"
                     Expect.isTrue message.QueueId.IsSome "anchored to its queue entry (the dedup key)"
                 | other -> failwithf "expected exactly one MessageSent, got %A" other
 
@@ -724,7 +724,7 @@ let private e2eTests =
                         MessageSent
                             { MessageId = MessageId.create "forged" |> expect
                               QueueId = None
-                              Author = PeerRef mallory
+                              Author = Principal.Peer mallory
                               Body = "forged message" } }
                 do! channel.Send (
                         EventLog (
