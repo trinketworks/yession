@@ -51,8 +51,8 @@ let private prefix = "git"
 
 /// Whose credential answers a route, resolved PER REQUEST — never captured.
 type Lender =
-    { /// Whose it is, for the sentences git prints. `None` is the deployment's own.
-      Owner : Principal option
+    { /// Whose it is, for the sentences git prints.
+      Owner : CredentialFor
       /// The credential now. `None` = the owner has none (any more).
       Resolve : unit -> Async<string option>
       /// github.com refused it: tell whoever tracks the credential's health.
@@ -185,11 +185,8 @@ let private forwardWith
 /// The credential as github.com's git endpoint takes it: HTTP basic, `x-access-token` as
 /// the user. (A bearer header is what the API takes and what the git endpoint answers 401
 /// to — another thing the motivating session learnt by trying.)
-/// Whose credential a sentence git prints is about. Nobody's is the deployment's own.
-let private ownerLabel (owner: Principal option) : string =
-    match owner with
-    | Some principal -> Principal.token principal
-    | None -> "this deployment"
+/// Whose credential a sentence git prints is about.
+let private ownerLabel (owner: CredentialFor) : string = CredentialFor.token owner
 
 let private basicAuthorization (token: string) : string =
     "Basic " + Convert.ToBase64String (Text.Encoding.UTF8.GetBytes ("x-access-token:" + token))

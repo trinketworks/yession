@@ -180,9 +180,9 @@ let private stubAuth () : SessionAuth.Auth =
 
 /// The route over a stub API, with a credential table keyed by who is asking: what the
 /// route must do is resolve the CALLER's token, and this is what shows it did.
-let private startRoutes (api: StubApi) (tokens: (Principal option * string) list) =
+let private startRoutes (api: StubApi) (tokens: (CredentialFor * string) list) =
     async {
-        let tokenFor (actor: Principal option) =
+        let tokenFor (actor: CredentialFor) =
             async { return tokens |> List.tryFind (fun (who, _) -> who = actor) |> Option.map snd }
         let route = GitHubRepos.routes (stubAuth ()) tokenFor api.Url ""
         return!
@@ -192,7 +192,7 @@ let private startRoutes (api: StubApi) (tokens: (Principal option * string) list
                     res.``end`` "not found")
     }
 
-let private alice = Some (Principal.User (UserId.create "alice" |> expect))
+let private alice = CredentialFor.Person (Principal.User (UserId.create "alice" |> expect))
 
 let private routeTests =
     testList "the repo routes" [

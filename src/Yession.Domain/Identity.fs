@@ -343,6 +343,47 @@ module Principal =
 
     let ofToken (raw: string) : Principal option = ActorRef.ofToken raw |> Option.bind ofActor
 
+/// Whose credential a call on a provider runs on: a person's, or the deployment's own.
+///
+/// This was `Principal option`, and `None` meant the deployment — the boot fold that runs
+/// before anybody has arrived, an unattributed browser asking for itself, a repo file's
+/// sandbox start. Real states, all of them, and the deployment is one party with one set
+/// of credentials (the session's own and `LocalScope`), so it deserves a name. What an
+/// option let happen is a caller writing `None` without meaning any of that; a case has to
+/// be written, and reads as what it is at every site.
+///
+/// `Person` and `Deployment` resolve to the same secret-store targets when the person is an
+/// unverified peer (`CredentialOwner.ofPrincipal` owns nothing for a peer) — but they are
+/// different parties in every sentence that names one, and a peer under an attributed
+/// deployment is somebody, not the deployment.
+[<RequireQualifiedAccess>]
+type CredentialFor =
+    | Person of Principal
+    | Deployment
+
+module CredentialFor =
+
+    /// The person, when there is one — for a sentence that names them, or a wake that needs
+    /// somebody to run as.
+    let person (credential: CredentialFor) : Principal option =
+        match credential with
+        | CredentialFor.Person principal -> Some principal
+        | CredentialFor.Deployment -> None
+
+    /// A principal that may be absent: the deployment's own when it is. The one place that
+    /// reading is made, so an `option` from a boundary (an attribution, a token) becomes a
+    /// credential here and nowhere else.
+    let ofOption (principal: Principal option) : CredentialFor =
+        match principal with
+        | Some principal -> CredentialFor.Person principal
+        | None -> CredentialFor.Deployment
+
+    /// One string, for logs and the sentences git prints.
+    let token (credential: CredentialFor) : string =
+        match credential with
+        | CredentialFor.Person principal -> Principal.token principal
+        | CredentialFor.Deployment -> "this deployment"
+
 /// On whose authority an act happens, and who is behind it: the three parties an audit asks
 /// about, as ONE value (Plan 20).
 ///
@@ -385,12 +426,12 @@ module Authority =
     /// credential is never its own: a `forward:` resolves for the human by Plan 08
     /// precedence, exactly as the agent's does.
     ///
-    /// `None` is a fold nobody triggered: the one at boot, where there is no turn and no
-    /// caller. The act then runs on NOTHING rather than on somebody guessed at, which is the
-    /// same degraded state `principal` already answers safely — a `forward:` fails saying
-    /// there is no credential to forward, which is true.
-    let configuredBy (repo: RepoRef) (onBehalfOf: Principal option) : Authority =
-        { AuthAuthor = ActorRef.Configured repo; AuthOnBehalfOf = onBehalfOf }
+    /// The deployment's own is a fold nobody triggered: the one at boot, where there is no
+    /// turn and no caller. The act then borrows nobody's authority and runs on the
+    /// deployment's credentials rather than on somebody guessed at — a `forward:` that needs
+    /// a person fails saying nobody was signed in, which is true.
+    let configuredBy (repo: RepoRef) (credential: CredentialFor) : Authority =
+        { AuthAuthor = ActorRef.Configured repo; AuthOnBehalfOf = CredentialFor.person credential }
 
     /// Recover what somebody else already wrote — a doc entry, a stored event. NOT an
     /// authoring path: it can express states the constructors above refuse, because it is
@@ -413,15 +454,16 @@ module Authority =
     /// author otherwise. The question every dispatch actually asks, answered once instead of
     /// by a `defaultArg` at each site that asks it.
     ///
-    /// `None` is an act that runs on nobody's credential: a file's boot fold, or an agent act
-    /// whose owner did not read back. That is a real state and the callers that resolve a
-    /// credential take it as one (session and deployment scopes only) — it is NOT the author
-    /// standing in, because an author that is not a principal has no credential to stand in
-    /// with, and a type that let it would be the fault this was narrowed to close.
-    let principal (authority: Authority) : Principal option =
+    /// The deployment's own is an act that runs on nobody's credential: a file's boot fold,
+    /// or an agent act whose owner did not read back. That is a real state and the callers
+    /// that resolve a credential take it as one (session and deployment scopes only) — it is
+    /// NOT the author standing in, because an author that is not a principal has no
+    /// credential to stand in with, and a type that let it would be the fault this was
+    /// narrowed to close.
+    let credential (authority: Authority) : CredentialFor =
         match authority.AuthOnBehalfOf with
-        | Some borrowed -> Some borrowed
-        | None -> Principal.ofActor authority.AuthAuthor
+        | Some borrowed -> CredentialFor.Person borrowed
+        | None -> CredentialFor.ofOption (Principal.ofActor authority.AuthAuthor)
 
 /// The name of one of the session's WorkSandboxes (Plan 15, stage 2). A session used to
 /// have exactly one, so it needed no name; now the agent can ask for a `test` sandbox

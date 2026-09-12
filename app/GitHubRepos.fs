@@ -210,7 +210,7 @@ let private statusOf (failure: LookupFailure) : int =
 /// notion of scopes or precedence.
 let routes
     (auth: SessionAuth.Auth)
-    (tokenFor: Principal option -> Async<string option>)
+    (tokenFor: CredentialFor -> Async<string option>)
     (apiBase: string)
     (mount: string)
     : IncomingMessage -> ServerResponse -> bool =
@@ -222,7 +222,7 @@ let routes
             match auth.IdentityOf req with
             | None -> respondText res 401 "unauthorized"
             | Some identity ->
-                let actor = PeerAttribution.principal identity.Attribution
+                let actor = PeerAttribution.credential identity.Attribution
                 Async.StartImmediate (
                     async {
                         let! token = tokenFor actor

@@ -55,11 +55,11 @@ module AgentModel =
 
 /// Ask the provider which models exist, on a party's authority.
 ///
-/// It takes a principal for the same reason a turn does (Plan 08): the agent has no scope of
-/// its own, so every call on a provider runs on somebody's credential. The catalogue a
-/// person can see is the catalogue their credential can see; `None` is the deployment
-/// asking for itself, which sees the session's own and the local one.
-type ListModels = Principal option -> Async<Result<AgentModel list, string>>
+/// It takes a credential for the same reason a turn does (Plan 08): the agent has no scope of
+/// its own, so every call on a provider runs on somebody's. The catalogue a person can see
+/// is the catalogue their credential can see; the deployment asking for itself sees the
+/// session's own and the local one.
+type ListModels = CredentialFor -> Async<Result<AgentModel list, string>>
 
 /// A kept catalogue and the way to drop it, handed back together because they are two
 /// halves of one thing: whoever holds the credential state is the only party that can
@@ -106,7 +106,7 @@ module ModelCatalogue =
     let keyed
         (now: unit -> DateTimeOffset)
         (ttl: TimeSpan)
-        (keyOf: Principal option -> 'key)
+        (keyOf: CredentialFor -> 'key)
         (lookup: ListModels)
         : ModelCatalogueCache =
         let mutable answer : ('key * AgentModel list * DateTimeOffset) option = None

@@ -98,8 +98,8 @@ let private gateTests =
                 let outcome = expect outcome
                 Expect.equal (Seq.length seen) 1 "it ran"
                 Expect.equal
-                    (Authority.principal (Seq.head seen).Authority)
-                    (Some ada')
+                    (Authority.credential (Seq.head seen).Authority)
+                    (CredentialFor.Person ada')
                     "on the turn actor's credential"
                 Expect.equal outcome.Status (CommandRan "done") "and answered with what it said"
                 let! events = eventsOf log

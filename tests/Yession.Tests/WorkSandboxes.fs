@@ -31,7 +31,7 @@ let private expect result =
 let private sessionId = SessionId.create "sess-sandboxes" |> expect
 let private ada = UserRef (UserId.create "ada" |> expect)
 /// Ada as a credential is lent on: the same person, where the type asks for a principal.
-let private adasCredential = Principal.User (UserId.create "ada" |> expect)
+let private adasCredential = CredentialFor.Person (Principal.User (UserId.create "ada" |> expect))
 let private fixedClock () = DateTimeOffset (2026, 1, 1, 0, 0, 0, TimeSpan.Zero)
 let private newLog () : EventLog<SessionEvent> = InMemoryEventLog.create sessionId fixedClock
 
@@ -113,7 +113,7 @@ let private registry (log: EventLog<SessionEvent>) (credentials: WorkSandboxes.C
     let sandboxes, built, _ = registryWithSpecs log credentials
     sandboxes, built
 
-let private caller : WorkSandboxes.SandboxCaller = { Actor = ActorRef.Agent; Credential = Some adasCredential }
+let private caller : WorkSandboxes.SandboxCaller = { Actor = ActorRef.Agent; Credential = adasCredential }
 
 /// A source that provisions the given env into any sandbox, for any actor, or holds nothing.
 /// Records what it gave and what it was asked to take back, which is the pair the revoke
@@ -572,7 +572,7 @@ let private credentialTests =
                 let sandboxes, built = registry log [ githubCredential None ]
                 let repo = RepoRef.create "octo/hello" |> expect
                 let file : WorkSandboxes.SandboxCaller =
-                    { Actor = ActorRef.Configured repo; Credential = None }
+                    { Actor = ActorRef.Configured repo; Credential = CredentialFor.Deployment }
                 match! sandboxes.Ensure file (sandbox "octo/hello:dev") (forwarding [ "github" ]) with
                 | Ok _ -> failwith "expected a refusal"
                 | Error e ->

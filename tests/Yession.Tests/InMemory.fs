@@ -227,7 +227,7 @@ let tests =
                     |> expect
                 let! host = Host.startWithEnvironment None (Some makeSandboxes) None (sid ()) 0
 
-                let caller : WorkSandboxes.SandboxCaller = { Actor = ActorRef.Agent; Credential = None }
+                let caller : WorkSandboxes.SandboxCaller = { Actor = ActorRef.Agent; Credential = CredentialFor.Deployment }
                 let test = SandboxRef.parse "test" |> expect
                 let! started = host.Sandboxes.Ensure caller test SandboxRequest.defaults
                 Expect.isTrue (Result.isOk started) "the sandbox starts"

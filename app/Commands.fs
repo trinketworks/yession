@@ -77,7 +77,7 @@ type CommandServices =
       /// is idempotent — a declaration that is already a running sandbox is an ask that
       /// changes nothing and records nothing, which is what every mutating command being
       /// ensure-shaped bought.
-      Refold : Principal option -> Async<unit> }
+      Refold : CredentialFor -> Async<unit> }
 
 let private encodeArgs (values: string list) : string = Codec.toString Codec.gatedArgs values
 
@@ -104,7 +104,7 @@ let private andRefold
         match result with
         // Whoever the verb ran on the authority of. A `forward:` in a file the fold picks up
         // resolves for THEM, by the same Plan 08 precedence the verb itself used.
-        | Ok _ -> do! services.Refold (Authority.principal invocation.Authority)
+        | Ok _ -> do! services.Refold (Authority.credential invocation.Authority)
         | Error _ -> ()
         return result
     }
@@ -163,10 +163,10 @@ let dispatch (services: CommandServices) : CommandDispatch =
     // these, a coincidence each site had to keep re-establishing.
     let repoCaller (invocation: GatedInvocation) : Repos.RepoCaller =
         { Actor = Authority.author invocation.Authority
-          Credential = Authority.principal invocation.Authority }
+          Credential = Authority.credential invocation.Authority }
     let sandboxCaller (invocation: GatedInvocation) : WorkSandboxes.SandboxCaller =
         { Actor = Authority.author invocation.Authority
-          Credential = Authority.principal invocation.Authority }
+          Credential = Authority.credential invocation.Authority }
     Map.ofList
         [ addRepoTool,
           fun (invocation: GatedInvocation) ->
@@ -316,7 +316,7 @@ let dispatch (services: CommandServices) : CommandDispatch =
                         // answer this changed.
                         match PrDraft.create repo head onto title body (draft = "true") with
                         | Error e -> return Error e
-                        | Ok drafted -> return! service.Create (Authority.principal invocation.Authority) drafted
+                        | Ok drafted -> return! service.Create (Authority.credential invocation.Authority) drafted
             }
 
           watchPrTool,
