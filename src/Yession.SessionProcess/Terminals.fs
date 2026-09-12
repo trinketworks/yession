@@ -586,7 +586,11 @@ module SessionTerminals =
     /// indistinguishable by output but identical here — both mark immediately. `ssh somebox`
     /// therefore does not trip it either; the LOCAL shell marks, and `D` arrives when `ssh`
     /// exits, hours later, correctly.
-    let private integrationWindowMs = 2000
+    let private integrationWindow = TimeSpan.FromMilliseconds 2000.0
+
+    /// How long an opened shell is given to print its first prompt mark before it is given
+    /// up on, and the per-block path kept instead. Also what a re-arm waits.
+    let private probeWindow = TimeSpan.FromMilliseconds 3000.0
 
     /// Transcript lines `Tail` counts back from the end of a live terminal (Plan 19). Lines
     /// rather than characters because that is what a range read is addressed by; the
@@ -606,7 +610,7 @@ module SessionTerminals =
     /// latency and change nothing about correctness, at the cost of a registry to clean up on
     /// timeout, on close, and on a caller that went away. Plan 17 made the same trade for the
     /// MCP poll, and for the same reason: one mechanism, not two.
-    let private lookAgainMs = 25
+    let private lookAgain = TimeSpan.FromMilliseconds 25.0
 
     /// A command line, as bytes to type into a shell's line editor. Three things, and none of
     /// them is cosmetic.
@@ -838,7 +842,10 @@ module SessionTerminals =
         (readTranscript: ReadTranscript)
         (openEmulator: OpenEmulator)
         (shell: TerminalShell)
-        (clock: unit -> DateTimeOffset)
+        // Every look at the time and every wait, through one port (`Clock`): the detector's
+        // window, the open-probe's bound, a held read's next look, an idle lease's age. A
+        // test hands a clock it turns by hand and the windows pass when it says.
+        (clock: Clock)
         (mintTerminalId: unit -> TerminalId)
         (mintBlockId: unit -> BlockId)
         // The per-terminal mark nonce (Plan 13, stage 2d). Injected like every other mint so
@@ -1032,7 +1039,7 @@ module SessionTerminals =
             // allowance says so through `TerminalTranscriptTruncated`.
             if data = "" then () else
             let record =
-                { At = (clock () - terminal.OpenedAt).TotalSeconds
+                { At = (clock.Now () - terminal.OpenedAt).TotalSeconds
                   Kind = kind
                   Data = data }
             let seq = transcript.Append record
@@ -1142,7 +1149,7 @@ module SessionTerminals =
                     | _ -> None
                 match Flip.propose altScreen holder autoHeld author with
                 | FlipToLive by ->
-                    do! applyLease (TerminalLeases.take id by true (clock ()) (markKeyframe id) leases)
+                    do! applyLease (TerminalLeases.take id by true (clock.Now ()) (markKeyframe id) leases)
                 | FlipToBlock -> do! applyLease (TerminalLeases.autoRelease id (seqNow id) leases)
                 | FlipNothing -> return ()
             }
@@ -1165,6 +1172,35 @@ module SessionTerminals =
                     let rc = instrumentation.Rc
                     let carry = ref ""
                     let ready = ref false
+                    // Whoever is waiting for the next prompt mark — the open-probe, or a
+                    // re-arm. Called when `A` is seen, so the wait is on the mark itself
+                    // rather than a poll for it; the bound on the wait is the clock's.
+                    let onReady = ref ignore
+                    /// True on the next `A`, false once `probeWindow` has passed without one.
+                    /// Whichever comes first answers; the other is ignored.
+                    ///
+                    /// Listening starts when this is CALLED, not when the async it returns is
+                    /// run — an async is cold, and a wait that only registered on `let!` would
+                    /// miss a mark that arrived between the rc going in and the wait starting.
+                    /// A scripted shell answers inside the write itself; a real one can too.
+                    let awaitMark () : Async<bool> =
+                        let mutable answer : bool option = None
+                        let mutable waiting : (bool -> unit) option = None
+                        let settle (this: bool) =
+                            if answer.IsNone then
+                                answer <- Some this
+                                onReady.Value <- ignore
+                                waiting |> Option.iter (fun resume -> resume this)
+                        onReady.Value <- fun () -> settle true
+                        Async.StartImmediate (
+                            async {
+                                do! clock.After probeWindow
+                                settle false
+                            })
+                        Async.FromContinuations (fun (cont, _, _) ->
+                            match answer with
+                            | Some this -> cont this
+                            | None -> waiting <- Some cont)
                     // What the shell printed BEFORE its first prompt mark, kept only so a probe
                     // that fails can say what it saw. The transcript deliberately carries none
                     // of this (the bootstrap is not the terminal's content), which left a
@@ -1212,7 +1248,9 @@ module SessionTerminals =
                                 // half of `Marks.lineFor`, which is where the reasons are.
                                 | Printed clean ->
                                     if clean <> "" && ready.Value && not (awaitingStart.Contains key) then record clean
-                                | Marked MarkPromptStart -> ready.Value <- true
+                                | Marked MarkPromptStart ->
+                                    ready.Value <- true
+                                    onReady.Value ()
                                 // Recorded, not acted on. A second `C` inside an open block is
                                 // still not repaired into anything — the Process knows what it
                                 // wrote — but that the mark ARRIVED is the one thing the
@@ -1307,19 +1345,11 @@ module SessionTerminals =
                         // Every line starts with a space, so the shell's own
                         // ignore-duplicates-and-space history setting keeps our bootstrap out
                         // of the user's history.
+                        // Listening BEFORE typing: the mark can arrive the instant the last
+                        // rc line lands, and a wait registered after it would have missed it.
+                        let probe = awaitMark ()
                         for line in rc.Split '\n' do
                             pty.Write (line + "\r")
-                        // Poll rather than race: this is the open path, not a hot one, and a
-                        // 50ms granularity beats carrying cancellation machinery Fable would
-                        // have to reproduce.
-                        let rec await (remaining: int) =
-                            async {
-                                if ready.Value then return true
-                                elif remaining <= 0 then return false
-                                else
-                                    do! Async.Sleep 50
-                                    return! await (remaining - 50)
-                            }
                         // The same bootstrap, typed into whatever shell is there NOW. Warp's
                         // move for the same problem, minus the rc-file edit — ours is a few
                         // lines and the shell is in front of us.
@@ -1328,19 +1358,12 @@ module SessionTerminals =
                                 async {
                                     ready.Value <- false
                                     carry.Value <- ""
+                                    let armed = awaitMark ()
                                     for line in rc.Split '\n' do
                                         pty.Write (line + "\r")
-                                    let rec awaitMark (remaining: int) =
-                                        async {
-                                            if ready.Value then return true
-                                            elif remaining <= 0 then return false
-                                            else
-                                                do! Async.Sleep 50
-                                                return! awaitMark (remaining - 50)
-                                        }
-                                    return! awaitMark 3000
+                                    return! armed
                                 }
-                        let! instrumented = await 3000
+                        let! instrumented = probe
                         if not instrumented then
                             // Uninstrumented. Tear the shell down and keep the per-block
                             // path, which answers a smaller question completely — and say
@@ -1358,7 +1381,7 @@ module SessionTerminals =
                                 TranscriptStderr
                                 (sprintf
                                     "yession: the shell never printed an instrumented prompt, so it was closed — each command runs as its own process instead. In %dms it said: %s\r\n"
-                                    3000
+                                    (int probeWindow.TotalMilliseconds)
                                     (if said = "" then "nothing" else said))
                             pty.Kill ()
                             terminal.Shell <- None
@@ -1425,7 +1448,7 @@ module SessionTerminals =
                 | Error reason -> return Error reason
                 | Ok dialledHandle ->
                     let id = mintTerminalId ()
-                    let openedAt = clock ()
+                    let openedAt = clock.Now ()
                     let transcript =
                         openTranscript
                             id
@@ -1764,7 +1787,7 @@ module SessionTerminals =
                                             // start mark that did not arrive".
                                             Async.StartImmediate (
                                               async {
-                                                  do! Async.Sleep integrationWindowMs
+                                                  do! clock.After integrationWindow
                                                   if not (sawCommandStart.Contains key)
                                                      && not settled
                                                      && not (Set.contains key lost) then
@@ -1842,7 +1865,7 @@ module SessionTerminals =
 
         let reclaimIdle (holdOf: TerminalId -> TerminalQueueDrain.TerminalHold option) : Async<unit> =
             async {
-                let now = clock ()
+                let now = clock.Now ()
                 // Snapshotted first: `applyLease` rewrites the map, and reclaiming one
                 // terminal must not change what is decided about another.
                 let candidates =
@@ -1888,7 +1911,7 @@ module SessionTerminals =
                 | true, terminal when Option.isNone terminal.Shell ->
                     return Error "this terminal has no interactive shell"
                 | true, _ ->
-                    do! applyLease (TerminalLeases.take id by false (clock ()) (markKeyframe id) leases)
+                    do! applyLease (TerminalLeases.take id by false (clock.Now ()) (markKeyframe id) leases)
                     return Ok ()
             }
 
@@ -1918,7 +1941,7 @@ module SessionTerminals =
             | Some pty ->
                 // Stamped BEFORE the write, so the idle timeout measures from the last
                 // keystroke rather than from when the lease was taken.
-                leases <- TerminalLeases.touch id by (clock ()) leases
+                leases <- TerminalLeases.touch id by (clock.Now ()) leases
                 pty.Write data
                 true
             | None -> false
@@ -2044,8 +2067,8 @@ module SessionTerminals =
                                         // waiting one out is waiting for nothing.
                                         elif not (isOpen id) then return Ok (Some false)
                                         else
-                                            do! Async.Sleep lookAgainMs
-                                            return! look (waitedMs + float lookAgainMs)
+                                            do! clock.After lookAgain
+                                            return! look (waitedMs + lookAgain.TotalMilliseconds)
                                 }
                             look 0.0
                     match! waited with

@@ -355,7 +355,7 @@ let startFull
                 transcripts.ReadRange
                 Emulator.openEmulator
                 SessionTerminals.TerminalShell.posix
-                (fun () -> DateTimeOffset.UtcNow)
+                Clock.system
                 TerminalId.mint
                 mintBlockId
                 // Cryptographically random, and not a counter: a guessable nonce is no nonce
