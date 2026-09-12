@@ -126,6 +126,15 @@ module Marks =
     /// **A foreign mark is left alone.** Anything without our nonce — including a nested
     /// shell's own OSC 133 integration — passes through as ordinary output, because it IS
     /// ordinary output as far as this terminal is concerned.
+    ///
+    /// **The readline brackets come off with the mark.** The `sh` dialect prints its marks
+    /// between `\001` and `\002` so readline measures them as zero width (see `rcFor`).
+    /// readline consumes those bytes itself; a shell without it (dash) prints them, and two
+    /// invisible control characters around every prompt are protocol, not content. So a
+    /// `\001` directly before a mark of ours and a `\002` directly after it are stripped
+    /// with it, and a trailing `\001` is carried like a partial prefix. A `\002` split
+    /// from its mark by a chunk boundary is the one byte that gets through, and it is
+    /// invisible where it lands.
     let scan (nonce: string) (carry: string) (data: string) : Mark list * string * string =
         let input = carry + data
         let out = System.Text.StringBuilder ()
@@ -139,15 +148,18 @@ module Marks =
                     // No mark ahead. Everything is output except a trailing fragment that
                     // could still BECOME our prefix once the next chunk arrives.
                     let keepFrom =
-                        let candidate = max index (input.Length - prefix.Length)
-                        // The longest suffix that is a proper prefix of `ESC ] 133 ;`.
+                        let candidate = max index (input.Length - prefix.Length - 1)
+                        // The longest suffix that is a proper prefix of `ESC ] 133 ;`, with
+                        // or without the `\001` the sh dialect puts in front of it.
                         [ candidate .. input.Length - 1 ]
-                        |> List.tryFind (fun i -> prefix.StartsWith (input.Substring i))
+                        |> List.tryFind (fun i ->
+                            let suffix = input.Substring i
+                            let unbracketed = if suffix.StartsWith "\u0001" then suffix.Substring 1 else suffix
+                            prefix.StartsWith unbracketed)
                         |> Option.defaultValue input.Length
                     out.Append (input.Substring (index, keepFrom - index)) |> ignore
                     input.Substring keepFrom
                 else
-                    out.Append (input.Substring (index, start - index)) |> ignore
                     let bodyStart = start + prefix.Length
                     // A mark ends at BEL or at ST (`ESC \`); both spellings are legal and a
                     // shell's `printf` may emit either.
@@ -159,21 +171,32 @@ module Marks =
                         | -1, s -> s
                         | b, -1 -> b
                         | b, s -> min b s
+                    // Where the output before this mark ends. A `\001` directly ahead of the
+                    // mark is its readline bracket and travels with it — carried with a
+                    // truncated one, dropped with one of ours, left as output with a foreign
+                    // one — so nothing is appended until the mark has been read.
+                    let bracketed = start > index && input.[start - 1] = '\u0001'
+                    let textEnd = if bracketed then start - 1 else start
                     if terminator < 0 then
                         // Truncated: carry the whole thing, terminator and all, to the next
                         // chunk. Emitting it as output here would leak a half-written mark
                         // into the transcript and lose the mark itself.
-                        input.Substring start
+                        out.Append (input.Substring (index, textEnd - index)) |> ignore
+                        input.Substring textEnd
                     else
                         let body = input.Substring (bodyStart, terminator - bodyStart)
                         let width = if input.[terminator] = Bel then 1 else 2
                         match parseBody nonce body with
                         | Some mark ->
+                            out.Append (input.Substring (index, textEnd - index)) |> ignore
                             marks.Add mark
-                            walk (terminator + width)
+                            // Ours, so the closing bracket that may follow it is ours too.
+                            let after = terminator + width
+                            let after = if after < input.Length && input.[after] = '\u0002' then after + 1 else after
+                            walk after
                         | None ->
-                            // Not ours. It is output, verbatim — including its terminator.
-                            out.Append (input.Substring (start, terminator + width - start)) |> ignore
+                            // Not ours. It is output, verbatim — bracket, terminator and all.
+                            out.Append (input.Substring (index, terminator + width - index)) |> ignore
                             walk (terminator + width)
 
         let rest = walk 0
@@ -253,10 +276,22 @@ module Marks =
             // reached us from dash all along and `A` never did. `D` before `A`: the previous
             // command's output ends before this prompt begins, the order FTCS gives them.
             //
+            // The marks are bracketed in `\001` … `\002` — readline's own zero-width
+            // markers, the bytes bash's `\[` and `\]` become — and that bracket is not
+            // cosmetic. A prompt is measured by whoever prints it, and bash-as-`sh` prints it
+            // through readline, which counts every byte it was not told to ignore. Two marks
+            // carrying a UUID nonce are a hundred-odd bytes, so readline believed the prompt
+            // was wider than an 80-column terminal and did what it does to a prompt that
+            // wraps: typed a line break into it — in the middle of the `A` mark, which then
+            // matched nothing, so the open-probe timed out and every terminal on a deployed
+            // macOS host ran a process per block. Every fixture in the suite used a short
+            // nonce and stayed green. A shell without readline (dash) prints the two bytes
+            // as they are; `scan` takes them off around a mark that is ours.
+            //
             // `MarksCommandStart = false`: with no preexec there is no `C`, so the drain
             // completes this dialect's blocks on `D` alone and the integration detector stays
             // disarmed here.
             Some
-                { Rc = " PS1='$(command -p printf \"" + commandDone + promptStart + "\" $?)'"
+                { Rc = " PS1='$(command -p printf \"\\001" + commandDone + promptStart + "\\002\" $?)'"
                   MarksCommandStart = false }
         | _ -> None

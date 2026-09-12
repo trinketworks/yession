@@ -157,7 +157,11 @@ let private withShellTerminal
                     at
                     (fun () -> TerminalId.create ("term-" + name) |> expect)
                     (let mutable n = 0 in fun () -> n <- n + 1; BlockId.create (sprintf "b-%d" n) |> expect)
-                    (fun () -> name + "-nonce")
+                    // UUID-shaped, as production mints them (`Interop.randomSecret`). A short
+                    // one here hid a whole class of failure: the `sh` dialect rides its marks
+                    // in PS1, and a prompt readline believes is wider than the terminal gets a
+                    // line-wrap typed into the middle of the mark.
+                    (fun () -> name + "-" + string (System.Guid.NewGuid ()))
                     (let mutable n = 0 in fun () -> n <- n + 1; MessageId.create (sprintf "m-%d" n) |> expect)
                     (fun _ _ _ -> ())
                     // What a peer would be told; this fixture has none.
