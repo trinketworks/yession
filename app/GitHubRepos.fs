@@ -173,8 +173,19 @@ let branchesOver (apiBase: string) (token: string option) (repo: RepoRef) : Asyn
         (sprintf "%s/repos/%s/branches?per_page=100" (apiBase.TrimEnd '/') (RepoRef.value repo))
         token
 
+/// Where a pull request comes from — the repository holding its head, and the branch — so
+/// a link to one is enough to check it out. The one link that has to be asked about: a
+/// repository link is already what `add_repo` takes and a branch link is that plus a
+/// switch, but which fork a pull request's branch lives in only the provider knows.
+let pullHeadOver (apiBase: string) (token: string option) (repo: RepoRef) (number: int) : Async<Result<PullHead, LookupFailure>> =
+    read
+        GitHubPrs.pullHeadDecoder
+        (sprintf "%s/repos/%s/pulls/%d" (apiBase.TrimEnd '/') (RepoRef.value repo) number)
+        token
+
 // --- the browser-facing routes ------------------------------------------------------------
-// Two reads a person makes while choosing: which repos, and which branches of one. Cookie-
+// Three reads a person makes while choosing: which repos, which branches of one, and where
+// a pull request they pasted a link to comes from. Cookie-
 // gated like the connection panels, and answered on the CALLER's credential by the same
 // precedence a repo verb spends — so what the list shows is what `add_repo` will be able
 // to clone, and not a repo some other credential in the session can see.
@@ -194,6 +205,8 @@ let private respondText (res: ServerResponse) (status: int) (text: string) =
 let encodeListing (candidates: RepoCandidate list) : string = Codec.toString Codec.repoCandidates candidates
 
 let encodeBranches (branches: string list) : string = Codec.toString Codec.branchNames branches
+
+let encodePullHead (head: PullHead) : string = Codec.toString Codec.pullHead head
 
 /// Which HTTP status a failure is said with. A missing credential and a dead one are both
 /// 401 — the browser's answer to either is the sign-in panel — but with different words.
@@ -218,7 +231,8 @@ let routes
         let path = req.url.Split('?').[0]
         match SessionRoute.parseUnder mount req.``method`` path with
         | Some GitHubRepos
-        | Some (GitHubBranches _) as route ->
+        | Some (GitHubBranches _)
+        | Some (GitHubPullHead _) as route ->
             match auth.IdentityOf req with
             | None -> respondText res 401 "unauthorized"
             | Some identity ->
@@ -241,6 +255,15 @@ let routes
                             | Ok repo ->
                                 match! branchesOver apiBase token repo with
                                 | Ok branches -> respondJson res 200 (encodeBranches branches)
+                                | Error failure -> respondText res (statusOf failure) (LookupFailure.describe failure)
+                        | Some (GitHubPullHead (owner, name, number)) ->
+                            match RepoRef.create (owner + "/" + name), Int32.TryParse number with
+                            | Error e, _ -> respondText res 400 (sprintf "not a repo name: %s" e)
+                            | Ok _, (false, _)
+                            | Ok _, (true, 0) -> respondText res 400 (sprintf "not a pull request number: %s" number)
+                            | Ok repo, (true, n) ->
+                                match! pullHeadOver apiBase token repo n with
+                                | Ok head -> respondJson res 200 (encodePullHead head)
                                 | Error failure -> respondText res (statusOf failure) (LookupFailure.describe failure)
                         | _ -> ()
                     })

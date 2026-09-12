@@ -64,6 +64,20 @@ let prDecoder : Decoder<PrFields> =
           // and never for a transition — see `PrSnapshot.Mergeable`.
           Mergeable = get.Optional.Field "mergeable" (Decode.option Decode.bool) |> Option.flatten })
 
+/// The same resource, read for where the pull request comes FROM: `head.repo.full_name`
+/// rather than the repository the link named, because a pull request from a fork has its
+/// branch in the fork, and checking out the base repository at that branch name finds
+/// nothing. `head.repo` is null when the fork has since been deleted — GitHub keeps the
+/// pull request and loses its source — which is a head nobody can check out.
+let pullHeadDecoder : Decoder<Yession.Domain.Repos.PullHead> =
+    Decode.at [ "head"; "repo"; "full_name" ] Decode.string
+    |> Decode.andThen (fun name ->
+        match RepoRef.create name with
+        | Error e -> Decode.fail (sprintf "github named a repository this session cannot: %s" e)
+        | Ok repo ->
+            Decode.at [ "head"; "ref" ] Decode.string
+            |> Decode.map (fun branch -> { Yession.Domain.Repos.PullHead.Repo = repo; Yession.Domain.Repos.PullHead.Branch = branch }))
+
 /// `GET /repos/{o}/{r}/commits/{sha}/check-runs` — each run's status and conclusion.
 let checkRunsDecoder : Decoder<(string * string option) list> =
     Decode.field

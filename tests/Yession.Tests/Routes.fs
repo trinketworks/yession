@@ -59,6 +59,7 @@ let private every =
       // shares its head with the listing's and is told apart by depth.
       GitHubRepos
       GitHubBranches ("octo", "hello")
+      GitHubPullHead ("octo", "hello", "42")
       Queries ]
 
 let private methodOf (route: SessionRoute) =
