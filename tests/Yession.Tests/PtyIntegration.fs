@@ -157,11 +157,11 @@ let private withShellTerminal
                     at
                     (fun () -> TerminalId.create ("term-" + name) |> expect)
                     (let mutable n = 0 in fun () -> n <- n + 1; BlockId.create (sprintf "b-%d" n) |> expect)
-                    // UUID-shaped, as production mints them (`Interop.randomSecret`). A short
-                    // one here hid a whole class of failure: the `sh` dialect rides its marks
-                    // in PS1, and a prompt readline believes is wider than the terminal gets a
-                    // line-wrap typed into the middle of the mark.
-                    (fun () -> name + "-" + string (System.Guid.NewGuid ()))
+                    // Production's own minter, not a stand-in. A short fixture nonce hid a
+                    // whole class of failure: the `sh` dialect rides its marks in PS1, and a
+                    // prompt readline believes is wider than the terminal gets a line-wrap
+                    // typed into the middle of the mark. What ships is what this composes.
+                    Interop.randomSecret
                     (let mutable n = 0 in fun () -> n <- n + 1; MessageId.create (sprintf "m-%d" n) |> expect)
                     (fun _ _ _ -> ())
                     // What a peer would be told; this fixture has none.
@@ -691,8 +691,43 @@ let private agentLeaseTests =
                 })
     ]
 
+/// Through the Session Process as production composes it (`hostOver`): the agent's one
+/// execution path, `TerminalCommands.Execute`, over a terminal the Host opens with ITS shell
+/// and ITS nonce. The fixtures below compose `SessionTerminals` by hand to reach seams this
+/// cannot — a scripted clock, a counted re-drain — and each of them names things production
+/// chooses; this one names nothing, so it fails the way a deployment does.
+let private throughTheHostTests =
+    testList "Through the Host as it ships" [
+        testCaseAsync "a terminal the Host opens carries cd into the next block" <|
+            async {
+                let policy =
+                    { emptyPolicy with
+                        Env = Sandboxes.hostBaseline (Sandboxes.ambientEnv ()) }
+                let! host = hostOver (Sandboxes.HostSandbox.create ()) policy "host-shell"
+                let agent = Authority.agentFor (Principal.Peer (PeerId.create "ada" |> expect))
+                let dir = mkdtemp nodeFs nodeOs
+                match! host.TerminalCommands.Execute (CommandRequest.ofCommand ("cd " + dir)) agent with
+                | Error e -> failwithf "cd did not run: %s" e
+                | Ok first ->
+                    Expect.equal first.Status (TerminalCommandRan (CommandSucceeded 0)) "cd ran as a block"
+                    match!
+                        host.TerminalCommands.Execute
+                            { CommandRequest.ofCommand "echo \"IN:$PWD\"" with Target = Some (InTerminal first.Terminal) }
+                            agent
+                        with
+                    | Error e -> failwithf "the second block did not run: %s" e
+                    | Ok second ->
+                        Expect.isTrue
+                            (second.Output.Contains ("IN:" + dir))
+                            (sprintf "the second block ran where the first left the shell (%s); it printed: %s" dir second.Output)
+                do! host.Stop ()
+            }
+    ]
+
 let tests =
     testList "Pty (Plan 13)" [
+        throughTheHostTests
+
         testCaseAsync "the host backend offers a pty at all" <|
             async {
                 let policy =
@@ -821,7 +856,7 @@ let tests =
                 // launch it, emits marks the real scanner recognises — with the real exit
                 // codes. An emitter and a parser that agree only with each other would pass
                 // every cheap-tier case and close no block at all in production.
-                let nonce = "probe-nonce"
+                let nonce = Interop.randomSecret ()
                 let rc = (Marks.rcFor "bash" nonce |> Option.get).Rc
                 let dir = mkdtemp nodeFs nodeOs
                 let rcPath = dir + "/yrc"

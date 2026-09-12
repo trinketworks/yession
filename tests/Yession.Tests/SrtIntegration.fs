@@ -16,6 +16,7 @@ open Fable.Core.JsInterop
 open Fable.Pyxpecto
 open Yession.Domain
 open Yession.Domain.Sandboxes
+open Yession.Domain.Agent
 open Yession.Domain.Terminals
 open Yession.Host
 open Yession.SessionProcess
@@ -35,6 +36,12 @@ let private writeFile (fs: obj) (path: string) (content: string) : unit = jsNati
 
 [<Emit("$0.existsSync($1)")>]
 let private exists (fs: obj) (path: string) : bool = jsNative
+
+[<Emit("$0.realpathSync($1)")>]
+let private realpath (fs: obj) (path: string) : string = jsNative
+
+[<Emit("$0.mkdirSync($1)")>]
+let private mkdir (fs: obj) (path: string) : unit = jsNative
 
 [<Emit("$0.symlinkSync($1, $2)")>]
 let private symlink (fs: obj) (target: string) (path: string) : unit = jsNative
@@ -197,49 +204,54 @@ let tests =
                 do! sandbox.Dispose ()
             })
 
-            // The terminal story's whole precondition, asked of the CONFINED spawn: an
-            // interactive shell on a pty, under this box's srt, prints the `sh` dialect's
-            // prompt mark inside the bound `openShell` waits. Every terminal on a deployed
-            // macOS host fell back to a process per block — silently, for weeks — and every
-            // pty case in the suite was green, because none of them ran the shell confined.
-            testCaseAsync "an interactive shell on a pty under srt prints an instrumented prompt" (async {
-                let workspace = mkdtemp nodeFs nodeOs
-                let! sandbox = startSandbox (policyIn workspace [])
-                match sandbox.SpawnPty with
-                | None -> failwith "srt reports no pty support"
-                | Some spawnPty ->
-                    let output = System.Text.StringBuilder ()
-                    // As wide as production's (`Interop.randomSecret` is a UUID): the `sh`
-                    // dialect's whole prompt is two of these inside escape sequences, and how
-                    // wide readline THINKS that is decides whether the mark survives.
-                    let nonce = string (System.Guid.NewGuid ())
-                    let rc =
-                        match Marks.rcFor "sh" nonce with
-                        | Some instrumentation -> instrumentation.Rc
-                        | None -> failwith "no sh dialect"
-                    let exec =
-                        { Executable = SessionTerminals.TerminalShell.posix.Executable
-                          Arguments = SessionTerminals.TerminalShell.posix.InteractiveArguments
-                          Env = Map.empty
-                          WorkingDirectory = None }
-                    match! spawnPty exec 80 24 (fun data -> output.Append data |> ignore) with
-                    | Error reason -> failwithf "the pty would not open: %s" reason
-                    | Ok pty ->
-                        for line in rc.Split '\n' do
-                            pty.Write (line + "\r")
-                        let rec await (remaining: int) =
-                            async {
-                                let marks, _, _ = Marks.scan nonce "" (output.ToString ())
-                                if marks |> List.contains MarkPromptStart then return true
-                                elif remaining <= 0 then return false
-                                else
-                                    do! Async.Sleep 50
-                                    return! await (remaining - 50)
-                            }
-                        let! instrumented = await 3000
-                        pty.Kill ()
-                        Expect.isTrue instrumented (sprintf "the prompt mark arrived; the shell said: %s" (output.ToString ()))
-                do! sandbox.Dispose ()
+            // The terminal story's whole precondition, asked of what SHIPS: the Session
+            // Process as production composes it — its shell, its nonce, its drain — opening a
+            // terminal in a sandbox this box's srt confines, and the shell carrying `cd` into
+            // the next block, which only an instrumented one does. Every terminal on a
+            // deployed macOS host fell back to a process per block, silently, for weeks, and
+            // every pty case in the suite was green: none ran the shell confined, and the one
+            // that did (briefly) minted its own nonce — shorter than production's, which is
+            // exactly the width the prompt broke at. Nothing is minted here.
+            testCaseAsync "a terminal the Host opens under srt carries cd into the next block" (async {
+                // Canonical, because the Host's start-up checks probe what the policy grants
+                // BY PATH: under a root read-deny the sandbox cannot resolve the `/tmp`
+                // symlink, so a grant spelled through it is one the probe finds unheld
+                // (relative writes from a cwd inside it are fine, which is what every other
+                // case here does). Production's paths are under the session directory and
+                // never symlinked.
+                let workspace = realpath nodeFs (mkdtemp nodeFs nodeOs)
+                // A home the sandbox cannot write is refused before any shell opens —
+                // production hands a sandbox its own home under the session, so this one
+                // lives in the workspace it may write.
+                let policy = policyIn workspace []
+                let policy =
+                    { policy with
+                        Env =
+                            policy.Env
+                            |> Map.add "HOME" (workspace + "/home")
+                            |> Map.add "TMPDIR" (workspace + "/tmp") }
+                let! host = hostOver (Sandboxes.SrtSandbox.create (srtTools ())) policy "srt-shell"
+                let agent = Authority.agentFor (Principal.Peer (PeerId.create "ada" |> expect))
+                // Somewhere the terminal does NOT start: a shell that is given up on runs
+                // each block as its own process in the sandbox's working directory, and a
+                // `cd` to that same directory would pass without a shell at all.
+                let inner = workspace + "/inner"
+                mkdir nodeFs inner
+                match! host.TerminalCommands.Execute (CommandRequest.ofCommand ("cd " + inner)) agent with
+                | Error e -> failwithf "cd did not run: %s" e
+                | Ok first ->
+                    Expect.equal first.Status (TerminalCommandRan (CommandSucceeded 0)) "cd ran as a block"
+                    match!
+                        host.TerminalCommands.Execute
+                            { CommandRequest.ofCommand "echo \"IN:$PWD\"" with Target = Some (InTerminal first.Terminal) }
+                            agent
+                        with
+                    | Error e -> failwithf "the second block did not run: %s" e
+                    | Ok second ->
+                        Expect.isTrue
+                            (second.Output.Contains ("IN:" + inner))
+                            (sprintf "the second block ran where the first left the shell (%s); it printed: %s" inner second.Output)
+                do! host.Stop ()
             })
 
             testCaseAsync "a write outside the policy's paths is refused" (async {
