@@ -293,7 +293,13 @@ let private mark (body: string) = "]133;" + body + ";y=" + nonce + ""
 /// printed. Same bytes, no nonce.
 let private foreign (body: string) = "]133;" + body + ""
 
-let private scan1 (data: string) = Marks.scan nonce "" data
+/// The old three-valued reading of a scan — marks, text, carry — for the cases that ask
+/// about recognition rather than order.
+let private scan3 (carry: string) (data: string) =
+    let scanned, rest = Marks.scan nonce carry data
+    Marks.marksOf scanned, Marks.printedOf scanned, rest
+
+let private scan1 (data: string) = scan3 "" data
 
 let private blockStdinTests =
     testList "Where a block reads its input (BlockStdin)" [
@@ -362,10 +368,10 @@ let private markTests =
             let whole = mark "D;7"
             let first = whole.Substring (0, 8)
             let second = whole.Substring 8
-            let marks1, out1, carry1 = Marks.scan nonce "" ("x" + first)
+            let marks1, out1, carry1 = scan3 "" ("x" + first)
             Expect.isEmpty marks1 "the first half is not a mark yet"
             Expect.equal out1 "x" "and the fragment is not emitted as output"
-            let marks2, out2, carry2 = Marks.scan nonce carry1 (second + "y")
+            let marks2, out2, carry2 = scan3 carry1 (second + "y")
             Expect.equal marks2 [ MarkCommandDone 7 ] "the halves join into one mark"
             Expect.equal out2 "y" "with only the real output around it"
             Expect.equal carry2 "" "and nothing left hanging"
@@ -407,24 +413,46 @@ let private markTests =
             Expect.isNone (Marks.rcFor "" nonce) "and neither is nothing"
             Expect.isSome (Marks.rcFor "sh" nonce) "a POSIX sh rides its marks in PS1"
 
-        testCase "a dialect declares whether it marks a command's start" <| fun () ->
-            // What the drain gates block-completion on and the integration detector gates
-            // arming on. Wrong for a dialect and either a working shell is reported lost, or a
-            // stale prompt-cycle `D` closes the first block early.
+        testCase "every dialect marks a command's start, and sh does it from the line" <| fun () ->
+            // What the drain gates block-completion on, what the integration detector waits
+            // for, and where a block's output begins. bash and zsh have a hook to print `C`
+            // from; a POSIX sh has none, so its line carries a call that prints it — and
+            // hands `$?` through, because the command after it may be `echo $?`.
             for shell in [ "bash"; "zsh" ] do
-                Expect.isTrue (Marks.rcFor shell nonce |> Option.get).MarksCommandStart
-                    (sprintf "%s has a preexec hook to hang C on" shell)
-            Expect.isFalse (Marks.rcFor "sh" nonce |> Option.get).MarksCommandStart
-                "a POSIX sh has none: its marks ride in PS1, which renders after the command"
+                Expect.isTrue ((Marks.rcFor shell nonce |> Option.get).Rc.Contains ("\\033]133;C;y=" + nonce + "\\007"))
+                    (sprintf "%s's hook prints C" shell)
+            let sh = (Marks.rcFor "sh" nonce |> Option.get).Rc
+            Expect.isTrue (sh.Contains ("__y_c() { __y_r=$?; command -p printf '\\033]133;C;y=" + nonce + "\\007'; return $__y_r; }"))
+                (sprintf "sh defines the start mark as a function that keeps $?, got: %s" sh)
+            Expect.equal (Marks.lineFor "sh" BlockStdin.Terminal "echo $?") "__y_c; echo $?" "and a block's line calls it first"
+            Expect.equal (Marks.lineFor "dash" BlockStdin.Terminal "ls # note\nmore") "__y_c; ls # note\nmore"
+                "as a prefix, so a comment and a second line are untouched"
+            Expect.equal (Marks.lineFor "sh" BlockStdin.Closed "cat") "{ __y_c; cat\n} </dev/null"
+                "inside the stdin wrapper, so the mark prints with the redirection in place"
+            for shell in [ "bash"; "zsh" ] do
+                Expect.equal (Marks.lineFor shell BlockStdin.Terminal "echo hi") "echo hi" (sprintf "%s types the command as written" shell)
+                Expect.equal (Marks.lineFor shell BlockStdin.Closed "echo hi") (BlockStdin.wrap BlockStdin.Closed "echo hi")
+                    (sprintf "%s wraps for stdin and nothing more" shell)
+
+        testCase "a scan keeps output and marks in the order the shell printed them" <| fun () ->
+            // A command's last line, the `D` that ends its block and the next prompt can all
+            // arrive in one read. Recorded in order, the line lands inside the block and the
+            // prompt outside it; the old two-valued scan put the prompt in the block.
+            let scanned, carry = Marks.scan nonce "" ("last\r\n" + mark "D;0" + mark "A" + "$ ")
+            Expect.equal scanned [ Printed "last\r\n"; Marked (MarkCommandDone 0); Marked MarkPromptStart; Printed "$ " ]
+                "each piece on its own side of the marks"
+            Expect.equal carry "" "nothing hangs"
 
         testCase "a POSIX sh emits both its marks through printf" <| fun () ->
             // The one that was silently wrong on every box that ships. PS1 is expanded by the
             // SHELL, and interpreting a `\033` in a prompt is a bash extension dash lacks — so
             // a mark left as literal text never reached us from Debian's `/bin/sh`, the probe
             // never saw its `A`, and every terminal there fell back to a process per block.
-            let rc = (Marks.rcFor "sh" nonce |> Option.get).Rc
-            Expect.isFalse (rc.Contains "\\007'") "no mark is left outside the printf for the shell to expand"
-            Expect.equal (rc.Split("printf").Length - 1) 1 "and both ride in the one command substitution"
+            let prompt =
+                (Marks.rcFor "sh" nonce |> Option.get).Rc.Split '\n'
+                |> Array.find (fun line -> line.StartsWith " PS1=")
+            Expect.isFalse (prompt.Contains "\\007'") "no mark is left outside the printf for the shell to expand"
+            Expect.equal (prompt.Split("printf").Length - 1) 1 "and both ride in the one command substitution"
 
         testCase "a POSIX sh brackets its prompt marks so readline gives them no width" <| fun () ->
             // The failure this pins was invisible to every fixture with a short nonce.
@@ -454,14 +482,14 @@ let private markTests =
             // The pty can hand over the `\001` in one read and the mark in the next; a
             // bracket emitted as output on the first read would be a stray byte the next
             // read cannot take back.
-            let marks1, out1, carry1 = Marks.scan nonce "" "x\u0001"
+            let marks1, out1, carry1 = scan3 "" "x\u0001"
             Expect.isEmpty marks1 "not a mark yet"
             Expect.equal out1 "x" "the bracket is held back"
-            let marks2, out2, carry2 = Marks.scan nonce carry1 (mark "A" + "\u0002y")
+            let marks2, out2, carry2 = scan3 carry1 (mark "A" + "\u0002y")
             Expect.equal marks2 [ MarkPromptStart ] "the mark arrives whole"
             Expect.equal out2 "y" "with both brackets gone"
             Expect.equal carry2 "" "and nothing left hanging"
-            let marks3, out3, carry3 = Marks.scan nonce "" ("x\u0001" + (mark "A").Substring (0, 6))
+            let marks3, out3, carry3 = scan3 "" ("x\u0001" + (mark "A").Substring (0, 6))
             Expect.isEmpty marks3 "a truncated mark is not one yet"
             Expect.equal out3 "x" "and its bracket travels with the fragment"
             Expect.equal carry3 ("\u0001" + (mark "A").Substring (0, 6)) "to be finished by the next chunk"

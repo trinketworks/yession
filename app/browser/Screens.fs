@@ -271,18 +271,18 @@ let create (dispatch: ClientMsg -> unit) (report: TerminalId -> int -> int -> un
                 | false, _ -> ()
                 | true, entry ->
                     let feed = ClientModel.terminalFeed terminal.TerminalId model
-                    // Resize records are folded alongside the output, in ONE ordered pass:
-                    // what a program drew before a resize was drawn at the old geometry and
-                    // what it drew after at the new, so applying them out of order — or not
-                    // at all — reflows the wrong half of the screen.
+                    // Every record but nothing else, in ONE ordered pass — the same fold the
+                    // Process runs, which is what lets a snapshot from there seed the screen
+                    // here. Resizes are folded alongside the output because what a program
+                    // drew before a resize was drawn at the old geometry and what it drew
+                    // after at the new, so applying them out of order — or not at all —
+                    // reflows the wrong half of the screen. Input records are folded because
+                    // they are the one rendering of a block's command: the Process does not
+                    // record the shell's echo of the line it was handed (`Marks.lineFor`).
                     let fresh =
                         feed.Records
                         |> Map.toList
-                        |> List.filter (fun (seq, record) ->
-                            seq >= entry.Through
-                            && (record.Kind = TranscriptOutput
-                                || record.Kind = TranscriptStderr
-                                || record.Kind = TranscriptResize))
+                        |> List.filter (fun (seq, _) -> seq >= entry.Through)
                     if not (List.isEmpty fresh) then
                         for _, record in fresh do
                             match record.Kind with
