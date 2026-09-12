@@ -566,12 +566,6 @@ module SessionTerminals =
           /// (Plan 16, part D) — its process is somebody else's, in nothing we run.
           Sandbox : SandboxRef option
           mutable Shell : PtyHandle option
-          /// Whether this terminal's shell dialect marks a command's START (Plan 13, stage
-          /// 2f). Set when the shell opens, beside `Shell` and for the same reason — neither
-          /// is known until then. The drain reads it to tell this block's completing `D` from
-          /// a leftover rc/startup prompt cycle, and the integration detector to arm only
-          /// where a start-mark could actually go missing.
-          mutable MarksCommandStart : bool
           /// Whether the last output chunk this terminal captured ended in `\r` — the carry
           /// `Onlcr.normalize` needs to leave a CRLF split across two reads alone. Mutable
           /// for the same reason `Shell` is: it is a property of the live capture, not of
@@ -921,6 +915,13 @@ module SessionTerminals =
         /// shell emits `C` when it STARTS a command, so its absence is about instrumentation
         /// rather than about how long the command runs.
         let sawCommandStart = Collections.Generic.HashSet<string> ()
+        /// Terminals whose current block has been TYPED and not yet started — the window in
+        /// which the shell is rendering the line it was handed rather than running it. What
+        /// it prints in that window is not the block's output and is not recorded (the other
+        /// half of `Marks.lineFor`). Closed by the start mark; forced shut by the block's `D`
+        /// or by the integration detector giving up, so a shell that never marks the start
+        /// cannot have its output swallowed for good.
+        let awaitingStart = Collections.Generic.HashSet<string> ()
         /// The re-arm closure per terminal, built in `openShell` because it needs that
         /// terminal's nonce and rc — the same ones its output scanner is bound to.
         let rearmers = Collections.Generic.Dictionary<string, unit -> Async<bool>> ()
@@ -1035,12 +1036,14 @@ module SessionTerminals =
                   Kind = kind
                   Data = data }
             let seq = transcript.Append record
-            // Only what the terminal PRINTED shapes the screen. An input record is what we
-            // wrote to the process, not what came back; feeding it here would draw the
-            // command twice on a pty, which echoes it itself.
+            // A block's command is drawn from its INPUT record — the command as written —
+            // and not from the shell's echo of the line it was handed, which the drain does
+            // not record (`Marks.lineFor`). The two folds of a transcript, this one and the
+            // browser's, draw the same records for the same reason a snapshot can seed
+            // either: the screen is a function of what was recorded, and nothing else.
             match kind with
-            | TranscriptOutput | TranscriptStderr -> emulator.Write data
-            | TranscriptInput | TranscriptResize -> ()
+            | TranscriptOutput | TranscriptStderr | TranscriptInput -> emulator.Write data
+            | TranscriptResize -> ()
             onRecord id seq record
 
         /// Where this terminal's transcript stands right now — the bound a lease event is
@@ -1174,22 +1177,21 @@ module SessionTerminals =
                         | false, _ -> ()
                         | true, current ->
                             if not ready.Value && overture.Length < 512 then overture.Append data |> ignore
-                            let marks, clean, rest = Marks.scan nonce carry.Value data
+                            let scanned, rest = Marks.scan nonce carry.Value data
                             carry.Value <- rest
-                            // Clean output is written BEFORE the marks are acted on, and the
-                            // order is load-bearing. A command's output precedes the `D` that
-                            // ends its block in the byte stream, and both can arrive in one
-                            // read — so `Marks.scan` hands them back together. Acting on the
-                            // `D` first captured `toSeq = NextSeq()` before this output was
-                            // appended, and the block's own last line landed one past its
-                            // recorded range: `read_terminal_block` and the mounted page, which
-                            // render a block by `[FromSeq, ToSeq)`, showed it empty. Writing
-                            // the output first puts it inside the range the `D` then closes.
+                            // In the order the shell printed them, and the order is
+                            // load-bearing twice over. A command's last line precedes the `D`
+                            // that ends its block, and the next prompt follows it, and all
+                            // three can arrive in one read: the output has to be recorded
+                            // before the `D` captures `toSeq` (or the block's own last line
+                            // lands one past its range and the block renders empty), and the
+                            // prompt has to be recorded after (or it lands inside a block
+                            // that has already finished). Acting on the pieces as they come
+                            // is what puts each on its own side.
                             //
-                            // It also keeps the bootstrap out of the transcript exactly as
-                            // before: the chunk that carries the first `A` is still gated by a
-                            // `ready` that is false until that `A` is acted on below.
-                            if clean <> "" && ready.Value then
+                            // The bootstrap stays out of the transcript exactly as before:
+                            // everything up to the first `A` is gated by `ready`.
+                            let record (clean: string) =
                                 // Per-block output accounting lives with the pending block,
                                 // because on a pty the stream belongs to the TERMINAL and the
                                 // cap is a property of the block.
@@ -1202,9 +1204,15 @@ module SessionTerminals =
                                         note (clean.Length - kept.Length)
                                         emit id current TranscriptOutput kept
                                 | _ -> emit id current TranscriptOutput clean
-                            for m in marks do
-                                match m with
-                                | MarkPromptStart -> ready.Value <- true
+                            for piece in scanned do
+                                match piece with
+                                // What the shell prints between being handed a block's line
+                                // and starting the command is its rendering of the line, not
+                                // the command's output, and it is not recorded — the other
+                                // half of `Marks.lineFor`, which is where the reasons are.
+                                | Printed clean ->
+                                    if clean <> "" && ready.Value && not (awaitingStart.Contains key) then record clean
+                                | Marked MarkPromptStart -> ready.Value <- true
                                 // Recorded, not acted on. A second `C` inside an open block is
                                 // still not repaired into anything — the Process knows what it
                                 // wrote — but that the mark ARRIVED is the one thing the
@@ -1216,21 +1224,23 @@ module SessionTerminals =
                                 // before this one arriving late, says nothing about whether
                                 // THIS block was marked. Counting it would let a lost shell
                                 // hide behind the previous command's mark.
-                                | MarkCommandStart ->
-                                    if pending.ContainsKey key then sawCommandStart.Add key |> ignore
-                                | MarkCommandDone code ->
+                                | Marked MarkCommandStart ->
+                                    if pending.ContainsKey key then
+                                        sawCommandStart.Add key |> ignore
+                                        awaitingStart.Remove key |> ignore
+                                | Marked (MarkCommandDone code) ->
                                     match pending.TryGetValue key with
-                                    | true, (complete, _, _) when
-                                        not current.MarksCommandStart || sawCommandStart.Contains key ->
+                                    | true, (complete, _, _) when sawCommandStart.Contains key ->
                                         pending.Remove key |> ignore
+                                        awaitingStart.Remove key |> ignore
                                         complete (if code = 0 then CommandSucceeded 0 else CommandFailed code)
                                     // A `D` with no block open is the shell's own prompt cycle
                                     // — at startup, or after a peer typed something in live
-                                    // mode. And a `D` before THIS block's `C`, on a dialect
-                                    // that marks command start, is a leftover prompt cycle from
-                                    // the rc bootstrap (bash types several lines after `PS1` is
-                                    // armed, each ending in a `PROMPT_COMMAND` `D`) — not this
-                                    // block's completion. Either way, not ours to act on.
+                                    // mode. And a `D` before THIS block's `C` is a leftover
+                                    // prompt cycle from the rc bootstrap (bash types several
+                                    // lines after `PS1` is armed, each ending in a
+                                    // `PROMPT_COMMAND` `D`) — not this block's completion.
+                                    // Either way, not ours to act on.
                                     | _ -> ()
                     // The profile is applied by the SPAWN, never as a `cd` typed at the
                     // prompt (Plan 25). A typed one would echo into the transcript on the
@@ -1290,7 +1300,6 @@ module SessionTerminals =
                         return ()
                     | Ok pty ->
                         terminal.Shell <- Some pty
-                        terminal.MarksCommandStart <- instrumentation.MarksCommandStart
                         // TYPED into the shell rather than written to a file it is launched
                         // with. No temp file to place inside a sandbox this Process cannot
                         // reach, no second spawn to set one up, and it works for any shell
@@ -1353,7 +1362,6 @@ module SessionTerminals =
                                     (if said = "" then "nothing" else said))
                             pty.Kill ()
                             terminal.Shell <- None
-                            terminal.MarksCommandStart <- false
                             rearmers.Remove key |> ignore
             }
 
@@ -1430,7 +1438,6 @@ module SessionTerminals =
                           Emulator = openEmulator 80 24
                           Sandbox = sandbox
                           Shell = None
-                          MarksCommandStart = false
                           OutputEndedCr = false }
                     // In the live map BEFORE the shell starts: the pty's output callback finds
                     // the terminal by id, and bytes can arrive the instant it spawns.
@@ -1551,6 +1558,7 @@ module SessionTerminals =
                     leases <- Map.remove (TerminalId.value id) leases
                     lost <- Set.remove (TerminalId.value id) lost
                     sawCommandStart.Remove (TerminalId.value id) |> ignore
+                    awaitingStart.Remove (TerminalId.value id) |> ignore
                     rearmers.Remove (TerminalId.value id) |> ignore
                     // The SOURCE stays. Everything else here is about a terminal that is
                     // running and this is not: "did its output resolve into blocks" is asked
@@ -1679,17 +1687,18 @@ module SessionTerminals =
                         // drain answers by planning against the log-anchored `consumed` set
                         // rather than against the doc.
                         onStarted ()
-                        // The command line is echoed into the transcript as INPUT, so a replay
-                        // shows what was typed as well as what came back — the same reason
-                        // asciinema records `"i"` events at all. The command AS AUTHORED, like
-                        // the block event above: the stdin wrapping below is how the shell is
-                        // asked to run it, and the shell's own echo shows that form.
+                        // The command line is recorded as INPUT — the command AS AUTHORED,
+                        // like the block event above — and that record is the one rendering
+                        // of it: it is what the emulator draws, and what a replay shows, for
+                        // the same reason asciinema records `"i"` events at all. What the
+                        // shell is actually handed is composed below and differs (a start
+                        // mark, a stdin wrapper), and the shell's own echo of THAT is not
+                        // recorded — see `Marks.lineFor`.
                         emit terminalId terminal TranscriptInput (command + "\n")
 
                         // Where this command reads its input from — decided by who wrote it,
                         // applied to the text the shell sees, on both paths below alike.
-                        let shellCommand =
-                            BlockStdin.wrap (BlockStdinPolicy.forAct (Authority.author entry.Authority) entry.Stdin) command
+                        let stdin = BlockStdinPolicy.forAct (Authority.author entry.Authority) entry.Stdin
 
                         let mutable written = 0
                         let mutable dropped = 0
@@ -1739,7 +1748,10 @@ module SessionTerminals =
                                                      dropped <- dropped + extra
                                                      written <- written + extra))
                                             sawCommandStart.Remove key |> ignore
-                                            pty.Write (writeFor shellCommand)
+                                            // Nothing the shell prints from here to the start
+                                            // mark is the block's (`Marks.lineFor`).
+                                            awaitingStart.Add key |> ignore
+                                            pty.Write (writeFor (Marks.lineFor shell.Name stdin command))
                                             // The integration detector (Plan 13, stage 2f), armed
                                             // beside the block rather than awaited: a lost shell
                                             // must not make this block wait, because the block is
@@ -1747,25 +1759,27 @@ module SessionTerminals =
                                             // open, the honest rendering of "we no longer know
                                             // when this finished".
                                             //
-                                            // Armed only where the dialect emits `C` at all. The
-                                            // detector IS "a start mark that did not arrive", so
-                                            // under a dialect with no preexec to hang one on it
-                                            // would fire on every command slower than the window
-                                            // and hold the queue behind a working shell.
-                                            if terminal.MarksCommandStart then
-                                                Async.StartImmediate (
-                                                  async {
-                                                      do! Async.Sleep integrationWindowMs
-                                                      if not (sawCommandStart.Contains key)
-                                                         && not settled
-                                                         && not (Set.contains key lost) then
-                                                          lost <- Set.add key lost
-                                                          do!
-                                                              append
-                                                                  (SessionEvent.TerminalIntegrationLost
-                                                                      { TerminalId = terminalId; BlockId = Some blockId })
-                                                          reDrain ()
-                                                  }))
+                                            // Every dialect marks a start (`ShellInstrumentation`),
+                                            // so the detector is armed for every block: it IS "a
+                                            // start mark that did not arrive".
+                                            Async.StartImmediate (
+                                              async {
+                                                  do! Async.Sleep integrationWindowMs
+                                                  if not (sawCommandStart.Contains key)
+                                                     && not settled
+                                                     && not (Set.contains key lost) then
+                                                      lost <- Set.add key lost
+                                                      // A shell that will not mark the start
+                                                      // will not mark the boundary of the
+                                                      // output either; from here whatever it
+                                                      // prints is recorded, wrapper and all.
+                                                      awaitingStart.Remove key |> ignore
+                                                      do!
+                                                          append
+                                                              (SessionEvent.TerminalIntegrationLost
+                                                                  { TerminalId = terminalId; BlockId = Some blockId })
+                                                      reDrain ()
+                                              }))
                                     return result
                                 }
                             | None ->
@@ -1783,7 +1797,10 @@ module SessionTerminals =
                                     let! spawned =
                                         (environmentOf terminalId).Spawn
                                             { Executable = shell.Executable
-                                              Arguments = shell.Arguments @ [ shellCommand ]
+                                              // No shell to render a line and nothing to mark
+                                              // its start: the wrapper alone, and every byte
+                                              // the process prints is the block's.
+                                              Arguments = shell.Arguments @ [ BlockStdin.wrap stdin command ]
                                               Env = Map.empty
                                               // The profile applies here TOO (Plan 25). This
                                               // path gets a fresh process per block and carries

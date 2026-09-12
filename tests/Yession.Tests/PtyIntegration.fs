@@ -606,11 +606,27 @@ let private agentLeaseTests =
         // the agent with ^C — the terminal, its cwd and its queue all survive, which closing
         // it would not have left standing.
         testCaseAsync "the agent interrupts its own stuck block, and the terminal lives on" <|
-            withPosixTerminal "stdinintr" (fun terminals id _ log _ _ ->
+            withPosixTerminal "stdinintr" (fun terminals id records log _ _ ->
                 async {
                     let ada = Principal.Peer (PeerId.create "ada" |> expect)
-                    let! block = Async.StartChild (terminals.RunBlock id (agentEntry id ada "1") "sleep 60" ignore, 10000)
-                    let! running = until 5000 (fun () -> terminals.Busy () |> Set.contains (TerminalId.value id))
+                    // The stuck thing runs under a NON-interactive `sh -c`, and the ^C waits
+                    // for it to say it has started. Both are about where the signal lands.
+                    // "Busy" is set before the line is even typed, so a ^C on that alone could
+                    // reach the line editor (the line is discarded: bash says 130, dash 0)
+                    // or nothing at all (the sleep then runs its minute). And even after
+                    // `started` is on the record, the interactive shell may still be between
+                    // the echo and forking the sleep — a ^C in that window is bash's own, and
+                    // an interactive bash eats it, so the sleep starts anyway and runs on.
+                    // Under `sh -c`, whichever process holds the terminal when the ^C lands —
+                    // the inner sh or its sleep — dies of it, and the block ends either way.
+                    let! block =
+                        Async.StartChild (
+                            terminals.RunBlock id (agentEntry id ada "1") "sh -c 'echo started; sleep 60'" ignore,
+                            10000)
+                    // Its OUTPUT — the input record carries the same word, as the command.
+                    let! running =
+                        until 5000 (fun () ->
+                            records |> Seq.exists (fun r -> r.Kind = TranscriptOutput && r.Data.Contains "started"))
                     Expect.isTrue running "it is running"
                     match! terminals.Write id ActorRef.Agent "\u0003" with
                     | Error e -> failwithf "the block is the agent's, so it may end it: %s" e
@@ -634,6 +650,34 @@ let private agentLeaseTests =
                     match! terminals.Write id ActorRef.Agent "ls\r" with
                     | Ok () -> failwith "an idle shell took raw bytes — that is a command around the queue"
                     | Error reason -> Expect.stringContains reason "execute_command" "and it says where commands go"
+                })
+
+        // What the shell prints between being handed a block's line and starting it is its
+        // rendering of the line — the echo, `>` per continuation, a bell, the stdin wrapper
+        // around an agent's command — and none of it is recorded: the input record is the one
+        // rendering of the command, and the block's output is what the command printed.
+        testCaseAsync "a block's output is the command's, not the shell's rendering of the line" <|
+            withPosixTerminal "echoless" (fun terminals id records _ _ _ ->
+                async {
+                    let ada = Principal.Peer (PeerId.create "ada" |> expect)
+                    do! terminals.RunBlock id (agentEntry id ada "1") "echo agent-said" ignore
+                    do! terminals.RunBlock id (queueEntry id ada "2") "echo person-said" ignore
+                    let printed =
+                        records
+                        |> Seq.filter (fun r -> r.Kind = TranscriptOutput || r.Kind = TranscriptStderr)
+                        |> Seq.map (fun r -> r.Data)
+                        |> String.concat ""
+                    let typed =
+                        records
+                        |> Seq.filter (fun r -> r.Kind = TranscriptInput)
+                        |> Seq.map (fun r -> r.Data)
+                        |> String.concat ""
+                    Expect.equal typed "echo agent-said\r\necho person-said\r\n" "each command is recorded as written, as input"
+                    Expect.isTrue (printed.Contains "agent-said\r\n" && printed.Contains "person-said\r\n")
+                        (sprintf "both commands' output is recorded, got: %s" printed)
+                    Expect.isFalse (printed.Contains "echo ") (sprintf "and neither command's echo is, got: %s" printed)
+                    Expect.isFalse (printed.Contains "dev/null" || printed.Contains "__y_c")
+                        (sprintf "nor the line the shell was actually handed, got: %s" printed)
                 })
 
         // The wrapping is a brace group in THIS shell, so the two things blocks are typed into
@@ -884,10 +928,10 @@ let tests =
                           Env = Map.empty
                           WorkingDirectory = None }
                     match! spawnPty exec 80 24 (fun data ->
-                              let found, output, rest = Marks.scan nonce carry data
-                              marks.AddRange found
+                              let scanned, rest = Marks.scan nonce carry data
+                              marks.AddRange (Marks.marksOf scanned)
                               carry <- rest
-                              clean <- clean + output) with
+                              clean <- clean + Marks.printedOf scanned) with
                     | Error e -> failwith e
                     | Ok pty ->
                         do! Async.Sleep 500
@@ -957,12 +1001,14 @@ let tests =
                         (sprintf "the second block ran in the first block's directory %s, got: %s" dir (printed ()))
                 })
 
-        testCaseAsync "a slow command does not lose integration where there is no start mark" <|
-            // The other half, and the reason the sh fix cannot ship without the dialect saying
-            // `MarksCommandStart = false`. A POSIX sh has no preexec, so it never emits `C`;
-            // arming the integration detector on that absence makes every command slower than
-            // `integrationWindowMs` report a working shell as lost and holds its queue. This
-            // runs a command past that window and asserts the terminal is not marked lost.
+        testCaseAsync "a slow command under sh does not lose integration: its line marks the start" <|
+            // The integration detector is armed for every block, sh included, and it IS "a
+            // start mark that did not arrive within the window". A POSIX sh has no preexec to
+            // print one from, so `Marks.lineFor` puts the call at the head of the line — and
+            // that has to run at once, not when the command finishes, or every command slower
+            // than `integrationWindowMs` reports a working shell as lost and holds its queue.
+            // This runs a command past that window and asserts the terminal is not marked
+            // lost.
             withPosixTerminal "slowposix" (fun terminals id _ log _ _ ->
                 async {
                     let ada = Principal.Peer (PeerId.create "ada" |> expect)
@@ -975,7 +1021,7 @@ let tests =
                              match e.Event with
                              | SessionEvent.TerminalIntegrationLost l -> l.TerminalId = id
                              | _ -> false))
-                        "a shell that never promised a start mark is not reported as having lost one"
+                        "the start mark arrived from the line, so the slow command is not a lost shell"
                     Expect.isEmpty (terminals.Lost ()) "and its queue is not held behind the report"
                 })
 

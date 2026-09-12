@@ -39,33 +39,41 @@ type Mark =
     /// `D;<code>` — the command finished, with this exit status.
     | MarkCommandDone of exitCode: int
 
-/// One shell's instrumentation: the text to type at it, and whether its marks report a
-/// command's START.
+/// One shell's instrumentation: the text to type at it.
 ///
-/// The `MarksCommandStart` bit travels WITH the text because the thing that knows a dialect
-/// has no `preexec` is the dialect. Two consumers need it, and a caller deciding it by shell
-/// name is a caller that can get it wrong somewhere no cheap test reaches:
+/// Every dialect here marks a command's START as well as its end, and the drain relies on
+/// that for two things a `D` alone cannot give it:
 ///
-///   * The drain completes a block on a `D`. bash arms `PS1`/`PROMPT_COMMAND` and then types
-///     several more rc lines (`__y_armed=1`, `trap … DEBUG`), each ending in a prompt cycle
-///     whose `PROMPT_COMMAND` emits a `D`. The open-probe returns on the first `A`, so those
-///     stale `D`s are still in flight when the first real block runs — and a `D` accepted
-///     without this block's `C` closes it early, with an exit code that is not the command's.
-///     Requiring a start-mark first is what tells this block's completion from a leftover
-///     prompt. A dialect with no `C` (POSIX sh) has nothing to wait for and completes on `D`
-///     alone — which is safe there, because its single rc line leaves exactly one prompt and
-///     the probe consumes it.
-///   * The integration detector is "a start-mark that did not arrive". A dialect that never
-///     emits one must not arm it, or every command slower than the window reports a working
-///     shell as lost.
+///   * Telling this block's completion from a leftover prompt. bash arms
+///     `PS1`/`PROMPT_COMMAND` and then types several more rc lines (`__y_armed=1`,
+///     `trap … DEBUG`), each ending in a prompt cycle whose `PROMPT_COMMAND` emits a `D`. The
+///     open-probe returns on the first `A`, so those stale `D`s are still in flight when the
+///     first real block runs — and a `D` accepted without this block's `C` closes it early,
+///     with an exit code that is not the command's.
+///   * Where the block's OUTPUT begins. The shell prints the line it was handed before it runs
+///     it — echo, continuation prompts, a bell for the line-kill — and none of that is the
+///     command's. The start mark is the boundary; see `Marks.lineFor`.
+///
+/// bash and zsh have a preexec hook, real or emulated with a DEBUG trap. A POSIX `sh` has
+/// none — its prompt marks ride in `PS1`, which is expanded AFTER a command — so its start
+/// mark rides in the typed line instead, as `Marks.lineFor` composes it.
 type ShellInstrumentation =
     { /// The rc lines, as text typed at the shell's prompt.
-      Rc : string
-      /// Does this dialect emit `C` when a command STARTS? bash and zsh have a preexec hook —
-      /// real, or emulated with a DEBUG trap — and do. A POSIX `sh` has none: its marks ride
-      /// in `PS1`, which the shell expands when it prints a PROMPT, which is after the command
-      /// and never before it. So there is nothing to hang a `C` on.
-      MarksCommandStart : bool }
+      Rc : string }
+
+/// One piece of a scanned chunk, in the order the shell printed it.
+///
+/// Order is the point of this type. A chunk can carry a command's last line, the `D` that
+/// ends its block, and the next prompt in one read, and each of those has to land on its own
+/// side of the mark: output before the `D` inside the block's range, the prompt after it
+/// outside. Handing back "the marks" and "the text" as two values — the shape this replaced
+/// — lost that, so a prompt printed after a `D` was recorded before the `D` was acted on and
+/// closed inside the block that had already finished.
+type Scanned =
+    /// Bytes the shell printed, with every mark of ours taken out.
+    | Printed of string
+    /// A mark of ours, where it fell.
+    | Marked of Mark
 
 module Marks =
 
@@ -107,7 +115,7 @@ module Marks =
             | [ "D" ] -> Some (MarkCommandDone -1)
             | _ -> None
 
-    /// Scan a chunk of output: the marks it carried, the bytes with our marks REMOVED, and
+    /// Scan a chunk of output: what it printed and the marks it carried, in order, and
     /// whatever trailing partial sequence must be carried into the next chunk.
     ///
     /// Three things this has to get right, and each of them is a bug if it does not.
@@ -135,10 +143,16 @@ module Marks =
     /// with it, and a trailing `\001` is carried like a partial prefix. A `\002` split
     /// from its mark by a chunk boundary is the one byte that gets through, and it is
     /// invisible where it lands.
-    let scan (nonce: string) (carry: string) (data: string) : Mark list * string * string =
+    let scan (nonce: string) (carry: string) (data: string) : Scanned list * string =
         let input = carry + data
         let out = System.Text.StringBuilder ()
-        let marks = ResizeArray<Mark> ()
+        let scanned = ResizeArray<Scanned> ()
+        // Text is gathered until a mark of ours cuts it, so consecutive bytes stay one piece
+        // and a mark always sits between what came before it and what came after.
+        let cut () =
+            if out.Length > 0 then
+                scanned.Add (Printed (string out))
+                out.Clear () |> ignore
 
         let rec walk (index: int) : string =
             if index >= input.Length then ""
@@ -189,7 +203,8 @@ module Marks =
                         match parseBody nonce body with
                         | Some mark ->
                             out.Append (input.Substring (index, textEnd - index)) |> ignore
-                            marks.Add mark
+                            cut ()
+                            scanned.Add (Marked mark)
                             // Ours, so the closing bracket that may follow it is ours too.
                             let after = terminator + width
                             let after = if after < input.Length && input.[after] = '\u0002' then after + 1 else after
@@ -200,7 +215,16 @@ module Marks =
                             walk (terminator + width)
 
         let rest = walk 0
-        List.ofSeq marks, string out, rest
+        cut ()
+        List.ofSeq scanned, rest
+
+    /// The marks in a scan, in order — for a reader that wants only those.
+    let marksOf (scanned: Scanned list) : Mark list =
+        scanned |> List.choose (fun piece -> match piece with Marked mark -> Some mark | Printed _ -> None)
+
+    /// What a scan printed, joined — for a reader that wants only that.
+    let printedOf (scanned: Scanned list) : string =
+        scanned |> List.choose (fun piece -> match piece with Printed text -> Some text | Marked _ -> None) |> String.concat ""
 
     /// The shell instrumentation, as the text of an rc file. Parameterised by the terminal's
     /// nonce, which is minted per terminal and never leaves the Session Process except into
@@ -242,8 +266,7 @@ module Marks =
                           " PROMPT_COMMAND='__y_post'"
                           " PS1='\\[" + promptStart + "\\]'\"$PS1\""
                           " __y_armed=1"
-                          " trap '__y_pre' DEBUG" ]
-                  MarksCommandStart = true }
+                          " trap '__y_pre' DEBUG" ] }
         | "zsh" ->
             // zsh has real hooks. They are APPENDED to whatever the image's shell already
             // registered, never substituted: replacing a shell's existing hooks breaks the
@@ -256,8 +279,7 @@ module Marks =
                           " autoload -Uz add-zsh-hook"
                           " add-zsh-hook preexec __y_pre"
                           " add-zsh-hook precmd __y_post"
-                          " PS1='" + promptStart + "'\"$PS1\"" ]
-                  MarksCommandStart = true }
+                          " PS1='" + promptStart + "'\"$PS1\"" ] }
         | "sh"
         | "dash" ->
             // A bare POSIX shell has NO prompt hook, so the marks ride inside PS1, which the
@@ -288,10 +310,39 @@ module Marks =
             // nonce and stayed green. A shell without readline (dash) prints the two bytes
             // as they are; `scan` takes them off around a mark that is ours.
             //
-            // `MarksCommandStart = false`: with no preexec there is no `C`, so the drain
-            // completes this dialect's blocks on `D` alone and the integration detector stays
-            // disarmed here.
+            // `__y_c` is the start mark this dialect has no hook for: `lineFor` puts it at the
+            // head of every block's line, so it runs first and prints `C` when the command
+            // starts — after the shell has finished echoing the line, which is what makes it
+            // the boundary of the block's output. It hands `$?` through untouched, because the
+            // command after it may be `echo $?`.
             Some
-                { Rc = " PS1='$(command -p printf \"\\001" + commandDone + promptStart + "\\002\" $?)'"
-                  MarksCommandStart = false }
+                { Rc =
+                    String.concat "\n"
+                        [ " __y_c() { __y_r=$?; command -p printf '" + commandStart + "'; return $__y_r; }"
+                          " PS1='$(command -p printf \"\\001" + commandDone + promptStart + "\\002\" $?)'" ] }
         | _ -> None
+
+    /// The line typed at an instrumented shell to run `command` as a block, with its stdin
+    /// as `stdin` says.
+    ///
+    /// This is one half of a bargain, and the other half is in the drain: nothing the shell
+    /// prints between this line going in and the block's start mark coming out is the
+    /// block's output. That is where the shell's rendering of the line goes — the echo, a
+    /// `>` per continuation line, the bell readline rings for the line-kill, the
+    /// `{ … } </dev/null` around a command whose stdin is closed — and it goes nowhere: the
+    /// transcript already holds the command as written, as its input record, and that is the
+    /// one rendering of it anybody sees. Cut there rather than by matching the wrapper's text
+    /// because there is no text to match: each shell echoes a two-line group differently
+    /// (dash verbatim, bash with `> ` and a bell, zsh with cursor movement around every
+    /// character), and one host echoed it twice.
+    ///
+    /// So every dialect has to mark a start, and this is where the one without a hook gets
+    /// its mark: `sh` runs `__y_c` (defined by `rcFor`) at the head of the line. A prefix,
+    /// so a trailing comment and a heredoc's body are untouched, which a suffix could not
+    /// promise — and inside the brace group when stdin is closed, so the mark is printed
+    /// with the command's redirection already in place.
+    let lineFor (shell: string) (stdin: BlockStdin) (command: string) : string =
+        match shell with
+        | "sh"
+        | "dash" -> BlockStdin.wrap stdin ("__y_c; " + command)
+        | _ -> BlockStdin.wrap stdin command
