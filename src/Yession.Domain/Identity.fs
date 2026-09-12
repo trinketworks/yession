@@ -394,76 +394,80 @@ module CredentialFor =
 /// places and was silently absent in a third. An invariant that holds only because a caller
 /// remembered to set a field is a convention with a good reputation.
 ///
+/// It is a sum, not a record: the three ways an act can be authorised are the three cases,
+/// and each carries exactly what that way needs. A person acts for themselves; the agent acts
+/// on a person's authority and cannot be built without one; a repo's file acts on whoever
+/// triggered the fold, which at boot is the deployment itself. There is no case for the agent
+/// with nobody behind it — the record this replaced could hold one, "recovered" from a stored
+/// event whose owner did not read back, and every reader then had a degraded state to answer
+/// for. Now a stored act that names nobody fails to decode, which is the honest outcome: it
+/// was never an act this version can run.
+///
 /// It is a triple, not a chain: three parties for ONE act, with no lineage and no history of
 /// delegation. What a later act inherits, it inherits by being constructed with it.
-///
-/// Private, so the smart constructors below are the only way to author one. `agentFor` takes
-/// the turn actor, which is what makes the omission unrepresentable: an agent-authored act
-/// with nobody named on it cannot be built, so forgetting would not compile.
-///
-/// The field names are prefixed and deliberately unlovely. They are private — every reader
-/// goes through the module below — and a record carrying bare `Author`/`OnBehalfOf` fields in
-/// this namespace made every OTHER record with those names ambiguous to inference.
+[<RequireQualifiedAccess>]
 type Authority =
-    private
-        { AuthAuthor : ActorRef
-          AuthOnBehalfOf : Principal option }
-
-module Authority =
-
     /// A party acting for themselves. There is no authority to borrow, so there is none to
     /// state — which is why a person's act cannot accidentally carry somebody else's.
-    let ofAuthor (actor: ActorRef) : Authority =
-        { AuthAuthor = actor; AuthOnBehalfOf = None }
-
+    | Own of Principal
     /// The agent, acting on a turn human's authority (Plan 08). The rule that was missing from
-    /// one call site, as the ONLY way to build an agent-authored act.
-    let agentFor (turnActor: Principal) : Authority =
-        { AuthAuthor = ActorRef.Agent; AuthOnBehalfOf = Some turnActor }
-
+    /// one call site, as the ONLY way an agent-authored act exists.
+    | AgentFor of Principal
     /// A repo's own `yession.yaml`, acting on the authority of whoever asked for the fold
     /// (Plan 27). The file is the AUTHOR — it is what asked for the sandbox — and the
     /// credential is never its own: a `forward:` resolves for the human by Plan 08
-    /// precedence, exactly as the agent's does.
-    ///
-    /// The deployment's own is a fold nobody triggered: the one at boot, where there is no
-    /// turn and no caller. The act then borrows nobody's authority and runs on the
-    /// deployment's credentials rather than on somebody guessed at — a `forward:` that needs
-    /// a person fails saying nobody was signed in, which is true.
+    /// precedence, exactly as the agent's does. The deployment's own is a fold nobody
+    /// triggered: the one at boot, where there is no turn and no caller.
+    | ConfiguredBy of RepoRef * CredentialFor
+
+module Authority =
+
+    let ofAuthor (principal: Principal) : Authority = Authority.Own principal
+
+    let agentFor (turnActor: Principal) : Authority = Authority.AgentFor turnActor
+
     let configuredBy (repo: RepoRef) (credential: CredentialFor) : Authority =
-        { AuthAuthor = ActorRef.Configured repo; AuthOnBehalfOf = CredentialFor.person credential }
+        Authority.ConfiguredBy (repo, credential)
 
-    /// Recover what somebody else already wrote — a doc entry, a stored event. NOT an
-    /// authoring path: it can express states the constructors above refuse, because it is
-    /// recovering facts rather than deciding them, and a decoder that could not represent what
-    /// is written would drop the entry instead.
-    ///
-    /// Chiefly: an agent act whose owner did not read back. That is the degraded state
-    /// `principal` answers safely — the act runs on NOTHING rather than on somebody else's
-    /// credential — and refusing to represent it here would turn a corrupt field into a
-    /// missing act.
-    let rehydrate (author: ActorRef) (onBehalfOf: Principal option) : Authority =
-        { AuthAuthor = author; AuthOnBehalfOf = onBehalfOf }
+    /// Recover what somebody else already wrote — a doc entry, a stored event — from the two
+    /// fields the wire carries. A decoding path, not an authoring one, and it REFUSES what the
+    /// cases above cannot say: an agent act naming nobody, a person borrowing, a process or
+    /// the system as an author. Those are not facts to recover; they are entries this version
+    /// cannot act on, and a decoder that answered something else for one would put the
+    /// degraded state back that the sum took out.
+    let recover (author: ActorRef) (onBehalfOf: Principal option) : Result<Authority, string> =
+        match author, onBehalfOf with
+        | (UserRef _ | PeerRef _), Some _ -> Error (sprintf "%s acts for themselves and borrows nobody's authority" (ActorRef.token author))
+        | UserRef u, None -> Ok (Authority.Own (Principal.User u))
+        | PeerRef p, None -> Ok (Authority.Own (Principal.Peer p))
+        | Agent, Some owner -> Ok (Authority.AgentFor owner)
+        | Agent, None -> Error "an act by the agent names nobody whose authority it ran on"
+        | Configured repo, credential -> Ok (Authority.ConfiguredBy (repo, CredentialFor.ofOption credential))
+        | (SessionProcess | System), _ -> Error (sprintf "%s does not author acts" (ActorRef.token author))
 
-    let author (authority: Authority) : ActorRef = authority.AuthAuthor
+    /// Who acted, as the log records it.
+    let author (authority: Authority) : ActorRef =
+        match authority with
+        | Authority.Own principal -> Principal.toActor principal
+        | Authority.AgentFor _ -> ActorRef.Agent
+        | Authority.ConfiguredBy (repo, _) -> ActorRef.Configured repo
+
     /// Whose authority this runs on, when that is not the author's own. `None` on a person's
-    /// act means there is nothing borrowed; `None` on the agent's means the owner was lost.
-    let onBehalfOf (authority: Authority) : Principal option = authority.AuthOnBehalfOf
+    /// act means there is nothing borrowed; on a file's, that the fold was the boot one.
+    let onBehalfOf (authority: Authority) : Principal option =
+        match authority with
+        | Authority.Own _ -> None
+        | Authority.AgentFor owner -> Some owner
+        | Authority.ConfiguredBy (_, credential) -> CredentialFor.person credential
 
     /// Whose credentials this resolves to — the borrowed authority when there is one, the
-    /// author otherwise. The question every dispatch actually asks, answered once instead of
-    /// by a `defaultArg` at each site that asks it.
-    ///
-    /// The deployment's own is an act that runs on nobody's credential: a file's boot fold,
-    /// or an agent act whose owner did not read back. That is a real state and the callers
-    /// that resolve a credential take it as one (session and deployment scopes only) — it is
-    /// NOT the author standing in, because an author that is not a principal has no
-    /// credential to stand in with, and a type that let it would be the fault this was
-    /// narrowed to close.
+    /// author's own otherwise. The question every dispatch actually asks, answered once
+    /// instead of by a `defaultArg` at each site that asks it.
     let credential (authority: Authority) : CredentialFor =
-        match authority.AuthOnBehalfOf with
-        | Some borrowed -> CredentialFor.Person borrowed
-        | None -> CredentialFor.ofOption (Principal.ofActor authority.AuthAuthor)
+        match authority with
+        | Authority.Own principal -> CredentialFor.Person principal
+        | Authority.AgentFor owner -> CredentialFor.Person owner
+        | Authority.ConfiguredBy (_, credential) -> credential
 
 /// The name of one of the session's WorkSandboxes (Plan 15, stage 2). A session used to
 /// have exactly one, so it needed no name; now the agent can ask for a `test` sandbox

@@ -227,8 +227,8 @@ let private frameSerializationTests =
                 [ SessionCreated { SessionCreated.SessionId = sessionId }
                   PeerJoined { PeerId = peerId; DisplayName = "Ada"; User = None }
                   PeerLeft { PeerId = peerId }
-                  MessageSent { MessageId = messageId; QueueId = None; Author = PeerRef peerId; Body = "hi" }
-                  MessageSent { MessageId = messageId; QueueId = Some (QueueId.create "q-1" |> expect); Author = ActorRef.System; Body = "" }
+                  MessageSent { MessageId = messageId; QueueId = None; Author = Principal.Peer peerId; Body = "hi" }
+                  MessageSent { MessageId = messageId; QueueId = Some (QueueId.create "q-1" |> expect); Author = Principal.User (UserId.create "alice" |> expect); Body = "" }
                   AgentTurnStarted { AgentTurnId = turnId; Cause = TurnCause.TriggeredBy messageId }
                   // Every wake reason (Plan 20, stages 2 and 5). A turn nobody asked for is
                   // the one whose attribution a reader most needs, and a reason that failed
@@ -386,14 +386,14 @@ let private frameSerializationTests =
             // Wire compatibility: event-log lines written by earlier versions carry no
             // queueId; they must decode to None, not fail the whole log open.
             let legacy =
-                """{"type":"messageSent","payload":{"messageId":"msg-legacy","author":{"kind":"system"},"body":"old line"}}"""
+                """{"type":"messageSent","payload":{"messageId":"msg-legacy","author":{"kind":"peer","peerId":"ada"},"body":"old line"}}"""
             let decoded = Codec.fromString Codec.sessionEvent legacy |> expect
             Expect.equal
                 decoded
                 (MessageSent
                     { MessageId = MessageId.create "msg-legacy" |> expect
                       QueueId = None
-                      Author = ActorRef.System
+                      Author = Principal.Peer (PeerId.create "ada" |> expect)
                       Body = "old line" })
                 "a line without queueId decodes with QueueId = None"
 
@@ -590,7 +590,7 @@ let private repoTests =
             let folded =
                 [ RepoAdded { MessageId = msg "r1"; Repo = repo; Branch = "main"; Actor = PeerRef ada }
                   RepoBranchSwitched { MessageId = msg "r2"; Repo = repo; Branch = "feature/x"; Created = true; Actor = ActorRef.Agent }
-                  MessageSent { MessageId = msg "m"; QueueId = None; Author = PeerRef ada; Body = "hi" } ]
+                  MessageSent { MessageId = msg "m"; QueueId = None; Author = Principal.Peer ada; Body = "hi" } ]
                 |> List.fold ReposProjection.applyEvent ReposProjection.empty
             Expect.equal folded.Repos [ { Repo = repo; Branch = "feature/x"; AddedBy = PeerRef ada } ] "one repo, on the switched branch"
             let readded = ReposProjection.applyEvent folded (RepoAdded { MessageId = msg "r3"; Repo = repo; Branch = "main"; Actor = ActorRef.Agent })
@@ -1219,7 +1219,7 @@ let private authorityTests =
     testList "Authority (Plan 20)" [
 
         testCase "a person's act borrows nothing, so it resolves to themselves" <| fun () ->
-            let authority = Authority.ofAuthor (PeerRef ada)
+            let authority = Authority.ofAuthor (Principal.Peer ada)
             Expect.equal (Authority.onBehalfOf authority) None "there is no authority to state"
             Expect.equal (Authority.credential authority) (CredentialFor.Person (Principal.Peer ada)) "and it runs as its own author"
 
@@ -1231,28 +1231,43 @@ let private authorityTests =
             Expect.equal (Authority.author authority) ActorRef.Agent "the agent is who acted"
             Expect.equal (Authority.credential authority) (CredentialFor.Person (Principal.Peer ada)) "on the turn human's credential"
 
-        testCase "an act recovered without its owner invents no other one" <| fun () ->
-            // The decode path's safe direction, and why it does not go through the authoring
-            // constructors: a doc entry whose owner did not read back is a fact to recover,
-            // not a state to refuse — and refusing it would turn a corrupt field into a
-            // missing act. What must never happen is a substitute owner appearing.
-            let recovered = Authority.rehydrate ActorRef.Agent None
-            Expect.equal (Authority.onBehalfOf recovered) None "no authority is conjured"
+        testCase "a stored act by the agent that names nobody is refused, not recovered" <| fun () ->
+            // The decode path's one refusal, and why it is one: an agent act with no owner is
+            // not a value `Authority` can hold any more. It used to be "recovered" as the
+            // agent on nobody's credential, and every reader then had a degraded state to
+            // answer for — the wake, the dispatch, the forward. A stored line that says it
+            // now fails the line, which is the honest outcome for an act this version could
+            // never have run.
+            Expect.isError (Authority.recover ActorRef.Agent None) "nobody is not an owner"
             Expect.equal
-                (Authority.credential recovered)
-                CredentialFor.Deployment
-                "so it resolves to the deployment's own — the agent has no scope of its own, and is not a person"
+                (Authority.recover ActorRef.Agent (Some (Principal.Peer ada)))
+                (Ok (Authority.agentFor (Principal.Peer ada)))
+                "and with one named, it is the agent act it says"
 
-        testCase "an act by something that is not a person resolves to the deployment's own" <| fun () ->
-            // A repo's file at boot, the process, the deployment: none of them is a principal,
-            // so none of them is an author a credential can be resolved for. The deployment's
-            // own is what a caller reads as "the session's own and the local one, and nothing
-            // else" — never as the author standing in.
-            for actor in [ ActorRef.System; ActorRef.SessionProcess; ActorRef.Configured (RepoRef.create "octo/hello" |> expect) ] do
-                Expect.equal
-                    (Authority.credential (Authority.ofAuthor actor))
-                    CredentialFor.Deployment
-                    (sprintf "%s holds no credential" (ActorRef.token actor))
+        testCase "a stored act by a person recovers as their own, and cannot borrow" <| fun () ->
+            Expect.equal
+                (Authority.recover (PeerRef ada) None)
+                (Ok (Authority.ofAuthor (Principal.Peer ada)))
+                "a person's act is their own"
+            Expect.isError
+                (Authority.recover (PeerRef ada) (Some (Principal.Peer bob)))
+                "a person acting on somebody else's authority is not a thing the log can say"
+
+        testCase "a repo file's act resolves to whoever triggered the fold, or the deployment" <| fun () ->
+            // A repo's file at boot acts on nobody's authority, which is a real state: the
+            // deployment's own credentials, the session's and the local one, and nothing
+            // else — never the file standing in as if it held one.
+            let repo = RepoRef.create "octo/hello" |> expect
+            Expect.equal
+                (Authority.credential (Authority.configuredBy repo CredentialFor.Deployment))
+                CredentialFor.Deployment
+                "the boot fold"
+            Expect.equal
+                (Authority.recover (ActorRef.Configured repo) (Some (Principal.Peer ada)))
+                (Ok (Authority.configuredBy repo (CredentialFor.Person (Principal.Peer ada))))
+                "and a triggered one, on the person who triggered it"
+            for actor in [ ActorRef.System; ActorRef.SessionProcess ] do
+                Expect.isError (Authority.recover actor None) (sprintf "%s authors no acts" (ActorRef.token actor))
     ]
 
 /// A catalogue cache over a stub provider: a frozen clock, a ten-minute window, and one

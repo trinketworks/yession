@@ -152,7 +152,7 @@ let private representativeModel : ClientModel =
                 Blocks =
                   [ { BlockId = blockId
                       QueueId = None
-                      Authority = Authority.ofAuthor (PeerRef ada)
+                      Authority = Authority.ofAuthor (Principal.Peer ada)
                       Command = "ls -la"
                       Background = false
                       FromSeq = 0
@@ -328,7 +328,7 @@ let private lostIntegrationModel : ClientModel =
             { representativeModel.Synced with
                 Pending =
                     representativeModel.Synced.Pending
-                    |> Map.map (fun _ entry -> { entry with Authority = Authority.ofAuthor (PeerRef ada) }) }
+                    |> Map.map (fun _ entry -> { entry with Authority = Authority.ofAuthor (Principal.Peer ada) }) }
         Terminals =
             { Terminals =
                 representativeModel.Terminals.Terminals
@@ -819,7 +819,7 @@ let private uiChecklistTests =
                         { leasedTerminalModel.Synced with
                             Pending =
                                 leasedTerminalModel.Synced.Pending
-                                |> Map.map (fun _ entry -> { entry with Authority = Authority.ofAuthor (PeerRef ada) }) } }
+                                |> Map.map (fun _ entry -> { entry with Authority = Authority.ofAuthor (Principal.Peer ada) }) } }
             let html = Support.render model
             Expect.isTrue
                 (html.Contains (Dom.attr Dom.Hooks.terminalQueuedStatus Dom.Text.queuedAwaitingTerminal))

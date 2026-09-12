@@ -25,6 +25,12 @@ let private terminalB = TerminalId.create "term-b" |> expect
 let private ada = PeerId.create "ada" |> expect
 let private bob = PeerId.create "bob" |> expect
 
+/// The authorities the fixtures below act under: a person for themselves, and the agent on
+/// Ada's turn — the only agent-shaped authority there is.
+let private byAda = Authority.ofAuthor (Principal.Peer ada)
+let private byBob = Authority.ofAuthor (Principal.Peer bob)
+let private agentForAda = Authority.agentFor (Principal.Peer ada)
+
 let private block (n: string) = BlockId.create ("b-" + n) |> expect
 let private message (n: string) = MessageId.create ("m-" + n) |> expect
 
@@ -53,14 +59,14 @@ let private openedBy (by: ActorRef) (id: TerminalId) (title: string) =
 let private opened (id: TerminalId) (title: string) = openedBy (PeerRef ada) id title
 
 let private sent (n: string) (body: string) =
-    MessageSent { MessageId = message n; QueueId = None; Author = PeerRef ada; Body = body }
+    MessageSent { MessageId = message n; QueueId = None; Author = Principal.Peer ada; Body = body }
 
-let private started (id: TerminalId) (n: string) (author: ActorRef) (command: string) (fromSeq: int) =
+let private started (id: TerminalId) (n: string) (authority: Authority) (command: string) (fromSeq: int) =
     SessionEvent.TerminalBlockStarted
         { TerminalId = id
           BlockId = block n
           QueueId = None
-          Authority = Authority.ofAuthor author
+          Authority = authority
           Command = command
           FromSeq = fromSeq
           Background = false }
@@ -99,7 +105,7 @@ let private orderTests =
             let items =
                 merge
                     [ at 1L 0.0 (opened terminalA "build")
-                      at 2L 1.0 (started terminalA "1" (PeerRef ada) "make" 1)
+                      at 2L 1.0 (started terminalA "1" byAda "make" 1)
                       at 3L 2.0 (sent "1" "how's it going?")
                       at 4L 3.0 (completed terminalA "1" (CommandSucceeded 0) 40) ]
             Expect.equal (shapes items) [ "ran:b-1"; "said:m-1" ] "the chip holds the place it started at"
@@ -124,7 +130,7 @@ let private orderTests =
                 merge
                     [ at 1L 0.0 (opened terminalA "build")
                       at 2L 0.0 (sent "1" "first")
-                      at 3L 1.0 (started terminalA "1" ActorRef.Agent "ls" 1)
+                      at 3L 1.0 (started terminalA "1" agentForAda "ls" 1)
                       at 4L 2.0 (took terminalA (PeerRef bob) 5)
                       at 5L 9.0 (released terminalA (PeerRef bob) LeaseReleased 30)
                       at 6L 10.0 (sent "2" "done?") ]
@@ -138,7 +144,7 @@ let private orderTests =
             // overlap, and a chip that appeared twice would be a bug a reload could not fix.
             let page =
                 [ at 1L 0.0 (opened terminalA "build")
-                  at 2L 1.0 (started terminalA "1" (PeerRef ada) "make" 1) ]
+                  at 2L 1.0 (started terminalA "1" byAda "make" 1) ]
             let first, highWater = TimelineProjection.applyEvents None page TimelineProjection.empty
             let second, _ = TimelineProjection.applyEvents highWater page first
             Expect.equal (List.length second.TerminalItems) 1 "one chip, however many times the page arrives"
@@ -154,7 +160,7 @@ let private chipTests =
             // status in would need its own update path, and would be free to disagree.
             let running =
                 [ at 1L 0.0 (opened terminalA "build")
-                  at 2L 1.0 (started terminalA "1" (PeerRef ada) "make" 1) ]
+                  at 2L 1.0 (started terminalA "1" byAda "make" 1) ]
             let finished = running @ [ at 3L 9.0 (completed terminalA "1" (CommandFailed 2) 40) ]
             let itemsOf events = (TimelineProjection.applyEvents None events TimelineProjection.empty |> fst).TerminalItems
             Expect.equal (itemsOf running) (itemsOf finished) "the timeline entry does not move or change"
@@ -177,7 +183,7 @@ let private chipTests =
                               { TerminalId = terminalA
                                 QueueId = QueueId.create "q-1" |> expect
                                 BlockId = block "no"
-                                Author = ActorRef.Agent
+                                Authority = agentForAda
                                 RejectedBy = PeerRef ada
                                 Command = "rm -rf /"
                                 Reason = Some "no" }) ]
@@ -314,7 +320,7 @@ let private unchangedTests =
             // the model and silently change what every turn reads.
             let terminalEvents =
                 [ at 1L 0.0 (opened terminalA "build")
-                  at 2L 1.0 (started terminalA "1" ActorRef.Agent "ls" 1)
+                  at 2L 1.0 (started terminalA "1" agentForAda "ls" 1)
                   at 3L 2.0 (completed terminalA "1" (CommandSucceeded 0) 9)
                   at 4L 3.0 (took terminalA (PeerRef bob) 9)
                   at 5L 4.0 (released terminalA (PeerRef bob) LeaseReleased 20)
@@ -394,7 +400,7 @@ let private clientOf (events: EventEnvelope<SessionEvent> list) : ClientModel =
 
 let private oneBlock =
     [ at 1L 0.0 (opened terminalA "build")
-      at 2L 1.0 (started terminalA "1" (PeerRef ada) "ls -la" 1)
+      at 2L 1.0 (started terminalA "1" byAda "ls -la" 1)
       at 3L 2.0 (completed terminalA "1" (CommandSucceeded 0) 3) ]
 
 let private stripKeys (model: ClientModel) = ClientModel.paneTabs model |> List.map PaneTab.key
@@ -616,9 +622,9 @@ let private keyframeTests =
 /// whole-terminal recording is made of.
 let private recordedTerminal =
     [ at 1L 0.0 (opened terminalA "build")
-      at 2L 1.0 (started terminalA "1" (PeerRef ada) "make" 1)
+      at 2L 1.0 (started terminalA "1" byAda "make" 1)
       at 3L 2.0 (completed terminalA "1" (CommandSucceeded 0) 3)
-      at 4L 3.0 (started terminalA "2" (PeerRef ada) "make test" 3)
+      at 4L 3.0 (started terminalA "2" byAda "make test" 3)
       at 5L 4.0 (completed terminalA "2" (CommandFailed 1) 5)
       at 6L 5.0 (SessionEvent.TerminalClosed { TerminalId = terminalA; Reason = "closed by a peer" }) ]
 
@@ -785,7 +791,7 @@ let private videoTests =
             // thrash through a streaming build. The terminal's own tab is where you watch it.
             let running =
                 [ at 1L 0.0 (opened terminalA "build")
-                  at 2L 1.0 (started terminalA "1" (PeerRef ada) "make" 1) ]
+                  at 2L 1.0 (started terminalA "1" byAda "make" 1) ]
             let model = withRecords (clientOf running)
             Expect.isNone (ClientModel.paneReplay (BlockTab (terminalA, block "1")) model) "not yet"
             let finished = withRecords (clientOf (running @ [ at 3L 9.0 (completed terminalA "1" (CommandSucceeded 0) 3) ]))
@@ -799,7 +805,7 @@ let private videoTests =
                           { TerminalId = terminalA
                             QueueId = QueueId.create "q-1" |> expect
                             BlockId = block "no"
-                            Author = ActorRef.Agent
+                            Authority = agentForAda
                             RejectedBy = PeerRef ada
                             Command = "rm -rf /"
                             Reason = Some "no" }) ]
@@ -1147,7 +1153,7 @@ let private toolTests =
             let events =
                 [ at 1L 0.0 (opened terminalA "agent")
                   at 2L 1.0 (used "1" "a" "execute_command")
-                  at 3L 2.0 (started terminalA "1" ActorRef.Agent "make" 1)
+                  at 3L 2.0 (started terminalA "1" agentForAda "make" 1)
                   at 4L 3.0 (toolDone "1" ToolCallOk (Some (block "1"))) ]
             Expect.equal (drawn events) [ "ran:b-1" ] "only the block's chip is drawn"
             let timeline, _ = TimelineProjection.applyEvents None events TimelineProjection.empty
@@ -1260,7 +1266,7 @@ let private listTests =
             // command and got nothing. A face cannot survive the choice that replaces it.
             let model =
                 clientOf [ at 1L 0.0 (opened terminalA "build")
-                           at 2L 1.0 (started terminalA "1" (PeerRef ada) "make" 1)
+                           at 2L 1.0 (started terminalA "1" byAda "make" 1)
                            at 3L 2.0 (completed terminalA "1" (CommandSucceeded 0) 3) ]
                 |> ClientModel.update ToggleTerminalListMsg
                 |> ClientModel.update (ShowInPaneMsg (Reading (BlockTab (terminalA, block "1"))))
@@ -1417,12 +1423,12 @@ let private pinTests =
 let private turnStarted (t: string) =
     AgentTurnStarted { AgentTurnId = turn t; Cause = TurnCause.TriggeredBy (message "1") }
 
-let private rejected (id: TerminalId) (n: string) (author: ActorRef) (command: string) =
+let private rejected (id: TerminalId) (n: string) (authority: Authority) (command: string) =
     SessionEvent.TerminalCommandRejected
         { TerminalId = id
           QueueId = QueueId.create ("q-" + n) |> expect
           BlockId = block n
-          Author = author
+          Authority = authority
           RejectedBy = PeerRef ada
           Command = command
           Reason = Some "not that one" }
@@ -1437,9 +1443,9 @@ let private cardTests =
                 [ at 1L 0.0 (turnStarted "a")
                   at 2L 1.0 (opened terminalA "agent 1")
                   at 3L 2.0 (opened terminalB "agent 2")
-                  at 4L 3.0 (started terminalA "1" ActorRef.Agent "make" 1)
-                  at 5L 4.0 (started terminalB "2" ActorRef.Agent "npm test" 1)
-                  at 6L 5.0 (started terminalA "3" ActorRef.Agent "git status" 40) ]
+                  at 4L 3.0 (started terminalA "1" agentForAda "make" 1)
+                  at 5L 4.0 (started terminalB "2" agentForAda "npm test" 1)
+                  at 6L 5.0 (started terminalA "3" agentForAda "git status" 40) ]
             Expect.equal (drawn events) [ "card:turn-a:3" ] "three commands, one card"
 
         testCase "a card forms on the SECOND command, never the first" <| fun () ->
@@ -1448,7 +1454,7 @@ let private cardTests =
             let events =
                 [ at 1L 0.0 (turnStarted "a")
                   at 2L 1.0 (opened terminalA "agent 1")
-                  at 3L 2.0 (started terminalA "1" ActorRef.Agent "make" 1) ]
+                  at 3L 2.0 (started terminalA "1" agentForAda "make" 1) ]
             Expect.equal (drawn events) [ "ran:b-1" ] "one command is a chip"
 
         testCase "a message between two commands splits the card" <| fun () ->
@@ -1457,11 +1463,11 @@ let private cardTests =
             let events =
                 [ at 1L 0.0 (turnStarted "a")
                   at 2L 1.0 (opened terminalA "agent 1")
-                  at 3L 2.0 (started terminalA "1" ActorRef.Agent "make" 1)
-                  at 4L 3.0 (started terminalA "2" ActorRef.Agent "npm test" 40)
+                  at 3L 2.0 (started terminalA "1" agentForAda "make" 1)
+                  at 4L 3.0 (started terminalA "2" agentForAda "npm test" 40)
                   at 5L 4.0 (sent "1" "how's it going?")
-                  at 6L 5.0 (started terminalA "3" ActorRef.Agent "git status" 80)
-                  at 7L 6.0 (started terminalA "4" ActorRef.Agent "git diff" 120) ]
+                  at 6L 5.0 (started terminalA "3" agentForAda "git status" 80)
+                  at 7L 6.0 (started terminalA "4" agentForAda "git diff" 120) ]
             Expect.equal
                 (drawn events)
                 [ "card:turn-a:2"; "said:m-1"; "card:turn-a:2" ]
@@ -1474,11 +1480,11 @@ let private cardTests =
             let events =
                 [ at 1L 0.0 (turnStarted "a")
                   at 2L 1.0 (opened terminalA "agent 1")
-                  at 3L 2.0 (started terminalA "1" ActorRef.Agent "make" 1)
-                  at 4L 3.0 (started terminalA "2" ActorRef.Agent "npm test" 40)
+                  at 3L 2.0 (started terminalA "1" agentForAda "make" 1)
+                  at 4L 3.0 (started terminalA "2" agentForAda "npm test" 40)
                   at 5L 4.0 (turnStarted "b")
-                  at 6L 5.0 (started terminalA "3" ActorRef.Agent "git status" 80)
-                  at 7L 6.0 (started terminalA "4" ActorRef.Agent "git diff" 120) ]
+                  at 6L 5.0 (started terminalA "3" agentForAda "git status" 80)
+                  at 7L 6.0 (started terminalA "4" agentForAda "git diff" 120) ]
             Expect.equal (drawn events) [ "card:turn-a:2"; "card:turn-b:2" ] "one card per turn"
 
         testCase "a person's commands never group, even during a turn" <| fun () ->
@@ -1488,8 +1494,8 @@ let private cardTests =
             let events =
                 [ at 1L 0.0 (turnStarted "a")
                   at 2L 1.0 (opened terminalA "build")
-                  at 3L 2.0 (started terminalA "1" (PeerRef ada) "make" 1)
-                  at 4L 3.0 (started terminalA "2" (PeerRef ada) "npm test" 40) ]
+                  at 3L 2.0 (started terminalA "1" byAda "make" 1)
+                  at 4L 3.0 (started terminalA "2" byAda "npm test" 40) ]
             Expect.equal (drawn events) [ "ran:b-1"; "ran:b-2" ] "two chips, no card"
 
         testCase "a command nobody's turn started never groups" <| fun () ->
@@ -1497,8 +1503,8 @@ let private cardTests =
             // attribute it to, and inventing one would be a task nobody asked for.
             let events =
                 [ at 1L 0.0 (opened terminalA "boot")
-                  at 2L 1.0 (started terminalA "1" ActorRef.Agent "make" 1)
-                  at 3L 2.0 (started terminalA "2" ActorRef.Agent "npm test" 40) ]
+                  at 2L 1.0 (started terminalA "1" agentForAda "make" 1)
+                  at 3L 2.0 (started terminalA "2" agentForAda "npm test" 40) ]
             Expect.equal (drawn events) [ "ran:b-1"; "ran:b-2" ] "two chips, no card"
 
         testCase "a refused command joins the card of the turn that proposed it" <| fun () ->
@@ -1507,8 +1513,8 @@ let private cardTests =
             let events =
                 [ at 1L 0.0 (turnStarted "a")
                   at 2L 1.0 (opened terminalA "agent 1")
-                  at 3L 2.0 (started terminalA "1" ActorRef.Agent "make" 1)
-                  at 4L 3.0 (rejected terminalA "2" ActorRef.Agent "rm -rf /") ]
+                  at 3L 2.0 (started terminalA "1" agentForAda "make" 1)
+                  at 4L 3.0 (rejected terminalA "2" agentForAda "rm -rf /") ]
             Expect.equal (drawn events) [ "card:turn-a:2" ] "the proposal counts, whether or not it ran"
 
         testCase "a card anchors where its FIRST command started" <| fun () ->
@@ -1517,8 +1523,8 @@ let private cardTests =
             let events =
                 [ at 1L 0.0 (turnStarted "a")
                   at 2L 1.0 (opened terminalA "agent 1")
-                  at 3L 2.0 (started terminalA "1" ActorRef.Agent "make" 1)
-                  at 4L 3.0 (started terminalA "2" ActorRef.Agent "npm test" 40)
+                  at 3L 2.0 (started terminalA "1" agentForAda "make" 1)
+                  at 4L 3.0 (started terminalA "2" agentForAda "npm test" 40)
                   at 5L 4.0 (sent "1" "how's it going?")
                   at 6L 9.0 (completed terminalA "1" (CommandSucceeded 0) 40) ]
             let conversation, _ = ConversationProjection.applyEvents None events ConversationProjection.empty
@@ -1547,8 +1553,8 @@ let private cardTests =
             let running =
                 [ at 1L 0.0 (turnStarted "a")
                   at 2L 1.0 (opened terminalA "agent 1")
-                  at 3L 2.0 (started terminalA "1" ActorRef.Agent "make" 1)
-                  at 4L 3.0 (started terminalA "2" ActorRef.Agent "npm test" 40) ]
+                  at 3L 2.0 (started terminalA "1" agentForAda "make" 1)
+                  at 4L 3.0 (started terminalA "2" agentForAda "npm test" 40) ]
             let finished = running @ [ at 5L 9.0 (completed terminalA "1" (CommandFailed 2) 40) ]
             let rowsOf events =
                 let conversation, _ = ConversationProjection.applyEvents None events ConversationProjection.empty

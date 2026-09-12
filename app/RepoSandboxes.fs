@@ -66,7 +66,7 @@ type RepoSandboxes =
       /// A capability set is authored by whoever can push to the checkout and can change
       /// between a screen being drawn and a button being pressed — approving something other
       /// than what was read is the failure worth preventing, and it is the easy one to build.
-      Approve : ActorRef -> RepoRef -> string list -> Async<Result<unit, string>> }
+      Approve : Principal -> RepoRef -> string list -> Async<Result<unit, string>> }
 
 /// A session with nothing to fold: no repos service, or a composition without one. Total,
 /// so a caller never branches on whether the fold exists.
@@ -415,55 +415,51 @@ let create
     ///
     /// What may NOT consent is everything that is not a person: the agent, the session
     /// process, and the repo's own file. A checkout that could approve itself is a checkout
-    /// nobody is deciding about, which is the whole reason it is a separate principal.
-    let approve (actor: ActorRef) (repo: RepoRef) (granted: string list) : Async<Result<unit, string>> =
+    /// nobody is deciding about, which is the whole reason it is a separate principal — and
+    /// the reason this takes a `Principal`: there is no call to write that asks it to.
+    let approve (approver: Principal) (repo: RepoRef) (granted: string list) : Async<Result<unit, string>> =
         async {
-            match Principal.ofActor actor with
-            | Some approver ->
-                match repos () with
-                | None -> return Error "this session has no repos"
-                | Some service ->
-                    match! service.ListRepos () with
-                    | Error reason -> return Error reason
-                    | Ok listings ->
-                        let declared, _ =
-                            RepoConfig.readAll reposDir (listings |> List.map (fun listing -> listing.Repo))
-                        match askedBy declared repo with
-                        | None -> return Error (sprintf "%s asks for nothing this session can resolve" (RepoRef.value repo))
-                        // The set that arrived is the set a person read. If it is not what
-                        // the repo asks for now, the file moved under them and the decision
-                        // they made is not the one they would make.
-                        | Some asked when asked <> granted ->
-                            return
-                                Error (
-                                    sprintf
-                                        "what %s asks for changed since you looked — it now asks for %s"
-                                        (RepoRef.value repo)
-                                        (String.concat "; " asked))
-                        | Some asked ->
-                            do!
-                                append
-                                    actor
-                                    (SessionEvent.RepoCapabilitiesApproved
-                                        { RepoCapabilitiesApproved.MessageId = mintMessageId ()
-                                          RepoCapabilitiesApproved.Repo = repo
-                                          RepoCapabilitiesApproved.Granted = asked
-                                          RepoCapabilitiesApproved.Actor = actor })
-                            // And then DO it. Consent that leaves the sandbox down until
-                            // somebody happens to touch a repo is a button that reports
-                            // success and changes nothing — which is the same class of fault
-                            // as a refusal nobody sees, arriving from the other direction.
-                            //
-                            // Safe to call here because the fold is idempotent by
-                            // construction: it re-asks for what is already running and
-                            // records nothing when nothing changed. It runs on the authority
-                            // of whoever approved, which is the truth of why it ran.
-                            do! fold (CredentialFor.Person approver)
-                            return Ok ()
-            | None ->
-                return
-                    Error
-                        "only a person in this session can approve what a repo asks for — an agent cannot consent on a checkout's behalf"
+            match repos () with
+            | None -> return Error "this session has no repos"
+            | Some service ->
+                match! service.ListRepos () with
+                | Error reason -> return Error reason
+                | Ok listings ->
+                    let declared, _ =
+                        RepoConfig.readAll reposDir (listings |> List.map (fun listing -> listing.Repo))
+                    match askedBy declared repo with
+                    | None -> return Error (sprintf "%s asks for nothing this session can resolve" (RepoRef.value repo))
+                    // The set that arrived is the set a person read. If it is not what
+                    // the repo asks for now, the file moved under them and the decision
+                    // they made is not the one they would make.
+                    | Some asked when asked <> granted ->
+                        return
+                            Error (
+                                sprintf
+                                    "what %s asks for changed since you looked — it now asks for %s"
+                                    (RepoRef.value repo)
+                                    (String.concat "; " asked))
+                    | Some asked ->
+                        let actor = Principal.toActor approver
+                        do!
+                            append
+                                actor
+                                (SessionEvent.RepoCapabilitiesApproved
+                                    { RepoCapabilitiesApproved.MessageId = mintMessageId ()
+                                      RepoCapabilitiesApproved.Repo = repo
+                                      RepoCapabilitiesApproved.Granted = asked
+                                      RepoCapabilitiesApproved.Actor = actor })
+                        // And then DO it. Consent that leaves the sandbox down until
+                        // somebody happens to touch a repo is a button that reports
+                        // success and changes nothing — which is the same class of fault
+                        // as a refusal nobody sees, arriving from the other direction.
+                        //
+                        // Safe to call here because the fold is idempotent by
+                        // construction: it re-asks for what is already running and
+                        // records nothing when nothing changed. It runs on the authority
+                        // of whoever approved, which is the truth of why it ran.
+                        do! fold (CredentialFor.Person approver)
+                        return Ok ()
         }
 
     let undeclared () =

@@ -13,7 +13,10 @@ type MessageSent =
       /// from doc-world to event-world, and the drain's exactly-once dedup key.
       /// `None` for messages that predate the queue.
       QueueId : QueueId option
-      Author : ActorRef
+      /// Who said it. A `Principal`, because a message is drained from the queue a peer
+      /// wrote to and every peer is one — and because the turn a message starts runs on its
+      /// author's credential, which the type then guarantees is somebody's.
+      Author : Principal
       Body : string }
 /// A command refused at its gate (Plan 15, stage 3; Plan 23: the gate is the classifier).
 /// The mirror of `TerminalCommandRejected`, and it exists for that event's reason: a refusal

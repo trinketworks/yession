@@ -283,6 +283,36 @@ The one thing text search cannot recover is a type F# inferred rather than wrote
 foo bar` has no annotation to find. Follow the right-hand side to its declaration, or write
 the type you expect and let `check` tell you if you are wrong.
 
+## Refactoring across call sites
+
+**Narrow the type; let the compiler enumerate the sites.** F# has no untyped escape hatch
+worth speaking of: change a field's type, a parameter's type, a union's cases, and every
+place that no longer fits is a compile error, all of them at once, in seconds, before
+anything runs. So the number of call sites is not a reason to keep a looser type. It is the
+list of places the looser type was letting something through.
+
+`MessageSent.Author` stayed `ActorRef` for one refactor because it had sixty-five sites, and
+the turn's principal was carried BESIDE the message instead — two values, one construction
+site, consistent by discipline and not by type. Narrowing it took one edit and forty minutes
+of the compiler pointing at fixtures. The sites were never the cost; the aliasing was.
+
+The pattern, in order:
+
+- Change the declaration (`Identity.fs`, a facts file) and nothing else. Build. Every error
+  is a site; there are no others.
+- Fix each site with the value it already had, never with a default: `Principal.toActor p`
+  where an actor is wanted, the principal itself where one is. A site that has nothing of
+  the right type to give is the finding — a caller that was passing `None` because it
+  could, an event that recorded the author when it needed the owner. Those get a case,
+  a constructor, or a refusal, not `Option.defaultValue`.
+- A test that pinned the old shape ("an agent act with no owner still decodes") is not a
+  regression guard when the shape was the bug — delete it and say in its place what the
+  type now says, so the next reader finds the reasoning where the case was.
+
+Do not keep a bridging alias, a second constructor, or an `option` "for now" to make the
+build go green with fewer edits. The build going red at every site is the tool working; a
+bridge is the fault coming back with a name that says it is fine.
+
 ## Testing
 
 Tests gated by CAPABILITIES the run declares, not folders (`tests/Yession.Tests/Tags.fs`). A

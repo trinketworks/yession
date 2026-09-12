@@ -309,7 +309,7 @@ module TimelineProjection =
             // the more interesting half of the two, and a rejection that appears nowhere is
             // indistinguishable from a bug.
             append (TimelineBlock (envelope.Offset, e.TerminalId, e.BlockId))
-            |> attributed e.Author e.BlockId
+            |> attributed (Authority.author e.Authority) e.BlockId
         | SessionEvent.TerminalLeaseTaken e ->
             { proj with
                 OpenLeases =

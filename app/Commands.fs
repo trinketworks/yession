@@ -547,7 +547,7 @@ type LaunchFailure =
       Summary : string
       Reason : string }
 
-type LaunchRepo = ActorRef -> RepoRef -> string option -> Async<Result<Async<Result<unit, LaunchFailure>>, string>>
+type LaunchRepo = Principal -> RepoRef -> string option -> Async<Result<Async<Result<unit, LaunchFailure>>, string>>
 
 let launchRepo
     (services: CommandServices)

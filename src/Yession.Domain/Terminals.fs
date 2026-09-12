@@ -348,7 +348,7 @@ module Projection =
                                   Background = false
                                   // Who refused it is on the status rather than smuggled
                                   // in here.
-                                  Authority = Authority.ofAuthor e.Author
+                                  Authority = e.Authority
                                   Command = e.Command
                                   // An EMPTY range, not a missing one: a command that never
                                   // ran produced no output, so every reader that slices
