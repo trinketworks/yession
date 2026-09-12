@@ -101,9 +101,9 @@ let targetFor (sessionId: SessionId) (owner: CredentialOwner) (scopeChoice: stri
 /// is never granted local access, so the candidate filter drops it before anything is
 /// resolved. The Manager's readable set is the single authority; a second copy of that
 /// judgement here could only drift from it.
-let turnTargets (sessionId: SessionId) (actor: Principal option) : SecretId list =
+let turnTargets (sessionId: SessionId) (credential: CredentialFor) : SecretId list =
     [ Some { SecretId.Scope = SessionScope sessionId; SecretId.Name = secretName }
-      actor
+      CredentialFor.person credential
       |> Option.bind CredentialOwner.ofPrincipal
       |> Option.map (fun owner -> { SecretId.Scope = CredentialOwner.scope owner; SecretId.Name = secretName })
       Some { SecretId.Scope = LocalScope; SecretId.Name = secretName } ]
@@ -210,11 +210,11 @@ let models (credential: string * string) : Async<Result<AgentModel list, ModelsF
 /// message. `None` is a call on nobody's — a deployment that attributes nobody, acting as
 /// itself — and "the system" is what that is called in the log, not what a person reading
 /// "no Claude account connected for …" needs to be told.
-let actorLabel (actor: Principal option) : string =
-    match actor with
-    | Some (Principal.User u) -> UserId.value u
-    | Some (Principal.Peer p) -> sprintf "peer %s" (PeerId.value p)
-    | None -> "this deployment"
+let actorLabel (credential: CredentialFor) : string =
+    match credential with
+    | CredentialFor.Person (Principal.User u) -> UserId.value u
+    | CredentialFor.Person (Principal.Peer p) -> sprintf "peer %s" (PeerId.value p)
+    | CredentialFor.Deployment -> "this deployment"
 
 // --- the browser-facing /claude* routes -----------------------------------------------
 // Thin proxies over the Manager's broker, gated by the same cookie identity as /me.
@@ -263,9 +263,9 @@ let ownerOf (identity: CookieIdentity) : CredentialOwner =
     | AttributedUser user -> UserOwner user
     | UnattributedAccess -> LocalOwner
 
-/// The party a browser request's provider calls run on (`PeerAttribution.principal`), so
+/// The party a browser request's provider calls run on (`PeerAttribution.credential`), so
 /// the catalogue it is answered with is the one this person's credential can actually see.
-let private actorOf (identity: CookieIdentity) : Principal option = PeerAttribution.principal identity.Attribution
+let private actorOf (identity: CookieIdentity) : CredentialFor = PeerAttribution.credential identity.Attribution
 
 /// Build the /claude* route handler. `statusOf` reads the session's live status cache
 /// (fed by the Manager's connection stream); `agentAvailable` is the agent gate's own

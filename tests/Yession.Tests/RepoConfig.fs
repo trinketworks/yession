@@ -340,7 +340,7 @@ let foldTests =
                         (recordingGate seen)
                         (foldLog ())
                         noCapabilities
-                do! folded.Fold None
+                do! folded.Fold CredentialFor.Deployment
                 Expect.equal (seen |> Seq.map (fun c -> c.Tool) |> Set.ofSeq) (Set.ofList [ "start_work_sandbox" ]) "one verb, no other"
                 Expect.equal (seen.Count) 3 "every declaration in every file, and nothing else"
             }
@@ -354,7 +354,7 @@ let foldTests =
                 let seen = ResizeArray<GatedCall> ()
                 let folded =
                     RepoSandboxes.create dir (cell (Some (reposOver dir [ r ]))) (cell WorkSandboxes.unavailable) (recordingGate seen) (foldLog ()) noCapabilities
-                do! folded.Fold None
+                do! folded.Fold CredentialFor.Deployment
                 Expect.equal (Authority.author seen.[0].Authority) (ActorRef.Configured r) "the repo's own file"
                 Expect.equal (Authority.onBehalfOf seen.[0].Authority) None "and a boot fold borrows nobody's authority"
             }
@@ -367,8 +367,8 @@ let foldTests =
                 let folded =
                     RepoSandboxes.create dir (cell (Some (reposOver dir [ r ]))) (cell WorkSandboxes.unavailable) (recordingGate seen) (foldLog ()) noCapabilities
                 let ada = Principal.User (UserId.create "ada" |> expect)
-                do! folded.Fold (Some ada)
-                Expect.equal (Authority.principal seen.[0].Authority) (Some ada) "whose credential a forward: resolves against"
+                do! folded.Fold (CredentialFor.Person ada)
+                Expect.equal (Authority.credential seen.[0].Authority) (CredentialFor.Person ada) "whose credential a forward: resolves against"
             }
 
         // `start_work_sandbox` decides "already running?" before it starts anything, and a
@@ -394,9 +394,9 @@ let foldTests =
                 let folded =
                     RepoSandboxes.create dir (cell (Some (reposOver dir [ r ]))) (cell WorkSandboxes.unavailable) holding (foldLog ()) noCapabilities
                 let ada = Principal.User (UserId.create "ada" |> expect)
-                let! first = Async.StartChild (folded.Fold None)
+                let! first = Async.StartChild (folded.Fold CredentialFor.Deployment)
                 do! Async.Sleep 20
-                let! second = Async.StartChild (folded.Fold (Some ada))
+                let! second = Async.StartChild (folded.Fold (CredentialFor.Person ada))
                 do! Async.Sleep 20
                 Expect.equal (List.ofSeq seen) [ None ] "the first is at the gate; the second has not reached it"
                 release.Value ()
@@ -419,7 +419,7 @@ let foldTests =
                         (refusingGate "registry.npmjs.org is not in this session's egress")
                         (foldLog ())
                         noCapabilities
-                do! folded.Fold None
+                do! folded.Fold CredentialFor.Deployment
                 match folded.Outcomes () with
                 | [ outcome ] ->
                     Expect.equal outcome.Repo r "the repo whose file asked"
@@ -440,7 +440,7 @@ let foldTests =
                         (recordingGate (ResizeArray<GatedCall> ()))
                         (foldLog ())
                         noCapabilities
-                do! folded.Fold None
+                do! folded.Fold CredentialFor.Deployment
                 Expect.equal (folded.Outcomes () |> List.map (fun o -> o.Problem)) [ None ] "nothing to report is nothing to report"
             }
 
@@ -459,7 +459,7 @@ let foldTests =
                         (recordingGate (ResizeArray<GatedCall> ()))
                         (foldLog ())
                         noCapabilities
-                do! folded.Fold None
+                do! folded.Fold CredentialFor.Deployment
                 match folded.Outcomes () with
                 | [ outcome ] ->
                     Expect.equal outcome.Sandbox None "there is no sandbox to name — the file did not parse"
@@ -476,7 +476,7 @@ let foldTests =
                 let seen = ResizeArray<GatedCall> ()
                 let folded =
                     RepoSandboxes.create dir (cell (Some (reposOver dir [ r ]))) (cell WorkSandboxes.unavailable) (recordingGate seen) (foldLog ()) noCapabilities
-                do! folded.Fold None
+                do! folded.Fold CredentialFor.Deployment
                 Expect.equal seen.Count 0 "nothing was asked for"
                 Expect.equal (folded.Outcomes ()) [] "and nothing is wrong"
             }
@@ -497,7 +497,7 @@ let foldTests =
                         (refusingGate "registry.npmjs.org is not in this session's egress")
                         log
                         noCapabilities
-                do! folded.Fold None
+                do! folded.Fold CredentialFor.Deployment
                 let! page = log.Read None System.Int32.MaxValue
                 match page.Events |> List.choose (fun e -> match e.Event with SessionEvent.RepoConfigRefused n -> Some n | _ -> None) with
                 | [ note ] ->
@@ -523,9 +523,9 @@ let foldTests =
                         (refusingGate "the ceiling is closed")
                         log
                         noCapabilities
-                do! folded.Fold None
-                do! folded.Fold None
-                do! folded.Fold None
+                do! folded.Fold CredentialFor.Deployment
+                do! folded.Fold CredentialFor.Deployment
+                do! folded.Fold CredentialFor.Deployment
                 let! page = log.Read None System.Int32.MaxValue
                 let notes =
                     page.Events |> List.choose (fun e -> match e.Event with SessionEvent.RepoConfigRefused n -> Some n.Reason | _ -> None)
@@ -548,9 +548,9 @@ let foldTests =
                         }
                 let folded =
                     RepoSandboxes.create dir (cell (Some (reposOver dir [ r ]))) (cell WorkSandboxes.unavailable) moving log noCapabilities
-                do! folded.Fold None
+                do! folded.Fold CredentialFor.Deployment
                 why <- "no credential to forward"
-                do! folded.Fold None
+                do! folded.Fold CredentialFor.Deployment
                 let! page = log.Read None System.Int32.MaxValue
                 let notes =
                     page.Events |> List.choose (fun e -> match e.Event with SessionEvent.RepoConfigRefused n -> Some n.Reason | _ -> None)
@@ -572,7 +572,7 @@ let foldTests =
                         (recordingGate (ResizeArray<GatedCall> ()))
                         log
                         noCapabilities
-                do! folded.Fold None
+                do! folded.Fold CredentialFor.Deployment
                 let! page = log.Read None System.Int32.MaxValue
                 Expect.equal
                     (page.Events |> List.filter (fun e -> match e.Event with SessionEvent.RepoConfigRefused _ -> true | _ -> false))
@@ -596,7 +596,7 @@ let foldTests =
                         (recordingGate (ResizeArray<GatedCall> ()))
                         log
                         (granting [ "path:/nix:ro"; "net:cache.nixos.org" ])
-                do! folded.Fold None
+                do! folded.Fold CredentialFor.Deployment
                 let! page = log.Read None System.Int32.MaxValue
                 match page.Events |> List.choose (fun e -> match e.Event with SessionEvent.RepoCapabilitiesChanged c -> Some c | _ -> None) with
                 | [ note ] ->
@@ -621,9 +621,9 @@ let foldTests =
                         (recordingGate (ResizeArray<GatedCall> ()))
                         log
                         (granting [ "path:/nix:ro" ])
-                do! folded.Fold None
-                do! folded.Fold None
-                do! folded.Fold None
+                do! folded.Fold CredentialFor.Deployment
+                do! folded.Fold CredentialFor.Deployment
+                do! folded.Fold CredentialFor.Deployment
                 let! page = log.Read None System.Int32.MaxValue
                 let notes =
                     page.Events |> List.choose (fun e -> match e.Event with SessionEvent.RepoCapabilitiesChanged c -> Some c.Granted | _ -> None)
@@ -645,9 +645,9 @@ let foldTests =
                         (recordingGate (ResizeArray<GatedCall> ()))
                         log
                         (granting granted)
-                do! folded.Fold None
+                do! folded.Fold CredentialFor.Deployment
                 granted <- [ "path:/nix:ro"; "!net:anywhere" ]
-                do! folded.Fold None
+                do! folded.Fold CredentialFor.Deployment
                 let! page = log.Read None System.Int32.MaxValue
                 let notes =
                     page.Events |> List.choose (fun e -> match e.Event with SessionEvent.RepoCapabilitiesChanged c -> Some c.Granted | _ -> None)
@@ -670,7 +670,7 @@ let foldTests =
                     RepoSandboxes.create
                         dir (cell (Some (reposOver dir [ r ]))) (cell WorkSandboxes.unavailable)
                         (recordingGate seen) (foldLog ()) (granting [ "path:/nix:ro" ])
-                do! folded.Fold None
+                do! folded.Fold CredentialFor.Deployment
                 Expect.equal seen.Count 1 "the declaration reached the gate"
             }
 
@@ -683,7 +683,7 @@ let foldTests =
                     RepoSandboxes.create
                         dir (cell (Some (reposOver dir [ r ]))) (cell WorkSandboxes.unavailable)
                         (recordingGate seen) (foldLog ()) (sensitively [ "!net:anywhere" ])
-                do! folded.Fold None
+                do! folded.Fold CredentialFor.Deployment
                 Expect.equal seen.Count 0 "nothing was started"
                 match folded.Outcomes () with
                 | [ outcome ] ->
@@ -714,7 +714,7 @@ let foldTests =
                     RepoSandboxes.create
                         dir (cell (Some (reposOver dir [ r ]))) (cell WorkSandboxes.unavailable)
                         (recordingGate seen) log (sensitively [ "!net:anywhere" ])
-                do! folded.Fold None
+                do! folded.Fold CredentialFor.Deployment
                 let ada = UserRef (UserId.create "ada" |> expect)
                 let! approved = folded.Approve ada r [ "!net:anywhere" ]
                 Expect.equal approved (Ok ()) "a signed-in person may consent"
@@ -859,7 +859,7 @@ let foldTests =
             async {
                 let folded =
                     RepoSandboxes.create "/nowhere" (cell None) (cell WorkSandboxes.unavailable) (recordingGate (ResizeArray<GatedCall> ())) (foldLog ()) noCapabilities
-                do! folded.Fold None
+                do! folded.Fold CredentialFor.Deployment
                 Expect.equal (folded.Outcomes ()) [] "no repos is not a fault"
             }
 

@@ -446,7 +446,7 @@ module ConversationProjection =
                 match s.Forwarded, s.CredentialOwner with
                 | [], _ -> None
                 | names, Some owner ->
-                    Some (sprintf "forwarding %s from %s" (String.concat ", " names) (Principal.token owner))
+                    Some (sprintf "forwarding %s from %s" (String.concat ", " names) (CredentialFor.token owner))
                 | names, None -> Some (sprintf "forwarding %s" (String.concat ", " names))
             // And where this host could not give what the sandbox's resources named. On the
             // start NOTE rather than a note of its own, because it is a property of THIS

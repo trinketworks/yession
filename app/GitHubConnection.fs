@@ -100,9 +100,9 @@ let targetFor (sessionId: SessionId) (owner: CredentialOwner) (scopeChoice: stri
 /// The per-operation credential targets, most specific first: the session's own explicit
 /// credential, then the acting human's, then the deployment's. Mirrors
 /// `ClaudeConnection.turnTargets` — including why `LocalScope` is named unconditionally.
-let turnTargets (sessionId: SessionId) (actor: Principal option) : SecretId list =
+let turnTargets (sessionId: SessionId) (credential: CredentialFor) : SecretId list =
     [ Some { SecretId.Scope = SessionScope sessionId; SecretId.Name = secretName }
-      actor
+      CredentialFor.person credential
       |> Option.bind CredentialOwner.ofPrincipal
       |> Option.map (fun owner -> { SecretId.Scope = CredentialOwner.scope owner; SecretId.Name = secretName })
       Some { SecretId.Scope = LocalScope; SecretId.Name = secretName } ]

@@ -202,8 +202,8 @@ let create
     (provider: string)
     (now: unit -> DateTimeOffset)
     (fetch: FetchPr)
-    (resolveToken: Principal option -> Async<string option>)
-    (onUnauthorized: Principal option -> Async<unit>)
+    (resolveToken: CredentialFor -> Async<string option>)
+    (onUnauthorized: CredentialFor -> Async<unit>)
     (record: Principal -> PrRef -> PrSnapshot -> PrTransition list -> Async<unit>)
     : PrWatchers =
 
@@ -251,7 +251,7 @@ let create
             if heldByProvider || (not force && entry.DueAtEpoch > nowEpoch) then return false
             else
                 entry.SkipUntilEpoch <- None
-                let! token = resolveToken (Some entry.Watcher)
+                let! token = resolveToken (CredentialFor.Person entry.Watcher)
                 let! outcome = fetch token entry.Pr entry.Etags entry.Snapshot
                 // Whatever the look found, this watch has had its turn: the next one is
                 // scheduled from what it now knows, so a suite finishing drops the watch
@@ -284,7 +284,7 @@ let create
                         | PrRateLimited _ -> sprintf "rate limited by %s — waiting for the window to reset" provider
                         | PrUnreachable reason -> reason
                     match failure with
-                    | PrUnauthorized -> do! onUnauthorized (Some entry.Watcher)
+                    | PrUnauthorized -> do! onUnauthorized (CredentialFor.Person entry.Watcher)
                     | PrRateLimited reset ->
                         // The provider names the moment it will answer again, which beats any
                         // backoff invented here. Absent, wait a window's worth.
@@ -365,8 +365,8 @@ type PrService =
       ///
       /// Takes the whole `Authority` because a watch needs both halves of it — who asked,
       /// for the note, and whose credential, for every poll and the wake a change causes —
-      /// and the second half is what this verb REFUSES without: an act on nobody's
-      /// credential (a file's boot fold) can be many things, but it cannot be a watch,
+      /// and the second half is what this verb REFUSES without: an act on the deployment's
+      /// own credential (a file's boot fold) can be many things, but it cannot be a watch,
       /// because there would be nobody to keep looking as and nobody to wake.
       Watch : Authority -> PrRef -> Async<Result<string, string>>
       Unwatch : ActorRef -> PrRef -> Async<Result<string, string>>
@@ -376,7 +376,7 @@ type PrService =
       ///
       /// Nothing is watched as a result. Watching is a decision about what this session will
       /// keep saying, and the number this hands back is what `Watch` takes.
-      Create : Principal option -> PrDraft -> Async<Result<string, string>> }
+      Create : CredentialFor -> PrDraft -> Async<Result<string, string>> }
 
 /// Build the watch verbs over the session's log and the poller they reconcile into.
 ///
@@ -389,7 +389,7 @@ let service
     (watchesNow: unit -> Async<PrWatch list>)
     (fetch: FetchPr)
     (openPr: OpenPr)
-    (resolveToken: Principal option -> Async<string option>)
+    (resolveToken: CredentialFor -> Async<string option>)
     (refold: PrWatch list -> unit)
     : PrService =
 
@@ -424,7 +424,7 @@ let service
         fun authority pr ->
             async {
                 let! watches = watchesNow ()
-                match watches |> List.tryFind (fun w -> w.Pr = pr), Authority.principal authority with
+                match watches |> List.tryFind (fun w -> w.Pr = pr), Authority.credential authority with
                 // Already watched: a repeated ask is a question, not an act (the
                 // `add_repo` rule). Answer what is known and record nothing.
                 | Some existing, _ ->
@@ -435,14 +435,14 @@ let service
                                 (PrRef.render pr)
                                 (PrState.describe existing.Known.State)
                                 (ChecksRollup.describe existing.Known.Checks))
-                | None, None ->
+                | None, CredentialFor.Deployment ->
                     return
                         Error (
                             sprintf
-                                "%s cannot be watched on nobody's credential — a watch keeps looking as somebody, and wakes them"
+                                "%s cannot be watched on the deployment's own credential — a watch keeps looking as somebody, and wakes them"
                                 (PrRef.render pr))
-                | None, Some watcher ->
-                    let! token = resolveToken (Some watcher)
+                | None, CredentialFor.Person watcher ->
+                    let! token = resolveToken (CredentialFor.Person watcher)
                     let! outcome = fetch token pr PrEtags.none None
                     match outcome with
                     | PrFetchFailed failure -> return Error (cannotReach (PrRef.render pr) failure)

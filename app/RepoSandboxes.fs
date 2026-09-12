@@ -48,7 +48,7 @@ type RepoSandboxes =
       /// asked. `None` is the fold at boot, which nobody triggered — and the one that runs
       /// again, on THEIR authority, when somebody arrives. One fold runs at a time; a
       /// second asked for while one is in flight waits for it.
-      Fold : Principal option -> Async<unit>
+      Fold : CredentialFor -> Async<unit>
       /// What the last fold made of each repo, in a stable order — the query's rows.
       Outcomes : unit -> FoldOutcome list
       /// Sandboxes this session is running that no file declares any more. Named rather
@@ -198,7 +198,7 @@ let create
     let mutable describedRefs : Map<string, string> = Map.empty
     let mutable reposAtRefs : Map<string, string> = Map.empty
 
-    let foldOnce (onBehalfOf: Principal option) : Async<unit> =
+    let foldOnce (onBehalfOf: CredentialFor) : Async<unit> =
         async {
             match repos () with
             | None ->
@@ -378,7 +378,7 @@ let create
     let mutable folding = false
     let waiting = System.Collections.Generic.Queue<unit -> unit> ()
 
-    let fold (onBehalfOf: Principal option) : Async<unit> =
+    let fold (onBehalfOf: CredentialFor) : Async<unit> =
         async {
             if folding then
                 do! Async.FromContinuations (fun (cont, _, _) -> waiting.Enqueue cont)
@@ -458,7 +458,7 @@ let create
                             // construction: it re-asks for what is already running and
                             // records nothing when nothing changed. It runs on the authority
                             // of whoever approved, which is the truth of why it ran.
-                            do! fold (Some approver)
+                            do! fold (CredentialFor.Person approver)
                             return Ok ()
             | None ->
                 return

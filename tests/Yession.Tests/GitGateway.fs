@@ -191,7 +191,7 @@ type private Lend =
 let private lending (token: string option) : Lend = { Token = token; Refusals = 0 }
 
 let private lenderOf (lend: Lend) : GitGateway.Lender =
-    { Owner = Some ada
+    { Owner = CredentialFor.Person ada
       Resolve = fun () -> async { return lend.Token }
       Refused = fun () -> async { lend.Refusals <- lend.Refusals + 1 } }
 

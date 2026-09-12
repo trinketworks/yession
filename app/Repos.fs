@@ -205,7 +205,7 @@ type ReposConfig =
       /// The GitHub token for the network verbs, resolved for the CREDENTIAL actor a
       /// caller names (Plan 08 precedence, applied by the composition). None =
       /// anonymous — public repos still clone; a private one fails with git's own words.
-      ResolveToken : Principal option -> Async<string option>
+      ResolveToken : CredentialFor -> Async<string option>
       /// What the provider calls this repo NOW, on this credential — `None` when it cannot
       /// say (unreachable, rate-limited, or a repo this credential cannot see, which the
       /// clone will say in its own words). A clone follows a renamed repo's old name with a
@@ -220,7 +220,7 @@ type ReposConfig =
       /// decides what the failure MEANS — git's stderr cannot tell "your token expired" from
       /// "that repo does not exist" (`Repository not found` is what github.com says for
       /// both), so the composition asks the provider, which is the only place that knows.
-      OnNetworkFailure : Principal option -> string -> Async<unit>
+      OnNetworkFailure : CredentialFor -> string -> Async<unit>
       Log : EventLog<SessionEvent> }
 
 /// Who is calling a mutating/network verb. The two halves genuinely differ for the
@@ -230,7 +230,7 @@ type ReposConfig =
 [<RequireQualifiedAccess>]
 type RepoCaller =
     { Actor : ActorRef
-      Credential : Principal option }
+      Credential : CredentialFor }
 
 /// The Process-side repo manager. Caller-taking members append the acting party onto
 /// the event; the read-only inspectors take none because they record nothing.
@@ -654,7 +654,7 @@ let create (config: ReposConfig) : Result<ReposService, string> =
 /// the acting party), the token is the TURN HUMAN's (Plan 08 — no borrowing across
 /// actors, and the agent has no scope of its own).
 let agentCaller (turnActor: Principal) : RepoCaller =
-    { Actor = ActorRef.Agent; Credential = Some turnActor }
+    { Actor = ActorRef.Agent; Credential = CredentialFor.Person turnActor }
 
 // --- the `repos` query (Plan 15) ----------------------------------------------------------
 // What was the Repos PANEL is now a registered query, and the panel's three write actions

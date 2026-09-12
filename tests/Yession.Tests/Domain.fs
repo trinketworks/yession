@@ -268,21 +268,22 @@ let private frameSerializationTests =
                       Description = None
                       Checkout = None
                       Forwarded = [ "github" ]
-                      CredentialOwner = Some (Principal.User (UserId.create "alice" |> expect))
+                      CredentialOwner = Some (CredentialFor.Person (Principal.User (UserId.create "alice" |> expect)))
                       Realisation = [ "the socket at /run/docker.sock — this host cannot scope that" ]
                       Actor = ActorRef.Agent }
                   // A repo-declared start, carrying both the things only a sandbox settles:
-                  // what it is for, and where it sees the checkout.
+                  // what it is for, and where it sees the checkout — forwarding the
+                  // deployment's own credential, which the boot fold does with nobody named.
                   WorkSandboxStarted
                     { MessageId = messageId
                       Sandbox = SandboxRef.parse "octo/hello:dev" |> expect
                       Backend = "docker"
                       Description = Some "day-to-day work"
                       Checkout = Some "/repos/octo/hello"
-                      Forwarded = []
-                      CredentialOwner = None
+                      Forwarded = [ "github" ]
+                      CredentialOwner = Some CredentialFor.Deployment
                       Realisation = []
-                      Actor = ActorRef.Agent }
+                      Actor = ActorRef.Configured (RepoRef.create "octo/hello" |> expect) }
                   WorkSandboxStarted
                     { MessageId = messageId
                       Sandbox = SandboxRef.defaultRef
@@ -1220,7 +1221,7 @@ let private authorityTests =
         testCase "a person's act borrows nothing, so it resolves to themselves" <| fun () ->
             let authority = Authority.ofAuthor (PeerRef ada)
             Expect.equal (Authority.onBehalfOf authority) None "there is no authority to state"
-            Expect.equal (Authority.principal authority) (Some (Principal.Peer ada)) "and it runs as its own author"
+            Expect.equal (Authority.credential authority) (CredentialFor.Person (Principal.Peer ada)) "and it runs as its own author"
 
         testCase "an agent's act resolves to the authority it was built with, never to itself" <| fun () ->
             // The rule that went missing, as the only thing `agentFor` can produce: the agent
@@ -1228,7 +1229,7 @@ let private authorityTests =
             // agent-authored act without one, so the omission would not compile.
             let authority = Authority.agentFor (Principal.Peer ada)
             Expect.equal (Authority.author authority) ActorRef.Agent "the agent is who acted"
-            Expect.equal (Authority.principal authority) (Some (Principal.Peer ada)) "on the turn human's credential"
+            Expect.equal (Authority.credential authority) (CredentialFor.Person (Principal.Peer ada)) "on the turn human's credential"
 
         testCase "an act recovered without its owner invents no other one" <| fun () ->
             // The decode path's safe direction, and why it does not go through the authoring
@@ -1238,19 +1239,19 @@ let private authorityTests =
             let recovered = Authority.rehydrate ActorRef.Agent None
             Expect.equal (Authority.onBehalfOf recovered) None "no authority is conjured"
             Expect.equal
-                (Authority.principal recovered)
-                None
-                "so it resolves to nobody — the agent has no scope of its own, and is not a person"
+                (Authority.credential recovered)
+                CredentialFor.Deployment
+                "so it resolves to the deployment's own — the agent has no scope of its own, and is not a person"
 
-        testCase "an act by something that is not a person resolves to nobody" <| fun () ->
+        testCase "an act by something that is not a person resolves to the deployment's own" <| fun () ->
             // A repo's file at boot, the process, the deployment: none of them is a principal,
-            // so none of them is an author a credential can be resolved for. `None` here is
-            // what a caller reads as "the session's own and the deployment's, and nothing
+            // so none of them is an author a credential can be resolved for. The deployment's
+            // own is what a caller reads as "the session's own and the local one, and nothing
             // else" — never as the author standing in.
             for actor in [ ActorRef.System; ActorRef.SessionProcess; ActorRef.Configured (RepoRef.create "octo/hello" |> expect) ] do
                 Expect.equal
-                    (Authority.principal (Authority.ofAuthor actor))
-                    None
+                    (Authority.credential (Authority.ofAuthor actor))
+                    CredentialFor.Deployment
                     (sprintf "%s holds no credential" (ActorRef.token actor))
     ]
 
@@ -1258,7 +1259,7 @@ let private authorityTests =
 /// model. Hoisted because three of the cases below differ only in what they MOVE — the
 /// credential, the clock, or the kept answer itself — and a setup written out three times
 /// hides which line is the case.
-let private keeping (onAsk: unit -> unit) (keyOf: Principal option -> string option) : ModelCatalogueCache =
+let private keeping (onAsk: unit -> unit) (keyOf: CredentialFor -> string option) : ModelCatalogueCache =
     ModelCatalogue.keyed
         (fun () -> DateTimeOffset (2026, 1, 1, 0, 0, 0, TimeSpan.Zero))
         (TimeSpan.FromMinutes 10.0)
@@ -1305,8 +1306,8 @@ let private modelTests =
             async {
                 let mutable asked = 0
                 let cache = keeping (fun () -> asked <- asked + 1) (fun _ -> Some "alice")
-                let! first = cache.List None
-                let! second = cache.List None
+                let! first = cache.List CredentialFor.Deployment
+                let! second = cache.List CredentialFor.Deployment
                 Expect.equal asked 1 "the provider is asked once"
                 Expect.equal second first "and every later reader gets the same answer"
             }
@@ -1328,9 +1329,9 @@ let private modelTests =
                                 if asked = 1 then return Error "not connected"
                                 else return Ok [ AgentModel.create (ModelId.create "a-model" |> expect) "A" ]
                             })
-                let! failed = cache.List None
+                let! failed = cache.List CredentialFor.Deployment
                 Expect.isError failed "the first ask reports why it could not"
-                let! second = cache.List None
+                let! second = cache.List CredentialFor.Deployment
                 Expect.isOk second "and the next ask tries again"
             }
 
@@ -1342,9 +1343,9 @@ let private modelTests =
                 let mutable asked = 0
                 let mutable who = "alice"
                 let cache = keeping (fun () -> asked <- asked + 1) (fun _ -> Some who)
-                let! _ = cache.List None
+                let! _ = cache.List CredentialFor.Deployment
                 who <- "bob"
-                let! _ = cache.List None
+                let! _ = cache.List CredentialFor.Deployment
                 Expect.equal asked 2 "a different credential is a different question"
             }
 
@@ -1364,12 +1365,12 @@ let private modelTests =
                                 asked <- asked + 1
                                 return Ok [ AgentModel.create (ModelId.create "a-model" |> expect) "A" ]
                             })
-                let! _ = cache.List None
+                let! _ = cache.List CredentialFor.Deployment
                 at <- at.AddMinutes 9.0
-                let! _ = cache.List None
+                let! _ = cache.List CredentialFor.Deployment
                 Expect.equal asked 1 "inside the window the kept answer stands"
                 at <- at.AddMinutes 2.0
-                let! _ = cache.List None
+                let! _ = cache.List CredentialFor.Deployment
                 Expect.equal asked 2 "past it the provider is asked again"
             }
 
@@ -1379,9 +1380,9 @@ let private modelTests =
                 // different account. Whoever holds that state says so.
                 let mutable asked = 0
                 let cache = keeping (fun () -> asked <- asked + 1) (fun _ -> Some "alice")
-                let! _ = cache.List None
+                let! _ = cache.List CredentialFor.Deployment
                 cache.Forget ()
-                let! _ = cache.List None
+                let! _ = cache.List CredentialFor.Deployment
                 Expect.equal asked 2 "what was forgotten is asked for again"
             }
     ]

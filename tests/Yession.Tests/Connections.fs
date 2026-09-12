@@ -305,7 +305,7 @@ let private arrivalTests =
         testCase "a person whose credential became readable is a fold on their authority" <| fun () ->
             let before = frame []
             let after = frame [ status (UserScope alice) "github" ]
-            Expect.equal (ConnectionStatusList.arrivals before after) [ Some (Principal.User alice) ] "alice arrived"
+            Expect.equal (ConnectionStatusList.arrivals before after) [ CredentialFor.Person (Principal.User alice) ] "alice arrived"
 
         testCase "a person already here is not an arrival, and a person who left is nothing" <| fun () ->
             let before = frame [ status (UserScope alice) "github"; status (UserScope bob) "github" ]
@@ -317,14 +317,14 @@ let private arrivalTests =
         testCase "several credentials of one person are one arrival" <| fun () ->
             let before = frame []
             let after = frame [ status (UserScope alice) "github"; status (UserScope alice) "claude-code" ]
-            Expect.equal (ConnectionStatusList.arrivals before after) [ Some (Principal.User alice) ] "once"
+            Expect.equal (ConnectionStatusList.arrivals before after) [ CredentialFor.Person (Principal.User alice) ] "once"
 
         // The session's own credential and the deployment's are reached with nobody named,
         // which is the fold the boot already ran — so the arrival is that fold again.
         testCase "a credential the session reaches on its own is a fold on nobody's authority" <| fun () ->
             let before = frame []
             let after = frame [ status (SessionScope sessionA) "github"; status LocalScope "github" ]
-            Expect.equal (ConnectionStatusList.arrivals before after) [ None ] "one fold, nobody named"
+            Expect.equal (ConnectionStatusList.arrivals before after) [ CredentialFor.Deployment ] "one fold, nobody named"
 
         // A peer owns nothing (`CredentialOwner.ofPrincipal`), so a fold on a peer's authority
         // would resolve exactly what the boot fold did: nothing new to do.
@@ -376,20 +376,20 @@ let private claudeTests =
 
         testCase "turn targets: session first, then the actor's own scope, then the deployment's" <| fun () ->
             Expect.equal
-                (ClaudeConnection.turnTargets sessionA (Some (Principal.User alice)))
+                (ClaudeConnection.turnTargets sessionA (CredentialFor.Person (Principal.User alice)))
                 [ target (SessionScope sessionA); target (UserScope alice); target LocalScope ]
                 "session shadows the actor, who shadows the deployment"
             // A peer owns nothing of their own. Naming LocalScope here is unconditional and
             // safe: an attributed deployment never reports it readable, so this candidate is
             // filtered out before anything is resolved.
             Expect.equal
-                (ClaudeConnection.turnTargets sessionA (Some (Principal.Peer peer1)))
+                (ClaudeConnection.turnTargets sessionA (CredentialFor.Person (Principal.Peer peer1)))
                 [ target (SessionScope sessionA); target LocalScope ]
                 "an unverified peer falls straight through to the deployment"
             // Nobody named — the deployment asking as itself, which is also the only thing
             // an agent-shaped caller can be now that a turn's actor is a `Principal`.
             Expect.equal
-                (ClaudeConnection.turnTargets sessionA None)
+                (ClaudeConnection.turnTargets sessionA CredentialFor.Deployment)
                 [ target (SessionScope sessionA); target LocalScope ]
                 "nobody has no own scope"
 
@@ -466,11 +466,11 @@ let private githubTests =
 
         testCase "operation targets: session first, then the actor's own scope, then the deployment's" <| fun () ->
             Expect.equal
-                (GitHubConnection.turnTargets sessionA (Some (Principal.User alice)))
+                (GitHubConnection.turnTargets sessionA (CredentialFor.Person (Principal.User alice)))
                 [ githubTarget (SessionScope sessionA); githubTarget (UserScope alice); githubTarget LocalScope ]
                 "session shadows the actor, who shadows the deployment"
             Expect.equal
-                (GitHubConnection.turnTargets sessionA None)
+                (GitHubConnection.turnTargets sessionA CredentialFor.Deployment)
                 [ githubTarget (SessionScope sessionA); githubTarget LocalScope ]
                 "nobody has no own scope"
 
@@ -2128,7 +2128,7 @@ let private pollerOver
     (now: unit -> DateTimeOffset)
     (fetch: PrWatches.FetchPr)
     (recorded: RecordedTransitions)
-    (rejected: ResizeArray<Principal option>)
+    (rejected: ResizeArray<CredentialFor>)
     : PrWatches.PrWatchers =
     PrWatches.create
         GitHubPrs.provider
@@ -2256,13 +2256,13 @@ let private prPollTests =
 
         testCaseAsync "a refused credential is reported to whoever's watch it is" <|
             async {
-                let rejected = ResizeArray<Principal option> ()
+                let rejected = ResizeArray<CredentialFor> ()
                 let script = scriptedFetch [ PrWatches.PrFetchFailed PrWatches.PrUnauthorized ]
                 let poller = pollerOver fixedNow script.Fetch (RecordedTransitions ()) rejected
                 poller.Apply [ watching { State = PrOpen; Checks = ChecksPending; Queue = NotQueued } ]
                 let! moved = poller.Poll ()
                 Expect.isTrue moved "the row's status changed"
-                Expect.equal (List.ofSeq rejected) [ Some ada ] "the watcher's credential is the one that was refused"
+                Expect.equal (List.ofSeq rejected) [ CredentialFor.Person ada ] "the watcher's credential is the one that was refused"
                 match poller.Rows () with
                 | [ row ] -> Expect.isSome row.Health "the row says what is wrong"
                 | rows -> failwithf "expected one row, got %d" rows.Length
@@ -3018,7 +3018,7 @@ let private prWatchVerbTests =
     /// watcher — the second is the one that used to record the agent as the watcher.
     let adaHerself = Authority.ofAuthor ada
     let agentForAda = Authority.agentFor (Principal.Peer (PeerId.create "ada" |> expect))
-    let adasCredential = Some (Principal.Peer (PeerId.create "ada" |> expect))
+    let adasCredential = CredentialFor.Person (Principal.Peer (PeerId.create "ada" |> expect))
     let watchSessionId = SessionId.create "pr-watch-suite" |> expect
 
     /// The verbs over a real log and the stub provider, wired the way SessionMain wires
@@ -3096,9 +3096,9 @@ let private prWatchVerbTests =
                 let! stub = startStubGitHubApi ()
                 let service, log, _ = serviceOver stub
                 let! outcome =
-                    service.Watch (Authority.configuredBy (RepoRef.create "octo/hello" |> expect) None) prOne
+                    service.Watch (Authority.configuredBy (RepoRef.create "octo/hello" |> expect) CredentialFor.Deployment) prOne
                 match outcome with
-                | Error message -> Expect.stringContains message "nobody's credential" "it says why"
+                | Error message -> Expect.stringContains message "deployment's own credential" "it says why"
                 | Ok said -> failwithf "expected a refusal, got %s" said
                 let! events = eventsOf log
                 Expect.isEmpty events "and records nothing"

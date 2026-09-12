@@ -109,14 +109,14 @@ module ConnectionStatusList =
     let arrivals
         (before: Map<SecretId, ConnectionStatus>)
         (after: Map<SecretId, ConnectionStatus>)
-        : Principal option list =
+        : CredentialFor list =
         after
         |> Map.toList
         |> List.choose (fun (id, _) ->
             if Map.containsKey id before then None
             else
                 match id.Scope with
-                | UserScope user -> Some (Some (Principal.User user))
-                | SessionScope _ | LocalScope -> Some None
+                | UserScope user -> Some (CredentialFor.Person (Principal.User user))
+                | SessionScope _ | LocalScope -> Some CredentialFor.Deployment
                 | PeerScope _ -> None)
         |> List.distinct

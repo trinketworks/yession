@@ -138,6 +138,23 @@ module Codec =
                 | Some p -> Decode.succeed p
                 | None -> Decode.fail (sprintf "Not a principal: %s" (ActorRef.token a))) }
 
+    /// Whose credential: a person is the principal's tagged object, the deployment its own
+    /// kind. Not an actor kind — the deployment is not a party that acts in the log, it is
+    /// whose credentials an act ran on when nobody's were named — so the actor decoder is
+    /// asked second, for the shape it knows.
+    let credentialFor : Codec<CredentialFor> =
+        { Encode =
+            fun credential ->
+                match credential with
+                | CredentialFor.Person p -> principal.Encode p
+                | CredentialFor.Deployment -> Encode.object [ "kind", Encode.string "deployment" ]
+          Decode =
+            Decode.field "kind" Decode.string
+            |> Decode.andThen (fun kind ->
+                match kind with
+                | "deployment" -> Decode.succeed CredentialFor.Deployment
+                | _ -> principal.Decode |> Decode.map CredentialFor.Person) }
+
     let terminalId : Codec<TerminalId> =
         { Encode = TerminalId.value >> Encode.string
           Decode = viaSmartCtor TerminalId.create Decode.string }
@@ -1167,7 +1184,7 @@ module Codec =
                       // credential VALUE, which is the point: the log is replicated to
                       // every peer, and a shape that could hold a token eventually does.
                       "forwarded", Encode.list (p.Forwarded |> List.map Encode.string)
-                      "credentialOwner", Encode.option principal.Encode p.CredentialOwner
+                      "credentialOwner", Encode.option credentialFor.Encode p.CredentialOwner
                       "realisation", Encode.list (p.Realisation |> List.map Encode.string)
                       "actor", actor.Encode p.Actor ]
           Decode =
@@ -1184,7 +1201,7 @@ module Codec =
                   WorkSandboxStarted.Checkout =
                     get.Optional.Field "checkout" (Decode.option Decode.string) |> Option.flatten
                   WorkSandboxStarted.Forwarded = get.Required.Field "forwarded" (Decode.list Decode.string)
-                  WorkSandboxStarted.CredentialOwner = get.Required.Field "credentialOwner" (Decode.option principal.Decode)
+                  WorkSandboxStarted.CredentialOwner = get.Required.Field "credentialOwner" (Decode.option credentialFor.Decode)
                   // Optional on the way in, and this is the only backward-compatible reading
                   // available: a start written before this field existed has no answer, and
                   // absent is the right one — nothing was measured, so nothing is claimed.
