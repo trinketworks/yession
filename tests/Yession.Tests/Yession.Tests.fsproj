@@ -52,6 +52,9 @@
     <Compile Include="Sync.fs" />
     <Compile Include="TerminalPattern.fs" />
     <Compile Include="Terminals.fs" />
+    <!-- The other end of the same wire: what a keydown means to a pty, which the browser
+         tier could only ever reach one key at a time. Pure, so it sits in the cheap tier. -->
+    <Compile Include="Keystrokes.fs" />
     <Compile Include="Attach.fs" />
     <Compile Include="NodeExtras.fs" />
     <Compile Include="Timeline.fs" />
@@ -59,6 +62,9 @@
     <Compile Include="LaunchSurface.fs" />
     <Compile Include="Editor.fs" />
     <Compile Include="Agent.fs" />
+    <!-- The zod bindings, exercised. Beside Agent.fs because the agent adapter is
+         their one caller: a tool descriptor's JSON Schema becomes a zod shape there. -->
+    <Compile Include="ZodBindings.fs" />
     <Compile Include="Telemetry.fs" />
     <Compile Include="TelemetryE2E.fs" />
     <Compile Include="Browser.fs" />
@@ -118,6 +124,7 @@
          app/ calls them yet — the call sites migrate one at a time — and a binding
          project nothing calls is a project nothing proves. -->
     <ProjectReference Include="..\..\src\Fable.NodeExtras\Fable.NodeExtras.fsproj" />
+    <ProjectReference Include="..\..\src\Fable.Zod\Fable.Zod.fsproj" />
     <!-- The serial provider is an EXAMPLE, not a component: nothing in the product
          references it. The suite does, because the tests it came with are worth keeping —
          the pure ones in the cheap tier, and a `Serial`-tagged one that drives a real pty. -->

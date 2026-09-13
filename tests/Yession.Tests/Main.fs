@@ -79,6 +79,7 @@ let all =
         Tag.needs "Sync" [] (fun () -> Sync.tests)
         Tag.needs "TerminalPattern" [] (fun () -> TerminalPattern.tests)
         Tag.needs "Terminals" [] (fun () -> Terminals.tests)
+        Tag.needs "Keystrokes" [] (fun () -> Keystrokes.tests)
         Tag.needs "Timeline" [] (fun () -> Timeline.tests)
         // The upgrade IS the thing being tested, and there is no in-memory stand-in for it.
         Tag.needs "Foreign terminal attach" [ Tag.Ports ] (fun () -> Attach.portsTests)
@@ -87,6 +88,10 @@ let all =
         Tag.needs "Node platform bindings, WebSocket" [ Tag.Ports ] (fun () -> NodeExtras.socketTests)
         Tag.needs "Editor" [] (fun () -> Editor.tests)
         Tag.needs "Agent" [] (fun () -> Agent.tests)
+        // The zod bindings, built and asked to accept and refuse. Beside Agent because the
+        // agent adapter is their one caller — a tool descriptor's JSON Schema becomes a zod
+        // shape there — and zod is pure JavaScript, so this costs no capability.
+        Tag.needs "Zod bindings" [] (fun () -> ZodBindings.tests)
         Tag.needs "Version" [] (fun () -> Version.tests)
         Tag.needs "Telemetry" [] (fun () -> Telemetry.tests)
         Tag.needs "Telemetry E2E" [] (fun () -> TelemetryE2E.tests)

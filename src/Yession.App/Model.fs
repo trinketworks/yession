@@ -901,6 +901,7 @@ module ClientModel =
             model.EventConsumer.LatestKnownOffset
             model.EventConsumer.IsCatchingUp
             begun
+            model.Launch
 
     /// Whose draft the composer is showing — the resolved answer to `ComposerChoice`, and the
     /// only place the "join what is already being written" default lives.

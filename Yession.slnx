@@ -16,6 +16,7 @@
     <Project Path="src/Fable.OpenTelemetry/Fable.OpenTelemetry.fsproj" />
     <Project Path="src/Fable.BrowserExtras/Fable.BrowserExtras.fsproj" />
     <Project Path="src/Fable.NodeExtras/Fable.NodeExtras.fsproj" />
+    <Project Path="src/Fable.Zod/Fable.Zod.fsproj" />
     <Project Path="src/Yession.App/Yession.App.fsproj" />
     <Project Path="src/Yession.Domain/Yession.Domain.fsproj" />
     <Project Path="src/Yession.Manager/Yession.Manager.fsproj" />
@@ -32,5 +33,6 @@
   <Folder Name="/tests/">
     <Project Path="tests/Yession.Tests/Yession.Tests.fsproj" />
     <Project Path="tools/Yession.Probe/Yession.Probe.fsproj" />
+    <Project Path="tools/Yession.Frames/Yession.Frames.fsproj" />
   </Folder>
 </Solution>

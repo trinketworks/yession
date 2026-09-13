@@ -24,6 +24,11 @@ open Yession.Host
 // will do without a session.
 Cli.parseOrExit (Cli.spec "yession-session" []) Version.current |> ignore
 
+/// The process's one clock. Everything here that asks the time or waits some of it out —
+/// the Host and all it composes, the provider polls below, the caches' freshness — is
+/// handed this and nothing reaches for the system's own.
+let private clock = Clock.system
+
 let private expect =
     function
     | Ok v -> v
@@ -318,7 +323,7 @@ let private makeSandboxes
                   Credentials = credentials
                   Create = create
                   Log = log
-                  Clock = fun () -> System.DateTimeOffset.UtcNow } with
+                  Clock = clock.Now } with
         | Ok sandboxes -> sandboxes
         | Error e -> failwithf "work sandboxes: %s" e
 
@@ -731,7 +736,7 @@ let private askProvider
 /// still fresh. `Forget` is called where the credential state moves, below.
 let private modelCatalogue : ModelCatalogueCache =
     ModelCatalogue.keyed
-        (fun () -> System.DateTimeOffset.UtcNow)
+        clock.Now
         ModelCatalogue.freshness
         claudeTargetFor
         (fun actor ->
@@ -811,14 +816,21 @@ let private connectedSomewhere () =
             | PeerScope _ -> false
             | SessionScope _ | UserScope _ | LocalScope -> true))
 
-/// Writing a few words, read at each pass (Plan 25) — the same gate a turn has, because it is
-/// the same credential and the same question about whether this session can reach a model.
+/// Writing a few words, read at each pass (Plan 25).
 ///
 /// On the DEPLOYMENT's credential, not a person's: naming a chapter is nobody's turn. No one
 /// asked for it, a chapter mark carries no author, and a session that spent whichever human
 /// happened to be connected would be attributing a request to somebody who did not make it.
+///
+/// Which is why the gate is the DISPATCHER's own question rather than the turn's.
+/// `connectedSomewhere` counts a user scope, correctly, because a turn names the acting
+/// person's own scope; these calls never do — `turnTargets … Deployment` is the session's
+/// scope and the deployment's, and nobody has no own scope. Gated the turn's way, a
+/// deployment where everybody signed in as themselves reads as connected, every chapter is
+/// asked about once, every ask fails to resolve a credential, and no chapter is ever named
+/// again. The gate has to promise what the dispatcher can deliver.
 let private summarize () : Summarize option =
-    if not (envCreds || connectedSomewhere ()) then None
+    if not (envCreds || (claudeTargetFor CredentialFor.Deployment).IsSome) then None
     else
         Some (fun ask ->
             async {
@@ -848,7 +860,7 @@ let private onStdinClosed (handler: unit -> unit) : unit = Fable.Core.Util.jsNat
 Async.StartImmediate (
     async {
         let log =
-            EventStore.openLog (sprintf "%s/events.jsonl" dataDir) sessionId (fun () -> System.DateTimeOffset.UtcNow)
+            EventStore.openLog (sprintf "%s/events.jsonl" dataDir) sessionId clock.Now
         // Filled before anything that could read it runs: the command table was built above
         // and holds a getter, not this value.
         openedLog <- Some log
@@ -907,7 +919,7 @@ Async.StartImmediate (
         // own would need all of it.
         let githubLedger = Resilience.Ledger.create ()
         let githubSpending (spend: Resilience.Spend) =
-            GitHubPrs.Spending.over githubLedger (fun () -> System.DateTimeOffset.UtcNow) spend
+            GitHubPrs.Spending.over githubLedger clock.Now spend
         let githubLooking (spend: Resilience.Spend) =
             GitHubPrs.fetchOver githubApi (githubSpending spend)
         do
@@ -940,7 +952,7 @@ Async.StartImmediate (
             prWatchers <-
                 PrWatches.create
                     GitHubPrs.provider
-                    (fun () -> System.DateTimeOffset.UtcNow)
+                    clock.Now
                     // Background: a watch yields the reserve, because the person asking for
                     // something is the one who should get the last of an hour's budget.
                     (githubLooking Resilience.Background)
@@ -1147,7 +1159,7 @@ Async.StartImmediate (
                                               GitConfig = GitGateway.gitConfig host gitGateway.Port cap }
                         }
                 Revoke = gitGateway.Revoke } ]
-        let! host = Host.startFull runAgent summarize (Some (makeSandboxes forwardableCredentials)) (secretsCapabilitiesFor sessionId) (Some log) (Some docStore) (Some transcriptStore) reportName reportActivity telemetry.Emit subscribeNotifications mcpServers connectionRoutes sessionId auth sessionMount managerOrigin ephemeralStorage (resourceProfile |> Option.bind (fun file -> file.Guidance)) port
+        let! host = Host.startFull clock runAgent summarize (Some (makeSandboxes forwardableCredentials)) (secretsCapabilitiesFor sessionId) (Some log) (Some docStore) (Some transcriptStore) reportName reportActivity telemetry.Emit subscribeNotifications mcpServers connectionRoutes sessionId auth sessionMount managerOrigin ephemeralStorage (resourceProfile |> Option.bind (fun file -> file.Guidance)) port
         // The Host built the sandbox registry (it owns the log), so the cell the turn
         // capabilities and the `work_sandboxes` query read is filled here — before the
         // readiness line, and therefore before any turn or any browser can ask.
@@ -1231,7 +1243,7 @@ Async.StartImmediate (
             // asking them says what they can do right now. A provider that starts after the
             // declaration, restarts, or grows tools as a device is plugged in is invisible
             // otherwise — the declaration never changed, so no frame is coming.
-            Interop.setInterval McpClient.PollIntervalMs (fun () ->
+            Clock.every clock McpClient.PollInterval (fun () ->
                 Async.StartImmediate (
                     async {
                         let! moved = mcpServers.Poll ()
@@ -1279,7 +1291,7 @@ Async.StartImmediate (
                 | None -> ())
         // ...and keep asking, because a delivery is an accelerator and not a guarantee:
         // where no hook is configured, or one is missed, the interval is the whole answer.
-        Interop.setInterval PrWatches.TickIntervalMs (fun () ->
+        Clock.every clock PrWatches.TickInterval (fun () ->
             Async.StartImmediate (
                 async {
                     let! moved = prWatchers.Poll ()

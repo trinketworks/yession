@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Fable bindings to the `zod` npm package — the schema library the Claude Agent SDK's
+    `tool()` builder takes its argument shapes in. Fable-only, like app/Yession.Host.fsproj:
+    `dotnet build` only type-checks it; the runnable JS comes from Fable. Kept a standalone
+    project so the bindings are a distinct layer, mirroring Fable.Jose / Fable.Keyring.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Zod.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Fable.Core" />
+  </ItemGroup>
+
+</Project>

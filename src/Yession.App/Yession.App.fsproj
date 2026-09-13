@@ -27,6 +27,9 @@
     <!-- Editing a plain collaborative command line: needed by the view (which renders the
          composer) and by App (which sends it). -->
     <Compile Include="TerminalText.fs" />
+    <!-- What a keydown means to a pty: pure, so the cheap tier can ask it without a
+         browser. Below the view, which is the only thing that holds a key event. -->
+    <Compile Include="Keystroke.fs" />
     <Compile Include="View.fs" />
     <Compile Include="Client.fs" />
   </ItemGroup>

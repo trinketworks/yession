@@ -11,11 +11,12 @@ module Yession.Tests.LaunchSurface
 //   * a repo, or anything said, takes it away: once the session has begun, adding a repo
 //     is the agent's (Plan 15), and this surface does not come back — while a launch that
 //     FAILED leaves it standing, over its own note, for the next try;
-//   * what it shows to choose from is named as the provider names it, so what is picked is
-//     what `add_repo` clones — and a row IS the launch, on its default unless another of
-//     its branches was picked;
-//   * a link copied from the forge is a launch; anything else typed is a search, because a
-//     name half typed still parses as a name;
+//   * what it shows to choose from is named as the provider names it, so what is held is
+//     what `add_repo` clones — and holding a row SENDS NOTHING: the one button does, on the
+//     row's default unless another branch was named on it;
+//   * a link copied from the forge becomes a held row; anything else typed is a search,
+//     because a name half typed still parses as a name;
+//   * a way out is on the card: dismissed, it steps aside for this client;
 //   * the session's answer to THIS command is the one it acts on — another command's
 //     rejection is not its problem — and a failed clone reaches the screen that asked;
 //   * with no credential, the way out is on the surface (connect GitHub), not a blank list.
@@ -70,7 +71,7 @@ let private offeredTests =
 
         testCase "a connected client that has read an empty log to its end is offered it" <| fun () ->
             Expect.isTrue (ClientModel.launchOffered (clientAt 1L fresh)) "offered"
-            Expect.stringContains (render (clientAt 1L fresh)) "data-repo-picker=\"choosing\"" "and it is rendered where the timeline would be"
+            Expect.stringContains (render (clientAt 1L fresh)) "data-repo-picker=\"choosing\"" "and it is rendered"
 
         testCase "a client that has not connected is not, whatever it has read" <| fun () ->
             let unconnected =
@@ -92,6 +93,11 @@ let private offeredTests =
             let spoken =
                 clientAt 2L (fresh @ [ at 2L (MessageSent { MessageId = MessageId.create "m1" |> expect; QueueId = None; Author = Principal.Peer ada; Body = "hi" }) ])
             Expect.isFalse (ClientModel.launchOffered spoken) "so is a message"
+
+        testCase "dismissed, it steps aside for this client" <| fun () ->
+            let dismissed = clientAt 1L fresh |> launch LaunchDismissed
+            Expect.isFalse (ClientModel.launchOffered dismissed) "dismissed"
+            Expect.isFalse ((render dismissed).Contains "data-repo-picker") "and gone from the screen"
     ]
 
 let private choosingTests =
@@ -109,21 +115,30 @@ let private choosingTests =
             let other = clientAt 1L fresh |> launch (LaunchListingArrived (ListingUnavailable ("github could not be reached", false)))
             Expect.isFalse ((render other).Contains "data-repo-picker-connect") "which a fault that is not a sign-in does not offer"
 
-        testCase "a row launches on its default branch, and only another is asked for" <| fun () ->
+        testCase "holding a row sends nothing; the button does, on the default unless another branch is named" <| fun () ->
             let listed = clientAt 1L fresh |> launch (LaunchListingArrived (ListingLoaded [ candidate "octo/hello" ]))
-            Expect.equal (Launch.targetOf listed.Launch (candidate "octo/hello")) { LaunchTarget.Repo = hello; LaunchTarget.Branch = None } "the default is not a switch, and the command does not name it"
-            let picked = listed |> launch (LaunchBranchPicked (hello, "feature/x"))
-            Expect.equal (Launch.targetOf picked.Launch (candidate "octo/hello")) { LaunchTarget.Repo = hello; LaunchTarget.Branch = Some "feature/x" } "another is"
+            Expect.equal (Launch.target listed.Launch) None "nothing held, nothing to start"
+            let heldRow = listed |> launch (LaunchSelected (candidate "octo/hello"))
+            Expect.equal heldRow.Launch.Stage Choosing "still choosing: holding is a state"
+            Expect.equal (Launch.target heldRow.Launch) (Some { LaunchTarget.Repo = hello; LaunchTarget.Branch = None }) "the default is not a switch, and the command does not name it"
+            let named = heldRow |> launch (LaunchBranchNamed (hello, "feature/x"))
+            Expect.equal (Launch.target named.Launch) (Some { LaunchTarget.Repo = hello; LaunchTarget.Branch = Some "feature/x" }) "another is"
+            let letGo = named |> launch (LaunchSelected (candidate "octo/hello"))
+            Expect.equal (Launch.target letGo.Launch) None "tapped again, let go"
 
-        testCase "a row's branches are offered only once they are here" <| fun () ->
-            // A menu that opened over one option and grew while it was open would, on a
-            // phone, show the one option — so the row offers a mark that fetches, and the
-            // menu only once there is something to choose from.
-            let listed = clientAt 1L fresh |> launch (LaunchListingArrived (ListingLoaded [ candidate "octo/hello" ]))
-            Expect.stringContains (render listed) "data-repo-candidate-branches=\"octo/hello\"" "the mark"
-            Expect.isFalse ((render listed).Contains "data-repo-candidate-branch=\"octo/hello\"") "no menu yet"
-            let loaded = listed |> launch (LaunchBranchesOpened hello) |> launch (LaunchBranchesArrived (hello, BranchesLoaded [ "main"; "feature/x" ]))
-            Expect.stringContains (render loaded) "data-repo-candidate-branch=\"octo/hello\"" "the menu, once they are here"
+        testCase "the held row carries the branch field; no other row does" <| fun () ->
+            let heldRow =
+                clientAt 1L fresh
+                |> launch (LaunchListingArrived (ListingLoaded [ candidate "octo/hello"; candidate "octo/other" ]))
+                |> launch (LaunchSelected (candidate "octo/hello"))
+            let html = render heldRow
+            let rowOf (name: string) =
+                let at = html.IndexOf (sprintf "data-repo-candidate=\"%s\"" name)
+                html.Substring (at, min 200 (html.Length - at))
+            Expect.stringContains (rowOf "octo/hello") "aria-pressed=\"true\"" "the row says it is held"
+            Expect.stringContains (rowOf "octo/other") "aria-pressed=\"false\"" "the other does not"
+            Expect.stringContains html "data-repo-candidate-branch=\"octo/hello\"" "and carries the branch field"
+            Expect.isFalse (html.Contains "data-repo-candidate-branch=\"octo/other\"") "not the other's"
 
         testCase "branches that arrive for one row do not land on another" <| fun () ->
             let other = RepoRef.create "octo/other" |> expect
@@ -133,21 +148,34 @@ let private choosingTests =
                 |> launch (LaunchBranchesArrived (hello, BranchesLoaded [ "main"; "stale" ]))
             Expect.equal (model.Launch.Branches |> Map.tryFind other) None "other's are still unknown"
 
-        testCase "a link copied from the forge is a launch; anything else typed is a search" <| fun () ->
+        testCase "a few rows are shown, and the held one is among them wherever it is" <| fun () ->
+            let many = [ 1 .. 8 ] |> List.map (fun n -> candidate (sprintf "octo/repo-%d" n))
+            let listed = clientAt 1L fresh |> launch (LaunchListingArrived (ListingLoaded many))
+            let html = render listed
+            Expect.stringContains html "data-repo-candidate=\"octo/repo-4\"" "the first few"
+            Expect.isFalse (html.Contains "data-repo-candidate=\"octo/repo-5\"") "not the rest"
+            Expect.stringContains html "data-repo-picker-more" "which are behind more"
+            let heldLate = listed |> launch (LaunchSelected (candidate "octo/repo-7"))
+            Expect.stringContains (render heldLate) "data-repo-candidate=\"octo/repo-7\"" "a row held from a search stays shown after the list shrinks"
+            let expanded = listed |> launch LaunchExpanded
+            Expect.stringContains (render expanded) "data-repo-candidate=\"octo/repo-8\"" "and more shows them all"
+
+        testCase "a link copied from the forge is resolved; anything else typed is a search" <| fun () ->
             Expect.equal (Launch.linkOf "https://github.com/octo/hello/tree/fix") (Some (RepoLink.Branch (hello, "fix"))) "a branch page"
             Expect.equal (Launch.linkOf "git@github.com:octo/hello.git") (Some (RepoLink.Repo hello)) "a clone url"
             Expect.equal (Launch.linkOf "octo/hello") None "a bare name is a search: half of one still parses as one"
             Expect.equal (Launch.linkOf "hello") None "so is a word"
 
-        testCase "a link to a repo or a branch is sent as it stands; a pull request has to be asked about" <| fun () ->
-            Expect.equal (Launch.targetOfLink (RepoLink.Repo hello)) (Some { LaunchTarget.Repo = hello; LaunchTarget.Branch = None }) "a repo"
-            Expect.equal (Launch.targetOfLink (RepoLink.Branch (hello, "fix"))) (Some { LaunchTarget.Repo = hello; LaunchTarget.Branch = Some "fix" }) "a branch"
-            Expect.equal (Launch.targetOfLink (RepoLink.PullRequest (hello, 42))) None "a pull request's head is the provider's to say"
-            let resolving = clientAt 1L fresh |> launch (LaunchResolving (RepoLink.PullRequest (hello, 42)))
-            Expect.stringContains (render resolving) "data-repo-picker=\"resolving\"" "and the surface says it is asking"
+        testCase "a resolved link is a held row, at the head of the list if it was not in it" <| fun () ->
+            let resolving = clientAt 1L fresh |> launch (LaunchListingArrived (ListingLoaded [ candidate "octo/other" ])) |> launch (LaunchResolving (RepoLink.PullRequest (hello, 42)))
+            Expect.stringContains (render resolving) "data-repo-picker=\"resolving\"" "the card says it is asking"
+            let linked = resolving |> launch (LaunchLinked (candidate "octo/hello", Some "fix/thing"))
+            Expect.equal linked.Launch.Stage Choosing "choosing again, with the row held"
+            Expect.equal (Launch.target linked.Launch) (Some { LaunchTarget.Repo = hello; LaunchTarget.Branch = Some "fix/thing" }) "on the branch the link named"
+            Expect.equal (Launch.candidates linked.Launch |> List.map (fun c -> c.Repo)) [ hello; RepoRef.create "octo/other" |> expect ] "at the head"
             let failed = resolving |> launch (LaunchFailed "github does not show that repository to this credential")
             Expect.equal failed.Launch.Stage Choosing "a link that could not be resolved opens choosing again"
-            Expect.stringContains (render failed) "data-repo-picker-problem" "with the reason on the surface"
+            Expect.stringContains (render failed) "data-repo-picker-problem" "with the reason on the card"
     ]
 
 let private answerTests =
@@ -158,6 +186,7 @@ let private answerTests =
         let waiting =
             clientAt 1L fresh
             |> launch (LaunchListingArrived (ListingLoaded [ candidate "octo/hello"; candidate "octo/other" ]))
+            |> launch (LaunchSelected (candidate "octo/hello"))
             |> launch (LaunchSent (request, target))
 
         testCase "a rejection at the door is shown, and choosing is open again" <| fun () ->
@@ -175,7 +204,7 @@ let private answerTests =
             let admitted = ClientModel.update (CommandAnsweredMsg (request, CommandAccepted)) waiting
             Expect.equal admitted.Launch.Stage (Cloning target) "cloning"
             Expect.stringContains (render admitted) "data-repo-picker=\"cloning\"" "and says so"
-            Expect.isTrue (Launch.busy admitted.Launch) "and no other row is for tapping meanwhile"
+            Expect.isTrue (Launch.busy admitted.Launch) "and no row is for holding meanwhile"
 
         testCase "a clone that failed reaches the screen that asked, while it is waiting" <| fun () ->
             let admitted = ClientModel.update (CommandAnsweredMsg (request, CommandAccepted)) waiting

@@ -2385,6 +2385,89 @@ let private deliveryFilterTests =
                 "no constraints is not a special case, it is an empty conjunction"
     ]
 
+/// A delivery is ONE document, and these are the rules that make it one: which half a path
+/// reaches, what a segment matches, and which values a constraint can name. They run on both
+/// runtimes because the rule is the domain's, not the relay's.
+let private deliveryDocumentTests =
+    let path raw = FieldPath.create raw |> expect
+    let resolving (headers: (string * string) list) (body: string) (raw: string) =
+        match Delivery.create headers body with
+        | Some delivery -> Delivery.resolve delivery (path raw)
+        | None -> failwithf "expected %s to be a readable delivery" body
+
+    testList "A delivery as one document" [
+        testCase "a segment matches a key case-insensitively" <| fun () ->
+            // A path is lowercased when it is parsed, so this is the only direction there is:
+            // a provider's casing must not be something a session has to know.
+            Expect.equal
+                (resolving [] """{"Repository":{"Full_Name":"trinketworks/yession"}}""" "body.repository.full_name")
+                (Some "trinketworks/yession")
+                "the key's case is not part of the address"
+
+        testCase "a path that lands on an object addresses nothing" <| fun () ->
+            Expect.equal
+                (resolving [] """{"repository":{"full_name":"trinketworks/yession"}}""" "body.repository")
+                None
+                "a container is not a value a constraint can equal"
+
+        testCase "a path that lands on an array addresses nothing" <| fun () ->
+            Expect.equal
+                (resolving [] """{"labels":["bug"]}""" "body.labels")
+                None
+                "an array is a container too, however few things are in it"
+
+        testCase "a path that lands on nothing addresses nothing" <| fun () ->
+            Expect.equal
+                (resolving [] """{"action":"opened"}""" "body.merged")
+                None
+                "an absent field must never match by accident"
+
+        testCase "a string answers itself" <| fun () ->
+            Expect.equal (resolving [] """{"action":"opened"}""" "body.action") (Some "opened") "unchanged"
+
+        testCase "a number answers the string it renders as" <| fun () ->
+            Expect.equal
+                (resolving [] """{"number":7}""" "body.number")
+                (Some "7")
+                "a constraint is an equality between strings, so a number has to have one"
+
+        testCase "a boolean answers the string it renders as" <| fun () ->
+            Expect.equal (resolving [] """{"draft":true}""" "body.draft") (Some "true") "as a session would write it"
+
+        testCase "a json null addresses nothing" <| fun () ->
+            Expect.equal
+                (resolving [] """{"merged_by":null}""" "body.merged_by")
+                None
+                "a field that is present and empty is not a value either"
+
+        testCase "a first segment of headers reads the header half" <| fun () ->
+            Expect.equal
+                (resolving [ "X-GitHub-Event", "pull_request" ] """{"action":"opened"}""" "headers.x-github-event")
+                (Some "pull_request")
+                "a header is addressed the same way a body field is"
+
+        testCase "a first segment of body reads the body half" <| fun () ->
+            Expect.equal
+                (resolving [ "x-github-event", "pull_request" ] """{"action":"opened"}""" "body.action")
+                (Some "opened")
+                "the halves are told apart by the first segment and nothing else"
+
+        testCase "a first segment naming neither half addresses nothing" <| fun () ->
+            Expect.equal
+                (resolving [] """{"action":"opened"}""" "payload.action")
+                None
+                "there are two halves, and a path that names a third reaches no document"
+
+        testCase "a body that is not json is not a delivery" <| fun () ->
+            Expect.equal (Delivery.create [] "not json") None "there is nothing to address"
+
+        testCase "a top-level json array is not a delivery" <| fun () ->
+            Expect.equal (Delivery.create [] """["opened"]""") None "a document has fields; an array has places"
+
+        testCase "a bare top-level json value is not a delivery" <| fun () ->
+            Expect.equal (Delivery.create [] "42") None "a value on its own carries no field to name"
+    ]
+
 let tests =
     testList "Domain" [
         identityTests
@@ -2399,6 +2482,7 @@ let tests =
         chapterTests
         prWatchTests
         deliveryFilterTests
+        deliveryDocumentTests
         shellProfileTests
         frameSerializationTests
     ]
