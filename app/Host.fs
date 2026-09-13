@@ -936,7 +936,7 @@ let startFull
                                     connections <- Map.remove connectionId connections
                                     // Clear this peer's cursor on every remaining peer.
                                     broadcastPresenceExcept connectionId
-                                        { PeerId = peerId; DisplayName = ""; Focus = None }
+                                        { Who = ActorRef.PeerRef peerId; DisplayName = ""; Focus = None }
                                     // ...and release every terminal it was holding. A lease
                                     // held by someone who is gone is the one hold nobody
                                     // should have to clear by hand: without this a crashed

@@ -1234,7 +1234,7 @@ do
             let at (index: int) = ProseMirror.relPosFromTypeIndex (box text) index |> ProseMirror.encodeRel
             dispatch (
                 RemotePresenceMsg
-                    { PeerId = peerId
+                    { Who = ActorRef.PeerRef peerId
                       DisplayName = "brave-owl"
                       Focus = Some { Field = ChapterName messageId; Pos = { Anchor = at anchor; Head = at head } } })
         | _ -> ())

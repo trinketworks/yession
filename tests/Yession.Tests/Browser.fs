@@ -2230,12 +2230,12 @@ let editorTests =
                 // in a driver calls hidden.
                 let! _ =
                     await (page.WaitForFunctionAsync
-                            """!!document.querySelector("#shell [data-chapter-rule='msg-filler-8'] [data-cursor-peer='brave-owl']")""")
+                            """!!document.querySelector("#shell [data-chapter-rule='msg-filler-8'] [data-cursor-peer='peer:brave-owl']")""")
                 let! inside =
                     await (page.EvaluateAsync<bool>
                             """() => {
                                  const name = document.querySelector("#shell [data-chapter-name='msg-filler-8']")
-                                 const mark = document.querySelector("#shell [data-chapter-rule='msg-filler-8'] [data-cursor-peer='brave-owl']")
+                                 const mark = document.querySelector("#shell [data-chapter-rule='msg-filler-8'] [data-cursor-peer='peer:brave-owl']")
                                  const n = name.getBoundingClientRect(), m = mark.getBoundingClientRect()
                                  return m.height > 0
                                      && m.top >= n.top - 1 && m.bottom <= n.bottom + 1
@@ -2248,12 +2248,12 @@ let editorTests =
                 // start of the field, which every check above would pass.
                 let! at3 =
                     await (page.EvaluateAsync<float>
-                            """() => document.querySelector("#shell [data-chapter-rule='msg-filler-8'] [data-cursor-peer='brave-owl']").getBoundingClientRect().left""")
+                            """() => document.querySelector("#shell [data-chapter-rule='msg-filler-8'] [data-cursor-peer='peer:brave-owl']").getBoundingClientRect().left""")
                 do! awaitU (page.EvaluateAsync "() => window.__chapterCaret('msg-filler-8', 9, 9)")
                 let! moved =
                     await (page.WaitForFunctionAsync
                             (sprintf
-                                """document.querySelector("#shell [data-chapter-rule='msg-filler-8'] [data-cursor-peer='brave-owl']").getBoundingClientRect().left > %f"""
+                                """document.querySelector("#shell [data-chapter-rule='msg-filler-8'] [data-cursor-peer='peer:brave-owl']").getBoundingClientRect().left > %f"""
                                 at3))
                 Expect.isNotNull moved "a caret later in the name is drawn further into it"
                 return ()
@@ -2273,11 +2273,11 @@ let editorTests =
                 do! awaitU (page.EvaluateAsync "() => window.__chapterCaret('msg-filler-8', 0, 0)")
                 let! _ =
                     await (page.WaitForFunctionAsync
-                            """!!document.querySelector("#shell [data-peer-presence='brave-owl'] [data-peer-at]")""")
+                            """!!document.querySelector("#shell [data-peer-presence='peer:brave-owl'] [data-peer-at]")""")
                 let! fits =
                     await (page.EvaluateAsync<bool>
                             """() => {
-                                 const row = document.querySelector("#shell [data-peer-presence='brave-owl']")
+                                 const row = document.querySelector("#shell [data-peer-presence='peer:brave-owl']")
                                  const at = row.querySelector('[data-peer-at]')
                                  return at.getBoundingClientRect().right <= row.getBoundingClientRect().right + 1
                                }""")

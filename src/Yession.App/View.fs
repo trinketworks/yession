@@ -538,7 +538,7 @@ module View =
     /// and the words for a person. The words name things when naming them helps — the
     /// terminal they are in, whose message they are co-writing — because "somewhere" is not
     /// what anyone wanted to know.
-    let private whereIs (model: ClientModel) (peer: PeerId) (field: FocusField) : string * string =
+    let private whereIs (model: ClientModel) (who: ActorRef) (field: FocusField) : string * string =
         // A terminal is NAMED when this client knows it. One that has not folded the
         // `TerminalOpened` event yet knows the peer is in some terminal and says exactly
         // that, rather than inventing a title or going quiet.
@@ -549,7 +549,7 @@ module View =
             |> Option.defaultValue Dom.Text.atSomeTerminal
         match field with
         | Title -> Dom.Text.atTitle, Dom.Text.renamingSession
-        | DraftBody author when author = peer -> Dom.Text.atDraft, Dom.Text.writing
+        | DraftBody author when who = ActorRef.PeerRef author -> Dom.Text.atDraft, Dom.Text.writing
         | DraftBody author when author = model.Peer.PeerId -> Dom.Text.atDraft, Dom.Text.inYourDraft
         | DraftBody author -> Dom.Text.atDraft, Dom.Text.inDraftOf (ClientModel.nameOf author model)
         | QueueBody _ -> Dom.Text.atQueued, Dom.Text.editingQueued
@@ -684,12 +684,12 @@ module View =
         // with an appendix, and a collaborator moving from the composer to a terminal changes
         // the words in place without moving anything.
         let peerRows =
-            ClientModel.presentPeers model
-            |> List.map (fun (peer, name, field) ->
-                let token, words = whereIs model peer field
+            ClientModel.presentEditors model
+            |> List.map (fun (who, name, field) ->
+                let token, words = whereIs model who field
                 html $"""
-                    <div class="{Style.person}" data-peer-presence="{PeerId.value peer}">
-                      <span class="{Style.cls [ Style.avatar; Style.humanAvatar (PeerId.value peer); Style.personAvatar ]}"></span>
+                    <div class="{Style.person}" data-peer-presence="{ActorRef.token who}">
+                      <span class="{Style.cls [ Style.avatar; Style.humanAvatar (ActorRef.token who); Style.personAvatar ]}"></span>
                       <span class="truncate min-w-0">{name}</span>
                       <!-- The slot TRUNCATES rather than holding its width: where a peer is
                            used to be a word or two, and a chapter's name made it a line of
@@ -1238,12 +1238,12 @@ module View =
     /// One collaborator's title caret+selection marker: a selection highlight span and a caret
     /// bar with a name label. The browser positions all three by measurement after render (from
     /// the peer's relative positions, decoded against the title `Y.Text`); colour is fixed here.
-    let private remoteCursor (peerId: PeerId) (presence: RemotePresence) : TemplateResult =
-        let colour = PeerColour.ofPeer peerId
+    let private remoteCursor (who: ActorRef) (presence: RemotePresence) : TemplateResult =
+        let colour = EditorColour.ofEditor who
         // Container = the translucent selection highlight (positioned `lo..hi` by the browser);
         // the caret bar is offset to `head` inside it; the label rides above the caret.
         html $"""
-            <span class="{Style.remoteCursor}" data-cursor-peer="{PeerId.value peerId}" style="background:{PeerColour.translucent peerId}">
+            <span class="{Style.remoteCursor}" data-cursor-peer="{ActorRef.token who}" style="background:{EditorColour.translucent who}">
               <span class="{Style.remoteCursorCaret}" style="background:{colour}">
                 <span class="{Style.remoteCursorLabel}" style="background:{colour}">{presence.DisplayName}</span>
               </span>
@@ -1306,7 +1306,7 @@ module View =
             model.Presence
             |> Map.toList
             |> List.filter (fun (_, p) -> p.Focus.Field = Title)
-            |> List.map (fun (peerId, p) -> remoteCursor peerId p)
+            |> List.map (fun (who, p) -> remoteCursor who p)
         html $"""
             <header class="{Style.header}">
               <button type="button" class="{Style.cls [ Style.navChevronForward; Style.navReopen ]}" aria-label="Show sidebar" data-nav-toggle="show" @click={Ev(fun _ -> actions.ToggleNav ())}>{Icon.right}</button>
@@ -1375,14 +1375,14 @@ module View =
             ClientModel.editorsOf peerId model
             |> List.map (fun (editor, name) ->
                 html $"""
-                    <span class="{Style.draftEditorDot}" style="background:{PeerColour.ofPeer editor}"
-                          title="{name}" data-draft-editor-peer="{PeerId.value editor}"></span>""")
+                    <span class="{Style.draftEditorDot}" style="background:{EditorColour.ofEditor editor}"
+                          title="{name}" data-draft-editor-peer="{ActorRef.token editor}"></span>""")
         // A collapsed draft: whose it is, one clamped line of it (the same read-only editor the
         // browser mounts everywhere, so the CRDT keeps it current), and who is in it. Opening it
         // collapses whatever was open — including your own composer.
         let summary (peerId: PeerId) =
             html $"""
-                <button type="button" class="{Style.draftSummary}" style="border-left-color:{PeerColour.ofPeer peerId}"
+                <button type="button" class="{Style.draftSummary}" style="border-left-color:{EditorColour.ofEditor (ActorRef.PeerRef peerId)}"
                         data-draft-summary="{PeerId.value peerId}"
                         data-draft-expand="{PeerId.value peerId}" @click={Ev(fun _ -> dispatch (ExpandDraftMsg peerId))}>
                   <span class="{Style.cls [ Style.avatarSm; Style.humanAvatar (PeerId.value peerId) ]}"></span>
@@ -2059,7 +2059,7 @@ module View =
                 model.Presence
                 |> Map.toList
                 |> List.filter (fun (_, p) -> p.Focus.Field = ChapterName item.MessageId)
-                |> List.map (fun (peerId, p) -> remoteCursor peerId p)
+                |> List.map (fun (who, p) -> remoteCursor who p)
             html $"""
                 <div class="{Style.chapterRule}" data-chapter-rule="{MessageId.value item.MessageId}">
                   <span class="{Style.chapterDot}" aria-hidden="true"></span>
@@ -2475,14 +2475,14 @@ module View =
             ClientModel.terminalEditorsOf terminal author model
             |> List.map (fun (editor, name) ->
                 html $"""
-                    <span class="{Style.draftEditorDot}" style="background:{PeerColour.ofPeer editor}"
-                          title="{name}" data-terminal-draft-editor="{PeerId.value editor}"></span>""")
+                    <span class="{Style.draftEditorDot}" style="background:{EditorColour.ofEditor editor}"
+                          title="{name}" data-terminal-draft-editor="{ActorRef.token editor}"></span>""")
         // Someone else mid-command: their live text, read-only here. Watching a collaborator
         // type a command is the same affordance as watching them type a message, which is
         // the whole reason the terminal composer is built out of the message composer's parts.
         let peerDraft (author: PeerId) =
             html $"""
-                <div class="{Style.terminalPeerDraft}" style="border-left-color:{PeerColour.ofPeer author}"
+                <div class="{Style.terminalPeerDraft}" style="border-left-color:{EditorColour.ofEditor (ActorRef.PeerRef author)}"
                      data-terminal-draft-author="{PeerId.value author}">
                   <span class="{Style.terminalPrompt}">$</span>
                   <input type="text" class="{Style.fieldMonoBare}" readonly aria-label="{ClientModel.nameOf author model}'s command"
@@ -2848,17 +2848,17 @@ module View =
                     // Whoever is typing, in their own colour — the same dot the roster and the
                     // tabs wear, so one person is one mark on every surface at once.
                     | Some (PeerRef peer) ->
-                        html $"""<span class="{Style.syncDot}" style="background:{PeerColour.ofPeer peer}"
+                        html $"""<span class="{Style.syncDot}" style="background:{EditorColour.ofEditor (ActorRef.PeerRef peer)}"
                                        title="{authorName model (PeerRef peer)}"></span>"""
                     | Some holder ->
                         html $"""<span class="{Style.statusRun}" title="{authorName model holder}"><span class="{Style.statusDot}"></span></span>"""
                     | None -> html $"""<span class="{Style.statusFaint}"><span class="{Style.statusDot}"></span></span>"""
             let peers =
-                ClientModel.peersInTerminal view.TerminalId model
-                |> List.map (fun (peer, name) ->
+                ClientModel.editorsInTerminal view.TerminalId model
+                |> List.map (fun (who, name) ->
                     html $"""
-                        <span class="{Style.draftEditorDot}" style="background:{PeerColour.ofPeer peer}"
-                              title="{name}" data-terminal-tab-peer="{PeerId.value peer}"></span>""")
+                        <span class="{Style.draftEditorDot}" style="background:{EditorColour.ofEditor who}"
+                              title="{name}" data-terminal-tab-peer="{ActorRef.token who}"></span>""")
             let rewind =
                 if not affords.CanRewind then Lit.nothing
                 else
@@ -2937,11 +2937,11 @@ module View =
             // where you would look for it. Without it, a collaborator typing a command in a
             // terminal you are not showing is visible nowhere in this column.
             let peers =
-                ClientModel.peersInTerminal view.TerminalId model
-                |> List.map (fun (peer, name) ->
+                ClientModel.editorsInTerminal view.TerminalId model
+                |> List.map (fun (who, name) ->
                     html $"""
-                        <span class="{Style.draftEditorDot}" style="background:{PeerColour.ofPeer peer}"
-                              title="{name}" data-terminal-tab-peer="{PeerId.value peer}"></span>""")
+                        <span class="{Style.draftEditorDot}" style="background:{EditorColour.ofEditor who}"
+                              title="{name}" data-terminal-tab-peer="{ActorRef.token who}"></span>""")
             // Two literal spellings of one button, because lit-html cannot inject an
             // attribute NAME through a hole — and the open/closed hooks must stay apart:
             // there is nothing to run in a closed terminal, only something to read.

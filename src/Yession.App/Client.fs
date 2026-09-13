@@ -1012,10 +1012,11 @@ module Client =
                     channel.Send (Command (Request (RequestId.fresh (), InterruptAgentTurn turnId))))
           ReportPresence =
             fun focus ->
-                // Presence carries the local peer's identity so collaborators can label
-                // and colour the caret; the Session Process relays it to other peers.
+                // Presence carries who is editing so collaborators can label and colour the
+                // caret; the Session Process relays it to everyone else. A browser is always
+                // a peer — the one party that is not is the Process itself.
                 Async.StartImmediate (
-                    channel.Send (Presence { PeerId = hello.PeerId; DisplayName = hello.DisplayName; Focus = focus }))
+                    channel.Send (Presence { Who = ActorRef.PeerRef hello.PeerId; DisplayName = hello.DisplayName; Focus = focus }))
           OpenTerminal =
             fun title ->
                 Async.StartImmediate (channel.Send (Command (Request (RequestId.fresh (), OpenTerminal title))))

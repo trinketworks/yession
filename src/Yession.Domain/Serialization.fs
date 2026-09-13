@@ -2033,12 +2033,12 @@ module Codec =
         { Encode =
             (fun (p: PresencePayload) ->
                 Encode.object
-                    [ "peerId", peerId.Encode p.PeerId
+                    [ "who", actor.Encode p.Who
                       "displayName", Encode.string p.DisplayName
                       "focus", Encode.option focus.Encode p.Focus ])
           Decode =
             Decode.object (fun get ->
-                { PresencePayload.PeerId = get.Required.Field "peerId" peerId.Decode
+                { PresencePayload.Who = get.Required.Field "who" actor.Decode
                   PresencePayload.DisplayName = get.Required.Field "displayName" Decode.string
                   PresencePayload.Focus = get.Required.Field "focus" (Decode.option focus.Decode) }) }
 

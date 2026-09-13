@@ -904,10 +904,10 @@ let private composerTests =
             let model =
                 mine
                 |> withDrafts [ grace ]
-                |> ClientModel.update (RemotePresenceMsg { PeerId = ivy; DisplayName = "keen-fox"; Focus = Some (focus grace) })
-                |> ClientModel.update (RemotePresenceMsg { PeerId = grace; DisplayName = "brave-owl"; Focus = Some (focus ada) })
-            Expect.equal (ClientModel.editorsOf grace model) [ ivy, "keen-fox" ] "only carets in THAT draft count"
-            Expect.equal (ClientModel.editorsOf ada model) [ grace, "brave-owl" ] "a peer in your draft shows in yours"
+                |> ClientModel.update (RemotePresenceMsg { Who = PeerRef ivy; DisplayName = "keen-fox"; Focus = Some (focus grace) })
+                |> ClientModel.update (RemotePresenceMsg { Who = PeerRef grace; DisplayName = "brave-owl"; Focus = Some (focus ada) })
+            Expect.equal (ClientModel.editorsOf grace model) [ PeerRef ivy, "keen-fox" ] "only carets in THAT draft count"
+            Expect.equal (ClientModel.editorsOf ada model) [ PeerRef grace, "brave-owl" ] "a peer in your draft shows in yours"
 
         testCase "a send goes in under the draft's own key, whoever presses it" <| fun () ->
             // Grace's draft, sent from Ada's client: the entry is Grace's, under Grace's draft key.
@@ -955,17 +955,17 @@ let private titlePresenceTests =
 
         testCase "RemotePresenceMsg adds, updates, and clears a peer's cursor" <| fun () ->
             let focusAt (a: string) : Focus = { Field = Title; Pos = { Anchor = a; Head = a } }
-            let added = ClientModel.update (RemotePresenceMsg { PeerId = bob; DisplayName = "brave-owl"; Focus = Some (focusAt "aa") }) base'
-            Expect.equal (Map.tryFind bob added.Presence) (Some { DisplayName = "brave-owl"; Focus = focusAt "aa" }) "the peer's caret is recorded"
-            let moved = ClientModel.update (RemotePresenceMsg { PeerId = bob; DisplayName = "brave-owl"; Focus = Some (focusAt "bb") }) added
-            Expect.equal (Map.tryFind bob moved.Presence |> Option.map (fun c -> c.Focus.Pos.Anchor)) (Some "bb") "the caret moves"
-            let cleared = ClientModel.update (RemotePresenceMsg { PeerId = bob; DisplayName = ""; Focus = None }) moved
-            Expect.isFalse (Map.containsKey bob cleared.Presence) "a cleared cursor removes the peer"
+            let added = ClientModel.update (RemotePresenceMsg { Who = PeerRef bob; DisplayName = "brave-owl"; Focus = Some (focusAt "aa") }) base'
+            Expect.equal (Map.tryFind (PeerRef bob) added.Presence) (Some { DisplayName = "brave-owl"; Focus = focusAt "aa" }) "the peer's caret is recorded"
+            let moved = ClientModel.update (RemotePresenceMsg { Who = PeerRef bob; DisplayName = "brave-owl"; Focus = Some (focusAt "bb") }) added
+            Expect.equal (Map.tryFind (PeerRef bob) moved.Presence |> Option.map (fun c -> c.Focus.Pos.Anchor)) (Some "bb") "the caret moves"
+            let cleared = ClientModel.update (RemotePresenceMsg { Who = PeerRef bob; DisplayName = ""; Focus = None }) moved
+            Expect.isFalse (Map.containsKey (PeerRef bob) cleared.Presence) "a cleared cursor removes the peer"
 
         testCase "RemotePresenceMsg ignores the local peer's own cursor" <| fun () ->
             let focus : Focus = { Field = Title; Pos = { Anchor = "aa"; Head = "aa" } }
-            let next = ClientModel.update (RemotePresenceMsg { PeerId = base'.Peer.PeerId; DisplayName = "Ada"; Focus = Some focus }) base'
-            Expect.isFalse (Map.containsKey base'.Peer.PeerId next.Presence) "you never render your own remote caret"
+            let next = ClientModel.update (RemotePresenceMsg { Who = PeerRef base'.Peer.PeerId; DisplayName = "Ada"; Focus = Some focus }) base'
+            Expect.isFalse (Map.containsKey (PeerRef base'.Peer.PeerId) next.Presence) "you never render your own remote caret"
     ]
 
 // The harness's own guard. `WaitFor` resolving on a model change is exercised by every suite

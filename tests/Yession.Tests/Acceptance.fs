@@ -132,7 +132,7 @@ let private representativeModel : ClientModel =
           Feed = FeedLive
           MissingBefore = None }
       Agent = { ActiveTurn = Some turnId }
-      Presence = Map.ofList [ bob, { DisplayName = "brave-owl"; Focus = { Field = Title; Pos = { Anchor = "AQI="; Head = "AwQ=" } } } ]
+      Presence = Map.ofList [ PeerRef bob, { DisplayName = "brave-owl"; Focus = { Field = Title; Pos = { Anchor = "AQI="; Head = "AwQ=" } } } ]
       // The roster names a draft's author even when they are not here: a label, never a peer id.
       Peers = Map.ofList [ ada, "swift-heron"; bob, "brave-owl" ]
       Attribution = Attribution.empty
@@ -295,7 +295,7 @@ let private joinedComposerModel : ClientModel =
         // Bob is writing, and his caret is in his own draft — the activity the summary shows.
         Presence =
             Map.ofList
-                [ bob,
+                [ PeerRef bob,
                   { DisplayName = "brave-owl"
                     Focus = { Field = DraftBody bob; Pos = { Anchor = "AQI="; Head = "AQI=" } } } ]
         Composer = Joined bob }
@@ -511,7 +511,7 @@ let private uiChecklistTests =
                   "editable session title", Dom.Hooks.sessionTitle
                   "title body", "planning the launch"
                   "session id secondary identifier", Dom.hookText Dom.Hooks.sessionId "demo-session"
-                  "remote collaborator cursor", Dom.attr Dom.Hooks.cursorPeer (PeerId.value bob)
+                  "remote collaborator cursor", Dom.attr Dom.Hooks.cursorPeer (ActorRef.token (PeerRef bob))
                   "remote cursor peer label", "brave-owl"
                   "peer display name", Dom.hookText Dom.Hooks.displayName "swift-heron"
                   "collaborative draft editor", Dom.Hooks.draftEditor
@@ -987,7 +987,7 @@ let private uiChecklistTests =
                   "your own draft collapses to a summary", Dom.attr Dom.Hooks.draftSummary "ada"
                   "a summary opens on click", Dom.attr Dom.Hooks.expandDraft "ada"
                   "the summary carries the body, clamped", Dom.attr "data-rich-body" (BodyKey.draft ada)
-                  "who is editing it right now", Dom.attr Dom.Hooks.draftEditor' (PeerId.value bob)
+                  "who is editing it right now", Dom.attr Dom.Hooks.draftEditor' (ActorRef.token (PeerRef bob))
                   "the way out of collaborating", Dom.Hooks.newDraft ]
             for label, needle in required do
                 Expect.isTrue (html.Contains needle) (sprintf "%s (%s)" label needle)
@@ -1708,11 +1708,11 @@ let private presenceTests =
         let withBobIn (field: FocusField) =
             { representativeModel with
                 Presence =
-                    Map.ofList [ bob, { DisplayName = "brave-owl"; Focus = { Field = field; Pos = { Anchor = "AQI="; Head = "AQI=" } } } ] }
+                    Map.ofList [ PeerRef bob, { DisplayName = "brave-owl"; Focus = { Field = field; Pos = { Anchor = "AQI="; Head = "AQI=" } } } ] }
 
         testCase "a peer is in the roster with where they are" <| fun () ->
             let html = Support.render (withBobIn Title)
-            Expect.isTrue (html.Contains (Dom.attr Dom.Hooks.peerPresence "bob")) "the peer has a roster row"
+            Expect.isTrue (html.Contains (Dom.attr Dom.Hooks.peerPresence (ActorRef.token (PeerRef bob)))) "the peer has a roster row"
             Expect.isTrue
                 (html.Contains (Dom.hookText (Dom.attr Dom.Hooks.peerAt Dom.Text.atTitle) Dom.Text.renamingSession))
                 "and it says they are renaming the session"
@@ -1731,7 +1731,7 @@ let private presenceTests =
                 (html.Contains (Dom.hookText (Dom.attr Dom.Hooks.peerAt Dom.Text.atTerminal) (Dom.Text.inTerminal "build")))
                 "the roster names the terminal, not just 'a terminal'"
             Expect.isTrue
-                (html.Contains (Dom.attr Dom.Hooks.terminalTabPeer "bob"))
+                (html.Contains (Dom.attr Dom.Hooks.terminalTabPeer (ActorRef.token (PeerRef bob))))
                 "and the terminal's own tab carries their mark"
 
         // A queued command names only its entry; the entry names the terminal. That join is
@@ -1741,7 +1741,7 @@ let private presenceTests =
             Expect.isTrue
                 (html.Contains (Dom.hookText (Dom.attr Dom.Hooks.peerAt Dom.Text.atTerminalQueued) (Dom.Text.inTerminal "build")))
                 "the queued command's terminal is resolved through the entry"
-            Expect.isTrue (html.Contains (Dom.attr Dom.Hooks.terminalTabPeer "bob")) "and shows on that terminal's tab"
+            Expect.isTrue (html.Contains (Dom.attr Dom.Hooks.terminalTabPeer (ActorRef.token (PeerRef bob)))) "and shows on that terminal's tab"
 
         // A chapter's name is collaborative text like the session title, so the roster places
         // somebody in it the same way — and says WHICH chapter, because "a chapter" in a
@@ -1759,7 +1759,7 @@ let private presenceTests =
                                     |> Map.add messageId { Opens = true; Name = Ylmish.Text.ofString "The rollback" } }
                         Presence =
                             Map.ofList
-                                [ bob,
+                                [ PeerRef bob,
                                   { DisplayName = "brave-owl"
                                     Focus = { Field = ChapterName messageId; Pos = { Anchor = "AQI="; Head = "AQI=" } } } ] }
             Expect.isTrue
@@ -1780,17 +1780,17 @@ let private presenceTests =
                     { model with
                         Presence =
                             Map.ofList
-                                [ bob,
+                                [ PeerRef bob,
                                   { DisplayName = "brave-owl"
                                     Focus = { Field = ChapterName here; Pos = { Anchor = "AQI="; Head = "AQI=" } } } ] }
             let ruleOf (messageId: MessageId) =
                 let opens = html.IndexOf (Dom.attr Dom.Hooks.chapterRule (MessageId.value messageId))
                 html.Substring (opens, html.IndexOf ("</div>", opens) - opens)
             Expect.isTrue
-                ((ruleOf here).Contains (Dom.attr Dom.Hooks.cursorPeer "bob"))
+                ((ruleOf here).Contains (Dom.attr Dom.Hooks.cursorPeer (ActorRef.token (PeerRef bob))))
                 "their caret is on the rule of the chapter they are naming"
             Expect.isFalse
-                ((ruleOf elsewhere).Contains (Dom.attr Dom.Hooks.cursorPeer "bob"))
+                ((ruleOf elsewhere).Contains (Dom.attr Dom.Hooks.cursorPeer (ActorRef.token (PeerRef bob))))
                 "and on no other chapter's"
 
         // The title and a chapter's name are both collaborative inputs, and a marker that
@@ -1799,8 +1799,8 @@ let private presenceTests =
             let html = Support.render { (withChapters [ "msg-1" ]) with Presence = (withBobIn Title).Presence }
             let opens = html.IndexOf (Dom.attr Dom.Hooks.chapterRule "msg-1")
             let rule = html.Substring (opens, html.IndexOf ("</div>", opens) - opens)
-            Expect.isFalse (rule.Contains (Dom.attr Dom.Hooks.cursorPeer "bob")) "the rule carries no caret"
-            Expect.isTrue (html.Contains (Dom.attr Dom.Hooks.cursorPeer "bob")) "the title still does"
+            Expect.isFalse (rule.Contains (Dom.attr Dom.Hooks.cursorPeer (ActorRef.token (PeerRef bob)))) "the rule carries no caret"
+            Expect.isTrue (html.Contains (Dom.attr Dom.Hooks.cursorPeer (ActorRef.token (PeerRef bob)))) "the title still does"
 
         // Presence is relayed live; the conversation is caught up over the event feed. A caret
         // can therefore arrive in a chapter this client has never seen, and the roster has to
@@ -1822,7 +1822,7 @@ let private presenceTests =
 
         testCase "the local peer never appears as their own collaborator" <| fun () ->
             let html = Support.render (withBobIn Title)
-            Expect.isFalse (html.Contains (Dom.attr Dom.Hooks.peerPresence "ada")) "you are 'you', not a peer row"
+            Expect.isFalse (html.Contains (Dom.attr Dom.Hooks.peerPresence (ActorRef.token (PeerRef ada)))) "you are 'you', not a peer row"
     ]
 
 // Sync status, said ONCE. Both halves of this used to be wrong at the same time: "up to date"
