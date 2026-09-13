@@ -209,7 +209,7 @@ let private startClaudeRoutes (list: ListModels) =
                 if not (route req res) then
                     res.writeHead (404, JsInterop.createObj [ "content-type", box "text/plain" ]) |> ignore
                     res.``end`` "not found")
-        return url + "/" + SessionRoute.relative SessionRoute.ClaudeStatus, server
+        return SessionRoute.at url SessionRoute.ClaudeStatus, server
     }
 
 /// The models off a status reply, as the browser reads them: the list, or the reason there

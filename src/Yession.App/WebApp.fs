@@ -71,7 +71,7 @@ module WebApp =
     let manifest =
         sprintf
             """{"name":"Yession","short_name":"Yession","start_url":"./","scope":"/","display":"standalone","orientation":"any","background_color":"%s","theme_color":"%s","icons":[{"src":"./%s","sizes":"512x512","type":"image/png","purpose":"any"}]}"""
-            ground ground (SessionRoute.relative Icon)
+            ground ground (RelativeUrl.inDocument DocumentBase.manifest (SessionRoute.relative Icon))
 
     /// The service worker, for one build. Registered from the client bundle; served at the
     /// mount root, because a worker controls its own path and below (Plan 20).

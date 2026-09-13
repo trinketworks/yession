@@ -70,28 +70,52 @@ let private methodOf (route: SessionRoute) =
 
 let private routeTests =
     testList "Session route contract" [
-        testCase "no route renders root-anchored" <| fun () ->
+        testCase "no route renders root-anchored inside a document" <| fun () ->
             // The property the type exists for: a session may be mounted under a path by an
             // operator's proxy, so a leading slash would send the browser to the origin root
-            // — the Manager, or nothing. `relative` is the only renderer, and it never emits
-            // one, which is why no caller can write that bug.
+            // — the Manager, or nothing. Inside a document that declared its base, `relative`
+            // never emits one; and a `RelativeUrl` cannot be spelled any other way without
+            // naming a mount (`under`), which is why no caller can write that bug.
+            let inShell, _ = DocumentBase.declare ""
             for route in every do
                 Expect.isFalse
-                    ((SessionRoute.relative route).StartsWith "/")
+                    ((RelativeUrl.inDocument inShell (SessionRoute.relative route)).StartsWith "/")
                     (sprintf "%A renders relative to the mount point" route)
+
+        testCase "declaring a base writes the tag that makes it one" <| fun () ->
+            // The tag and the witness are one value, so a document holding the proof has
+            // written the tag — that is the whole reason the constructor returns both. The
+            // trailing slash is what makes `/s/abc` and `/s/abc/` resolve alike.
+            let _, tag = DocumentBase.declare "/s/abc"
+            Expect.equal tag "<base href=\"/s/abc/\">" "the base is the mount, with a trailing slash"
+            let _, root = DocumentBase.declare ""
+            Expect.equal root "<base href=\"/\">" "and an origin root is the root"
+
+        testCase "under a mount, every route is root-anchored with one slash" <| fun () ->
+            // The other spelling, for a document that declared no base or a server naming
+            // its own paths: `mount + "/" + relative`, written here once instead of at every
+            // site that used to write it by hand — and never a double or a missing slash,
+            // whatever the mount.
+            for route in every do
+                let rooted = RelativeUrl.under "" (SessionRoute.relative route)
+                Expect.isTrue (rooted.StartsWith "/") (sprintf "%A is root-anchored at an origin root" route)
+                Expect.isFalse (rooted.StartsWith "//") (sprintf "%A has one slash, not two" route)
+                let mounted = RelativeUrl.under "/s/abc" (SessionRoute.relative route)
+                Expect.isTrue (mounted.StartsWith "/s/abc/") (sprintf "%A sits under its mount" route)
 
         testCase "every route round-trips through its own rendering" <| fun () ->
             // Rendering and matching are two directions of one declaration; this is what
             // stops them drifting the way three hand-written copies of "/client.js" could.
             for route in every do
-                let path = "/" + SessionRoute.relative route
+                let path = RelativeUrl.under "" (SessionRoute.relative route)
                 Expect.equal
                     (SessionRoute.parse (methodOf route) path)
                     (Some route)
                     (sprintf "%A parses back from %s" route path)
 
         testCase "the shell is the mount point itself" <| fun () ->
-            Expect.equal (SessionRoute.relative Shell) "" "so `<base href>` alone addresses it"
+            let inShell, _ = DocumentBase.declare ""
+            Expect.equal (RelativeUrl.inDocument inShell (SessionRoute.relative Shell)) "" "so `<base href>` alone addresses it"
             Expect.equal (SessionRoute.parse "GET" "/") (Some Shell) "served at the mount root"
 
         testCase "a route reached with the wrong method is no route at all" <| fun () ->
@@ -175,7 +199,7 @@ let private mountTests =
             // exactly what `parseUnder` accepts back. If either side changed alone, this
             // would fail.
             for route in every do
-                let asked = mount + "/" + SessionRoute.relative route
+                let asked = RelativeUrl.under mount (SessionRoute.relative route)
                 Expect.equal
                     (SessionRoute.parseUnder mount (methodOf route) asked)
                     (Some route)

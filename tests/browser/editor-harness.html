@@ -4,6 +4,11 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Yession rich-editor harness</title>
+    <!-- Declared, because the client requires it: every route the bundle spells is relative
+         and resolved against the base the page declared (`Page.href`), and a page with none
+         is a shell the bundle refuses to run in. The harness is served at its own root, so
+         its base is the root — and its stylesheets below resolve exactly as before. -->
+    <base href="/" />
     <!-- The real stylesheet, built beside the bundle by the `Browser`-cap test build. The
          shell below is the real `View.view`, and an unstyled one would make every layout
          this page is used to measure a fiction. -->

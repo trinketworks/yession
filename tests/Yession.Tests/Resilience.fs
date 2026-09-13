@@ -543,7 +543,7 @@ let private classificationTests =
         testCaseAsync "a transport failure is an unreachable feed, not an empty log" <|
             async {
                 let get : Client.HttpGet = fun _ -> async { return Error (Client.HttpUnreachable "ECONNREFUSED") }
-                let! result = Client.EventFetch.overHttp get SessionRoute.relative None None
+                let! result = Client.EventFetch.overHttp get (RelativeUrl.under "" << SessionRoute.relative) None None
                 Expect.equal
                     result
                     (Error (Client.FeedUnreachable "ECONNREFUSED"))
@@ -557,8 +557,8 @@ let private classificationTests =
         testCaseAsync "a refusal keeps its status, so authorization and overload differ" <|
             async {
                 let refusing (status: int) : Client.HttpGet = fun _ -> async { return Error (Client.HttpStatus status) }
-                let! unauthorized = Client.EventFetch.overHttp (refusing 401) SessionRoute.relative None None
-                let! overloaded = Client.EventFetch.overHttp (refusing 503) SessionRoute.relative None None
+                let! unauthorized = Client.EventFetch.overHttp (refusing 401) (RelativeUrl.under "" << SessionRoute.relative) None None
+                let! overloaded = Client.EventFetch.overHttp (refusing 503) (RelativeUrl.under "" << SessionRoute.relative) None None
                 Expect.equal unauthorized (Error (Client.FeedRefused 401)) "401 survives as 401"
                 Expect.equal overloaded (Error (Client.FeedRefused 503)) "503 survives as 503"
                 Expect.equal (Client.FeedFault.verdict (Client.FeedRefused 401)) Resilience.Fatal "retrying cannot fix a 401"
@@ -570,7 +570,7 @@ let private classificationTests =
             async {
                 let get : Client.HttpGet =
                     fun url -> async { return Ok { Url = url; Body = "{\"not\":\"an envelope\"}" } }
-                match! Client.EventFetch.overHttp get SessionRoute.relative None None with
+                match! Client.EventFetch.overHttp get (RelativeUrl.under "" << SessionRoute.relative) None None with
                 | Error (Client.FeedCorrupt _) -> ()
                 | other -> failwithf "expected FeedCorrupt, got %A" other
                 Expect.equal
@@ -652,7 +652,7 @@ let private fakeSocket (host: Host.SessionHost) : Socket =
 let private connectOverFeed (get: Client.HttpGet) (retries: ResizeArray<FeedHealth>) =
     connectInMemoryClientVia (fun dispatch ->
         let feed =
-            Client.EventFetch.overHttp get SessionRoute.relative None
+            Client.EventFetch.overHttp get (RelativeUrl.under "" << SessionRoute.relative) None
             |> Resilience.Policy.guard
                 (Client.EventFetch.policy (recordingSleep (ResizeArray ())) noJitter (fun attempt ->
                     Client.EventFetch.retrying attempt
