@@ -79,7 +79,7 @@ let tests =
             async {
                 let summarize : Summarize = fun _ -> async { return Ok "Where it was settled" }
                 let! host =
-                    Host.startFull (fun () -> None) (fun () -> Some summarize) None None None None None None None (fun _ _ -> ()) None McpClient.McpConnections.none None (sid ()) None "" None false None 0
+                    Host.startFull Clock.system (fun () -> None) (fun () -> Some summarize) None None None None None None None (fun _ _ -> ()) None McpClient.McpConnections.none None (sid ()) None "" None false None 0
                 let! a = connectInMemoryClient host "ada" "Ada"
                 let ada = a.Hello.PeerId
                 do! compose a ada "ship it"
@@ -106,7 +106,7 @@ let tests =
                             return Ok "Where it was settled"
                         }
                 let! host =
-                    Host.startFull (fun () -> None) (fun () -> Some summarize) None None None None None None None (fun _ _ -> ()) None McpClient.McpConnections.none None (sid ()) None "" None false None 0
+                    Host.startFull Clock.system (fun () -> None) (fun () -> Some summarize) None None None None None None None (fun _ _ -> ()) None McpClient.McpConnections.none None (sid ()) None "" None false None 0
                 let! a = connectInMemoryClient host "ada" "Ada"
                 let ada = a.Hello.PeerId
                 do! compose a ada "ship it"
@@ -591,7 +591,7 @@ let tests =
                 let awaitReport = Async.FromContinuations (fun (cont, _, _) -> reportCont <- Some cont)
                 let report (name: string) = async { match reportCont with Some c -> reportCont <- None; c name | None -> () }
 
-                let! host = Host.startFull (fun () -> None) (fun () -> None) None None None None None (Some report) None (fun _ _ -> ()) None McpClient.McpConnections.none None (sid ()) None "" None false None 0
+                let! host = Host.startFull Clock.system (fun () -> None) (fun () -> None) None None None None None (Some report) None (fun _ _ -> ()) None McpClient.McpConnections.none None (sid ()) None "" None false None 0
                 let! a = connectInMemoryClient host "ada" "Ada"
                 let! reportWaiter = Async.StartChild awaitReport
                 a.Runner.Dispatch (user (EditTitleMsg (Text.insert 0 "ship it" (a.Runner.Model ()).Synced.Title)))
@@ -624,7 +624,7 @@ let tests =
                 let report (busy: bool) = async { reports.Add busy }
 
                 let! host =
-                    Host.startFull (fun () -> None) (fun () -> None) None None None None None None (Some report) (fun _ _ -> ()) None McpClient.McpConnections.none None (sid ()) None "" None false None 0
+                    Host.startFull Clock.system (fun () -> None) (fun () -> None) None None None None None None (Some report) (fun _ _ -> ()) None McpClient.McpConnections.none None (sid ()) None "" None false None 0
 
                 // A session nobody has attached to is idle from the moment it boots — which
                 // is what lets the Manager's window start at launch rather than at first

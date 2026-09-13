@@ -10,10 +10,12 @@ open Yession.Domain.Terminals
 /// the browser's fetch, three strings that agreed only by inspection.
 ///
 /// The property that matters: `relative` never emits a leading slash, and it is the only
-/// way to render a route as a URL. A session does not necessarily own the root of its
-/// origin — an operator's proxy may mount it under a path (Plan 09) — so a
-/// root-anchored URL is not something a caller should be able to write by accident. The
-/// browser resolves these against the shell's `<base href>`.
+/// way to render a route. A session does not necessarily own the root of its origin — an
+/// operator's proxy may mount it under a path (Plan 09) — so a root-anchored URL is not
+/// something a caller should be able to write by accident. What it renders is a
+/// `RelativeUrl`, not a string: spelling one means saying what it resolves against — the
+/// base a document declared (`RelativeUrl.inDocument`, the browser resolving it against the
+/// shell's `<base href>`) or a mount named outright (`RelativeUrl.under`).
 
 /// The Claude connection panel's write actions (Plan 08). Separate from the status read
 /// so the two cannot be confused for one another. Qualified access is required because
@@ -37,6 +39,28 @@ type GitHubAction =
     | Poll
     | Token
     | Disconnect
+
+/// A route rendered as an address relative to the session's mount — and nothing else, which
+/// is the point of it being a type rather than the string it wraps. The string was correct in
+/// exactly one place, a document that had declared what it resolves against, and `string`
+/// let it travel anywhere: the Manager's `/open` page copied the Manager page's relative
+/// stylesheet link and lived at `/sessions/{id}/open`, so the link resolved to
+/// `/sessions/{id}/assets/…`, a 404, and the page was white with a stylesheet link in it.
+/// Three other places had already patched the same fact back by hand (`"/" + …`,
+/// `mount + "/" + …`), which is the tell that the fact belongs on the value.
+///
+/// Private, so the string cannot be interpolated, `sprintf`'d or concatenated: it has to be
+/// RESOLVED first (`RelativeUrl`), and resolving is where a caller says what it resolves
+/// against — a document that has declared its base, or a mount named outright.
+type RelativeUrl = private RelativeUrl of string
+
+/// Proof that a document has declared its base, held by whoever renders inside it. Minted by
+/// the code that WRITES the `<base href>` (`DocumentBase.declare`), or recovered in a browser
+/// from a page that carries one (`DocumentBase.declared`) — and by the two documents that
+/// resolve against their own address at the mount root, each named here with its reason.
+/// Nothing else can produce one, so a relative address cannot be rendered into a document
+/// that has not said where it is.
+type DocumentBase = private DocumentBase of mount: string
 
 type SessionRoute =
     /// The client shell itself — the served page IS the app.
@@ -179,41 +203,44 @@ module SessionRoute =
         | GitHubAction.Token -> "token"
         | GitHubAction.Disconnect -> "disconnect"
 
-    /// A route as a URL relative to whatever the session is mounted at. Never begins with
-    /// `/` — that is the whole point (see the type's remarks). `Shell` is the empty
-    /// string, which resolves to the mount point itself.
-    let relative (route: SessionRoute) : string =
-        match route with
-        | Shell -> ""
-        | Asset (build, path) -> assetsPrefix + build + "/" + path
-        | ServiceWorker -> "sw.js"
-        | Manifest -> "manifest.webmanifest"
-        | Icon -> "icon.png"
-        | Signal -> "signal"
-        | Me -> "me"
-        | Login -> "login"
-        | Callback -> "callback"
-        | EventsAfter None -> "events"
-        | EventsAfter (Some after) -> sprintf "events/after/%d" (EventOffset.value after)
-        | Events (first, last) -> sprintf "events/%d-%d" first last
-        | TerminalTranscriptAfter (terminal, None) -> sprintf "terminals/%s" terminal
-        | TerminalTranscriptAfter (terminal, Some after) -> sprintf "terminals/%s/after/%d" terminal after
-        | TerminalTranscriptRange (terminal, first, last) -> sprintf "terminals/%s/%d-%d" terminal first last
-        | TerminalKeyframe (terminal, seq) -> sprintf "terminals/%s/keyframes/%d" terminal seq
-        | ClaudeStatus -> "claude"
-        | Claude action -> "claude/" + claudeSegment action
-        | GitHubStatus -> "github"
-        | GitHub action -> "github/" + githubSegment action
-        | GitHubRepos -> "github/repos"
-        | GitHubBranches (owner, repo) -> sprintf "github/repos/%s/%s/branches" owner repo
-        | GitHubPullHead (owner, repo, number) -> sprintf "github/repos/%s/%s/pulls/%s" owner repo number
-        | Queries -> "queries"
+    /// A route as an address relative to whatever the session is mounted at. Never begins
+    /// with `/` — that is the whole point (see the type's remarks) — and comes back as a
+    /// `RelativeUrl`, so the only way to spell it is to say what it resolves against.
+    /// `Shell` is the empty string, which resolves to the mount point itself.
+    let relative (route: SessionRoute) : RelativeUrl =
+        RelativeUrl (
+          match route with
+          | Shell -> ""
+          | Asset (build, path) -> assetsPrefix + build + "/" + path
+          | ServiceWorker -> "sw.js"
+          | Manifest -> "manifest.webmanifest"
+          | Icon -> "icon.png"
+          | Signal -> "signal"
+          | Me -> "me"
+          | Login -> "login"
+          | Callback -> "callback"
+          | EventsAfter None -> "events"
+          | EventsAfter (Some after) -> sprintf "events/after/%d" (EventOffset.value after)
+          | Events (first, last) -> sprintf "events/%d-%d" first last
+          | TerminalTranscriptAfter (terminal, None) -> sprintf "terminals/%s" terminal
+          | TerminalTranscriptAfter (terminal, Some after) -> sprintf "terminals/%s/after/%d" terminal after
+          | TerminalTranscriptRange (terminal, first, last) -> sprintf "terminals/%s/%d-%d" terminal first last
+          | TerminalKeyframe (terminal, seq) -> sprintf "terminals/%s/keyframes/%d" terminal seq
+          | ClaudeStatus -> "claude"
+          | Claude action -> "claude/" + claudeSegment action
+          | GitHubStatus -> "github"
+          | GitHub action -> "github/" + githubSegment action
+          | GitHubRepos -> "github/repos"
+          | GitHubBranches (owner, repo) -> sprintf "github/repos/%s/%s/branches" owner repo
+          | GitHubPullHead (owner, repo, number) -> sprintf "github/repos/%s/%s/pulls/%s" owner repo number
+          | Queries -> "queries")
 
     /// A route as an absolute URL under a session's address — what a client outside a
     /// browser needs, having no document base to resolve against. The single `/` between
     /// the two halves lives here, so no caller writes a leading slash of its own.
     let at (sessionUrl: string) (route: SessionRoute) : string =
-        sessionUrl.TrimEnd '/' + "/" + relative route
+        let (RelativeUrl path) = relative route
+        sessionUrl.TrimEnd '/' + "/" + path
 
     /// The route a request is for, or None when the session serves nothing there — which
     /// includes a known path reached with the wrong method, so a mismatch 404s exactly as
@@ -308,6 +335,53 @@ module SessionRoute =
         elif path.StartsWith (mount + "/") then parse method (path.Substring mount.Length)
         else None
 
+module DocumentBase =
+
+    let private escapeAttr (s: string) =
+        s.Replace("&", "&amp;").Replace("\"", "&quot;").Replace("<", "&lt;").Replace(">", "&gt;")
+
+    /// Declare a document's base — the `<base href>` tag to write, and the proof of having
+    /// written it. ONE value with two halves, so the tag and the witness cannot come apart:
+    /// a shell that takes the witness has emitted the tag.
+    ///
+    /// `mount` is the path the document is served under (`""` at an origin root). The
+    /// trailing `/` is what makes `/s/{id}` and `/s/{id}/` resolve the same relative
+    /// address, which is why the session shell needs a base at all.
+    let declare (mount: string) : DocumentBase * string =
+        DocumentBase mount, sprintf "<base href=\"%s/\">" (escapeAttr mount)
+
+    /// The base a running page has, from what the page carries. `None` is a page that
+    /// declared none — a shell this client cannot resolve anything from, which is an error
+    /// to raise at boot rather than a 404 to meet on the first fetch.
+    let declared (baseHref: string option) : Result<DocumentBase, string> =
+        match baseHref with
+        | Some href -> Ok (DocumentBase (href.TrimEnd '/'))
+        | None -> Error "this page declares no <base href>; relative routes have nothing to resolve against"
+
+    /// The web manifest resolves its own contents against ITS address, and it is served at
+    /// the mount root beside the shell (`SessionRoute.Manifest` has no path segments) — so
+    /// inside it, the bare relative form is right without a tag.
+    let manifest : DocumentBase = DocumentBase ""
+
+    /// The service worker resolves what it precaches against `self.registration.scope`,
+    /// and its scope is where it is served — the mount root (`SessionRoute.ServiceWorker`),
+    /// for the same reason as the manifest.
+    let serviceWorker : DocumentBase = DocumentBase ""
+
+module RelativeUrl =
+
+    /// Inside a document that has declared its base: the bare relative form, resolved by
+    /// the browser against that base. The witness is the whole argument — it is not read,
+    /// it is the proof that there is something to resolve against.
+    let inDocument (DocumentBase _) (RelativeUrl path) : string = path
+
+    /// Anchored under a mount (`""` for an origin root): always begins with `/`. For a
+    /// document that has declared no base — every page the Manager serves, which lives at
+    /// its origin root by `ManagerOrigin`'s own rule — and for a server recognising or
+    /// redirecting to its own paths. The single `/` between the halves lives here, so no
+    /// caller writes one of its own.
+    let under (mount: string) (RelativeUrl path) : string = mount + "/" + path
+
 /// Which build's asset set a document should name: a digest over every static file this
 /// process ships. It used to be one digest per asset, which meant a renderer had to be handed
 /// each of them and a new asset changed the type. A set has one address, so a document that
@@ -317,11 +391,12 @@ type AssetBuild =
 
 module AssetBuild =
 
-    /// Where `file` is served for this build — the URL a document should name. Relative, like
-    /// every route: it resolves against the shell's `<base href>`, and the stylesheet's own
-    /// relative `url()`s then resolve against IT. Takes the declared file rather than a path,
-    /// so a document cannot name one this build does not ship.
-    let url (AssetBuild digest) (file: AssetFile) : string =
+    /// Where `file` is served for this build — the address a document should name. Relative,
+    /// like every route, and typed like one: the document resolves it against its declared
+    /// base or anchors it under its mount, and the stylesheet's own relative `url()`s then
+    /// resolve against IT. Takes the declared file rather than a path, so a document cannot
+    /// name one this build does not ship.
+    let url (AssetBuild digest) (file: AssetFile) : RelativeUrl =
         SessionRoute.relative (Asset (digest, AssetFile.path file))
 
     /// The set's own address, for the one consumer that names no file: the service worker,

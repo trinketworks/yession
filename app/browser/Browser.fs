@@ -333,9 +333,9 @@ let private revealSettings () : unit = jsNative
 // one-line Emit below. What the answer MEANS is this file's `ProbeOutcome` and the match
 // below, both type-checked.
 //
-// The URL is a PARAMETER: every fetch below takes its URL from `SessionRoute.relative`, so
-// it stays checked against the route table rather than living as a literal only the
-// runtime can see.
+// The URL is a PARAMETER: every fetch below takes its URL from `Page.href`, so it stays
+// checked against the route table — and resolved against the base this page declared —
+// rather than living as a literal only the runtime can see.
 //
 // A REFUSAL is 401/403 and nothing else. Every other error status — a 502 from the
 // operator's proxy standing in front of a session that is gone, a 503 from one still
@@ -718,7 +718,7 @@ let private viewOf (kind: string option) (signInRequired: string option) : Conne
     kind |> Option.map (fun kind -> { Kind = kind; SignInRequired = signInRequired })
 
 let private fetchClaudeStatus () =
-    fetchClaudeStatusAt (SessionRoute.relative ClaudeStatus)
+    fetchClaudeStatusAt (Page.href ClaudeStatus)
 
 /// `status` rides beside `ok` because a panel that only knows THAT a post failed cannot tell
 /// a refusal from a session it could not reach, and those end a sign-in flow differently
@@ -752,7 +752,7 @@ let private panelInput (selector: string) : string = jsNative
 let private fetchGitHubStatusAt (url: string) : JS.Promise<{| ok: bool; sessionKind: string option; sessionSignIn: string option; mineKind: string option; mineSignIn: string option |}> = jsNative
 
 let private fetchGitHubStatus () =
-    fetchGitHubStatusAt (SessionRoute.relative GitHubStatus)
+    fetchGitHubStatusAt (Page.href GitHubStatus)
 
 [<Emit("JSON.stringify({ scope: $0, token: $1 || undefined })")>]
 let private githubBody (scope: string) (token: string) : string = jsNative
@@ -777,8 +777,8 @@ let private fetchRepoListing (query: string) : Async<LaunchListing> =
     async {
         let url =
             match query.Trim () with
-            | "" -> SessionRoute.relative GitHubRepos
-            | text -> SessionRoute.relative GitHubRepos + "?q=" + urlEncode text
+            | "" -> Page.href GitHubRepos
+            | text -> Page.href GitHubRepos + "?q=" + urlEncode text
         let! reply = getText url |> Async.AwaitPromise
         if not reply.ok then
             return ListingUnavailable ((if reply.body = "" then sprintf "the session answered %d" reply.status else reply.body), reply.status = 401)
@@ -791,7 +791,7 @@ let private fetchRepoListing (query: string) : Async<LaunchListing> =
 let private fetchRepoBranches (repo: RepoRef) : Async<LaunchBranches> =
     async {
         let owner, name = RepoRef.owner repo, RepoRef.repo repo
-        let! reply = getText (SessionRoute.relative (GitHubBranches (owner, name))) |> Async.AwaitPromise
+        let! reply = getText (Page.href (GitHubBranches (owner, name))) |> Async.AwaitPromise
         if not reply.ok then
             return BranchesUnavailable (if reply.body = "" then sprintf "the session answered %d" reply.status else reply.body)
         else
@@ -805,7 +805,7 @@ let private fetchRepoBranches (repo: RepoRef) : Async<LaunchBranches> =
 let private fetchPullHead (repo: RepoRef) (number: int) : Async<Result<PullHead, string>> =
     async {
         let owner, name = RepoRef.owner repo, RepoRef.repo repo
-        let! reply = getText (SessionRoute.relative (GitHubPullHead (owner, name, string number))) |> Async.AwaitPromise
+        let! reply = getText (Page.href (GitHubPullHead (owner, name, string number))) |> Async.AwaitPromise
         if not reply.ok then
             return Error (if reply.body = "" then sprintf "the session answered %d" reply.status else reply.body)
         else
@@ -982,7 +982,7 @@ let private start () =
                     | GitHubAwaitingApproval (userCode, verificationUri, scope, interval) ->
                         let! reply =
                             postClaude
-                                (SessionRoute.relative (GitHub GitHubAction.Poll))
+                                (Page.href (GitHub GitHubAction.Poll))
                                 (githubBody scope "")
                             |> Async.AwaitPromise
                         if not reply.ok then
@@ -1015,7 +1015,7 @@ let private start () =
         // real authorization fault has to read.
         let subscribeQueries () =
             openQueryStream
-                (SessionRoute.relative SessionRoute.Queries)
+                (Page.href SessionRoute.Queries)
                 (fun data ->
                     match Codec.fromString Codec.queryFrame data with
                     | Ok frame -> dispatchRef (QueryFrameMsg frame)
@@ -1083,7 +1083,7 @@ let private start () =
               ClaudeConnect =
                 fun () ->
                     let scope = match panelInput "[data-claude-scope]" with "" -> "mine" | s -> s
-                    postClaudeAction (SessionRoute.relative (Claude ClaudeAction.Begin)) scope "" "" true
+                    postClaudeAction (Page.href (Claude ClaudeAction.Begin)) scope "" "" true
               ClaudeComplete =
                 fun () ->
                     // The scope selector is unmounted while awaiting; the flow carries it.
@@ -1093,20 +1093,20 @@ let private start () =
                         | _ -> "mine"
                     match panelInput "[data-claude-code]" with
                     | "" -> dispatchRef (ClaudeFlowMsg (ClaudeError "paste the code first"))
-                    | code -> postClaudeAction (SessionRoute.relative (Claude ClaudeAction.Complete)) scope code "" false
+                    | code -> postClaudeAction (Page.href (Claude ClaudeAction.Complete)) scope code "" false
               ClaudePasteToken =
                 fun () ->
                     match panelInput "[data-claude-token]" with
                     | "" -> dispatchRef (ClaudeFlowMsg (ClaudeError "paste a token first"))
                     | token ->
                         postClaudeAction
-                            (SessionRoute.relative (Claude ClaudeAction.Token))
+                            (Page.href (Claude ClaudeAction.Token))
                             (match panelInput "[data-claude-scope]" with "" -> "mine" | s -> s)
                             ""
                             token
                             false
               ClaudeDisconnect =
-                fun scope -> postClaudeAction (SessionRoute.relative (Claude ClaudeAction.Disconnect)) scope "" "" false
+                fun scope -> postClaudeAction (Page.href (Claude ClaudeAction.Disconnect)) scope "" "" false
               GitHubConnect =
                 fun () ->
                     let scope = match panelInput "[data-github-scope]" with "" -> "mine" | s -> s
@@ -1114,7 +1114,7 @@ let private start () =
                         async {
                             let! reply =
                                 postClaude
-                                    (SessionRoute.relative (GitHub GitHubAction.Begin))
+                                    (Page.href (GitHub GitHubAction.Begin))
                                     (githubBody scope "")
                                 |> Async.AwaitPromise
                             if not reply.ok then return Error reply.body
@@ -1134,7 +1134,7 @@ let private start () =
                             async {
                                 let! reply =
                                     postClaude
-                                        (SessionRoute.relative (GitHub GitHubAction.Token))
+                                        (Page.href (GitHub GitHubAction.Token))
                                         (githubBody scope token)
                                     |> Async.AwaitPromise
                                 if not reply.ok then return Error reply.body else return Ok None
@@ -1161,7 +1161,7 @@ let private start () =
                         async {
                             let! reply =
                                 postClaude
-                                    (SessionRoute.relative (GitHub GitHubAction.Disconnect))
+                                    (Page.href (GitHub GitHubAction.Disconnect))
                                     (githubBody scope "")
                                 |> Async.AwaitPromise
                             if not reply.ok then return Error reply.body else return Ok None
@@ -1190,22 +1190,40 @@ let private start () =
                     |> Option.iter (fun c -> dispatchRef (LaunchMsg (LaunchSent (c.AddRepo target.Repo target.Branch, target))))
               LaunchLink =
                 fun link ->
-                    match Launch.targetOfLink link, link with
-                    | Some target, _ ->
-                        connectionRef
-                        |> Option.iter (fun c -> dispatchRef (LaunchMsg (LaunchSent (c.AddRepo target.Repo target.Branch, target))))
-                    | None, RepoLink.PullRequest (repo, number) ->
-                        dispatchRef (LaunchMsg (LaunchResolving link))
-                        Async.StartImmediate (
-                            async {
-                                match! fetchPullHead repo number with
-                                | Ok head ->
-                                    let target = { LaunchTarget.Repo = head.Repo; LaunchTarget.Branch = Some head.Branch }
-                                    connectionRef
-                                    |> Option.iter (fun c -> dispatchRef (LaunchMsg (LaunchSent (c.AddRepo target.Repo target.Branch, target))))
-                                | Error reason -> dispatchRef (LaunchMsg (LaunchFailed reason))
-                            })
-                    | None, _ -> ()
+                    // A link becomes a ROW, held — never a send: the same listing lookup a
+                    // search makes, asked for the one name, answers the candidate under the
+                    // provider's current name with its real default branch. A pull request is
+                    // asked about first, since which fork its branch lives in only the
+                    // provider knows.
+                    dispatchRef (LaunchMsg (LaunchResolving link))
+                    Async.StartImmediate (
+                        async {
+                            let! resolved =
+                                match link with
+                                | RepoLink.Repo repo -> async { return Ok (repo, None) }
+                                | RepoLink.Branch (repo, branch) -> async { return Ok (repo, Some branch) }
+                                | RepoLink.PullRequest (repo, number) ->
+                                    async {
+                                        match! fetchPullHead repo number with
+                                        | Ok head -> return Ok (head.Repo, Some head.Branch)
+                                        | Error reason -> return Error reason
+                                    }
+                            match resolved with
+                            | Error reason -> dispatchRef (LaunchMsg (LaunchFailed reason))
+                            | Ok (repo, branch) ->
+                                match! fetchRepoListing (RepoRef.value repo) with
+                                | ListingLoaded (candidate :: _) ->
+                                    dispatchRef (LaunchMsg (LaunchLinked (candidate, branch)))
+                                    Async.StartImmediate (
+                                        async {
+                                            let! branches = fetchRepoBranches candidate.Repo
+                                            dispatchRef (LaunchMsg (LaunchBranchesArrived (candidate.Repo, branches)))
+                                        })
+                                | ListingLoaded [] ->
+                                    dispatchRef (LaunchMsg (LaunchFailed (sprintf "github does not show %s to this credential" (RepoRef.value repo))))
+                                | ListingUnavailable (reason, _) -> dispatchRef (LaunchMsg (LaunchFailed reason))
+                                | ListingUnknown -> ()
+                        })
               CloseTerminal = fun id -> connectionRef |> Option.iter (fun c -> c.CloseTerminal id)
               TakeTerminal = fun id -> connectionRef |> Option.iter (fun c -> c.TakeTerminal id)
               ReleaseTerminal = fun id -> connectionRef |> Option.iter (fun c -> c.ReleaseTerminal id)
@@ -1293,7 +1311,7 @@ let private start () =
         // The worker first, because it is what makes the NEXT cold open work; this one is
         // already served. Fire and forget: nothing here depends on it, and a client that
         // cannot have one loses only the offline open.
-        registerWorker (SessionRoute.relative ServiceWorker)
+        registerWorker (Page.href ServiceWorker)
 
         let! historyCache = openHistoryCache ()
         let! transcriptCaches = openTranscriptCaches ()
@@ -1308,14 +1326,14 @@ let private start () =
         // `Disconnected` with its reason, not silence: the local-first shell — IndexedDB doc
         // plus the event ranges in this client's own store — stays fully usable, and the model
         // says why it is alone.
-        let! outcome = fetchMe (SessionRoute.relative Me) Client.Probe.deadline.TotalMilliseconds
+        let! outcome = fetchMe (Page.href Me) Client.Probe.deadline.TotalMilliseconds
         match outcome with
         | ProbeUnreachable detail ->
             dispatchRef (ConnectFailedMsg (Client.ChannelFault.describe (Client.ChannelUnreachable detail)))
         | ProbeUnauthorized ->
             // The peer id rides the login bounce so the Manager can witness which peer
             // signed in for this session (Plan 07 — peer-scoped secrets).
-            renavigateTo (SessionRoute.relative Login + "?peer_id=" + urlEncode (PeerId.value peerId))
+            renavigateTo (Page.href Login + "?peer_id=" + urlEncode (PeerId.value peerId))
         | ProbeAuthorized me ->
             // Authenticated: the Claude panel's status is knowable now, and the read
             // surface's stream has a cookie that will be accepted.
@@ -1349,7 +1367,7 @@ let private start () =
             let feed =
                 // `storing` sits UNDER the policy, so only a settled answer is kept — a
                 // retried fetch stores once, and a failed one stores nothing.
-                Client.EventFetch.overHttp (Client.EventFetch.storing historyCache httpGet) SessionRoute.relative None
+                Client.EventFetch.overHttp (Client.EventFetch.storing historyCache httpGet) Page.href None
                 |> Resilience.Policy.guard
                     (Client.EventFetch.policy Resilience.Policy.sleep jsRandom (fun attempt ->
                         Client.EventFetch.retrying attempt
@@ -1360,7 +1378,7 @@ let private start () =
             // feed, a failed read here is re-armed by the next record or availability hint
             // that arrives, so there is nothing for a retry schedule to add.
             let transcripts =
-                Client.TranscriptFetch.overHttp transcriptCaches httpGet SessionRoute.relative None
+                Client.TranscriptFetch.overHttp transcriptCaches httpGet Page.href None
             let options =
                 { Client.ConnectOptions.defaults with
                     FetchEvents = Some feed
@@ -1384,7 +1402,7 @@ let private start () =
             let openChannel =
                 Resilience.Policy.guard
                     (Client.SessionChannel.policy Resilience.Policy.sleep jsRandom)
-                    (fun () -> connectChannel (absolute (SessionRoute.relative Signal)))
+                    (fun () -> connectChannel (absolute (Page.href Signal)))
 
             // The session leg. The RULES — announce, open, serve, and come back only for a
             // session that was accepted — are `Client.SessionLifecycle`; this supplies the

@@ -554,7 +554,7 @@ let create (deps: Deps) : Renderer =
                 if keyframesAsked.Add key then
                     Async.StartImmediate (
                         async {
-                            let url = SessionRoute.relative (TerminalKeyframe (TerminalId.value terminal, seq))
+                            let url = Page.href (TerminalKeyframe (TerminalId.value terminal, seq))
                             match! deps.Links.Http url with
                             // A keyframe that does not answer is not a failure: the range
                             // still rebases and still plays, as the naive slice. Asking
