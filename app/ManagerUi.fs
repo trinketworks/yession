@@ -752,6 +752,15 @@ let private problem (res: ServerResponse) (status: int) (title: string) (detail:
 /// Bounded, and it says why it gave up. An `/open` that spins forever is indistinguishable
 /// from one that is about to work, which is the failure mode this whole feature is supposed
 /// to remove rather than add.
+///
+/// It hands the browser to the session's SIGN-IN entry (`/login`), not its shell. Every
+/// session this page can name was launched by this Manager, so every one of them gates its
+/// data behind the Manager's bounce — and a browser that landed on the shell first painted
+/// it, ran the client, asked `/me`, was told 401, and went round the bounce to land on the
+/// shell a second time: two full loads of the same page, with a repaint between them, before
+/// a person saw anything they could use. Entering through `/login` runs the bounce first and
+/// paints once; a browser already holding the session's cookie is sent straight on by that
+/// route (`Signalling.fs`), so the return visit pays one redirect, never a second sign-in.
 let private openingPage (target: string) (readyUrl: string) : string =
     standalonePage
         "Opening session…"
@@ -980,7 +989,11 @@ let tryHandle
                         | Error reason -> problem res (refusalStatus sessionId) "Cannot open this session" reason
                         | Ok port ->
                             let address = PublicAccess.sessionAddress sessionId port pm.Public
-                            html res (openingPage (sprintf "%s/" address.Url) (ManagerRoute.path (ManagerRoute.SessionReady sessionId)))
+                            html
+                                res
+                                (openingPage
+                                    (RelativeUrl.under address.Url (SessionRoute.relative Login))
+                                    (ManagerRoute.path (ManagerRoute.SessionReady sessionId)))
                 })
         // Does this deployment's front door reach the session yet? The question the
         // opening page above is really asking, answered HERE because here is the only

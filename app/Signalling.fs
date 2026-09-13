@@ -407,12 +407,22 @@ let start
             | None -> notFound res
         | Some Login ->
             // Begin the authorization-code + PKCE dance: 302 to the Manager's authorize
-            // endpoint. The BROWSER navigates here (renavigation on a 401 from `/me`) —
-            // the cached shell itself never redirects, preserving offline reopen.
+            // endpoint. The BROWSER navigates here — from the Manager's `/open` page, which
+            // enters every session this way so the shell is painted once rather than
+            // painted, bounced and painted again; and by renavigation on a 401 from `/me`,
+            // for a shell reached any other way. The cached shell itself never redirects,
+            // preserving offline reopen.
             match auth with
             | None ->
                 res.writeHead (404, createObj [ "content-type", box "text/plain"; "cache-control", box "no-store" ]) |> ignore
                 res.``end`` "this session has no authorization provider"
+            // Already signed in: straight to the shell. A sign-in this browser holds is not
+            // restarted — the bounce would only mint the cookie it already carries, three
+            // redirects later. `./` relative to `<mount>/login` is the shell, as `/callback`
+            // spells it below.
+            | Some a when (a.IdentityOf req).IsSome ->
+                res.writeHead (302, createObj [ "location", box "./"; "cache-control", box "no-store" ]) |> ignore
+                res.``end`` ""
             | Some a ->
                 // The browser's stable peer id rides the bounce so the
                 // Manager can witness which peer signed in; absent for headless logins.
