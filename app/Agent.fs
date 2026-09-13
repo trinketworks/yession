@@ -3,12 +3,24 @@ module Yession.Host.Agent
 // The real agent runner: an adapter from the `RunAgent` capability to the Claude Agent
 // SDK. The turn's typed capabilities reach the model as MCP tools, and WHICH tools those
 // are is no longer this file's business — `AgentTools.registry` answers that, and the
-// adapter turns whatever it answers into `sdk.tool(...)` calls in a loop (Plan 16, part A).
+// adapter turns whatever it answers into `tool` declarations in a loop (Plan 16, part A).
 // Requires ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN; the deterministic tests never call
 // this, and the live smoke test is gated on credentials, so verification stays repeatable.
+//
+// It is F# over `Fable.ClaudeAgentSdk` and `Fable.Zod`. It used to be a 169-line JavaScript
+// program inside one `[<Emit>]` string, and it had every fault that shape has: an emit body
+// is inlined into whatever calls it, so it was invisible to a reader of this file,
+// unreachable from any other, and — the sharp edge — Fable does not treat a change to one as
+// a change to its callers. Nothing inside it was type-checked and nothing inside it was
+// reachable from a test, which is how a thinking delta came to be told from a text one by
+// which FIELD happened to hold a string. What this adapter DECIDES now lives in `Turn`
+// below, over ordinary values, where the cheap tier reaches all of it.
 
 open System
+open Fable
 open Fable.Core
+open Fable.Core.JsInterop
+open Fable.ClaudeAgentSdk
 open Yession.Domain
 open Yession.Domain.Sandboxes
 open Yession.Domain.Agent
@@ -16,211 +28,344 @@ open Yession.Domain.Terminals
 open Yession.Domain.Tools
 open Yession.Domain.Chat
 
-type private RunOutcome =
-    abstract ok : bool
-    abstract body : string
-    abstract reason : string
-    // Plan 04, Step 28: the `result` message's usage block, surfaced instead of
-    // discarded. Zero when the SDK reports no usage; `model` is "" when unknown.
-    abstract inputTokens : int
-    abstract outputTokens : int
-    abstract cacheReadTokens : int
-    abstract cacheCreationTokens : int
-    abstract model : string
+#if FABLE_COMPILER
+open Thoth.Json
+#else
+open Thoth.Json.Net
+#endif
 
-/// What one tool call answered, as JS sees it: the text the model gets, and whether the
-/// call HAPPENED. `ok = false` is a protocol failure (no such tool, unreadable arguments),
-/// which the SDK is told about as `isError` — a tool that ran and went badly is `ok = true`
-/// with text saying so, because that is something the model should read and act on.
-type private JsToolAnswer =
-    abstract ok : bool
-    abstract text : string
+// --- a tool descriptor, as the SDK wants one ----------------------------------------------
 
-[<Emit("""(async function (prompts, agentEnv, claudePath, descriptors, invoke, allowedTools, onChunk, onBoundary, registerAbort, claudeSpawner, onThought) {
-  // Declared OUTSIDE the try because a turn does not always end by returning: the SDK
-  // reports a non-success ending by THROWING, and what the turn streamed and spent before
-  // that has to survive the throw. See the catch.
-  let body = ''
-  let streamed = ''
-  // One thought's deltas, held until its block ends. Declared out here with the rest of what
-  // has to survive a throw: a turn that ends badly still thought what it thought.
-  let thinking = ''
-  let failed = null
-  let inputTokens = 0
-  let outputTokens = 0
-  let cacheReadTokens = 0
-  let cacheCreationTokens = 0
-  let model = ''
-  try {
-    const sdk = await import('@anthropic-ai/claude-agent-sdk')
-    const { z } = await import('zod')
-    const controller = new AbortController()
-    registerAbort(() => controller.abort())
-    // JSON Schema in, zod shape out. The SDK's tool builder wants zod; every other
-    // boundary a descriptor crosses (MCP's tools/list, an external server, the audit
-    // record) speaks JSON Schema — so the conversion belongs here, at the one edge that
-    // needs it, rather than making the schema itself SDK-shaped.
-    const zodType = (spec) => {
-      if (!spec) return z.any()
-      if (spec.type === 'string') return z.string()
-      if (spec.type === 'boolean') return z.boolean()
-      if (spec.type === 'number' || spec.type === 'integer') return z.number()
-      if (spec.type === 'array') return z.array(zodType(spec.items))
-      return z.any()
-    }
-    const zodShape = (schema) => {
-      const shape = {}
-      const props = (schema && schema.properties) || {}
-      const required = new Set((schema && schema.required) || [])
-      for (const key of Object.keys(props)) {
-        const p = props[key] || {}
-        let t = zodType(p)
-        if (p.description) t = t.describe(p.description)
-        if (!required.has(key)) t = t.optional()
-        shape[key] = t
-      }
-      return shape
-    }
-    // One SDK MCP server per namespace, which is what puts the namespace in the wire name
-    // the model sees (mcp__<namespace>__<tool>) without inventing a naming scheme.
-    const byNamespace = new Map()
-    for (const d of descriptors) {
-      let shape = {}
-      try { shape = zodShape(JSON.parse(d.schema)) } catch (e) { shape = {} }
-      const annotations = {}
-      if (d.readOnly) annotations.readOnlyHint = true
-      if (d.title) annotations.title = d.title
-      const built = sdk.tool(d.name, d.description, shape, async (args) => {
-        const answer = await invoke(d.ns, d.name, JSON.stringify(args || {}))
-        return { content: [{ type: 'text', text: answer.text }], isError: !answer.ok }
-      }, { annotations })
-      if (!byNamespace.has(d.ns)) byNamespace.set(d.ns, [])
-      byNamespace.get(d.ns).push(built)
-    }
-    // Every entry here is one of OUR in-process SDK servers, built from the registry. A
-    // declared external server never goes in this map, tempting as its one line is: a server
-    // the model reaches directly is a second door, and its calls skip the approval gate, the
-    // tool-use record and attribution — the whole of what `ToolUseLog` and `ToolStreams` wrap
-    // the merged registry to guarantee. It also decides who holds a provider's claim: reached
-    // through the proxy the claim belongs to the SESSION, so the terminal's write lease can
-    // arbitrate between the agent and a human; reached directly it belongs to the agent's own
-    // MCP session, and nobody can take the device off it.
-    const mcpServers = {}
-    for (const entry of byNamespace) {
-      mcpServers[entry[0]] = sdk.createSdkMcpServer({ name: entry[0], version: '1.0.0', tools: entry[1] })
-    }
-    const q = sdk.query({
-      prompt: prompts.prompt,
-      options: {
-        systemPrompt: prompts.system,
+/// One JSON Schema node as zod says it. The slice is what `Fable.Zod` binds and no wider —
+/// the leaf types a `type` can name, and `array` over another node. Anything else is `any`,
+/// which is a WIDER schema and never a refusal: a tool whose arguments this cannot describe
+/// must still be callable, and the model still reads the description.
+///
+/// A node that is not an object at all — a schema written wrongly — is `any` for the same
+/// reason.
+let rec private zodType () : Decoder<Zod.ZodType> =
+    let node =
+        Decode.object (fun get ->
+            match get.Optional.Field "type" Decode.string with
+            | Some "string" -> Zod.string ()
+            | Some "boolean" -> Zod.boolean ()
+            | Some "number"
+            | Some "integer" -> Zod.number ()
+            | Some "array" -> Zod.array (get.Optional.Field "items" (zodType ()) |> Option.defaultWith Zod.any)
+            | Some _
+            | None -> Zod.any ())
+    Decode.oneOf [ node; Decode.succeed (Zod.any ()) ]
+
+/// One property: its node, and the documentation the model is shown beside it. The
+/// description is read HERE rather than inside `zodType`, so that it lands on the property
+/// and not on an array's elements — which is where the JSON Schema wrote it.
+let private zodProperty () : Decoder<Zod.ZodType * string option> =
+    Decode.map2
+        (fun node description -> node, description)
+        (zodType ())
+        (Decode.oneOf [ Decode.optional "description" Decode.string; Decode.succeed None ])
+
+/// JSON Schema in, zod raw shape out — a plain object whose values are zod types, one per
+/// argument, which is what the SDK's tool builder takes.
+///
+/// The conversion belongs here, at the one edge that needs it, rather than making the schema
+/// itself SDK-shaped: every OTHER boundary a descriptor crosses (MCP's `tools/list`, an
+/// external server, the audit record) speaks JSON Schema.
+///
+/// A schema that cannot be read at all is no arguments at all. That is what the `catch`
+/// around `JSON.parse` used to say, and it is still the only answer available: refusing here
+/// would take a tool away from the turn over a schema the model never sees.
+let zodShape (schema: string) : obj =
+    let shape =
+        Decode.object (fun get ->
+            let required =
+                get.Optional.Field "required" (Decode.oneOf [ Decode.list Decode.string; Decode.succeed [] ])
+                |> Option.defaultValue []
+                |> Set.ofList
+            get.Optional.Field "properties" (Decode.keyValuePairs (zodProperty ()))
+            |> Option.defaultValue []
+            |> List.map (fun (key, (node: Zod.ZodType, description)) ->
+                let described =
+                    match description with
+                    | Some description -> node.describe description
+                    | None -> node
+                key ==> (if required.Contains key then described else described.optional ())))
+    match Decode.fromString shape schema with
+    | Ok properties -> createObj properties
+    | Error _ -> createObj []
+
+/// One tool, as the SDK declares one, over the registry's single dispatch.
+///
+/// Every tool — in-process today, proxied tomorrow — is answered through `registry.Invoke`,
+/// which is what makes a single audit seam possible rather than one per implementation. What
+/// comes back says whether the call HAPPENED: an `Error` is a protocol failure (no such tool,
+/// unreadable arguments) and the SDK is told about it as `isError`, while a tool that ran and
+/// went badly is `Ok` with text saying so, because that is something the model should read
+/// and act on.
+let private toolOf (registry: ToolRegistry) (descriptor: ToolDescriptor) : ToolDefinition =
+    // A hint nobody set is ABSENT rather than false, which is what MCP's optional annotations
+    // mean and what `readOnlyHint = false` would not.
+    let annotations =
+        jsOptions<ToolAnnotations> (fun a ->
+            if descriptor.ReadOnly then a.readOnlyHint <- true
+            match descriptor.Title with
+            | Some title -> a.title <- title
+            | None -> ())
+    tool
+        descriptor.Name
+        descriptor.Description
+        (zodShape descriptor.InputSchema)
+        annotations
+        (fun args ->
+            async {
+                let arguments = JS.JSON.stringify (if isNull args then createObj [] else args)
+                let call : ToolCall =
+                    { Namespace = descriptor.Namespace; Name = descriptor.Name; Arguments = arguments }
+                match! registry.Invoke call with
+                | Ok answer -> return ToolResult.ofText false answer.Text
+                | Error reason -> return ToolResult.ofText true reason
+            }
+            |> Async.StartAsPromise)
+
+/// One SDK MCP server per namespace, which is what puts the namespace in the wire name the
+/// model sees (mcp__<namespace>__<tool>) without inventing a naming scheme.
+///
+/// Every entry here is one of OUR in-process SDK servers, built from the registry. A declared
+/// external server never goes in this map, tempting as its one line is: a server the model
+/// reaches directly is a second door, and its calls skip the approval gate, the tool-use
+/// record and attribution — the whole of what `ToolUseLog` and `ToolStreams` wrap the merged
+/// registry to guarantee. It also decides who holds a provider's claim: reached through the
+/// proxy the claim belongs to the SESSION, so the terminal's write lease can arbitrate
+/// between the agent and a human; reached directly it belongs to the agent's own MCP session,
+/// and nobody can take the device off it.
+let private serversOf (registry: ToolRegistry) : obj =
+    ToolRegistry.namespaces registry
+    |> List.map (fun ns ->
+        let tools =
+            registry.Tools
+            |> List.filter (fun descriptor -> descriptor.Namespace = ns)
+            |> List.map (toolOf registry)
+            |> Array.ofList
+        ns ==> createSdkMcpServer ns "1.0.0" tools)
+    |> createObj
+
+// --- what one turn accumulates ------------------------------------------------------------
+
+/// The turn, as a fold: what the SDK's partial-message stream adds up to, and what each
+/// message gives the session to forward on the way.
+///
+/// A fold over values rather than a loop over mutable state, because this is the whole of
+/// what the adapter DECIDES — which delta is a thought, when a thought is whole, which body a
+/// turn ends with, what it spent — and none of it needs a model, a credential or a process to
+/// check. `Fable.ClaudeAgentSdk` stops deliberately short of it: the binding narrows the
+/// union, and everything here reads the narrowing.
+module Turn =
+
+    /// What has arrived so far.
+    type State =
+        { /// The body a successful ending settled on.
+          Body : string
+          /// The LAST message's text deltas — the fallback body for an ending that carries
+          /// none. Reset at every `message_start`, because a turn is several messages once
+          /// the model calls a tool, and the whole turn's text is not what the last message
+          /// said.
+          Streamed : string
+          /// One thought's deltas, held until its block ends, so that one thought is one
+          /// `Thinking` chunk. Forwarded per delta, a thought arrived as an event per token —
+          /// twenty-eight events for seven thoughts, split at "I" / "'ll clone the
+          /// repository" — and every reader had to put them back together by adjacency, which
+          /// is a rule nothing states and nothing checks. Text gets away with per-delta
+          /// because a message is bracketed by started/completed and the completion carries
+          /// the whole body; a thought is bracketed by nothing.
+          Thinking : string
+          /// The non-success ending the SDK YIELDED, if it yielded one.
+          Failed : string option
+          /// Plan 04, Step 28: the `result` message's usage block, kept instead of discarded.
+          Usage : AgentUsage }
+
+    let empty : State =
+        { Body = ""
+          Streamed = ""
+          Thinking = ""
+          Failed = None
+          Usage =
+            { InputTokens = 0
+              OutputTokens = 0
+              CacheReadTokens = 0
+              CacheCreationTokens = 0
+              Model = None } }
+
+    /// One count off the usage block. A result carrying no usage block at all is zero, and
+    /// that is the only absence there is to answer for: the SDK types every count inside one
+    /// non-null, and reading a missing one as `int` answers 0 anyway.
+    let private counted (read: Usage -> int) (usage: Usage) : int =
+        if isNull usage then 0 else read usage
+
+    /// Which model actually answered. `modelUsage` is keyed by model id, and it is the only
+    /// place a turn says which one ran; an empty key is no answer.
+    let private modelOf (result: ResultMessage) : string option =
+        if isNull result.modelUsage then None
+        else
+            JS.Constructors.Object.keys result.modelUsage
+            |> Seq.tryHead
+            |> Option.filter (fun id -> id <> "")
+
+    /// The spend, read off an ending. An ending that says nothing about the model leaves the
+    /// one already read standing rather than clearing it.
+    let private usageFrom (previous: AgentUsage) (result: ResultMessage) : AgentUsage =
+        { InputTokens = counted (fun usage -> usage.input_tokens) result.usage
+          OutputTokens = counted (fun usage -> usage.output_tokens) result.usage
+          CacheReadTokens = counted (fun usage -> usage.cache_read_input_tokens) result.usage
+          CacheCreationTokens = counted (fun usage -> usage.cache_creation_input_tokens) result.usage
+          Model = modelOf result |> Option.orElse previous.Model }
+
+    /// The pending thought, forwarded and cleared.
+    ///
+    /// Three things end a block and all three come here: the provider's own
+    /// `content_block_stop`, the next `message_start`, and the end of the stream. So a block
+    /// the provider never closes is still reported rather than lost — an unterminated thought
+    /// is worth reading and this is the only copy of it.
+    let flush (state: State) : State * AgentResponseChunk list =
+        if state.Thinking = "" then state, []
+        else { state with Thinking = "" }, [ AgentResponseChunk.Thinking state.Thinking ]
+
+    /// Fold one message off the query into the turn, and say what the session forwards for it.
+    let step (state: State) (message: Message) : State * AgentResponseChunk list =
+        match Message.classify message with
+        | MessageCase.StreamEvent partial ->
+            match StreamEvent.classify partial.``event`` with
+            // One `message_start` per API round: the model beginning its next message, which
+            // after a tool call is the next thing it has to say. The pending thought is
+            // flushed, a boundary is forwarded so the turn can be split where the model split
+            // it, and `Streamed` starts over.
+            | StreamEventCase.MessageStart ->
+                let state, thought = flush state
+                { state with Streamed = "" }, thought @ [ AgentResponseChunk.MessageBoundary ]
+            | StreamEventCase.ContentBlockDelta delta ->
+                match Delta.classify delta with
+                | DeltaCase.Text text ->
+                    { state with Streamed = state.Streamed + text }, [ AgentResponseChunk.Text text ]
+                // Reasoning arrives on the same stream under its own delta, told apart by the
+                // delta's TAG and never by which field happens to hold a string — that test
+                // is what let a thinking delta look exactly like an event nobody cared about.
+                // It is NOT added to `Streamed`: that is the fallback body for what the model
+                // SAID.
+                | DeltaCase.Thinking thought -> { state with Thinking = state.Thinking + thought }, []
+                | DeltaCase.Other _ -> state, []
+            | StreamEventCase.ContentBlockStop -> flush state
+            // Everything else, `content_block_start` among it. A block's opening is read by
+            // nobody here on purpose: the API sends it with its text or its thinking EMPTY and
+            // puts the content in the deltas, and the block is already bracketed by the stop
+            // above — so a second flush point would be a spare mechanism for a requirement one
+            // already meets.
+            | StreamEventCase.Other _ -> state, []
+        | MessageCase.Result result ->
+            let state = { state with Usage = usageFrom state.Usage result }
+            if result.subtype = "success" then
+                // The ending's own text, and what was streamed when the ending carries none.
+                let said = result.result
+                { state with Body = (if String.IsNullOrEmpty said then state.Streamed else said) }, []
+            else { state with Failed = Some ("agent run ended: " + result.subtype) }, []
+        | MessageCase.Other _ -> state, []
+
+    /// What the turn answers with.
+    let outcome (state: State) : Result<string, string> =
+        match state.Failed with
+        | Some reason -> Error reason
+        | None -> Ok state.Body
+
+// --- one turn, run ------------------------------------------------------------------------
+
+/// Everything one query runs under, assembled from what the session decided.
+let private optionsFor
+    (systemPrompt: string)
+    (model: string option)
+    (registry: ToolRegistry)
+    (controller: Fetch.Types.AbortController)
+    (claudePath: string)
+    (agentEnv: obj)
+    (claudeSpawner: obj)
+    : Options =
+    jsOptions<Options> (fun o ->
+        o.systemPrompt <- systemPrompt
         // The session's model choice, and ONLY when it has made one: an absent option is
         // what leaves the pick to the SDK, and passing an empty string instead would be
         // this session inventing a model id of "".
-        ...(prompts.model ? { model: prompts.model } : {}),
+        match model with
+        | Some chosen -> o.model <- chosen
+        | None -> ()
         // No `maxTurns`: unset is the SDK's no-cap default, the same setting interactive
         // Claude Code runs under. A turn ends when the model is done or somebody
         // interrupts it, never at a step count this file picked.
-        settingSources: [],
+        o.settingSources <- [||]
         // Ask for the reasoning, summarised — the only two choices the provider offers are a
         // summary and nothing, and unasked it answers with a signed empty block: proof that
         // something was thought, and nothing about what.
-        thinking: { type: 'adaptive', display: 'summarized' },
-        includePartialMessages: true,
-        mcpServers,
-        // The turn's ONLY tools are the registry's. `tools: []` drops every built-in
+        o.thinking <- Thinking.adaptive Summarized
+        o.includePartialMessages <- true
+        o.mcpServers <- serversOf registry
+        // The turn's ONLY tools are the registry's. `tools = [||]` drops every built-in
         // (Bash/Read/Glob/Grep/WebFetch/Agent/Skill) from the model's context; MCP servers
         // ride a separate channel, so the registry's tools survive it. `allowedTools` is
         // NOT a restriction — it is the auto-approve list, and on its own it left the
         // read-only built-ins reachable (a session could list the host filesystem). It
         // stays so our tools run without a permission round-trip, and it is COMPUTED from
         // the same descriptors the servers were built from, so the two cannot drift.
-        tools: [],
-        allowedTools: allowedTools,
-        abortController: controller,
-        ...(claudePath ? { pathToClaudeCodeExecutable: claudePath } : {}),
-        env: agentEnv,
-        spawnClaudeCodeProcess: claudeSpawner
-      }
-    })
-    for await (const m of q) {
-      if (m.type === 'stream_event') {
-        const e = m.event
-        // One `message_start` per API round: the model beginning its next message, which
-        // after a tool call is the next thing it has to say. Forwarded as a boundary so the
-        // turn can be split where the model split it, and `streamed` starts over so the
-        // fallback body below is that of the LAST message rather than of the whole turn.
-        if (e && e.type === 'message_start') {
-          if (thinking !== '') { onThought(thinking); thinking = '' }
-          onBoundary()
-          streamed = ''
-        }
-        if (e && e.type === 'content_block_delta' && e.delta && typeof e.delta.text === 'string') {
-          onChunk(e.delta.text)
-          streamed += e.delta.text
-        }
-        // Reasoning arrives on the same stream under its own delta, and used to fall through
-        // the condition above in silence — `typeof undefined === 'string'` is false, so a
-        // thinking delta looked exactly like an event this runner did not care about. It is
-        // NOT added to `streamed`: that is the fallback body for what the model SAID.
-        //
-        // ACCUMULATED to the end of its block, so one thought is one `onThought`. Forwarded
-        // per delta, a thought arrived as an event per token — twenty-eight events for seven
-        // thoughts, split at "I" / "'ll clone the repository" — and every reader had to put
-        // them back together by adjacency, which is a rule nothing states and nothing checks.
-        // Text gets away with per-delta because a message is bracketed by started/completed
-        // and the completion carries the whole body; a thought is bracketed by nothing.
-        if (e && e.type === 'content_block_delta' && e.delta && typeof e.delta.thinking === 'string') {
-          thinking += e.delta.thinking
-        }
-        // The provider's own end of the block. `message_start` above and the end of the
-        // stream below flush too, so a block the provider never closes is still reported
-        // rather than lost — an unterminated thought is worth reading and this is the only
-        // copy of it.
-        if (e && e.type === 'content_block_stop' && thinking !== '') {
-          onThought(thinking)
-          thinking = ''
-        }
-      } else if (m.type === 'result') {
-        // Plan 04, Step 28: read the usage block instead of discarding it.
-        const u = m.usage || {}
-        inputTokens = u.input_tokens || 0
-        outputTokens = u.output_tokens || 0
-        cacheReadTokens = u.cache_read_input_tokens || 0
-        cacheCreationTokens = u.cache_creation_input_tokens || 0
-        if (m.modelUsage) { const ks = Object.keys(m.modelUsage); if (ks.length) model = ks[0] }
-        if (m.subtype === 'success') body = (typeof m.result === 'string' && m.result !== '') ? m.result : streamed
-        else failed = 'agent run ended: ' + m.subtype
-      }
-    }
-    if (thinking !== '') { onThought(thinking); thinking = '' }
-    const usage = { inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens, model }
-    return failed ? { ok: false, body: '', reason: failed, ...usage } : { ok: true, body, reason: '', ...usage }
-  } catch (err) {
-    // Where a real ending arrives. The `result` branch above reads the ending the SDK
-    // YIELDS; the endings that happen — a step ceiling, a refused credential — are thrown
-    // instead, so they land here, and answering with zeros threw away the usage of the
-    // longest turns in the session. The streamed text is already durable (every chunk was
-    // appended as a delta while it arrived), so what is recovered here is the spend and the
-    // reason; `Agent.sdkFailureReason` unwraps the latter.
-    return { ok: false, body: '', reason: String((err && err.message) || err), inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens, model }
-  }
-})($0, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10)""")>]
+        o.tools <- [||]
+        o.allowedTools <- ToolRegistry.allowedTools registry |> Array.ofList
+        o.abortController <- box controller
+        if claudePath <> "" then o.pathToClaudeCodeExecutable <- claudePath
+        o.env <- agentEnv
+        o.spawnClaudeCodeProcess <- !!claudeSpawner)
+
+/// Drive one query to its end: forward what the turn says as it says it, and answer with the
+/// body or the reason, and what it spent either way.
 let private runQuery
-    (prompts: {| system: string; prompt: string; model: string |})
+    (systemPrompt: string)
+    (prompt: string)
+    (model: string option)
+    (registry: ToolRegistry)
     (agentEnv: obj)
     (claudePath: string)
-    /// The registry's descriptors, flattened for JS. Where eighteen positional callbacks
-    /// used to be: one array, and a tool costs nothing here at all.
-    (descriptors: obj array)
-    (invoke: string -> string -> string -> JS.Promise<JsToolAnswer>)
-    (allowedTools: string array)
-    (onChunk: string -> unit)
-    (onBoundary: unit -> unit)
-    (registerAbort: (unit -> unit) -> unit)
     (claudeSpawner: obj)
-    (onThought: string -> unit)
-    : JS.Promise<RunOutcome> =
-    jsNative
+    (registerAbort: (unit -> unit) -> unit)
+    (forward: AgentResponseChunk -> unit)
+    : Async<Result<string, string> * AgentUsage> =
+    async {
+        // Held OUTSIDE the try because a turn does not always end by returning: the SDK
+        // reports a non-success ending by THROWING, and what the turn spent before that has
+        // to survive the throw. See the `with` below.
+        let mutable state = Turn.empty
+        try
+            let controller = Fetch.newAbortController ()
+            registerAbort (fun () -> controller.abort ())
+            let options = optionsFor systemPrompt model registry controller claudePath agentEnv claudeSpawner
+            let running = query prompt options
+            let mutable finished = false
+            while not finished do
+                let! step = running.next () |> Interop.awaitPromise
+                if step.``done`` then finished <- true
+                else
+                    let next, chunks = Turn.step state step.value
+                    state <- next
+                    chunks |> List.iter forward
+            let ended, chunks = Turn.flush state
+            state <- ended
+            chunks |> List.iter forward
+            return Turn.outcome state, state.Usage
+        with error ->
+            // Where a real ending arrives. The `Result` branch of `Turn.step` reads the ending
+            // the SDK YIELDS; the endings that happen — a step ceiling, a refused credential —
+            // are thrown instead, so they land here, and answering with zeros threw away the
+            // usage of the longest turns in the session. The streamed text is already durable
+            // (every chunk was forwarded as a delta while it arrived), so what is recovered
+            // here is the spend and the reason; `sdkFailureReason` below unwraps the latter.
+            //
+            // A thought still PENDING when the throw arrives is not forwarded — the flush sits
+            // inside the try, above. That is how this has always behaved, and this change is
+            // deliberately not where it gets decided.
+            return Error (Http.reasonOf error), state.Usage
+    }
 
 /// What the SDK threw, said as the reason a turn stopped.
 ///
@@ -231,8 +376,6 @@ let private runQuery
 /// never once reached a screen, and how a person reading a stopped turn was told what
 /// layer had spoken rather than what had happened.
 ///
-/// Unwrapping here rather than in the emitted JS because this is the answer a person
-/// reads, and a rule about what a reader is told belongs where a cheap test can reach it.
 /// Anything not wearing the wrapper is already the reason and passes through.
 let sdkFailureReason (raw: string) : string =
     let prefix = "Claude Code returned an error result:"
@@ -242,9 +385,6 @@ let sdkFailureReason (raw: string) : string =
 /// Some sandboxes disallow the SDK's own vendored executable; `YESSION_BIN_CLAUDE`
 /// points the SDK at a system Claude Code install instead. Empty = SDK default.
 let private claudePath () = Interop.envOr "YESSION_BIN_CLAUDE" ""
-
-[<Emit("Object.fromEntries($0)")>]
-let private toEnvObj (entries: (string * string) array) : obj = jsNative
 
 /// One prompt per turn: the completed conversation as a transcript plus the message to
 /// answer. Built from the projection only — draft/Yjs state never appears here.
@@ -319,31 +459,6 @@ let private promptOf (context: AgentContextPack) : string =
             transcript
             terminals
 
-/// The registry's descriptors, as plain objects the Emit block can walk. The only place
-/// the two representations meet, and it is a projection — nothing is decided here.
-let private descriptorsOf (registry: ToolRegistry) : obj array =
-    registry.Tools
-    |> List.map (fun descriptor ->
-        box
-            {| ns = descriptor.Namespace
-               name = descriptor.Name
-               description = descriptor.Description
-               schema = descriptor.InputSchema
-               readOnly = descriptor.ReadOnly
-               title = descriptor.Title |})
-    |> Array.ofList
-
-/// The one dispatch, as a promise the Emit block can await. Every tool — in-process today,
-/// proxied tomorrow — arrives here, which is what makes a single audit seam possible.
-let private invokeOf (registry: ToolRegistry) : string -> string -> string -> JS.Promise<JsToolAnswer> =
-    fun ns name args ->
-        async {
-            match! registry.Invoke { Namespace = ns; Name = name; Arguments = args } with
-            | Ok answer -> return unbox<JsToolAnswer> {| ok = true; text = answer.Text |}
-            | Error reason -> return unbox<JsToolAnswer> {| ok = false; text = reason |}
-        }
-        |> Async.StartAsPromise
-
 /// Every tool ONE turn can reach, assembled once: the session's own registry, plus a
 /// namespace per MCP server it was given (Plan 17), wrapped in the audit seam (Plan 16,
 /// part C) over the merged whole — applying it per server would let a provider added later
@@ -388,34 +503,24 @@ let runWith (dataDir: string) (backend: SandboxBackend) (credential: (string * s
             // What this turn can call, assembled where every driver of a tool call assembles
             // it — the registry, then the audit, in that order and only once.
             let registry = registryFor capabilities
-            let! outcome =
+            let! outcome, usage =
                 runQuery
-                    {| system = context.SystemPrompt
-                       prompt = promptOf context
-                       // "" = no choice, which is the provider's own default. The turn
-                       // carries the choice rather than the runner holding one, so a
-                       // person changing it changes the next turn and nothing else.
-                       model = context.Model |> Option.map ModelId.value |> Option.defaultValue "" |}
-                    (toEnvObj (Map.toArray cli.Env))
+                    context.SystemPrompt
+                    (promptOf context)
+                    // No choice is `None`, all the way down to the SDK option that is then
+                    // not passed. The turn carries the choice rather than the runner holding
+                    // one, so a person changing it changes the next turn and nothing else.
+                    (context.Model |> Option.map ModelId.value)
+                    registry
+                    (cli.Env |> Map.toList |> List.map (fun (name, value) -> name ==> value) |> createObj)
                     (claudePath ())
-                    (descriptorsOf registry)
-                    (invokeOf registry)
-                    (ToolRegistry.allowedTools registry |> Array.ofList)
-                    (fun text -> onChunk (AgentResponseChunk.Text text))
-                    (fun () -> onChunk AgentResponseChunk.MessageBoundary)
-                    signal.OnAbort
                     cli.Spawner
-                    (fun thought -> onChunk (AgentResponseChunk.Thinking thought))
-                |> Interop.awaitPromise
-            let usage =
-                { InputTokens = outcome.inputTokens
-                  OutputTokens = outcome.outputTokens
-                  CacheReadTokens = outcome.cacheReadTokens
-                  CacheCreationTokens = outcome.cacheCreationTokens
-                  Model = if System.String.IsNullOrEmpty outcome.model then None else Some outcome.model }
+                    signal.OnAbort
+                    onChunk
             return
-                if outcome.ok then AgentCompleted (outcome.body, Some usage)
-                else AgentFailed (sdkFailureReason outcome.reason, Some usage)
+                match outcome with
+                | Ok body -> AgentCompleted (body, Some usage)
+                | Error reason -> AgentFailed (sdkFailureReason reason, Some usage)
         }
 
 /// The ambient-credential runner over a given data directory (existing call sites and the

@@ -95,7 +95,7 @@ let all =
         Tag.needs "Node platform bindings, aborting and relaying" [] (fun () -> NodeExtras.eventTests)
         Tag.needs "Node platform bindings, a given environment" [ Tag.Ports ] (fun () -> NodeExtras.seamTests)
         Tag.needs "Editor" [] (fun () -> Editor.tests)
-        // The SDK binding, before the adapter written over it. The live case spawns the
+        // The SDK binding, beside the adapter written over it. The live case spawns the
         // real CLI, so it needs `Ports` beside the credential.
         Tag.needs "Claude Agent SDK binding" [] (fun () -> ClaudeSdk.tests)
         Tag.needs "Claude Agent SDK live" [ Tag.LiveAgent; Tag.Ports ] (fun () -> ClaudeSdk.liveTests)

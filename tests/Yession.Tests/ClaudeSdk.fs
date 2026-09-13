@@ -2,12 +2,13 @@ module Yession.Tests.ClaudeSdk
 
 // The Claude Agent SDK binding (`src/Fable.ClaudeAgentSdk`).
 //
-// A binding project that nothing calls yet is only TYPE-CHECKED, and a type-check proves
-// almost nothing about a binding: every fault this layer can have — an argument in the wrong
-// position, a field named for the SDK's camelCase where the wire is snake_case, an option
-// that should have been absent and arrived empty, a handler the SDK calls with two arguments
-// and F# curried into one — compiles clean and fails at run time, in a live turn, as
-// something else.
+// A type-check proves almost nothing about a binding: every fault this layer can have — an
+// argument in the wrong position, a field named for the SDK's camelCase where the wire is
+// snake_case, an option that should have been absent and arrived empty, a handler the SDK
+// calls with two arguments and F# curried into one — compiles clean and fails at run time,
+// in a live turn, as something else. The adapter over it (`app/Agent.fs`) is F# now, so the
+// product does call every member below — but it calls them where a credential is needed,
+// which is the one place a fault is expensive to find.
 //
 // So the cheap tier drives everything here that a credential is not needed for: the two
 // constructors really run (the SDK is imported, not stubbed), the options object is read back

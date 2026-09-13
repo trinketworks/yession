@@ -387,9 +387,9 @@ let dev () =
 // node-datachannel (native addon) and @anthropic-ai/claude-agent-sdk (resolves its own native
 // `claude` sibling via import.meta.url) MUST NOT be bundled — they only work from their real
 // node_modules. @anthropic-ai/sandbox-runtime is the same shape: it reaches for vendored
-// helper binaries beside its own module. zod is a dynamic import shared with the SDK; dockerode
-// is pure JS but pulls ssh2 (with an optional native addon), so it resolves from node_modules
-// too. Everything else (yjs, lib0, Thoth, prosemirror, …) inlines.
+// helper binaries beside its own module. zod is the agent adapter's, and shared with the
+// SDK; dockerode is pure JS but pulls ssh2 (with an optional native addon), so it resolves
+// from node_modules too. Everything else (yjs, lib0, Thoth, prosemirror, …) inlines.
 //
 // `serialport` is NOT here: it belongs to the example provider, which has its own bundle and
 // its own externals (see the `example` verb). The product neither imports it nor declares it.

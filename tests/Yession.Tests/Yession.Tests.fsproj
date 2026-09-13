@@ -65,7 +65,7 @@
     <!-- The launch surface, through the model a browser folds and the renderer it serves. -->
     <Compile Include="LaunchSurface.fs" />
     <Compile Include="Editor.fs" />
-    <!-- The Claude Agent SDK binding, beside the adapter that will be written over it. -->
+    <!-- The Claude Agent SDK binding, beside the adapter written over it. -->
     <Compile Include="ClaudeSdk.fs" />
     <Compile Include="Agent.fs" />
     <!-- The zod bindings, exercised. Beside Agent.fs because the agent adapter is
@@ -131,6 +131,9 @@
          app/ calls them yet — the call sites migrate one at a time — and a binding
          project nothing calls is a project nothing proves. -->
     <ProjectReference Include="..\..\src\Fable.NodeExtras\Fable.NodeExtras.fsproj" />
+    <!-- The zod bindings. The product calls them now (app/Agent.fs turns a tool
+         descriptor's JSON Schema into a zod shape), so this reference is only so the
+         suite can name them directly. -->
     <ProjectReference Include="..\..\src\Fable.Zod\Fable.Zod.fsproj" />
     <!-- The serial provider is an EXAMPLE, not a component: nothing in the product
          references it. The suite does, because the tests it came with are worth keeping —

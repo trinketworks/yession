@@ -68,6 +68,9 @@
          a declaration becomes one of ITS calls and the encoding of that call is private to
          it — there is no second way to ask for a sandbox. -->
     <Compile Include="RepoSandboxes.fs" />
+    <!-- The agent turn, as F# over `Fable.ClaudeAgentSdk` and `Fable.Zod`. After Http.fs,
+         whose `reasonOf` says what a rejection said, and after Commands.fs, whose registry
+         a turn's tools are built from. -->
     <Compile Include="Agent.fs" />
     <Compile Include="ManagerStore.fs" />
     <Compile Include="SecretsCipher.fs" />
@@ -115,7 +118,12 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- The Claude Agent SDK and zod bindings. The agent adapter (app/Agent.fs) is what
+         needs both: the turn is F# over the first, and a tool descriptor's JSON Schema
+         becomes a zod shape for it through the second. `app/Sandboxes.fs` reaches the SDK
+         too, for the one interface its spawner seam implements. -->
     <ProjectReference Include="..\src\Fable.ClaudeAgentSdk\Fable.ClaudeAgentSdk.fsproj" />
+    <ProjectReference Include="..\src\Fable.Zod\Fable.Zod.fsproj" />
     <ProjectReference Include="..\src\Fable.Dockerode\Fable.Dockerode.fsproj" />
     <ProjectReference Include="..\src\Fable.Jose\Fable.Jose.fsproj" />
     <!-- The Node platform slice `Fable.Node` does not type: the WHATWG streams and decoder the
