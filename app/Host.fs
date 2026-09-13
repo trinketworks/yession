@@ -645,9 +645,9 @@ let startFull
                             | Error reason -> return Error reason
                         }
                   // `write_terminal`'s other half, and it lives beside it in the terminal
-                  // manager: the rule that admits one admits the other, and the composition
-                  // root is not where a bound belongs.
-                  Read = terminals.Tail }
+                  // manager: the rule that admits one admits the other (`BlockAccess`), and
+                  // the composition root is not where a bound belongs.
+                  Read = fun id from waitFor -> terminals.Tail id ActorRef.Agent from waitFor }
               RunGated = commandGate.Run
               Secrets =
                 match secretsCapabilities with

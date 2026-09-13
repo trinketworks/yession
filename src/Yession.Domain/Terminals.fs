@@ -428,25 +428,36 @@ module Flip =
         | false, Some _ when autoHeld -> FlipToBlock
         | false, _ -> FlipNothing
 
-/// Who may type raw bytes into an INSTRUMENTED terminal — one whose commands are blocks.
+/// Who may reach INTO an instrumented terminal — one whose commands are blocks — while a
+/// block runs: type raw bytes into it, or read its screen mid-run.
 ///
-/// The rule the admission asks, kept apart from the write that applies it. Blocks exist so
-/// that what runs is classified and on the record, and raw bytes into the shell would be
-/// the door around that — so nobody types into a shell terminal at large. Two parties are
-/// admitted, and both are typing into something already on the record rather than running
-/// something new:
+/// The rule the admission asks, kept apart from the write and the read that apply it.
+/// Blocks exist so that what runs is classified and on the record, and raw bytes into the
+/// shell would be the door around that — so nobody types into a shell terminal at large;
+/// and a block's output comes back as the block's answer, so nobody reads a shell terminal
+/// mid-run at large either. Two parties are admitted, and both are reaching into something
+/// already on the record rather than running something new:
 ///
 ///   * the LEASE HOLDER — detection handed them the terminal over a block that took the
-///     alternate screen (`Flip`), and their keystrokes are that block's;
+///     alternate screen (`Flip`), their keystrokes are that block's, and the screen is the
+///     only answer that block has;
 ///   * the AUTHOR OF THE RUNNING BLOCK — the block is theirs, classified and recorded, and a
 ///     command that prompts is waiting on exactly them. Without this an agent's block that
 ///     asked for stdin (`BlockStdinPolicy`) had stdin and no hand to feed it with, and a
 ///     block of its that turned out to be stuck could be ended only by closing the whole
-///     terminal, `cd` and all.
+///     terminal, `cd` and all. And the same agent, waiting on its own ten-minute `lint`,
+///     was refused a `read_terminal` of it — told to run it with `execute_command`, which it
+///     had — so it could not wait for a line of the output it was allowed to type at.
 ///
-/// Neither admits typing while NOTHING runs: between blocks the shell is at its prompt, and
-/// bytes typed there would be a command that skipped the queue.
-module Typing =
+/// One rule for both verbs, because they are one question: is this block yours to be in the
+/// middle of. A reader takes nothing and blocks nobody, which is why the read used to be
+/// gated on detection alone; but whose block it is still decides whether the screen is
+/// theirs to read mid-run, or another author's answer to wait for.
+///
+/// Neither admits either while NOTHING runs: between blocks the shell is at its prompt,
+/// bytes typed there would be a command that skipped the queue, and there is nothing to read
+/// that a block's answer did not already carry.
+module BlockAccess =
 
     let admits (holder: ActorRef option) (runningAuthor: ActorRef option) (by: ActorRef) : bool =
         holder = Some by || runningAuthor = Some by

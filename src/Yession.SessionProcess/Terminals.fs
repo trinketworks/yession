@@ -725,7 +725,7 @@ module SessionTerminals =
           ///
           /// `None` is the live tail; `Some line` reads FORWARD from a line a previous read
           /// handed back. The two are bounded differently on purpose — see `TerminalTail`.
-          Tail : TerminalId -> int option -> TerminalWait option -> Async<Result<TerminalTail, string>>
+          Tail : TerminalId -> ActorRef -> int option -> TerminalWait option -> Async<Result<TerminalTail, string>>
           /// The lease holder's viewport size, applied to the pty and the emulator. `false`
           /// when dropped, on the same terms as `Input`.
           Resize : TerminalId -> ActorRef -> int -> int -> bool
@@ -812,7 +812,7 @@ module SessionTerminals =
           PeerGone = fun _ -> async { return () }
           Input = fun _ _ _ -> false
           Write = fun _ _ _ -> async { return Error "this session has no terminals" }
-          Tail = fun _ _ _ -> async { return Error "this session has no terminals" }
+          Tail = fun _ _ _ _ -> async { return Error "this session has no terminals" }
           Resize = fun _ _ _ _ -> false
           Busy = fun () -> Set.empty
           Leased = fun () -> Set.empty
@@ -2077,7 +2077,7 @@ module SessionTerminals =
                 let key = TerminalId.value id
                 if not (isOpen id) then return Error "terminal is not open"
                 elif canInstrument key then
-                    // The refusal stops exactly where `Typing.admits` says (Plan 20, stage 6).
+                    // The refusal stops exactly where `BlockAccess.admits` says (Plan 20, stage 6).
                     // It exists because raw bytes into a shell would be the door around the
                     // classifier; what is admitted is typing into a block already classified
                     // and on the record — by the holder detection handed the terminal to, or
@@ -2089,7 +2089,7 @@ module SessionTerminals =
                         match runningAuthor.TryGetValue key with
                         | true, author when Set.contains key busy -> Some author
                         | _ -> None
-                    if not (Typing.admits holder running by) then
+                    if not (BlockAccess.admits holder running by) then
                         return Error "this terminal runs commands as blocks — run it with execute_command, where they are classified and on the record"
                     elif holder = Some by then
                         return (if input id by data then Ok () else Error noShell)
@@ -2118,16 +2118,18 @@ module SessionTerminals =
         /// window. A CLOSED terminal has no live length to count back from, so it reads what
         /// the store still holds — already bounded by the per-terminal retention cap, and
         /// still worth answering, because a device's recording outlives its stream.
-        let tail (id: TerminalId) (from: int option) (waitFor: TerminalWait option) : Async<Result<TerminalTail, string>> =
+        let tail (id: TerminalId) (by: ActorRef) (from: int option) (waitFor: TerminalWait option) : Async<Result<TerminalTail, string>> =
             async {
                 let key = TerminalId.value id
                 // Refused where a command's own answer carries what it printed — and that is
-                // every instrumented terminal EXCEPT one whose running block has taken the
-                // screen (Plan 20, stage 6). There `execute_command` has already returned
-                // `Interactive` with nothing to show, so the screen is the only answer there
-                // is. Gated on detection rather than on the reader, because a reader is not a
-                // second writer: it takes nothing and blocks nobody, so who is asking does not
-                // change the answer.
+                // every instrumented terminal EXCEPT one whose running block is the READER's
+                // to be in the middle of (`BlockAccess`, the same rule that admits typing):
+                // the lease holder, whose block took the screen (Plan 20, stage 6) — there
+                // `execute_command` has already returned `Interactive` with nothing to show,
+                // so the screen is the only answer there is — and the author of the block
+                // running now, whose answer has not come yet and who may wait for a line of
+                // it. A reader still takes nothing and blocks nobody; whose block it is
+                // decides whether the screen is theirs to read mid-run.
                 //
                 // The refusal is the TAIL read's alone. A command's answer carries what it
                 // printed only up to `TerminalCommandOutcome.answerCap` characters, and past
@@ -2136,7 +2138,11 @@ module SessionTerminals =
                 // what it already has. A `from` read is the page that recovers the middle: it
                 // is what `TerminalCommandOutcome` means by "the transcript keeps all of it",
                 // and without it that sentence was aspirational.
-                if from.IsNone && canInstrument key && not (TerminalLeases.autoHeld id leases) then
+                let running =
+                    match runningAuthor.TryGetValue key with
+                    | true, author when Set.contains key busy -> Some author
+                    | _ -> None
+                if from.IsNone && canInstrument key && not (BlockAccess.admits (TerminalLeases.holderOf id leases) running by) then
                     return
                         Error
                             "this terminal's output comes back as blocks — run it with execute_command, whose answer carries what it printed, and read on from a line of it with from:"

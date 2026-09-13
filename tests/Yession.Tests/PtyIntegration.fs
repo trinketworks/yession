@@ -745,7 +745,7 @@ let private agentLeaseTests =
                 async {
                     // `execute_command` answers with what a command printed — except for the
                     // one command that has not printed an answer and never will on its own.
-                    match! terminals.Tail id None None with
+                    match! terminals.Tail id ActorRef.Agent None None with
                     | Ok _ -> failwith "a shell's output is its blocks', and reading it twice is two answers to one question"
                     | Error reason -> Expect.stringContains reason "execute_command" "so it is refused, and says where the answer is"
 
@@ -760,12 +760,50 @@ let private agentLeaseTests =
                             20000)
                     let! wedged = until 8000 (fun () -> terminals.Interactive id)
                     Expect.isTrue wedged "the block took the screen"
-                    match! terminals.Tail id None None with
+                    match! terminals.Tail id ActorRef.Agent None None with
                     | Error e -> failwithf "there is no command answer to read instead, so the screen is the only one: %s" e
                     | Ok _ ->
+                        // The screen is the HOLDER's to read, as it is theirs to type at; a
+                        // bystander is refused on the same terms.
+                        match! terminals.Tail id (PeerRef (PeerId.create "bob" |> expect)) None None with
+                        | Ok _ -> failwith "a bystander is not in the middle of this block"
+                        | Error reason -> Expect.stringContains reason "execute_command" "and is told where an answer comes from"
                         match! terminals.Write id ActorRef.Agent "yes\r" with
                         | Error e -> failwith e
                         | Ok () -> do! block
+                })
+
+        // The other half of the same rule (`BlockAccess`): the author of a running block may
+        // read it mid-run — and wait for a line of it — as they may type at it. Refused, an
+        // agent waiting on its own ten-minute `lint` was told to run it with
+        // `execute_command`, which it had, and could not wait for the line it needed.
+        testCaseAsync "the author of a running block may read it mid-run, and a bystander may not" <|
+            withPosixTerminal "authorread" (fun terminals id records _ _ _ ->
+                async {
+                    let ada = Principal.Peer (PeerId.create "ada" |> expect)
+                    let! block =
+                        Async.StartChild (
+                            terminals.RunBlock id (agentEntry id ada "1") "sh -c 'echo started; sleep 60'" ignore,
+                            20000)
+                    let! running = printedOutput records "started"
+                    Expect.isTrue running "the block is running, and has printed"
+                    match! terminals.Tail id ActorRef.Agent None None with
+                    | Error e -> failwithf "the running block is the agent's, so its screen is the agent's to read: %s" e
+                    | Ok tail -> Expect.stringContains tail.Text "started" "and the read carries what the block has printed so far"
+                    // A held read, the way `wait_for_pattern` asks: admitted on the same terms.
+                    match! terminals.Tail id ActorRef.Agent None (Some { Until = MatchLiteral "started"; TimeoutSeconds = 1.0 }) with
+                    | Error e -> failwithf "a held read of one's own block is a read of one's own block: %s" e
+                    | Ok tail -> Expect.stringContains tail.Text "started" "and it answers when the line is there"
+                    match! terminals.Tail id (PeerRef (PeerId.create "bob" |> expect)) None None with
+                    | Ok _ -> failwith "a bystander is not in the middle of the agent's block"
+                    | Error reason -> Expect.stringContains reason "execute_command" "and is told where an answer comes from"
+                    match! terminals.Write id ActorRef.Agent "\u0003" with
+                    | Error e -> failwith e
+                    | Ok () -> do! block
+                    // Between blocks there is nothing to read that an answer did not carry.
+                    match! terminals.Tail id ActorRef.Agent None None with
+                    | Ok _ -> failwith "nothing runs, so there is no block to be in the middle of"
+                    | Error reason -> Expect.stringContains reason "execute_command" "the refusal names the answer instead"
                 })
     ]
 
