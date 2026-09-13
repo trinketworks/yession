@@ -811,14 +811,21 @@ let private connectedSomewhere () =
             | PeerScope _ -> false
             | SessionScope _ | UserScope _ | LocalScope -> true))
 
-/// Writing a few words, read at each pass (Plan 25) — the same gate a turn has, because it is
-/// the same credential and the same question about whether this session can reach a model.
+/// Writing a few words, read at each pass (Plan 25).
 ///
 /// On the DEPLOYMENT's credential, not a person's: naming a chapter is nobody's turn. No one
 /// asked for it, a chapter mark carries no author, and a session that spent whichever human
 /// happened to be connected would be attributing a request to somebody who did not make it.
+///
+/// Which is why the gate is the DISPATCHER's own question rather than the turn's.
+/// `connectedSomewhere` counts a user scope, correctly, because a turn names the acting
+/// person's own scope; these calls never do — `turnTargets … Deployment` is the session's
+/// scope and the deployment's, and nobody has no own scope. Gated the turn's way, a
+/// deployment where everybody signed in as themselves reads as connected, every chapter is
+/// asked about once, every ask fails to resolve a credential, and no chapter is ever named
+/// again. The gate has to promise what the dispatcher can deliver.
 let private summarize () : Summarize option =
-    if not (envCreds || connectedSomewhere ()) then None
+    if not (envCreds || (claudeTargetFor CredentialFor.Deployment).IsSome) then None
     else
         Some (fun ask ->
             async {
