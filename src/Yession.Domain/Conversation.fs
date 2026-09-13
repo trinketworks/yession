@@ -158,7 +158,9 @@ module Chapters =
     /// at the size a chapter is set in. This is the length of a GUESS — a person's own name
     /// for a chapter is theirs to make as long as they like — and a guess that wraps onto a
     /// second line has claimed more of the screen than a guess is worth.
-    let [<Literal>] private Limit = 48
+    /// Public because a title is set on the same kind of surface — one line, read at a
+    /// glance — and a second number for it would be a second answer to one question.
+    let [<Literal>] Limit = 48
 
     /// What a first line can OPEN with that says nothing about what the line SAYS: a
     /// heading's hashes, a quote's angle, a bullet.
@@ -374,6 +376,46 @@ module Chapters =
             match headline answer |> unquoted |> cutToLimit with
             | "" -> None
             | name -> Some name
+
+/// What the whole session is called.
+///
+/// `Chapters`' sibling, and deliberately thin: the rules about when a name may be written and
+/// when it is worth reconsidering are `Naming`'s, and they are the same rules for both. What
+/// is different about a title is only its material — everything, rather than one stretch — and
+/// that it has no guess, because nothing about a session says what it is for the way a
+/// message's first line says what a chapter is about. An untitled session reads `""`, and that
+/// is a state nobody chose rather than one nobody has got to.
+module Titles =
+
+    /// How much of a session is worth reading to name it. The same bounds a chapter's ask
+    /// uses, and from the START: a session is named for what it set out to do, and the
+    /// fortieth message moves that less than the first.
+    let [<Literal>] private ReadItems = 12
+    let [<Literal>] private ReadChars = 400
+
+    let summaryAsk (items: ConversationItem list) (current: string option) : SummaryAsk =
+        { Task =
+            // The inner binding is NOT `current`, for the reason `Chapters.summaryAsk` says.
+            match current with
+            | None ->
+                "Name this working session the way a task in a list is named: a few words "
+                + "saying what it is FOR, in the session's own vocabulary. "
+                + "Answer with the name alone — no quotes, no preamble, no full stop."
+            | Some standing ->
+                "This working session is currently called \"" + standing + "\". More has been "
+                + "said in it since that was written. If those words are still the best short "
+                + "name for what the session is FOR, answer with them exactly as they are. If "
+                + "the newer material shows it is really about something else, answer with a "
+                + "few words that say so, in the session's own vocabulary. Answer with the "
+                + "name alone — no quotes, no preamble, no full stop."
+          Lines =
+            items
+            |> List.truncate ReadItems
+            |> List.map (fun i ->
+                let body = i.Body.Trim ()
+                if body.Length <= ReadChars then body else body.Substring (0, ReadChars) + "…")
+            |> List.filter (fun line -> line <> "")
+          Budget = Chapters.Limit }
 
 type ConversationProjection =
     { Items : ConversationItem list

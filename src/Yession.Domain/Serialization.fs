@@ -234,11 +234,13 @@ module Codec =
                 match subject with
                 | NamingSubject.Chapter id ->
                     Encode.object [ "kind", Encode.string "chapter"; "messageId", messageId.Encode id ]
+                | NamingSubject.Title -> Encode.object [ "kind", Encode.string "title" ]
           Decode =
             Decode.field "kind" Decode.string
             |> Decode.andThen (fun kind ->
                 match kind with
                 | "chapter" -> Decode.field "messageId" messageId.Decode |> Decode.map NamingSubject.Chapter
+                | "title" -> Decode.succeed NamingSubject.Title
                 | other -> Decode.fail (sprintf "Not a naming subject: %s" other)) }
 
     let private sessionNamed : Codec<SessionNamed> =

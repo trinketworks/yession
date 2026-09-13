@@ -96,6 +96,19 @@ let private envelopeSerializationTests =
             let json = Codec.toString Codec.sessionEventEnvelope original
             Expect.equal (Codec.fromString Codec.sessionEventEnvelope json) (Ok original) "round-trip should be identical"
 
+        testCase "a title the session settled round-trips through the envelope codec" <| fun () ->
+            let original =
+                { sampleEnvelope () with
+                    Actor = SessionProcess
+                    Event =
+                        SessionNamed
+                            { Subject = NamingSubject.Title
+                              Name = "The refresh-token bug"
+                              Read = 9
+                              OnBehalfOf = None } }
+            let json = Codec.toString Codec.sessionEventEnvelope original
+            Expect.equal (Codec.fromString Codec.sessionEventEnvelope json) (Ok original) "round-trip should be identical"
+
         testCase "a name the session settled round-trips through the envelope codec" <| fun () ->
             let original =
                 { sampleEnvelope () with
@@ -2536,6 +2549,14 @@ let private namingTests =
     let opened (item: ConversationItem) (written: string) =
         item.MessageId, { Opens = true; Name = Ylmish.Text.ofString written }
     let subjectOf (item: ConversationItem) = NamingSubject.Chapter item.MessageId
+    /// A title somebody set by hand, so a title is never what these answer with.
+    let titled = "Titled by hand"
+    /// What is owed about CHAPTERS. Scoped, so a chapter case goes red when the chapter rule
+    /// breaks and not when the title rule does — the two are asked of the same fold, and a
+    /// case that answered for both would name neither.
+    let chaptersOwed settled chapters items =
+        Naming.owed settled titled chapters items
+        |> List.filter (fun (job: Naming.Job) -> job.Subject <> NamingSubject.Title)
     let settledAs (item: ConversationItem) (name: string) (read: int) =
         Map.ofList
             [ subjectOf item,
@@ -2549,7 +2570,7 @@ let private namingTests =
             let item = saying "m" "run tests"
             let chapters = Map.ofList [ opened item (Chapters.defaultName item) ]
             Expect.equal
-                (Naming.owed Map.empty chapters [ item ] |> List.map (fun job -> job.Subject))
+                (chaptersOwed Map.empty chapters [ item ] |> List.map (fun job -> job.Subject))
                 [ subjectOf item ]
                 "the guess is nobody's words"
 
@@ -2557,7 +2578,7 @@ let private namingTests =
         testCase "a chapter somebody named themselves is owed nothing, ever" <| fun () ->
             let item = saying "m" "run tests"
             let chapters = Map.ofList [ opened item "The Friday deploy" ]
-            Expect.equal (Naming.owed Map.empty chapters [ item ]) [] "their words end the question"
+            Expect.equal (chaptersOwed Map.empty chapters [ item ]) [] "their words end the question"
 
         // ...and it holds against the session's own record, not just against the guess: a
         // person who types over a name the session wrote has the same last word.
@@ -2568,7 +2589,7 @@ let private namingTests =
             let items = [ item; saying "n" "and the rest" ]
             let chapters = Map.ofList [ opened item "Their better name" ]
             Expect.equal
-                (Naming.owed (settledAs item "What the session wrote" 1) chapters items)
+                (chaptersOwed (settledAs item "What the session wrote" 1) chapters items)
                 []
                 "the doc no longer reads what the session left there"
 
@@ -2578,7 +2599,7 @@ let private namingTests =
             let second = saying "b" "the auth middleware drops the refresh token"
             let chapters = Map.ofList [ opened first "Running the tests" ]
             Expect.equal
-                (Naming.owed (settledAs first "Running the tests" 1) chapters [ first; second ]
+                (chaptersOwed (settledAs first "Running the tests" 1) chapters [ first; second ]
                  |> List.map (fun job -> job.Subject))
                 [ subjectOf first ]
                 "its own words are not somebody else's"
@@ -2589,7 +2610,7 @@ let private namingTests =
             let first = saying "a" "run tests"
             let second = saying "b" "the auth middleware drops the refresh token"
             let chapters = Map.ofList [ opened first "Running the tests" ]
-            let jobs = Naming.owed (settledAs first "Running the tests" 1) chapters [ first; second ]
+            let jobs = chaptersOwed (settledAs first "Running the tests" 1) chapters [ first; second ]
             Expect.equal (jobs |> List.map (fun job -> job.Read)) [ 2 ] "both messages, and the fact will say so"
 
         // ...and the bound that keeps it from being one model call per message.
@@ -2597,7 +2618,7 @@ let private namingTests =
             let items = [ saying "a" "one"; saying "b" "two"; saying "c" "three" ]
             let first = List.head items
             let chapters = Map.ofList [ opened first "Two of them" ]
-            Expect.equal (Naming.owed (settledAs first "Two of them" 2) chapters items) [] "three is not six"
+            Expect.equal (chaptersOwed (settledAs first "Two of them" 2) chapters items) [] "three is not six"
 
         // A chapter an act opens by nature has no entry until somebody touches it, and an act
         // note is a sentence somebody already wrote short.
@@ -2606,20 +2627,20 @@ let private namingTests =
                 { saying "n" "PR octo/hello#12 merged" with
                     Kind = ConversationItemKind.ActNote { Detail = None; Notable = true } }
             Expect.isTrue (Chapters.opens Map.empty act) "it does open a chapter"
-            Expect.equal (Naming.owed Map.empty Map.empty [ act ]) [] "and it is still not named"
+            Expect.equal (chaptersOwed Map.empty Map.empty [ act ]) [] "and it is still not named"
 
         // A closed chapter is not a chapter.
         testCase "a chapter somebody closed is owed nothing" <| fun () ->
             let item = saying "m" "run tests"
             let chapters = Map.ofList [ item.MessageId, { Opens = false; Name = Ylmish.Text.empty } ]
-            Expect.equal (Naming.owed Map.empty chapters [ item ]) [] "there is no chapter here to name"
+            Expect.equal (chaptersOwed Map.empty chapters [ item ]) [] "there is no chapter here to name"
 
         // The doc and the log are two stores, and a mark can name a message the log has not
         // reached yet.
         testCase "a mark with no message behind it is not a subject" <| fun () ->
             let item = saying "m" "run tests"
             let chapters = Map.ofList [ opened item (Chapters.defaultName item) ]
-            Expect.equal (Naming.owed Map.empty chapters []) [] "nothing to read, so nothing to ask"
+            Expect.equal (chaptersOwed Map.empty chapters []) [] "nothing to read, so nothing to ask"
 
         // A second ask exists to let the model KEEP the name, and it cannot keep a name it
         // was never told. What is pinned is that the name reaches the ask, not the prose
@@ -2628,7 +2649,7 @@ let private namingTests =
             let first = saying "a" "run tests"
             let second = saying "b" "the auth middleware drops the refresh token"
             let chapters = Map.ofList [ opened first "Running the tests" ]
-            match Naming.owed (settledAs first "Running the tests" 1) chapters [ first; second ] with
+            match chaptersOwed (settledAs first "Running the tests" 1) chapters [ first; second ] with
             | [ job ] -> Expect.isTrue (job.Ask.Task.Contains "Running the tests") "the name it has is in the ask"
             | other -> failwithf "expected one job, got %A" other
 
@@ -2638,7 +2659,7 @@ let private namingTests =
         testCase "a first ask is not anchored to the guess" <| fun () ->
             let item = saying "m" "run tests"
             let chapters = Map.ofList [ opened item (Chapters.defaultName item) ]
-            match Naming.owed Map.empty chapters [ item ] with
+            match chaptersOwed Map.empty chapters [ item ] with
             | [ job ] -> Expect.isFalse (job.Ask.Task.Contains "run tests") "nothing to keep, so nothing to anchor to"
             | other -> failwithf "expected one job, got %A" other
 
@@ -2647,9 +2668,48 @@ let private namingTests =
         testCase "a job carries the name it read, for the write to compare against" <| fun () ->
             let item = saying "m" "run tests"
             let chapters = Map.ofList [ opened item "Running the tests" ]
-            match Naming.owed (settledAs item "Running the tests" 1) chapters [ item; saying "n" "and the rest" ] with
+            match chaptersOwed (settledAs item "Running the tests" 1) chapters [ item; saying "n" "and the rest" ] with
             | [ job ] -> Expect.equal job.Held "Running the tests" "what stood when this pass looked"
             | other -> failwithf "expected one job, got %A" other
+
+        // --- the session's own name -------------------------------------------------------
+
+        // A title has no guess, so the state nobody chose is the empty one.
+        testCase "an untitled session with something said in it is owed a title" <| fun () ->
+            let item = saying "m" "the auth middleware drops the refresh token"
+            Expect.equal
+                (Naming.owed Map.empty "" Map.empty [ item ] |> List.map (fun job -> job.Subject))
+                [ NamingSubject.Title ]
+                "empty is nobody's words, so it is the session's to write"
+
+        testCase "a session nobody has said anything in is owed no title" <| fun () ->
+            Expect.equal (Naming.owed Map.empty "" Map.empty []) [] "there is nothing to name it after"
+
+        testCase "a title somebody typed is owed nothing, ever" <| fun () ->
+            let item = saying "m" "the auth middleware drops the refresh token"
+            Expect.equal (Naming.owed Map.empty "Friday deploy" Map.empty [ item ]) [] "their words end the question"
+
+        // The same doubling rule as a chapter's, over the whole conversation rather than a
+        // stretch — which is the "run tests" case at the session's own scale.
+        testCase "a session whose material doubles is titled again" <| fun () ->
+            let items = [ saying "a" "run tests"; saying "b" "the auth middleware drops the refresh token" ]
+            let settled =
+                Map.ofList
+                    [ NamingSubject.Title,
+                      { Subject = NamingSubject.Title; Name = "Running the tests"; Read = 1; OnBehalfOf = None } ]
+            match Naming.owed settled "Running the tests" Map.empty items with
+            | [ job ] ->
+                Expect.equal job.Read 2 "and the fact will say it read both"
+                Expect.isTrue (job.Ask.Task.Contains "Running the tests") "with the name it has, so it can keep it"
+            | other -> failwithf "expected one job, got %A" other
+
+        testCase "a session that has not doubled since its title is not asked again" <| fun () ->
+            let items = [ saying "a" "one"; saying "b" "two"; saying "c" "three" ]
+            let settled =
+                Map.ofList
+                    [ NamingSubject.Title,
+                      { Subject = NamingSubject.Title; Name = "Two of them"; Read = 2; OnBehalfOf = None } ]
+            Expect.equal (Naming.owed settled "Two of them" Map.empty items) [] "three is not six"
 
         // --- what the pass records ------------------------------------------------------
 
@@ -2657,7 +2717,7 @@ let private namingTests =
         testCase "a write that lost its race is settled to what stands, not to what was said" <| fun () ->
             let item = saying "m" "run tests"
             let chapters = Map.ofList [ opened item (Chapters.defaultName item) ]
-            match Naming.owed Map.empty chapters [ item ] with
+            match chaptersOwed Map.empty chapters [ item ] with
             | [ job ] ->
                 let fact = Naming.settle job None "What they typed instead"
                 Expect.equal fact.Name "What they typed instead" "the fact records the doc, not the answer"
