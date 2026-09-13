@@ -12,6 +12,7 @@ module Yession.Host.Sse
 
 open Fable.Core
 open Fable.Core.JsInterop
+open Fable.NodeExtras
 open Yession.Domain
 open Yession.Host.Interop
 
@@ -70,55 +71,6 @@ let stream (req: IncomingMessage) (res: ServerResponse) (encode: Encode<'a>) (su
     |> ignore
     sink
 
-// Consume an SSE stream: connect (with whatever request headers the caller's authentication
-// wants — a control secret, a strategy's identity assertion, or none), hand each event's rejoined
-// `data:` lines to the sink, reconnect with a fixed backoff when the connection drops, and cancel
-// both the retry loop and the live fetch on unsubscribe. Best-effort by design: a transport error
-// is a dropped connection, retried, never thrown.
-//
-// EVERY statement below is semicolon-terminated, and that is load-bearing: Fable inlines a lambda
-// argument as a parenthesised IIFE, so `$2(event)` can expand to `((e) => {...})(event)`. Without
-// the semicolon on the line above it, JS's automatic semicolon insertion glues the two together
-// and calls the previous expression's result — which fails at runtime, inside a catch, as a stream
-// that silently delivers nothing.
-[<Emit("""(function (url, headers, onEvent, retry) {
-  const controller = new AbortController();
-  let cancelled = false;
-  const run = async () => {
-    while (!cancelled) {
-      try {
-        const res = await fetch(url, { method: 'GET', headers: { ...Object.fromEntries(headers), 'accept': 'text/event-stream' }, signal: controller.signal });
-        if (!res.ok) { if (!retry(res.status)) return; throw new Error('sse subscribe failed: ' + res.status); }
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = '';
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-          let idx;
-          while ((idx = buffer.indexOf('\n\n')) >= 0) {
-            const event = buffer.slice(0, idx);
-            buffer = buffer.slice(idx + 2);
-            onEvent(event);
-          }
-        }
-      } catch (e) { if (cancelled) return; }
-      if (cancelled) return;
-      await new Promise(r => setTimeout(r, 1000));
-    }
-  };
-  run();
-  return () => { cancelled = true; controller.abort(); };
-})($0, $1, $2, $3)""")>]
-let private openStream
-    (url: string)
-    (headers: (string * string)[])
-    (onEvent: Sink<string>)
-    (retry: int -> bool)
-    : (unit -> unit) =
-    jsNative
-
 /// Whether a connect that was REFUSED should be tried again, asked once per failure with the
 /// status the server answered.
 ///
@@ -136,12 +88,138 @@ module Retry =
     /// want: the peer is ours, and its absence is always temporary.
     let always : Retry = fun _ -> true
 
+/// The whole events in what has arrived so far, and the tail that is not one yet.
+///
+/// A stream of events is a stream of BYTES: one read can carry three events, or half of one, and
+/// what separates them is a blank line. So every read hands what it has to this, dispatches what
+/// came back whole, and keeps the remainder for the next read to finish. A remainder still left
+/// when the connection ends is DISCARDED — half an event is not an event, and the reconnect
+/// starts its buffer empty.
+let events (buffered: string) : string list * string =
+    let rec loop (whole: string list) (rest: string) =
+        match rest.IndexOf "\n\n" with
+        | -1 -> List.rev whole, rest
+        | boundary -> loop (rest.Substring (0, boundary) :: whole) (rest.Substring (boundary + 2))
+
+    loop [] buffered
+
+/// What one connect attempt decided about the next one.
+[<RequireQualifiedAccess>]
+type private Attempt =
+    /// Connect again after the backoff. Every ordinary end of a stream is this one: a server that
+    /// closed, a socket that dropped, a refusal the caller called temporary.
+    | Reconnect
+    /// Stop for good, because the caller called this refusal permanent. The subscription is left
+    /// inert rather than errored.
+    | Finished
+
+/// How long a connection that ended waits before it is made again. Fixed rather than backed off,
+/// because the peer these legs talk to is ours: it is restarting, not overloaded, and a growing
+/// delay would only lengthen the window in which its news does not reach us.
+let private retryAfterMs = 1000
+
+// Consume an SSE stream: connect (with whatever request headers the caller's authentication
+// wants — a control secret, a strategy's identity assertion, or none), hand each event's rejoined
+// `data:` lines to the sink, reconnect with a fixed backoff when the connection drops, and cancel
+// both the retry loop and the live fetch on unsubscribe. Best-effort by design: a transport error
+// is a dropped connection, retried, never thrown.
+let private openStream
+    (url: string)
+    (headers: (string * string) list)
+    (onEvent: Sink<string>)
+    (retry: Retry)
+    : (unit -> unit) =
+    let controller = Fetch.newAbortController ()
+
+    // Written by the teardown, read by the loop, and the only thing that tells the two ends of a
+    // connection apart: aborting alone would not stop a subscription, because the loop's answer to
+    // a request that ended is to make another one.
+    let mutable cancelled = false
+
+    let request =
+        [ Fetch.Types.RequestProperties.Method Fetch.Types.HttpMethod.GET
+          // `accept` goes on LAST so it wins over a caller that named one: this connection reads
+          // an event stream or it reads nothing.
+          Http.headers (headers @ [ "accept", "text/event-stream" ])
+          Fetch.Types.RequestProperties.Signal controller.signal ]
+
+    let drain (reader: ReadableStreamDefaultReader) =
+        // One decoder for the whole connection, because a multi-byte character split across two
+        // reads is completed by the decoder holding its tail; one buffer beside it, because an
+        // event split across two reads is completed the same way, a few bytes further up.
+        let decoder = createDecoder ()
+
+        let rec loop (buffered: string) =
+            async {
+                let! chunk = reader.read () |> Interop.awaitPromise
+
+                if chunk.``done`` then
+                    return ()
+                else
+                    let text = chunk.value |> Option.map (decodeChunk decoder) |> Option.defaultValue ""
+                    let whole, tail = events (buffered + text)
+                    whole |> List.iter onEvent
+                    return! loop tail
+            }
+
+        loop ""
+
+    let connect () =
+        async {
+            let! response = Fetch.fetchUnsafe url request |> Interop.awaitPromise
+
+            if not response.Ok then
+                // The one place a subscription ends by DECISION rather than by teardown, and the
+                // only place `retry` is asked at all: a refusal is the server ANSWERING, which is
+                // the only outcome that carries a status for the caller to judge.
+                return (if retry response.Status then Attempt.Reconnect else Attempt.Finished)
+            else
+                // A response with no body to read is a 204, or the answer to a HEAD. Nothing this
+                // module asks for answers that way, and the reconnect is what covers a server that
+                // did: there is no stream here NOW, so ask again in a second.
+                match responseBody response with
+                | Some body -> do! drain (body.getReader ())
+                | None -> ()
+
+                return Attempt.Reconnect
+        }
+
+    let rec run () =
+        async {
+            let! attempt =
+                async {
+                    try
+                        return! connect ()
+                    with _ ->
+                        // Every transport fault lands here — nothing listening, a socket that
+                        // dropped mid-stream, and the abort the teardown fires — and none of them
+                        // reaches the caller. `cancelled` below is what tells the last one apart.
+                        return Attempt.Reconnect
+                }
+
+            match attempt with
+            | Attempt.Finished -> return ()
+            | Attempt.Reconnect ->
+                if cancelled then
+                    return ()
+                else
+                    do! Async.Sleep retryAfterMs
+                    if cancelled then return () else return! run ()
+        }
+
+    // Started immediately rather than scheduled: the first connect goes out in the tick that
+    // subscribed, which is what a caller that subscribes and then provokes the far end depends on.
+    Async.StartImmediate (run ())
+
+    fun () ->
+        cancelled <- true
+        controller.abort ()
+
 /// Subscribe, but stop for good when `retry` says a refusal is permanent. The stopped
 /// subscription is inert rather than errored: a server that does not offer a stream is not a
 /// fault, it is a server whose news has to arrive another way.
 let subscribeWhile (url: string) (headers: (string * string) list) (retry: Retry) (onFrame: Sink<string>) : Subscription =
-    Subscription.ofStop (
-        openStream url (Array.ofList headers) (fun event -> dataOf event |> Option.iter onFrame) retry)
+    Subscription.ofStop (openStream url headers (fun event -> dataOf event |> Option.iter onFrame) retry)
 
 /// Subscribe to an SSE stream, receiving one call per event carrying data (comment-only
 /// keep-alives are dropped). `headers` ride every connect and reconnect.

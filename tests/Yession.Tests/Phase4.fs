@@ -1828,6 +1828,71 @@ let private sseTests =
         testCase "a comment-only event carries no data" <| fun () ->
             Expect.equal (Sse.dataOf ": ping") None "a keep-alive is not a message"
             Expect.equal (Sse.dataOf ": subscribed") None "neither is the stream's opening comment"
+
+        // The reading half of the same wire format. A read off the socket is not an event: it can
+        // carry three of them, or the first half of one, and only the blank line says which. These
+        // pin the decision `Sse.events` makes about what has arrived; the case below them, over a
+        // real socket, pins that the read loop CARRIES what it kept back.
+        testCase "two whole events in one read are both dispatched, in order" <| fun () ->
+            let whole, _ = Sse.events "data: one\n\ndata: two\n\n"
+            Expect.equal whole [ "data: one"; "data: two" ] "both events, in the order they arrived"
+
+        testCase "a read that ends on a boundary keeps nothing back" <| fun () ->
+            let _, held = Sse.events "data: one\n\ndata: two\n\n"
+            Expect.equal held "" "there is no half-event to wait on"
+
+        testCase "half an event is not dispatched" <| fun () ->
+            let whole, _ = Sse.events "data: one\n\ndata: tw"
+            Expect.equal whole [ "data: one" ] "only what the blank line finished"
+
+        testCase "half an event is held for the read that finishes it" <| fun () ->
+            let _, held = Sse.events "data: one\n\ndata: tw"
+            Expect.equal held "data: tw" "kept verbatim, prefix included"
+
+        testCase "what was held joins what arrives next" <| fun () ->
+            let _, held = Sse.events "data: tw"
+            let whole, _ = Sse.events (held + "o\n\n")
+            Expect.equal whole [ "data: two" ] "the event the two reads spell between them"
+    ]
+
+// -----------------------------------------------------------------------------
+// SSE consumption over a real socket. `Sse.events` decides what has arrived;
+// only a server that writes one event in two pieces can say whether the read
+// loop keeps the piece it could not dispatch.
+// -----------------------------------------------------------------------------
+
+let private sseStreamTests =
+    testList "SSE consumption across read boundaries" [
+        testCaseAsync "an event written in two pieces arrives once, whole" <|
+            async {
+                // Split mid-payload AND before the blank line that ends the event, so NEITHER
+                // piece is an event on its own: a loop that dropped what it held back would
+                // deliver nothing at all, and one that dispatched the half would deliver it twice.
+                let handler (_req: Interop.IncomingMessage) (res: Interop.ServerResponse) =
+                    res.writeHead (200, Fable.Core.JsInterop.createObj [ "content-type", box "text/event-stream" ])
+                    |> ignore
+                    res.write "data: half a lo" |> ignore
+                    // The gap is what makes this two reads rather than one: written back to back,
+                    // the two pieces would reach the client in a single chunk and the case would
+                    // pin nothing.
+                    Async.StartImmediate (async {
+                        do! Async.Sleep 100
+                        res.write "af\n\n" |> ignore
+                    })
+
+                let server = Interop.createServer handler
+                let! listening =
+                    Async.FromContinuations (fun (cont, _, _) ->
+                        server.listen (0, "127.0.0.1", fun () -> cont server) |> ignore)
+                let url = sprintf "http://127.0.0.1:%d/stream" (Interop.serverPort listening)
+
+                let payloads = ResizeArray<string> ()
+                let subscription = Sse.subscribe url [] payloads.Add
+                do! waitUntil "the event both writes spell" (fun () -> payloads.Count > 0)
+                Expect.equal (List.ofSeq payloads) [ "half a loaf" ] "one event, carrying both pieces"
+                subscription.Stop ()
+                listening.close ignore
+            }
     ]
 
 // -----------------------------------------------------------------------------
@@ -2739,6 +2804,9 @@ let tests =
         // taking every suite after it down with a timeout, which is the least legible way a
         // missing capability could possibly report itself.
         Tag.needs "Session-owned environment across real processes" [ Tag.Ports; Tag.Native; Tag.Srt ] (fun () -> controlRpcTests)
+        // `Ports` only: one bare `node:http` server writing two strings, and the SSE client
+        // reading them. Nothing spawns, so nothing here needs `Native`.
+        Tag.needs "SSE consumption across read boundaries" [ Tag.Ports ] (fun () -> sseStreamTests)
         Tag.needs "Manager→Session notifications over SSE (reverse control leg)" [ Tag.Ports ] (fun () -> notificationStreamTests)
         Tag.needs "A hook delivery across the control channel (the relay end to end)" [ Tag.Ports ] (fun () -> hookDeliveryStreamTests)
         Tag.needs "MCP server set over SSE (reverse control leg)" [ Tag.Ports ] (fun () -> mcpStreamTests)
