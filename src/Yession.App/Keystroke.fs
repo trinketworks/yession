@@ -38,6 +38,15 @@ type KeyChord =
 /// on QWERTY, wrong on Dvorak and on every non-Latin layout — so the limit is stated
 /// rather than papered over.
 ///
+/// **AltGr is not Ctrl-Alt.** Windows and Linux report the AltGr key as `ctrlKey` AND
+/// `altKey` both down, and `ev.key` as the character it composed — so on a German layout
+/// AltGr-Q is `@` wearing the flags of Ctrl-Alt-Q, and read as a Ctrl chord it sends NUL
+/// instead of typing the character. Every layout outside US-ASCII puts something behind
+/// AltGr (`@`, `\`, `~`, `{`, `[`, `€`), so reading those as control codes is a keyboard
+/// that cannot type its own punctuation. The two are indistinguishable in a `KeyboardEvent`,
+/// and this resolves them the way xterm.js does: Ctrl and Alt together on a key that
+/// produced a character is AltGr, and the character goes as itself.
+///
 /// Deciding is all this does. Acting on the decision — `preventDefault` for everything that
 /// IS sent — belongs to the caller that holds the event, and is one verb with it there.
 module Keystroke =
@@ -65,12 +74,27 @@ module Keystroke =
         | "ArrowLeft" -> Some (csi chord "D")
         | "Home" -> Some (csi chord "H")
         | "End" -> Some (csi chord "F")
+        // AltGr, which arrives as Ctrl and Alt together (see above). A key that composed a
+        // character under it is that character; one that did not falls through to the Ctrl
+        // reading below, where a named key sends nothing anyway.
+        | _ when chord.Ctrl && chord.Alt && k.Length = 1 -> Some k
         | _ when chord.Ctrl ->
             // Ctrl-Backspace is the other delete-word, and the byte it sends is the one readline
             // binds: `\b`, not the `\x7f` an unmodified Backspace sends.
             if k = "Backspace" then Some "\b"
+            // Ctrl-Space is NUL, the same byte as Ctrl-@ and what readline's set-mark reads.
+            // `ev.key` for it is a space, which is outside the control range below, so without
+            // this the one chord that sets a mark sends nothing at all.
+            elif k = " " then Some "\u0000"
             elif k.Length = 1 then
-                let c = int (k.ToUpperInvariant().[0])
+                // ASCII only, and upper-cased by arithmetic rather than by `ToUpperInvariant`.
+                // Culture-aware uppercasing is not a character-for-character map: `ß` upper-cases
+                // to `SS`, so taking `.[0]` of the result read Ctrl-ß as Ctrl-S and sent XOFF —
+                // freezing the terminal on a chord a German layout can reach by accident. A
+                // character outside the control range has no control code, and saying so is the
+                // answer.
+                let c = int k.[0]
+                let c = if c >= int 'a' && c <= int 'z' then c - 32 else c
                 if c >= 64 && c <= 95 then Some (string (char (c - 64))) else None
             else None
         | _ when chord.Alt ->
@@ -82,6 +106,9 @@ module Keystroke =
             else None
         | "Enter" -> Some "\r"
         | "Backspace" -> Some "\u007f"
+        // Back-tab (CBT). A shell's completion cycles forward on TAB and back on this; a
+        // terminal that sent a plain TAB for both could only ever go one way round.
+        | "Tab" when chord.Shift -> Some "\u001b[Z"
         | "Tab" -> Some "\t"
         | "Escape" -> Some "\u001b"
         | "PageUp" -> Some "\u001b[5~"
