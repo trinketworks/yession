@@ -125,6 +125,8 @@ let private startStubApi () : Async<StubApi> =
             elif url.StartsWith "/repos/octo/hello/branches" then json res 200 """[{"name":"main"},{"name":"next"}]"""
             elif url.StartsWith "/repos/octo/hello/pulls/42" then
                 json res 200 """{"number":42,"head":{"ref":"fix/thing","repo":{"full_name":"fork-owner/hello"}}}"""
+            // Renamed: `octo/old` is answered under its current name, the way github.com does.
+            elif url = "/repos/octo/old" then json res 200 (candidate "octo/hello")
             elif url.StartsWith "/repos/" then json res 404 """{"message":"Not Found"}"""
             else json res 500 "{}"
         let! url = serving handler
@@ -158,6 +160,17 @@ let private lookupTests =
                 Expect.equal (expect found |> List.map (fun c -> c.Repo)) [ repo "found/by-name" ] "search answers"
                 let asked, _ = api.Requests.[0]
                 Expect.isTrue (asked.Contains "in%3Aname") "matched on the name"
+            }
+
+        testCaseAsync "a whole owner/name is looked up, and answers under the provider's current name" <|
+            async {
+                let! api = startStubApi ()
+                let! found = GitHubRepos.searchOver api.Url None "octo/old"
+                Expect.equal (found |> Result.map (List.map (fun c -> c.Repo))) (Ok [ repo "octo/hello" ]) "one row, named as the provider names it now"
+                let url, _ = api.Requests.[0]
+                Expect.equal url "/repos/octo/old" "asked of the repo itself, not the search"
+                let! missing = GitHubRepos.searchOver api.Url None "octo/gone"
+                Expect.equal (missing |> Result.map List.length) (Ok 0) "and one nobody can see is nothing found, as a search would say"
             }
 
         testCaseAsync "a dead credential, a missing repo and a spent allowance are told apart" <|

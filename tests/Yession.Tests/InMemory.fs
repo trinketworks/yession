@@ -68,6 +68,78 @@ let tests =
                 do! host.Stop ()
             }
 
+        // Naming a chapter nobody named, through the whole path: a person divides the
+        // session, the Session Process notices the doc write, asks whatever can write a few
+        // words, and the answer comes back as the name every peer reads.
+        //
+        // Here rather than around the namer alone because what would break silently is the
+        // WIRING — nothing announces a chapter but a doc update, and a namer nobody armed
+        // leaves a session that works exactly as it did, with the guess standing.
+        testCaseAsync "a chapter nobody has named takes the words written for it" <|
+            async {
+                let summarize : Summarize = fun _ -> async { return Ok "Where it was settled" }
+                let! host =
+                    Host.startFull Clock.system (fun () -> None) (fun () -> Some summarize) None None None None None None None (fun _ _ -> ()) None McpClient.McpConnections.none None (sid ()) None "" None false None 0
+                let! a = connectInMemoryClient host "ada" "Ada"
+                let ada = a.Hello.PeerId
+                do! compose a ada "ship it"
+                a.Connection.SendDraft ada
+                do! a.Runner.WaitFor (fun m -> m.Conversation.Items |> List.exists (fun i -> i.Body = "ship it"))
+                let item = (a.Runner.Model ()).Conversation.Items |> List.head
+                // Ada divides the session here. The chapter is made wearing the guess, which
+                // is what the process finds and what it is allowed to replace.
+                a.Runner.Dispatch (user (ToggleChapterMsg item.MessageId))
+                do! a.Runner.WaitFor (fun m -> Chat.Chapters.name m.Synced.Chapters item = "Where it was settled")
+                do! host.Stop ()
+            }
+
+        // A chapter is asked about ONCE. Everything anybody does afterwards is another doc
+        // update through the same signal, and a namer that asked again on each of them would
+        // spend a request per keystroke — and could overwrite its own answer.
+        testCaseAsync "a chapter is asked about once, whatever happens afterwards" <|
+            async {
+                let asked = ResizeArray<SummaryAsk> ()
+                let summarize : Summarize =
+                    fun ask ->
+                        async {
+                            asked.Add ask
+                            return Ok "Where it was settled"
+                        }
+                let! host =
+                    Host.startFull Clock.system (fun () -> None) (fun () -> Some summarize) None None None None None None None (fun _ _ -> ()) None McpClient.McpConnections.none None (sid ()) None "" None false None 0
+                let! a = connectInMemoryClient host "ada" "Ada"
+                let ada = a.Hello.PeerId
+                do! compose a ada "ship it"
+                a.Connection.SendDraft ada
+                do! a.Runner.WaitFor (fun m -> m.Conversation.Items |> List.exists (fun i -> i.Body = "ship it"))
+                let item = (a.Runner.Model ()).Conversation.Items |> List.head
+                a.Runner.Dispatch (user (ToggleChapterMsg item.MessageId))
+                do! a.Runner.WaitFor (fun m -> Chat.Chapters.name m.Synced.Chapters item = "Where it was settled")
+                // More doc updates, of the kind a session makes constantly: somebody typing.
+                do! compose a ada "and then this"
+                do! a.Runner.WaitFor (fun m -> Map.containsKey ada m.Synced.Drafts)
+                Expect.equal asked.Count 1 "once, however much else happened"
+                do! host.Stop ()
+            }
+
+        // The deployment that cannot reach a model — no credential connected, nothing
+        // ambient. It is not a broken session: the guess is what a chapter has always worn,
+        // and it goes on wearing it.
+        testCaseAsync "a session with nothing to write the words keeps the guess" <|
+            async {
+                let! host = Host.start (sid ()) 0
+                let! a = connectInMemoryClient host "ada" "Ada"
+                let ada = a.Hello.PeerId
+                do! compose a ada "ship it"
+                a.Connection.SendDraft ada
+                do! a.Runner.WaitFor (fun m -> m.Conversation.Items |> List.exists (fun i -> i.Body = "ship it"))
+                let item = (a.Runner.Model ()).Conversation.Items |> List.head
+                a.Runner.Dispatch (user (ToggleChapterMsg item.MessageId))
+                do! a.Runner.WaitFor (fun m -> Chat.Chapters.opens m.Synced.Chapters item)
+                Expect.equal (Chat.Chapters.name (a.Runner.Model ()).Synced.Chapters item) "ship it" "the guess, as before"
+                do! host.Stop ()
+            }
+
         testCaseAsync "two peers co-edit one draft and either can send it — once" <|
             async {
                 let! host = Host.start (sid ()) 0
@@ -519,7 +591,7 @@ let tests =
                 let awaitReport = Async.FromContinuations (fun (cont, _, _) -> reportCont <- Some cont)
                 let report (name: string) = async { match reportCont with Some c -> reportCont <- None; c name | None -> () }
 
-                let! host = Host.startFull (fun () -> None) None None None None None (Some report) None (fun _ _ -> ()) None McpClient.McpConnections.none None (sid ()) None "" None false None 0
+                let! host = Host.startFull Clock.system (fun () -> None) (fun () -> None) None None None None None (Some report) None (fun _ _ -> ()) None McpClient.McpConnections.none None (sid ()) None "" None false None 0
                 let! a = connectInMemoryClient host "ada" "Ada"
                 let! reportWaiter = Async.StartChild awaitReport
                 a.Runner.Dispatch (user (EditTitleMsg (Text.insert 0 "ship it" (a.Runner.Model ()).Synced.Title)))
@@ -552,7 +624,7 @@ let tests =
                 let report (busy: bool) = async { reports.Add busy }
 
                 let! host =
-                    Host.startFull (fun () -> None) None None None None None None (Some report) (fun _ _ -> ()) None McpClient.McpConnections.none None (sid ()) None "" None false None 0
+                    Host.startFull Clock.system (fun () -> None) (fun () -> None) None None None None None None (Some report) (fun _ _ -> ()) None McpClient.McpConnections.none None (sid ()) None "" None false None 0
 
                 // A session nobody has attached to is idle from the moment it boots — which
                 // is what lets the Manager's window start at launch rather than at first

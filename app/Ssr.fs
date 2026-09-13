@@ -104,18 +104,23 @@ let renderModel (model: ClientModel) : string =
 /// REQUIRED parameter for a reason: it becomes the `<base href>` every relative URL in
 /// the page and in the client bundle resolves against (`SessionRoute.relative` emits
 /// nothing else), so a page rendered without one would ask the origin root for its own
-/// assets. There is no way to render this document and forget it.
+/// assets. There is no way to render this document and forget it — `DocumentBase.declare`
+/// hands back the tag and the witness together, and every relative address below is
+/// rendered through that witness.
 /// `assets` is the BUILD this shell is rendered against — one address covering every static
 /// file the server will hand out, so the document names bytes that exist. That pairing is what
 /// makes the assets cacheable forever and the shell the only thing that has to be fresh. The
 /// shell names the files it links and nothing else knows they exist; a build that adds one
 /// changes nothing here but the line that links it.
 let page (sessionId: SessionId) (mount: string) (managerOrigin: string option) (ephemeralStorage: bool) (assets: AssetBuild) (model: ClientModel) : string =
+    let declared, baseTag = DocumentBase.declare mount
+    let href (route: SessionRoute) = RelativeUrl.inDocument declared (SessionRoute.relative route)
+    let asset (file: AssetFile) = RelativeUrl.inDocument declared (AssetBuild.url assets file)
     String.concat "" [
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         // Before the stylesheet and the bundle, because it governs how both resolve.
-        sprintf "<base href=\"%s/\">" (escapeAttr mount)
+        baseTag
         sprintf "<meta name=\"%s\" content=\"%s\">" Dom.sessionMetaName (escapeAttr (SessionId.value sessionId))
         // Where to ask for this session back once it has stopped (Plan 11). OMITTED, never
         // emitted empty, when this session has no Manager: the client's offer to bring the
@@ -128,15 +133,15 @@ let page (sessionId: SessionId) (mount: string) (managerOrigin: string option) (
         // nothing about storage at all.
         (if ephemeralStorage then sprintf "<meta name=\"%s\" content=\"1\">" Dom.ephemeralStorageMetaName else "")
         "<title>Yession</title>"
-        Style.headTags (AssetBuild.url assets AssetFile.``app``)
+        Style.headTags (asset AssetFile.``app``)
         // The replay player's sheet, linked but inert: most sessions never open a recording,
         // and a second render-blocking stylesheet in the head would make all of them pay for
         // the ones that do. `Replay.mount` flips its `media` when a replay is first shown.
-        Style.deferredHeadTags (AssetBuild.url assets AssetFile.``player``) Dom.playerStylesheetHook
+        Style.deferredHeadTags (asset AssetFile.``player``) Dom.playerStylesheetHook
         // What makes this installable, and chrome-less once it is (`WebApp`). Both URLs are
         // relative, like every other one here, so they resolve under the mount rather than at
         // the origin root — and the manifest's own contents then resolve against ITS address.
-        WebApp.headTags (SessionRoute.relative Manifest) (SessionRoute.relative Icon)
+        WebApp.headTags (href Manifest) (href Icon)
         // The ONE inline script in the shell, and the only thing that has to run before first
         // paint: a collapsed sidebar is a stored preference (written by the nav toggle), and
         // applying it from the bundle would paint the sidebar open and then shut it. Desktop
@@ -147,6 +152,6 @@ let page (sessionId: SessionId) (mount: string) (managerOrigin: string option) (
         + "document.documentElement.classList.add('nav-alt')}catch(e){}</script>"
         "</head><body>"
         sprintf "<main id=\"%s\" class=\"%s\">%s</main>" Dom.appId Style.app (renderModel model)
-        sprintf "<script type=\"module\" src=\"%s\"></script>" (AssetBuild.url assets AssetFile.``client``)
+        sprintf "<script type=\"module\" src=\"%s\"></script>" (asset AssetFile.``client``)
         "</body></html>"
     ]

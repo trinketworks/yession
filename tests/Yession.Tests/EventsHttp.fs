@@ -78,7 +78,7 @@ let private endpointTests =
                 // because it is what a fixed chunk index could never give an address to.
                 do! append (2 * EventChunk.size + 5)
                 let at (route: SessionRoute) (token: string) =
-                    sprintf "http://127.0.0.1:%d/%s?token=%s" h.Port (SessionRoute.relative route) token
+                    sprintf "%s?token=%s" (SessionRoute.at (sprintf "http://127.0.0.1:%d" h.Port) route) token
                 let offset (n: int64) = EventOffset.create n |> expect
 
                 // The cursor itself: no events, never cached, and it says where to look.

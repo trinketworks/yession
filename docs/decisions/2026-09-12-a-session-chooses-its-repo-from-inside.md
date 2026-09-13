@@ -13,9 +13,9 @@
 Which repository a session is FOR is chosen **inside the session**, on its first screen,
 by the person who opened it. The Manager's create form stays one press with no fields: it
 launches an empty session, and the session's own launch surface — the repositories the
-person's credential reaches, a search of the provider by name, one repository's branches
-— produces the one command that begins it (`AddRepo`), through the same gate the agent's
-`add_repo` goes through, attributed to the person.
+person's credential reaches, a search of the provider by name, a link pasted from the
+provider's own pages — produces the one command that begins it (`AddRepo`), through the
+same gate the agent's `add_repo` goes through, attributed to the person.
 
 The Manager learns nothing new. It does not list repositories, does not hold a
 provider's credential, does not carry a choice into a launch, and does not remember what
@@ -63,6 +63,37 @@ still the agent's to add, and the surface does not come back once anything has h
 It is the same gated `add_repo` — classified, attributed, on the timeline — with a second
 caller rather than a second implementation.
 
+## An ask card, not a form
+
+The first cut of the surface was a wizard: choose a row, then a branch, then Start, with
+Back beside it and "start without a repository" below — three stages and three buttons
+over a paragraph explaining them, in a product whose every other act is one line said to
+a composer. The second was a list at the foot of the timeline whose rows launched on tap;
+it read as history rather than a decision, its rows did not look pressable, and thirty of
+them was a page. What stands now is an **ask card**, docked above the composer where the
+queue's bands dock: *who asks · the question · rows to hold · one button · a way out*.
+
+The anatomy is deliberately general. It is the session asking which repository today, and
+it is the shape the agent will use to ask a person a question with several answers. So
+holding a row is a STATE and starting is a PRESS: tapping a row holds it (blue edge, a
+mark, a lifted ground) and sends nothing; the held row grows a branch field where its
+description was; START is the one thing that sends. Holding several rows later is a list
+where an option is, not a redesign. Four rows are shown, then "N more"; a bare
+`owner/name` typed into the field searches (a name half typed still parses as one, and an
+exact one is looked up and answered under the provider's current name); a link copied
+from the provider — a page, a `tree/<branch>` page, a `pull/<n>` page, a clone URL — is
+resolved to a row and held, on the branch it named. A pull request is asked about first,
+because which fork its branch lives in only the provider knows.
+
+The branch is a field with the provider's branches to choose from, not a menu of them: a
+hundred branches is a list nobody scrolls, three letters and a pick is how a person names
+one, and a name the provider has not got yet is typed the same way (`switch_branch`
+creates it).
+
+The card wears the blue leading edge a queued command wears, because it means the same
+thing there: waiting on you. ✕ dismisses it for this client; a session that is not about
+a repository begins the way it always did, by saying something.
+
 ## What the surface promises, and what it does not
 
 It is offered only to a client that is connected, has read the log to where the session
@@ -88,5 +119,5 @@ the `ToolUseFinished` line, which is why the gate records nothing for the agent'
 and this is recorded only where nothing else would say it.
 
 And the session's first screen is now a screen, where it used to be a caret. A session
-that is not about a repository — a conversation, a terminal on this machine — has one
-more button to press ("start without a repository") than it had.
+that is not about a repository — a conversation, a terminal on this machine — begins the
+way it always did, by saying something, with a list above the composer it did not ask for.

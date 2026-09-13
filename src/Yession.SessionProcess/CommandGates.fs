@@ -43,7 +43,7 @@ module CommandGates =
         (appendAs: ActorRef -> SessionEvent -> Async<unit>)
         (mintQueueId: unit -> QueueId)
         (mintMessageId: unit -> MessageId)
-        (now: unit -> DateTimeOffset)
+        (clock: Clock)
         (onChanged: TerminalCommands.OnChanged)
         : CommandGate =
 
@@ -87,10 +87,10 @@ module CommandGates =
                 match outcomes.TryGetValue (QueueId.value handle) with
                 | true, outcome -> return outcome
                 | false, _ ->
-                    if now () - startedAt >= TerminalCommands.commandTimeout then
+                    if clock.Now () - startedAt >= TerminalCommands.commandTimeout then
                         return { Handle = Some handle; Tool = call.Tool; Summary = call.Summary; Status = CommandRunning }
                     else
-                        do! TerminalCommands.nextWake onChanged
+                        do! TerminalCommands.nextWake clock onChanged
                         return! awaitSettled call handle startedAt
             }
 
@@ -126,7 +126,7 @@ module CommandGates =
                                         | Ok text -> CommandRan text
                                         | Error reason -> CommandRan ("failed: " + reason) }
                             })
-                        let! settled = awaitSettled call handle (now ())
+                        let! settled = awaitSettled call handle (clock.Now ())
                         return Ok settled
             }
 
@@ -139,7 +139,7 @@ module CommandGates =
                     // A resume gets the full deadline again, measured from the resume: the
                     // work is the same work, but the caller asked a fresh question.
                     | true, call ->
-                        let! settled = awaitSettled call handle (now ())
+                        let! settled = awaitSettled call handle (clock.Now ())
                         return Ok settled
                     | false, _ -> return Error "no such pending command"
             }

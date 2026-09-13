@@ -43,6 +43,9 @@ let all =
         // reply, and the session's own gated route — and neither has an in-memory
         // stand-in that would exercise what the cases turn on.
         Tag.needs "Model catalogue" [ Tag.Ports ] (fun () -> Models.portsTests)
+        // Writing a few words is an HTTP conversation and nothing else: what is sent, how the
+        // credential presents itself, and which useless answers are told apart.
+        Tag.needs "Writing a few words" [ Tag.Ports ] (fun () -> Summaries.portsTests)
         Tag.needs "GitHubRepos" [] (fun () -> GitHubRepos.tests)
         Tag.needs "Launch surface" [] (fun () -> LaunchSurface.tests)
         // Finding a repo is an HTTP conversation on both sides — the provider's listing and
@@ -80,6 +83,7 @@ let all =
         Tag.needs "Sync" [] (fun () -> Sync.tests)
         Tag.needs "TerminalPattern" [] (fun () -> TerminalPattern.tests)
         Tag.needs "Terminals" [] (fun () -> Terminals.tests)
+        Tag.needs "Keystrokes" [] (fun () -> Keystrokes.tests)
         Tag.needs "Timeline" [] (fun () -> Timeline.tests)
         // The upgrade IS the thing being tested, and there is no in-memory stand-in for it.
         Tag.needs "Foreign terminal attach" [ Tag.Ports ] (fun () -> Attach.portsTests)

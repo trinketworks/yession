@@ -1116,22 +1116,43 @@ module Style =
     /// as it replaces it.
     let timelineIdle = "pl-8 max-md:pl-8"
 
-    // --- The launch surface ---------------------------------------------------------------
-    // Stands where the timeline's first line will: on the timeline's own rail, in the
-    // timeline's own type, so it reads as the session's first page rather than a dialog over
-    // it. A candidate is a listed row (`rowBase`'s idiom without the leading edge — a row
-    // that is not yet anything has no state to show on one), lifting under the pointer.
-    let launch = "flex flex-col gap-3 pl-8 max-md:pl-8 pr-8 max-md:pr-4 py-2 max-w-2xl"
-    let launchLead = cls [ body; "text-ink-dim" ]
-    let launchList = "flex flex-col"
-    let launchCandidate =
-        cls [ "w-full text-left flex items-baseline gap-3 px-2 -mx-2 py-1.5 bg-transparent border-0 cursor-pointer"
-              "hover:bg-surface-2 focus-visible:bg-surface-2 transition-colors"; focusRing ]
-    let launchCandidateName = "font-terminal text-code text-ink shrink-0"
-    let launchCandidateDescription = cls [ small; "truncate min-w-0" ]
-    let launchChoice = "flex flex-col gap-3"
-    let launchChoiceName = "font-terminal text-code text-ink"
-    let launchActions = "flex flex-wrap items-center gap-2"
+    // --- The ask card ---------------------------------------------------------------------
+    // A band docked above the composer, in the queue's dock: somebody is asking, and here
+    // are the ways to answer. It wears the blue LEAD a queued command wears, because it
+    // means the same thing — waiting on you — and lifts a tone off the timeline behind it.
+    // Rows are bordered rectangles, the product's one "press me", and the held one goes
+    // blue at the edge and a tone lighter on the ground: the press state, kept. Everything
+    // else in the card is type.
+    let ask =
+        cls [ "shrink-0 px-4 max-md:px-3 py-3 bg-surface max-h-[60vh] overflow-y-auto"
+              Stroke.dividerTop; Stroke.lead; Stroke.blue ]
+    /// The band runs the column's width, as the composer's does; what is in it reads at a
+    /// measure, as the timeline's lines do.
+    let askBody = "flex flex-col gap-2 max-w-2xl"
+    let askHead = "flex items-baseline justify-between gap-3"
+    let askFrom = cls [ body ]
+    let askWho = "text-ink font-normal"
+    let askVerb = "text-blue"
+    let askQuestion = cls [ body; "text-ink" ]
+    let askRows = "flex flex-col gap-1.5"
+    let askRow = cls [ "flex flex-col"; Stroke.ring; Stroke.rim; Stroke.hoverInk; "transition-colors" ]
+    let askRowHeld = cls [ "flex flex-col bg-surface-2"; Stroke.ring; Stroke.blue ]
+    let askRowButton =
+        cls [ "w-full text-left flex items-baseline gap-3 px-3 py-1.5 bg-transparent border-0 cursor-pointer min-w-0"
+              "disabled:cursor-default"; focusRing ]
+    let askRowName = "font-terminal text-code text-ink truncate min-w-0"
+    let askRowMark = "text-blue shrink-0 self-center"
+    let askRowDescription = cls [ small; "truncate min-w-0 ml-auto max-w-[45%]" ]
+    let askBranch = "flex items-center gap-3 px-3 pb-2"
+    let askBranchField = cls [ fieldFace; "font-terminal text-code text-ink flex-1 min-w-0 h-8 py-0" ]
+    let askMore = "flex items-baseline justify-between"
+    let askMoreButton =
+        cls [ label; "inline-flex items-center gap-1 bg-transparent border-0 cursor-pointer hover:text-ink transition-colors"; focusRing ]
+    let askActions = "flex flex-wrap items-center gap-2 pt-1"
+    /// The commit button, which is disabled until something is held — and looks it: the
+    /// rim recedes to a hairline and the type to faint, so the press state is one a held row
+    /// visibly buys.
+    let askStart = cls [ btnPrimary; "disabled:border-hair disabled:text-ink-faint disabled:cursor-default" ]
     let caretIdle = caret + " opacity-50"
 
 

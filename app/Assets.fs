@@ -82,8 +82,9 @@ let load (fallbackDir: string) : AssetSet =
 /// whole directory, for the same reason `load` addresses the set rather than each file.
 let configured () : AssetSet = load (envOr "YESSION_ASSETS" "app/out/public/assets")
 
-/// The URL a document should name for `file` in this set.
-let url (assets: AssetSet) (file: AssetFile) : string = AssetBuild.url assets.Build file
+/// The address a document should name for `file` in this set — relative, and typed so the
+/// document has to say what it resolves against (`RelativeUrl`).
+let url (assets: AssetSet) (file: AssetFile) : RelativeUrl = AssetBuild.url assets.Build file
 
 /// Serve one file, but only at this build's address.
 ///

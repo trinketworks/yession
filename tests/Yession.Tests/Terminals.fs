@@ -1874,7 +1874,9 @@ let private makeTerminalsFrom attach classifier (log: EventLog<SessionEvent>) en
             // about the screen.
             Yession.Host.Emulator.openEmulator
             SessionTerminals.TerminalShell.posix
-            fixedClock
+            // A fixed NOW, and real waiting: these cases are about the manager's rules, and
+            // the few that hold a read open (`Tail` with a wait) look again in real time.
+            { Clock.system with Now = fixedClock }
             (fun () -> TerminalId.create (mintTerminal ()) |> expect)
             (fun () -> BlockId.create (mintBlock ()) |> expect)
             // Fixed, because a test that cannot predict the nonce cannot assert on a mark.

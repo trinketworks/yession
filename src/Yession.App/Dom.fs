@@ -161,19 +161,21 @@ module Dom =
         /// something is wrong cannot be mistaken for chrome.
         let signInRequired = "data-signin-required"
         let signInAgain = "data-signin-again"
-        /// The launch surface — choosing the session's first repo — valued by where the act
-        /// stands (`choosing` | `sent` | `cloning`). Present only while it is offered: a
-        /// surface that stands where the timeline's first line will, and steps aside the
-        /// moment there is one.
+        /// The launch surface — the ask card choosing the session's first repo — valued by
+        /// where the act stands (`choosing` | `resolving` | `sent` | `cloning`). Present only
+        /// while it is offered: docked above the composer, and gone the moment the session
+        /// has begun.
         let repoPicker = "data-repo-picker"
         let repoPickerSearch = "data-repo-picker-search"
-        /// One repo a person can choose, valued by its canonical name.
+        /// One repo a person can hold, valued by its canonical name. `aria-pressed` says
+        /// whether it is held.
         let repoCandidate = "data-repo-candidate"
-        let repoPickerBranch = "data-repo-picker-branch"
+        /// The held row's branch field, valued by the row's name.
+        let repoCandidateBranch = "data-repo-candidate-branch"
+        /// The one button that sends. Disabled until a row is held.
         let repoPickerStart = "data-repo-picker-start"
-        let repoPickerBack = "data-repo-picker-back"
-        /// The way past the picker without a repo.
-        let repoPickerSkip = "data-repo-picker-skip"
+        let repoPickerMore = "data-repo-picker-more"
+        let repoPickerDismiss = "data-repo-picker-dismiss"
         /// What went wrong with the last launch, in the session's words.
         let repoPickerProblem = "data-repo-picker-problem"
         /// The listing's own way out when there is no credential: the settings face.
@@ -512,17 +514,19 @@ module Dom =
         let composerPlaceholder = "write a message"
         /// What the timeline's pulse means, for a reader who cannot see it pulse (Plan 20).
         let readingHistory = "Reading this session's history"
-        // The launch surface.
-        let repoPickerTitle = "start with a repository"
-        let repoPickerLead = "Choose the repository this session works in. It is cloned for everyone here, and terminals open inside it."
-        let repoPickerSearchLabel = "search repositories"
-        let repoPickerSearchPlaceholder = "search github, or pick one of yours"
+        // The ask card, asking for the session's repo.
+        let repoPickerAsker = "session"
+        let repoPickerAsks = "asks"
+        let repoPickerTitle = "Which repository is this session for?"
+        let repoPickerSearchLabel = "search repositories, or paste a link"
+        let repoPickerSearchPlaceholder = "search github, or paste a link"
         let repoPickerLooking = "looking…"
         let repoPickerNothing = "nothing by that name"
+        let repoPickerRecent = "recently pushed"
+        let repoPickerFound = "found"
         let repoPickerBranchLabel = "branch"
         let repoPickerStart = "Start"
-        let repoPickerBack = "Back"
-        let repoPickerSkip = "start without a repository"
+        let repoPickerDismiss = "dismiss"
         let repoPickerConnect = "Connect GitHub"
         let repoPickerCloning = "cloning…"
         /// What stands where history this device does not hold would be (Plan 20). Said only

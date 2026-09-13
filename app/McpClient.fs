@@ -159,7 +159,7 @@ module McpConnections =
 /// streamed connection is the only route back to one mechanism and is worse: it assumes
 /// every provider counts an open stream as liveness, which is exactly the assumption
 /// `examples/jumpstarter` had to be fixed for.
-let PollIntervalMs = 10000
+let PollInterval = System.TimeSpan.FromSeconds 10.0
 
 /// Build the connection manager.
 let create () : McpConnections =

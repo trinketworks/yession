@@ -598,6 +598,14 @@ let private bodyTemplate
           </div>
         </main>"""
 
+/// How this Manager spells an address on any page it serves: anchored at the origin root.
+/// The Manager declares no `<base href>` and lives at its origin root by `ManagerOrigin`'s
+/// own rule, so the root-anchored form is the one that is true from every page here — the
+/// management page at `/` and the standalone pages under `/sessions/{id}/` alike. The
+/// relative form was true from the first and a 404 from the second, which `RelativeUrl` now
+/// makes a question this file has to answer rather than a string it can copy.
+let private atRoot (url: RelativeUrl) = RelativeUrl.under "" url
+
 /// `styleSheetUrl` is passed in rather than read from the module below: F# scopes top-down, and
 /// the stylesheet's address is derived from bytes read further down the file.
 let page
@@ -613,7 +621,7 @@ let page
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         "<title>Yession Manager</title>"
         Style.headTags styleSheetUrl
-        WebApp.managerHeadTags (SessionRoute.relative Icon)
+        WebApp.managerHeadTags (atRoot (SessionRoute.relative Icon))
         sprintf "</head><body class=\"%s\">" Style.app
         Ssr.render (bodyTemplate access query views declarations hooks)
         sprintf "<script>%s</script>" script
@@ -634,7 +642,7 @@ let private formField (body: string) (name: string) : string = Fable.Core.Util.j
 /// which is also why this page can link a stylesheet whose faces this file has never heard of.
 let private assets = Assets.configured ()
 
-let private cssUrl = Assets.url assets AssetFile.``app``
+let private cssUrl = atRoot (Assets.url assets AssetFile.``app``)
 
 /// The icon's constant is base64 (it lives in source); the wire wants the PNG. Same decode
 /// the session server does, for the same reason — `res.end` takes what Node's `end` takes.
@@ -695,12 +703,10 @@ let private answeredFor (status: int) : bool =
 /// impossible to reintroduce: whatever the ground becomes, these pages have it, because it
 /// is declared once, on the document, in the one file every surface links.
 ///
-/// Linked from the ROOT. The Manager page links the sheet by a relative address, which is
-/// right where it lives — `/` — and wrong here: these pages live under `/sessions/{id}/`, so
-/// the same relative address resolved to `/sessions/{id}/assets/…`, a 404, and the page was
-/// white with a stylesheet link in it. The Manager serves from the origin's root (every
-/// route this file writes — `/`, `/sessions/…` — says so), so the root-anchored address is
-/// the one that is true from every page it serves.
+/// Linked from the ROOT, like every address the Manager emits (`atRoot`). These pages live
+/// under `/sessions/{id}/`, and a relative link copied from the management page at `/`
+/// resolved to `/sessions/{id}/assets/…`, a 404 — the page was white with a stylesheet link
+/// in it. `RelativeUrl` is what makes that a compile error now rather than a review catch.
 ///
 /// HTML, and that is the point rather than a detail. Every other answer this file gives is
 /// read by the page's script, so `text/plain` is right for them — but these are NAVIGATIONS
@@ -720,7 +726,7 @@ let private standalonePage (title: string) (body: string) : string =
 </main>
 </body></html>"""
         (Ssr.escapeText title)
-        (Style.headTags ("/" + cssUrl))
+        (Style.headTags cssUrl)
         Style.standalone
         Style.heading
         (Ssr.escapeText title)
@@ -856,9 +862,9 @@ let tryHandle
             match SessionRoute.parse "GET" path with
             | Some (Asset (build, file)) -> Some (fun () -> Assets.serve assets build file res)
             | _ -> None
-        | "GET", path when path = "/" + SessionRoute.relative Icon ->
-            // The same mark the session shells wear, from the same constant — the Manager
-            // sits at its origin root, so the relative address the page emits is this path.
+        | "GET", path when path = atRoot (SessionRoute.relative Icon) ->
+            // The same mark the session shells wear, from the same constant, at the address
+            // the page emits for it.
             Some (fun () ->
                 res.writeHead (
                     200,

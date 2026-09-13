@@ -162,7 +162,7 @@ type ViewActions =
       /// menu strands focus on `body` — the failure the WCAG floor names, and the one a
       /// keyboard reader hits on the very first Escape.
       FocusItemActions : MessageId -> unit
-      /// The launch surface's three effects. Ask the session for the repos this person can
+      /// The launch surface's four effects. Ask the session for the repos this person can
       /// choose from — theirs when the text is empty, a search otherwise; the answer comes
       /// back as `LaunchListingArrived`.
       LaunchSearch : string -> unit
@@ -171,7 +171,11 @@ type ViewActions =
       /// Send the choice: the `AddRepo` command, on the branch when one other than the
       /// default was picked. The request leaves as `LaunchSent`; its admission comes back as
       /// `CommandAnsweredMsg`, and its outcome as events.
-      LaunchStart : RepoRef -> string option -> unit }
+      LaunchStart : LaunchTarget -> unit
+      /// Launch what a pasted link asks for. A repo or a branch is sent as it stands; a pull
+      /// request is first asked about (`LaunchResolving`), since its head is the provider's
+      /// to say.
+      LaunchLink : Repos.RepoLink -> unit }
 
 module ViewActions =
     /// A no-op action set for rendering the view to a string (SSR + tests). The handlers
@@ -194,7 +198,8 @@ module ViewActions =
           Copy = fun _ _ -> ()
           LaunchSearch = ignore
           LaunchBranches = ignore
-          LaunchStart = fun _ _ -> ()
+          LaunchStart = ignore
+          LaunchLink = ignore
           RetryNow = ignore
           OpenTerminal = ignore
           ApproveRepoCapabilities = fun _ _ -> ()
@@ -1215,82 +1220,20 @@ module View =
 })($0)""")>]
     let private commitOnEnter (e: obj) : unit = Fable.Core.Util.jsNative
 
-    /// The bytes a keydown means to a pty (Plan 14, stage 6).
+    /// The bytes a keydown sends to a pty, and the browser told not to also act on it.
     ///
-    /// A keyboard event is not a byte stream, and the translation is the whole of what a
-    /// terminal front end does with keys: printable characters go as themselves, Ctrl-<key>
-    /// as the control code, and the keys with no character at all (arrows, Home, the
-    /// function block) as the escape sequences a program is waiting for. `null` means a key
-    /// that sends nothing — a bare modifier, or a shortcut the browser owns.
-    ///
-    /// `preventDefault` on everything that IS sent, because otherwise the browser also acts
-    /// on it: Tab would leave the terminal mid-session, and Backspace used to navigate.
-    ///
-    /// **Modifiers are part of the key, not a reason to drop it.** This used to refuse every
-    /// event carrying `altKey`, and to refuse `ctrlKey` with anything that was not a single
-    /// character — which is every way of moving by WORD rather than by character. Alt-B,
-    /// Alt-F and Ctrl-arrow are how a person navigates a line they have already typed, so a
-    /// terminal that swallows all three is one you can only walk through a character at a
-    /// time. Alt is `ESC` before the key, which is what `metaSendsEscape` means and what
-    /// readline is reading; a modified arrow is the same CSI with a parameter saying which
-    /// modifier (`2` shift, `3` alt, `5` ctrl — xterm's encoding, the one every shell reads).
-    ///
-    /// `metaKey` still sends nothing. Cmd belongs to the browser and the OS, and a terminal
-    /// that ate Cmd-W would be a terminal you cannot close.
-    ///
-    /// One honest limit, on macOS: Option COMPOSES. `ev.key` for Option-B is `∫`, so what
-    /// goes is `ESC∫` unless the browser or the OS has been told to treat Option as Meta,
-    /// which is the setting every terminal emulator on that platform also asks for. Deriving
-    /// the unmodified letter from `ev.code` would be a guess about a keyboard layout — right
-    /// on QWERTY, wrong on Dvorak and on every non-Latin layout — so the limit is stated
-    /// rather than papered over.
-    [<Fable.Core.Emit("""(function (e) {
-  const ev = e
-  if (ev.metaKey) return null
-  const k = ev.key
-  const send = d => { ev.preventDefault(); return d }
-  // xterm's modifier parameter: 1 + shift(1) + alt(2) + ctrl(4). 1 is "no modifier", which is
-  // spelled by leaving the parameter off entirely.
-  const mod = 1 + (ev.shiftKey ? 1 : 0) + (ev.altKey ? 2 : 0) + (ev.ctrlKey ? 4 : 0)
-  const csi = final => send(mod === 1 ? '\x1b[' + final : '\x1b[1;' + mod + final)
-  switch (k) {
-    case 'ArrowUp': return csi('A')
-    case 'ArrowDown': return csi('B')
-    case 'ArrowRight': return csi('C')
-    case 'ArrowLeft': return csi('D')
-    case 'Home': return csi('H')
-    case 'End': return csi('F')
-  }
-  if (ev.ctrlKey) {
-    // Ctrl-Backspace is the other delete-word, and the byte it sends is the one readline
-    // binds: `\b`, not the `\x7f` an unmodified Backspace sends.
-    if (k === 'Backspace') return send('\b')
-    if (k.length === 1) {
-      const c = k.toUpperCase().charCodeAt(0)
-      if (c >= 64 && c <= 95) return send(String.fromCharCode(c - 64))
-    }
-    return null
-  }
-  if (ev.altKey) {
-    // ESC then the key: Alt-B, Alt-F, Alt-D, Alt-Backspace — a word back, a word on, kill a
-    // word, rub one out. Only for keys that ARE a character; the named ones above already
-    // carried their modifier in the sequence, and the rest have nothing to prefix.
-    if (k === 'Backspace') return send('\x1b\x7f')
-    if (k.length === 1) return send('\x1b' + k)
-    return null
-  }
-  switch (k) {
-    case 'Enter': return send('\r')
-    case 'Backspace': return send('\x7f')
-    case 'Tab': return send('\t')
-    case 'Escape': return send('\x1b')
-    case 'PageUp': return send('\x1b[5~')
-    case 'PageDown': return send('\x1b[6~')
-    case 'Delete': return send('\x1b[3~')
-  }
-  return k.length === 1 ? send(k) : null
-})($0)""")>]
-    let private keystrokeOf (e: obj) : string option = Fable.Core.Util.jsNative
+    /// `Keystroke.bytesOf` decides them — what a key means to a terminal is pure, and is
+    /// written down (with the reasoning) where a test can reach it without a browser. This is
+    /// the half that needs the event: reading its fields, and `preventDefault` on everything
+    /// that IS sent, because otherwise the browser also acts on it — Tab would leave the
+    /// terminal mid-session, and Backspace used to navigate. Deciding and preventing are one
+    /// verb, so no caller can send a key and leave the browser acting on it too.
+    let private keystrokeOf (e: Browser.Types.KeyboardEvent) : string option =
+        let sent =
+            Keystroke.bytesOf
+                { Key = e.key; Ctrl = e.ctrlKey; Alt = e.altKey; Shift = e.shiftKey; Meta = e.metaKey }
+        if Option.isSome sent then e.preventDefault ()
+        sent
 
     /// One collaborator's title caret+selection marker: a selection highlight span and a caret
     /// bar with a name label. The browser positions all three by measurement after render (from
@@ -1676,48 +1619,86 @@ module View =
     /// Terminal items are resolved against `Projection` at render time rather than
     /// copied into the timeline, which is what makes a running chip mutate in place as its
     /// block finishes — the timeline holds where it goes, the projection holds what it says.
-    /// The launch surface: a person choosing which repository this session is FOR, standing
-    /// where the timeline's first line will (`ClientModel.launchOffered`).
+    /// The launch surface: an ASK CARD, docked above the composer (`ClientModel.launchOffered`)
+    /// — the session asking which repository it is for, with the ways to answer.
     ///
-    /// The list is what the person's own credential can see — theirs, most recently pushed
-    /// first, or a search of GitHub by name — so a repo shown here is one their `add_repo`
-    /// can clone. Choosing one shows its branches with the provider's default picked, and
-    /// Start sends the one command; from then on the surface only waits, and the outcome is
-    /// the timeline's first line (the repo note, or the failure it says instead).
-    let private repoPicker (actions: ViewActions) (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
+    /// Its anatomy is the one the agent's questions will wear later: who asks · the question
+    /// · rows to hold · one button that commits · a way out. A row is a bordered rectangle —
+    /// the product's one "press me" — and holding it is a state, not a send: the held row
+    /// grows a branch field where its description was, and START is what sends. The card
+    /// wears the blue leading edge a queued command wears, because it means the same thing
+    /// there: waiting on you.
+    let private askCard (actions: ViewActions) (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
         let launch = model.Launch
-        let waiting =
-            match launch.Stage with
-            | Choosing -> false
-            | Sent _ | Cloning -> true
+        let busy = Launch.busy launch
         let stage =
             match launch.Stage with
             | Choosing -> "choosing"
+            | Resolving _ -> "resolving"
             | Sent _ -> "sent"
-            | Cloning -> "cloning"
-        let search () = actions.LaunchSearch launch.Query
-        let onSearchKey (e: Browser.Types.Event) =
+            | Cloning _ -> "cloning"
+        let onFieldKey (e: Browser.Types.Event) =
             let key : string = (e :?> Browser.Types.KeyboardEvent).key
-            if key = "Enter" then
+            if key = "Enter" && not busy then
                 e.preventDefault ()
-                search ()
-        let candidateRow (candidate: Repos.RepoCandidate) =
+                match Launch.linkOf launch.Query with
+                | Some link -> actions.LaunchLink link
+                | None -> actions.LaunchSearch launch.Query
+        let hold (candidate: Repos.RepoCandidate) =
+            dispatch (LaunchMsg (LaunchSelected candidate))
+            // Branches are asked for on holding, so the field is full by the time it is
+            // opened — and once per row, whatever is held and let go.
+            if launch.Selected <> Some candidate.Repo && not (launch.Branches |> Map.containsKey candidate.Repo) then
+                actions.LaunchBranches candidate.Repo
+        // The held row's branch: a field with the provider's branches to choose from, that
+        // also takes a name the provider has not got. A hundred branches is a list nobody
+        // scrolls; typed, it is three letters and a pick — and a name past the first hundred,
+        // or one that does not exist yet, is typed the same way.
+        let branchField (candidate: Repos.RepoCandidate) =
             let name = RepoRef.value candidate.Repo
-            // A repo with no description renders none — not an empty span standing where one
-            // would be.
-            let description =
-                candidate.Description
-                |> Option.map (fun said -> html $"""<span class="{Style.launchCandidateDescription}">{said}</span>""")
-                |> Option.toList
+            let listId = "repo-branches-" + name.Replace ('/', '-')
+            let options =
+                match launch.Branches |> Map.tryFind candidate.Repo with
+                | Some (BranchesLoaded names) -> names |> List.map (fun branch -> html $"""<option value="{branch}"></option>""")
+                | Some (BranchesUnavailable _)
+                | Some BranchesUnknown
+                | None -> []
+            let note =
+                match launch.Branches |> Map.tryFind candidate.Repo with
+                | Some (BranchesUnavailable reason) -> html $"""<span class="{Style.small}">{reason}</span>"""
+                | _ -> Lit.nothing
             html $"""
-                <li>
-                  <button type="button" class="{Style.launchCandidate}" data-repo-candidate="{name}" ?disabled={waiting}
-                          @click={Ev(fun _ ->
-                              dispatch (LaunchMsg (LaunchChosen candidate))
-                              actions.LaunchBranches candidate.Repo)}>
-                    <span class="{Style.launchCandidateName}">{name}</span>
+                <div class="{Style.askBranch}">
+                  <label class="{Style.label}" for="repo-branch">{Dom.Text.repoPickerBranchLabel}</label>
+                  <input id="repo-branch" type="text" class="{Style.askBranchField}" data-repo-candidate-branch="{name}"
+                         list="{listId}" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false"
+                         ?disabled={busy}
+                         .value={Launch.branchOf launch candidate}
+                         @input={EvVal(fun v -> dispatch (LaunchMsg (LaunchBranchNamed (candidate.Repo, v))))} />
+                  <datalist id="{listId}">{options}</datalist>
+                  {note}
+                </div>"""
+        let row (candidate: Repos.RepoCandidate) =
+            let name = RepoRef.value candidate.Repo
+            let heldNow = launch.Selected = Some candidate.Repo
+            // A held row's second line is its branch field, so the description gives way.
+            let description =
+                if heldNow then []
+                else
+                    candidate.Description
+                    |> Option.map (fun said -> html $"""<span class="{Style.askRowDescription}">{said}</span>""")
+                    |> Option.toList
+            let mark = if heldNow then html $"""<span class="{Style.askRowMark}" aria-hidden="true">{Icon.check}</span>""" else Lit.nothing
+            html $"""
+                <li class="{if heldNow then Style.askRowHeld else Style.askRow}">
+                  <button type="button" class="{Style.askRowButton}" data-repo-candidate="{name}"
+                          aria-pressed="{if heldNow then "true" else "false"}" ?disabled={busy}
+                          @click={Ev(fun _ -> hold candidate)}>
+                    <span class="{Style.askRowName}">{name}</span>
+                    {mark}
                     {description}
                   </button>
+                  {if heldNow then branchField candidate else Lit.nothing}
                 </li>"""
         let listing =
             match launch.Listing with
@@ -1726,7 +1707,7 @@ module View =
             | ListingUnavailable (reason, true) ->
                 html $"""
                     <span class="{Style.small}">{reason}</span>
-                    <div class="{Style.launchActions}">
+                    <div class="{Style.askActions}">
                       <button type="button" class="{Style.btnPrimary}" data-repo-picker-connect @click={Ev(fun _ -> actions.RevealSettings ())}>{Dom.Text.repoPickerConnect}</button>
                     </div>"""
             | ListingUnavailable (reason, false) ->
@@ -1734,78 +1715,59 @@ module View =
             | ListingLoaded [] ->
                 html $"""<span class="{Style.small}">{Dom.Text.repoPickerNothing}</span>"""
             | ListingLoaded candidates ->
-                html $"""<ul class="{Style.launchList}">{candidates |> List.map candidateRow}</ul>"""
-        let choosing =
-            html $"""
-                <label class="{Style.srOnly}" for="repo-picker-search">{Dom.Text.repoPickerSearchLabel}</label>
-                <input id="repo-picker-search" type="search" class="{Style.field}" data-repo-picker-search
-                       placeholder="{Dom.Text.repoPickerSearchPlaceholder}"
-                       autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false"
-                       enterkeyhint="search"
-                       .value={launch.Query}
-                       @input={EvVal(fun v -> dispatch (LaunchMsg (LaunchQueryTyped v)))}
-                       @keydown={Ev onSearchKey} />
-                {listing}"""
-        let chosen (choice: LaunchChoice) =
-            let name = RepoRef.value choice.Repo.Repo
-            // The provider's default is always offered — it is what the clone comes up on —
-            // and the rest are whatever the provider listed. A choice already made stays
-            // offered whatever arrived, so the control never shows something other than the
-            // setting behind it.
-            let branches =
-                match choice.Branches with
-                | BranchesLoaded names -> names
-                | BranchesUnknown | BranchesUnavailable _ -> []
-            let offered = (choice.Repo.DefaultBranch :: choice.Branch :: branches) |> List.distinct
-            let options =
-                offered
-                |> List.map (fun branch ->
-                    html $"""<option value="{branch}" ?selected={branch = choice.Branch}>{branch}</option>""")
-            let branchesNote =
-                match choice.Branches with
-                | BranchesUnavailable reason -> html $"""<span class="{Style.small}">{reason}</span>"""
-                | BranchesUnknown | BranchesLoaded _ -> html $""""""
-            let status =
-                if waiting then
-                    html $"""<span class="{Style.statusRun}" role="status"><span class="{Style.statusDotPulse}"></span>{Dom.Text.repoPickerCloning}</span>"""
-                else html $""""""
-            html $"""
-                <div class="{Style.launchChoice}">
-                  <span class="{Style.launchChoiceName}">{name}</span>
-                  <label class="{Style.label}" for="repo-picker-branch">{Dom.Text.repoPickerBranchLabel}</label>
-                  <div class="{Style.fieldSelectWrap}">
-                    <select id="repo-picker-branch" class="{Style.fieldSelect}" data-repo-picker-branch ?disabled={waiting}
-                            @change={EvVal(fun v -> dispatch (LaunchMsg (LaunchBranchPicked v)))}>
-                      {options}
-                    </select>
-                    <span class="{Style.fieldSelectMark}" aria-hidden="true">{Icon.down}</span>
-                  </div>
-                  {branchesNote}
-                  <div class="{Style.launchActions}">
-                    <button type="button" class="{Style.btnPrimary}" data-repo-picker-start ?disabled={waiting}
-                            @click={Ev(fun _ -> actions.LaunchStart choice.Repo.Repo (Launch.branchToAsk choice))}>{Dom.Text.repoPickerStart}</button>
-                    <button type="button" class="{Style.btn}" data-repo-picker-back ?disabled={waiting}
-                            @click={Ev(fun _ -> dispatch (LaunchMsg LaunchUnchosen))}>{Dom.Text.repoPickerBack}</button>
-                    {status}
-                  </div>
-                </div>"""
-        let body =
-            match launch.Choice with
-            | Some choice -> chosen choice
-            | None -> choosing
+                // The held row is always shown, wherever it is in the list; the rest are the
+                // first few until "more".
+                let shown =
+                    if launch.Expanded then candidates
+                    else
+                        let top = candidates |> List.truncate Launch.shown
+                        match Launch.held launch with
+                        | Some h when not (top |> List.exists (fun c -> c.Repo = h.Repo)) -> top @ [ h ]
+                        | _ -> top
+                let rest = candidates.Length - shown.Length
+                let more =
+                    if rest > 0 then
+                        html $"""
+                            <div class="{Style.askMore}">
+                              <span class="{Style.label}">{if launch.Query.Trim () = "" then Dom.Text.repoPickerRecent else Dom.Text.repoPickerFound}</span>
+                              <button type="button" class="{Style.askMoreButton}" data-repo-picker-more @click={Ev(fun _ -> dispatch (LaunchMsg LaunchExpanded))}>{rest} more {Icon.right}</button>
+                            </div>"""
+                    else Lit.nothing
+                html $"""<ul class="{Style.askRows}">{shown |> List.map row}</ul>{more}"""
         let problem =
             match launch.Problem with
             | Some reason -> html $"""<span class="{Style.statusErr}" role="alert" data-repo-picker-problem>{reason}</span>"""
-            | None -> html $""""""
+            | None -> Lit.nothing
+        let actionsRow =
+            match launch.Stage, Launch.target launch with
+            | Resolving _, _ ->
+                html $"""<span class="{Style.statusRun}" role="status"><span class="{Style.statusDotPulse}"></span>{Dom.Text.repoPickerLooking}</span>"""
+            | (Sent _ | Cloning _), _ ->
+                html $"""<span class="{Style.statusRun}" role="status"><span class="{Style.statusDotPulse}"></span>{Dom.Text.repoPickerCloning}</span>"""
+            | Choosing, target ->
+                html $"""
+                    <button type="button" class="{Style.askStart}" data-repo-picker-start ?disabled={target.IsNone}
+                            @click={Ev(fun _ -> target |> Option.iter actions.LaunchStart)}>{Dom.Text.repoPickerStart}</button>"""
         html $"""
-            <section class="{Style.launch}" data-repo-picker="{stage}" aria-labelledby="repo-picker-title">
-              <span id="repo-picker-title" class="{Style.label}">{Dom.Text.repoPickerTitle}</span>
-              <p class="{Style.launchLead}">{Dom.Text.repoPickerLead}</p>
+            <section class="{Style.ask}" data-repo-picker="{stage}" aria-labelledby="repo-picker-title">
+              <div class="{Style.askBody}">
+              <div class="{Style.askHead}">
+                <span class="{Style.askFrom}"><span class="{Style.askWho}">{Dom.Text.repoPickerAsker}</span> <span class="{Style.askVerb}">{Dom.Text.repoPickerAsks}</span></span>
+                <button type="button" class="{Style.btnIconBare}" data-repo-picker-dismiss aria-label="{Dom.Text.repoPickerDismiss}"
+                        @click={Ev(fun _ -> dispatch (LaunchMsg LaunchDismissed))}>{Icon.close}</button>
+              </div>
+              <span id="repo-picker-title" class="{Style.askQuestion}">{Dom.Text.repoPickerTitle}</span>
+              <label class="{Style.srOnly}" for="repo-picker-search">{Dom.Text.repoPickerSearchLabel}</label>
+              <input id="repo-picker-search" type="search" class="{Style.field}" data-repo-picker-search
+                     placeholder="{Dom.Text.repoPickerSearchPlaceholder}"
+                     autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false"
+                     enterkeyhint="go" ?disabled={busy}
+                     .value={launch.Query}
+                     @input={EvVal(fun v -> dispatch (LaunchMsg (LaunchQueryTyped v)))}
+                     @keydown={Ev onFieldKey} />
+              {listing}
               {problem}
-              {body}
-              <div class="{Style.launchActions}">
-                <button type="button" class="{Style.btn}" data-repo-picker-skip ?disabled={waiting}
-                        @click={Ev(fun _ -> dispatch (LaunchMsg LaunchDismissed))}>{Dom.Text.repoPickerSkip}</button>
+              <div class="{Style.askActions}">{actionsRow}</div>
               </div>
             </section>"""
 
@@ -2267,9 +2229,6 @@ module View =
             // has always said, which is why it can stay wordless and decorative. Unless what
             // is known is that history is missing — then the timeline is truncated rather
             // than empty, and the line saying so stands where the caret would have.
-            // Nothing here, and there will be: the launch surface stands where the first line
-            // will land, for a client that is connected and has read to the log's end.
-            | [], [], true when ClientModel.launchOffered model -> [ repoPicker actions dispatch model ]
             | [], [], true ->
                 match missing with
                 | Some line -> [ line ]
@@ -2277,10 +2236,6 @@ module View =
                     // Hooked like its sibling above, and for the same reason: what a mark
                     // MEANS is not readable from the mark, and these two mean opposite things.
                     [ html $"""<div class="{Style.timelineIdle}" data-timeline-empty aria-hidden="true"><span class="{Style.caretIdle}"></span></div>""" ]
-            // Rows, and still no repo and nothing said — a launch that failed, and its note:
-            // the surface stays at the head, so the next attempt is a click rather than a
-            // conversation.
-            | _ when ClientModel.launchOffered model -> repoPicker actions dispatch model :: Option.toList missing @ items
             | _ -> Option.toList missing @ items
         html $"""<section class="{Style.timeline}" data-conversation>{body}</section>"""
 
@@ -2498,8 +2453,8 @@ module View =
             html $"""
                 <div class="{Style.terminalScreen}" data-terminal-screen="{id}"
                      role="application" tabindex="0" aria-label="Live terminal, you are typing here"
-                     @keydown={Ev(fun e ->
-                                     match keystrokeOf e with
+                     @keydown={Ev(fun (e: Browser.Types.Event) ->
+                                     match keystrokeOf (e :?> Browser.Types.KeyboardEvent) with
                                      | Some data -> actions.TypeIntoTerminal terminal data
                                      | None -> ())}>{body}</div>"""
         else
@@ -3316,6 +3271,7 @@ module View =
               {header actions dispatch model}
               {signInPrompt actions model}
               {chat actions dispatch model}
+              {if ClientModel.launchOffered model then askCard actions dispatch model else Lit.nothing}
               {queue dispatch model.Synced}
               {drafts actions dispatch model}
             </div>

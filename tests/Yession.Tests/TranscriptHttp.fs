@@ -66,7 +66,7 @@ let private serving (records: int) =
                 0
         let port = Yession.Host.Interop.serverPort server
         let at (route: SessionRoute) (t: string) =
-            sprintf "http://127.0.0.1:%d/%s?token=%s" port (SessionRoute.relative route) t
+            sprintf "%s?token=%s" (SessionRoute.at (sprintf "http://127.0.0.1:%d" port) route) t
         return at, (fun () -> async { server.close ignore })
     }
 
@@ -147,9 +147,8 @@ let private endpointTests =
                 let port = Yession.Host.Interop.serverPort server
                 let url =
                     sprintf
-                        "http://127.0.0.1:%d/%s?token=%s"
-                        port
-                        (SessionRoute.relative (TerminalTranscriptRange (TerminalId.value terminal, 0, 4)))
+                        "%s?token=%s"
+                        (SessionRoute.at (sprintf "http://127.0.0.1:%d" port) (TerminalTranscriptRange (TerminalId.value terminal, 0, 4)))
                         token
                 let! before = httpGet url |> Async.AwaitPromise
                 for i in 5 .. 20 do
@@ -369,7 +368,7 @@ let private storeTests =
                             let url, _, body = answerOf 5 2
                             return Ok { Url = url; Body = body }
                         }
-                let feed = Client.TranscriptFetch.overHttp store answering (fun r -> SessionRoute.relative r) None
+                let feed = Client.TranscriptFetch.overHttp store answering (RelativeUrl.under "" << SessionRoute.relative) None
                 let! _ = feed terminal 5
                 let! cache = store.For terminal
                 let! kept = cache.Stored ()
@@ -386,7 +385,7 @@ let private storeTests =
                 let store = storeOf []
                 let answering : Client.HttpGet =
                     fun url -> async { return Ok { Url = url; Body = "" } }
-                let feed = Client.TranscriptFetch.overHttp store answering (fun r -> SessionRoute.relative r) None
+                let feed = Client.TranscriptFetch.overHttp store answering (RelativeUrl.under "" << SessionRoute.relative) None
                 let! _ = feed terminal 7
                 let! cache = store.For terminal
                 let! kept = cache.Stored ()

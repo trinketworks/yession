@@ -1632,7 +1632,7 @@ module ClientModel =
                 |> List.fold
                     (fun (launch: LaunchViewState) e ->
                         match e.Event, launch.Stage with
-                        | SessionEvent.GatedCommandFailed failed, (Sent _ | Cloning) when failed.Tool = "add_repo" ->
+                        | SessionEvent.GatedCommandFailed failed, (Sent _ | Cloning _) when failed.Tool = "add_repo" ->
                             Launch.update (LaunchFailed failed.Reason) launch
                         | _ -> launch)
                     model.Launch

@@ -51,7 +51,7 @@ let tests =
                     | Some resume -> waiter <- None; resume ()
                     | None -> ()
 
-                let! host = Host.startFull (fun () -> Some (usageAgent usage)) None None None None None None None sink None McpClient.McpConnections.none None sessionId None "" None false None 0
+                let! host = Host.startFull Clock.system (fun () -> Some (usageAgent usage)) (fun () -> None) None None None None None None None sink None McpClient.McpConnections.none None sessionId None "" None false None 0
 
                 // Inject a human message the Phase-3 way: an offline peer builds the enqueue on
                 // its own doc, then we deliver that state into the Host's doc, which drains it

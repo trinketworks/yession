@@ -85,12 +85,12 @@ let private claudeTests =
     testList "a model catalogue lookup" [
 
         testCase "an api key authenticates with x-api-key" <| fun () ->
-            let sent = ClaudeConnection.modelsHeaders "ANTHROPIC_API_KEY" "sk-ant-api03-x"
+            let sent = List.ofArray (ClaudeConnection.headersFor ("ANTHROPIC_API_KEY", "sk-ant-api03-x"))
             Expect.equal (valueOf "x-api-key" sent) (Some "sk-ant-api03-x") "the console dialect"
             Expect.equal (valueOf "authorization" sent) None "and never a bearer beside it"
 
         testCase "an oauth access token authenticates with a bearer and the beta opt-in" <| fun () ->
-            let sent = ClaudeConnection.modelsHeaders "CLAUDE_CODE_OAUTH_TOKEN" "at-1"
+            let sent = List.ofArray (ClaudeConnection.headersFor ("CLAUDE_CODE_OAUTH_TOKEN", "at-1"))
             Expect.equal (valueOf "authorization" sent) (Some "Bearer at-1") "the oauth dialect"
             Expect.equal (valueOf "anthropic-beta" sent) (Some "oauth-2025-04-20") "what Claude Code's own client sends"
             Expect.equal (valueOf "x-api-key" sent) None "and never a console key beside it"
@@ -98,7 +98,7 @@ let private claudeTests =
         testCase "either dialect declares which api version it speaks" <| fun () ->
             for envVar in [ "ANTHROPIC_API_KEY"; "CLAUDE_CODE_OAUTH_TOKEN" ] do
                 Expect.equal
-                    (valueOf "anthropic-version" (ClaudeConnection.modelsHeaders envVar "x"))
+                    (valueOf "anthropic-version" (List.ofArray (ClaudeConnection.headersFor (envVar, "x"))))
                     (Some "2023-06-01")
                     "the version this session was written against"
     ]

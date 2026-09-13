@@ -149,18 +149,33 @@ let recentOver (apiBase: string) (token: string option) : Async<Result<RepoCandi
 /// Repositories whose name matches, anywhere on GitHub the credential can see — so a
 /// public repo somebody else owns is one search away, without the session having to be
 /// told its exact name. Anonymous works, and sees only what anyone can.
+///
+/// A whole `owner/name` is looked up rather than searched: GitHub's search does not read
+/// a slash as an owner, so the one repo somebody typed in full is the one it would not
+/// find. Looked up, it answers as one row under the name the provider calls it NOW — so
+/// a stale name typed here shows its current one, and a name nobody can see shows
+/// nothing, which is what a search says too.
 let searchOver (apiBase: string) (token: string option) (text: string) : Async<Result<RepoCandidate list, LookupFailure>> =
     let query = text.Trim ()
     if query = "" then async { return Ok [] }
     else
-        read
-            searchDecoder
-            (sprintf
-                "%s/search/repositories?q=%s&per_page=%d"
-                (apiBase.TrimEnd '/')
-                (Http.urlPart (query + " in:name"))
-                pageSize)
-            token
+        match RepoRef.create query with
+        | Ok repo ->
+            async {
+                match! read candidateDecoder (sprintf "%s/repos/%s" (apiBase.TrimEnd '/') (RepoRef.value repo)) token with
+                | Ok candidate -> return Ok [ candidate ]
+                | Error NotFound -> return Ok []
+                | Error failure -> return Error failure
+            }
+        | Error _ ->
+            read
+                searchDecoder
+                (sprintf
+                    "%s/search/repositories?q=%s&per_page=%d"
+                    (apiBase.TrimEnd '/')
+                    (Http.urlPart (query + " in:name"))
+                    pageSize)
+                token
 
 /// One repository as GitHub names it NOW, or why it could not say.
 ///

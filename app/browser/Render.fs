@@ -76,11 +76,28 @@ let private surfaceScroll (selector: string) : obj = jsNative
 // oldest. It used to fall through to `scrollTop = 0` — invisible while the stream hugged the
 // bottom of a short box with `mt-auto`, and plainly wrong the moment the history was longer
 // than the box, which is exactly when the anchoring stopped applying.
+//
+// Written ONLY when the render left the reader somewhere else. A write to `scrollTop` — to
+// the value it already holds included — ends whatever scroll the browser has in flight, in
+// Chromium and WebKit alike (measured in the shell harness: a smooth scroll from the end of
+// two hundred items, with a record landing every frame, stayed at the end for sixty frames
+// under the unconditional write, and reached the top under this one). A record arriving is
+// a render, so while a sandbox ran its setup — a dozen renders a second, none of them
+// touching the timeline — every fling back through the conversation was taken away within a
+// frame and, having started at the end, put back there. Which is what "it keeps jumping to
+// the bottom, no matter where I scroll" was, on a phone.
+//
+// Both reads happen in the one task the render is, and the browser moves a scroll only
+// between tasks — so a pinned reader who is not at the end AFTER the render is one the
+// render moved: the surface grew past them (they follow the tail), or Lit replaced it and
+// the new one starts at zero. A reader who had scrolled up is put back on the same terms.
 [<Emit("""(function (selector, positions) {
   const key = el => el.getAttribute('data-terminal-id') || 'chat'
+  const atEnd = el => el.scrollTop + el.clientHeight >= el.scrollHeight - 4
   for (const el of document.querySelectorAll(selector)) {
     const position = positions[key(el)]
-    el.scrollTop = position === undefined || position < 0 ? el.scrollHeight : position
+    if (position === undefined || position < 0) { if (!atEnd(el)) el.scrollTop = el.scrollHeight }
+    else if (el.scrollTop !== position) el.scrollTop = position
   }
 })($0, $1)""")>]
 let private restoreSurfaceScroll (selector: string) (positions: obj) : unit = jsNative
@@ -537,7 +554,7 @@ let create (deps: Deps) : Renderer =
                 if keyframesAsked.Add key then
                     Async.StartImmediate (
                         async {
-                            let url = SessionRoute.relative (TerminalKeyframe (TerminalId.value terminal, seq))
+                            let url = Page.href (TerminalKeyframe (TerminalId.value terminal, seq))
                             match! deps.Links.Http url with
                             // A keyframe that does not answer is not a failure: the range
                             // still rebases and still plays, as the naive slice. Asking
