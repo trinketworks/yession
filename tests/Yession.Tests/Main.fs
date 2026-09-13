@@ -90,6 +90,8 @@ let all =
         Tag.needs "Node platform bindings" [] (fun () -> NodeExtras.tests)
         Tag.needs "Node platform bindings, spawning" [ Tag.Ports ] (fun () -> NodeExtras.portsTests)
         Tag.needs "Node platform bindings, WebSocket" [ Tag.Ports ] (fun () -> NodeExtras.socketTests)
+        Tag.needs "Node platform bindings, aborting and relaying" [] (fun () -> NodeExtras.eventTests)
+        Tag.needs "Node platform bindings, a given environment" [ Tag.Ports ] (fun () -> NodeExtras.seamTests)
         Tag.needs "Editor" [] (fun () -> Editor.tests)
         // The SDK binding, before the adapter written over it. The live case spawns the
         // real CLI, so it needs `Ports` beside the credential.

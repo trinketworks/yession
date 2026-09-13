@@ -2195,6 +2195,170 @@ let private persistenceTests =
             }
     ]
 
+// -----------------------------------------------------------------------------
+// The agent CLI's spawner seam: the two decisions the SDK's request leaves to us,
+// and the bookkeeping a stand-in does while srt is still wrapping. Pure, so they
+// are asked here rather than in the tier that can really spawn something.
+// -----------------------------------------------------------------------------
+
+/// A spawn request as the SDK builds one. Only the field under test is set; the rest
+/// are absent, which is what the SDK leaves them when it has nothing to say.
+let private spawnRequest (fields: (string * obj) list) : Fable.ClaudeAgentSdk.SpawnOptions =
+    unbox<Fable.ClaudeAgentSdk.SpawnOptions> (Fable.Core.JsInterop.createObj fields)
+
+let private agentSpawnerTests =
+    testList "The agent CLI's spawner seam (pure)" [
+
+        testCase "a request that named no directory starts the child where this process is" <| fun () ->
+            // The SDK spells "no directory" as the empty string as readily as by leaving the
+            // field out, and `spawn` given `cwd: ''` fails with ENOENT rather than
+            // inheriting — so the CLI would not start at all.
+            Expect.equal
+                (Sandboxes.AgentSandbox.startDirectory (spawnRequest [ "cwd", box "" ]))
+                None
+                "an empty directory is no directory"
+
+        testCase "the directory a request named is where the child starts" <| fun () ->
+            Expect.equal
+                (Sandboxes.AgentSandbox.startDirectory (spawnRequest [ "cwd", box "/work/checkout" ]))
+                (Some "/work/checkout")
+                "the directory the SDK asked for"
+
+        testCase "a stand-in reports killed from the moment the kill is asked for" <| fun () ->
+            // Node's own meaning of `child.killed`, and the SDK reads it to decide whether it
+            // has already asked. A stand-in that said `false` until a child existed would be
+            // asked to kill twice.
+            let standin = Sandboxes.AgentSandbox.Standin ()
+            Expect.isFalse standin.Killed "nothing has been asked yet"
+            standin.Kill "SIGTERM" |> ignore
+            Expect.isTrue standin.Killed "the kill was asked for, whether or not anything died"
+
+        testCase "a stand-in has no exit code until the child reports one" <| fun () ->
+            // `null`, not `undefined`: the SDK tests the field against `null`, so the answer
+            // for "still running" has to be the one Node gives.
+            let standin = Sandboxes.AgentSandbox.Standin ()
+            Expect.isTrue (isNull standin.ExitCode) "nothing has exited"
+            standin.Exited (box 0)
+            Expect.equal (unbox<int> standin.ExitCode) 0 "the code the child ended with"
+
+        testCase "a kill asked for before the child arrives reaches it when it does" <| fun () ->
+            // srt's wrap is asynchronous and the SDK's seam is not, so there is a window in
+            // which a kill has nothing to signal. Dropping it would leave the CLI running
+            // while the SDK believes it has been stopped.
+            let signalled = ResizeArray<string> ()
+            let standin = Sandboxes.AgentSandbox.Standin ()
+            standin.Kill "SIGKILL" |> ignore
+            Expect.equal (List.ofSeq signalled) [] "there was nothing to signal yet"
+            standin.Joined signalled.Add
+            Expect.equal (List.ofSeq signalled) [ "SIGKILL" ] "the child is signalled the moment it arrives"
+
+        testCase "a kill asked for after the child arrives reaches it at once" <| fun () ->
+            let signalled = ResizeArray<string> ()
+            let standin = Sandboxes.AgentSandbox.Standin ()
+            standin.Joined signalled.Add
+            standin.Kill "SIGKILL" |> ignore
+            Expect.equal (List.ofSeq signalled) [ "SIGKILL" ] "straight through to the child"
+
+        testCase "a kill with no signal named is SIGTERM" <| fun () ->
+            // Node's default, and the one the SDK relies on: its graceful stop calls `kill()`
+            // with nothing, and a stand-in that chose SIGKILL there would turn every ordinary
+            // end of a turn into a hard kill.
+            let signalled = ResizeArray<string> ()
+            let standin = Sandboxes.AgentSandbox.Standin ()
+            standin.Joined signalled.Add
+            standin.Kill null |> ignore
+            Expect.equal (List.ofSeq signalled) [ "SIGTERM" ] "the default Node would have used"
+    ]
+
+
+// --- The same seam, driven --------------------------------------------------------------------
+
+[<Emit("process.execPath")>]
+let private nodePath () : string = jsNative
+
+/// The FIRING end of an abort, which the product never holds: the signals it sees come from
+/// the agent SDK. Here because a spawner that listens to one needs something to listen to.
+[<Emit("new AbortController()")>]
+let private abortController () : obj = jsNative
+
+[<Emit("$0.signal")>]
+let private signalOf (controller: obj) : obj = jsNative
+
+[<Emit("$0.abort()")>]
+let private abortNow (controller: obj) : unit = jsNative
+
+/// Call a spawner the way the SDK does: one request in, one process out.
+let private askSpawner (spawner: obj) (fields: (string * obj) list) : Fable.ClaudeAgentSdk.SpawnedProcess =
+    (unbox<Func<Fable.ClaudeAgentSdk.SpawnOptions, Fable.ClaudeAgentSdk.SpawnedProcess>> spawner)
+        .Invoke (unbox<Fable.ClaudeAgentSdk.SpawnOptions> (Fable.Core.JsInterop.createObj fields))
+
+let private agentSpawnerPortsTests =
+    testList "The agent CLI's host spawner" [
+
+        testCaseAsync "the command, arguments and environment a request names are the child's" <| async {
+            let spawned =
+                askSpawner
+                    (Sandboxes.AgentSandbox.hostClaudeSpawner ())
+                    [ "command", box (nodePath ())
+                      "args", box [| "-e"; "process.exit(process.env.YESSION_MARK === 'set' ? 4 : 5)" |]
+                      "env", Fable.Core.JsInterop.createObj [ "YESSION_MARK", box "set" ] ]
+
+            do! Support.waitUntilWithin 5000 "the child exits" (fun () -> not (isNull spawned.exitCode))
+            Expect.equal (unbox<int> spawned.exitCode) 4 "the CLI ran with exactly the env the request carried"
+        }
+
+        // The SDK's forwarded abort is how a turn is stopped, and what it has to stop is the
+        // CLI's whole process GROUP — the CLI spawns children of its own. A sleeper is the
+        // cheapest thing that will not end on its own while the signal is being tested.
+        testCaseAsync "an abort on the request's signal kills the child" <| async {
+            let controller = abortController ()
+
+            let spawned =
+                askSpawner
+                    (Sandboxes.AgentSandbox.hostClaudeSpawner ())
+                    [ "command", box (nodePath ())
+                      "args", box [| "-e"; "setTimeout(() => {}, 60000)" |]
+                      "env", Fable.Core.JsInterop.createObj []
+                      "signal", signalOf controller ]
+
+            let child = unbox<Node.ChildProcess.ChildProcess> spawned
+            abortNow controller
+
+            do! Support.waitUntilWithin 5000 "the child is signalled" (fun () ->
+                    (Fable.NodeExtras.ChildProcesses.signalCode child).IsSome)
+
+            Expect.equal
+                (Fable.NodeExtras.ChildProcesses.signalCode child)
+                (Some "SIGKILL")
+                "the forwarded abort took it down"
+        }
+
+        // The other branch, and the one listening cannot reach: a signal that fired before
+        // the spawner was ever asked never calls a listener, so the spawner has to ASK too.
+        testCaseAsync "a signal that had already fired kills the child anyway" <| async {
+            let controller = abortController ()
+            abortNow controller
+
+            let spawned =
+                askSpawner
+                    (Sandboxes.AgentSandbox.hostClaudeSpawner ())
+                    [ "command", box (nodePath ())
+                      "args", box [| "-e"; "setTimeout(() => {}, 60000)" |]
+                      "env", Fable.Core.JsInterop.createObj []
+                      "signal", signalOf controller ]
+
+            let child = unbox<Node.ChildProcess.ChildProcess> spawned
+
+            do! Support.waitUntilWithin 5000 "the child is signalled" (fun () ->
+                    (Fable.NodeExtras.ChildProcesses.signalCode child).IsSome)
+
+            Expect.equal
+                (Fable.NodeExtras.ChildProcesses.signalCode child)
+                (Some "SIGKILL")
+                "an already-fired signal is still a kill"
+        }
+    ]
+
 let tests =
     testList "Phase2" [
         // Cheap tier: pure policy/parse, folds, host-sandbox child-process integration.
@@ -2206,10 +2370,13 @@ let tests =
         testWaitTests
         commandFoldTests
         acceptanceTests
+        agentSpawnerTests
         // Needs ports: everything that binds ports / spawns hosts over real WebRTC.
         Tag.needs "Session Manager launch" [ Tag.Ports; Tag.Native ] (fun () -> launchTests)
         Tag.needs "Lazy environment lifecycle" [ Tag.Ports; Tag.Native ] (fun () -> lazyLifecycleTests)
         Tag.needs "Command execution" [ Tag.Ports; Tag.Native ] (fun () -> commandTests)
         Tag.needs "Phase 2 acceptance E2E" [ Tag.Ports; Tag.Native ] (fun () -> acceptanceE2eTests)
         Tag.needs "Durable event log" [ Tag.Ports; Tag.Native ] (fun () -> persistenceTests)
+        // Only ports: the agent CLI's host spawner really spawning, with no WebRTC in it.
+        Tag.needs "The agent CLI's host spawner" [ Tag.Ports ] (fun () -> agentSpawnerPortsTests)
     ]

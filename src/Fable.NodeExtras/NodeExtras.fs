@@ -534,3 +534,118 @@ module HttpClient =
         : HttpRequest =
         let options = createObj [ "method" ==> ``method``; "headers" ==> createObj headers ]
         if url.StartsWith "https:" then overHttps url options onResponse else overHttp url options onResponse
+
+// --- Aborting ---------------------------------------------------------------------------------
+
+/// The WHATWG `AbortSignal` — a Node global since v15, and what a cancellable Node API takes.
+/// `Fable.Node` types none of it, and the `Fable.Browser.*` family is not on a Node program's
+/// path.
+///
+/// The LISTENING end only, because that is the end this repository holds: the signals it sees
+/// arrive from somebody else's API (the agent SDK hands one to the spawner it is given), and
+/// what fires one is an `AbortController` nothing here constructs.
+[<AllowNullLiteral>]
+type AbortSignal =
+
+    /// Whether the signal has ALREADY fired. A listener registered after that is never
+    /// called, so this is asked BESIDE registering one rather than instead of it.
+    abstract aborted : bool
+
+    /// Run `handler` when the signal fires. `{ once: true }` is not tidiness: `abort` fires
+    /// at most once by the spec, so a listener that removes itself costs nothing and is what
+    /// keeps a long-lived signal from retaining every handler ever hung on it.
+    [<Emit("$0.addEventListener('abort', $1, { once: true })")>]
+    abstract onAbort : handler: (unit -> unit) -> unit
+
+// --- Relaying somebody else's listeners --------------------------------------------------------
+
+/// A Node `EventEmitter` used as a RELAY: what one thing said, re-emitted to listeners
+/// somebody ELSE wrote — registered through here and never called from here.
+///
+/// `Fable.Node`'s `EventEmitter` cannot say that. It types a listener as an F# function of a
+/// definite arity, which is right for a listener written here and wrong for one passed
+/// through: Fable adapts a function whose arity it can see, and an adapted listener is a
+/// DIFFERENT function object — so `off` would no longer match what `on` registered, and a
+/// two-argument listener hung on `exit` would be handed one. Nor is there an arity to see,
+/// since it varies by event.
+///
+/// So a listener is `obj` here: it arrives as a JavaScript function and is handed on as that
+/// same function, which is the only thing a relay may do with one.
+[<AllowNullLiteral>]
+type EventRelay =
+
+    [<Emit("$0.on($1, $2)")>]
+    abstract on : ``event``: string * listener: obj -> unit
+
+    [<Emit("$0.once($1, $2)")>]
+    abstract once : ``event``: string * listener: obj -> unit
+
+    [<Emit("$0.off($1, $2)")>]
+    abstract off : ``event``: string * listener: obj -> unit
+
+    /// Emit one event, with the arguments its listeners take. THROWS when the event is
+    /// `error` and nothing is listening — Node's own rule, and the reason a relay is a real
+    /// `EventEmitter` rather than a list of functions kept here.
+    [<Emit("$0.emit($1, ...$2)")>]
+    abstract emit : ``event``: string * arguments: obj array -> unit
+
+[<AutoOpen>]
+module EventRelays =
+
+    /// `new EventEmitter()`, with its listeners left opaque.
+    let createRelay () : EventRelay = !!Node.Api.events.EventEmitter.Create ()
+
+// --- What was thrown ----------------------------------------------------------------------------
+
+[<AutoOpen>]
+module Thrown =
+
+    /// Whether what was thrown is an `Error`. JavaScript lets a `throw` carry any value at
+    /// all, and F#'s `with` binds whatever arrived without asking — so code handing a caught
+    /// value on to somebody who expects an `Error` is the code that has to ask.
+    [<Emit("$0 instanceof Error")>]
+    let isError (thrown: obj) : bool = jsNative
+
+    /// `String(x)` — JavaScript's own conversion, which spells `null` and `undefined` out
+    /// where F#'s `string` answers the empty string for both.
+    [<Emit("String($0)")>]
+    let describe (thrown: obj) : string = jsNative
+
+    /// `new Error(message)` — the platform's own error, not F#'s `exn`, which Fable compiles
+    /// to a class of its own. Both are `instanceof Error`, and only one of them is what a
+    /// listener written in JavaScript will have its hands on.
+    [<Emit("new Error($0)")>]
+    let errorWith (message: string) : exn = jsNative
+
+// --- Child processes: an environment this process did not build ----------------------------------
+
+[<AutoOpen>]
+module ChildProcessSeams =
+
+    /// `spawn`, where the environment arrives as the JavaScript object it already IS and the
+    /// child is handed that object.
+    ///
+    /// `SpawnOptions.Env` cannot express this. A `Map<string, string>` round trip RE-ENCODES
+    /// an environment, and a re-encoding is not what a seam like the agent SDK's
+    /// `spawnClaudeCodeProcess` promises: it hands a spawner `options.env` and the contract is
+    /// that the child sees exactly that object. What a round trip would quietly drop — a value
+    /// that is not a string, a key this process's own reader does not admit — is precisely
+    /// what "verbatim" is there to protect.
+    ///
+    /// Everything else is `SpawnOptions`' story, spelled the same way here — including what it
+    /// says about the streams of the `ChildProcess` that comes back.
+    let spawnWithEnv
+        (command: string)
+        (arguments: string list)
+        (env: obj)
+        (cwd: string option)
+        (stdio: Stdio)
+        (detached: bool)
+        : ChildProcess =
+        let js =
+            !!{| cwd = cwd
+                 env = env
+                 stdio = stdio
+                 detached = detached |}
+
+        Node.Api.childProcess.spawn (command, ResizeArray arguments, js)

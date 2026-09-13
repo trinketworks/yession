@@ -117,12 +117,42 @@ type [<AllowNullLiteral>] SpawnOptions =
     abstract env : obj
     abstract signal : obj
 
-/// The process a spawner hands back. Opaque, because nothing in this repository READS one —
-/// the two spawners build it (or hand back a Node `ChildProcess`) and the SDK consumes it.
-/// Declaring its members would be declaring an interface no F# here implements, with two
-/// `on`/`once`/`off` overloads whose listener arity differs by event.
+/// The process a spawner hands back: Node's `ChildProcess` as far as the SDK reads one.
+///
+/// Declared rather than opaque because F# now IMPLEMENTS it — the srt spawner's stand-in is
+/// an object expression over this interface, standing in for a child that srt has not
+/// finished wrapping — and what the SDK reads off a process is the only statement of what a
+/// stand-in has to answer for. The host spawner hands back a real `ChildProcess`, which
+/// satisfies the same shape natively.
 type [<AllowNullLiteral>] SpawnedProcess =
-    interface end
+    /// The three streams, opaque: the SDK writes a turn into `stdin` and reads the CLI's
+    /// answer off `stdout`, and nothing in this repository reads any of them.
+    abstract stdin : obj
+    abstract stdout : obj
+    abstract stderr : obj
+
+    /// Whether a kill has been ASKED for — Node's own meaning, true from the moment `kill`
+    /// is called rather than from the moment anything dies.
+    abstract killed : bool
+
+    /// The code the process ended with. `obj` rather than `int option` because Node's answer
+    /// for "still running" and for "a signal ended it" is `null`, and `null` is what the SDK
+    /// tests for: an `int option` would hand it `undefined`, the same F# value and a
+    /// different answer to `=== null`.
+    abstract exitCode : obj
+
+    /// Signal the process; `true` for "the signal was sent". Node's own default when the
+    /// caller names none is `SIGTERM`.
+    abstract kill : signal: string -> bool
+
+    /// A listener is `obj` for the reason `Fable.NodeExtras.EventRelay` gives: it is somebody
+    /// else's function, forwarded, and adapting it would change which function `off` can
+    /// remove. It is also the only way to have one member per verb rather than one per event,
+    /// since the two events the SDK waits on carry different arities — `exit` a code and a
+    /// signal, `error` an error.
+    abstract on : ``event``: string * listener: obj -> unit
+    abstract once : ``event``: string * listener: obj -> unit
+    abstract off : ``event``: string * listener: obj -> unit
 
 // --- the turn's options -------------------------------------------------------------------
 
