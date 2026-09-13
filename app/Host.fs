@@ -206,6 +206,20 @@ let startFull
             connections
             |> Map.iter (fun id channel -> if id <> except then Async.StartImmediate (channel.Send (Presence payload)))
 
+        // ...and to EVERY peer, which is what the Session Process's own caret needs: it is not
+        // one of the connections, so there is nobody to leave out.
+        let broadcastPresence (payload: PresencePayload) =
+            connections |> Map.iter (fun _ channel -> Async.StartImmediate (channel.Send (Presence payload)))
+
+        // Where everybody's caret is, as the last frame each of them sent. Kept because one
+        // thing here has to ASK — the namer, which will not start typing into a field somebody
+        // is already in (Plan 25). Relaying alone never needed to know.
+        let mutable carets : Map<ActorRef, Focus> = Map.empty
+        let recordCaret (payload: PresencePayload) =
+            match payload.Focus with
+            | Some focus -> carets <- Map.add payload.Who focus carets
+            | None -> carets <- Map.remove payload.Who carets
+
         // Every durable fact is advertised: appends go through a log wrapper that
         // broadcasts the new latest offset to all connected peers (clients page the
         // actual events in Step 07).
@@ -697,9 +711,40 @@ let startFull
         // conversation rather than reaching for one — and reads it only when there is a
         // chapter it has not asked about, which is once per chapter rather than once per
         // keystroke anybody types.
+        // How the session types where people can watch it (Plan 25). Composed here because
+        // both halves live here and nowhere lower: a caret is a relative position over the
+        // shared type, which only the client's Yjs bindings can make, and a presence frame to
+        // every peer, which only the relay can send.
+        let typing : Names.Typing =
+            // Qualified for the reason the conversation read below is: this file carries
+            // several types whose labels would collide if Chat were opened over it.
+            let fieldOf (subject: Yession.Domain.Chat.NamingSubject) : FocusField =
+                match subject with
+                | Yession.Domain.Chat.NamingSubject.Chapter messageId -> ChapterName messageId
+                | Yession.Domain.Chat.NamingSubject.Title -> FocusField.Title
+            { Occupied =
+                fun subject ->
+                    let field = fieldOf subject
+                    carets |> Map.exists (fun _ focus -> focus.Field = field)
+              Append = fun subject expected addition -> SyncedStateSync.appendToName doc subject expected addition
+              Caret =
+                fun where ->
+                    let focus =
+                        where
+                        |> Option.bind (fun (subject, index) ->
+                            SyncedStateSync.nameTextOf doc subject
+                            |> Option.map (fun text ->
+                                // Collapsed: a writer's caret is a bar, never a selection.
+                                let at = Yession.App.ProseMirror.relPosFromTypeIndex (box text) index |> Yession.App.ProseMirror.encodeRel
+                                { Field = fieldOf subject; Pos = { Anchor = at; Head = at } }))
+                    broadcastPresence
+                        { Who = ActorRef.Agent; DisplayName = Yession.App.Dom.Text.agent; Focus = focus } }
+
         let nameThings =
             Names.create
+                clock
                 doc
+                typing
                 (fun () ->
                     async {
                         let! page = log.Read None System.Int32.MaxValue
@@ -882,7 +927,10 @@ let startFull
                         approveCapabilities
                         launchRepo
                         principalFor
-                  OnPresence = fun payload -> broadcastPresenceExcept connectionId payload
+                  OnPresence =
+                    fun payload ->
+                        recordCaret payload
+                        broadcastPresenceExcept connectionId payload
                   // Live-mode traffic (Plan 13, stage 2e). Only the two peer-authored frames
                   // are acted on; a peer replaying a `TerminalRecord` or a `TerminalSnapshot`
                   // at us is asserting a fact about the transcript, which is the Process's
@@ -935,8 +983,9 @@ let startFull
                                 fun () ->
                                     connections <- Map.remove connectionId connections
                                     // Clear this peer's cursor on every remaining peer.
-                                    broadcastPresenceExcept connectionId
-                                        { Who = ActorRef.PeerRef peerId; DisplayName = ""; Focus = None }
+                                    let gone = { Who = ActorRef.PeerRef peerId; DisplayName = ""; Focus = None }
+                                    recordCaret gone
+                                    broadcastPresenceExcept connectionId gone
                                     // ...and release every terminal it was holding. A lease
                                     // held by someone who is gone is the one hold nobody
                                     // should have to clear by hand: without this a crashed

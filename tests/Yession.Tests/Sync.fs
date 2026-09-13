@@ -367,7 +367,7 @@ let private codecTests =
             p.Dispatch (user (EventsPageMsg (said messageId "ship it")))
             p.Dispatch (user (ToggleChapterMsg messageId))
             Expect.equal
-                (SyncedStateSync.nameChapter doc messageId "ship it" "Where it was settled")
+                (SyncedStateSync.nameSubject doc (NamingSubject.Chapter messageId) "ship it" "Where it was settled")
                 "Where it was settled"
                 "it still wore the guess, so the words went in and now stand"
             let decoded = SyncedStateSync.ofDoc doc |> Result.mapError (sprintf "%A") |> expect
@@ -380,22 +380,40 @@ let private codecTests =
         // chose is the empty one — and empty is a real expectation to compare against.
         testCase "an untitled session takes the words that were written for it" <| fun () ->
             let doc = Y.Doc.Create ()
-            Expect.equal (SyncedStateSync.titleOf doc) "" "nobody has titled it"
+            Expect.equal (SyncedStateSync.nameOf doc NamingSubject.Title) "" "nobody has titled it"
             Expect.equal
-                (SyncedStateSync.nameTitle doc "" "The refresh-token bug")
+                (SyncedStateSync.nameSubject doc NamingSubject.Title "" "The refresh-token bug")
                 "The refresh-token bug"
                 "it stands, because nothing was there to lose to"
-            Expect.equal (SyncedStateSync.titleOf doc) "The refresh-token bug" "and the session holds it"
+            Expect.equal (SyncedStateSync.nameOf doc NamingSubject.Title) "The refresh-token bug" "and the session holds it"
 
         testCase "a title typed while the model was thinking is the one that stays" <| fun () ->
             let doc = Y.Doc.Create ()
             let p = Harness.run (Client.makeProgram doc (ClientModel.init (peer "ada" "Ada")))
             p.Dispatch (user (EditTitleMsg (Text.insert 0 "Mine" (p.Model ()).Synced.Title)))
             Expect.equal
-                (SyncedStateSync.nameTitle doc "" "The refresh-token bug")
+                (SyncedStateSync.nameSubject doc NamingSubject.Title "" "The refresh-token bug")
                 "Mine"
                 "it answers what stands, which is theirs"
-            Expect.equal (SyncedStateSync.titleOf doc) "Mine" "and nothing wrote over it"
+            Expect.equal (SyncedStateSync.nameOf doc NamingSubject.Title) "Mine" "and nothing wrote over it"
+
+        // Typing is an append at the end, under the same guard as a whole-name write. A
+        // splice rather than a replacement, so a caret anybody is holding in the same text
+        // keeps its place while the words grow past it.
+        testCase "a name grows by what is typed into it" <| fun () ->
+            let doc = Y.Doc.Create ()
+            Expect.equal (SyncedStateSync.nameSubject doc NamingSubject.Title "" "Wher") "Wher" "the first of it"
+            Expect.equal (SyncedStateSync.appendToName doc NamingSubject.Title "Wher" "e it") "Where it" "and the next"
+
+        testCase "a tick that finds other words there writes nothing, and says so" <| fun () ->
+            let doc = Y.Doc.Create ()
+            Expect.equal (SyncedStateSync.nameSubject doc NamingSubject.Title "" "Wher") "Wher" "the session's own so far"
+            // Somebody typed between one tick and the next.
+            Expect.equal (SyncedStateSync.nameSubject doc NamingSubject.Title "Wher" "Mine") "Mine" "theirs now"
+            Expect.equal
+                (SyncedStateSync.appendToName doc NamingSubject.Title "Wher" "e it")
+                "Mine"
+                "the tick answers what stands, and added nothing to it"
 
         // The race the write exists to lose. A second passes between reading a name and
         // having something to put there, and somebody typing in that second has named the
@@ -411,7 +429,7 @@ let private codecTests =
             // Somebody types, after the pass that read "ship it" and before its answer lands.
             p.Dispatch (user (EditChapterNameMsg (messageId, Text.edit "Mine" seeded.Name)))
             Expect.equal
-                (SyncedStateSync.nameChapter doc messageId "ship it" "Where it was settled")
+                (SyncedStateSync.nameSubject doc (NamingSubject.Chapter messageId) "ship it" "Where it was settled")
                 "Mine"
                 "it answers what stands, which is theirs — and is what the session records"
             let decoded = SyncedStateSync.ofDoc doc |> Result.mapError (sprintf "%A") |> expect
