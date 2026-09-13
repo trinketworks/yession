@@ -63,24 +63,36 @@ still the agent's to add, and the surface does not come back once anything has h
 It is the same gated `add_repo` — classified, attributed, on the timeline — with a second
 caller rather than a second implementation.
 
-## One gesture, not a form
+## An ask card, not a form
 
 The first cut of the surface was a wizard: choose a row, then a branch, then Start, with
 Back beside it and "start without a repository" below — three stages and three buttons
 over a paragraph explaining them, in a product whose every other act is one line said to
-a composer. It was replaced the same day by a list and a field. A row IS the launch, on
-the branch its trailing mark shows (the provider's default, until the mark is opened and
-another picked); the field is a search or a paste — `owner/name`, a github.com page, a
-`tree/<branch>` page, a `pull/<n>` page, a clone URL — and Enter on a link copied from
-the provider launches it as it stands. A pull request is the one link that has to be
-asked about first, because which fork its branch lives in only the provider knows.
+a composer. The second was a list at the foot of the timeline whose rows launched on tap;
+it read as history rather than a decision, its rows did not look pressable, and thirty of
+them was a page. What stands now is an **ask card**, docked above the composer where the
+queue's bands dock: *who asks · the question · rows to hold · one button · a way out*.
 
-There is no Start, no Back, and no "start without one": the composer beside the surface
-is already the way to begin a session that is not about a repository, and the surface
-says so in one muted line. It stands at the FOOT of the timeline, where the next line
-lands and where a thumb is, not at its head. A bare `owner/name` typed into the field
-searches rather than launches, deliberately: a name half typed still parses as a name,
-and a search shows what it matched where a launch would fail against it.
+The anatomy is deliberately general. It is the session asking which repository today, and
+it is the shape the agent will use to ask a person a question with several answers. So
+holding a row is a STATE and starting is a PRESS: tapping a row holds it (blue edge, a
+mark, a lifted ground) and sends nothing; the held row grows a branch field where its
+description was; START is the one thing that sends. Holding several rows later is a list
+where an option is, not a redesign. Four rows are shown, then "N more"; a bare
+`owner/name` typed into the field searches (a name half typed still parses as one, and an
+exact one is looked up and answered under the provider's current name); a link copied
+from the provider — a page, a `tree/<branch>` page, a `pull/<n>` page, a clone URL — is
+resolved to a row and held, on the branch it named. A pull request is asked about first,
+because which fork its branch lives in only the provider knows.
+
+The branch is a field with the provider's branches to choose from, not a menu of them: a
+hundred branches is a list nobody scrolls, three letters and a pick is how a person names
+one, and a name the provider has not got yet is typed the same way (`switch_branch`
+creates it).
+
+The card wears the blue leading edge a queued command wears, because it means the same
+thing there: waiting on you. ✕ dismisses it for this client; a session that is not about
+a repository begins the way it always did, by saying something.
 
 ## What the surface promises, and what it does not
 
