@@ -17,6 +17,10 @@ open Yession.Domain.Collab
 /// `setTo` therefore writes the MINIMUM edit: keep the common prefix, keep the common
 /// suffix, and replace only what actually changed. For ordinary typing that is a
 /// one-character insert, which is exactly what merges cleanly.
+///
+/// The other direction — the root's value going back into the input — is `lineWrite`, which
+/// is here rather than beside the DOM write it governs because what can be WRONG about it is
+/// arithmetic, and arithmetic is cheap to re-check.
 module TerminalText =
 
     [<Emit("$0.toString()")>]
@@ -36,6 +40,42 @@ module TerminalText =
 
     /// The current value of a command line.
     let read (registry: TextRegistry) (key: string) : string = textString (registry.Text key)
+
+    /// What an input showing a command line must be TOLD, once the root says `value`: whether
+    /// to write at all, and where the caret goes afterwards. One answer rather than two,
+    /// because a caller that decided them apart could write the value and forget the caret,
+    /// which is precisely the fault this exists to prevent.
+    [<RequireQualifiedAccess>]
+    type LineWrite =
+        /// The input already says it. Nothing is written — and that is the only way a caret
+        /// is left genuinely untouched, since assigning a value moves it to the end whether
+        /// or not the string changed.
+        | Unchanged
+        /// Write the value. No caret is in this line, so there is none to put back.
+        | Value
+        /// Write the value, then put the caret back at these offsets.
+        | ValueAndCaret of first: int * last: int
+
+    /// Decide it. `caret` is where the input's selection is, and `None` when nobody is typing
+    /// in this line — an unfocused input, or one whose type carries no selection at all.
+    ///
+    /// A remote edit re-renders the value under a focused input, and assigning it resets the
+    /// selection to the end: a collaborator's keystroke throwing your cursor across the line.
+    /// So the caret is read before the write and put back after it — and not written at all
+    /// when nothing changed, which is nearly every call, because this runs after every render
+    /// and every doc update.
+    ///
+    /// Both offsets are clamped into the new value, INDEPENDENTLY: a shorter value cannot
+    /// leave the caret past its end, and a selection whose start still fits keeps it while
+    /// only its end comes back.
+    let lineWrite (current: string) (value: string) (caret: (int * int) option) : LineWrite =
+        if current = value then LineWrite.Unchanged
+        else
+            match caret with
+            | None -> LineWrite.Value
+            | Some (first, last) ->
+                let limit = value.Length
+                LineWrite.ValueAndCaret (min first limit, min last limit)
 
     /// The length of the common prefix of two strings.
     let private commonPrefix (a: string) (b: string) : int =
