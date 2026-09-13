@@ -73,35 +73,61 @@ module Naming =
     /// oversight — an act note is a sentence somebody already wrote short ("PR octo/hello#12
     /// merged"), and what this names is where a person divided the session and left the guess
     /// standing.
+    /// The session's own name, when it wants one.
+    ///
+    /// A title has no guess, so the state nobody chose is the empty one — which makes the
+    /// ownership rule read the same as a chapter's with one fewer way to be writable, and
+    /// means a session somebody titled by hand before anything was said is theirs from the
+    /// start.
+    let private titleOwed
+        (settled: Map<NamingSubject, SessionNamed>)
+        (title: string)
+        (items: ConversationItem list)
+        : Job option =
+        let last = Map.tryFind NamingSubject.Title settled
+        if not (title = "" || ours last title) then None
+        elif not (worthAsking last (List.length items)) then None
+        else
+            Some
+                { Subject = NamingSubject.Title
+                  Ask = Titles.summaryAsk items (last |> Option.map (fun fact -> fact.Name))
+                  Held = title
+                  Read = List.length items }
+
     let owed
         (settled: Map<NamingSubject, SessionNamed>)
+        (title: string)
         (chapters: Map<MessageId, ChapterMark>)
         (items: ConversationItem list)
         : Job list =
-        chapters
-        |> Map.toList
-        |> List.filter (fun (_, mark) -> mark.Opens)
-        |> List.choose (fun (messageId, _) ->
-            items |> List.tryFind (fun item -> item.MessageId = messageId))
-        |> List.choose (fun item ->
-            let subject = NamingSubject.Chapter item.MessageId
-            let last = Map.tryFind subject settled
-            let held = Chapters.name chapters item
-            if not (Chapters.unwritten chapters item || ours last held) then None
-            else
-                let covered = Chapters.covers chapters items item
-                if not (worthAsking last (List.length covered)) then None
+        let chapterJobs =
+            chapters
+            |> Map.toList
+            |> List.filter (fun (_, mark) -> mark.Opens)
+            |> List.choose (fun (messageId, _) ->
+                items |> List.tryFind (fun item -> item.MessageId = messageId))
+            |> List.choose (fun item ->
+                let subject = NamingSubject.Chapter item.MessageId
+                let last = Map.tryFind subject settled
+                let held = Chapters.name chapters item
+                if not (Chapters.unwritten chapters item || ours last held) then None
                 else
-                    Some
-                        { Subject = subject
-                          // What it is called ALREADY is the session's own last answer, not
-                          // whatever the doc happens to read: on a first ask there is nothing
-                          // to keep, and the guess is not a name anybody chose — handing it
-                          // over would be asking a model to reword the first line of a
-                          // message rather than to name what the part is about.
-                          Ask = Chapters.summaryAsk chapters items item (last |> Option.map (fun fact -> fact.Name))
-                          Held = held
-                          Read = List.length covered })
+                    let covered = Chapters.covers chapters items item
+                    if not (worthAsking last (List.length covered)) then None
+                    else
+                        Some
+                            { Subject = subject
+                              // What it is called ALREADY is the session's own last answer,
+                              // not whatever the doc happens to read: on a first ask there is
+                              // nothing to keep, and the guess is not a name anybody chose —
+                              // handing it over would be asking a model to reword the first
+                              // line of a message rather than to name what the part is about.
+                              Ask = Chapters.summaryAsk chapters items item (last |> Option.map (fun fact -> fact.Name))
+                              Held = held
+                              Read = List.length covered })
+        // The session's own name first, because it is the one a person sees before they have
+        // scrolled anywhere.
+        (titleOwed settled title items |> Option.toList) @ chapterJobs
 
     /// The fact to record once a pass has answered, whatever it answered.
     ///

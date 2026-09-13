@@ -62,6 +62,10 @@ and GatedCommandFailed =
 /// this is called still the best short name for it — is the same question about both.
 and [<RequireQualifiedAccess>] NamingSubject =
     | Chapter of MessageId
+    /// What the whole session is called. The same question as a chapter's, asked of
+    /// everything rather than of a stretch — which is why it is a case here and not a
+    /// second feature with a second set of rules to keep in step.
+    | Title
 
 /// What the session settled a subject's name to, and how much it had read to settle it.
 ///

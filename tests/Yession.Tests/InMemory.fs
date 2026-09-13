@@ -110,6 +110,10 @@ let tests =
                     Host.startFull Clock.system (fun () -> None) (fun _ -> Some summarize) None None None None None None None (fun _ _ -> ()) None McpClient.McpConnections.none None (sid ()) None "" None false None 0
                 let! a = connectInMemoryClient host "ada" "Ada"
                 let ada = a.Hello.PeerId
+                // Titled by hand, so what is counted below is only ever asks about CHAPTERS:
+                // a title the session did not write is never owed.
+                a.Runner.Dispatch (user (EditTitleMsg (Text.insert 0 "Titled by hand" (a.Runner.Model ()).Synced.Title)))
+                do! a.Runner.WaitFor (fun m -> Text.toString m.Synced.Title = "Titled by hand")
                 do! compose a ada "ship it"
                 a.Connection.SendDraft ada
                 do! a.Runner.WaitFor (fun m -> m.Conversation.Items |> List.exists (fun i -> i.Body = "ship it"))
@@ -168,6 +172,10 @@ let tests =
                     Host.startFull Clock.system (fun () -> None) (fun _ -> Some summarize) None None None None None None None (fun _ _ -> ()) None McpClient.McpConnections.none None (sid ()) None "" None false None 0
                 let! a = connectInMemoryClient host "ada" "Ada"
                 let ada = a.Hello.PeerId
+                // Titled by hand, so what is counted below is only ever asks about CHAPTERS:
+                // a title the session did not write is never owed.
+                a.Runner.Dispatch (user (EditTitleMsg (Text.insert 0 "Titled by hand" (a.Runner.Model ()).Synced.Title)))
+                do! a.Runner.WaitFor (fun m -> Text.toString m.Synced.Title = "Titled by hand")
                 do! compose a ada "run tests"
                 a.Connection.SendDraft ada
                 do! a.Runner.WaitFor (fun m -> m.Conversation.Items |> List.exists (fun i -> i.Body = "run tests"))
@@ -203,6 +211,10 @@ let tests =
                     Host.startFull Clock.system (fun () -> None) (fun _ -> Some summarize) None None None None None None None (fun _ _ -> ()) None McpClient.McpConnections.none None (sid ()) None "" None false None 0
                 let! a = connectInMemoryClient host "ada" "Ada"
                 let ada = a.Hello.PeerId
+                // Titled by hand, so what is counted below is only ever asks about CHAPTERS:
+                // a title the session did not write is never owed.
+                a.Runner.Dispatch (user (EditTitleMsg (Text.insert 0 "Titled by hand" (a.Runner.Model ()).Synced.Title)))
+                do! a.Runner.WaitFor (fun m -> Text.toString m.Synced.Title = "Titled by hand")
                 do! compose a ada "run tests"
                 a.Connection.SendDraft ada
                 do! a.Runner.WaitFor (fun m -> m.Conversation.Items |> List.exists (fun i -> i.Body = "run tests"))
@@ -219,6 +231,46 @@ let tests =
                 do! a.Runner.WaitFor (fun m -> List.length m.Conversation.Items = 2)
                 Expect.equal (Chat.Chapters.name (a.Runner.Model ()).Synced.Chapters item) "Mine" "theirs, and nothing wrote over it"
                 Expect.equal asked.Count 1 "and it was not even asked again"
+                do! host.Stop ()
+            }
+
+        // The session names ITSELF, not only its parts — and the name reaches the Manager
+        // through the hook that already carries a typed title, so a session list shows what
+        // a session is for without anybody having titled it.
+        testCaseAsync "a session nobody titled names itself, and the Manager hears it" <|
+            async {
+                let summarize : Summarize = fun _ -> async { return Ok "The refresh-token bug" }
+                let reported = ResizeArray<string> ()
+                let report (name: string) = async { reported.Add name }
+                let! host =
+                    Host.startFull Clock.system (fun () -> None) (fun _ -> Some summarize) None None None None None (Some report) None (fun _ _ -> ()) None McpClient.McpConnections.none None (sid ()) None "" None false None 0
+                let! a = connectInMemoryClient host "ada" "Ada"
+                let ada = a.Hello.PeerId
+                do! compose a ada "the auth middleware drops the refresh token"
+                a.Connection.SendDraft ada
+                do! a.Runner.WaitFor (fun m -> Text.toString m.Synced.Title = "The refresh-token bug")
+                do! a.Runner.WaitFor (fun _ -> reported |> Seq.contains "The refresh-token bug")
+                do! host.Stop ()
+            }
+
+        // The promise, for the session's own name: a title somebody typed is theirs.
+        testCaseAsync "a session somebody titled is not retitled" <|
+            async {
+                let asked = ResizeArray<SummaryAsk> ()
+                let summarize : Summarize =
+                    fun ask -> async { asked.Add ask; return Ok "The refresh-token bug" }
+                let! host =
+                    Host.startFull Clock.system (fun () -> None) (fun _ -> Some summarize) None None None None None None None (fun _ _ -> ()) None McpClient.McpConnections.none None (sid ()) None "" None false None 0
+                let! a = connectInMemoryClient host "ada" "Ada"
+                let ada = a.Hello.PeerId
+                // Titled before anything is said, which is when a person usually does it.
+                a.Runner.Dispatch (user (EditTitleMsg (Text.insert 0 "Friday deploy" (a.Runner.Model ()).Synced.Title)))
+                do! a.Runner.WaitFor (fun m -> Text.toString m.Synced.Title = "Friday deploy")
+                do! compose a ada "the auth middleware drops the refresh token"
+                a.Connection.SendDraft ada
+                do! a.Runner.WaitFor (fun m -> m.Conversation.Items |> List.exists (fun i -> i.Body.StartsWith "the auth"))
+                Expect.equal (Text.toString (a.Runner.Model ()).Synced.Title) "Friday deploy" "theirs, and nothing wrote over it"
+                Expect.isFalse (asked |> Seq.exists (fun ask -> ask.Task.Contains "working session is currently called")) "and it was never even asked about"
                 do! host.Stop ()
             }
 

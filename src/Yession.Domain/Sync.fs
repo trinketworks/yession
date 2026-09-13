@@ -617,6 +617,35 @@ module SyncedStateSync =
             processOrigin)
         stands
 
+    /// What the session is called, read straight from its root.
+    let titleOf (doc: Yjs.Y.Doc) : string =
+        if shareHas doc "title" then textString (doc.getText "title") else ""
+
+    /// Write the session's title — but only while it still reads `expected`.
+    ///
+    /// `nameChapter`'s sibling, and the same compare-and-set for the same reason: a second
+    /// passes between reading a name and having something to put there, and somebody typing
+    /// in that second has named the session themselves. The read and the write are one
+    /// transaction, so there is no window between them here either, and it answers what
+    /// STANDS so the caller records the doc rather than its own hope.
+    ///
+    /// A session that has never been titled reads `""`, which is a real expectation rather
+    /// than a missing one: a title has no guess seeded into it the way a chapter does, so
+    /// empty IS the state nobody has chosen.
+    let nameTitle (doc: Yjs.Y.Doc) (expected: string) (name: string) : string =
+        let mutable stands = ""
+        doc.transact (
+            (fun _ ->
+                let text : Yjs.Y.Text = doc.getText "title"
+                let held = textString text
+                stands <- held
+                if held = expected && held <> name then
+                    if held.Length > 0 then text.delete (0, held.Length)
+                    text.insert (0, name)
+                    stands <- name),
+            processOrigin)
+        stands
+
     /// The Markdown of a queue entry's rich body, read straight from its top-level fragment
     /// root — the drain's snapshot into the durable `MessageSent` (the Session Process observes
     /// the doc without a Ylmish binding, so it reads the body fragment directly). An entry whose

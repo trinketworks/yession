@@ -376,6 +376,27 @@ let private codecTests =
                 (Some "Where it was settled")
                 "the session holds the written name"
 
+        // A title has no guess seeded into it the way a chapter does, so the state nobody
+        // chose is the empty one — and empty is a real expectation to compare against.
+        testCase "an untitled session takes the words that were written for it" <| fun () ->
+            let doc = Y.Doc.Create ()
+            Expect.equal (SyncedStateSync.titleOf doc) "" "nobody has titled it"
+            Expect.equal
+                (SyncedStateSync.nameTitle doc "" "The refresh-token bug")
+                "The refresh-token bug"
+                "it stands, because nothing was there to lose to"
+            Expect.equal (SyncedStateSync.titleOf doc) "The refresh-token bug" "and the session holds it"
+
+        testCase "a title typed while the model was thinking is the one that stays" <| fun () ->
+            let doc = Y.Doc.Create ()
+            let p = Harness.run (Client.makeProgram doc (ClientModel.init (peer "ada" "Ada")))
+            p.Dispatch (user (EditTitleMsg (Text.insert 0 "Mine" (p.Model ()).Synced.Title)))
+            Expect.equal
+                (SyncedStateSync.nameTitle doc "" "The refresh-token bug")
+                "Mine"
+                "it answers what stands, which is theirs"
+            Expect.equal (SyncedStateSync.titleOf doc) "Mine" "and nothing wrote over it"
+
         // The race the write exists to lose. A second passes between reading a name and
         // having something to put there, and somebody typing in that second has named the
         // chapter themselves — so the answer arriving after them is dropped rather than

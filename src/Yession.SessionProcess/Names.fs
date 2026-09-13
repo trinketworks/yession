@@ -36,16 +36,16 @@ module Names =
         (summarize: unit -> Summarize option)
         : unit -> unit =
         let mutable running = false
-        /// What the last pass was answered against: the doc's chapters, and how far the log
-        /// had got. Between them they are everything `Naming.owed` reads, so a trigger that
+        /// What the last pass was answered against: the doc's title and chapters, and how far
+        /// the log had got. Between them they are everything `Naming.owed` reads, so a trigger that
         /// leaves both alone — somebody typing in a draft, a terminal record landing — cannot
         /// have made naming work, and does not read the log to discover that. `None` until
         /// the first pass, because a session that has looked at nothing has to look once.
-        let mutable lastSeen : (Map<MessageId, ChapterMark> * EventOffset option) option = None
+        let mutable lastSeen : (string * Map<MessageId, ChapterMark> * EventOffset option) option = None
 
         /// Everything a pass would answer against, cheaply: one small structural read of the
         /// chapters root and the offset the log is already keeping.
-        let here () = SyncedStateSync.chaptersOf doc, latestOffset ()
+        let here () = SyncedStateSync.titleOf doc, SyncedStateSync.chaptersOf doc, latestOffset ()
 
         /// What stands on a chapter after trying to write `name` over `held`.
         ///
@@ -72,6 +72,10 @@ module Names =
                     | Some name ->
                         match job.Subject with
                         | NamingSubject.Chapter messageId -> writeChapter messageId job.Held name
+                        | NamingSubject.Title ->
+                            match SyncedStateSync.nameTitle doc job.Held name with
+                            | "" -> job.Held
+                            | stands -> stands
                 // Recorded whatever happened, including nothing happening. A pass that
                 // considered a subject and kept the name it had is exactly the fact that
                 // stops the next pass asking the same question of the same material — which
@@ -87,14 +91,14 @@ module Names =
                     let seen = here ()
                     if lastSeen = Some seen then return ()
                     else
-                        let chapters = fst seen
+                        let title, chapters, _ = seen
                         lastSeen <- Some seen
                         let! envelopes = readEvents ()
                         let conversation =
                             ConversationProjection.applyEvents None envelopes ConversationProjection.empty
                             |> fst
                         let settled = Naming.ofEvents (envelopes |> List.map (fun e -> e.Event))
-                        for job in Naming.owed settled chapters conversation.Items do
+                        for job in Naming.owed settled title chapters conversation.Items do
                             do! nameOne write job
             }
 
