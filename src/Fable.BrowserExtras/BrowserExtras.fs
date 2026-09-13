@@ -101,6 +101,21 @@ module Scrolling =
     [<Emit("$0.scrollIntoView({ block: 'center' })")>]
     let scrollIntoMiddle (element: Browser.Types.HTMLElement) : unit = jsNative
 
+/// What a key event is, beyond the keystroke: whether an IME was mid-composition when it
+/// arrived.
+///
+/// `Fable.Browser.Dom`'s `KeyboardEvent` stops at the key and the modifiers, so this is the
+/// one part of the event a handler cannot ask about — and it is the part that decides whether
+/// an Enter is a person committing a candidate word or a person finishing a line.
+[<AutoOpen>]
+module KeyboardComposition =
+
+    /// Whether this key event was dispatched while an input method editor was composing. True
+    /// for every keystroke a candidate word is being assembled from, INCLUDING the Enter that
+    /// accepts one — which is why a binding that acts on Enter has to ask.
+    [<Emit("$0.isComposing")>]
+    let isComposing (event: Browser.Types.KeyboardEvent) : bool = jsNative
+
 /// Asking the browser what the STYLESHEET thinks, rather than deciding it again in F#.
 ///
 /// A layout that changes at a breakpoint has two readers — the stylesheet, and whatever

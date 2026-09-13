@@ -21,6 +21,8 @@ module Yession.Browser.Render
 // happens.
 
 open Fable.Core
+open Fable.Core.JsInterop
+open Fable.BrowserExtras
 open Lit
 open Yjs
 open Yession.Domain
@@ -195,55 +197,46 @@ let private hostReadOnly (el: obj) : bool = jsNative
 // arrangement the rich bodies use one level up. An `<input>` rather than an editor because a
 // command is characters, and the CRDT merge happens per character either way.
 
-[<Emit("Array.from(document.querySelectorAll('[data-terminal-input]'))")>]
-let private terminalInputs () : obj[] = jsNative
-
-[<Emit("$0.getAttribute('data-terminal-input')")>]
-let private terminalInputKey (el: obj) : string = jsNative
-
-[<Emit("$0.readOnly === true")>]
-let private terminalInputReadOnly (el: obj) : bool = jsNative
+/// Every command line on the page, in document order.
+let private terminalInputs () : Browser.Types.HTMLInputElement list =
+    let found = Browser.Dom.document.querySelectorAll "[data-terminal-input]"
+    [ for i in 0 .. found.length - 1 -> found.[i] :?> Browser.Types.HTMLInputElement ]
 
 // The READ of the same roots: a surface that SHOWS a command without offering to change it —
 // the chat's chip for a queued command, which is a `<button>` and so cannot hold an input.
 
-[<Emit("Array.from(document.querySelectorAll('[data-terminal-text]'))")>]
-let private terminalTexts () : obj[] = jsNative
+let private terminalTexts () : Browser.Types.HTMLElement list =
+    let found = Browser.Dom.document.querySelectorAll "[data-terminal-text]"
+    [ for i in 0 .. found.length - 1 -> found.[i] :?> Browser.Types.HTMLElement ]
 
-[<Emit("$0.getAttribute('data-terminal-text')")>]
-let private terminalTextKey (el: obj) : string = jsNative
+/// Show a command on a surface that cannot be typed into. Only on a change: assigning
+/// `textContent` replaces the node's children, which is a write the browser need not be
+/// asked to make for text it is already showing.
+let private setTextContent (el: Browser.Types.HTMLElement) (value: string) : unit =
+    if el.textContent <> value then el.textContent <- value
 
-[<Emit("""(function (node, value) {
-  const __yNode = node, __yNext = value;
-  if (__yNode.textContent !== __yNext) __yNode.textContent = __yNext;
-})($0, $1)""")>]
-let private setTextContent (node: obj) (value: string) : unit = jsNative
-
-[<Emit("$0.value")>]
-let private inputValue (el: obj) : string = jsNative
+/// Where this input's selection is, and `None` when it has none to give: an `<input>` whose
+/// type carries no text selection answers `null` rather than an offset.
+let private inputSelection (el: Browser.Types.HTMLInputElement) : (int * int) option =
+    if isNull (box el.selectionStart) then None else Some (el.selectionStart, el.selectionEnd)
 
 /// Set an input's value while keeping the caret where the person left it. A remote edit
-/// re-renders the value under a focused input, and `el.value = …` resets the selection to
+/// re-renders the value under a focused input, and `el.value <- …` resets the selection to
 /// the end — which is a collaborator's keystroke throwing your cursor across the line.
 /// Offsets are clamped, so a shorter value cannot leave the caret past the end.
-// The locals are `__y`-prefixed for a reason that cost an afternoon: Fable substitutes
-// `$0` with the ARGUMENT'S OWN IDENTIFIER, so a template that declares `const el = $0`
-// against an F# value also called `el` emits `let el = el` — a temporal-dead-zone
-// self-reference that throws at the first call. Names that no F# binding will ever have
-// make the substitution safe whatever the call site is called.
-[<Emit("""(function (el, value) {
-  const __yInput = el, __yNext = value;
-  if (__yInput.value === __yNext) return;
-  const __yFocused = document.activeElement === __yInput;
-  const __yStart = __yFocused ? __yInput.selectionStart : null;
-  const __yEnd = __yFocused ? __yInput.selectionEnd : null;
-  __yInput.value = __yNext;
-  if (__yFocused && __yStart !== null) {
-    const __yLimit = __yNext.length;
-    __yInput.setSelectionRange(Math.min(__yStart, __yLimit), Math.min(__yEnd, __yLimit));
-  }
-})($0, $1)""")>]
-let private setInputValue (el: obj) (value: string) : unit = jsNative
+///
+/// Both halves of that are `TerminalText.lineWrite`, which decides them together; this only
+/// carries the decision out on the element.
+let private setInputValue (el: Browser.Types.HTMLInputElement) (value: string) : unit =
+    let caret =
+        if System.Object.ReferenceEquals (Browser.Dom.document.activeElement, el) then inputSelection el
+        else None
+    match TerminalText.lineWrite el.value value caret with
+    | TerminalText.LineWrite.Unchanged -> ()
+    | TerminalText.LineWrite.Value -> el.value <- value
+    | TerminalText.LineWrite.ValueAndCaret (first, last) ->
+        el.value <- value
+        el.setSelectionRange (first, last)
 
 /// Attach a listener once. The flag lives on the element, so a Lit re-render that reuses the
 /// same element does not stack a second handler on it — and one that creates a fresh element
@@ -257,31 +250,31 @@ let private setInputValue (el: obj) (value: string) : unit = jsNative
 /// A command line is one line, so there is no new line for Alt-Enter to insert and none is
 /// bound. `isComposing` guards the IME: mid-composition Enter commits the candidate word, and
 /// running a half-typed command because someone accepted a suggestion is not a thing to do.
-[<Emit("""(function (el, onInput, onSelect, onBlur, onEnter) {
-  const __yBind = el;
-  if (__yBind.__yessionBound) return false;
-  __yBind.__yessionBound = true;
-  __yBind.addEventListener('input', onInput);
-  __yBind.addEventListener('keyup', onSelect);
-  __yBind.addEventListener('click', onSelect);
-  __yBind.addEventListener('select', onSelect);
-  __yBind.addEventListener('focus', onSelect);
-  __yBind.addEventListener('blur', onBlur);
-  __yBind.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); onEnter() }
-  });
-  return true;
-})($0, $1, $2, $3, $4)""")>]
 let private bindTerminalInput
-    (el: obj)
+    (el: Browser.Types.HTMLInputElement)
     (onInput: unit -> unit)
     (onSelect: unit -> unit)
     (onBlur: unit -> unit)
     (onEnter: unit -> unit)
-    : bool = jsNative
-
-[<Emit("(function (el) { return (el && typeof el.selectionStart === 'number') ? [el.selectionStart, el.selectionEnd] : null })($0)")>]
-let private inputSelection (el: obj) : (int * int) option = jsNative
+    : unit =
+    // The flag is this repository's own property on the element rather than anything the DOM
+    // declares, so no binding types it and none should: `Fable.BrowserExtras` is for the parts
+    // of the BROWSER's API that `Fable.Browser.Dom` has not typed.
+    if not (el?__yessionBound) then
+        el?__yessionBound <- true
+        el.addEventListener ("input", fun _ -> onInput ())
+        el.addEventListener ("keyup", fun _ -> onSelect ())
+        el.addEventListener ("click", fun _ -> onSelect ())
+        el.addEventListener ("select", fun _ -> onSelect ())
+        el.addEventListener ("focus", fun _ -> onSelect ())
+        el.addEventListener ("blur", fun _ -> onBlur ())
+        el.addEventListener (
+            "keydown",
+            fun event ->
+                let event = event :?> Browser.Types.KeyboardEvent
+                if event.key = "Enter" && not (isComposing event) then
+                    event.preventDefault ()
+                    onEnter ())
 
 // --- The render ---------------------------------------------------------------------------
 
@@ -482,11 +475,11 @@ let create (deps: Deps) : Renderer =
             // position in that template, so "bind only the editable one" bound whichever
             // it was first and got the other wrong ever after.
             let lineOf () =
-                let key = terminalInputKey el
+                let key = el.getAttribute "data-terminal-input"
                 if isNull (box key) || key = "" then None
                 // A read-only line (a collaborator's slot) still shows live text; it just
                 // never writes back, and never claims a caret.
-                elif terminalInputReadOnly el then None
+                elif el.readOnly then None
                 else Some key
             // Four events report the caret here and most report it unmoved — a keyup for
             // every key that types rather than navigates, a click landing where the caret
@@ -511,15 +504,14 @@ let create (deps: Deps) : Renderer =
                 | _ -> ()
             bindTerminalInput
                 el
-                (fun () -> lineOf () |> Option.iter (fun key -> TerminalText.setTo texts key (inputValue el)))
+                (fun () -> lineOf () |> Option.iter (fun key -> TerminalText.setTo texts key el.value))
                 reportFocus
                 (fun () -> sendFocus None)
                 onEnter
-            |> ignore
-            let key = terminalInputKey el
+            let key = el.getAttribute "data-terminal-input"
             if not (isNull (box key)) && key <> "" then setInputValue el (TerminalText.read texts key)
         for el in terminalTexts () do
-            let key = terminalTextKey el
+            let key = el.getAttribute "data-terminal-text"
             if not (isNull (box key)) && key <> "" then setTextContent el (TerminalText.read texts key)
 
     /// Fetch the keyframes the open tabs need, once each (Plan 14, stage 4). A keyframe
