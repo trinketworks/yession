@@ -93,6 +93,86 @@ let private routeTests =
             Expect.equal (Sandboxes.withGitConfig [] baseline) baseline "nothing to add changes nothing"
     ]
 
+// --- cheap: what the gateway carries, each way ----------------------------------------------
+//
+// The proxy itself needs a socket at both ends, but the three decisions it makes do not: which
+// headers go up, which come back down, and which statuses are relayed as they stand. Those are
+// the parts a wire test can only observe indirectly, so they are pinned here, where a red says
+// which one moved.
+
+let private headers (pairs: (string * string) list) : (string * obj)[] =
+    pairs |> List.map (fun (name, value) -> name, box value) |> List.toArray
+
+let private names (pairs: (string * obj)[]) = pairs |> Array.map fst |> List.ofArray
+
+let private valueOf (name: string) (pairs: (string * obj)[]) =
+    pairs |> Array.tryPick (fun (key, value) -> if key = name then Some (unbox<string> value) else None)
+
+let private carryTests =
+    testList "what the gateway carries" [
+
+        // Hop-by-hop headers describe a connection this process is not forwarding, and `host`
+        // and `expect` describe the request as it arrived HERE — Node's server has already
+        // answered the `100 Continue`, so repeating the ask upstream would wait for a second.
+        testCase "nothing that described the hop the request arrived on goes up" <| fun () ->
+            let sent =
+                headers
+                    [ "host", "127.0.0.1:4321"
+                      "user-agent", "git/2.45.0"
+                      "content-type", "application/x-git-upload-pack-request"
+                      "content-encoding", "gzip"
+                      "expect", "100-continue"
+                      "connection", "keep-alive"
+                      "keep-alive", "timeout=5"
+                      "proxy-authorization", "Basic bm90aGluZw=="
+                      "proxy-connection", "keep-alive"
+                      "te", "trailers"
+                      "trailer", "x-checksum"
+                      "transfer-encoding", "chunked"
+                      "upgrade", "h2c" ]
+            Expect.equal
+                (names (GitGateway.upstreamHeaders sent "Basic lent"))
+                [ "user-agent"; "content-type"; "content-encoding"; "authorization" ]
+                "what git said about its BODY goes up; what it said about its connection does not"
+
+        // The sandbox holds no credential, so anything it managed to put in `authorization`
+        // is its own invention — and would be what github.com judged if it were carried.
+        testCase "the credential that goes up is the lender's, whatever arrived" <| fun () ->
+            let carried = GitGateway.upstreamHeaders (headers [ "authorization", "Basic c2FuZGJveA==" ]) "Basic lent"
+            Expect.equal (names carried) [ "authorization" ] "one authorization, not two"
+            Expect.equal (valueOf "authorization" carried) (Some "Basic lent") "and it is the lender's"
+
+        // Only the three that describe the upstream connection this process terminated. The
+        // rest is github.com talking to git, including a `www-authenticate` that rides the
+        // 403 it refuses a push with.
+        testCase "the answer keeps every header but the three that described the upstream hop" <| fun () ->
+            let received =
+                headers
+                    [ "content-type", "application/x-git-upload-pack-advertisement"
+                      "cache-control", "no-cache, max-age=0, must-revalidate"
+                      "www-authenticate", "Basic realm=\"GitHub\""
+                      "upgrade", "h2"
+                      "connection", "keep-alive"
+                      "keep-alive", "timeout=5"
+                      "transfer-encoding", "chunked" ]
+            Expect.equal
+                (names (GitGateway.downstreamHeaders received))
+                [ "content-type"; "cache-control"; "www-authenticate"; "upgrade" ]
+                "the connection's three are dropped and nothing else is"
+
+        // Relaying it would make the sandbox's git prompt for a password nobody can type,
+        // which under `GIT_TERMINAL_PROMPT=0` is "could not read Username" — the sentence the
+        // whole `ERR` channel exists to replace.
+        testCase "a 401 is not relayed" <| fun () ->
+            Expect.isFalse (GitGateway.relayed 401) "it comes back unanswered, to be said in words"
+
+        // Git already knows how to read these, and a gateway with an opinion about them would
+        // be a gateway that has to be taught each new one.
+        testCase "every other status is relayed as it stands" <| fun () ->
+            for status in [ 200; 206; 304; 403; 404; 410; 500; 503 ] do
+                Expect.isTrue (GitGateway.relayed status) (sprintf "a %d is git's to read" status)
+    ]
+
 // --- [Ports]: a real git, at a real gateway ------------------------------------------------
 
 let private nodeFs : obj = importAll "node:fs"
@@ -123,12 +203,18 @@ type private GitRun =
 /// whatever the gateway told it on top. Asynchronous of necessity: the gateway git is
 /// talking to runs on THIS event loop, and a synchronous spawn would hold it while git
 /// waited for an answer that could then never come.
+///
+/// And BOUNDED, because that is the shape every fault in a gateway takes: a gateway that
+/// stops answering does not fail, it says nothing, and git waits on it for as long as it is
+/// allowed to. Unbounded, the first such regression kills the whole run on its budget and
+/// names no case; bounded, git is killed and the case that was waiting fails as itself, on
+/// the assertion it was actually making.
 [<Emit("""(function (cp, args, cwd, extra) {
   const env = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null', GIT_TERMINAL_PROMPT: '0',
                 GIT_AUTHOR_NAME: 'fixture', GIT_AUTHOR_EMAIL: 'f@x', GIT_COMMITTER_NAME: 'fixture', GIT_COMMITTER_EMAIL: 'f@x' }
   for (const [k, v] of extra) env[k] = v
   return new Promise((resolve) => {
-    cp.execFile('git', args, { cwd, env, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }, (error, stdout, stderr) => {
+    cp.execFile('git', args, { cwd, env, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, timeout: 20000, killSignal: 'SIGKILL' }, (error, stdout, stderr) => {
       resolve({ Status: error ? (typeof error.code === 'number' ? error.code : -1) : 0, Stdout: stdout ?? '', Stderr: stderr ?? '' })
     })
   })
@@ -299,6 +385,28 @@ let private portsTests =
                         Expect.equal lend.Refusals 1 "and whoever tracks the credential's health was told once"
                     })
             do! upstream.Close ()
+        }
+
+        // The same channel, for the other thing git cannot be shown: a github.com that did not
+        // answer at all. Nothing has been written to git yet when the upstream fails, so the
+        // reason is still sayable — and it has to BE the reason, not the word `undefined`,
+        // which is what reading a message off something that is not an `Error` produces.
+        testCaseAsync "an upstream this session cannot reach is said in words git prints" <| async {
+            // A port that WAS listening and is not any more: the connection is refused at
+            // once, rather than hanging against an address nothing ever answers on.
+            let! upstream = startUpstream ()
+            do! upstream.Close ()
+            do!
+                withGateway upstream.Origin (fun gateway ->
+                    async {
+                        let cap = gateway.Grant (sandbox "octo/hello:dev") (lenderOf (lending (Some "ghu_lent")))
+                        let! run = git [ "ls-remote"; "https://github.com/octo/hello.git" ] "." (sandboxEnv gateway cap)
+                        Expect.isTrue (run.Status <> 0) "it fails"
+                        Expect.isTrue (run.Stderr.Contains "remote error:") (sprintf "on the remote-error channel: %s" run.Stderr)
+                        Expect.isTrue (run.Stderr.Contains "could not be reached") "saying github.com was not reached"
+                        Expect.isFalse (run.Stderr.Contains "undefined") "with the reason, not the word undefined"
+                        Expect.isFalse (run.Stderr.Contains "Username") "never a credential prompt"
+                    })
         }
 
         // A route is a thing the session OPENED. It dies with the sandbox, or it is a route
@@ -505,6 +613,7 @@ let private srtTests =
 let tests =
     testList "The git gateway" [
         routeTests
+        carryTests
         Tag.needs "The git gateway, driven by git" [ Tag.Ports ] (fun () -> testList "with a real git" [ portsTests; pushTests ])
         Tag.needs "The git gateway, from srt" [ Tag.Srt ] (fun () -> srtTests)
     ]

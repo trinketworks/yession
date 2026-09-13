@@ -39,6 +39,7 @@ module Yession.Host.GitGateway
 open System
 open Fable.Core
 open Fable.Core.JsInterop
+open Fable.NodeExtras
 open Yession.Domain
 open Yession.Host.Interop
 
@@ -132,55 +133,122 @@ let private searchOf (url: string) : string = jsNative
 [<Emit("new URL($0, 'http://local').searchParams.get($1) ?? null")>]
 let private queryOf (url: string) (name: string) : string option = jsNative
 
-let private nodeHttp : obj = importAll "node:http"
-let private nodeHttps : obj = importAll "node:https"
+// --- carrying one request ---------------------------------------------------------------------
+
+/// What a request does NOT carry up to github.com. `host` and `expect` because they describe
+/// the request as it arrived HERE — the upstream's host is its own, and Node's server has
+/// already answered the `100 Continue` that `expect` asked for; `authorization` because the
+/// one that goes out is the lender's, not whatever came in; and the rest because they are
+/// hop-by-hop, which is to say they describe a connection this process is not forwarding.
+let private droppedUpstream =
+    set
+        [ "host"
+          "authorization"
+          "connection"
+          "expect"
+          "keep-alive"
+          "proxy-authorization"
+          "proxy-connection"
+          "te"
+          "trailer"
+          "transfer-encoding"
+          "upgrade" ]
+
+/// What the answer does NOT carry back down: the three that describe the upstream connection
+/// this process terminated, and that Node decides for itself on the response it is writing.
+/// Deliberately NOT the whole hop-by-hop set above — everything else github.com says about
+/// its answer is git's to read.
+let private droppedDownstream = set [ "connection"; "keep-alive"; "transfer-encoding" ]
+
+/// The headers this gateway carries UP: what the sandbox's git sent, less the set above, and
+/// then the lender's credential — appended rather than merged, because `authorization` is in
+/// that set and so cannot already be there.
+///
+/// Node lowercases a header name on the way in, so the comparison is against lowercase and
+/// does no folding of its own. A value passes through as it arrived: a string, or an array of
+/// them for a header that repeated.
+let upstreamHeaders (sent: (string * obj)[]) (authorization: string) : (string * obj)[] =
+    Array.append
+        (sent |> Array.filter (fun (name, _) -> not (Set.contains name droppedUpstream)))
+        [| "authorization", box authorization |]
+
+/// The headers it carries back DOWN: github.com's, as they came, less the three above.
+let downstreamHeaders (received: (string * obj)[]) : (string * obj)[] =
+    received |> Array.filter (fun (name, _) -> not (Set.contains name droppedDownstream))
+
+/// Whether an upstream status is relayed to the sandbox's git as it stands. Nearly every one
+/// is — a 200, the `403` github.com refuses a push with, a 404 — because git already knows
+/// how to read those. A `401` is the exception: relaying it would make the sandbox's git
+/// prompt for a password nobody can type, so it comes back to the caller unanswered, to be
+/// said in words (`errorBody`).
+let relayed (status: int) : bool = status <> 401
+
+/// What became of one forwarded request — the three outcomes the caller acts on, and no
+/// more. What separates them is whether anything has gone out on the sandbox's response yet,
+/// because that is what decides whether a refusal can still be SAID.
+[<RequireQualifiedAccess>]
+type Forwarded =
+    /// github.com answered `401`, which `relayed` says is not carried down. Nothing has been
+    /// written, so the caller can still say what happened.
+    | Unauthorized
+    /// The request never got an answer out of github.com, and nothing has been written.
+    | Unreachable of string
+    /// The head went out. Whether the body then ran to its end or the connection broke
+    /// partway — in which case the response is destroyed rather than finished — there is no
+    /// channel left to say anything else on.
+    | Answered
 
 /// Carry one request to the upstream and its answer back, adding the credential on the way.
 ///
-/// The bytes are piped, never read: git gzips its posts and expects its responses untouched,
-/// so a `fetch` — which decodes bodies for you — is exactly the wrong tool. The request's
-/// `expect` is dropped because Node's server has already answered the `100 Continue` it
-/// asked for, and the hop-by-hop headers are dropped because they describe a connection this
-/// process is not forwarding. A `401` is NOT relayed: relaying it would make the sandbox's
-/// git prompt for a password nobody can type, so it comes back to the caller unanswered, to
-/// be said in words (`errorBody`). Everything else — 200s, the 403 github.com uses to refuse
-/// a push, a 404 — passes through as it is, because git already knows how to read those.
-[<Emit("""(function (http, https, req, res, url, authorization) {
-  return new Promise((resolve) => {
-    const dropUp = new Set(['host', 'authorization', 'connection', 'expect', 'keep-alive', 'proxy-authorization', 'proxy-connection', 'te', 'trailer', 'transfer-encoding', 'upgrade'])
-    const dropDown = new Set(['connection', 'keep-alive', 'transfer-encoding'])
-    const headers = {}
-    for (const [k, v] of Object.entries(req.headers)) if (!dropUp.has(k)) headers[k] = v
-    headers['authorization'] = authorization
-    const mod = url.startsWith('https:') ? https : http
-    let settled = false
-    const done = (outcome) => { if (!settled) { settled = true; resolve(outcome) } }
-    const up = mod.request(url, { method: req.method, headers }, (r) => {
-      if (r.statusCode === 401) { r.resume(); done({ status: 401, error: '', answered: false }); return }
-      const out = {}
-      for (const [k, v] of Object.entries(r.headers)) if (!dropDown.has(k)) out[k] = v
-      res.writeHead(r.statusCode, out)
-      r.pipe(res)
-      r.on('end', () => done({ status: r.statusCode, error: '', answered: true }))
-      r.on('error', (e) => { res.destroy(); done({ status: 0, error: String(e && e.message || e), answered: true }) })
-    })
-    up.on('error', (e) => {
-      if (res.headersSent) res.destroy()
-      done({ status: 0, error: String(e && e.message || e), answered: res.headersSent })
-    })
-    req.on('error', () => up.destroy())
-    req.pipe(up)
-  })
-})($0, $1, $2, $3, $4, $5)""")>]
-let private forwardWith
-    (http: obj)
-    (https: obj)
+/// The bytes are PIPED, never read: git gzips its posts and expects its responses untouched,
+/// so a `fetch` — which decodes bodies for you — is exactly the wrong tool. Which headers go
+/// each way is `upstreamHeaders`/`downstreamHeaders`, and which statuses come back as they
+/// are is `relayed`; all three are stated above, where a test can reach them without a socket.
+let private forward
     (req: IncomingMessage)
     (res: ServerResponse)
     (url: string)
     (authorization: string)
-    : JS.Promise<{| status: int; error: string; answered: bool |}> =
-    jsNative
+    : Async<Forwarded> =
+    Async.FromContinuations (fun (cont, _, _) ->
+        // ONE answer, whatever arrives first. Every path below can be reached after another
+        // already has — an upstream that errors after its response ended, a request body that
+        // fails while the answer is streaming — and a second continuation would resume the
+        // caller twice, on a response it has already finished with.
+        let mutable settled = false
+
+        let finish (outcome: Forwarded) =
+            if not settled then
+                settled <- true
+                cont outcome
+
+        let up =
+            httpRequest url req.``method`` (upstreamHeaders (req.headerEntries ()) authorization) (fun answer ->
+                if relayed answer.statusCode then
+                    res.writeHead (answer.statusCode, createObj (downstreamHeaders (answer.headerEntries ()))) |> ignore
+                    answer.pipe res
+                    answer.onEnd (fun () -> finish Forwarded.Answered)
+                    answer.onError (fun _ ->
+                        res.destroy ()
+                        finish Forwarded.Answered)
+                else
+                    // Drained rather than relayed: nothing here wants the body, and a
+                    // response left paused holds its socket open.
+                    answer.resume ()
+                    finish Forwarded.Unauthorized)
+
+        up.onError (fun error ->
+            // A head already out is a promise this gateway can no longer keep: destroy the
+            // response rather than end it, so git reads a broken stream instead of a
+            // truncated answer it would believe.
+            if res.headersSent then
+                res.destroy ()
+                finish Forwarded.Answered
+            else
+                finish (Forwarded.Unreachable (StreamError.describe error)))
+
+        req.onError (fun _ -> up.destroy ())
+        req.pipe up)
 
 /// The credential as github.com's git endpoint takes it: HTTP basic, `x-access-token` as
 /// the user. (A bearer header is what the API takes and what the git endpoint answers 401
@@ -238,19 +306,16 @@ let start (upstream: string) : Async<Gateway> =
                                         (ownerLabel lender.Owner))
                             | Some token ->
                                 let target = upstream.TrimEnd '/' + "/" + request.Path + searchOf url
-                                let! outcome =
-                                    forwardWith nodeHttp nodeHttps req res target (basicAuthorization token)
-                                    |> awaitPromise
-                                match outcome.status with
-                                | 401 ->
+                                match! forward req res target (basicAuthorization token) with
+                                | Forwarded.Unauthorized ->
                                     do! lender.Refused ()
                                     refuse (
                                         sprintf
                                             "github rejected %s's credential — sign in again on the settings panel"
                                             (ownerLabel lender.Owner))
-                                | 0 when not outcome.answered ->
-                                    refuse (sprintf "%s could not be reached from this session: %s" remoteHost outcome.error)
-                                | _ -> ()
+                                | Forwarded.Unreachable error ->
+                                    refuse (sprintf "%s could not be reached from this session: %s" remoteHost error)
+                                | Forwarded.Answered -> ()
                         with e ->
                             if not (res.headersSent) then refuse (sprintf "the git gateway failed: %s" e.Message)
                     })

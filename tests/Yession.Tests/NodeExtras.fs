@@ -7,7 +7,12 @@ module Yession.Tests.NodeExtras
 // declaration proves almost nothing: an `[<Emit>]` string, an `[<Import>]` name and an
 // anonymous record's field spelling are all opaque to the compiler and all wrong in exactly
 // the way that compiles. So every binding declared there is called here at least once, on
-// Node, in the cheapest tier that can host it.
+// Node, in the cheapest tier that can host it — with one exception, which is called somewhere
+// better. The HTTP-client slice (`httpRequest`, `Readable`/`Writable`, `HttpMessage`) is what
+// `app/GitGateway.fs` is built from, and the gateway's [Ports] suite drives it with a REAL git:
+// gzipped posts, chunked answers, a push and a fetch streaming both ways. An echo server here
+// would exercise strictly less of it, so what stays here is the one part of that slice no wire
+// reaches — the sentence `StreamError.describe` makes of a failure.
 //
 // What each case pins is the binding's PROMISE rather than the platform's behaviour: that
 // `base64url` reaches Buffer as an encoding, that a decoder held between chunks really holds
@@ -15,6 +20,7 @@ module Yession.Tests.NodeExtras
 // is not under test; the two lines of ours that stand between F# and Node are.
 
 open Fable.Core
+open Fable.Core.JsInterop
 open Fable.Pyxpecto
 open Fable.NodeExtras
 open Node.Api
@@ -186,6 +192,20 @@ let tests =
                  | Choice2Of2 _ -> true)
                 "GCM authentication failed, as it must for an AAD that is not the one sealed with"
         }
+
+        // What a stream reports is an `Error` by convention only, and the sentence built from
+        // it is read by a person — so the two answers are pinned apart. The ordinary one:
+        testCase "a stream error describes as the message it carries" <| fun () ->
+            let refused : StreamError = !!{| message = "connect ECONNREFUSED 127.0.0.1:1" |}
+            Expect.equal
+                (StreamError.describe refused)
+                "connect ECONNREFUSED 127.0.0.1:1"
+                "the message, not a rendering of the error object"
+
+        // And the one the reader would otherwise see as `undefined` in the middle of a
+        // sentence: `emit('error')` can carry anything, an absent value included.
+        testCase "an error carrying no message still describes as something readable" <| fun () ->
+            Expect.equal (StreamError.describe null) "null" "what JavaScript makes of the value itself"
     ]
 
 // --- Spawning, and the members of a child Fable.Node does not declare ------------------------
