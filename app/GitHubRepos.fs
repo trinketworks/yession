@@ -79,39 +79,49 @@ let branchesDecoder : Decoder<string list> = Decode.list (Decode.field "name" De
 // --- the three GETs ----------------------------------------------------------------------
 
 type private Reply =
-    abstract reachable : bool
-    abstract status : int
-    abstract body : string
+    { Reachable : bool
+      Status : int
+      Body : string }
 
-/// One GET, as GitHub wants it asked: a bearer token when there is one, the versioned
-/// accept header, and a user agent (GitHub refuses requests without one).
-[<Emit("""(function (url, token) {
-  const headers = { 'accept': 'application/vnd.github+json', 'user-agent': 'yession',
-                    'x-github-api-version': '2022-11-28' }
-  if (token) headers['authorization'] = 'Bearer ' + token
-  return fetch(url, { headers })
-    .then(async r => ({ reachable: true, status: r.status, body: await r.text() }))
-    .catch(e => ({ reachable: false, status: 0, body: String((e && e.message) || e) }))
-})($0, $1)""")>]
-let private getJson (url: string) (token: string) : JS.Promise<Reply> = jsNative
+/// How every request in this file presents itself to GitHub: the versioned accept header, a
+/// user agent (GitHub refuses requests without one), and a bearer token when there is one.
+///
+/// `GitHubPrs.fs` carries its own copy of these three, deliberately: each of these files is
+/// the whole of one endpoint family and owns what it knows about the provider outright, so
+/// a second forge is a second copy of a file rather than a shared GitHub layer that neither
+/// of them owns.
+let sentHeaders (token: string) : (string * string) list =
+    [ yield "accept", "application/vnd.github+json"
+      yield "user-agent", "yession"
+      yield "x-github-api-version", "2022-11-28"
+      if not (String.IsNullOrEmpty token) then yield "authorization", "Bearer " + token ]
 
-/// A value on its way into a query string.
-[<Emit("encodeURIComponent($0)")>]
-let private urlPart (value: string) : string = jsNative
+/// One GET, as GitHub wants it asked.
+let private getJson (url: string) (token: string) : Async<Reply> =
+    async {
+        let! attempt = Http.text url [ Http.headers (sentHeaders token) ]
+        match attempt with
+        | Http.Answered (response, body) -> return { Reachable = true; Status = response.Status; Body = body }
+        | Http.Unreachable reason -> return { Reachable = false; Status = 0; Body = reason }
+    }
 
+/// What a status GitHub answered with means for a look.
+let failureAt (status: int) : LookupFailure =
+    if status = 401 then Refused
+    elif status = 404 then NotFound
+    elif status = 403 || status = 429 then RateLimited
+    else Unreachable (sprintf "github answered %d" status)
+
+/// A reply that never arrived carries why in place of a body; everything else is a status.
 let private failureOf (reply: Reply) : LookupFailure =
-    if not reply.reachable then Unreachable reply.body
-    elif reply.status = 401 then Refused
-    elif reply.status = 404 then NotFound
-    elif reply.status = 403 || reply.status = 429 then RateLimited
-    else Unreachable (sprintf "github answered %d" reply.status)
+    if not reply.Reachable then Unreachable reply.Body else failureAt reply.Status
 
 let private read (decoder: Decoder<'a>) (url: string) (token: string option) : Async<Result<'a, LookupFailure>> =
     async {
-        let! reply = getJson url (Option.toObj token) |> awaitPromise
-        if not (reply.reachable && reply.status >= 200 && reply.status < 300) then return Error (failureOf reply)
+        let! reply = getJson url (Option.toObj token)
+        if not (reply.Reachable && reply.Status >= 200 && reply.Status < 300) then return Error (failureOf reply)
         else
-            match Decode.fromString decoder reply.body with
+            match Decode.fromString decoder reply.Body with
             | Ok value -> return Ok value
             | Error e -> return Error (Unreachable (sprintf "unrecognised reply: %s" e))
     }
@@ -148,7 +158,7 @@ let searchOver (apiBase: string) (token: string option) (text: string) : Async<R
             (sprintf
                 "%s/search/repositories?q=%s&per_page=%d"
                 (apiBase.TrimEnd '/')
-                (urlPart (query + " in:name"))
+                (Http.urlPart (query + " in:name"))
                 pageSize)
             token
 

@@ -34,6 +34,10 @@
     <!-- Finding a repository: the provider lookups and the gated route over them. The same
          shape as Models.fs — a stub provider behind a session surface — for the same reason. -->
     <Compile Include="GitHubRepos.fs" />
+    <!-- What every provider request says on the wire and what this host makes of the answer
+         — the decisions that used to live inside `[<Emit>]` strings, where nothing could
+         reach them. After the suites whose modules it reads, and cheap: no socket. -->
+    <Compile Include="Requests.fs" />
     <Compile Include="WorkSandboxes.fs" />
     <Compile Include="CommandGates.fs" />
     <Compile Include="Tools.fs" />

@@ -119,13 +119,25 @@ let turnTargets (sessionId: SessionId) (credential: CredentialFor) : SecretId li
 let private modelsUrl = "https://api.anthropic.com/v1/models"
 
 type private ModelsOutcome =
-    abstract ok : bool
-    abstract reason : string
-    /// The provider's status, or 0 when it never answered. Kept apart from `reason` because
-    /// one number decides something no prose can: whether the CREDENTIAL was refused, or
-    /// this lookup merely failed.
-    abstract status : int
-    abstract models : {| id: string; name: string |} array
+    { Ok : bool
+      Reason : string
+      /// The provider's status, or 0 when it never answered. Kept apart from `Reason`
+      /// because one number decides something no prose can: whether the CREDENTIAL was
+      /// refused, or this lookup merely failed.
+      Status : int
+      /// Each row as the provider gave it: its id, and the name it displays under.
+      Models : (string * string) list }
+
+/// One page of the models endpoint's reply, and one row of it, as F# reads the JSON.
+/// Everything is nullable because everything is optional: the reply is somebody else's.
+type private ModelRow =
+    abstract id : string
+    abstract display_name : string
+
+type private ModelsPage =
+    abstract data : ModelRow array
+    abstract has_more : bool
+    abstract last_id : string
 
 /// Why a catalogue lookup produced nothing, and the one distinction its caller acts on.
 ///
@@ -133,45 +145,80 @@ type private ModelsOutcome =
 /// is a fact about this request and belongs nowhere but the picker's note.
 type ModelsFailure = { Message : string; Refused : bool }
 
-/// GET the catalogue on one credential, following the API's paging.
+/// How a credential presents itself to this provider.
 ///
 /// The credential PAIR decides the dialect, which is why this takes the same
 /// `(envVar, value)` `envVarFor` produces rather than a bare string: a Console API key
 /// authenticates with `x-api-key`, and an OAuth access token with a bearer header plus the
 /// beta opt-in Claude Code's own client sends. One value, one rule, no guessing at the
 /// shape of a secret.
+let modelsHeaders (envVar: string) (value: string) : (string * string) list =
+    [ yield "anthropic-version", "2023-06-01"
+      if envVar = "ANTHROPIC_API_KEY" then
+          yield "x-api-key", value
+      else
+          yield "authorization", "Bearer " + value
+          yield "anthropic-beta", "oauth-2025-04-20" ]
+
+/// How long one page of the catalogue may take.
+///
+/// Bounded, because the connection panel's status reply waits on this: a provider that
+/// accepts a socket and never answers would otherwise take the panel with it, and a lookup
+/// that cannot finish IS a lookup that failed.
+let private pageDeadlineMs = 10000.0
+
+/// The rows of one page. A reply with no `data` is a page with no rows, not a failure —
+/// the reply is somebody else's and this side reads what it can.
+let private rowsOf (page: ModelsPage) : ModelRow array =
+    if isNull (box page.data) then [||] else page.data
+
+/// A field the provider left out, as the empty string. Every row is read this way, so a
+/// half-filled one costs its own name rather than the whole lookup.
+let private textOf (value: string) : string = if isNull (box value) then "" else value
+
+/// One page's JSON, or why it could not be read. A provider that answers 200 with
+/// something that is not JSON has failed this lookup without failing the request, which is
+/// why the reason comes back here rather than as a status.
+let private pageOf (body: string) : Result<ModelsPage, string> =
+    try Ok (unbox<ModelsPage> (JS.JSON.parse body))
+    with error -> Error (Http.reasonOf error)
+
+/// GET the catalogue on one credential, following the API's paging.
 ///
 /// The page bound is a runaway guard, not a coverage cap: the API's own maximum page is
 /// 1000, so ten pages is ten thousand models and no provider is near it.
-[<Emit("""(async function (envVar, value, url) {
-  try {
-    // Bounded, because the connection panel's status reply waits on this: a provider
-    // that accepts a socket and never answers would otherwise take the panel with it,
-    // and a lookup that cannot finish IS a lookup that failed.
-    const headers = { 'anthropic-version': '2023-06-01' }
-    if (envVar === 'ANTHROPIC_API_KEY') headers['x-api-key'] = value
-    else { headers['authorization'] = 'Bearer ' + value; headers['anthropic-beta'] = 'oauth-2025-04-20' }
-    const models = []
-    // Not `url`: Fable names the substituted argument after its F# parameter, so a local of
-    // the same name shadows it into a temporal dead zone and every lookup throws.
-    let next = url + '?limit=1000'
-    for (let page = 0; page < 10; page++) {
-      const r = await fetch(next, { headers, signal: AbortSignal.timeout(10000) })
-      if (!r.ok) {
-        const detail = (await r.text()).slice(0, 200)
-        return { ok: false, reason: 'the provider answered ' + r.status + ': ' + detail, status: r.status, models: [] }
-      }
-      const body = await r.json()
-      for (const m of (body.data || [])) models.push({ id: String(m.id || ''), name: String(m.display_name || '') })
-      if (!body.has_more || !body.last_id) break
-      next = url + '?limit=1000&after_id=' + encodeURIComponent(body.last_id)
+let private fetchModels (envVar: string) (value: string) (url: string) : Async<ModelsOutcome> =
+    async {
+        let request = [ Http.headers (modelsHeaders envVar value); Http.deadline pageDeadlineMs ]
+        let models = ResizeArray<string * string> ()
+        let mutable next = url + "?limit=1000"
+        let mutable page = 0
+        let mutable settled : ModelsOutcome option = None
+        while settled.IsNone && page < 10 do
+            page <- page + 1
+            let! attempt = Http.text next request
+            match attempt with
+            | Http.Unreachable reason -> settled <- Some { Ok = false; Reason = reason; Status = 0; Models = [] }
+            | Http.Answered (response, body) when not response.Ok ->
+                let detail = body.Substring (0, min 200 body.Length)
+                settled <-
+                    Some
+                        { Ok = false
+                          Reason = sprintf "the provider answered %d: %s" response.Status detail
+                          Status = response.Status
+                          Models = [] }
+            | Http.Answered (_, body) ->
+                match pageOf body with
+                | Error reason -> settled <- Some { Ok = false; Reason = reason; Status = 0; Models = [] }
+                | Ok read ->
+                    for row in rowsOf read do
+                        models.Add (textOf row.id, textOf row.display_name)
+                    if not read.has_more || System.String.IsNullOrEmpty read.last_id then
+                        settled <- Some { Ok = true; Reason = ""; Status = 200; Models = List.ofSeq models }
+                    else
+                        next <- url + "?limit=1000&after_id=" + Http.urlPart read.last_id
+        return settled |> Option.defaultValue { Ok = true; Reason = ""; Status = 200; Models = List.ofSeq models }
     }
-    return { ok: true, reason: '', status: 200, models }
-  } catch (err) {
-    return { ok: false, reason: String((err && err.message) || err), status: 0, models: [] }
-  }
-})($0, $1, $2)""")>]
-let private fetchModels (envVar: string) (value: string) (url: string) : JS.Promise<ModelsOutcome> = jsNative
 
 /// The models one credential can see at one endpoint, as the provider-neutral pair the
 /// rest of the session speaks. An id the smart constructor refuses is DROPPED rather than
@@ -184,19 +231,18 @@ let private fetchModels (envVar: string) (value: string) (url: string) : JS.Prom
 let modelsAt (url: string) (credential: string * string) : Async<Result<AgentModel list, ModelsFailure>> =
     async {
         let envVar, value = credential
-        let! outcome = fetchModels envVar value url |> Interop.awaitPromise
-        if not outcome.ok then
+        let! outcome = fetchModels envVar value url
+        if not outcome.Ok then
             // Only 401. A 403 here is an org policy or a scope this key does not carry, both
             // of which happen to a credential that is otherwise perfectly alive, and a 5xx or
             // an unreachable host says nothing about the credential at all.
-            return Error { Message = outcome.reason; Refused = outcome.status = 401 }
+            return Error { Message = outcome.Reason; Refused = outcome.Status = 401 }
         else
             return
-                outcome.models
-                |> Array.toList
-                |> List.choose (fun row ->
-                    match ModelId.create row.id with
-                    | Ok id -> Some (AgentModel.create id row.name)
+                outcome.Models
+                |> List.choose (fun (id, name) ->
+                    match ModelId.create id with
+                    | Ok created -> Some (AgentModel.create created name)
                     | Error _ -> None)
                 |> Ok
     }
