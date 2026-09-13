@@ -44,7 +44,17 @@ type PrFetchFailure =
     | PrNotFound
     /// Rate limited, with the epoch second the provider says the window resets at, when
     /// it said one.
-    | PrRateLimited of resetEpoch: int option
+    ///
+    /// `int64`, like `WatchEntry.DueAtEpoch` beside it and unlike what this used to be: an
+    /// `int` cannot hold a unix second past January 2038, so the header carrying one parsed
+    /// as nothing and the hold fell back to a fixed window — a rate-limit reading that
+    /// stops being read, silently, on a date already inside some certificates' lifetimes.
+    | PrRateLimited of resetEpoch: int64 option
+    /// The provider answered, and this session could not read what it said — a 2xx whose
+    /// body did not decode, or an identifier in it this session cannot hold. Not
+    /// `PrUnreachable`: the request went and the reply came back, so "could not be reached"
+    /// sends a person to look at their network for a fault that is in the payload.
+    | PrUnreadable of string
     | PrUnreachable of string
 
 type PrFetchOutcome =
@@ -139,7 +149,7 @@ type private WatchEntry =
       mutable Etags : PrEtags
       mutable Health : string option
       /// Set when the provider said to come back later; the epoch second it named.
-      mutable SkipUntilEpoch : int option
+      mutable SkipUntilEpoch : int64 option
       /// The epoch second this watch is next due, from what its last look found. Zero
       /// until it has had one, which is what makes a fresh watch due immediately.
       ///
@@ -245,7 +255,7 @@ let create
     let pollEntry (force: bool) (entry: WatchEntry) : Async<bool> =
         async {
             let nowEpoch = (now ()).ToUnixTimeSeconds ()
-            let heldByProvider = entry.SkipUntilEpoch |> Option.exists (fun until -> int64 until > nowEpoch)
+            let heldByProvider = entry.SkipUntilEpoch |> Option.exists (fun until -> until > nowEpoch)
             // A poke overrides OUR cadence and never the provider's hold — asking inside a
             // window the provider already named would spend a request to be refused.
             if heldByProvider || (not force && entry.DueAtEpoch > nowEpoch) then return false
@@ -282,6 +292,8 @@ let create
                                 "%s cannot see this pull request — it may be gone, or the credential cannot reach it"
                                 provider
                         | PrRateLimited _ -> sprintf "rate limited by %s — waiting for the window to reset" provider
+                        | PrUnreadable reason ->
+                            sprintf "%s answered with something this session could not read: %s" provider reason
                         | PrUnreachable reason -> reason
                     match failure with
                     | PrUnauthorized -> do! onUnauthorized (CredentialFor.Person entry.Watcher)
@@ -289,8 +301,11 @@ let create
                         // The provider names the moment it will answer again, which beats any
                         // backoff invented here. Absent, wait a window's worth.
                         entry.SkipUntilEpoch <-
-                            Some (defaultArg reset (int ((now ()).ToUnixTimeSeconds () + 900L)))
-                    | PrNotFound | PrUnreachable _ -> ()
+                            Some (defaultArg reset ((now ()).ToUnixTimeSeconds () + 900L))
+                    // Neither says to come back later, so neither sets a hold: the next
+                    // poll is the ordinary cadence's. A reply this session cannot read is
+                    // the provider working and us not understanding it, which no wait fixes.
+                    | PrNotFound | PrUnreadable _ | PrUnreachable _ -> ()
                     let moved = entry.Health <> Some health
                     entry.Health <- Some health
                     schedule None
@@ -411,6 +426,8 @@ let service
                 provider
         | PrUnauthorized -> sprintf "%s rejected the credential — sign in again from the Connections panel" provider
         | PrRateLimited _ -> sprintf "rate limited by %s — try again shortly" provider
+        | PrUnreadable reason ->
+            sprintf "%s answered with something this session could not read: %s" provider reason
         | PrUnreachable reason -> reason
 
     let describe (pr: PrRef) (snapshot: PrSnapshot) =

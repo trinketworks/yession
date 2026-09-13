@@ -171,11 +171,38 @@ let private githubStatusTests =
             Expect.equal (GitHubRepos.failureAt 429) GitHubRepos.RateLimited "and the same again"
 
         testCase "a rate limit carries the window it ends at, when GitHub named one" <| fun () ->
-            Expect.equal (GitHubPrs.failureAt 429 "1770000000") (PrRateLimited (Some 1770000000)) "the reset epoch"
+            Expect.equal (GitHubPrs.failureAt 429 "1770000000") (PrRateLimited (Some 1770000000L)) "the reset epoch"
+
+        // Read as an `Int32` this parsed as nothing, so the hold fell back to a fixed window
+        // and the number GitHub actually named was discarded — on every reply, from January
+        // 2038 on, with nothing saying the reading had stopped working. 2147483648 is the
+        // first second an `int` cannot hold.
+        testCase "a reset window past 2038 is read, not dropped" <| fun () ->
+            Expect.equal
+                (GitHubPrs.failureAt 429 "2147483648")
+                (PrRateLimited (Some 2147483648L))
+                "the second after Int32.MaxValue"
+            Expect.equal
+                (GitHubPrs.failureAt 403 "4102444800")
+                (PrRateLimited (Some 4102444800L))
+                "and one well past it"
 
         testCase "any other status is reported as what GitHub answered" <| fun () ->
             Expect.equal (GitHubPrs.failureAt 502 "") (PrUnreachable "github answered 502") "a gateway between us"
             Expect.equal (GitHubRepos.failureAt 502) (GitHubRepos.Unreachable "github answered 502") "the same on a listing"
+
+        // A reply that arrived and did not decode is not a host that could not be reached,
+        // and the two sentences send a person to different places: one to their network,
+        // one to the payload. They were one case, so a 200 full of unexpected JSON told
+        // everybody GitHub was down.
+        testCase "a reply that could not be read says so, not that GitHub was unreachable" <| fun () ->
+            let said = GitHubRepos.LookupFailure.describe (GitHubRepos.Unreadable "Expecting an object at $")
+            Expect.stringContains said "could not read" "what actually failed"
+            Expect.isFalse (said.Contains "could not be reached") "not a network fault"
+
+        testCase "a host that could not be reached still says that" <| fun () ->
+            let said = GitHubRepos.LookupFailure.describe (GitHubRepos.Unreachable "ECONNREFUSED")
+            Expect.stringContains said "could not be reached" "the other half of the pair"
     ]
 
 let tests =

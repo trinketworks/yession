@@ -123,6 +123,9 @@ let private startStubApi () : Async<StubApi> =
                 else json res 200 (sprintf "[%s]" (candidate "mine/recent"))
             elif url.StartsWith "/search/repositories" then json res 200 (sprintf """{"items":[%s]}""" (candidate "found/by-name"))
             elif url.StartsWith "/repos/octo/hello/branches" then json res 200 """[{"name":"main"},{"name":"next"}]"""
+            // A 200 whose body is not what the endpoint promises: reached, answered, and
+            // unreadable. What a provider looks like mid-incident, or after a schema change.
+            elif url.StartsWith "/repos/octo/nonsense/branches" then json res 200 """{"message":"have some prose"}"""
             elif url.StartsWith "/repos/octo/hello/pulls/42" then
                 json res 200 """{"number":42,"head":{"ref":"fix/thing","repo":{"full_name":"fork-owner/hello"}}}"""
             // Renamed: `octo/old` is answered under its current name, the way github.com does.
@@ -182,6 +185,27 @@ let private lookupTests =
                 Expect.equal (expect branches) [ "main"; "next" ] "the branches of one that is there"
                 let! refused = GitHubRepos.recentOver api.Url (Some "dead")
                 Expect.equal refused (Error GitHubRepos.Refused) "a 401 is a refusal"
+            }
+
+        // These were one case, and the sentence it produced was the wrong one of the two: a
+        // provider that answered 200 with a body this session could not decode was reported
+        // as a provider that could not be reached, which sends a person to look at their
+        // network for a fault that is in the payload.
+        testCaseAsync "a 200 this session cannot read is not a provider that could not be reached" <|
+            async {
+                let! api = startStubApi ()
+                let! unreadable = GitHubRepos.branchesOver api.Url None (repo "octo/nonsense")
+                let isUnreadable =
+                    match unreadable with
+                    | Error (GitHubRepos.Unreadable _) -> true
+                    | _ -> false
+                Expect.isTrue isUnreadable "reached, answered 200, and did not decode"
+                let said =
+                    match unreadable with
+                    | Error failure -> GitHubRepos.LookupFailure.describe failure
+                    | Ok _ -> "it decoded"
+                Expect.stringContains said "could not read" "what actually failed"
+                Expect.isFalse (said.Contains "could not be reached") "the provider was reached"
             }
     ]
 
