@@ -148,7 +148,9 @@ let gitExec
     { Executable = git
       Arguments = args
       Env = hardenedEnv allowProtocol token |> Map.ofList
-      WorkingDirectory = Some workingDirectory }
+      WorkingDirectory = Some workingDirectory
+      // Housekeeping: git by path needs no toolchain and must not pay for one.
+      Via = Direct }
 
 /// What a sandbox that cannot run git says. It is a whole sentence with the two knobs in
 /// it because the alternative is what shipped: the host binary's own parting words —

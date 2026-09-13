@@ -66,6 +66,7 @@ let private fakeEnvironmentHolding (realisation: string list) =
        SpawnPty = fun _ _ _ _ -> async { return Error "not under test" }
        Stop = fun () -> async { running <- false }
        CurrentRef = fun () -> if running then Some "fake" else None
+       Shell = fun () -> None
        // Gated on `running` like `CurrentRef` beside it, because the real one is: what a
        // sandbox holds is a fact about a sandbox that exists. A fake that answered either way
        // would let the listing test pass while the panel spoke for a sandbox that had gone.

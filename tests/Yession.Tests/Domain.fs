@@ -1688,6 +1688,67 @@ let private configTests =
             let dev = file.Sandboxes |> Map.find (sandboxName "dev")
             Expect.equal dev.Description (Some "day-to-day work — the full toolchain") "the words as written"
 
+        // compose's `entrypoint`, in both of compose's spellings: a list of words, or one
+        // string read into words the way a shell would — quotes group, nothing expands.
+        testCase "a container's entrypoint is read as an argv, from a list or a string" <| fun () ->
+            let file =
+                ConfigFile.parse """
+                    { "version": 2,
+                      "sandboxes": {
+                        "listed": { "container": { "image": "nixos/nix", "entrypoint": [ "nix", "develop", "--impure", "--command" ] } },
+                        "written": { "container": { "image": "nixos/nix", "entrypoint": "nix develop --impure --command" } },
+                        "quoted": { "container": { "image": "alpine", "entrypoint": "env 'A B=c d' \"E=f\\\"g\" h" } } } }"""
+                |> expect
+            let entrypoint name =
+                (file.Sandboxes |> Map.find (sandboxName name)).Container |> Option.get |> fun c -> c.Entrypoint
+            Expect.equal (entrypoint "listed") (Some [ "nix"; "develop"; "--impure"; "--command" ]) "a list is the argv as written"
+            Expect.equal (entrypoint "written") (Some [ "nix"; "develop"; "--impure"; "--command" ]) "a string is split on whitespace"
+            Expect.equal (entrypoint "quoted") (Some [ "env"; "A B=c d"; "E=f\"g"; "h" ]) "with quotes grouping and a backslash escaping, as a shell reads them"
+
+        testCase "an entrypoint string a shell could not read is refused, saying why" <| fun () ->
+            match ConfigFile.parse """{ "version": 2, "sandboxes": { "dev": { "container": { "image": "alpine", "entrypoint": "nix 'develop" } } } }""" with
+            | Ok _ -> failwith "an unterminated quote is not an argv"
+            | Error reason -> Expect.stringContains reason "quote is never closed" "it names the problem"
+            match ConfigFile.parse """{ "version": 2, "sandboxes": { "dev": { "container": { "image": "alpine", "entrypoint": "  " } } } }""" with
+            | Ok _ -> failwith "no words is not an entrypoint"
+            | Error reason -> Expect.stringContains reason "empty" "it says so"
+
+        // compose's spelling for the container's own process, beside the older `cmd` — one
+        // key by two names, and never both.
+        testCase "a container's command is `command`, or `cmd` by its older name, not both" <| fun () ->
+            let parsed (container: string) =
+                ConfigFile.parse (sprintf """{ "version": 2, "sandboxes": { "dev": { "container": { "image": "alpine", %s } } } }""" container)
+            let command (file: ConfigFile) =
+                (file.Sandboxes |> Map.find (sandboxName "dev")).Container |> Option.get |> fun c -> c.Command
+            Expect.equal (parsed """ "command": "./serve" """ |> expect |> command) (Some "./serve") "compose's word"
+            Expect.equal (parsed """ "cmd": "./serve" """ |> expect |> command) (Some "./serve") "the older word still reads"
+            match parsed """ "cmd": "./serve", "command": "./other" """ with
+            | Ok _ -> failwith "two spellings of one key cannot both be honoured"
+            | Error reason -> Expect.stringContains reason "one key by two names" "and the refusal says they are one key"
+
+        // Which shell a terminal in the container opens, by dialect, when the repo would
+        // rather say than have the backend look. Only a container has a shell to choose.
+        testCase "a dialect names a container's shell, from the three a terminal can instrument" <| fun () ->
+            let file =
+                ConfigFile.parse """{ "version": 2, "sandboxes": { "dev": { "container": { "image": "nixos/nix" }, "dialect": "bash" } } }"""
+                |> expect
+            let dev = file.Sandboxes |> Map.find (sandboxName "dev")
+            Expect.equal (dev.Container |> Option.bind (fun c -> c.Dialect)) (Some "bash") "carried on the container, whose shell it chooses"
+            match ConfigFile.parse """{ "version": 2, "sandboxes": { "dev": { "container": { "image": "nixos/nix" }, "dialect": "fish" } } }""" with
+            | Ok _ -> failwith "fish is not a dialect a terminal can instrument"
+            | Error reason -> Expect.stringContains reason "bash, zsh, sh" "the refusal names the three"
+            match ConfigFile.parse """{ "version": 2, "sandboxes": { "dev": { "dialect": "bash" } } }""" with
+            | Ok _ -> failwith "a sandbox with no container has no shell to choose"
+            | Error reason -> Expect.stringContains reason "declares no `container`" "and says so"
+
+        testCase "entrypoint, command and dialect survive the round trip the command gate rides" <| fun () ->
+            let file =
+                ConfigFile.parse """{ "version": 2, "sandboxes": { "dev": { "container": { "image": "nixos/nix", "entrypoint": [ "nix", "develop", "--command" ], "command": "./serve" }, "dialect": "bash" } } }"""
+                |> expect
+            let dev = file.Sandboxes |> Map.find (sandboxName "dev")
+            let back = SandboxDecl.encode dev |> ConfigFile.parseSandbox |> expect
+            Expect.equal back.Container dev.Container "what `encode` writes, `parseSandbox` reads back whole"
+
         // A repo saying where the session's checkouts should appear in its own container.
         testCase "a sandbox can say where it wants the checkouts" <| fun () ->
             let file =
@@ -2731,10 +2792,27 @@ let private namingTests =
             Expect.equal (Map.tryFind (subjectOf item) settled) (Some later) "the last word is the current one"
     ]
 
+/// A compose-style command line into words: what `entrypoint: "…"` is read with.
+let private shellWordsTests =
+    testList "Shell words" [
+        testCase "whitespace separates, quotes group, a backslash escapes, nothing expands" <| fun () ->
+            Expect.equal (ShellWords.split "nix  develop --impure\t--command") (Ok [ "nix"; "develop"; "--impure"; "--command" ]) "runs of whitespace are one gap"
+            Expect.equal (ShellWords.split "env 'A B'=c \"d e\"f") (Ok [ "env"; "A B=c"; "d ef" ]) "a quoted stretch joins its word"
+            Expect.equal (ShellWords.split "say it\\ is \"so\\\"\" ''") (Ok [ "say"; "it is"; "so\""; "" ]) "a backslash escapes a space or a quote, and '' is an empty word"
+            Expect.equal (ShellWords.split "echo $HOME '$X'") (Ok [ "echo"; "$HOME"; "$X" ]) "and a dollar is a dollar: this is words, not a shell"
+            Expect.equal (ShellWords.split "   ") (Ok []) "nothing is no words"
+
+        testCase "what a shell could not read is refused, naming what is missing" <| fun () ->
+            Expect.equal (ShellWords.split "nix 'develop") (Error "a ' quote is never closed") "an open single quote"
+            Expect.equal (ShellWords.split "say \"so") (Error "a \" quote is never closed") "an open double quote"
+            Expect.equal (ShellWords.split "trail \\") (Error "ends with a backslash that escapes nothing") "a trailing backslash"
+    ]
+
 let tests =
     testList "Domain" [
         identityTests
         launchTests
+        shellWordsTests
         configTests
         sandboxRequestTests
         modelTests

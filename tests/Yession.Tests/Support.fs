@@ -111,6 +111,7 @@ let scriptedSandbox
                                           Exited = script exec onChunk }
                             }
                       SpawnPty = None
+                      Shell = None
                       Dispose = fun () -> async { recorder.Disposed <- recorder.Disposed + 1 } }
         }
 
@@ -139,7 +140,8 @@ let runInSandbox
                 { Executable = executable
                   Arguments = args
                   Env = env
-                  WorkingDirectory = workingDirectory }
+                  WorkingDirectory = workingDirectory
+                  Via = Entrypoint }
                 (fun (stream, text) ->
                     (match stream with
                      | Stdout -> out

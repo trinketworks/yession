@@ -205,6 +205,7 @@ let private missing (reason: string) : SessionEnvironment.SessionEnvironment =
       SpawnPty = fun _ _ _ _ -> async { return Error reason }
       Stop = fun () -> async { return () }
       CurrentRef = fun () -> None
+      Shell = fun () -> None
       Realisation = fun () -> [] }
 
 let create (config: WorkSandboxesConfig) : Result<WorkSandboxes, string> =

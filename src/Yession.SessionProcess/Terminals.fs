@@ -521,30 +521,9 @@ module SessionTerminals =
     /// How a command line becomes a process. A terminal composer holds a LINE (`ls -la |
     /// wc -l`), not an argv, so something has to interpret it, and that something is a
     /// shell. Configurable because the sandbox decides what shell exists inside it.
-    type TerminalShell =
-        { Executable : string
-          /// Arguments before the command line itself.
-          Arguments : string list
-          /// Which instrumentation dialect this shell speaks — the key `Marks.rcFor`
-          /// is asked for. A name we do not know means no instrumentation, and therefore a
-          /// terminal that keeps the per-block path.
-          Name : string
-          /// How to launch this shell INTERACTIVELY, with its own startup files suppressed
-          /// so ours is the only instrumentation in play.
-          InteractiveArguments : string list }
-
-    module TerminalShell =
-        let posix : TerminalShell =
-            { Executable = "/bin/sh"
-              Arguments = [ "-c" ]
-              Name = "sh"
-              InteractiveArguments = [ "-i" ] }
-
-        let bash : TerminalShell =
-            { Executable = "/bin/bash"
-              Arguments = [ "-c" ]
-              Name = "bash"
-              InteractiveArguments = [ "--noprofile"; "--norc"; "-i" ] }
+    // `TerminalShell` lives on the sandbox seam (`Yession.Domain.Sandboxes`): a container
+    // backend composes one from what it finds behind the entrypoint, and the session's
+    // default (`TerminalShell.posix`) is what the host and srt backends leave in place.
 
     /// What the manager holds per live terminal (Plan 13, stage 2d).
     ///
@@ -565,7 +544,16 @@ module SessionTerminals =
           /// a close and an open, and those already exist. `None` for an ATTACHED source
           /// (Plan 16, part D) — its process is somebody else's, in nothing we run.
           Sandbox : SandboxRef option
+          /// The shell this terminal opens — the sandbox's own when its backend found one
+          /// (`Sandbox.Shell`), the session's default otherwise. Fixed at open, like the
+          /// sandbox: a terminal IS a shell in one place.
+          Spec : TerminalShell
           mutable Shell : PtyHandle option
+          /// While the shell is starting: resolves once it is in front of the terminal or
+          /// has been given up on. A block that arrives meanwhile waits on it rather than
+          /// running as its own process next to a shell that is a moment from ready — and
+          /// rather than for ever, because the start is settled by evidence (`openShell`).
+          mutable Starting : Async<unit> option
           /// Whether the last output chunk this terminal captured ended in `\r` — the carry
           /// `Onlcr.normalize` needs to leave a CRLF split across two reads alone. Mutable
           /// for the same reason `Shell` is: it is a property of the live capture, not of
@@ -588,8 +576,10 @@ module SessionTerminals =
     /// exits, hours later, correctly.
     let private integrationWindow = TimeSpan.FromMilliseconds 2000.0
 
-    /// How long an opened shell is given to print its first prompt mark before it is given
-    /// up on, and the per-block path kept instead. Also what a re-arm waits.
+    /// How long an opened shell goes without printing its first prompt mark before the
+    /// terminal SAYS so — a notice with what the shell printed so far, not a decision: a
+    /// shell is given up on only when it exits (`openShell`). A re-arm, whose shell is
+    /// already there, is bounded by it.
     let private probeWindow = TimeSpan.FromMilliseconds 3000.0
 
     /// Transcript lines `Tail` counts back from the end of a live terminal (Plan 19). Lines
@@ -632,6 +622,23 @@ module SessionTerminals =
     /// alternate screen when a block completes. A command that dies inside a remote TUI
     /// therefore leaves the shell in a mode it never set and cannot clear — a terminal wedged in
     /// the alt screen is one nobody can type into again, and today only closing it recovers.
+    /// A gate that opens once: `settle ()` resumes whoever awaits `settled`, and a settle
+    /// before anyone waits is remembered. What a terminal's start is waited on with.
+    module private OneShotLatch =
+        let create () : (unit -> unit) * Async<unit> =
+            let mutable fired = false
+            let mutable waiting : (unit -> unit) list = []
+            let settle () =
+                if not fired then
+                    fired <- true
+                    let held = waiting
+                    waiting <- []
+                    held |> List.iter (fun resume -> resume ())
+            let settled =
+                Async.FromContinuations (fun (cont, _, _) ->
+                    if fired then cont () else waiting <- (fun () -> cont ()) :: waiting)
+            settle, settled
+
     let internal writeFor (command: string) : string =
         let kept =
             command
@@ -1154,18 +1161,30 @@ module SessionTerminals =
                 | FlipNothing -> return ()
             }
 
-        /// Open the terminal's ONE instrumented shell, and report whether it took.
+        /// A directory as one word for the shell's own `cd`: single-quoted, with any quote
+        /// inside closed, escaped and reopened — nothing else is read inside single quotes.
+        let quotedPath (path: string) : string = "'" + path.Replace ("'", "'\\''") + "'"
+
+        /// Open the terminal's ONE instrumented shell.
         ///
-        /// Probed by RUNNING it: the shell is launched with our rc file and we wait, bounded,
-        /// for its first prompt mark. Arrived, the terminal is instrumented. Absent — an image
-        /// whose shell we cannot instrument, or which ignores the mechanism — the pty is torn
-        /// down and the terminal keeps the per-block path. Deciding by observation rather than
-        /// by shell name is the point: a POSIX `sh` has no prompt hook at all and rides its
+        /// Probed by RUNNING it: the shell is launched with our rc typed in, and the
+        /// terminal waits for its first prompt mark. Arrived, the terminal is instrumented.
+        /// The wait is not bounded by a timer — a shell behind a devshell takes minutes cold
+        /// and is not broken — so the terminal gives the shell up only on EVIDENCE: the
+        /// process exited before it marked, or its dialect has no instrumentation to type. A
+        /// window passing is a notice ("still waiting, so far it said: …"), and a person who
+        /// reads it and disagrees closes the terminal. Deciding by observation rather than by
+        /// shell name is the point: a POSIX `sh` has no prompt hook at all and rides its
         /// marks in PS1, which is the shakiest of the three and cannot be trusted on a name.
+        ///
+        /// Returns once the shell is in front of the terminal or has been given up on; the
+        /// terminal exists, in the live map, from before this starts, and `Open` does not
+        /// wait for it — a block queued meanwhile waits on `Starting`.
         let openShell (id: TerminalId) (terminal: LiveTerminal) (sandbox: SandboxRef) : Async<unit> =
             async {
                 let key = TerminalId.value id
                 let nonce = mintNonce ()
+                let shell = terminal.Spec
                 match Marks.rcFor shell.Name nonce with
                 | None -> return ()
                 | Some instrumentation ->
@@ -1176,26 +1195,54 @@ module SessionTerminals =
                     // re-arm. Called when `A` is seen, so the wait is on the mark itself
                     // rather than a poll for it; the bound on the wait is the clock's.
                     let onReady = ref ignore
-                    /// True on the next `A`, false once `probeWindow` has passed without one.
+                    /// How the shell's start came out: its first `A`, or its exit before one.
                     /// Whichever comes first answers; the other is ignored.
                     ///
                     /// Listening starts when this is CALLED, not when the async it returns is
                     /// run — an async is cold, and a wait that only registered on `let!` would
                     /// miss a mark that arrived between the rc going in and the wait starting.
                     /// A scripted shell answers inside the write itself; a real one can too.
-                    let awaitMark () : Async<bool> =
-                        let mutable answer : bool option = None
-                        let mutable waiting : (bool -> unit) option = None
-                        let settle (this: bool) =
+                    ///
+                    /// `overture` is what the shell has printed so far, for the notice that
+                    /// goes out when `probeWindow` passes with no answer: not a decision, a
+                    /// sentence — "still waiting" and the bytes, so a shell that printed a
+                    /// prompt without marks reads differently from one that printed nothing.
+                    ///
+                    /// `bounded` is the re-arm's case: the shell is already there, so a mark
+                    /// that does not come inside the window is a shell that will not mark,
+                    /// and the wait ends as if it had exited. The open is not bounded.
+                    let awaitStart (bounded: bool) (exited: Async<SandboxRun>) (overture: unit -> string) : Async<Result<unit, SandboxRun>> =
+                        let mutable answer : Result<unit, SandboxRun> option = None
+                        let mutable waiting : (Result<unit, SandboxRun> -> unit) option = None
+                        let settle (this: Result<unit, SandboxRun>) =
                             if answer.IsNone then
                                 answer <- Some this
                                 onReady.Value <- ignore
                                 waiting |> Option.iter (fun resume -> resume this)
-                        onReady.Value <- fun () -> settle true
+                        onReady.Value <- fun () -> settle (Ok ())
+                        Async.StartImmediate (
+                            async {
+                                let! run = exited
+                                settle (Error run)
+                            })
                         Async.StartImmediate (
                             async {
                                 do! clock.After probeWindow
-                                settle false
+                                if answer.IsNone then
+                                    if bounded then
+                                        settle (Error (SandboxRunFailed "no prompt mark inside the window"))
+                                    else
+                                        match live.TryGetValue key with
+                                        | true, current ->
+                                            emit
+                                                id
+                                                current
+                                                TranscriptStderr
+                                                (sprintf
+                                                    "yession: the shell has not printed an instrumented prompt after %dms — still waiting for it. So far it said: %s\r\n"
+                                                    (int probeWindow.TotalMilliseconds)
+                                                    (overture ()))
+                                        | _ -> ()
                             })
                         Async.FromContinuations (fun (cont, _, _) ->
                             match answer with
@@ -1280,112 +1327,139 @@ module SessionTerminals =
                                     // `PROMPT_COMMAND` `D`) — not this block's completion.
                                     // Either way, not ours to act on.
                                     | _ -> ()
-                    // The profile is applied by the SPAWN, never as a `cd` typed at the
-                    // prompt (Plan 25). A typed one would echo into the transcript on the
-                    // re-arm path below — which re-types this bootstrap into whatever shell
-                    // is there NOW — so the audit trail would carry a command nobody ran; it
-                    // would need quoting for a path this code did not choose; and it cannot
-                    // fail visibly, because `cd /gone` prints into a terminal that carries on
-                    // regardless. The OS answers a spawn's cwd at the one moment something
-                    // is listening.
+                    // What the shell has said, as one legible line: control characters (the
+                    // bytes a prompt is made of) escaped, so a notice cannot itself carry a
+                    // mark or an escape into the transcript.
+                    let said () =
+                        let text =
+                            overture.ToString ()
+                            |> Seq.map (fun c -> if System.Char.IsControl c then sprintf "\\x%02x" (int c) else string c)
+                            |> String.concat ""
+                        if text = "" then "nothing" else text
+                    // The profile's directory is the FIRST line the shell is handed, as its
+                    // own `cd`, and the spawn itself starts where the sandbox puts a shell.
+                    // Typed, not a spawn cwd, for two reasons that arrived separately. A
+                    // sandbox whose work runs behind an entrypoint (`nix develop …`) needs the
+                    // process to start where the entrypoint is valid — the checkout — whatever
+                    // directory the shell is to end up in. And a typed line is invisible now:
+                    // nothing before the first prompt mark is recorded, so the objection that
+                    // made Plan 25 choose the spawn (a `cd` nobody ran, in the audit trail)
+                    // no longer holds. The other objection — a `cd` that cannot fail visibly
+                    // — is answered by `|| exit 97`: a directory that is gone ends the shell
+                    // with a code nothing else uses, and the exit arm below reads it, says so,
+                    // and starts again without the profile. The profile is left alone: it is a
+                    // person's to fix, not ours to guess at.
                     let profileCwd = ShellProfileProjection.workingDirectory sandbox profiles
-                    let spawnPty (cwd: string option) =
+                    let profileExit = 97
+                    let rcWith (cwd: string option) =
+                        match cwd with
+                        | Some path -> " cd -- " + quotedPath path + " || exit " + string profileExit + "\n" + rc
+                        | None -> rc
+                    let spawnPty () =
                         (environmentFor sandbox).SpawnPty
                             { Executable = shell.Executable
                               Arguments = shell.InteractiveArguments
                               Env = Map.empty
-                              WorkingDirectory = cwd }
+                              WorkingDirectory = None
+                              // A terminal's shell IS the work a sandbox's entrypoint is for.
+                              Via = Entrypoint }
                             80
                             24
                             onOutput
-                    let! attempted = spawnPty profileCwd
-                    // The directory can go away between being set and being opened in — an
-                    // `rm -rf` in a terminal, an unmounted volume. A terminal that refuses to
-                    // open because of a DEFAULT is a worse failure than the default being
-                    // wrong, so fall back once and say why where everyone reads it. The
-                    // profile is left alone: it is a person's to fix, not ours to guess at.
-                    let! spawned =
-                        match attempted, profileCwd with
-                        | Error reason, Some path ->
-                            async {
+                    let rec start (cwd: string option) : Async<unit> =
+                        async {
+                            match! spawnPty () with
+                            | Error reason ->
+                                // Said where everyone reads it. A terminal with no shell still
+                                // answers every command — as its own process, with no `cd`
+                                // carrying and nothing to type into — and that quiet
+                                // degradation ran on a deployed host for weeks, every terminal,
+                                // because this arm said nothing: the reason was `posix_spawnp
+                                // failed` and the only trace of it was an agent being told
+                                // "nothing to type into" by a block that was plainly waiting.
                                 emit
                                     id
                                     terminal
                                     TranscriptStderr
                                     (sprintf
-                                        "yession: could not start a shell in %s (%s) — starting where the sandbox puts them instead\r\n"
-                                        path
+                                        "yession: no shell for this terminal (%s) — each command runs as its own process, so nothing carries between them and nothing can be typed into one\r\n"
                                         reason)
-                                return! spawnPty None
-                            }
-                        | _ -> async { return attempted }
-                    match spawned with
-                    | Error reason ->
-                        // Said where everyone reads it, like the cwd fallback above. A
-                        // terminal with no shell still answers every command — as its own
-                        // process, with no `cd` carrying and nothing to type into — and that
-                        // quiet degradation ran on a deployed host for weeks, every terminal,
-                        // because this arm said nothing: the reason was `posix_spawnp failed`
-                        // and the only trace of it was an agent being told "nothing to type
-                        // into" by a block that was plainly waiting.
-                        emit
-                            id
-                            terminal
-                            TranscriptStderr
-                            (sprintf
-                                "yession: no shell for this terminal (%s) — each command runs as its own process, so nothing carries between them and nothing can be typed into one\r\n"
-                                reason)
-                        return ()
-                    | Ok pty ->
-                        terminal.Shell <- Some pty
-                        // TYPED into the shell rather than written to a file it is launched
-                        // with. No temp file to place inside a sandbox this Process cannot
-                        // reach, no second spawn to set one up, and it works for any shell
-                        // that has a prompt — which is Warp's approach for the same reasons.
-                        // Every line starts with a space, so the shell's own
-                        // ignore-duplicates-and-space history setting keeps our bootstrap out
-                        // of the user's history.
-                        // Listening BEFORE typing: the mark can arrive the instant the last
-                        // rc line lands, and a wait registered after it would have missed it.
-                        let probe = awaitMark ()
-                        for line in rc.Split '\n' do
-                            pty.Write (line + "\r")
-                        // The same bootstrap, typed into whatever shell is there NOW. Warp's
-                        // move for the same problem, minus the rc-file edit — ours is a few
-                        // lines and the shell is in front of us.
-                        rearmers.[key] <-
-                            fun () ->
-                                async {
-                                    ready.Value <- false
-                                    carry.Value <- ""
-                                    let armed = awaitMark ()
-                                    for line in rc.Split '\n' do
-                                        pty.Write (line + "\r")
-                                    return! armed
-                                }
-                        let! instrumented = probe
-                        if not instrumented then
-                            // Uninstrumented. Tear the shell down and keep the per-block
-                            // path, which answers a smaller question completely — and say
-                            // so, for the reason the spawn failure above does.
-                            // Control characters (the bytes a prompt is made of) are shown
-                            // escaped, so the notice is one legible line and cannot itself
-                            // carry a mark or an escape into the transcript.
-                            let said =
-                                overture.ToString ()
-                                |> Seq.map (fun c -> if System.Char.IsControl c then sprintf "\\x%02x" (int c) else string c)
-                                |> String.concat ""
-                            emit
-                                id
-                                terminal
-                                TranscriptStderr
-                                (sprintf
-                                    "yession: the shell never printed an instrumented prompt, so it was closed — each command runs as its own process instead. In %dms it said: %s\r\n"
-                                    (int probeWindow.TotalMilliseconds)
-                                    (if said = "" then "nothing" else said))
-                            pty.Kill ()
-                            terminal.Shell <- None
-                            rearmers.Remove key |> ignore
+                            | Ok pty ->
+                                ready.Value <- false
+                                carry.Value <- ""
+                                overture.Clear () |> ignore
+                                let lines = rcWith cwd
+                                // TYPED into the shell rather than written to a file it is
+                                // launched with. No temp file to place inside a sandbox this
+                                // Process cannot reach, no second spawn to set one up, and it
+                                // works for any shell that has a prompt — which is Warp's
+                                // approach for the same reasons. Every line starts with a
+                                // space, so the shell's own ignore-duplicates-and-space
+                                // history setting keeps our bootstrap out of the user's
+                                // history. Listening BEFORE typing: the mark can arrive the
+                                // instant the last rc line lands, and a wait registered after
+                                // it would have missed it.
+                                let started = awaitStart false pty.Exited said
+                                for line in lines.Split '\n' do
+                                    pty.Write (line + "\r")
+                                match! started with
+                                | Ok () ->
+                                    terminal.Shell <- Some pty
+                                    // The same bootstrap, typed into whatever shell is there
+                                    // NOW. Warp's move for the same problem, minus the rc-file
+                                    // edit — ours is a few lines and the shell is in front of
+                                    // us. Bounded, unlike the open: the shell is already there
+                                    // and a re-arm that does not answer is a shell that will
+                                    // not.
+                                    rearmers.[key] <-
+                                        fun () ->
+                                            async {
+                                                ready.Value <- false
+                                                carry.Value <- ""
+                                                let armed = awaitStart true pty.Exited said
+                                                for line in rc.Split '\n' do
+                                                    pty.Write (line + "\r")
+                                                match! armed with
+                                                | Ok () -> return true
+                                                | Error _ -> return false
+                                            }
+                                | Error (SandboxExited code) when code = profileExit && cwd.IsSome ->
+                                    // The directory can go away between being set and being
+                                    // opened in — an `rm -rf` in a terminal, an unmounted
+                                    // volume. A terminal that refuses to open because of a
+                                    // DEFAULT is a worse failure than the default being wrong,
+                                    // so fall back once and say why where everyone reads it.
+                                    emit
+                                        id
+                                        terminal
+                                        TranscriptStderr
+                                        (sprintf
+                                            "yession: could not start a shell in %s — starting where the sandbox puts them instead\r\n"
+                                            cwd.Value)
+                                    return! start None
+                                | Error run ->
+                                    // Evidence, not a guess: the shell ENDED before it marked
+                                    // a prompt. Keep the per-block path, which answers a
+                                    // smaller question completely — and say so, with what
+                                    // the shell said, for the reason the spawn failure above
+                                    // does.
+                                    let how =
+                                        match run with
+                                        | SandboxExited code -> sprintf "exited with code %d" code
+                                        | SandboxRunFailed reason -> sprintf "could not run: %s" reason
+                                    emit
+                                        id
+                                        terminal
+                                        TranscriptStderr
+                                        (sprintf
+                                            "yession: the shell %s before it printed an instrumented prompt — each command runs as its own process instead. It said: %s\r\n"
+                                            how
+                                            (said ()))
+                                    pty.Kill ()
+                                    terminal.Shell <- None
+                                    rearmers.Remove key |> ignore
+                        }
+                    return! start profileCwd
             }
 
         /// Where an attached source's bytes go once there is a terminal to put them in
@@ -1460,7 +1534,15 @@ module SessionTerminals =
                           OpenedAt = openedAt
                           Emulator = openEmulator 80 24
                           Sandbox = sandbox
+                          // The sandbox's shell when its backend found one, the session's
+                          // otherwise; an attached source has no shell of ours at all and
+                          // the default stands unused.
+                          Spec =
+                            sandbox
+                            |> Option.bind (fun name -> (environmentFor name).Shell ())
+                            |> Option.defaultValue shell
                           Shell = None
+                          Starting = None
                           OutputEndedCr = false }
                     // In the live map BEFORE the shell starts: the pty's output callback finds
                     // the terminal by id, and bytes can arrive the instant it spawns.
@@ -1469,7 +1551,21 @@ module SessionTerminals =
                     terminal.Emulator.OnAltScreen (fun alt -> Async.StartImmediate (flip id alt))
                     sources.[TerminalId.value id] <- Source.capabilities source
                     match source with
-                    | SandboxShell name -> do! openShell id terminal name
+                    | SandboxShell name ->
+                        // Started, not awaited: the terminal exists now, and the shell takes
+                        // as long as it takes (a devshell, cold, takes minutes). Whoever
+                        // needs the shell — a block, a lease — waits on `Starting`, which
+                        // settles when `openShell` has decided either way.
+                        let started, settled = OneShotLatch.create ()
+                        terminal.Starting <- Some settled
+                        Async.StartImmediate (
+                            async {
+                                try
+                                    do! openShell id terminal name
+                                finally
+                                    terminal.Starting <- None
+                                    started ()
+                            })
                     | Attached _ ->
                         dialledHandle |> Option.iter (fun handle -> terminal.Shell <- Some handle)
                         // Point the sink at the terminal, then let go of what arrived before
@@ -1655,6 +1751,12 @@ module SessionTerminals =
                 | true, terminal ->
                     let transcript = terminal.Transcript
                     busy <- Set.add key busy
+                    // A shell still starting is waited for, busy: the block is this
+                    // terminal's next thing to run, and running it as its own process
+                    // beside a shell a moment from ready would carry nothing into that shell.
+                    match terminal.Starting with
+                    | Some starting -> do! starting
+                    | None -> ()
                     // The flip policy's input: if this command takes the alternate screen, its
                     // author is the person who now needs the keyboard.
                     runningAuthor.[key] <- Authority.author entry.Authority
@@ -1774,7 +1876,7 @@ module SessionTerminals =
                                             // Nothing the shell prints from here to the start
                                             // mark is the block's (`Marks.lineFor`).
                                             awaitingStart.Add key |> ignore
-                                            pty.Write (writeFor (Marks.lineFor shell.Name stdin command))
+                                            pty.Write (writeFor (Marks.lineFor terminal.Spec.Name stdin command))
                                             // The integration detector (Plan 13, stage 2f), armed
                                             // beside the block rather than awaited: a lost shell
                                             // must not make this block wait, because the block is
@@ -1819,12 +1921,14 @@ module SessionTerminals =
                                             emit terminalId terminal kind kept
                                     let! spawned =
                                         (environmentOf terminalId).Spawn
-                                            { Executable = shell.Executable
+                                            { Executable = terminal.Spec.Executable
                                               // No shell to render a line and nothing to mark
                                               // its start: the wrapper alone, and every byte
                                               // the process prints is the block's.
-                                              Arguments = shell.Arguments @ [ BlockStdin.wrap stdin command ]
+                                              Arguments = terminal.Spec.Arguments @ [ BlockStdin.wrap stdin command ]
                                               Env = Map.empty
+                                              // A block is work, entrypoint or no shell.
+                                              Via = Entrypoint
                                               // The profile applies here TOO (Plan 25). This
                                               // path gets a fresh process per block and carries
                                               // nothing between them, so it is applied per
@@ -1908,11 +2012,14 @@ module SessionTerminals =
                 // its blocks are separate processes that end with themselves. Refusing here is
                 // the same declare-and-skip honesty the fallback is built on — better than a
                 // lease that is granted and then does nothing.
-                | true, terminal when Option.isNone terminal.Shell ->
-                    return Error "this terminal has no interactive shell"
-                | true, _ ->
-                    do! applyLease (TerminalLeases.take id by false (clock.Now ()) (markKeyframe id) leases)
-                    return Ok ()
+                | true, terminal ->
+                    match terminal.Starting with
+                    | Some starting -> do! starting
+                    | None -> ()
+                    if Option.isNone terminal.Shell then return Error "this terminal has no interactive shell"
+                    else
+                        do! applyLease (TerminalLeases.take id by false (clock.Now ()) (markKeyframe id) leases)
+                        return Ok ()
             }
 
         let release (id: TerminalId) (by: ActorRef) : Async<Result<unit, string>> =
@@ -2270,7 +2377,9 @@ module SessionTerminals =
                                     { Executable = shell.Executable
                                       Arguments = shell.Arguments @ [ "pwd && cd \"$1\" && pwd"; "sh"; path ]
                                       Env = Map.empty
-                                      WorkingDirectory = None }
+                                      WorkingDirectory = None
+                                      // A `cd` and two `pwd`s: housekeeping, not work.
+                                      Via = Direct }
                                     (fun (stream, chunk) ->
                                         match stream with
                                         | Stdout -> answered <- answered + chunk

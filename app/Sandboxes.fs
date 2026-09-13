@@ -1033,6 +1033,7 @@ module HostSandbox =
                                             |> Option.toObj
                                         return Pty.spawn exec.Executable exec.Arguments cwd env cols rows onOutput
                                     })
+                          Shell = None
                           Dispose = fun () -> async { children.KillAll () } }
             }
 
@@ -1154,7 +1155,56 @@ module DockerSandbox =
     /// The daemon's regression, so the backend carries the workaround: it sat in
     /// yession.yaml for a while, where every repo adopting a nix-built image would have
     /// had to copy it and keep copying it after the daemon is fixed.
-    let startCommand (declared: string option) : string array =
+    /// One argv word as `sh -c` reads it back: single-quoted, any quote inside closed,
+    /// escaped and reopened.
+    let private shellQuote (word: string) : string = "'" + word.Replace ("'", "'\\''") + "'"
+
+    /// The argv a process actually runs as: behind the container's entrypoint when the
+    /// exec is work and one is declared, bare otherwise (`ProcessEntry`).
+    let private argvFor (entrypoint: string list option) (exec: SandboxExec) : string list =
+        match exec.Via, entrypoint with
+        | Entrypoint, Some prefix -> prefix @ (exec.Executable :: exec.Arguments)
+        | _ -> exec.Executable :: exec.Arguments
+
+    /// What the start command prints once its fixes are in — the line `awaitStarted`
+    /// waits for before the first exec.
+    let startedMark = "yession:started"
+
+    /// Wait for the container's start command to have run its fixes: its stdout is
+    /// followed until `startedMark` comes through, or the stream ends (the process
+    /// exited before saying it — a start that failed). Not a poll and not an exec: an exec
+    /// before the fixes trips Docker 29's own exec-user resolution on the symlinked /etc
+    /// the fixes materialise ("openat etc/group: path escapes from parent"), which is
+    /// exactly how the first exec after `start` — the shell detection — failed on the
+    /// nix image while every later one passed.
+    let private awaitStarted (client: DK.Docker) (container: DK.Container) : Async<Result<unit, string>> =
+        async {
+            try
+                let! stream = container.logs (createObj [ "follow", box true; "stdout", box true; "stderr", box true ]) |> Interop.awaitPromise
+                let stdout = DK.createPassThrough ()
+                let stderr = DK.createPassThrough ()
+                client.modem.demuxStream (stream, stdout, stderr)
+                let said = System.Text.StringBuilder ()
+                let! outcome =
+                    Async.FromContinuations (fun (cont, _, _) ->
+                        let mutable settled = false
+                        let settle (answer: Result<unit, string>) =
+                            if not settled then
+                                settled <- true
+                                (try stream.destroy () with _ -> ())
+                                cont answer
+                        stdout.on ("data", fun d ->
+                            said.Append (bufToStr d) |> ignore
+                            if said.ToString().Contains startedMark then settle (Ok ())) |> ignore
+                        stderr.on ("data", fun d -> said.Append (bufToStr d) |> ignore) |> ignore
+                        stream.on ("end", fun _ ->
+                            settle (Error (sprintf "the container's start command ended before it reported itself started; it said: %s" (said.ToString().Trim ())))) |> ignore
+                        stream.on ("error", fun e -> settle (Error (string e))) |> ignore)
+                return outcome
+            with ex -> return Error (sprintf "could not follow the container's output: %s" ex.Message)
+        }
+
+    let startCommand (entrypoint: string list option) (declared: string option) : string array =
         let materialiseEtc =
             "for f in passwd group shadow; do if [ -L /etc/$f ]; then cat /etc/$f > /etc/.$f && rm /etc/$f && mv /etc/.$f /etc/$f; fi; done"
         // The OTHER reader of the bind-mounted checkouts' ownership. The docker policy's
@@ -1170,14 +1220,84 @@ module DockerSandbox =
         // store. Delete either and one reader goes back to refusing.
         let trustMounts =
             "grep -qs 'directory = \\*' /etc/gitconfig 2>/dev/null || printf '[safe]\\n\\tdirectory = *\\n' >> /etc/gitconfig"
+        // The declared command keeps its meaning — a shell sequence — behind an entrypoint
+        // too: it becomes `sh -c` of the sequence, run as the entrypoint's command, which
+        // is what compose composes from the two.
+        let own =
+            match declared, entrypoint with
+            | None, _ -> "exec tail -f /dev/null"
+            | Some sequence, None -> sequence
+            | Some sequence, Some prefix ->
+                "exec " + (prefix @ [ "sh"; "-c"; sequence ] |> List.map shellQuote |> String.concat " ")
+        // Said once the fixes are in, on the container's own stdout: the one channel that
+        // does not go through the exec path the fixes exist to repair. `awaitStarted`
+        // reads it; an exec before it would trip the very bug the prelude repairs.
         [| "sh"
            "-c"
-           sprintf "%s\n%s\n%s" materialiseEtc trustMounts (declared |> Option.defaultValue "exec tail -f /dev/null") |]
+           sprintf "%s\n%s\necho %s\n%s" materialiseEtc trustMounts startedMark own |]
+
+    /// Where each dialect's shell is on the far side of the entrypoint, by asking: one
+    /// `sh -c "command -v …"` behind it, whose output is the paths found, one per line, in
+    /// the order asked. The first found is the answer — or the declared dialect, when the
+    /// repo named one and it is there.
+    let private detectShell (spawn: SandboxExec -> (OutputStream * string -> unit) -> Async<Result<SandboxProcessHandle, string>>) (container: ContainerSpec) : Async<Result<TerminalShell, string>> =
+        async {
+            let asked =
+                match container.Dialect with
+                | Some dialect -> [ dialect ]
+                | None -> TerminalShell.dialects
+            let said = System.Text.StringBuilder ()
+            let exec =
+                { Executable = "sh"
+                  // `command -v` prints a path per name found and nothing for one that is
+                  // not, so `printf` tags each line with the name it answers.
+                  Arguments =
+                    [ "-c"
+                      (asked
+                       |> List.map (fun dialect -> sprintf "p=$(command -v %s) && printf '%%s %%s\\n' %s \"$p\"" dialect dialect)
+                       |> String.concat "; ")
+                      + "; true" ]
+                  Env = Map.empty
+                  WorkingDirectory = None
+                  Via = Entrypoint }
+            match! spawn exec (fun (_, chunk) -> said.Append chunk |> ignore) with
+            | Error reason -> return Error (sprintf "could not look for a shell behind the entrypoint: %s" reason)
+            | Ok handle ->
+                match! handle.Exited with
+                | SandboxRunFailed reason -> return Error (sprintf "could not look for a shell behind the entrypoint: %s" reason)
+                | SandboxExited _ ->
+                    let found =
+                        said.ToString().Split '\n'
+                        |> Array.choose (fun line ->
+                            match line.Trim().Split ([| ' ' |], 2) with
+                            | [| dialect; path |] when List.contains dialect asked && path <> "" -> Some (dialect, path)
+                            | _ -> None)
+                        |> List.ofArray
+                    let chosen =
+                        asked |> List.tryPick (fun dialect -> found |> List.tryFind (fun (d, _) -> d = dialect))
+                    match chosen |> Option.bind (fun (dialect, path) -> TerminalShell.forDialect dialect path) with
+                    | Some shell -> return Ok shell
+                    | None ->
+                        let where =
+                            match container.Entrypoint with
+                            | Some prefix -> sprintf " behind the entrypoint (%s)" (String.concat " " prefix)
+                            | None -> ""
+                        return
+                            Error
+                                (sprintf
+                                    "no shell a terminal can instrument%s: looked for %s on PATH and found none. It said: %s"
+                                    where
+                                    (String.concat ", " asked)
+                                    (let text = said.ToString().Trim () in if text = "" then "nothing" else text))
+        }
 
     let create (name: string) (spec: EnvironmentSpec) (container: ContainerSpec) : CreateSandbox =
         fun policy ->
             async {
                 try
+                    // The declaration, under a name the docker object below does not shadow.
+                    let declared = container
+                    let entrypoint = container.Entrypoint
                     let client = DK.create ()
                     // Resolve the image: build it from the context, or pull the named image.
                     let! imageResult =
@@ -1244,7 +1364,7 @@ module DockerSandbox =
                                       // otherwise the idle command that has always kept the
                                       // container up for `exec` to reach — either way behind
                                       // the daemon workaround (`startCommand`).
-                                      "Cmd", box (startCommand container.Command)
+                                      "Cmd", box (startCommand entrypoint container.Command)
                                       "HostConfig",
                                       box (
                                           createObj
@@ -1271,12 +1391,19 @@ module DockerSandbox =
                                                 "SecurityOpt", box [| "no-new-privileges" |] ]) ])
                             |> Interop.awaitPromise
                         do! container.start () |> Interop.awaitPromise |> Async.Ignore
+                        match! awaitStarted client container with
+                        | Error reason ->
+                            try
+                                do! client.getContainer(container.id).remove (createObj [ "force", box true ]) |> Interop.awaitPromise |> Async.Ignore
+                            with _ -> ()
+                            return Error reason
+                        | Ok () ->
 
                         let spawn (exec: SandboxExec) (onChunk: OutputStream * string -> unit) =
                             async {
                                 try
                                     let execOpts =
-                                        [ "Cmd", box (List.toArray (exec.Executable :: exec.Arguments))
+                                        [ "Cmd", box (List.toArray (argvFor entrypoint exec))
                                           "AttachStdin", box true
                                           "AttachStdout", box true
                                           "AttachStderr", box true
@@ -1338,7 +1465,7 @@ module DockerSandbox =
                             async {
                                 try
                                     let execOpts =
-                                        [ "Cmd", box (List.toArray (exec.Executable :: exec.Arguments))
+                                        [ "Cmd", box (List.toArray (argvFor entrypoint exec))
                                           "AttachStdin", box true
                                           "AttachStdout", box true
                                           "AttachStderr", box true
@@ -1386,19 +1513,37 @@ module DockerSandbox =
                                               Exited = ended.Await }
                                 with ex -> return Error ex.Message
                             }
+                        let dispose () =
+                            async {
+                                try
+                                    do! client.getContainer(container.id).remove (createObj [ "force", box true ]) |> Interop.awaitPromise |> Async.Ignore
+                                with ex ->
+                                    eprintfn "[sandbox %s] docker remove failed: %s" name ex.Message
+                            }
+                        // Which shell a terminal here opens: looked for on the far side of
+                        // the entrypoint, once, at start — `command -v` for the dialects
+                        // in order of what they can be instrumented to say, or the one the
+                        // repo named. Behind the entrypoint on purpose, twice over: the
+                        // shell a terminal runs is the one the entrypoint's PATH resolves,
+                        // and asking costs the entrypoint's start — a devshell's evaluation
+                        // — which is then paid here, once, off the first terminal, rather
+                        // than inside whatever command happens to be first.
+                        //
+                        // A container with none of the three is refused, with the reason: a
+                        // sandbox whose terminals could only ever run one process per block
+                        // is not the sandbox the repo declared.
+                        match! detectShell spawn declared with
+                        | Error reason ->
+                            do! dispose ()
+                            return Error reason
+                        | Ok shell ->
                         return
                             Ok
                                 { Ref = container.id
                                   Spawn = spawn
                                   SpawnPty = Some spawnPty
-                                  Dispose =
-                                    fun () ->
-                                        async {
-                                            try
-                                                do! client.getContainer(container.id).remove (createObj [ "force", box true ]) |> Interop.awaitPromise |> Async.Ignore
-                                            with ex ->
-                                                eprintfn "[sandbox %s] docker remove failed: %s" name ex.Message
-                                        } }
+                                  Shell = Some shell
+                                  Dispose = dispose }
                 with ex -> return Error (sprintf "docker sandbox failed: %s" ex.Message)
             }
 
@@ -2035,6 +2180,7 @@ module SrtSandbox =
                                                     return Pty.spawn executable arguments cwd env cols rows onOutput
                                             with ex -> return Error ex.Message
                                         })
+                              Shell = None
                               // The manager stays up: it is process-wide, and a sibling
                               // sandbox may still be running under it. Its proxies die
                               // with the Session Process, which is the lifetime they are

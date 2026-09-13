@@ -169,7 +169,9 @@ module SandboxDecl =
                                       "target", Encode.string mount.Target
                                       "mode",
                                       Encode.string (match mount.Mode with ReadOnly -> "ro" | ReadWrite -> "rw") ]))
-                      if container.Command.IsSome then "cmd", Encode.string container.Command.Value ])
+                      if container.Command.IsSome then "command", Encode.string container.Command.Value
+                      if container.Entrypoint.IsSome then
+                        "entrypoint", Encode.list (container.Entrypoint.Value |> List.map Encode.string) ])
         let env =
             decl.EnvironmentVariables
             |> Map.toList
@@ -182,6 +184,9 @@ module SandboxDecl =
         Encode.toString 0 (
             Encode.object
                 [ if container.IsSome then "container", container.Value
+                  match decl.Container |> Option.bind (fun spec -> spec.Dialect) with
+                  | Some dialect -> "dialect", Encode.string dialect
+                  | None -> ()
                   if decl.WorkingDirectory.IsSome then "workdir", Encode.string decl.WorkingDirectory.Value
                   if not (Map.isEmpty decl.EnvironmentVariables) then "env", Encode.object env
                   if not (List.isEmpty decl.Uses) then "uses", strings (decl.Uses |> List.map ResourceName.value)
@@ -475,21 +480,59 @@ module ConfigFile =
                 | Some "ro" -> ReadOnly
                 | _ -> ReadWrite })
 
-    let private containerKeys = [ "image"; "build"; "volumes"; "cmd" ]
+    /// An argv, as compose writes one: a list of words, or one string split into words the
+    /// way a POSIX shell would read them — quotes group, a backslash escapes, nothing is
+    /// expanded. The string form is compose's, taken as it is so a line copied from a
+    /// compose file means the same thing here; the list form is the one that cannot be
+    /// misread, and what the docs prefer.
+    let private argv (field: string) : Decoder<string list> =
+        Decode.oneOf
+            [ Decode.list Decode.string
+              Decode.string
+              |> Decode.andThen (fun raw ->
+                  match ShellWords.split raw with
+                  | Ok [] -> Decode.fail (sprintf "%s is empty — write the words to run, or leave it out" field)
+                  | Ok words -> Decode.succeed words
+                  | Error reason -> Decode.fail (sprintf "%s: %s" field reason)) ]
 
-    /// The container block. `cmd` lives HERE and nowhere else, which is the whole reason the
-    /// block exists: a sandbox with no container has no place to write one.
+    let private containerKeys = [ "image"; "build"; "volumes"; "cmd"; "command"; "entrypoint" ]
+
+    /// The container block. `command` lives HERE and nowhere else, which is the whole reason
+    /// the block exists: a sandbox with no container has no place to write one. `cmd` is the
+    /// same key by its older name; one of the two, not both.
     let private container : Decoder<ContainerSpec> =
         noUnknownKeys containerKeys
         |> Decode.andThen (fun () ->
             Decode.object (fun get ->
+                let cmd = get.Optional.Field "cmd" Decode.string
+                let command = get.Optional.Field "command" Decode.string
                 { Image = get.Optional.Field "image" image
                   Build = get.Optional.Field "build" build
                   Mounts = get.Optional.Field "volumes" (Decode.list mount) |> Option.defaultValue []
-                  Command = get.Optional.Field "cmd" Decode.string }))
+                  Command = (match cmd, command with | Some _, Some _ -> None | Some c, None | None, Some c -> Some c | None, None -> None)
+                  Entrypoint = get.Optional.Field "entrypoint" (argv "entrypoint")
+                  Dialect = None },
+                (cmd, command)))
+        |> Decode.andThen (fun (spec, (cmd, command)) ->
+            match cmd, command with
+            | Some _, Some _ -> Decode.fail "`cmd` and `command` are one key by two names — write one of them"
+            | _ -> Decode.succeed spec)
 
     let private sandboxKeys =
-        [ "container"; "workdir"; "env"; "uses"; "wants"; "files"; "forward"; "setup"; "description"; "repos" ]
+        [ "container"; "dialect"; "workdir"; "env"; "uses"; "wants"; "files"; "forward"; "setup"; "description"; "repos" ]
+
+    /// `dialect:` — one of the shells a terminal can instrument, by name.
+    let private dialect : Decoder<string> =
+        Decode.string
+        |> Decode.andThen (fun raw ->
+            let name = raw.Trim ()
+            if List.contains name TerminalShell.dialects then Decode.succeed name
+            else
+                Decode.fail
+                    (sprintf
+                        "'%s' is not a shell dialect a terminal can instrument — one of %s"
+                        raw
+                        (String.concat ", " TerminalShell.dialects)))
 
     /// `files:` — a path inside the sandbox's home to the content written there.
     ///
@@ -512,7 +555,9 @@ module ConfigFile =
         noUnknownKeys sandboxKeys
         |> Decode.andThen (fun () ->
             Decode.object (fun get ->
-                { Container = get.Optional.Field "container" container
+                let container = get.Optional.Field "container" container
+                let dialect = get.Optional.Field "dialect" dialect
+                { Container = container |> Option.map (fun spec -> { spec with Dialect = dialect })
                   WorkingDirectory = get.Optional.Field "workdir" (inCheckout "workdir")
                   EnvironmentVariables =
                     get.Optional.Field "env" environment |> Option.defaultValue Map.empty
@@ -525,7 +570,16 @@ module ConfigFile =
                     get.Optional.Field "description" Decode.string
                     |> Option.map (fun said -> said.Trim ())
                     |> Option.filter (fun said -> said <> "")
-                  Repos = get.Optional.Field "repos" reposTarget }))
+                  Repos = get.Optional.Field "repos" reposTarget },
+                (container, dialect)))
+        |> Decode.andThen (fun (decl, (container, dialect)) ->
+            // A dialect names the shell a CONTAINER's terminal opens, chosen from what the
+            // backend finds behind the entrypoint. A sandbox without a container has no
+            // such choice — the session's own shell is what it gets — so the key is refused
+            // there rather than read and ignored.
+            match dialect, container with
+            | Some _, None -> Decode.fail "`dialect` chooses a container's shell — this sandbox declares no `container`"
+            | _ -> Decode.succeed decl)
 
     /// Sandbox names, refusing a clash INSIDE one file.
     ///

@@ -79,12 +79,24 @@ type ContainerSpec =
       /// with one — the sandbox lives exactly as long as the process does, so a command that
       /// exits takes its terminals with it. That is docker's own behaviour, not a policy
       /// invented here.
-      Command : string option }
+      Command : string option
+      /// What every piece of WORK in this container runs behind — compose's `entrypoint`,
+      /// as an argv. A repo whose toolchain is assembled by a devshell puts that here
+      /// (`nix develop --impure --command`), and a terminal's shell, a block, `setup:` and
+      /// the container's own `command` all run inside it; the session's housekeeping does
+      /// not (`ProcessEntry`). `None` runs everything as it stands.
+      Entrypoint : string list option
+      /// Which shell a terminal here opens, by dialect (`TerminalShell.dialects`), when the
+      /// repo would rather say than have the backend look. `None` — the usual — has the
+      /// backend detect what is on the far side of the entrypoint, most capable first.
+      /// Written at the sandbox level as `dialect:`, and carried here because only a
+      /// container has a shell to choose.
+      Dialect : string option }
 
 module ContainerSpec =
 
     let defaults : ContainerSpec =
-        { Image = None; Build = None; Mounts = []; Command = None }
+        { Image = None; Build = None; Mounts = []; Command = None; Entrypoint = None; Dialect = None }
 
 /// What the sandbox IS, and the distinction is load-bearing rather than descriptive.
 ///
