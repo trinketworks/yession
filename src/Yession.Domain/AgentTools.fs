@@ -183,8 +183,15 @@ module AgentTools =
                         outcome.Elided
                         readOn
                         (outcome.Output.Substring headLength)
+        // Every status opens with ONE upper-case word that says which it is, and the words
+        // differ at the first letter. A finished command used to open `exit code 0 in …`,
+        // beside `STILL RUNNING in …` for one that had not — and both were followed by the
+        // same ten lines of a devshell's prelude, so an agent that had read STILL RUNNING
+        // four times read a fifth answer the same way, tried to interrupt a block that had
+        // ended, and committed without the lint it was waiting on. Measured, session
+        // 9ZBRTTCZ; the word is the fix.
         match outcome.Status with
-        | TerminalCommandRan (CommandSucceeded code) -> sprintf "exit code %d in %s%s" code where output
+        | TerminalCommandRan (CommandSucceeded code) -> sprintf "FINISHED with exit code %d in %s%s" code where output
         | TerminalCommandRan (CommandFailed code) -> sprintf "FAILED with exit code %d in %s%s" code where output
         | TerminalCommandRan CommandTimedOut -> sprintf "TIMED OUT in %s%s" where output
         | TerminalCommandRan (CommandExecutionFailed reason) ->
