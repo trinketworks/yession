@@ -1335,9 +1335,334 @@ let private failureReasonTests =
                 "unwrapping is for the wrapper, and nothing else"
     ]
 
+// -----------------------------------------------------------------------------
+// The turn itself: what the SDK's partial-message stream adds up to, and what the session
+// is handed on the way. All of it used to be JavaScript inside one `[<Emit>]` string, where
+// no test could reach it and no compiler read it — which is how a thinking delta came to be
+// told from a text one by which FIELD happened to hold a string. It is a fold over values
+// now, so the whole of it belongs in the cheap tier: no model, no credential, no process.
+// -----------------------------------------------------------------------------
+
+// Opened here rather than at the top of the file: `createObj` and `==>` are what shape a
+// message the way the SDK delivers one, and nothing above this line wants them.
+open Fable.Core.JsInterop
+
+module Turn = Yession.Host.Agent.Turn
+
+module private Stream =
+
+    open Fable.ClaudeAgentSdk
+
+    /// One message off the query, shaped the way `sdk.d.ts` says it arrives.
+    let private message (fields: (string * obj) list) : Message = createObj fields |> unbox
+
+    let private event (fields: (string * obj) list) : Message =
+        message [ "type" ==> "stream_event"; "event" ==> createObj fields ]
+
+    let messageStart : Message = event [ "type" ==> "message_start" ]
+
+    /// A block's opening, carrying the block the API opens it with.
+    let blockStart (block: (string * obj) list) : Message =
+        event [ "type" ==> "content_block_start"; "content_block" ==> createObj block ]
+
+    let blockStop : Message = event [ "type" ==> "content_block_stop" ]
+
+    /// A delta carrying whatever fields the case is about, so a case can ask what the TAG
+    /// decides rather than what happens to be present.
+    let deltaOf (fields: (string * obj) list) : Message =
+        event [ "type" ==> "content_block_delta"; "delta" ==> createObj fields ]
+
+    let text (said: string) : Message = deltaOf [ "type" ==> "text_delta"; "text" ==> said ]
+
+    let thought (said: string) : Message = deltaOf [ "type" ==> "thinking_delta"; "thinking" ==> said ]
+
+    /// The ending the SDK yields, with whatever else the case is about on it.
+    let ending (subtype: string) (fields: (string * obj) list) : Message =
+        message ([ "type" ==> "result"; "subtype" ==> subtype ] @ fields)
+
+    /// The usage block, under the API's own snake_case names.
+    let usage (input: int) (output: int) (cacheRead: int) (cacheCreation: int) : string * obj =
+        "usage"
+        ==> createObj
+            [ "input_tokens" ==> input
+              "output_tokens" ==> output
+              "cache_read_input_tokens" ==> cacheRead
+              "cache_creation_input_tokens" ==> cacheCreation ]
+
+    let answeredBy (model: string) : string * obj = "modelUsage" ==> createObj [ model ==> createObj [] ]
+
+    /// Every message in order, then the end of the stream — which is where a block the
+    /// provider never closed is flushed.
+    let run (messages: Message list) : Turn.State * AgentResponseChunk list =
+        let state, forwarded =
+            messages
+            |> List.fold
+                (fun (state, forwarded) message ->
+                    let state, chunks = Turn.step state message
+                    state, forwarded @ chunks)
+                (Turn.empty, [])
+        let state, last = Turn.flush state
+        state, forwarded @ last
+
+    /// What the turn handed the session, in order.
+    let forwarded (messages: Message list) : AgentResponseChunk list = run messages |> snd
+
+    /// What the turn answered with.
+    let outcome (messages: Message list) : Result<string, string> = run messages |> fst |> Turn.outcome
+
+    /// What the turn spent.
+    let spend (messages: Message list) : AgentUsage = (run messages |> fst).Usage
+
+let private deltaTests =
+    testList "What one delta is" [
+        // The tag, and never which field holds a string. `typeof e.delta.thinking ===
+        // 'string'` was the old test, and `typeof undefined === 'string'` is false — so a
+        // thinking delta looked exactly like an event the runner did not care about.
+        testCase "a delta tagged thinking_delta is a thought" <| fun () ->
+            Expect.equal
+                (Stream.forwarded [ Stream.thought "the repository has a lockfile" ])
+                [ AgentResponseChunk.Thinking "the repository has a lockfile" ]
+                "what was thought reaches the session"
+
+        testCase "a delta tagged text_delta is what the model said" <| fun () ->
+            Expect.equal
+                (Stream.forwarded [ Stream.text "cloning it now" ])
+                [ AgentResponseChunk.Text "cloning it now" ]
+                "what was said reaches the session"
+
+        testCase "a thinking delta carrying a text field too is still only a thought" <| fun () ->
+            // Which optional fields a delta happens to carry decides nothing.
+            Expect.equal
+                (Stream.forwarded
+                    [ Stream.deltaOf [ "type" ==> "thinking_delta"; "thinking" ==> "hmm"; "text" ==> "hello" ] ])
+                [ AgentResponseChunk.Thinking "hmm" ]
+                "the tag decides, and it said thinking"
+
+        testCase "a text delta carrying a thinking field too is still only text" <| fun () ->
+            // Read by field presence, this one was something said AND a thought.
+            Expect.equal
+                (Stream.forwarded
+                    [ Stream.deltaOf [ "type" ==> "text_delta"; "text" ==> "hello"; "thinking" ==> "hmm" ] ])
+                [ AgentResponseChunk.Text "hello" ]
+                "the tag decides, and it said text"
+
+        testCase "a delta kind this repository does not read forwards nothing" <| fun () ->
+            Expect.equal
+                (Stream.forwarded [ Stream.deltaOf [ "type" ==> "signature_delta"; "signature" ==> "abc" ] ])
+                []
+                "an unread delta is not a chunk"
+    ]
+
+let private thoughtTests =
+    testList "One thought, whole" [
+        // Forwarded per delta, a thought arrived as an event per token — twenty-eight events
+        // for seven thoughts, split at "I" / "'ll clone the repository" — and every reader
+        // had to put them back together by adjacency.
+        testCase "a thought's deltas are one chunk, not one per delta" <| fun () ->
+            Expect.equal
+                (Stream.forwarded [ Stream.thought "I"; Stream.thought "'ll clone"; Stream.blockStop ])
+                [ AgentResponseChunk.Thinking "I'll clone" ]
+                "the block is the thought, not the delta"
+
+        testCase "the provider's end of a block is what ends a thought" <| fun () ->
+            // Two blocks, two thoughts: the stop between them is the only thing separating
+            // them, and a runner that missed it would report one thought saying both.
+            Expect.equal
+                (Stream.forwarded
+                    [ Stream.thought "first"; Stream.blockStop; Stream.thought "second"; Stream.blockStop ])
+                [ AgentResponseChunk.Thinking "first"; AgentResponseChunk.Thinking "second" ]
+                "one thought per block"
+
+        testCase "a block the provider never closes is still reported at the end of the stream" <| fun () ->
+            // An unterminated thought is worth reading, and this is the only copy of it.
+            Expect.equal
+                (Stream.forwarded [ Stream.thought "half a th" ])
+                [ AgentResponseChunk.Thinking "half a th" ]
+                "not lost for want of a stop"
+
+        testCase "the next message flushes the thought before its boundary" <| fun () ->
+            // The order is the point: a thought belongs to the message it was thought in.
+            Expect.equal
+                (Stream.forwarded [ Stream.thought "now to answer"; Stream.messageStart ])
+                [ AgentResponseChunk.Thinking "now to answer"; AgentResponseChunk.MessageBoundary ]
+                "the thought, then the break"
+
+        testCase "a thought is not part of what the model said" <| fun () ->
+            // The streamed text is the fallback body for what the model SAID; reasoning in it
+            // would put the model's private thinking in its own mouth on a shared transcript.
+            Expect.equal
+                (Stream.outcome [ Stream.thought "I should refuse"; Stream.blockStop; Stream.ending "success" [] ])
+                (Ok "")
+                "reasoning is not the body"
+    ]
+
+let private boundaryTests =
+    testList "Where the model split its turn" [
+        testCase "a message start forwards a boundary" <| fun () ->
+            // One `message_start` per API round: after a tool call it is the next thing the
+            // model has to say, and the turn is split where the model split it.
+            Expect.equal
+                (Stream.forwarded [ Stream.messageStart ])
+                [ AgentResponseChunk.MessageBoundary ]
+                "the break the model made"
+
+        testCase "a block's opening forwards nothing" <| fun () ->
+            // `content_block_start` carries the block with its text (or its thinking) EMPTY —
+            // the content is in the deltas — so there is nothing in it to forward.
+            Expect.equal
+                (Stream.forwarded [ Stream.blockStart [ "type" ==> "text"; "text" ==> "" ] ])
+                []
+                "an opening is not a chunk"
+
+        testCase "a block's opening leaves the thought it opens whole" <| fun () ->
+            // And it is not a second place a thought ends: the stop below it already is one.
+            Expect.equal
+                (Stream.forwarded
+                    [ Stream.blockStart [ "type" ==> "thinking"; "thinking" ==> "" ]
+                      Stream.thought "I "
+                      Stream.thought "shall"
+                      Stream.blockStop ])
+                [ AgentResponseChunk.Thinking "I shall" ]
+                "one thought, not two"
+    ]
+
+let private bodyTests =
+    testList "The body a turn ends with" [
+        testCase "an ending carrying its own words is the body" <| fun () ->
+            Expect.equal
+                (Stream.outcome
+                    [ Stream.text "streamed"; Stream.ending "success" [ "result" ==> "the whole answer" ] ])
+                (Ok "the whole answer")
+                "what the ending said"
+
+        testCase "an ending carrying no words of its own falls back to what was streamed" <| fun () ->
+            Expect.equal
+                (Stream.outcome [ Stream.text "streamed"; Stream.ending "success" [] ])
+                (Ok "streamed")
+                "the deltas are the only copy left"
+
+        testCase "the fallback body is the LAST message's, not the whole turn's" <| fun () ->
+            // A turn is several messages once the model calls a tool. The whole turn's text
+            // is not what the last message said, and answering with it would repeat
+            // everything the model said before the tool call.
+            Expect.equal
+                (Stream.outcome
+                    [ Stream.messageStart
+                      Stream.text "let me look"
+                      Stream.messageStart
+                      Stream.text "it is a lockfile"
+                      Stream.ending "success" [] ])
+                (Ok "it is a lockfile")
+                "the last message, alone"
+
+        testCase "a non-success ending is the reason the turn stopped" <| fun () ->
+            Expect.equal
+                (Stream.outcome [ Stream.text "streamed"; Stream.ending "error_max_turns" [] ])
+                (Error "agent run ended: error_max_turns")
+                "the subtype, said as a reason"
+    ]
+
+let private spendTests =
+    testList "What a turn spent" [
+        // Plan 04, Step 28: the `result` message's usage block, surfaced instead of
+        // discarded.
+        testCase "the ending's usage is the turn's spend" <| fun () ->
+            let spent = Stream.spend [ Stream.ending "success" [ Stream.usage 11 22 33 44 ] ]
+            Expect.equal
+                (spent.InputTokens, spent.OutputTokens, spent.CacheReadTokens, spent.CacheCreationTokens)
+                (11, 22, 33, 44)
+                "each count off the field it is written in"
+
+        testCase "an ending with no usage block spent nothing anybody can see" <| fun () ->
+            let spent = Stream.spend [ Stream.ending "success" [] ]
+            Expect.equal
+                (spent.InputTokens, spent.OutputTokens, spent.CacheReadTokens, spent.CacheCreationTokens)
+                (0, 0, 0, 0)
+                "zero, rather than whatever a missing block reads as"
+
+        testCase "the model that answered is the one modelUsage is keyed by" <| fun () ->
+            // The only place a turn says which model actually ran — the session's own choice
+            // can be absent, and then nobody else knows.
+            let spent = Stream.spend [ Stream.ending "success" [ Stream.answeredBy "claude-opus-5" ] ]
+            Expect.equal spent.Model (Some "claude-opus-5") "which model answered"
+
+        testCase "an ending naming no model leaves the model unknown" <| fun () ->
+            let spent = Stream.spend [ Stream.ending "success" [] ]
+            Expect.equal spent.Model None "nothing is invented on the provider's behalf"
+
+        testCase "a turn that stopped still spent what it spent" <| fun () ->
+            // The turn most worth costing is the long one that ran into something, not the
+            // short one that finished.
+            let spent = Stream.spend [ Stream.ending "error_max_turns" [ Stream.usage 900 100 0 0 ] ]
+            Expect.equal spent.InputTokens 900 "a failure reports its spend too"
+    ]
+
+// -----------------------------------------------------------------------------
+// A tool's arguments, as the SDK's builder wants them: one JSON Schema in, one zod raw
+// shape out. The only edge in this repository that speaks zod, and the only observation a
+// schema offers is what it accepts and what it refuses.
+// -----------------------------------------------------------------------------
+
+/// One argument's schema out of the raw shape, which is a plain object keyed by name.
+[<Emit("$0[$1]")>]
+let private zodArgument (shape: obj) (key: string) : Fable.Zod.ZodType = Fable.Core.Util.jsNative
+
+/// A genuinely absent argument, which is what `optional` is about. `null` is NOT it: zod
+/// refuses a null against an optional schema.
+[<Emit("undefined")>]
+let private noArgument : obj = Fable.Core.Util.jsNative
+
+let private schemaTests =
+    let accepts (schema: string) (key: string) (value: obj) : bool =
+        ((zodArgument (Yession.Host.Agent.zodShape schema) key).safeParse value).success
+    let required =
+        """{"type":"object","properties":{"cwd":{"type":"string","description":"a directory"}},"required":["cwd"]}"""
+    let optional = """{"type":"object","properties":{"cwd":{"type":"string"}},"required":[]}"""
+    testList "A tool's arguments, as zod" [
+        testCase "a declared string argument accepts a string" <| fun () ->
+            Expect.isTrue (accepts required "cwd" (box "repos/octocat/hello-world")) "a string is a string"
+
+        testCase "a declared string argument refuses what is not one" <| fun () ->
+            // The types the model is told about are the types the SDK enforces before a tool
+            // body ever sees the call.
+            Expect.isFalse (accepts required "cwd" (box 7)) "a number is not a string"
+
+        testCase "an argument outside `required` accepts absence" <| fun () ->
+            Expect.isTrue (accepts optional "cwd" noArgument) "an omitted argument is allowed"
+
+        testCase "an argument inside `required` refuses absence" <| fun () ->
+            Expect.isFalse (accepts required "cwd" noArgument) "required means required"
+
+        testCase "an array argument carries its element type" <| fun () ->
+            let schema =
+                """{"type":"object","properties":{"tags":{"type":"array","items":{"type":"string"}}},"required":["tags"]}"""
+            Expect.isTrue (accepts schema "tags" (box [| "a"; "b" |])) "a list of strings"
+            Expect.isFalse (accepts schema "tags" (box [| box "a"; box 2 |])) "one element off is the array off"
+
+        testCase "a type zod cannot say is accepted rather than refused" <| fun () ->
+            // A WIDER schema, never a refusal: a tool whose arguments this cannot describe
+            // must still be callable, and the model still reads the description.
+            let schema = """{"type":"object","properties":{"where":{"type":"object"}},"required":["where"]}"""
+            Expect.isTrue (accepts schema "where" (box 7)) "anything at all"
+
+        testCase "a schema that cannot be read at all is no arguments at all" <| fun () ->
+            // What the `catch` around `JSON.parse` said: refusing here would take a tool away
+            // from the turn over a schema the model never sees.
+            Expect.equal
+                (JS.Constructors.Object.keys (Yession.Host.Agent.zodShape "{not json") |> List.ofSeq)
+                []
+                "an empty shape"
+    ]
+
 let tests =
     testList "Agent" [
         turnTests
+        deltaTests
+        thoughtTests
+        boundaryTests
+        bodyTests
+        spendTests
+        schemaTests
         failureReasonTests
         wakeTests
         modelChoiceTests
