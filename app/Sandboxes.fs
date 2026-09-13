@@ -1399,6 +1399,22 @@ module DockerSandbox =
                             return Error reason
                         | Ok () ->
 
+                        // Where an exec runs, resolved against the container's own working
+                        // directory, and its environment with `PWD` set to that — because
+                        // `docker exec` sets the directory and not the variable, and a
+                        // process exec'd bare then has no `$PWD` where one started by a
+                        // shell would. devenv's flake reads it under `--impure`, so an
+                        // entrypoint of `nix develop --impure --command` died exec'd bare
+                        // with an error nowhere near the cause. An exec that names its own
+                        // `PWD` keeps it.
+                        let execWorkingDir (exec: SandboxExec) =
+                            SandboxPath.resolvedFrom (Some workspaceTarget) exec.WorkingDirectory
+                        let execEnv (exec: SandboxExec) =
+                            let pwd = execWorkingDir exec |> Option.defaultValue workspaceTarget
+                            (if Map.containsKey "PWD" exec.Env then exec.Env else Map.add "PWD" pwd exec.Env)
+                            |> Map.toList
+                            |> List.map (fun (k, v) -> sprintf "%s=%s" k v)
+                            |> List.toArray
                         let spawn (exec: SandboxExec) (onChunk: OutputStream * string -> unit) =
                             async {
                                 try
@@ -1407,14 +1423,14 @@ module DockerSandbox =
                                           "AttachStdin", box true
                                           "AttachStdout", box true
                                           "AttachStderr", box true
-                                          "Env", box (exec.Env |> Map.toList |> List.map (fun (k, v) -> sprintf "%s=%s" k v) |> List.toArray) ]
+                                          "Env", box (execEnv exec) ]
                                         // Resolved against the container's own working
                                         // directory, which is what it was CREATED with — so
                                         // an exec naming nothing lands exactly where it
                                         // always did, and one naming a relative directory
                                         // means the same thing here as it does everywhere
                                         // else in the session.
-                                        @ (match SandboxPath.resolvedFrom (Some workspaceTarget) exec.WorkingDirectory with
+                                        @ (match execWorkingDir exec with
                                            | Some w -> [ "WorkingDir", box w ]
                                            | None -> [])
                                         |> createObj
@@ -1470,8 +1486,8 @@ module DockerSandbox =
                                           "AttachStdout", box true
                                           "AttachStderr", box true
                                           "Tty", box true
-                                          "Env", box (exec.Env |> Map.toList |> List.map (fun (k, v) -> sprintf "%s=%s" k v) |> List.toArray) ]
-                                        @ (match SandboxPath.resolvedFrom (Some workspaceTarget) exec.WorkingDirectory with
+                                          "Env", box (execEnv exec) ]
+                                        @ (match execWorkingDir exec with
                                            | Some w -> [ "WorkingDir", box w ]
                                            | None -> [])
                                         |> createObj
