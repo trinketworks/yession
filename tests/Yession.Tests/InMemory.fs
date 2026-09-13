@@ -152,6 +152,42 @@ let tests =
                 do! host.Stop ()
             }
 
+        // Keeping the name is a real answer, and the commonest right one. A re-reading that
+        // decides the name still fits must leave the session exactly as it was — and must
+        // still count as having asked, or the next doc update asks the same question again.
+        testCaseAsync "a re-reading that keeps the name changes nothing, and is not asked twice" <|
+            async {
+                let asked = ResizeArray<SummaryAsk> ()
+                let summarize : Summarize =
+                    fun ask ->
+                        async {
+                            asked.Add ask
+                            return Ok "Where it was settled"
+                        }
+                let! host =
+                    Host.startFull Clock.system (fun () -> None) (fun _ -> Some summarize) None None None None None None None (fun _ _ -> ()) None McpClient.McpConnections.none None (sid ()) None "" None false None 0
+                let! a = connectInMemoryClient host "ada" "Ada"
+                let ada = a.Hello.PeerId
+                do! compose a ada "run tests"
+                a.Connection.SendDraft ada
+                do! a.Runner.WaitFor (fun m -> m.Conversation.Items |> List.exists (fun i -> i.Body = "run tests"))
+                let item = (a.Runner.Model ()).Conversation.Items |> List.head
+                a.Runner.Dispatch (user (ToggleChapterMsg item.MessageId))
+                do! a.Runner.WaitFor (fun m -> Chat.Chapters.name m.Synced.Chapters item = "Where it was settled")
+                // Twice the material, so it is re-read — and answered with the same words.
+                do! compose a ada "the auth middleware drops the refresh token"
+                a.Connection.SendDraft ada
+                do! a.Runner.WaitFor (fun m -> List.length m.Conversation.Items = 2)
+                do! a.Runner.WaitFor (fun _ -> asked.Count = 2)
+                Expect.equal (Chat.Chapters.name (a.Runner.Model ()).Synced.Chapters item) "Where it was settled" "unchanged, as the answer said"
+                // A draft keystroke afterwards: the material has not doubled again, and the
+                // pass that kept the name recorded that it had considered this much.
+                do! compose a ada "typing"
+                do! a.Runner.WaitFor (fun m -> Map.containsKey ada m.Synced.Drafts)
+                Expect.equal asked.Count 2 "considered twice, not once per update afterwards"
+                do! host.Stop ()
+            }
+
         // The promise the feature rests on, through the whole path and across a re-reading:
         // a name somebody typed is never written over, however much is said afterwards.
         testCaseAsync "a name somebody typed is not written over when the material grows" <|

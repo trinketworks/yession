@@ -94,7 +94,12 @@ module Naming =
                 else
                     Some
                         { Subject = subject
-                          Ask = Chapters.summaryAsk chapters items item
+                          // What it is called ALREADY is the session's own last answer, not
+                          // whatever the doc happens to read: on a first ask there is nothing
+                          // to keep, and the guess is not a name anybody chose — handing it
+                          // over would be asking a model to reword the first line of a
+                          // message rather than to name what the part is about.
+                          Ask = Chapters.summaryAsk chapters items item (last |> Option.map (fun fact -> fact.Name))
                           Held = held
                           Read = List.length covered })
 
