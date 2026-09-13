@@ -2134,7 +2134,7 @@ let private semanticsTests =
                 Support.render
                     { representativeModel with
                         Peers = Map.ofList [ bob, "quiet-otter" ]
-                        Attribution = { PeerUsers = Map.ofList [ bob, carol ]; UserPeers = Map.ofList [ carol, bob ] }
+                        Attribution = { Attribution.empty with PeerUsers = Map.ofList [ bob, carol ]; UserPeers = Map.ofList [ carol, bob ] }
                         Presence = Map.empty
                         Conversation =
                             { Items =
@@ -2190,7 +2190,7 @@ let private semanticsTests =
                 Support.render
                     { representativeModel with
                         Peers = Map.ofList [ bob, "lucid-tern"; dora, "warm-tern" ]
-                        Attribution = { PeerUsers = Map.ofList [ bob, carol; dora, carol ]; UserPeers = Map.ofList [ carol, dora ] }
+                        Attribution = { Attribution.empty with PeerUsers = Map.ofList [ bob, carol; dora, carol ]; UserPeers = Map.ofList [ carol, dora ] }
                         Presence = Map.empty
                         Conversation =
                             { Items =

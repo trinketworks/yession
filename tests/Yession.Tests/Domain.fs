@@ -2468,6 +2468,45 @@ let private deliveryDocumentTests =
             Expect.equal (Delivery.create [] "42") None "a value on its own carries no field to name"
     ]
 
+// Whose session it is (Plan 25). The fold already answered "who is this peer" and "which
+// peer is this user's"; the creator is the third reading of the same joins, and the only
+// one that is about their ORDER — which is why it is folded rather than derived.
+let private attributionTests =
+    let ada = PeerId.create "ada" |> expect
+    let bob = PeerId.create "bob" |> expect
+    let carol = UserId.create "carol" |> expect
+    let dan = UserId.create "dan" |> expect
+    let joined (peer: PeerId) (user: UserId option) =
+        PeerJoined { PeerJoined.PeerId = peer; PeerJoined.DisplayName = "peer"; PeerJoined.User = user }
+    testList "Whose session it is" [
+
+        testCase "the creator is the first user the session attributed" <| fun () ->
+            let state = Attribution.ofEvents [ joined ada (Some carol) ]
+            Expect.equal (Attribution.creator state) (Some (Principal.User carol)) "the first attributed join names the creator"
+
+        testCase "a later arrival does not take the session from whoever started it" <| fun () ->
+            let state = Attribution.ofEvents [ joined ada (Some carol); joined bob (Some dan) ]
+            Expect.equal (Attribution.creator state) (Some (Principal.User carol)) "the creator is the first, not the latest"
+
+        testCase "the creator survives their own reconnection" <| fun () ->
+            // Every reconnect mints a new peer, so the same person joins several times. The
+            // rule is about the USER, not the connection: a creator who refreshes the tab is
+            // still the creator, and is not replaced by themselves.
+            let state = Attribution.ofEvents [ joined ada (Some carol); joined bob (Some carol) ]
+            Expect.equal (Attribution.creator state) (Some (Principal.User carol)) "rejoining does not restart the question"
+
+        testCase "an unattributed session has no creator" <| fun () ->
+            // `--auth localhost` verifies nobody, so there is no user whose session this is.
+            // What reads this for a credential turns that into the deployment's own scope,
+            // which is exactly what such a launch holds.
+            let state = Attribution.ofEvents [ joined ada None; joined bob None ]
+            Expect.equal (Attribution.creator state) None "nobody verified is nobody, not an anonymous somebody"
+
+        testCase "an unattributed peer before an attributed one does not deny them the session" <| fun () ->
+            let state = Attribution.ofEvents [ joined ada None; joined bob (Some carol) ]
+            Expect.equal (Attribution.creator state) (Some (Principal.User carol)) "the first ATTRIBUTED join is the one that counts"
+    ]
+
 let tests =
     testList "Domain" [
         identityTests
@@ -2476,6 +2515,7 @@ let tests =
         sandboxRequestTests
         modelTests
         authorityTests
+        attributionTests
         envelopeSerializationTests
         conversationProjectionTests
         repoTests
