@@ -16,8 +16,15 @@ module Yession.Tests.Attach
 //
 // `Ports`, because the upgrade is the thing being tested and there is no meaningful
 // in-memory stand-in for it.
+//
+// Reading the wire is a separate question from carrying it, and the cheap tier answers that
+// one: what a frame MEANS, what a control frame said, and what an ending was are pure
+// functions of `app/AttachWs.fs` since the client stopped being a JavaScript program inside an
+// `[<Emit>]` string. They are the decisions a provider gets wrong, so they are the ones worth
+// asking about on every PR rather than only where a socket can be opened.
 
 open Fable.Core
+open Fable.NodeExtras
 open Fable.Pyxpecto
 open Yession.Domain
 open Yession.Domain.Sandboxes
@@ -230,4 +237,90 @@ let portsTests =
                         80 24 ignore
                 Expect.isError attached "a refused connection is reported, not awaited"
             }
+    ]
+
+// --- Reading the wire -------------------------------------------------------------------
+//
+// No socket, so no `Ports`: these are the client's own decisions about what arrived, and the
+// cheapest tier that can host them is the one every PR runs.
+
+module Ws = Yession.Host.AttachWs
+
+/// UTF-8 bytes as a BINARY frame carries them: a standalone `ArrayBuffer`, which is what
+/// `binaryType <- ArrayBuffer` buys and what the socket hands over.
+[<Emit("new TextEncoder().encode($0).buffer")>]
+let private utf8Bytes (text: string) : JS.ArrayBuffer = jsNative
+
+let tests =
+    testList "Foreign terminal attach, reading the wire (Plan 16)" [
+
+        testCase "a binary frame is what the device said" <| fun () ->
+            Expect.equal (Ws.heard (Frame.Binary (utf8Bytes "hello"))) (Ws.Heard.Output "hello") "binary frames are the bytes"
+
+        // The other channel, and the distinction the whole wire is built on: a provider that
+        // reaches for its framework's `send_text` to emit device output gets a terminal
+        // showing nothing, and a client that quietly accepted it would make text mean two
+        // things.
+        testCase "a text frame is control, never device output" <| fun () ->
+            match Ws.heard (Frame.Text "device output on the wrong channel") with
+            | Ws.Heard.Said _ -> ()
+            | Ws.Heard.Output text -> failwithf "a text frame is never data (got %s)" text
+
+        testCase "an exited frame carries the code the provider sent" <| fun () ->
+            Expect.equal
+                (Ws.control """{"type":"exited","code":7}""")
+                (Ws.Control.Exited 7)
+                "the in-band termination frame is where an exit code comes from"
+
+        testCase "a failed frame carries the provider's own words" <| fun () ->
+            Expect.equal
+                (Ws.control """{"type":"failed","reason":"the port went away"}""")
+                (Ws.Control.Failed "the port went away")
+                "the reason reaches the person verbatim"
+
+        testCase "a failed frame that named no reason still says something" <| fun () ->
+            Expect.equal
+                (Ws.control """{"type":"failed"}""")
+                (Ws.Control.Failed "the source failed")
+                "a failure with nothing to read is still a failure"
+
+        // `docs/streams.md` MAY 9, from this end: control types will be added, and a client
+        // that treated an unknown one as fatal would break on every provider written against
+        // the newer spec.
+        testCase "a control type from a later version is ignored rather than fatal" <| fun () ->
+            Expect.equal
+                (Ws.control """{"type":"from-a-later-version"}""")
+                Ws.Control.Unrecognised
+                "an unknown control type is nothing, not an error"
+
+        testCase "a text frame that is not JSON at all is ignored rather than fatal" <| fun () ->
+            Expect.equal
+                (Ws.control "device output on the wrong channel")
+                Ws.Control.Unrecognised
+                "text that will not parse is nothing, not an error"
+
+        // MAY 8: a provider that sends both is saying the exit is not the story.
+        testCase "a named failure outranks an exit code" <| fun () ->
+            Expect.equal
+                (Ws.ending (Some "the port went away") (Some 0))
+                (SandboxRunFailed "the port went away")
+                "the failure is what the person needs to read"
+
+        testCase "an exit code is the ending when nothing failed" <| fun () ->
+            Expect.equal (Ws.ending None (Some 7)) (SandboxExited 7) "the code the exited frame carried"
+
+        // The reason termination is a frame and not a close code: an abnormal closure (1006)
+        // carries nothing at all, and that path exists whatever the provider intends.
+        testCase "a close that said nothing is a failure rather than an exit" <| fun () ->
+            Expect.equal
+                (Ws.ending None None)
+                (SandboxRunFailed "the stream closed without saying why")
+                "an ending nobody explained is not an exit 0"
+
+        // PRESERVED, not endorsed — see the note on `ending`. The JavaScript this client was
+        // carried an ending as a `{code, reason}` pair and read an empty reason as "nothing
+        // failed"; `String([])` is "", so a provider can reach it. Here so that fixing it is a
+        // deliberate change with this case's name on it.
+        testCase "a failure whose reason came out empty still reads as an exit" <| fun () ->
+            Expect.equal (Ws.ending (Some "") (Some 7)) (SandboxExited -1) "the shape the JavaScript had"
     ]
