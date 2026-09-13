@@ -329,3 +329,141 @@ let socketTests =
             do! provider.stop () |> Async.AwaitPromise
         }
     ]
+
+// --- Aborting, relaying, and what was thrown ----------------------------------------------------
+
+/// `new AbortController()` — the FIRING end, which the product never holds: the signals it
+/// sees arrive from the agent SDK. Declared here rather than in the binding for that reason,
+/// and because a test of a listening binding needs something to make it listen to.
+[<Emit("new AbortController()")>]
+let private abortController () : obj = jsNative
+
+[<Emit("$0.signal")>]
+let private signalOf (controller: obj) : AbortSignal = jsNative
+
+[<Emit("$0.abort()")>]
+let private abort (controller: obj) : unit = jsNative
+
+let eventTests =
+    testList "Node platform bindings, aborting and relaying (Fable.NodeExtras)" [
+
+        // There is deliberately no case for the macro's `{ once: true }`: a signal fires at
+        // most once by the spec — `abort()` on an already-aborted controller returns without
+        // notifying anyone — so a listener that stayed registered would behave identically.
+        // What `once` buys is that a long-lived signal stops retaining handlers, and nothing
+        // a test can observe tells that apart from the alternative.
+        testCase "a handler hung on a signal runs when the signal fires" <| fun () ->
+            let controller = abortController ()
+            let mutable ran = 0
+            (signalOf controller).onAbort (fun () -> ran <- ran + 1)
+            abort controller
+            Expect.equal ran 1 "the abort reached the handler"
+
+        // The half a listener cannot answer: registering after the fact never runs, so a
+        // caller has to ask as well as listen.
+        testCase "a signal that has already fired says so" <| fun () ->
+            let controller = abortController ()
+            Expect.isFalse (signalOf controller).aborted "nothing has fired"
+            abort controller
+            Expect.isTrue (signalOf controller).aborted "and now it has"
+
+        testCase "what the relay emits reaches the listener, arguments and all" <| fun () ->
+            let relay = createRelay ()
+            let seen = ResizeArray<obj * obj> ()
+            relay.on ("exit", box (System.Func<obj, obj, unit> (fun code signal -> seen.Add (code, signal))))
+            relay.emit ("exit", [| box 3; box null |])
+            Expect.equal (List.ofSeq seen) [ box 3, box null ] "both arguments arrived, in order"
+
+        // The promise the `obj` listener exists to keep: `off` can only remove the function
+        // `on` was given, so a binding that adapted it on the way in would leak every
+        // listener anybody tried to remove.
+        testCase "a listener removed through the relay stops hearing" <| fun () ->
+            let relay = createRelay ()
+            let mutable heard = 0
+            let listener = box (System.Func<obj, unit> (fun _ -> heard <- heard + 1))
+            relay.on ("exit", listener)
+            relay.emit ("exit", [| box 0 |])
+            relay.off ("exit", listener)
+            relay.emit ("exit", [| box 0 |])
+            Expect.equal heard 1 "the listener heard the first and not the second"
+
+        testCase "a listener registered once hears once" <| fun () ->
+            let relay = createRelay ()
+            let mutable heard = 0
+            relay.once ("exit", box (System.Func<obj, unit> (fun _ -> heard <- heard + 1)))
+            relay.emit ("exit", [| box 0 |])
+            relay.emit ("exit", [| box 0 |])
+            Expect.equal heard 1 "the second emit found no listener"
+
+        // JavaScript admits a `throw` of any value, and F#'s `exn` is a class of Fable's own
+        // that is NOT `instanceof Error` — which is the whole reason the question is asked
+        // rather than assumed.
+        testCase "an F# exception is not the platform's Error" <| fun () ->
+            Expect.isFalse (isError (box (exn "boom"))) "Fable's Exception is its own class"
+            Expect.isTrue (isError (box (errorWith "boom"))) "and `new Error` is not"
+
+        testCase "String() spells out what F#'s string leaves blank" <| fun () ->
+            Expect.equal (describe (box null)) "null" "the platform's own conversion"
+
+        testCase "an Error carries the message it was made with" <| fun () ->
+            Expect.equal (errorWith "boom").Message "boom" "which is what a handler reads"
+    ]
+
+// --- Spawning with an environment this process did not build ------------------------------------
+
+let seamTests =
+    testList "Node platform bindings, a given environment (Fable.NodeExtras)" [
+
+        // The promise `spawnWithEnv` exists for: the object handed in is the object the child
+        // gets. A `Map` round trip would read as the same test and drop everything a map
+        // cannot hold.
+        testCaseAsync "the environment OBJECT given is the environment the child has" <| async {
+            let env = Fable.Core.JsInterop.createObj [ "YESSION_MARK", box "set" ]
+
+            let child =
+                spawnWithEnv
+                    ``process``.execPath
+                    [ "-e"; "process.exit(process.env.YESSION_MARK === 'set' ? 4 : 5)" ]
+                    env
+                    None
+                    Pipe
+                    false
+
+            let! _ = until (fun () -> (exitCode child).IsSome)
+            Expect.equal (exitCode child) (Some 4) "the child saw the variable the object carried"
+        }
+
+        // Node REPLACES rather than merges, and the seam's contract is that the child sees
+        // exactly what it was given — so what this process holds must not leak into it.
+        testCaseAsync "nothing of this process's own environment rides along" <| async {
+            let child =
+                spawnWithEnv
+                    ``process``.execPath
+                    [ "-e"; "process.exit(process.env.PATH === undefined ? 6 : 7)" ]
+                    (Fable.Core.JsInterop.createObj [])
+                    None
+                    Pipe
+                    false
+
+            let! _ = until (fun () -> (exitCode child).IsSome)
+            Expect.equal (exitCode child) (Some 6) "an empty object is an empty environment"
+        }
+
+        testCaseAsync "the working directory given is where the child runs" <| async {
+            let directory = os.tmpdir ()
+
+            let child =
+                spawnWithEnv
+                    ``process``.execPath
+                    [ "-e"
+                      "const fs = require('node:fs'); process.exit(fs.realpathSync(process.cwd()) === fs.realpathSync(process.argv[1]) ? 8 : 9)"
+                      directory ]
+                    (Fable.Core.JsInterop.createObj [])
+                    (Some directory)
+                    Pipe
+                    false
+
+            let! _ = until (fun () -> (exitCode child).IsSome)
+            Expect.equal (exitCode child) (Some 8) "the child started where it was told to"
+        }
+    ]
