@@ -87,6 +87,9 @@ let all =
         Tag.needs "Timeline" [] (fun () -> Timeline.tests)
         // The upgrade IS the thing being tested, and there is no in-memory stand-in for it.
         Tag.needs "Foreign terminal attach" [ Tag.Ports ] (fun () -> Attach.portsTests)
+        Tag.needs "Node platform bindings" [] (fun () -> NodeExtras.tests)
+        Tag.needs "Node platform bindings, spawning" [ Tag.Ports ] (fun () -> NodeExtras.portsTests)
+        Tag.needs "Node platform bindings, WebSocket" [ Tag.Ports ] (fun () -> NodeExtras.socketTests)
         Tag.needs "Editor" [] (fun () -> Editor.tests)
         // The SDK binding, before the adapter written over it. The live case spawns the
         // real CLI, so it needs `Ports` beside the credential.
