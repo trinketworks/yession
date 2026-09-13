@@ -39,6 +39,11 @@ type LookupFailure =
     | NotFound
     /// 403/429: the credential's hourly allowance is spent.
     | RateLimited
+    /// GitHub answered, and this session could not read what it said. Not `Unreachable`:
+    /// the request went, the reply came back, and it was a 2xx — what failed is the
+    /// decoding. Told apart because the remedy is not the same one: "could not be reached"
+    /// sends a person to look at their network for a fault that is in the payload.
+    | Unreadable of string
     | Unreachable of string
 
 module LookupFailure =
@@ -49,6 +54,7 @@ module LookupFailure =
         | Refused -> "github rejected this credential — sign in again"
         | NotFound -> "github does not show that repository to this credential"
         | RateLimited -> "github is rate limiting this credential — try again shortly"
+        | Unreadable said -> sprintf "github answered with something this session could not read: %s" said
         | Unreachable said -> sprintf "github could not be reached: %s" said
 
 // --- the provider's JSON, decoded ------------------------------------------------------
@@ -123,7 +129,7 @@ let private read (decoder: Decoder<'a>) (url: string) (token: string option) : A
         else
             match Decode.fromString decoder reply.Body with
             | Ok value -> return Ok value
-            | Error e -> return Error (Unreachable (sprintf "unrecognised reply: %s" e))
+            | Error e -> return Error (Unreadable e)
     }
 
 /// How many a listing carries. One page, deliberately: a person choosing a repo reads the
@@ -241,6 +247,9 @@ let private statusOf (failure: LookupFailure) : int =
     | Refused -> 401
     | NotFound -> 404
     | RateLimited -> 429
+    // Both 502: a gateway that cannot reach the upstream and one whose upstream said
+    // something it cannot pass on are the same answer to the browser. The words differ.
+    | Unreadable _
     | Unreachable _ -> 502
 
 /// Build the `/github/repos*` route handler. `tokenFor` is the session's own resolution of

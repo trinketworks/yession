@@ -185,7 +185,11 @@ let failureAt (status: int) (reset: string) : PrFetchFailure =
     // (scopes, a blocked App) is also not something a retry sooner would fix, so the
     // wait it implies is the safe reading either way.
     elif status = 403 || status = 429 then
-        PrRateLimited (match Int32.TryParse reset with | true, epoch -> Some epoch | _ -> None)
+        // `Int64`, as `allowanceIn` above already reads the same header: a unix second is
+        // past `Int32.MaxValue` from January 2038, and an `Int32.TryParse` of one answers
+        // `false` — so the window the provider named was dropped and the caller fell back
+        // to a fixed wait, with nothing anywhere saying the reading had stopped working.
+        PrRateLimited (match Int64.TryParse reset with | true, epoch -> Some epoch | _ -> None)
     else PrUnreachable (sprintf "github answered %d" status)
 
 /// A reply that never arrived carries why in place of a body; everything else is a status.
@@ -239,7 +243,7 @@ let fetchOver (apiBase: string) (spending: Spending) : FetchPr =
             // poller already schedules around exactly this value. The difference is that
             // this one costs no request to discover.
             | Resilience.Hold until ->
-                return PrFetchFailed (PrRateLimited (Some (int (until.ToUnixTimeSeconds ()))))
+                return PrFetchFailed (PrRateLimited (Some (until.ToUnixTimeSeconds ())))
             | Resilience.Go ->
                 let bearer = Option.toObj token
                 let repo = RepoRef.value pr.Repo
@@ -276,7 +280,7 @@ let fetchOver (apiBase: string) (spending: Spending) : FetchPr =
                         |> Result.mapError (sprintf "unrecognised pull request reply: %s")
                     else Ok None
                 match fields with
-                | Error e -> return PrFetchFailed (PrUnreachable e)
+                | Error e -> return PrFetchFailed (PrUnreadable e)
                 | Ok None when not (notModified prReply) -> return PrFetchFailed (failureOf prReply)
                 | Ok None -> return PrUnchanged
                 | Ok (Some fields) ->
@@ -408,7 +412,7 @@ let openOver (apiBase: string) (spending: Spending) : OpenPr =
         async {
             match spending.Permit () with
             | Resilience.Hold until ->
-                return PrOpenFailed (PrRateLimited (Some (int (until.ToUnixTimeSeconds ()))))
+                return PrOpenFailed (PrRateLimited (Some (until.ToUnixTimeSeconds ())))
             | Resilience.Go ->
                 let bearer = Option.toObj token
                 let repo = RepoRef.value draft.Repo
@@ -426,11 +430,11 @@ let openOver (apiBase: string) (spending: Spending) : OpenPr =
                 if not (succeeded listing) then return PrOpenFailed (failureOf listing)
                 else
                     match Decode.fromString openNumbersDecoder listing.Body with
-                    | Error e -> return PrOpenFailed (PrUnreachable (sprintf "unrecognised pull request list: %s" e))
+                    | Error e -> return PrOpenFailed (PrUnreadable (sprintf "unrecognised pull request list: %s" e))
                     | Ok (number :: _) ->
                         match PrRef.create draft.Repo number with
                         | Ok pr -> return PrAlreadyOpen pr
-                        | Error e -> return PrOpenFailed (PrUnreachable e)
+                        | Error e -> return PrOpenFailed (PrUnreadable e)
                     | Ok [] ->
                         let! created =
                             postJson (sprintf "%s/repos/%s/pulls" root repo) bearer (createBody draft)
@@ -446,11 +450,11 @@ let openOver (apiBase: string) (spending: Spending) : OpenPr =
                         else
                             match Decode.fromString numberDecoder created.Body with
                             | Error e ->
-                                return PrOpenFailed (PrUnreachable (sprintf "unrecognised pull request reply: %s" e))
+                                return PrOpenFailed (PrUnreadable (sprintf "unrecognised pull request reply: %s" e))
                             | Ok number ->
                                 match PrRef.create draft.Repo number with
                                 | Ok pr -> return PrOpened pr
-                                | Error e -> return PrOpenFailed (PrUnreachable e)
+                                | Error e -> return PrOpenFailed (PrUnreadable e)
         }
 
 // --- the hook subscription -------------------------------------------------------------------
