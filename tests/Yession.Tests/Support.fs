@@ -61,50 +61,6 @@ let emptyPolicy : SandboxPolicy =
 let preparedEmptyPolicy : unit -> Async<Result<SandboxPolicy, string>> =
     fun () -> async { return Ok emptyPolicy }
 
-/// A clock a test turns by hand.
-///
-/// `After` parks the caller until `Advance` has carried the clock past its due time; timers
-/// fire in due order, each with `Now` standing at its own due time, so a component that
-/// re-arms itself from inside a timer sees the time it expects. Nothing fires on its own:
-/// a window that has to pass is a call to `Advance`, and a case takes the time it takes to
-/// do its I/O rather than the time its windows are wide.
-type VirtualClock =
-    { Clock : Clock
-      /// Move the clock forward, firing every timer that comes due on the way.
-      Advance : TimeSpan -> unit
-      /// How many waits are parked — what a case asserts when it expects a component to
-      /// have armed (or not armed) a timer.
-      Pending : unit -> int }
-
-let virtualClock (start: DateTimeOffset) : VirtualClock =
-    let mutable now = start
-    let timers = ResizeArray<DateTimeOffset * (unit -> unit)> ()
-    let advance (by: TimeSpan) =
-        let target = now + by
-        let rec fire () =
-            let due =
-                timers
-                |> Seq.indexed
-                |> Seq.filter (fun (_, (at, _)) -> at <= target)
-                |> Seq.sortBy (fun (_, (at, _)) -> at)
-                |> Seq.tryHead
-            match due with
-            | Some (index, (at, resume)) ->
-                timers.RemoveAt index
-                now <- max now at
-                resume ()
-                fire ()
-            | None -> ()
-        fire ()
-        now <- target
-    { Clock =
-        { Now = fun () -> now
-          After =
-            fun delay ->
-                Async.FromContinuations (fun (cont, _, _) -> timers.Add ((now + delay), (fun () -> cont ()))) }
-      Advance = advance
-      Pending = fun () -> timers.Count }
-
 /// A Session Process as production composes it — `Host.startFull`'s own wiring: its shell,
 /// its nonce, its drain, its command path — over ONE sandbox built by `createSandbox`
 /// under `policy`, standing as the session's default.
@@ -411,6 +367,69 @@ let waitUntilWithin (timeoutMs: int) (label: string) (condition: unit -> bool) :
         let! held = settledWithin timeoutMs condition
         if not held then failwithf "timed out waiting for %s" label
     }
+
+/// A gate a case opens once: `release ()` resumes whoever awaits `released`, and a release
+/// before anyone waits is remembered. For work that ends when the case says so.
+let latch () : (unit -> unit) * Async<unit> =
+    let mutable fired = false
+    let mutable resume : unit -> unit = ignore
+    (fun () ->
+        if not fired then
+            fired <- true
+            resume ()),
+    Async.FromContinuations (fun (cont, _, _) -> if fired then cont () else resume <- cont)
+
+/// A clock a test turns by hand.
+///
+/// `After` parks the caller until `Advance` has carried the clock past its due time. A turn
+/// moves `Now` to its target FIRST and then fires what is due, in due order — so a waiter
+/// that wakes reads the time the case turned to, and a wait it re-arms from there is due
+/// later and stays parked for the next turn. (Stepping `Now` through each due time instead
+/// looked more faithful and hung the gate's deadline case: its tick re-arms itself every
+/// hundred milliseconds, and a continuation Fable defers registers its next wait after the
+/// turn has already looked.) Nothing fires on its own: a window that has to pass is a call
+/// to `Advance`, and a case takes the time it takes to do its I/O rather than the time its
+/// windows are wide.
+type VirtualClock =
+    { Clock : Clock
+      /// Move the clock forward, firing every timer that comes due on the way.
+      Advance : TimeSpan -> unit
+      /// How many waits are parked — what a case asserts when it expects a component to
+      /// have armed (or not armed) a timer.
+      Pending : unit -> int
+      /// Resolve once at least one wait is parked. A component started as a child may not
+      /// have reached its wait by the time the case turns the clock, and a turn that
+      /// nothing was waiting on moves `Now` under a `startedAt` taken afterwards — so a
+      /// case turns the clock only once something is on it.
+      Armed : unit -> Async<unit> }
+
+let virtualClock (start: DateTimeOffset) : VirtualClock =
+    let mutable now = start
+    let timers = ResizeArray<DateTimeOffset * (unit -> unit)> ()
+    let advance (by: TimeSpan) =
+        now <- now + by
+        let rec fire () =
+            let due =
+                timers
+                |> Seq.indexed
+                |> Seq.filter (fun (_, (at, _)) -> at <= now)
+                |> Seq.sortBy (fun (_, (at, _)) -> at)
+                |> Seq.tryHead
+            match due with
+            | Some (index, (_, resume)) ->
+                timers.RemoveAt index
+                resume ()
+                fire ()
+            | None -> ()
+        fire ()
+    { Clock =
+        { Now = fun () -> now
+          After =
+            fun delay ->
+                Async.FromContinuations (fun (cont, _, _) -> timers.Add ((now + delay), (fun () -> cont ()))) }
+      Advance = advance
+      Pending = fun () -> timers.Count
+      Armed = fun () -> waitUntilWithin 5000 "a wait to be parked on the clock" (fun () -> timers.Count > 0) }
 
 /// The everyday wait: 5s, a hang detector for a signal that normally arrives in milliseconds.
 let waitUntil (label: string) (condition: unit -> bool) : Async<unit> = waitUntilWithin 5_000 label condition

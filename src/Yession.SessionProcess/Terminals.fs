@@ -2598,15 +2598,20 @@ module TerminalCommands =
         { Execute = fun _ _ -> async { return Error "this session has no terminals" }
           Read = fun _ -> async { return Error "this session has no terminals" } }
 
+    /// How long a waiter goes without looking when nothing changes.
+    let private wakeTick = TimeSpan.FromMilliseconds 100.0
+
     /// Wake on the next change, or on a short tick. The tick is a floor, not the mechanism:
     /// a change wakes the wait immediately, which is what makes `AutoRun` synchronous, and
     /// the tick only guarantees that a deadline can still fire in a quiet session where
-    /// nothing else is happening.
+    /// nothing else is happening. The tick is the clock's, like every wait: a deadline is
+    /// measured on `clock.Now` and observed on this tick, and a test that turns the clock
+    /// past the deadline has the tick fire with it.
     ///
     /// Public because the command gate (Plan 15, stage 3) waits on exactly the same signal:
     /// one wait mechanism, so a parked act and a queued command cannot end up with different
     /// liveness.
-    let nextWake (onChanged: OnChanged) : Async<unit> =
+    let nextWake (clock: Clock) (onChanged: OnChanged) : Async<unit> =
         Async.FromContinuations (fun (cont, _, _) ->
             let mutable fired = false
             let mutable unsubscribe : unit -> unit = ignore
@@ -2618,7 +2623,7 @@ module TerminalCommands =
             unsubscribe <- onChanged go
             Async.StartImmediate (
                 async {
-                    do! Async.Sleep 100
+                    do! clock.After wakeTick
                     go ()
                 }))
 
@@ -2636,7 +2641,7 @@ module TerminalCommands =
         /// retired `ensure_environment`'s one genuinely useful argument becomes.
         (agentTerminal: SandboxRef -> string -> Async<Result<TerminalId, string>>)
         (mintQueueId: unit -> QueueId)
-        (now: unit -> DateTimeOffset)
+        (clock: Clock)
         (onChanged: OnChanged)
         : TerminalCommands =
 
@@ -2708,7 +2713,7 @@ module TerminalCommands =
         /// gets the full command timeout it would have had.
         let rec awaitOutcome (terminal: TerminalId) (handle: QueueId) (startedAt: DateTimeOffset) (runningSince: DateTimeOffset option) =
             async {
-                let elapsedSince (from: DateTimeOffset) = now () - from
+                let elapsedSince (from: DateTimeOffset) = clock.Now () - from
                 let observation = observe terminal handle
                 let deadlineFrom = runningSince |> Option.defaultValue startedAt
                 let deadlineElapsed = elapsedSince deadlineFrom >= commandTimeout
@@ -2719,9 +2724,9 @@ module TerminalCommands =
                 | TerminalCommandWait.KeepWaiting ->
                     let runningSince =
                         match runningSince, observation.Block with
-                        | None, Some block when block.Status = BlockRunning -> Some (now ())
+                        | None, Some block when block.Status = BlockRunning -> Some (clock.Now ())
                         | existing, _ -> existing
-                    do! nextWake onChanged
+                    do! nextWake clock onChanged
                     return! awaitOutcome terminal handle startedAt runningSince
             }
 
@@ -2765,7 +2770,7 @@ module TerminalCommands =
                             command
                             request.Background
                             request.Stdin
-                        if not request.Background then return! awaitOutcome terminal handle (now ()) None
+                        if not request.Background then return! awaitOutcome terminal handle (clock.Now ()) None
                         else
                             // Answer with what is true NOW rather than waiting: the caller
                             // said it is not waiting, and the outcome reaches it as a wake
@@ -2799,7 +2804,7 @@ module TerminalCommands =
                 // Resumed under the same two-phase policy, which is what makes a late approval
                 // chainable: the caller waits again rather than being told "still waiting" for
                 // ever in a loop of its own.
-                | Some terminal -> return! awaitOutcome terminal handle (now ()) None
+                | Some terminal -> return! awaitOutcome terminal handle (clock.Now ()) None
             }
 
         { Execute = execute; Read = read }
