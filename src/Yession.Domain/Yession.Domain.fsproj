@@ -73,6 +73,9 @@
     <Compile Include="Models.fs" />
     <Compile Include="Summaries.fs" />
     <Compile Include="Conversation.fs" />
+    <!-- What the session owes in the way of names (Plan 25). After Conversation.fs, whose
+         chapters it is about, and after Summaries.fs, whose ask it builds. -->
+    <Compile Include="Naming.fs" />
     <Compile Include="Repos.fs" />
     <!-- Watched pull requests (the projection and the transition algebra). After
          Events.fs like every projection; beside Repos.fs, whose shape it mirrors. -->

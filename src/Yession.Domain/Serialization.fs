@@ -228,6 +228,34 @@ module Codec =
                   MessageSent.Author = get.Required.Field "author" principal.Decode
                   MessageSent.Body = get.Required.Field "body" Decode.string }) }
 
+    let private namingSubject : Codec<NamingSubject> =
+        { Encode =
+            fun (subject: NamingSubject) ->
+                match subject with
+                | NamingSubject.Chapter id ->
+                    Encode.object [ "kind", Encode.string "chapter"; "messageId", messageId.Encode id ]
+          Decode =
+            Decode.field "kind" Decode.string
+            |> Decode.andThen (fun kind ->
+                match kind with
+                | "chapter" -> Decode.field "messageId" messageId.Decode |> Decode.map NamingSubject.Chapter
+                | other -> Decode.fail (sprintf "Not a naming subject: %s" other)) }
+
+    let private sessionNamed : Codec<SessionNamed> =
+        { Encode =
+            fun (p: SessionNamed) ->
+                Encode.object
+                    [ "subject", namingSubject.Encode p.Subject
+                      "name", Encode.string p.Name
+                      "read", Encode.int p.Read
+                      "onBehalfOf", Encode.option principal.Encode p.OnBehalfOf ]
+          Decode =
+            Decode.object (fun get ->
+                { SessionNamed.Subject = get.Required.Field "subject" namingSubject.Decode
+                  SessionNamed.Name = get.Required.Field "name" Decode.string
+                  SessionNamed.Read = get.Required.Field "read" Decode.int
+                  SessionNamed.OnBehalfOf = get.Optional.Field "onBehalfOf" principal.Decode }) }
+
     let private prRef : Codec<PrRef> =
         { Encode =
             fun (pr: PrRef) ->
@@ -1411,6 +1439,8 @@ module Codec =
                     Encode.object [ "type", Encode.string "peerLeft"; "payload", peerLeft.Encode p ]
                 | MessageSent p ->
                     Encode.object [ "type", Encode.string "messageSent"; "payload", messageSent.Encode p ]
+                | SessionNamed p ->
+                    Encode.object [ "type", Encode.string "sessionNamed"; "payload", sessionNamed.Encode p ]
                 | AgentTurnStarted p ->
                     Encode.object [ "type", Encode.string "agentTurnStarted"; "payload", agentTurnStarted.Encode p ]
                 | AgentContextBuilt p ->
@@ -1521,6 +1551,7 @@ module Codec =
                 | "peerJoined" -> Decode.field "payload" peerJoined.Decode |> Decode.map PeerJoined
                 | "peerLeft" -> Decode.field "payload" peerLeft.Decode |> Decode.map PeerLeft
                 | "messageSent" -> Decode.field "payload" messageSent.Decode |> Decode.map MessageSent
+                | "sessionNamed" -> Decode.field "payload" sessionNamed.Decode |> Decode.map SessionNamed
                 | "agentTurnStarted" -> Decode.field "payload" agentTurnStarted.Decode |> Decode.map AgentTurnStarted
                 | "agentContextBuilt" -> Decode.field "payload" agentContextBuilt.Decode |> Decode.map AgentContextBuilt
                 | "agentMessageStarted" -> Decode.field "payload" agentMessageStarted.Decode |> Decode.map AgentMessageStarted

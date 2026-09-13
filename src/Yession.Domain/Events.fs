@@ -32,6 +32,11 @@ type SessionEvent =
     // Process. Immutable — later edits never touch it. Drafts themselves are ephemeral WIP
     // in the synced state and are never durable facts (only their send is).
     | MessageSent of MessageSent
+    // What the session decided something should be called (Plan 25). Appended by the Session
+    // Process when it asks a model for a few words, whether or not the answer changed
+    // anything — a pass that considered a subject and kept the name it had is the fact that
+    // stops the next pass asking the same question of the same material.
+    | SessionNamed of SessionNamed
     // Agent turn lifecycle (Step 08): the agent's response is represented entirely as
     // events — streamed deltas project as a Streaming conversation item; completion or
     // failure flips it. Appended only by the Session Process.

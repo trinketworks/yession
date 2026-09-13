@@ -56,3 +56,33 @@ and GatedCommandFailed =
       Summary : string
       Author : ActorRef
       Reason : string }
+
+/// What a naming pass is about (Plan 25). One case today; the session title is the other one
+/// coming, and it is a case here rather than a second feature because the question — is what
+/// this is called still the best short name for it — is the same question about both.
+and [<RequireQualifiedAccess>] NamingSubject =
+    | Chapter of MessageId
+
+/// What the session settled a subject's name to, and how much it had read to settle it.
+///
+/// A durable fact rather than a set held in memory, because the two questions the next pass
+/// asks are both about the past: may this still be written over, and has enough been said
+/// since to be worth asking again. A process that kept those in a field would forget both on
+/// restart — and forgetting the first is the dangerous half, since it is the only thing
+/// standing between a model and a name somebody wrote themselves.
+and SessionNamed =
+    { Subject : NamingSubject
+      /// The name that stands after this pass: what was written, or what was already there
+      /// when the write lost its race or the answer was unusable. It is exactly what the
+      /// session may write over next time — anything else the doc holds is somebody's own
+      /// words, and those end the matter for good.
+      Name : string
+      /// How many conversation items the ask read. What makes the next pass a re-reading
+      /// rather than a repetition: the material has to have DOUBLED before it is worth
+      /// asking again, so a long session costs a handful of calls rather than one a message,
+      /// and the second message of a session that opened with "run tests" still counts.
+      Read : int
+      /// Whose authority it ran on — the session's creator, or nobody on an unattributed
+      /// deployment. `Authority.AgentFor` cannot say "nobody", and that is the honest gap
+      /// rather than a case to invent: an unattributed launch has no person behind it.
+      OnBehalfOf : Principal option }
