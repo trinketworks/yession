@@ -488,8 +488,9 @@ let
     # conventions only — the prompt already covers the tools.
     agent:
       guidance: |
-        The first `nix develop` in a fresh container takes minutes; wait for it
-        rather than retrying. Push to feature branches only.
+        A fresh container's first terminal takes minutes to open while the
+        devshell is assembled; wait for it rather than retrying. Push to
+        feature branches only.
   '';
 in
 {

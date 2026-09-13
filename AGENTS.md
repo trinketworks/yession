@@ -56,12 +56,14 @@ On a laptop / in CI: `devenv shell` drops you in with `node`, `dotnet`, and the 
 PATH.
 
 **Inside a yession work sandbox** (`YESSION_SANDBOX` is set, and names which one): the
-container brings nix and the checkout brings the toolchain, so the devshell is assembled by
-the flake — `nix develop --impure --command check`, and the same for any other task.
-`--impure` is load-bearing rather than a preference: devenv resolves its root from the
-process's working directory, which a pure evaluation does not have, so the pure form fails
-with "devenv was not able to determine the current directory" — in this container and on a
-laptop alike. Do NOT install devenv here and do NOT run `.claude/setup.sh`, which is for a
+container brings nix and the checkout brings the toolchain, and the sandbox's declared
+entrypoint (`yession.yaml`: `nix develop --impure --command`) has already assembled the
+devshell around your shell — so `check`, `build` and the other tasks are on PATH as
+written; put nothing in front of them. (Prefixing `nix develop --command` yourself works
+and costs a second evaluation.) `--impure` in that entrypoint is load-bearing rather than a
+preference: devenv resolves its root from the process's working directory, which a pure
+evaluation does not have, so the pure form fails with "devenv was not able to determine the
+current directory" — in this container and on a laptop alike. Do NOT install devenv here and do NOT run `.claude/setup.sh`, which is for a
 Claude Code container and correctly no-ops in this one; a session that reconstructed the
 laptop's route from the prose below spent two minutes installing a second devenv it did not
 need. `yession.yaml` declares the sandboxes (`dev` for work, `gate` for the long `verify`).
@@ -338,9 +340,9 @@ check Nix                    # + the build-source contract, then builds the inst
 check Jumpstarter            # + our MCP client driven against the Python example's provider,
                              #   over two real child processes. Needs uv and a CPython.
 check Docker Dogfood         # + the self-hosting run: this repo's whole suite inside the
-                             #   dev container its own yession.yaml declares (`nix develop
-                             #   --impure --command check`, in the container, through the real
-                             #   docker backend). ~11 min warm, up to an hour cold; in NO scheduled
+                             #   dev container its own yession.yaml declares (`check`, behind
+                             #   the file's `nix develop --impure --command` entrypoint, in the
+                             #   container, through the real docker backend). ~11 min warm, up to an hour cold; in NO scheduled
                              #   tier — run it when the container environment story changes,
                              #   locally or via a verify.yml dispatch naming both caps.
 verify                       # == check Browser Ports Native Docker LiveAgent Keyring Nix Srt

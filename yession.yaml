@@ -3,7 +3,7 @@
 # A repo's work sandbox is a CONTAINER (a repo-owned declaration without a `container:`
 # block is refused): work runs in a full Linux userland, the same environment a person
 # gets locally from this repo's flake. The TOOLCHAIN is devenv.nix's business (Node 24,
-# .NET 10, Chromium, uv); the container brings only nix, and `nix develop` assembles the
+# .NET 10, Chromium, uv); the container brings only nix, and the ENTRYPOINT assembles the
 # devshell from the checkout — one source of truth, no second copy of the toolchain here.
 #
 # The session bind-mounts its shared checkouts at /repos, so `workdir: .` is this repo's
@@ -32,38 +32,35 @@ sandboxes:
     workdir: .
     container:
       image: nixos/nix
+      # compose's `entrypoint`: what every piece of work in this container runs behind —
+      # a terminal's shell, every block, the gate's `verify`. The devshell is assembled
+      # ONCE, when a terminal's shell starts, and the shell then has the toolchain for as
+      # long as it lives: no `nix develop --command` in front of every command, no
+      # devenv prelude in every block's output (it prints before the shell's first
+      # prompt, which no transcript records). The session's own housekeeping — its
+      # start-up checks, `git` by path — runs bare, the way `docker exec` bypasses an
+      # entrypoint; the toolchain is for work.
+      #
+      # `--impure` is not optional and not a preference: devenv resolves its root from
+      # the PROCESS's working directory, which a pure evaluation does not have, so the
+      # pure form fails every time with "devenv was not able to determine the current
+      # directory" — on this container and on a laptop alike. Which is also why the
+      # shell is spawned where this sandbox puts one (the checkout, `workdir: .`) and
+      # only then `cd`s to a shell profile: the entrypoint has to start at the flake.
+      #
+      # No `dialect:`: the backend looks behind the entrypoint for bash, zsh and sh in
+      # that order and opens the first found, which here is the devshell's bash. That
+      # look is also what warms the store, once, at sandbox start rather than inside
+      # whatever command happens to be first — measured at ~3.5 min of flake evaluation
+      # and ~4 min of substitution cold, and it was once a `setup:` line whose whole
+      # purpose was to be run behind this entrypoint before there was one.
+      entrypoint: nix develop --impure --command
     forward: [ github ]              # so `git push` works from a terminal
     # A wish, not a need: where the operator offers a warm nix store volume under this
     # name, the container mounts it and the first build substitutes into a store that
     # outlives the sandbox; where nobody offers it, this line selects nothing and the
     # build runs cold. `uses:` would refuse on every host that offers none.
     wants: [ nix-container-store ]
-
-    # Assemble the devshell as soon as the sandbox is up, rather than inside whatever
-    # command happens to be first. This is not an optimisation of the total: the shell
-    # has to be built either way. It moves the cost off the first command, which is
-    # where it is least legible — measured here at ~3.5 min of flake evaluation and
-    # ~4 min of substitution, all of it inside one `check` that looked like a hang.
-    #
-    # `--impure` is not optional and not a preference: devenv resolves its root from the
-    # PROCESS's working directory, which a pure evaluation does not have, so the pure form
-    # fails every time with "devenv was not able to determine the current directory" — on this
-    # container and on a laptop alike. It was written pure here, and in the two places the
-    # prose says how to do this, for as long as the setup block has existed; the failure was
-    # invisible because `setup:` is queued in the background and nobody reads a block that
-    # nothing waited for. Measured in a real session: an agent that followed the documented
-    # pure form spent nine tool calls working out why.
-    #
-    # `--command true` because the point is the SHELL, not anything run in it. The
-    # store is what it leaves behind, so whatever comes next — `check`, a build, the
-    # gate — finds it there. Idempotent by nature: a shell already assembled is a
-    # no-op, which matters because a sandbox is restarted by things this file cannot
-    # see.
-    #
-    # Only on `dev`. `gate` shares the same store volume, so the first shell built on
-    # this host warms both, and two containers substituting the same paths at once is
-    # work done twice.
-    setup: nix develop --impure --command true
 
     # Which nix features this repo's build needs, plus where its artifacts substitute
     # from. In the container this is the whole nix configuration the devshell sees —
@@ -94,6 +91,7 @@ sandboxes:
     workdir: .
     container:
       image: nixos/nix
+      entrypoint: nix develop --impure --command
     forward: [ github ]
     wants: [ nix-container-store ]
 

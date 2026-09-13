@@ -95,6 +95,20 @@ let private declaredDev (reposDir: string) : EnvironmentSpec =
     | Confinement -> failwith "yession.yaml declares no container, and a repo work sandbox is one"
     Sandboxes.withSessionRepos reposDir DockerBackend request.Spec
 
+/// The same, minus the entrypoint. The file's entrypoint assembles the devshell from the
+/// flake, and the backend runs it once at start to find the shell — so a container with it
+/// needs a real checkout and pays the devshell's evaluation before it answers anything. The
+/// probes below are about the CONTAINER the file declares (the bind, git's trust, the nix
+/// store), and each runs against a copy of the file alone; the entrypoint is what the
+/// self-hosting run proves, on a real clone.
+let private declaredDevBare (reposDir: string) : EnvironmentSpec =
+    let spec = declaredDev reposDir
+    { spec with
+        Runtime =
+            match spec.Runtime with
+            | Container c -> Container { c with Entrypoint = None }
+            | Confinement -> Confinement }
+
 /// Start the declared container through the production composition, with `granted` as what
 /// the operator's profile came to (empty = a host offering nothing, so the file's `wants:`
 /// selects nothing — the portable cold path).
@@ -139,7 +153,8 @@ let private awaitReady (sandbox: Sandbox) : Async<unit> =
 /// cannot delete. The in-container wipe runs before Dispose on every path for the same
 /// reason it exists at all: whatever the case wrote into the checkout, it wrote as the
 /// container's root, and the same root is the only thing that can take it back.
-let private withDev
+let private withDevSpec
+    (spec: string -> EnvironmentSpec)
     (granted: ResourceLeaf list)
     (checkout: string -> unit)
     (body: Sandbox -> Async<unit>)
@@ -149,7 +164,7 @@ let private withDev
         let mutable sandbox = None
         let mutable failure = None
         try
-            let! started = startDev granted (declaredDev reposDir)
+            let! started = startDev granted (spec reposDir)
             sandbox <- Some started
             do! awaitReady started
             do! body started
@@ -164,6 +179,9 @@ let private withDev
         | Some e -> return raise e
         | None -> return ()
     }
+
+/// The declared container over a copy of the file alone — see `declaredDevBare`.
+let private withDev granted checkout body = withDevSpec declaredDevBare granted checkout body
 
 let private copiedConfig (dir: string) = copyFile nodeFs "yession.yaml" (dir + "/yession.yaml")
 
@@ -253,21 +271,33 @@ let dogfood =
                 // evaluates the flake from git, and a checkout is what the session would
                 // have put there. Uncommitted changes are deliberately not smuggled in —
                 // this proves the tree as committed, which is what anything downstream gets.
-                withDev [] (fun dir -> execSync childProcess (sprintf "git clone --quiet . %s" dir)) (fun sandbox -> async {
-                    // Through a SHELL, deliberately — not because nix needs one to run, but
-                    // because devenv's flake reads $PWD under --impure and only a shell sets
-                    // it: exec'd bare, the eval died inside devenv's own mkShell with an
-                    // unrelated-looking `//` operator error. A terminal and the agent's
-                    // run_command both arrive through sh, so this is also simply how every
-                    // real invocation reaches the container.
+                withDevSpec declaredDev [] (fun dir -> execSync childProcess (sprintf "git clone --quiet . %s" dir)) (fun sandbox -> async {
+                    // `check`, and nothing in front of it: the file's entrypoint is what
+                    // puts `nix develop --impure --command` there, for this exec as for
+                    // every block a terminal here runs. That the container STARTED is
+                    // already the entrypoint proving itself — the backend found the
+                    // devshell's shell behind it before this ran. (devenv's flake reads
+                    // $PWD under --impure, which `docker exec` does not set; the backend
+                    // sets it on every exec, which is what lets an exec'd-bare entrypoint
+                    // evaluate at all.)
                     let! run, out, err =
-                        runInSandbox sandbox "sh" [ "-c"; "nix develop --impure --command check" ] Map.empty None
+                        runInSandbox sandbox "sh" [ "-c"; "check" ] Map.empty None
                     // The exit code IS the tally: check exits non-zero on any failure or
                     // error. The output check on top only proves the suite RAN rather than
                     // something exiting 0 without ever reaching it. Whatever this wrote
                     // into the checkout, it wrote as the container's root — `withDev`'s
                     // cleanup wipes it from inside on green and red alike.
-                    Expect.equal run (SandboxExited 0) (sprintf "check failed inside the container; tail of stderr: %s" (err.Substring (max 0 (err.Length - 2000))))
+                    // Both tails: the runner's tally and its ❌ lines go to stdout, and a
+                    // failure reported with stderr alone showed devenv's prelude and nothing
+                    // about which case failed.
+                    let failed =
+                        out.Split '\n'
+                        |> Array.filter (fun line -> line.Contains "❌" || line.Contains "🚫" || line.Contains "tests run")
+                        |> String.concat "\n"
+                    Expect.equal
+                        run
+                        (SandboxExited 0)
+                        (sprintf "check failed inside the container. What failed: %s\ntail of stderr: %s" failed (err.Substring (max 0 (err.Length - 2000))))
                     Expect.isTrue (out.Contains "tests run") "the tally printed, so the suite really ran"
                 }))
         ])
