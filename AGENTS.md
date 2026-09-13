@@ -95,7 +95,7 @@ here) — the `Native` cap works too (see Testing).
 ## Build interface
 
 Every Yession build function lives in `tasks.fsx` — the complete, standalone build interface
-(`restore`/`build`/`start`/`dev`/`check`/`verify`/`lint`/`version`/`stage`/`package`/
+(`restore`/`build`/`start`/`dev`/`check`/`vm-check`/`verify`/`lint`/`version`/`stage`/`package`/
 `install-smoke`/`boot-smoke`/`example`/`clean`/`clean-docker`). The devenv scripts, the GitHub Actions
 workflows, and the Nix `outputs` are thin wrappers over it — throw devenv and CI away and
 `dotnet fsi tasks.fsx <verb>` still drives everything.
@@ -596,6 +596,13 @@ Capabilities:
   job — `pr.yaml` clears `kernel.apparmor_restrict_unprivileged_userns` so the probes run for
   real there — and weaker confinement in production is the operator's decision, never a way
   to get a passing session here.
+
+  **On a Mac, `vm-check <caps>` runs the Srt tier under STRICT nesting.** The Mac is
+  Seatbelt and the dev container cannot nest a user namespace, so neither hosts what CI runs
+  — but the Colima VM is a bare Linux host that can. The verb compiles here and runs the
+  (portable) suite there, on a cached Node 24 + Linux `node_modules`, in seconds rather than a
+  `verify.yml` round-trip: `vm-check Srt --only "<text>"`. The target is a parameter behind
+  `LinuxTarget` in `tasks.fsx`; today Colima is the only one.
 - `Jumpstarter` — uv, and an interpreter it can resolve the `examples/jumpstarter` lock
   against. Probed by BUILDING that environment (`uv sync --frozen`), because "uv is on PATH"
   and "this box can assemble that environment" are different questions and only the second

@@ -944,17 +944,11 @@ let private buildNixPackage () =
 // from "wedged"; the stages the caps skip never announce themselves.
 let private progress (label: string) = printfn "check: %s" label
 
-let private runCheckOnce (requested: string list) =
-    let caps = requested
-    requireCapabilities caps
-    let capSet = Set.ofList caps
-    let budgetMs = nodeBudgetMs capSet
-    Environment.SetEnvironmentVariable ("YESSION_TEST_CAPS", String.concat " " caps)
-    // The suite is told its own budget, because a case's deadline is spent out of it: a wait
-    // that asks for more than the run can afford is refused at the call rather than taking the
-    // runner down later (`Support.settledWithin`).
-    Environment.SetEnvironmentVariable ("YESSION_TEST_BUDGET_MS", string budgetMs)
-    progress (sprintf "capabilities: %s" (if List.isEmpty caps then "none (cheap tier)" else String.concat " " caps))
+/// Compile everything the Node suite needs for these capabilities, host-side, and hand back
+/// its entry point. Shared by `check` (which runs it here) and `vm-check` (which runs the same
+/// JS on a Linux target): the compiled JS is portable, so only `node_modules` is
+/// platform-specific — and that is the target's to provide, not this compile's.
+let private buildNodeSuite (capSet: Set<string>) : string =
     progress "building the solution"
     exec "dotnet" [ "build"; "Yession.slnx" ]
 
@@ -972,8 +966,22 @@ let private runCheckOnce (requested: string list) =
     // The Node (Fable/JS) path — always runs; self-skips suites whose caps/runtime don't match.
     progress "compiling the suite"
     fable false "tests/Yession.Tests/Yession.Tests.fsproj" "tests/Yession.Tests/out"
+    "tests/Yession.Tests/out/Main.js"
+
+let private runCheckOnce (requested: string list) =
+    let caps = requested
+    requireCapabilities caps
+    let capSet = Set.ofList caps
+    let budgetMs = nodeBudgetMs capSet
+    Environment.SetEnvironmentVariable ("YESSION_TEST_CAPS", String.concat " " caps)
+    // The suite is told its own budget, because a case's deadline is spent out of it: a wait
+    // that asks for more than the run can afford is refused at the call rather than taking the
+    // runner down later (`Support.settledWithin`).
+    Environment.SetEnvironmentVariable ("YESSION_TEST_BUDGET_MS", string budgetMs)
+    progress (sprintf "capabilities: %s" (if List.isEmpty caps then "none (cheap tier)" else String.concat " " caps))
+    let mainJs = buildNodeSuite capSet
     progress (sprintf "running the Node suite (budget %ds)" (budgetMs / 1000))
-    runNodeSuite "tests/Yession.Tests/out/Main.js" caps budgetMs
+    runNodeSuite mainJs caps budgetMs
 
     // The .NET CLR (Playwright) path — only when a Browser-tagged suite is enabled.
     if capSet.Contains "Browser" then
@@ -1095,6 +1103,174 @@ let verify (args: string list) =
         ([ "Browser"; "Ports"; "Native"; "Docker"; "LiveAgent"; "Keyring"; "Nix"; "Srt"; "Pty"; "Serial"
            "Jumpstarter" ]
          @ args)
+
+// --- vm-check: run a Node test tier on a Linux target -----------------------------------------
+//
+// The Mac runs srt as Seatbelt and cannot host the STRICT nested-userns profile CI uses; the
+// dev container cannot host it either — a container has no user namespace left to nest in. A
+// Linux box that shares this checkout can, and iterating there is seconds rather than a
+// ~4-minute `verify.yml` round-trip. This compiles the suite on the host (the JS is portable)
+// and runs it on such a target under strict nesting.
+//
+// The TARGET is a parameter. Today there is exactly one — the Colima VM on a Mac — but the
+// verb is written against `LinuxTarget`, so a remote SSH box or another VM is a new union case
+// and a new set of branches in the module below, and nothing above it changes. Everything
+// Colima-specific lives behind this seam.
+
+let private shquote (s: string) = "'" + s.Replace ("'", "'\\''") + "'"
+
+type private LinuxTarget =
+    | Colima
+    // future: | RemoteSsh of host: string | Lima of profile: string
+
+module private LinuxTarget =
+
+    let describe = function Colima -> "the Colima VM"
+
+    // The repo builds on Node 24, so the target must run the suite on Node 24 too — its own
+    // system Node (Ubuntu ships 18) will not do. Fetched into the target's cache on first use.
+    let private nodeVersion = "v24.8.0"
+
+    // A shell command line on the target, stdio streamed to the console; returns the exit code.
+    // Colima shares $HOME over virtiofs, so the checkout is at the SAME path the Mac sees.
+    let private ssh target (command: string) : int =
+        match target with
+        | Colima -> runInherit repoRoot "colima" [ "ssh"; "--"; "bash"; "-c"; command ]
+
+    // The same, capturing stdout for a probe or a path (None if the command fails).
+    let private sshOut target (command: string) : string option =
+        match target with
+        | Colima ->
+            try Some (runIn repoRoot "colima" [ "ssh"; "--"; "bash"; "-c"; command ]) with _ -> None
+
+    /// None if the target is usable right now; otherwise the reason, with the fix.
+    let unavailable target : string option =
+        match target with
+        | Colima ->
+            match sshOut Colima "echo ok" with
+            | Some s when s.Trim () = "ok" -> None
+            | _ -> Some "the Colima VM is not reachable — start it with `colima start`"
+
+    /// The checkout as the target sees it. On Colima that is the Mac path (shared $HOME) — but
+    /// only when the checkout is UNDER $HOME, since a bind outside the share is invisible there.
+    let repoPathOnTarget target : Result<string, string> =
+        match target with
+        | Colima ->
+            let home = Environment.GetEnvironmentVariable "HOME"
+            if not (String.IsNullOrEmpty home) && repoRoot.StartsWith (home.TrimEnd '/' + "/") then Ok repoRoot
+            else
+                Error (sprintf "the checkout (%s) is outside $HOME, the only path Colima shares into its VM" repoRoot)
+
+    /// Provision (idempotently) a Node 24 and a Linux `node_modules` for `lockHash` on the
+    /// target, and report their paths. One remote script rather than a dozen round-trips — glue
+    /// that must run where `dotnet` cannot, which is the sanctioned exception to "no scripts".
+    /// `node_modules` is keyed on the lockfile, so a dependency change rebuilds it and nothing
+    /// else does; the native addon is fetched best-effort so Native suites run when a prebuild
+    /// exists and self-skip when it does not.
+    let provision target (repoPath: string) (lockHash: string) : string * string =
+        let prelude =
+            String.concat "\n"
+                [ "set -euo pipefail"
+                  "cache=$HOME/.cache/yession-vm; mkdir -p \"$cache\""
+                  "case \"$(uname -m)\" in aarch64) narch=arm64;; x86_64) narch=x64;; *) echo \"vm-check: unsupported arch $(uname -m)\" >&2; exit 1;; esac"
+                  // The tarball's top-level dir — and so `$nodedir` — is `node-<ver>-linux-<arch>`.
+                  sprintf "nodedir=\"$cache/node-%s-linux-$narch\"; node=\"$nodedir/bin/node\"" nodeVersion
+                  sprintf "nm=\"$cache/nm-%s\"" lockHash ]
+        let build =
+            String.concat "\n"
+                [ prelude
+                  // `.tar.gz`, not `.tar.xz`: the VM has gzip but not always xz. `rm -rf` first
+                  // so a half-extracted dir from an interrupted run cannot masquerade as ready.
+                  sprintf "if [ ! -x \"$node\" ]; then rm -rf \"$nodedir\"; curl -fsSL \"https://nodejs.org/dist/%s/node-%s-linux-$narch.tar.gz\" | tar -xz -C \"$cache\"; fi" nodeVersion nodeVersion
+                  // Export, not a per-command prefix: bash resolves the command name against the
+                  // PATH already in the environment, so `PATH=… npm` would still not find npm.
+                  "export PATH=\"$nodedir/bin:$PATH\""
+                  "if [ ! -d \"$nm/node_modules\" ]; then"
+                  "  rm -rf \"$nm\"; mkdir -p \"$nm\""
+                  sprintf "  cp %s/package.json %s/package-lock.json \"$nm/\"" (shquote repoPath) (shquote repoPath)
+                  "  ( cd \"$nm\" && npm ci --ignore-scripts --no-audit --no-fund )"
+                  "  ( cd \"$nm\" && npm rebuild node-datachannel >/dev/null 2>&1 || true )"
+                  "fi" ]
+        if ssh target build <> 0 then
+            failwithf "vm-check: could not provision the toolchain on %s (see output above)" (describe target)
+        match sshOut target (prelude + "\necho \"$node\"; echo \"$nm/node_modules\"") with
+        | Some out ->
+            match out.Trim().Split '\n' |> Array.map (fun s -> s.Trim ()) |> Array.filter (fun s -> s <> "") with
+            | [| node; nm |] -> node, nm
+            | _ -> failwithf "vm-check: provisioning %s reported no node/node_modules:\n%s" (describe target) out
+        | None -> failwithf "vm-check: could not read the toolchain paths on %s" (describe target)
+
+    /// Best-effort: make strict srt possible. Ubuntu ships
+    /// `kernel.apparmor_restrict_unprivileged_userns=1`, which blocks the nested user namespace
+    /// bwrap needs; CI clears it the same way.
+    let enableStrictNesting target : unit =
+        match target with
+        | Colima ->
+            ssh Colima "sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 >/dev/null 2>&1 || true" |> ignore
+
+    /// The sandbox tools srt names, at their paths ON the target (a name absent is left unset —
+    /// `toolsFrom` treats that as "not here" rather than guessing).
+    let sandboxTools target : (string * string) list =
+        [ "YESSION_BIN_BWRAP", "bwrap"; "YESSION_BIN_SOCAT", "socat"; "YESSION_BIN_GIT", "git"; "YESSION_BIN_RIPGREP", "rg" ]
+        |> List.choose (fun (var, bin) ->
+            match sshOut target (sprintf "command -v %s || true" bin) with
+            | Some p when p.Trim () <> "" -> Some (var, p.Trim ())
+            | _ -> None)
+
+    /// Run `node <mainJs>` on the target from `repoPath`, with `env`, streaming stdio.
+    let runNode target (repoPath: string) (node: string) (mainJs: string) (env: (string * string) list) : int =
+        let exports = env |> List.map (fun (k, v) -> sprintf "export %s=%s" k (shquote v)) |> String.concat "\n"
+        ssh target (sprintf "cd %s\n%s\nexec %s %s" (shquote repoPath) exports (shquote node) (shquote mainJs))
+
+// vm-check [caps…] [--only <text>]: like `check`, but the Node suite runs on a Linux target
+// under strict nesting instead of on this box. Same capability words; the target supplies
+// node_modules and the sandbox, this side supplies the compiled (portable) JS.
+let private vmCheck (target: LinuxTarget) (args: string list) =
+    let caps, only = takeOnly args
+    match LinuxTarget.unavailable target with
+    | Some reason -> failwithf "vm-check: %s" reason
+    | None -> ()
+    let repoPath =
+        match LinuxTarget.repoPathOnTarget target with
+        | Ok path -> path
+        | Error reason -> failwithf "vm-check: %s" reason
+    let capSet = Set.ofList caps
+    // Host-side compile — the JS is portable; only node_modules is the target's to provide.
+    let mainJs = buildNodeSuite capSet
+    let lockHash =
+        use sha = System.Security.Cryptography.SHA256.Create ()
+        File.ReadAllBytes (Path.Combine (repoRoot, "package-lock.json"))
+        |> sha.ComputeHash
+        |> Array.take 8
+        |> Array.map (sprintf "%02x")
+        |> String.concat ""
+    progress (sprintf "provisioning %s (Node %s + node_modules)" (LinuxTarget.describe target) "24")
+    let node, nodeModules = LinuxTarget.provision target repoPath lockHash
+    LinuxTarget.enableStrictNesting target
+    // Node walks up from a compiled file to the FIRST `node_modules`. Point the ones the suite
+    // and the child Session Processes it spawns resolve from at the Linux tree — and put them
+    // back afterwards, so a later run on THIS box does not load Linux binaries. Cleared up front
+    // too, in case a crashed run left one behind.
+    let linkPaths = [ "tests/Yession.Tests/node_modules"; "app/node_modules" ] |> List.map (fun r -> Path.Combine (repoRoot, r))
+    let clearLinks () =
+        linkPaths |> List.iter (fun p -> runInherit repoRoot "bash" [ "-c"; sprintf "[ -L %s ] && rm -f %s || true" (shquote p) (shquote p) ] |> ignore)
+    clearLinks ()
+    try
+        linkPaths |> List.iter (fun p -> exec "ln" [ "-sfn"; nodeModules; p ])
+        let env =
+            [ "YESSION_TEST_CAPS", String.concat " " caps
+              "YESSION_NESTED_SANDBOX", "strict" ]
+            @ (only |> Option.map (fun text -> "YESSION_TEST_ONLY", text) |> Option.toList)
+            @ LinuxTarget.sandboxTools target
+        progress
+            (sprintf
+                "running the Node suite on %s (caps: %s)"
+                (LinuxTarget.describe target)
+                (if List.isEmpty caps then "cheap tier" else String.concat " " caps))
+        let code = LinuxTarget.runNode target repoPath node mainJs env
+        if code <> 0 then failwithf "vm-check: the suite failed on %s (exit %d)" (LinuxTarget.describe target) code
+    finally
+        clearLinks ()
 
 // --- bench: what a person waits for, and whether it is getting worse --------------------------
 
@@ -1682,6 +1858,7 @@ match arg 1 with
 | Some "version" -> printfn "%s" (defaultVersion ())
 | Some "stage" -> stage (arg 2 |> Option.defaultWith defaultVersion)
 | Some "check" -> check (rest 2)
+| Some "vm-check" -> vmCheck Colima (rest 2)
 | Some "verify" -> verify (rest 2)
 | Some "lint" -> lint ()
 | Some "probe" -> probe (rest 2)
