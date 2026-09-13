@@ -970,14 +970,14 @@ let private chapterTests =
                 Map.ofList
                     [ a.MessageId, { Opens = true; Name = Ylmish.Text.empty }
                       c.MessageId, { Opens = true; Name = Ylmish.Text.empty } ]
-            Expect.equal (Chapters.summaryAsk chapters [ a; b; c ] a).Lines [ "first"; "second" ] "its own, and no more"
+            Expect.equal (Chapters.summaryAsk chapters [ a; b; c ] a None).Lines [ "first"; "second" ] "its own, and no more"
 
         // A session can hold a stack trace, a diff, or forty messages. A name is made from
         // the shape of a chapter, and an ask that sent all of it would spend a model's
         // context on the part that moves a name least.
         testCase "a chapter longer than anybody reads is not sent whole" <| fun () ->
             let long = itemSaying "l" (String.replicate 500 "word ") ConversationItemKind.Message
-            let ask = Chapters.summaryAsk (Map.ofList [ long.MessageId, { Opens = true; Name = Ylmish.Text.empty } ]) [ long ] long
+            let ask = Chapters.summaryAsk (Map.ofList [ long.MessageId, { Opens = true; Name = Ylmish.Text.empty } ]) [ long ] long None
             let sent = ask.Lines |> List.sumBy (fun line -> line.Length)
             Expect.isTrue (sent < long.Body.Length) "bounded, rather than the whole of it"
 
@@ -2620,6 +2620,27 @@ let private namingTests =
             let item = saying "m" "run tests"
             let chapters = Map.ofList [ opened item (Chapters.defaultName item) ]
             Expect.equal (Naming.owed Map.empty chapters []) [] "nothing to read, so nothing to ask"
+
+        // A second ask exists to let the model KEEP the name, and it cannot keep a name it
+        // was never told. What is pinned is that the name reaches the ask, not the prose
+        // around it — the wording is a design and will be revised.
+        testCase "a re-reading tells the model what it is called already" <| fun () ->
+            let first = saying "a" "run tests"
+            let second = saying "b" "the auth middleware drops the refresh token"
+            let chapters = Map.ofList [ opened first "Running the tests" ]
+            match Naming.owed (settledAs first "Running the tests" 1) chapters [ first; second ] with
+            | [ job ] -> Expect.isTrue (job.Ask.Task.Contains "Running the tests") "the name it has is in the ask"
+            | other -> failwithf "expected one job, got %A" other
+
+        // ...and a FIRST ask is not, because the guess is the first line of a message. Handing
+        // it over would be asking for a rewording of that line rather than a name for what
+        // the part is about.
+        testCase "a first ask is not anchored to the guess" <| fun () ->
+            let item = saying "m" "run tests"
+            let chapters = Map.ofList [ opened item (Chapters.defaultName item) ]
+            match Naming.owed Map.empty chapters [ item ] with
+            | [ job ] -> Expect.isFalse (job.Ask.Task.Contains "run tests") "nothing to keep, so nothing to anchor to"
+            | other -> failwithf "expected one job, got %A" other
 
         // The job carries what the write must still find, so the compare-and-set is against
         // what this pass actually read.

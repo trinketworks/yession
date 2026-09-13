@@ -315,15 +315,34 @@ module Chapters =
     /// The task is spelled out rather than left to the provider: these words land on a rule
     /// across a transcript, next to other chapters' names, and "summarize this" gets a
     /// sentence about a conversation instead of a label for a section of one.
+    ///
+    /// `current` is what the chapter is called already, on a second ask. The task then says
+    /// what a second ask is for — keeping the name is a real answer, and the commonest right
+    /// one — because a model handed more material and no reason to keep anything will write
+    /// something new every time, and a name that changes under a reader as they scroll is
+    /// worse than a name that was made too early.
     let summaryAsk
         (chapters: Map<MessageId, ChapterMark>)
         (items: ConversationItem list)
         (item: ConversationItem)
+        (current: string option)
         : SummaryAsk =
         { Task =
-            "Name this part of a working session, the way a chapter in a book is named: "
-            + "a few words saying what it is ABOUT, in the session's own vocabulary. "
-            + "Answer with the name alone — no quotes, no preamble, no full stop."
+            // The inner binding is NOT `current`. One name meaning an option in the outer
+            // scope and its contents in the inner is the shape CI's whole-solution analyzer
+            // has been wedged by before (AGENTS.md, YES000), and it costs nothing to avoid.
+            match current with
+            | None ->
+                "Name this part of a working session, the way a chapter in a book is named: "
+                + "a few words saying what it is ABOUT, in the session's own vocabulary. "
+                + "Answer with the name alone — no quotes, no preamble, no full stop."
+            | Some standing ->
+                "This part of a working session is currently called \"" + standing + "\". More has "
+                + "been said in it since that was written. If those words are still the best "
+                + "short name for what this part is ABOUT, answer with them exactly as they "
+                + "are. If the newer material shows it is really about something else, answer "
+                + "with a few words that say so, in the session's own vocabulary. Answer with "
+                + "the name alone — no quotes, no preamble, no full stop."
           Lines =
             covers chapters items item
             |> List.truncate ReadItems
