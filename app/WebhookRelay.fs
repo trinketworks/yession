@@ -198,49 +198,6 @@ let endpointsFor (kek: string) (specs: EndpointSpec list) : HookEndpoint list =
               if spec.Rotation > 0 then secretAt kek spec.Name (spec.Rotation - 1) ]
           Signature = spec.Signature })
 
-// --- reading a delivery ----------------------------------------------------------------
-
-/// Parse a body into the object a filter can address; `null` for anything that is not one
-/// (invalid JSON, an array, a bare value). Deliberately total — a body that cannot be read
-/// is a 400, not an exception.
-[<Emit("""(function (raw) {
-  try { const v = JSON.parse(raw); return (v !== null && typeof v === 'object' && !Array.isArray(v)) ? v : null }
-  catch { return null }
-})($0)""")>]
-let private parseObject (raw: string) : obj = jsNative
-
-[<Emit("""(function (pairs) {
-  const out = {}
-  for (const [k, v] of pairs) out[String(k).toLowerCase()] = v
-  return out
-})($0)""")>]
-let private headerObject (pairs: (string * string) list) : obj = jsNative
-
-/// Resolve one path against a delivery.
-///
-/// The first segment names which half — `headers` or `body` — and anything else addresses
-/// nothing, which is what makes "a delivery is one document" a rule rather than a
-/// convention. Keys are compared case-insensitively against the already-lowercased path,
-/// so a provider's camelCase body and HTTP's indifferent header case both resolve; the
-/// cost is that two keys in one object differing only by case are not distinguishable, and
-/// no provider this serves has a pair like that.
-///
-/// A path that lands on a container, or on nothing, answers `null` — which fails its
-/// constraint. Matching by accident is the direction that would hurt.
-[<Emit("""(function (headers, body, segments) {
-  let cur = (segments[0] === 'headers') ? headers : (segments[0] === 'body') ? body : null
-  if (cur === null || cur === undefined) return null
-  for (let i = 1; i < segments.length; i++) {
-    if (cur === null || typeof cur !== 'object' || Array.isArray(cur)) return null
-    const key = Object.keys(cur).find(k => k.toLowerCase() === segments[i])
-    if (key === undefined) return null
-    cur = cur[key]
-  }
-  const t = typeof cur
-  return (t === 'string') ? cur : (t === 'number' || t === 'boolean') ? String(cur) : null
-})($0, $1, $2)""")>]
-let private resolveIn (headers: obj) (body: obj) (segments: string array) : string = jsNative
-
 // --- the relay ---------------------------------------------------------------------------
 
 /// What a session asked for, and which launch to send it to.
@@ -304,18 +261,13 @@ let create
         | Some endpoint ->
             if not (verified endpoint headers body) then 401
             else
-                let parsed = parseObject body
-                if isNull parsed then 400
-                else
-                    let headerDoc = headerObject headers
-                    let lookup (path: FieldPath) =
-                        match resolveIn headerDoc parsed (FieldPath.segments path |> Array.ofList) with
-                        | null -> None
-                        | value -> Some value
+                match Delivery.create headers body with
+                | None -> 400
+                | Some delivery ->
                     // A snapshot, so a subscription arriving mid-fan-out is picked up by the
                     // next delivery rather than mutating what this one is walking.
                     for subscription in List.ofSeq subscriptions do
-                        if DeliveryFilter.matches subscription.Filter lookup then
+                        if DeliveryFilter.matches subscription.Filter (Delivery.resolve delivery) then
                             notify
                                 subscription.Secret
                                 (WebhookDelivered (subscription.Id, endpoint.Name, headers, body))
