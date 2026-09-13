@@ -366,9 +366,10 @@ let private codecTests =
             let messageId = MessageId.create "msg-1" |> expect
             p.Dispatch (user (EventsPageMsg (said messageId "ship it")))
             p.Dispatch (user (ToggleChapterMsg messageId))
-            Expect.isTrue
+            Expect.equal
                 (SyncedStateSync.nameChapter doc messageId "ship it" "Where it was settled")
-                "it still wore the guess, so the words went in"
+                "Where it was settled"
+                "it still wore the guess, so the words went in and now stand"
             let decoded = SyncedStateSync.ofDoc doc |> Result.mapError (sprintf "%A") |> expect
             Expect.equal
                 (decoded.Chapters |> Map.tryFind messageId |> Option.map (fun mark -> Text.toString mark.Name))
@@ -388,9 +389,10 @@ let private codecTests =
             let seeded = (p.Model ()).Synced.Chapters |> Map.find messageId
             // Somebody types, after the pass that read "ship it" and before its answer lands.
             p.Dispatch (user (EditChapterNameMsg (messageId, Text.edit "Mine" seeded.Name)))
-            Expect.isFalse
+            Expect.equal
                 (SyncedStateSync.nameChapter doc messageId "ship it" "Where it was settled")
-                "the name it was told to replace is not the name that is there"
+                "Mine"
+                "it answers what stands, which is theirs — and is what the session records"
             let decoded = SyncedStateSync.ofDoc doc |> Result.mapError (sprintf "%A") |> expect
             Expect.equal
                 (decoded.Chapters |> Map.tryFind messageId |> Option.map (fun mark -> Text.toString mark.Name))

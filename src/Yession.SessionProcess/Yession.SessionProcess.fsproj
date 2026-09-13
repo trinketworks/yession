@@ -19,7 +19,7 @@
     <Compile Include="Scheduler.fs" />
     <!-- Beside the scheduler because it is the same shape of thing: a doc update might have
          made work, so look and see. -->
-    <Compile Include="ChapterNames.fs" />
+    <Compile Include="Names.fs" />
     <Compile Include="Transport.fs" />
     <Compile Include="Library.fs" />
   </ItemGroup>

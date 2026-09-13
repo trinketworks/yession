@@ -93,10 +93,11 @@ let tests =
                 do! host.Stop ()
             }
 
-        // A chapter is asked about ONCE. Everything anybody does afterwards is another doc
-        // update through the same signal, and a namer that asked again on each of them would
-        // spend a request per keystroke — and could overwrite its own answer.
-        testCaseAsync "a chapter is asked about once, whatever happens afterwards" <|
+        // The namer looks on every doc update, and almost every doc update is somebody
+        // typing. A pass that read the whole log to discover it had nothing to do would cost
+        // a session's events per keystroke, so what it reads first is the two things the
+        // rule is about — the chapters, and how far the log has got.
+        testCaseAsync "a doc update that changed nothing the rule reads asks nothing" <|
             async {
                 let asked = ResizeArray<SummaryAsk> ()
                 let summarize : Summarize =
@@ -118,7 +119,70 @@ let tests =
                 // More doc updates, of the kind a session makes constantly: somebody typing.
                 do! compose a ada "and then this"
                 do! a.Runner.WaitFor (fun m -> Map.containsKey ada m.Synced.Drafts)
-                Expect.equal asked.Count 1 "once, however much else happened"
+                Expect.equal asked.Count 1 "a draft is not a chapter, and it is not something said"
+                do! host.Stop ()
+            }
+
+        // The case the whole re-reading rule is for: a session that opens with "run tests"
+        // and puts the actual work in the message after it. The first name is made from a
+        // line that said nothing; the second is made from the work.
+        testCaseAsync "a chapter whose material doubles is named again from the whole of it" <|
+            async {
+                let asked = ResizeArray<SummaryAsk> ()
+                let summarize : Summarize =
+                    fun ask ->
+                        async {
+                            asked.Add ask
+                            return Ok (sprintf "Name from %d" (List.length ask.Lines))
+                        }
+                let! host =
+                    Host.startFull Clock.system (fun () -> None) (fun _ -> Some summarize) None None None None None None None (fun _ _ -> ()) None McpClient.McpConnections.none None (sid ()) None "" None false None 0
+                let! a = connectInMemoryClient host "ada" "Ada"
+                let ada = a.Hello.PeerId
+                do! compose a ada "run tests"
+                a.Connection.SendDraft ada
+                do! a.Runner.WaitFor (fun m -> m.Conversation.Items |> List.exists (fun i -> i.Body = "run tests"))
+                let item = (a.Runner.Model ()).Conversation.Items |> List.head
+                a.Runner.Dispatch (user (ToggleChapterMsg item.MessageId))
+                do! a.Runner.WaitFor (fun m -> Chat.Chapters.name m.Synced.Chapters item = "Name from 1")
+                // ...and then the substance, inside the same chapter.
+                do! compose a ada "the auth middleware drops the refresh token"
+                a.Connection.SendDraft ada
+                do! a.Runner.WaitFor (fun m -> Chat.Chapters.name m.Synced.Chapters item = "Name from 2")
+                do! host.Stop ()
+            }
+
+        // The promise the feature rests on, through the whole path and across a re-reading:
+        // a name somebody typed is never written over, however much is said afterwards.
+        testCaseAsync "a name somebody typed is not written over when the material grows" <|
+            async {
+                let asked = ResizeArray<SummaryAsk> ()
+                let summarize : Summarize =
+                    fun ask ->
+                        async {
+                            asked.Add ask
+                            return Ok "Where it was settled"
+                        }
+                let! host =
+                    Host.startFull Clock.system (fun () -> None) (fun _ -> Some summarize) None None None None None None None (fun _ _ -> ()) None McpClient.McpConnections.none None (sid ()) None "" None false None 0
+                let! a = connectInMemoryClient host "ada" "Ada"
+                let ada = a.Hello.PeerId
+                do! compose a ada "run tests"
+                a.Connection.SendDraft ada
+                do! a.Runner.WaitFor (fun m -> m.Conversation.Items |> List.exists (fun i -> i.Body = "run tests"))
+                let item = (a.Runner.Model ()).Conversation.Items |> List.head
+                a.Runner.Dispatch (user (ToggleChapterMsg item.MessageId))
+                do! a.Runner.WaitFor (fun m -> Chat.Chapters.name m.Synced.Chapters item = "Where it was settled")
+                // Ada does not like it, and says so.
+                let named = (a.Runner.Model ()).Synced.Chapters |> Map.find item.MessageId
+                a.Runner.Dispatch (user (EditChapterNameMsg (item.MessageId, Text.edit "Mine" named.Name)))
+                do! a.Runner.WaitFor (fun m -> Chat.Chapters.name m.Synced.Chapters item = "Mine")
+                // ...and then says twice as much, which would otherwise be worth re-reading.
+                do! compose a ada "the auth middleware drops the refresh token"
+                a.Connection.SendDraft ada
+                do! a.Runner.WaitFor (fun m -> List.length m.Conversation.Items = 2)
+                Expect.equal (Chat.Chapters.name (a.Runner.Model ()).Synced.Chapters item) "Mine" "theirs, and nothing wrote over it"
+                Expect.equal asked.Count 1 "and it was not even asked again"
                 do! host.Stop ()
             }
 

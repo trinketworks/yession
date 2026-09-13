@@ -233,6 +233,11 @@ let startFull
         // construction — and it is what `execute_command`'s wait observes, which is why the
         // wait holds no state of its own.
         let mutable terminalProjection = Projection.empty
+        /// How far the log has got, kept as it moves. What a reader needs to ask "has
+        /// anything been said since I last looked" without reading the log to find out —
+        /// which is the difference between a naming pass costing one structural read of the
+        /// doc and costing the whole session's events, on every keystroke anybody types.
+        let mutable latestOffset : EventOffset option = None
         // Anything that could change a waiting command's outcome: an appended event, a doc
         // update. One signal for both, because a waiter does not care which happened — it
         // re-reads and decides.
@@ -258,6 +263,7 @@ let startFull
                         async {
                             recordAttribution event
                             let! appended = inner.Append actor event
+                            latestOffset <- Some appended.Offset
                             terminalProjection <- Projection.applyEvent terminalProjection event
                             broadcastEventsAvailable appended.Offset
                             notifyChanged ()
@@ -267,6 +273,7 @@ let startFull
         // Seed the scheduler's log-anchored dedup set from the durable log (the
         // restart case): exactly-once is anchored in the log, not the doc.
         let! replayed = log.Read None Int32.MaxValue
+        latestOffset <- replayed.Events |> List.tryLast |> Option.map (fun e -> e.Offset)
         replayed.Events |> List.iter (fun e -> recordAttribution e.Event)
         let initialConsumed =
             replayed.Events |> List.choose (fun e -> QueueDrain.consumedOf e.Event) |> Set.ofList
@@ -690,30 +697,30 @@ let startFull
         // conversation rather than reaching for one — and reads it only when there is a
         // chapter it has not asked about, which is once per chapter rather than once per
         // keystroke anybody types.
-        let nameChapters =
-            ChapterNames.create
+        let nameThings =
+            Names.create
                 doc
                 (fun () ->
                     async {
                         let! page = log.Read None System.Int32.MaxValue
-                        // Qualified for the reason the tool-note read above is: this file
-                        // carries several records with an `Items`, and an `open` for one read
-                        // would decide which of them a label means everywhere below it.
-                        return
-                            Yession.Domain.Chat.ConversationProjection.applyEvents
-                                None
-                                page.Events
-                                Yession.Domain.Chat.ConversationProjection.empty
-                            |> fst
+                        return page.Events
                     })
-                // On the CREATOR's credential. Naming a chapter is nobody's turn — no one
-                // asked for it and a chapter mark carries no author — so the session cannot
-                // spend whichever human happens to be connected without attributing a
-                // request to somebody who did not make it. Whose session it is, is a
-                // different question with a stable answer, and it is the one this log can
-                // answer. An unattributed session has no creator, which `ofOption` reads as
-                // the deployment's own credential — the scope `--auth localhost` actually
-                // grants.
+                (fun () -> latestOffset)
+                (fun named ->
+                    // The SESSION named it, not the agent taking a turn and not a person.
+                    // Deliberately not routed through `Authority`, whose cases are about
+                    // ACTS somebody asked for: nobody asked for this, and the one thing
+                    // worth recording about whose it is — the credential it spent — the
+                    // fact carries itself.
+                    log.Append ActorRef.SessionProcess (SessionNamed named) |> Async.Ignore)
+                (fun () -> Attribution.creator attribution)
+                // On the CREATOR's credential. Naming is nobody's turn — no one asked for it
+                // and a chapter mark carries no author — so the session cannot spend
+                // whichever human happens to be connected without attributing a request to
+                // somebody who did not make it. Whose session it is, is a different question
+                // with a stable answer, and it is the one this log can answer. An
+                // unattributed session has no creator, which `ofOption` reads as the
+                // deployment's own credential — the scope `--auth localhost` actually grants.
                 (fun () -> summarize (CredentialFor.ofOption (Attribution.creator attribution)))
 
         // The drain re-arms on every doc update observed while idle, so an enqueue can
@@ -721,10 +728,13 @@ let startFull
         // single-flight guard). Drafts are ephemeral WIP in the synced state — never
         // durable facts (only their send is) — so a new draft appearing needs no append.
         DocSync.onAnyUpdate doc (fun () -> drain ())
-        // A chapter is made by a doc write and nothing else announces it, so the namer looks
-        // on the same signal — and its own write comes back through here, which its
-        // single-flight guard and its asked-once set are what make harmless.
-        DocSync.onAnyUpdate doc (fun () -> nameChapters ())
+        // A chapter is made by a doc write, so the namer looks on that signal — and its own
+        // write comes back through here, which its single-flight guard and its watermark are
+        // what make harmless. More being SAID is a log append rather than a doc write, so it
+        // looks on that too (`subscribeToChanges`, below), and a credential arriving is
+        // neither, which is what `Wake` is for.
+        DocSync.onAnyUpdate doc (fun () -> nameThings ())
+        subscribeToChanges (fun () -> nameThings ()) |> ignore
         // The terminal queue re-arms on the same signal, for the same liveness reason.
         DocSync.onAnyUpdate doc (fun () -> drainTerminals ())
         // ...and so does a command waiting on that queue: an approval a peer just granted is a
@@ -1033,7 +1043,10 @@ let startFull
               SetApproveCapabilities = fun approve -> approveCapabilitiesRef.Value <- approve
               SetLaunchRepo = fun launch -> launchRepoRef.Value <- launch
               SetNotificationHandler = fun handle -> notificationHandler.Value <- Some handle
-              Wake = scheduler.Wake
+              // Both looks, because both wait on the same thing a caller has: a credential
+              // that has just arrived is work for the scheduler AND work for the namer, and
+              // a caller that had to know which is a caller that will pick one.
+              Wake = fun () -> scheduler.Wake (); nameThings ()
               RunGated = commandGate.Run
               ResumeGated = commandGate.Read
               TerminalCommands = terminalCommands

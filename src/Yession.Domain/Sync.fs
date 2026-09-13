@@ -587,10 +587,13 @@ module SyncedStateSync =
     /// them must not be what the session keeps. The read and the write are one transaction, so
     /// there is no window between them here either.
     ///
-    /// Answers whether it wrote, so a caller can tell "named it" from "somebody got there
-    /// first" rather than assuming.
-    let nameChapter (doc: Yjs.Y.Doc) (messageId: MessageId) (expected: string) (name: string) : bool =
-        let mutable wrote = false
+    /// Answers what STANDS when it is done — the new name where it wrote, and whatever it
+    /// found where it did not. A caller can tell "named it" from "somebody got there first"
+    /// by comparing, and the one that needs to record what the session may write over next
+    /// time gets that without reading the doc a second time. `""` where there is no chapter
+    /// entry here at all, which is the one answer that is about neither.
+    let nameChapter (doc: Yjs.Y.Doc) (messageId: MessageId) (expected: string) (name: string) : string =
+        let mutable stands = ""
         doc.transact (
             (fun _ ->
                 let chapters : Yjs.Y.Map<obj> = doc.getMap "chapters"
@@ -600,6 +603,7 @@ module SyncedStateSync =
                     | Some textObj when not (isNull textObj) ->
                         let text = unbox<Yjs.Y.Text> textObj
                         let held = textString text
+                        stands <- held
                         if held = expected && held <> name then
                             // Delete then insert, which is what replacing a whole name is. A
                             // splice against the words would be the intent-preserving edit a
@@ -607,11 +611,11 @@ module SyncedStateSync =
                             // these are not the same name shortened, they are other words.
                             if held.Length > 0 then text.delete (0, held.Length)
                             text.insert (0, name)
-                            wrote <- true
+                            stands <- name
                     | _ -> ()
                 | _ -> ()),
             processOrigin)
-        wrote
+        stands
 
     /// The Markdown of a queue entry's rich body, read straight from its top-level fragment
     /// root — the drain's snapshot into the durable `MessageSent` (the Session Process observes
