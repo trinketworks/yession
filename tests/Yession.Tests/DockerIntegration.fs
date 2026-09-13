@@ -293,7 +293,7 @@ let tests =
             // container that cannot reach its own session's gateway.
             testCaseAsync "a container reaches the session's git gateway by the name the backend promises" (async {
                 let host =
-                    match Sandboxes.hostAddressFrom DockerBackend with
+                    match Sandboxes.hostAddressHere (Interop.hostname ()) DockerBackend with
                     | Some host -> host
                     | None -> failwith "docker is a backend with a route to the host"
                 // github.com, played by a listener that answers anything with one line —

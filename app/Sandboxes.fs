@@ -419,22 +419,37 @@ let limitsFor (backend: SandboxBackend) (platform: string) : HostLimits =
 /// ever agrees with the first on the box it was written on.
 let limitsHere (backend: SandboxBackend) : HostLimits = limitsFor backend (platform ())
 
-/// The name by which a sandbox on this backend reaches a listener bound on THIS host, or
-/// none when it cannot — a fact about the backend, stated by the backend, so that whatever
-/// hands a sandbox a route to this process (the git gateway) asks rather than guesses.
+/// The name by which a sandbox on this backend, on this platform, reaches a listener bound
+/// on THIS host — none when it cannot. A fact about the backend, stated by the backend, so
+/// that whatever hands a sandbox a route to this process (the git gateway) asks rather than
+/// guesses. The platform is an argument for the reason `limitsFor`'s is: every claim about
+/// it stays checkable from either machine.
 ///
 /// docker: `host.docker.internal`, which every container is given as an alias for the
 /// daemon's `host-gateway`. That is the host's loopback under Colima and Docker Desktop and
 /// the bridge address under a native Linux daemon — which is why a listener meant for a
 /// container binds every interface, not loopback. host: loopback, there being no boundary.
-/// srt: none yet. Its egress is a filtering proxy whose `NO_PROXY` covers loopback and every
-/// private range, and on Linux its network namespace has no route to the host at all; a name
-/// the proxy will carry and the host will answer to is a question for a later change.
-let hostAddressFrom (backend: SandboxBackend) : string option =
+///
+/// srt: a name its filtering proxy will carry. The proxy sets `NO_PROXY` over `localhost`,
+/// `127.0.0.1` and every private range, so any of those is dialled DIRECTLY — into a
+/// network namespace with no route on Linux, a seatbelt deny on macOS. What is left splits
+/// by platform, and the split IS the fault this takes the platform for: on Linux loopback
+/// is the whole of `127/8`, so `127.0.0.2` is a loopback address `NO_PROXY` does not name —
+/// it goes through the proxy and the parent dials it with no resolver involved. macOS
+/// configures `.1` alone on `lo0`, so `127.0.0.2` is not up; the name there is the box's own
+/// hostname, which macOS resolves for itself (mDNS) and reaches the every-interface listener.
+/// The macOS answer assumes the box resolves its own name; where it does not, a confined git
+/// gets a proxy error naming the host, not a route.
+let hostAddressFrom (hostname: string) (platform: string) (backend: SandboxBackend) : string option =
     match backend with
     | DockerBackend -> Some "host.docker.internal"
     | HostBackend -> Some "127.0.0.1"
-    | SrtBackend -> None
+    | SrtBackend -> if platform = "darwin" then Some hostname else Some "127.0.0.2"
+
+/// `hostAddressFrom` on the host this process runs on — the same one-place reading of the
+/// platform `limitsHere` is, for the same reason.
+let hostAddressHere (hostname: string) (backend: SandboxBackend) : string option =
+    hostAddressFrom hostname (platform ()) backend
 
 /// What one set of granted leaves comes to, each channel beside the others because they
 /// are one fact read by different consumers: the host family closes path SETS over the
@@ -1769,6 +1784,16 @@ module SrtSandbox =
     [<Emit("$0.argv")>]
     let private argvOf (wrapped: obj) : string array = jsNative
 
+    // Where srt's Linux egress bridge listens: the unix sockets the in-sandbox socat
+    // connects to, forwarding a confined command's proxied traffic back to the parent
+    // proxy. Both are undefined off Linux (Seatbelt needs no such bridge), so a caller
+    // reads them through `Option.ofObj`.
+    [<Emit("$0.SandboxManager.getLinuxHttpSocketPath()")>]
+    let private linuxHttpSocketPath (srt: obj) : string = jsNative
+
+    [<Emit("$0.SandboxManager.getLinuxSocksSocketPath()")>]
+    let private linuxSocksSocketPath (srt: obj) : string = jsNative
+
     [<Emit("(function (srt, allowedDomains, allowUnixSockets) { return srt.SandboxManager.updateConfig({ ...srt.SandboxManager.getConfig(), network: { ...srt.SandboxManager.getConfig().network, allowedDomains: allowedDomains, allowUnixSockets: allowUnixSockets } }) })($0, $1, $2)")>]
     let private widenAllowlist (srt: obj) (allowedDomains: string array) (allowUnixSockets: string array) : unit = jsNative
 
@@ -1924,6 +1949,34 @@ module SrtSandbox =
                 | NothingSettled -> forgetManager () |> Async.StartImmediate)
             Interop.awaitPromise promise
 
+    /// Name srt's own egress bridge sockets in the read set, so a confined command can
+    /// reach them.
+    ///
+    /// srt bind-mounts these sockets into every command it wraps, and the in-sandbox
+    /// socat connects to them to carry proxied traffic back to the parent proxy. But a
+    /// root-deny filesystem lays a tmpfs over the directory they live in — the system
+    /// temp — and re-binds only the paths the policy named. Unnamed, the socket is
+    /// masked: the socat connects to nothing, and every egress request comes back an
+    /// empty reply with the destination never dialled. Naming it is what makes srt
+    /// re-bind it AFTER the tmpfs.
+    ///
+    /// The socket stays where srt put it — a SHORT path in the system temp. Moving it
+    /// under the session directory instead (so the existing tmp grant would cover it)
+    /// overflows the unix-socket `sun_path` limit the moment that directory is deep,
+    /// and srt cannot open the socket at all: `listen EINVAL`, no sandbox, no command.
+    /// Both paths are absent off Linux, where Seatbelt needs no bridge; a socks path
+    /// that reuses the http one in mux mode is de-duplicated, and only real files are
+    /// named — a `--bind` of a path that does not exist fails the whole spawn.
+    let private withBridgeSockets (srt: obj) (config: SrtConfig) : SrtConfig =
+        let sockets =
+            [ linuxHttpSocketPath srt; linuxSocksSocketPath srt ]
+            |> List.choose Option.ofObj
+            |> List.filter Fs.exists
+            |> List.distinct
+        match sockets with
+        | [] -> config
+        | _ -> { config with AllowRead = List.distinct (config.AllowRead @ sockets) }
+
     let create (tools: SrtTools) : CreateSandbox =
         fun policy ->
             async {
@@ -1932,6 +1985,9 @@ module SrtSandbox =
                     Fs.ensureDir (SessionLayout.tmpDir ())
                     let config = configFor tools policy
                     let! srt = managerFor config
+                    // The bridge sockets are the manager's, settled once it is up: fold
+                    // them into the config every wrap here uses.
+                    let config = withBridgeSockets srt config
                     let children = Children.Registry ()
                     let spawn (exec: SandboxExec) (onChunk: OutputStream * string -> unit) =
                         async {
@@ -1995,6 +2051,7 @@ module SrtSandbox =
         fun executable arguments cwd ->
             async {
                 let! srt = managerFor config
+                let config = withBridgeSockets srt config
                 let! wrapped = Interop.awaitPromise (wrapArgv srt (commandLine executable arguments) (toJs config) cwd)
                 match List.ofArray (argvOf wrapped) with
                 | [] -> return failwith "srt returned an empty argv"

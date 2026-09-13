@@ -28,19 +28,25 @@ open Yession.Domain.Agent
 open Yession.Domain.Tools
 open Yession.SessionProcess
 
-/// What a forwarded credential puts in a sandbox. Two channels, because git's config is
-/// one variable everything shares (`GIT_CONFIG_COUNT`) and has to be APPENDED to, where a
-/// plain variable is simply set — `Sandboxes.withGitConfig` is the difference.
+/// What a forwarded credential puts in a sandbox. Three channels: git's config is one
+/// variable everything shares (`GIT_CONFIG_COUNT`) and has to be APPENDED to, where a plain
+/// variable is simply set — `Sandboxes.withGitConfig` is the difference — and a route is
+/// only a route if the sandbox's egress admits the host it names.
 type Provision =
     { Env : Map<string, string>
-      GitConfig : (string * string) list }
+      GitConfig : (string * string) list
+      /// Hosts the sandbox must be allowed to reach for the provision to work. Read by a
+      /// backend that filters egress (srt); the rest have nothing to widen.
+      Domains : string list }
 
 module Provision =
 
-    let empty : Provision = { Env = Map.empty; GitConfig = [] }
+    let empty : Provision = { Env = Map.empty; GitConfig = []; Domains = [] }
 
     let merge (a: Provision) (b: Provision) : Provision =
-        { Env = Sandboxes.mergeEnv a.Env b.Env; GitConfig = a.GitConfig @ b.GitConfig }
+        { Env = Sandboxes.mergeEnv a.Env b.Env
+          GitConfig = a.GitConfig @ b.GitConfig
+          Domains = List.distinct (a.Domains @ b.Domains) }
 
 /// What forwarding one credential into one sandbox came to.
 [<RequireQualifiedAccess>]
