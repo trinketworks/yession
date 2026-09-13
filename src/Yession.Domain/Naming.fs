@@ -11,10 +11,11 @@ open Yession.Domain.Agent
 /// test each caller writes: the guard it carries is the only thing between a model and a name
 /// somebody typed themselves, and a second copy of it would be the copy that got it wrong.
 ///
-/// Its memory is the event log. Both questions a pass asks are about the past — may this
-/// still be written over, and has enough been said since to be worth asking again — so a
-/// `SessionNamed` answers both, and a restarted process picks up exactly where it left off
-/// instead of either re-asking everything or refusing to ask anything.
+/// Its memory is the event log. Every question a pass asks is about the past — may this still
+/// be written over, is the asking over, and has enough been said since to be worth asking
+/// again — so the `SessionNamed` facts answer all three, and a restarted process picks up
+/// exactly where it left off instead of either re-asking everything or refusing to ask
+/// anything.
 module Naming =
 
     /// One subject wanting a name, and everything the asking needs.
@@ -30,13 +31,34 @@ module Naming =
           /// number the ask actually covered.
           Read : int }
 
+    /// Where a subject stands after everything the session has settled about it.
+    type Settled =
+        { /// What the last pass left the name reading.
+          Name : string
+          /// How much that pass covered.
+          Read : int
+          /// The pass left the name where it found it. Every ask after the first hands the
+          /// model the standing name and asks it to keep those words or better them, so an
+          /// answer identical to what it was given is the model saying this name is the one —
+          /// and that FINISHES the subject, because a name a reader has started using is
+          /// worth more than a name that is marginally more apt.
+          ///
+          /// Derived from consecutive facts rather than recorded on one, so it cannot
+          /// disagree with the log it came from and needs nothing of already-written events.
+          Kept : bool }
+
     /// Fold one event into what the session has settled so far.
-    let applyEvent (acc: Map<NamingSubject, SessionNamed>) (event: SessionEvent) : Map<NamingSubject, SessionNamed> =
+    let applyEvent (acc: Map<NamingSubject, Settled>) (event: SessionEvent) : Map<NamingSubject, Settled> =
         match event with
-        | SessionNamed named -> Map.add named.Subject named acc
+        | SessionNamed named ->
+            let kept =
+                match Map.tryFind named.Subject acc with
+                | Some before -> before.Name = named.Name
+                | None -> false
+            Map.add named.Subject { Name = named.Name; Read = named.Read; Kept = kept } acc
         | _ -> acc
 
-    let ofEvents (events: SessionEvent list) : Map<NamingSubject, SessionNamed> =
+    let ofEvents (events: SessionEvent list) : Map<NamingSubject, Settled> =
         events |> List.fold applyEvent Map.empty
 
     /// Whether the session may still write this name, given what it last settled it to.
@@ -45,9 +67,29 @@ module Naming =
     /// chose it; the session's own last answer is writable because it wrote it. Anything else
     /// is a person's words, and a person's words end the question for good — there is no
     /// re-asking a subject somebody has named, however much is said afterwards.
-    let private ours (settled: SessionNamed option) (held: string) : bool =
+    let private ours (settled: Settled option) (held: string) : bool =
         match settled with
         | Some last -> held = last.Name
+        | None -> false
+
+    /// Whether this subject is done being asked about, however much is said from here on.
+    ///
+    /// Stability over aptness, deliberately. A name is a REFERENCE — somebody has it in a
+    /// list, in a tab, in their head — and one that keeps improving under them costs more
+    /// than the improvement is worth. So the naming of a subject is a thing that finishes,
+    /// and the two ways it finishes are the model saying so and the reading running out.
+    ///
+    /// The second is not a spare for the first. `Kept` is what ends it properly, and it is
+    /// the model's judgement rather than a count — which is what lets a session that opened
+    /// with "clone z" and put the work in the next message still be named for the work. But
+    /// a model handed the same material twice can answer differently twice, and an ask that
+    /// has run out of NEW material to read cannot be asking a new question: past this much,
+    /// every ask sends the same lines and the same standing name as the one before it. So
+    /// the second is what stops an unlucky session asking forever, and it is where the
+    /// asking would have stopped mattering anyway.
+    let private finished (settled: Settled option) (bound: int) : bool =
+        match settled with
+        | Some last -> last.Kept || last.Read >= bound
         | None -> false
 
     /// Whether enough has been said since the last ask to be worth asking again.
@@ -58,7 +100,7 @@ module Naming =
     /// session. And it still catches the case the rule is for — a session that opened with
     /// "run tests" and put the actual work in the second message has doubled by the time that
     /// message lands.
-    let private worthAsking (settled: SessionNamed option) (covered: int) : bool =
+    let private worthAsking (settled: Settled option) (covered: int) : bool =
         let read = settled |> Option.map (fun last -> last.Read) |> Option.defaultValue 0
         covered >= max 1 (read * 2)
 
@@ -80,12 +122,13 @@ module Naming =
     /// means a session somebody titled by hand before anything was said is theirs from the
     /// start.
     let private titleOwed
-        (settled: Map<NamingSubject, SessionNamed>)
+        (settled: Map<NamingSubject, Settled>)
         (title: string)
         (items: ConversationItem list)
         : Job option =
         let last = Map.tryFind NamingSubject.Title settled
         if not (title = "" || ours last title) then None
+        elif finished last Titles.ReadItems then None
         elif not (worthAsking last (List.length items)) then None
         else
             Some
@@ -95,7 +138,7 @@ module Naming =
                   Read = List.length items }
 
     let owed
-        (settled: Map<NamingSubject, SessionNamed>)
+        (settled: Map<NamingSubject, Settled>)
         (title: string)
         (chapters: Map<MessageId, ChapterMark>)
         (items: ConversationItem list)
@@ -111,6 +154,7 @@ module Naming =
                 let last = Map.tryFind subject settled
                 let held = Chapters.name chapters item
                 if not (Chapters.unwritten chapters item || ours last held) then None
+                elif finished last Chapters.ReadItems then None
                 else
                     let covered = Chapters.covers chapters items item
                     if not (worthAsking last (List.length covered)) then None

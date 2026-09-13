@@ -309,7 +309,11 @@ module Chapters =
     /// back half of a stack trace moves that. Bounded here rather than at a provider because
     /// the bound is a judgement about chapters, and a provider that set its own would be a
     /// second judgement nobody could find.
-    let [<Literal>] private ReadItems = 12
+    ///
+    /// Public because it is also the point past which asking again can learn nothing: an ask
+    /// over a stretch this long reads the same lines as the one before it, whatever has been
+    /// said since (`Naming.owed`).
+    let [<Literal>] ReadItems = 12
     let [<Literal>] private ReadChars = 400
 
     /// What to ask about the chapter here, for whatever can write a few words (`Summarize`).
@@ -387,10 +391,10 @@ module Chapters =
 /// is a state nobody chose rather than one nobody has got to.
 module Titles =
 
-    /// How much of a session is worth reading to name it. The same bounds a chapter's ask
-    /// uses, and from the START: a session is named for what it set out to do, and the
-    /// fortieth message moves that less than the first.
-    let [<Literal>] private ReadItems = 12
+    /// How much of a session is worth reading to name it. Chapters' bounds rather than its
+    /// own, because the judgement is the same one, and from the START: a session is named for
+    /// what it set out to do, and the fortieth message moves that less than the first.
+    let ReadItems = Chapters.ReadItems
     let [<Literal>] private ReadChars = 400
 
     let summaryAsk (items: ConversationItem list) (current: string option) : SummaryAsk =

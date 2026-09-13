@@ -2618,10 +2618,15 @@ let private namingTests =
     let chaptersOwed settled chapters items =
         Naming.owed settled titled chapters items
         |> List.filter (fun (job: Naming.Job) -> job.Subject <> NamingSubject.Title)
+    /// What the session has settled, folded from the facts it recorded — the real path, so a
+    /// case about what the fold DERIVES (whether a pass kept the name it was given) cannot be
+    /// set up into being true.
+    let settledFrom (facts: SessionNamed list) =
+        Naming.ofEvents (facts |> List.map SessionNamed)
+    let fact (subject: NamingSubject) (name: string) (read: int) =
+        { Subject = subject; Name = name; Read = read; OnBehalfOf = None }
     let settledAs (item: ConversationItem) (name: string) (read: int) =
-        Map.ofList
-            [ subjectOf item,
-              { Subject = subjectOf item; Name = name; Read = read; OnBehalfOf = None } ]
+        settledFrom [ fact (subjectOf item) name read ]
 
     testList "What the session owes a name" [
 
@@ -2754,10 +2759,7 @@ let private namingTests =
         // stretch — which is the "run tests" case at the session's own scale.
         testCase "a session whose material doubles is titled again" <| fun () ->
             let items = [ saying "a" "run tests"; saying "b" "the auth middleware drops the refresh token" ]
-            let settled =
-                Map.ofList
-                    [ NamingSubject.Title,
-                      { Subject = NamingSubject.Title; Name = "Running the tests"; Read = 1; OnBehalfOf = None } ]
+            let settled = settledFrom [ fact NamingSubject.Title "Running the tests" 1 ]
             match Naming.owed settled "Running the tests" Map.empty items with
             | [ job ] ->
                 Expect.equal job.Read 2 "and the fact will say it read both"
@@ -2766,10 +2768,7 @@ let private namingTests =
 
         testCase "a session that has not doubled since its title is not asked again" <| fun () ->
             let items = [ saying "a" "one"; saying "b" "two"; saying "c" "three" ]
-            let settled =
-                Map.ofList
-                    [ NamingSubject.Title,
-                      { Subject = NamingSubject.Title; Name = "Two of them"; Read = 2; OnBehalfOf = None } ]
+            let settled = settledFrom [ fact NamingSubject.Title "Two of them" 2 ]
             Expect.equal (Naming.owed settled "Two of them" Map.empty items) [] "three is not six"
 
         // --- what the pass records ------------------------------------------------------
@@ -2786,10 +2785,51 @@ let private namingTests =
 
         testCase "the fold keeps the latest fact for a subject" <| fun () ->
             let item = saying "m" "run tests"
-            let earlier = { Subject = subjectOf item; Name = "First"; Read = 1; OnBehalfOf = None }
-            let later = { earlier with Name = "Second"; Read = 4 }
-            let settled = Naming.ofEvents [ SessionNamed earlier; SessionNamed later ]
-            Expect.equal (Map.tryFind (subjectOf item) settled) (Some later) "the last word is the current one"
+            let settled =
+                settledFrom [ fact (subjectOf item) "First" 1; fact (subjectOf item) "Second" 4 ]
+            Expect.equal
+                (settled |> Map.tryFind (subjectOf item) |> Option.map (fun s -> s.Name, s.Read))
+                (Some ("Second", 4))
+                "the last word is the current one"
+
+        // --- when the asking is over -----------------------------------------------------
+
+        // The model was handed the name and asked to keep it or better it, and kept it. That
+        // is the answer that finishes the subject: a name somebody has started using is worth
+        // more than a name that is marginally more apt.
+        testCase "a name the model kept is never asked about again" <| fun () ->
+            // Four items against a fact that read two: material enough to have doubled, so
+            // the only thing that can be stopping this is the model's own answer.
+            let items =
+                [ saying "a" "clone z"; saying "b" "fix the refresh token"
+                  saying "c" "and the tests"; saying "d" "and a changelog line" ]
+            let settled = settledFrom [ fact NamingSubject.Title "Cloning z" 1; fact NamingSubject.Title "Cloning z" 2 ]
+            Expect.equal (Naming.owed settled "Cloning z" Map.empty items) [] "the model said this is the name"
+
+        // The other half of that: a pass that CHANGED the name has not settled anything, which
+        // is what keeps the session that opened with "clone z" nameable for the work.
+        testCase "a name the model changed is still asked about" <| fun () ->
+            let items = [ saying "a" "clone z"; saying "b" "fix the refresh token"; saying "c" "and the tests"; saying "d" "and a test" ]
+            let settled =
+                settledFrom [ fact NamingSubject.Title "Cloning z" 1; fact NamingSubject.Title "Fixing the refresh token" 2 ]
+            Expect.equal
+                (Naming.owed settled "Fixing the refresh token" Map.empty items |> List.map (fun job -> job.Subject))
+                [ NamingSubject.Title ]
+                "nothing has been settled while the answer keeps moving"
+
+        // The backstop, for the session whose answer never settles. An ask reads a bounded
+        // number of items, so past that it sends the same lines and the same standing name as
+        // the ask before it — a question with a known answer.
+        testCase "a session whose ask has run out of new material is not asked again" <| fun () ->
+            let items = List.init (Titles.ReadItems * 4) (fun i -> saying (string i) (sprintf "message %d" i))
+            let settled = settledFrom [ fact NamingSubject.Title "Something" Titles.ReadItems ]
+            Expect.equal (Naming.owed settled "Something" Map.empty items) [] "the next ask would be the last one again"
+
+        testCase "a chapter whose ask has run out of new material is not asked again" <| fun () ->
+            let items = List.init (Chapters.ReadItems * 4) (fun i -> saying (string i) (sprintf "message %d" i))
+            let first = List.head items
+            let chapters = Map.ofList [ opened first "Something" ]
+            Expect.equal (chaptersOwed (settledAs first "Something" Chapters.ReadItems) chapters items) [] "same question, same answer"
     ]
 
 /// A compose-style command line into words: what `entrypoint: "…"` is read with.
