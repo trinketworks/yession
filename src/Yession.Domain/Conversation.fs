@@ -328,13 +328,16 @@ module Chapters =
         (current: string option)
         : SummaryAsk =
         { Task =
+            // The inner binding is NOT `current`. One name meaning an option in the outer
+            // scope and its contents in the inner is the shape CI's whole-solution analyzer
+            // has been wedged by before (AGENTS.md, YES000), and it costs nothing to avoid.
             match current with
             | None ->
                 "Name this part of a working session, the way a chapter in a book is named: "
                 + "a few words saying what it is ABOUT, in the session's own vocabulary. "
                 + "Answer with the name alone — no quotes, no preamble, no full stop."
-            | Some current ->
-                "This part of a working session is currently called \"" + current + "\". More has "
+            | Some standing ->
+                "This part of a working session is currently called \"" + standing + "\". More has "
                 + "been said in it since that was written. If those words are still the best "
                 + "short name for what this part is ABOUT, answer with them exactly as they "
                 + "are. If the newer material shows it is really about something else, answer "
