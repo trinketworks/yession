@@ -430,9 +430,12 @@ let private run () =
         let mutable since = now ()
         while now () - since < float (if landed then seconds else 60) * 1000.0 do
             do! delay 250
-            let! href = evaluate cdp "location.href"
+            // Landed = the document is the session shell, wherever the deployment mounts it
+            // (a path under the Manager, a port of its own): the shell is the one document
+            // with the client's mount in it, and the Manager's opening page has none.
+            let! href = evaluate cdp (sprintf "document.getElementById('%s') ? location.href : ''" Yession.App.Dom.appId)
             let href : string = match unbox href with | null -> "" | s -> s
-            if not landed && href.Contains "/s/" then
+            if not landed && href <> "" then
                 landed <- true
                 since <- now ()
                 say (sprintf "landed %s after %.0f ms" href (now () - navigatedAt))
