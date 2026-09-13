@@ -17,6 +17,7 @@ open Yession.Domain
 open Yession.Domain.Sandboxes
 open Yession.Domain.Access
 open Yession.Host
+open Yession.Domain.Agent
 open Yession.Tests.Support
 open Yession.Peer
 
@@ -165,6 +166,39 @@ let tests =
                 | Error reason ->
                     Expect.stringContains reason "looked for bash" "it says what it looked for"
                     Expect.stringContains reason "found none" "and that nothing was there"
+            })
+
+            // Through the Session Process as production composes it (`hostOver`), over a
+            // docker sandbox with an entrypoint: the terminal's shell is the one found
+            // behind it, a block runs inside it, `cd` carries to the next block — and the
+            // output is the command's bytes, with no stream headers. No docker terminal had
+            // run a shell through the Host in this suite before; the first one on a
+            // deployed host printed `\x01\x00…\x14sed (GNU sed) 4.10`, the exec-start's
+            // own `Tty` flag having been left off.
+            testCaseAsync "a terminal the Host opens in a docker sandbox runs its blocks behind the entrypoint, in one shell, cleanly" (async {
+                let spec =
+                    alpineSpec
+                    |> withContainer (fun c -> { c with Entrypoint = Some [ "/usr/bin/env"; "BEHIND=entrypoint" ] })
+                let name = SessionId.value (SessionId.mint ())
+                let createSandbox = Sandboxes.forBackend DockerBackend name spec |> expect
+                let layout = Sandboxes.SessionLayout.forSandbox "/session" DockerBackend SandboxRef.defaultRef
+                let! policy =
+                    async {
+                        match! Sandboxes.preparePolicy DockerBackend envSecrets layout (fun _ _ -> Ok ([], Set.empty)) spec () with
+                        | Error reason -> return failwithf "policy: %s" reason
+                        | Ok policy -> return policy
+                    }
+                let! host = hostOver createSandbox policy "docker-host"
+                let agent = Authority.agentFor (Principal.Peer (PeerId.create "ada" |> expect))
+                match! host.TerminalCommands.Execute (CommandRequest.ofCommand "echo behind=$BEHIND; cd /tmp") agent with
+                | Error e -> failwithf "the first block did not run: %s" e
+                | Ok first ->
+                    Expect.equal first.Status (TerminalCommandRan (CommandSucceeded 0)) "the block ran, in a shell that marks"
+                    Expect.equal (first.Output.Trim ()) "behind=entrypoint" (sprintf "its output is the command's, behind the entrypoint, with nothing else in it; got: %A" first.Output)
+                    match! host.TerminalCommands.Execute { CommandRequest.ofCommand "pwd" with Target = Some (InTerminal first.Terminal) } agent with
+                    | Error e -> failwithf "the second block did not run: %s" e
+                    | Ok second -> Expect.equal (second.Output.Trim ()) "/tmp" "and the shell carried the first block's cd into the second"
+                do! host.Stop ()
             })
 
             testCaseAsync "a non-zero command exit maps to its exit code" (async {
