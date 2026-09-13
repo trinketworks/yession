@@ -117,7 +117,16 @@ let page (sessionId: SessionId) (mount: string) (managerOrigin: string option) (
     let href (route: SessionRoute) = RelativeUrl.inDocument declared (SessionRoute.relative route)
     let asset (file: AssetFile) = RelativeUrl.inDocument declared (AssetBuild.url assets file)
     String.concat "" [
-        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+        "<!doctype html>"
+        // The terminals column's open state is a class on the ROOT, outside `#app`
+        // (`PaneShell.setOpen`), so the first paint has to carry it: a shell that said
+        // nothing painted the column open, and the client's first render then shut it — a
+        // full-width pane sliding off a phone's screen, a 200ms width collapse on a desktop,
+        // before anything the person asked for. The same bit the client writes, from the
+        // same model field, so the first paint and the first render agree by construction.
+        (if model.TerminalsOpen then "<html lang=\"en\">"
+         else sprintf "<html lang=\"en\" class=\"%s\">" Dom.termClosedClass)
+        "<head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         // Before the stylesheet and the bundle, because it governs how both resolve.
         baseTag

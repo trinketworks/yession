@@ -37,6 +37,13 @@ module Dom =
     /// A hook rather than a selector spelled twice, for the same reason every other one is.
     let playerStylesheetHook = "data-player-css"
 
+    /// The class on the shell ROOT (`<html>`) that says the terminals column is shut. Written
+    /// by two hands — the server into the first paint (`Ssr.page`) and the browser after every
+    /// render (`PaneShell.setOpen`) — from the one model field, `TerminalsOpen`; the name is
+    /// here so those two cannot drift apart. `Style.terminalPanel` spells it a third time,
+    /// inside Tailwind variants, which have to be literal to be generated at all.
+    let termClosedClass = "term-closed"
+
     /// `data-*` hooks on the session client shell (`View`) and its browser delegation.
     module Hooks =
         // Header — the collaborative session title and its secondary id.

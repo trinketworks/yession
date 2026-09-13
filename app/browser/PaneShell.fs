@@ -229,10 +229,12 @@ let toItemActions (messageId: string) : unit =
 /// The pane's open state, as a class on the shell root — the same mechanism the sidebar uses,
 /// so a Lit re-render never fights the CSS transition. A `set` rather than a toggle, because
 /// the model holds the bit and this only reflects it: the app opens this column itself
-/// whenever a chip or a tab is chosen.
+/// whenever a chip or a tab is chosen. The served shell (`Ssr.page`) writes the same class
+/// from the same field before the first paint, so the first call here changes nothing —
+/// which is the point: a column that painted open and was then shut is a jump.
 let setOpen (isOpen: bool) : unit =
-    if isOpen then document.documentElement.classList.remove [| "term-closed" |]
-    else document.documentElement.classList.add [| "term-closed" |]
+    if isOpen then document.documentElement.classList.remove [| Yession.App.Dom.termClosedClass |]
+    else document.documentElement.classList.add [| Yession.App.Dom.termClosedClass |]
 
 /// The pane's width on desktop, as a custom property on the shell root — the same mechanism
 /// the open state uses, and for the same reasons: it is presentation, a Lit re-render must not

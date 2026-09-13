@@ -1697,6 +1697,27 @@ let private shellTests =
             Expect.isFalse
                 ((pageWith None false).Contains Dom.ephemeralStorageMetaName)
                 "absence is the good case, so the client reads false"
+
+        // The terminals column's open state lives on `<html>`, outside the mount the client
+        // re-renders, so the client cannot paint it — only the shell can, and if it does not,
+        // the first render shuts a column the first paint showed open. What is pinned is
+        // agreement: the shell root says what the model says, in both directions.
+        let shellWith (terminalsOpen: bool) =
+            Yession.Host.Ssr.page sessionId "" None false assets { representativeModel with TerminalsOpen = terminalsOpen }
+
+        let rootOf (html: string) =
+            let start = html.IndexOf "<html"
+            html.Substring (start, html.IndexOf ('>', start) - start + 1)
+
+        testCase "a shell whose column is shut says so on its root, before the client runs" <| fun () ->
+            Expect.isTrue
+                ((rootOf (shellWith false)).Contains Dom.termClosedClass)
+                "the first paint carries the class the first render would otherwise have to add"
+
+        testCase "a shell whose column is open carries no such class" <| fun () ->
+            Expect.isFalse
+                ((rootOf (shellWith true)).Contains Dom.termClosedClass)
+                "the class is the model's bit, not a default"
     ]
 
 // Where everyone IS. Presence already drove per-field overlays, but each of those is only
