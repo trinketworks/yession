@@ -84,6 +84,10 @@ let all =
         Tag.needs "Foreign terminal attach" [ Tag.Ports ] (fun () -> Attach.portsTests)
         Tag.needs "Editor" [] (fun () -> Editor.tests)
         Tag.needs "Agent" [] (fun () -> Agent.tests)
+        // The zod bindings, built and asked to accept and refuse. Beside Agent because the
+        // agent adapter is their one caller — a tool descriptor's JSON Schema becomes a zod
+        // shape there — and zod is pure JavaScript, so this costs no capability.
+        Tag.needs "Zod bindings" [] (fun () -> ZodBindings.tests)
         Tag.needs "Version" [] (fun () -> Version.tests)
         Tag.needs "Telemetry" [] (fun () -> Telemetry.tests)
         Tag.needs "Telemetry E2E" [] (fun () -> TelemetryE2E.tests)
