@@ -96,6 +96,19 @@ let private envelopeSerializationTests =
             let json = Codec.toString Codec.sessionEventEnvelope original
             Expect.equal (Codec.fromString Codec.sessionEventEnvelope json) (Ok original) "round-trip should be identical"
 
+        testCase "a name the session settled round-trips through the envelope codec" <| fun () ->
+            let original =
+                { sampleEnvelope () with
+                    Actor = SessionProcess
+                    Event =
+                        SessionNamed
+                            { Subject = NamingSubject.Chapter (MessageId.create "m1" |> expect)
+                              Name = "The refresh-token bug"
+                              Read = 4
+                              OnBehalfOf = Some (Principal.User (UserId.create "ada" |> expect)) } }
+            let json = Codec.toString Codec.sessionEventEnvelope original
+            Expect.equal (Codec.fromString Codec.sessionEventEnvelope json) (Ok original) "round-trip should be identical"
+
         testCase "UserRef actor round-trips through the envelope codec" <| fun () ->
             let user = UserId.create "nick@example.com" |> expect
             let original = { sampleEnvelope () with Actor = UserRef user }
@@ -2507,6 +2520,136 @@ let private attributionTests =
             Expect.equal (Attribution.creator state) (Some (Principal.User carol)) "the first ATTRIBUTED join is the one that counts"
     ]
 
+// What the session owes in the way of names (Plan 25). The rule that decides which subjects
+// want naming, and the guard that is the only thing between a model and a name somebody
+// typed themselves.
+let private namingTests =
+    let saying id body : ConversationItem =
+        { MessageId = MessageId.create id |> expect
+          Author = ActorRef.Agent
+          Body = body
+          Status = Complete
+          Kind = ConversationItemKind.Message
+          Offset = EventOffset.create 1L |> expect
+          Woke = None; Replying = None }
+    /// A chapter opening at this item, wearing whatever is written on it.
+    let opened (item: ConversationItem) (written: string) =
+        item.MessageId, { Opens = true; Name = Ylmish.Text.ofString written }
+    let subjectOf (item: ConversationItem) = NamingSubject.Chapter item.MessageId
+    let settledAs (item: ConversationItem) (name: string) (read: int) =
+        Map.ofList
+            [ subjectOf item,
+              { Subject = subjectOf item; Name = name; Read = read; OnBehalfOf = None } ]
+
+    testList "What the session owes a name" [
+
+        // The ordinary case: a chapter made by hand wears the guess, and the guess is what
+        // nobody chose.
+        testCase "a chapter still wearing its guess is owed a name" <| fun () ->
+            let item = saying "m" "run tests"
+            let chapters = Map.ofList [ opened item (Chapters.defaultName item) ]
+            Expect.equal
+                (Naming.owed Map.empty chapters [ item ] |> List.map (fun job -> job.Subject))
+                [ subjectOf item ]
+                "the guess is nobody's words"
+
+        // The promise the whole feature rests on.
+        testCase "a chapter somebody named themselves is owed nothing, ever" <| fun () ->
+            let item = saying "m" "run tests"
+            let chapters = Map.ofList [ opened item "The Friday deploy" ]
+            Expect.equal (Naming.owed Map.empty chapters [ item ]) [] "their words end the question"
+
+        // ...and it holds against the session's own record, not just against the guess: a
+        // person who types over a name the session wrote has the same last word.
+        testCase "a name the session wrote and a person then changed is owed nothing" <| fun () ->
+            // Material enough to be worth asking again, so the ONLY thing that can stop this
+            // is whose words are on it.
+            let item = saying "m" "run tests"
+            let items = [ item; saying "n" "and the rest" ]
+            let chapters = Map.ofList [ opened item "Their better name" ]
+            Expect.equal
+                (Naming.owed (settledAs item "What the session wrote" 1) chapters items)
+                []
+                "the doc no longer reads what the session left there"
+
+        // The other half of the same fact: what the session wrote is its own to revisit.
+        testCase "a name the session wrote is its own to reconsider" <| fun () ->
+            let first = saying "a" "run tests"
+            let second = saying "b" "the auth middleware drops the refresh token"
+            let chapters = Map.ofList [ opened first "Running the tests" ]
+            Expect.equal
+                (Naming.owed (settledAs first "Running the tests" 1) chapters [ first; second ]
+                 |> List.map (fun job -> job.Subject))
+                [ subjectOf first ]
+                "its own words are not somebody else's"
+
+        // The case the doubling rule exists for: a session that opens with "run tests" and
+        // puts the actual work in the second message.
+        testCase "a second message doubles the material, so the name is asked again" <| fun () ->
+            let first = saying "a" "run tests"
+            let second = saying "b" "the auth middleware drops the refresh token"
+            let chapters = Map.ofList [ opened first "Running the tests" ]
+            let jobs = Naming.owed (settledAs first "Running the tests" 1) chapters [ first; second ]
+            Expect.equal (jobs |> List.map (fun job -> job.Read)) [ 2 ] "both messages, and the fact will say so"
+
+        // ...and the bound that keeps it from being one model call per message.
+        testCase "material that has grown without doubling is not asked again" <| fun () ->
+            let items = [ saying "a" "one"; saying "b" "two"; saying "c" "three" ]
+            let first = List.head items
+            let chapters = Map.ofList [ opened first "Two of them" ]
+            Expect.equal (Naming.owed (settledAs first "Two of them" 2) chapters items) [] "three is not six"
+
+        // A chapter an act opens by nature has no entry until somebody touches it, and an act
+        // note is a sentence somebody already wrote short.
+        testCase "a chapter no doc entry opens is not a subject" <| fun () ->
+            let act =
+                { saying "n" "PR octo/hello#12 merged" with
+                    Kind = ConversationItemKind.ActNote { Detail = None; Notable = true } }
+            Expect.isTrue (Chapters.opens Map.empty act) "it does open a chapter"
+            Expect.equal (Naming.owed Map.empty Map.empty [ act ]) [] "and it is still not named"
+
+        // A closed chapter is not a chapter.
+        testCase "a chapter somebody closed is owed nothing" <| fun () ->
+            let item = saying "m" "run tests"
+            let chapters = Map.ofList [ item.MessageId, { Opens = false; Name = Ylmish.Text.empty } ]
+            Expect.equal (Naming.owed Map.empty chapters [ item ]) [] "there is no chapter here to name"
+
+        // The doc and the log are two stores, and a mark can name a message the log has not
+        // reached yet.
+        testCase "a mark with no message behind it is not a subject" <| fun () ->
+            let item = saying "m" "run tests"
+            let chapters = Map.ofList [ opened item (Chapters.defaultName item) ]
+            Expect.equal (Naming.owed Map.empty chapters []) [] "nothing to read, so nothing to ask"
+
+        // The job carries what the write must still find, so the compare-and-set is against
+        // what this pass actually read.
+        testCase "a job carries the name it read, for the write to compare against" <| fun () ->
+            let item = saying "m" "run tests"
+            let chapters = Map.ofList [ opened item "Running the tests" ]
+            match Naming.owed (settledAs item "Running the tests" 1) chapters [ item; saying "n" "and the rest" ] with
+            | [ job ] -> Expect.equal job.Held "Running the tests" "what stood when this pass looked"
+            | other -> failwithf "expected one job, got %A" other
+
+        // --- what the pass records ------------------------------------------------------
+
+        // Recording the LOSS is what tells the next pass the subject is somebody else's now.
+        testCase "a write that lost its race is settled to what stands, not to what was said" <| fun () ->
+            let item = saying "m" "run tests"
+            let chapters = Map.ofList [ opened item (Chapters.defaultName item) ]
+            match Naming.owed Map.empty chapters [ item ] with
+            | [ job ] ->
+                let fact = Naming.settle job None "What they typed instead"
+                Expect.equal fact.Name "What they typed instead" "the fact records the doc, not the answer"
+            | other -> failwithf "expected one job, got %A" other
+
+        testCase "the fold keeps the latest fact for a subject" <| fun () ->
+            let item = saying "m" "run tests"
+            let earlier = { Subject = subjectOf item; Name = "First"; Read = 1; OnBehalfOf = None }
+            let later = { earlier with Name = "Second"; Read = 4 }
+            let settled = Naming.ofEvents [ SessionNamed earlier; SessionNamed later ]
+            Expect.equal (Map.tryFind (subjectOf item) settled) (Some later) "the last word is the current one"
+    ]
+
 let tests =
     testList "Domain" [
         identityTests
@@ -2520,6 +2663,7 @@ let tests =
         conversationProjectionTests
         repoTests
         chapterTests
+        namingTests
         prWatchTests
         deliveryFilterTests
         deliveryDocumentTests

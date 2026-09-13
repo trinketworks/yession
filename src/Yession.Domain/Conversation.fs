@@ -422,6 +422,7 @@ module ConversationProjection =
         | SessionCreated _ -> proj // session lifecycle, not a conversation item
         | PeerJoined _ -> proj     // presence, not a conversation item
         | PeerLeft _ -> proj       // presence, not a conversation item
+        | SessionNamed _ -> proj   // what a chapter is CALLED, not something said in one
         | MessageSent m ->
             { proj with
                 Items =
