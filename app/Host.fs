@@ -15,22 +15,16 @@ open Yession.Domain.Collab
 open Yession.Domain.Tools
 open Yession.SessionProcess
 
-[<Fable.Core.Emit("setInterval($1, $0)")>]
-let private setInterval (ms: int) (callback: unit -> unit) : obj = Fable.Core.Util.jsNative
-
-[<Fable.Core.Emit("clearInterval($0)")>]
-let private clearInterval (handle: obj) : unit = Fable.Core.Util.jsNative
-
 /// How often a busy session repeats its activity report (Plan 11). Comfortably shorter
 /// than any sane idle window, so a Manager reaping on silence needs several missed beats
 /// in a row before it acts — one dropped request never costs a session.
-let private activityBeatMs = 30000
+let private activityBeat = TimeSpan.FromSeconds 30.0
 
 /// How often the idle-lease sweep runs (Plan 13, stage 3c). Its own beat rather than the
 /// activity one, because that beat exists only for a session with a Manager to report to —
 /// and a terminal held open in a Manager-less session starves its queue exactly the same.
 /// Well under `TerminalLeaseIdle.window`, so the overshoot is bounded by the beat.
-let private idleLeaseBeatMs = 30000
+let private idleLeaseBeat = TimeSpan.FromSeconds 30.0
 
 type SessionHost =
     { SessionId : SessionId
@@ -113,6 +107,10 @@ type SessionHost =
 /// replayed at boot — unsent queue entries and drafts survive restarts — and every
 /// subsequent update is durably appended. Resolves once the server is listening.
 let startFull
+    // Time, for everything this host composes (`Clock`): what it is, and every wait — the
+    // terminal manager's windows, a command's deadline tick, the two beats below. One
+    // clock, handed down, so a composition that turns it by hand turns all of it.
+    (clock: Clock)
     // A THUNK, read at every drain (Plan 08): agent availability is dynamic — a
     // credential connected mid-session enables turns without a relaunch.
     (runAgent: unit -> RunAgent option)
@@ -248,7 +246,7 @@ let startFull
             let inner =
                 match baseLog with
                 | Some injected -> injected
-                | None -> InMemoryEventLog.create sessionId (fun () -> DateTimeOffset.UtcNow)
+                | None -> InMemoryEventLog.create sessionId clock.Now
             { inner with
                 Append =
                     fun actor event ->
@@ -355,7 +353,7 @@ let startFull
                 transcripts.ReadRange
                 Emulator.openEmulator
                 SessionTerminals.TerminalShell.posix
-                Clock.system
+                clock
                 TerminalId.mint
                 mintBlockId
                 // Cryptographically random, and not a counter: a guessable nonce is no nonce
@@ -395,7 +393,7 @@ let startFull
                     match QueueId.create (string (Guid.NewGuid ())) with
                     | Ok id -> id
                     | Error e -> failwithf "queue id invariant violated: %s" e)
-                (fun () -> DateTimeOffset.UtcNow)
+                clock
                 subscribeToChanges
 
         // How each gated command is actually carried out, by tool name. Assigned once
@@ -457,7 +455,7 @@ let startFull
                     | Ok id -> id
                     | Error e -> failwithf "queue id invariant violated: %s" e)
                 mintMessageId
-                (fun () -> DateTimeOffset.UtcNow)
+                clock
                 subscribeToChanges
 
         // A handle names a REQUEST without saying which kind it is, so the join lives here
@@ -671,7 +669,7 @@ let startFull
         // Kept so `Stop` can clear it. Unlike the activity beat this one runs in EVERY
         // session, so a timer left armed past the end of a session is a timer reading a doc
         // and a log that nothing owns any more.
-        let idleLeaseBeat = setInterval idleLeaseBeatMs terminalScheduler.ReclaimIdleLeases
+        let stopIdleLeaseBeat = Clock.every clock idleLeaseBeat terminalScheduler.ReclaimIdleLeases
 
         // Process-originated doc writes (the drain's queue removals) broadcast to every
         // peer; peer payloads are relayed by the receiving connection.
@@ -764,7 +762,7 @@ let startFull
 
         if Option.isSome reportActivity then
             notifyActivity ()
-            setInterval activityBeatMs notifyActivity |> ignore
+            Clock.every clock activityBeat notifyActivity |> ignore
             DocSync.onAnyUpdate doc notifyActivity
 
         // Report the collaborative title to the Manager (metadata, not an event) so the
@@ -1031,7 +1029,7 @@ let startFull
               Stop =
                 fun () ->
                     async {
-                        clearInterval idleLeaseBeat
+                        stopIdleLeaseBeat ()
                         notifications |> Option.iter (fun s -> s.Stop ())
                         // Sandbox lifetime = session lifetime: take the WorkSandbox (and
                         // anything still running in it) down with the session.
@@ -1057,7 +1055,7 @@ let startWithEnvironment
     // No mount: these helpers serve an unfronted, origin-root session. No transcript store
     // either — terminals fall back to the in-memory one, which is the right default for a
     // host with no data directory.
-    startFull (fun () -> runAgent) (fun () -> None) makeSandboxes None baseLog None None None None (fun _ _ -> ()) None McpClient.McpConnections.none None sessionId None "" None false None port
+    startFull Clock.system (fun () -> runAgent) (fun () -> None) makeSandboxes None baseLog None None None None (fun _ _ -> ()) None McpClient.McpConnections.none None sessionId None "" None false None port
 
 /// `startWithEnvironment` without an environment — Step 08-era topology.
 let startWith (runAgent: RunAgent option) (sessionId: SessionId) (port: int) : Async<SessionHost> =

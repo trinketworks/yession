@@ -31,6 +31,7 @@ open Yession.Domain.Prs
 open Yession.Domain.Repos
 open Yession.Host
 open Yession.SessionProcess
+open Yession.Tests.Support
 
 let private expect result =
     match result with
@@ -55,7 +56,12 @@ type ToolSession =
       Events : unit -> Async<SessionEvent list>
       /// Move the session's clock. The gate's deadline is measured against this, so a test
       /// crosses it without spending it, and without depending on how long anything took.
+      /// Turning it fires the waiter's tick, which is how the gate notices a deadline — and
+      /// an outcome nothing appended for — so it is turned once a waiter is on it.
       Advance : TimeSpan -> unit
+      /// Resolve once something is waiting on the clock. A call started as a child reaches
+      /// its wait a moment later than the case does its next line.
+      Armed : unit -> Async<unit>
       /// A person's first repo, through the same gate a turn's `add_repo` goes through —
       /// composed the way `SessionMain` composes it, over the same gate as `Call`.
       Launch : Commands.LaunchRepo }
@@ -66,9 +72,10 @@ type ToolSession =
 /// but the clock and whatever the caller substituted at the leaves.
 let openToolSession (services: Commands.CommandServices) : ToolSession =
     let doc = Y.Doc.Create ()
-    let log = InMemoryEventLog.create sessionId (fun () -> DateTimeOffset.UtcNow)
-
-    let mutable clock = DateTimeOffset (2026, 1, 1, 0, 0, 0, TimeSpan.Zero)
+    // The session's clock, turned by the test: the gate's deadline is measured on it and
+    // observed on a tick that is its own, so crossing the deadline is one call.
+    let clock = virtualClock (DateTimeOffset (2026, 1, 1, 0, 0, 0, TimeSpan.Zero))
+    let log = InMemoryEventLog.create sessionId clock.Clock.Now
 
     // The Host's own change seam: one signal for an appended event and a doc update alike,
     // because a waiter does not care which happened — it re-reads and decides.
@@ -99,7 +106,7 @@ let openToolSession (services: Commands.CommandServices) : ToolSession =
                 })
             (fun () -> QueueId.create (mint "q" ()) |> expect)
             (fun () -> MessageId.create (mint "msg" ()) |> expect)
-            (fun () -> clock)
+            clock.Clock
             subscribeToChanges
 
     // What the Host leaves as denials plus the one capability it owns here, then the
@@ -125,10 +132,8 @@ let openToolSession (services: Commands.CommandServices) : ToolSession =
                 let! page = log.Read None 1000
                 return page.Events |> List.map (fun e -> e.Event)
             }
-      Advance =
-        fun span ->
-            clock <- clock + span
-            notifyChanged ()
+      Advance = clock.Advance
+      Armed = clock.Armed
       Launch = Commands.launchRepo services gate.Run gate.Read }
 
 /// A repo service that answers `add_repo` with whatever the test says, and refuses
@@ -346,10 +351,12 @@ let private tests' =
             async {
                 let session, finish = slowlyCloning ()
                 let! call = Async.StartChild (addRepo session "octo/hello")
-                do! Async.Sleep 50
+                do! session.Armed ()
                 session.Advance (TimeSpan.FromSeconds 30.0)
-                do! Async.Sleep 50
                 finish ()
+                // Finished, and nothing appended for it: the tick is how the call finds out.
+                do! session.Armed ()
+                session.Advance (TimeSpan.FromSeconds 1.0)
                 let! answer = call
                 let text = answered answer
                 Expect.stringContains text "added octo/hello" "the call carried the outcome back"
@@ -363,7 +370,7 @@ let private tests' =
             async {
                 let session, finish = slowlyCloning ()
                 let! call = Async.StartChild (addRepo session "octo/hello")
-                do! Async.Sleep 50
+                do! session.Armed ()
                 session.Advance (TimeSpan.FromSeconds 600.0)
                 let! answer = call
                 let text = answered answer
@@ -577,15 +584,16 @@ let private launchTests =
                         | Ok work -> return work
                     }
                 let! running = Async.StartChild work
-                do! Async.Sleep 50
+                do! session.Armed ()
                 session.Advance (TimeSpan.FromSeconds 600.0)
-                do! Async.Sleep 50
+                do! session.Armed ()
                 session.Advance (TimeSpan.FromSeconds 600.0)
-                do! Async.Sleep 50
                 Expect.isFalse
                     (held.Calls |> Seq.exists (fun (call, _) -> call.StartsWith "set_shell_profile"))
                     "two deadlines on, the clone is still the thing being waited for"
                 finish ()
+                do! session.Armed ()
+                session.Advance (TimeSpan.FromSeconds 1.0)
                 let! outcome = running
                 expect outcome
                 Expect.isTrue

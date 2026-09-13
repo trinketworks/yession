@@ -16,6 +16,7 @@ open Fable.Pyxpecto
 open Yession.Domain
 open Yession.Domain.Agent
 open Yession.SessionProcess
+open Yession.Tests.Support
 
 let private expect result =
     match result with
@@ -26,18 +27,16 @@ let private sessionId = SessionId.create "sess-gates" |> expect
 let private ada' = Principal.User (UserId.create "ada" |> expect)
 let private fixedClock () = DateTimeOffset (2026, 1, 1, 0, 0, 0, TimeSpan.Zero)
 let private newLog () : EventLog<SessionEvent> = InMemoryEventLog.create sessionId fixedClock
-
-/// A clock that leaps a minute per look, for the cases that are about a DEADLINE: the yield
-/// needs time to have passed, and a fixed clock never gets there.
-let private leapingClock () =
-    let mutable ticks = 0.0
-    fun () ->
-        ticks <- ticks + 61.0
-        DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero).AddSeconds ticks
+let private stillClock () = virtualClock (fixedClock ())
 
 /// A gate over a classifier, with a dispatch table it can be told about after the fact —
 /// the production arrangement, where the table is assembled a layer above the gate.
-let private gateWith (classifier: Classifier) (log: EventLog<SessionEvent>) (now: unit -> DateTimeOffset) =
+///
+/// Over a clock the case turns: a deadline is crossed by `Advance`, which also fires the
+/// tick the waiter observes it on. (This replaced a clock that leapt a minute per look — a
+/// stand-in for not being able to drive the tick, which made "how many times did the gate
+/// look" part of what the case asserted without saying so.)
+let private gateWith (classifier: Classifier) (log: EventLog<SessionEvent>) (clock: VirtualClock) =
     let mutable n = 0
     let dispatch = ref Map.empty
     let mint (prefix: string) () =
@@ -54,9 +53,10 @@ let private gateWith (classifier: Classifier) (log: EventLog<SessionEvent>) (now
                 })
             (fun () -> QueueId.create (mint "q" ()) |> expect)
             (fun () -> MessageId.create (mint "msg" ()) |> expect)
-            now
-            // No change feed in these tests: the wait's 100ms tick is what a waiter falls
-            // back on, which is also the production guarantee for a dispatch that fails.
+            clock.Clock
+            // No change feed in these tests: the wait's tick is what a waiter falls back
+            // on, which is also the production guarantee for a dispatch that fails — and
+            // the tick is the clock's, so a case that needs a look turns the clock.
             (fun _ -> ignore)
     gate, dispatch
 
@@ -91,7 +91,7 @@ let private gateTests =
         testCaseAsync "under the bypass classifier a command runs, and answers with what it said" <|
             async {
                 let log = newLog ()
-                let gate, dispatch = gateWith Classifier.approveAll log fixedClock
+                let gate, dispatch = gateWith Classifier.approveAll log (stillClock ())
                 let table, seen = recordingDispatch "add_repo"
                 dispatch.Value <- table
                 let! outcome = gate.Run (call "add_repo" [ "octo/hello" ] "add_repo octo/hello")
@@ -110,7 +110,7 @@ let private gateTests =
             async {
                 let log = newLog ()
                 let refusing : Classifier = fun _ _ -> async { return Rejected "not in this session" }
-                let gate, dispatch = gateWith refusing log fixedClock
+                let gate, dispatch = gateWith refusing log (stillClock ())
                 let table, seen = recordingDispatch "add_repo"
                 dispatch.Value <- table
                 let! outcome = gate.Run (call "add_repo" [ "octo/hello" ] "add_repo octo/hello")
@@ -141,7 +141,7 @@ let private gateTests =
                             asked.Add (author, act)
                             return Approved
                         }
-                let gate, dispatch = gateWith recording log fixedClock
+                let gate, dispatch = gateWith recording log (stillClock ())
                 let table, _ = recordingDispatch "add_repo"
                 dispatch.Value <- table
                 let! _ = gate.Run (call "add_repo" [ "octo/hello" ] "add_repo octo/hello")
@@ -156,7 +156,7 @@ let private gateTests =
         testCaseAsync "a command this build does not have is refused, and says which" <|
             async {
                 let log = newLog ()
-                let gate, _ = gateWith Classifier.approveAll log fixedClock
+                let gate, _ = gateWith Classifier.approveAll log (stillClock ())
                 let! outcome = gate.Run (call "add_repos" [ "octo/hello" ] "add_repos octo/hello")
                 let outcome = expect outcome
                 match outcome.Status with
@@ -173,45 +173,83 @@ let private gateTests =
         testCaseAsync "a command that outlives its deadline yields a handle rather than holding the turn" <|
             async {
                 let log = newLog ()
-                let gate, dispatch = gateWith Classifier.approveAll log (leapingClock ())
-                let mutable release = false
+                let clock = stillClock ()
+                let gate, dispatch = gateWith Classifier.approveAll log clock
+                // Work that ends when the case says, and not before.
+                let release, released = latch ()
                 dispatch.Value <-
                     Map.ofList
                         [ "add_repo",
                           fun (_: GatedInvocation) ->
                             async {
-                                while not release do
-                                    do! Async.Sleep 10
+                                do! released
                                 return Ok "done"
                             } ]
-                let! outcome = gate.Run (call "add_repo" [ "octo/hello" ] "add_repo octo/hello")
+                let! running = Async.StartChild (gate.Run (call "add_repo" [ "octo/hello" ] "add_repo octo/hello"), 10000)
+                // The deadline passes because the clock is turned past it — not because
+                // anything waited — and the waiter's tick fires with it. Turned once the
+                // waiter is on the clock, so the turn is one it measures.
+                do! clock.Armed ()
+                clock.Advance (TerminalCommands.commandTimeout + TimeSpan.FromSeconds 1.0)
+                let! outcome = running
                 let outcome = expect outcome
                 Expect.equal outcome.Status CommandRunning "going, not waiting on anybody"
                 Expect.isTrue (Option.isSome outcome.Handle) "with the handle that picks it up"
-                release <- true
+                release ()
+            }
+
+        testCaseAsync "a command inside its deadline holds the turn until it is done" <|
+            async {
+                // The counterpart, which the leaping clock could never state: time passes,
+                // short of the deadline, and the call still waits for its answer.
+                let log = newLog ()
+                let clock = stillClock ()
+                let gate, dispatch = gateWith Classifier.approveAll log clock
+                let release, released = latch ()
+                dispatch.Value <-
+                    Map.ofList
+                        [ "add_repo",
+                          fun (_: GatedInvocation) ->
+                            async {
+                                do! released
+                                return Ok "done"
+                            } ]
+                let! running = Async.StartChild (gate.Run (call "add_repo" [ "octo/hello" ] "add_repo octo/hello"), 10000)
+                do! clock.Armed ()
+                clock.Advance (TerminalCommands.commandTimeout - TimeSpan.FromSeconds 1.0)
+                release ()
+                // Done, but nothing appended: with no change feed here, the tick is how
+                // the waiter finds out — the production guarantee for exactly this shape.
+                do! clock.Armed ()
+                clock.Advance (TimeSpan.FromSeconds 1.0)
+                let! outcome = running
+                Expect.equal (expect outcome).Status (CommandRan "done") "answered in the call, no handle needed"
             }
 
         testCaseAsync "the handle picks up what finished after the yield" <|
             async {
                 let log = newLog ()
-                let gate, dispatch = gateWith Classifier.approveAll log (leapingClock ())
-                let mutable release = false
+                let clock = stillClock ()
+                let gate, dispatch = gateWith Classifier.approveAll log clock
+                let release, released = latch ()
                 dispatch.Value <-
                     Map.ofList
                         [ "add_repo",
                           fun (_: GatedInvocation) ->
                             async {
-                                while not release do
-                                    do! Async.Sleep 10
+                                do! released
                                 return Ok "done"
                             } ]
-                let! outcome = gate.Run (call "add_repo" [ "octo/hello" ] "add_repo octo/hello")
+                let! running = Async.StartChild (gate.Run (call "add_repo" [ "octo/hello" ] "add_repo octo/hello"), 10000)
+                do! clock.Armed ()
+                clock.Advance (TerminalCommands.commandTimeout + TimeSpan.FromSeconds 1.0)
+                let! outcome = running
                 let outcome = expect outcome
                 let handle =
                     match outcome.Handle with
                     | Some handle -> handle
                     | None -> failwith "expected a handle"
-                release <- true
+                release ()
                 // The work finishes; the handle resumes to the recorded outcome. A resume
                 // may land while the work is still wrapping up, in which case it says so —
                 // ask again, exactly as an agent would.

@@ -125,8 +125,8 @@ let SettledIntervalMs = 60000
 /// No jitter, and one tick's watches are polled in sequence rather than at once. A single
 /// session watching a handful of pull requests is not a thundering herd, and a slow
 /// request delaying the next watch is the backpressure worth having — the same argument
-/// `McpClient.PollIntervalMs` makes.
-let TickIntervalMs = PendingIntervalMs
+/// `McpClient.PollInterval` makes.
+let TickInterval = System.TimeSpan.FromMilliseconds (float PendingIntervalMs)
 
 type private WatchEntry =
     { Pr : PrRef

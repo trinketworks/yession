@@ -27,3 +27,20 @@ module Clock =
     let system : Clock =
         { Now = fun () -> DateTimeOffset.UtcNow
           After = fun delay -> Async.Sleep (int delay.TotalMilliseconds) }
+
+    /// Run `beat` every `interval` until the function returned is called.
+    ///
+    /// A loop over `After` rather than a timer of its own, so a beat — the idle-lease
+    /// reclaim, the activity report, a provider poll — is driven by the same clock as every
+    /// other wait, and a test that turns the clock past an interval sees the beat. Stopped
+    /// by flag, not by cancellation: the wait in flight runs out and the loop ends at it,
+    /// with nothing beaten after the stop.
+    let every (clock: Clock) (interval: TimeSpan) (beat: unit -> unit) : unit -> unit =
+        let mutable stopped = false
+        Async.StartImmediate (
+            async {
+                while not stopped do
+                    do! clock.After interval
+                    if not stopped then beat ()
+            })
+        fun () -> stopped <- true
