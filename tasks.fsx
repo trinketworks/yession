@@ -1667,6 +1667,16 @@ let probe (args: string list) =
     fable false (Path.Combine (repoRoot, "tools", "Yession.Probe", "Yession.Probe.fsproj")) out
     runInherit repoRoot "node" ([ Path.Combine (out, "Probe.js") ] @ args) |> ignore
 
+/// The camera: a session's first load against a real deployment, every painted frame and every
+/// client render, labelled with each other (`tools/Yession.Frames`). The same terms as the
+/// probe — an instrument, nothing shipped reaches it — and the same shape: its arguments pass
+/// straight through, and it states its own usage. The module's header says how to read what it
+/// makes.
+let frames (args: string list) =
+    let out = Path.Combine (repoRoot, "tools", "Yession.Frames", "out")
+    fable false (Path.Combine (repoRoot, "tools", "Yession.Frames", "Yession.Frames.fsproj")) out
+    runInherit repoRoot "node" ([ Path.Combine (out, "Frames.js") ] @ args) |> ignore
+
 // --- dispatch --------------------------------------------------------------------------------
 
 let argv = fsi.CommandLineArgs
@@ -1685,6 +1695,7 @@ match arg 1 with
 | Some "verify" -> verify (rest 2)
 | Some "lint" -> lint ()
 | Some "probe" -> probe (rest 2)
+| Some "frames" -> frames (rest 2)
 | Some "bench" -> bench (rest 2)
 | Some "bench-guard" -> benchGuard ()
 | Some "bench-publish" -> benchPublish (arg 2 |> Option.defaultWith defaultVersion)

@@ -118,6 +118,25 @@ focus capture.
    compiled output actually changed (`grep` a new class in `app/ManagerUi.js`) before
    blaming the browser. Loop to step 3 until both anchors are clean.
 
+## When the page moves: film it, don't screenshot it
+
+A jump, a flash, a pane that opens and shuts, a scroll that lands somewhere else — one
+screenshot cannot show it and a render count cannot say what a person saw. For that there
+is the camera, `dotnet fsi tasks.fsx frames`, which loads a session on a real deployment the
+way the Create button does and records every painted frame AND every client render,
+each labelled with the other (a stamp the page writes into its own corner), with the
+navigation timeline and a per-frame pixel diff:
+
+```
+dotnet fsi tasks.fsx frames --manager https://home.example:8321          # fresh session, phone
+dotnet fsi tasks.fsx frames --manager … --session <url> --seconds 20 --desktop
+```
+
+Read `sheet-N.png` in the output directory with the Read tool; `report.html` has the same
+frames with the renders and layout diffs under each. How to read them, what a clean run
+looks like, and the caveats (Chromium only, the stamp forces paints) are at the top of
+`tools/Yession.Frames/Frames.fs` — that header is the guidance, and this is only the pointer.
+
 ## Before/after evidence
 
 Shots of the old code must come from the old code — reconstructing them from memory or
