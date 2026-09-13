@@ -237,10 +237,22 @@ let ownerOf (identity: CookieIdentity) : CredentialOwner =
 /// together — as this port used to, with one `ok` for both — a phone changing radios and
 /// github.com refusing a client id are the same value, so neither the classifier below nor
 /// the person reading the panel can tell "we could not ask" from "we asked and were told no".
-[<Emit("""fetch($0, { method: 'POST', headers: { 'content-type': 'application/json', 'accept': 'application/json' }, body: $1 })
-  .then(async r => ({ reached: true, status: r.status, body: await r.text() }))
-  .catch(e => ({ reached: false, status: 0, body: String((e && e.message) || e) }))""")>]
-let private postJson (url: string) (body: string) : JS.Promise<{| reached: bool; status: int; body: string |}> = jsNative
+let deviceFlowHeaders : (string * string) list =
+    [ "content-type", "application/json"
+      "accept", "application/json" ]
+
+let private postJson (url: string) (body: string) : Async<{| reached: bool; status: int; body: string |}> =
+    async {
+        let! attempt =
+            Http.text
+                url
+                [ Fetch.Types.RequestProperties.Method Fetch.Types.HttpMethod.POST
+                  Http.headers deviceFlowHeaders
+                  Fetch.Types.RequestProperties.Body (U3.Case3 body) ]
+        match attempt with
+        | Http.Answered (response, said) -> return {| reached = true; status = response.Status; body = said |}
+        | Http.Unreachable reason -> return {| reached = false; status = 0; body = reason |}
+    }
 
 /// Why a call to github.com produced nothing this session can use. The cases exist to be
 /// told apart: one is this box's network, one is github.com's answer, one is neither side
@@ -284,7 +296,7 @@ type GitHubPost = string * string -> Async<Result<string, GitHubFault>>
 let posting : GitHubPost =
     fun (url, body) ->
         async {
-            let! reply = postJson url body |> Interop.awaitPromise
+            let! reply = postJson url body
             if not reply.reached then return Error (GitHubUnreachable reply.body)
             elif reply.status >= 200 && reply.status < 300 then return Ok reply.body
             else return Error (GitHubRefused (reply.status, reply.body))
@@ -329,11 +341,23 @@ let resilient (sleep: TimeSpan -> Async<unit>) (random: unit -> float) (post: Gi
 ///
 /// The endpoint is a parameter for the same reason the OAuth ones are: a suite needs
 /// somewhere to point it that is not the live provider.
-[<Emit("""fetch($0, { headers: { 'authorization': 'Bearer ' + $1, 'accept': 'application/vnd.github+json',
-                                 'user-agent': 'yession' } })
-  .then(r => ({ reachable: true, status: r.status }))
-  .catch(() => ({ reachable: false, status: 0 }))""")>]
-let private getUser (url: string) (token: string) : JS.Promise<{| reachable: bool; status: int |}> = jsNative
+///
+/// The credential is the point of both calls below, so the bearer is never conditional;
+/// `user-agent` is there because GitHub refuses a request without one.
+let userHeaders (token: string) : (string * string) list =
+    [ "authorization", "Bearer " + token
+      "accept", "application/vnd.github+json"
+      "user-agent", "yession" ]
+
+/// This one turns on the status alone; the body is read and discarded, which is what
+/// releases the connection rather than leaving it for the garbage collector.
+let private getUser (url: string) (token: string) : Async<{| reachable: bool; status: int |}> =
+    async {
+        let! attempt = Http.text url [ Http.headers (userHeaders token) ]
+        match attempt with
+        | Http.Answered (response, _) -> return {| reachable = true; status = response.Status |}
+        | Http.Unreachable _ -> return {| reachable = false; status = 0 |}
+    }
 
 let private userUrl = "https://api.github.com/user"
 
@@ -345,7 +369,7 @@ let private userUrl = "https://api.github.com/user"
 /// not a verdict either — that is this box's network, not the token.
 let refusedAt (url: string) (token: string) : Async<string option> =
     async {
-        let! reply = getUser url token |> Interop.awaitPromise
+        let! reply = getUser url token
         if reply.reachable && reply.status = 401 then
             return Some "github rejected this credential"
         else return None
@@ -365,23 +389,50 @@ type Profile =
       /// The PUBLIC email, when the account shows one. Most do not.
       Email : string option }
 
+/// What `GET /user` says about the account behind a token, as F# reads the JSON. Nullable
+/// throughout because the reply is somebody else's: an account with no display name simply
+/// does not carry the field.
+type private GitHubUser =
+    abstract login : string
+    abstract id : float
+    abstract name : string option
+    abstract email : string option
+
 /// The same endpoint, read for its body this time.
-[<Emit("""fetch($0, { headers: { 'authorization': 'Bearer ' + $1, 'accept': 'application/vnd.github+json',
-                                 'user-agent': 'yession' } })
-  .then(r => r.ok ? r.json().then(u => ({ ok: true, status: r.status, login: String(u.login ?? ''), id: Number(u.id ?? 0), name: u.name ?? null, email: u.email ?? null }))
-                  : { ok: false, status: r.status, login: '', id: 0, name: null, email: null })
-  .catch(() => ({ ok: false, status: 0, login: '', id: 0, name: null, email: null }))""")>]
+///
+/// A body that will not parse is not a profile whatever the status said, so it lands in the
+/// same `ok = false, status = 0` as a request that never arrived — there is nothing else
+/// honest to report about a reply nobody can read.
 let private getProfile
     (url: string)
     (token: string)
-    : JS.Promise<{| ok: bool; status: int; login: string; id: float; name: string option; email: string option |}> =
-    jsNative
+    : Async<{| ok: bool; status: int; login: string; id: float; name: string option; email: string option |}> =
+    let unread (status: int) =
+        {| ok = false; status = status; login = ""; id = 0.0; name = None; email = None |}
+    async {
+        let! attempt = Http.text url [ Http.headers (userHeaders token) ]
+        match attempt with
+        | Http.Unreachable _ -> return unread 0
+        | Http.Answered (response, _) when not response.Ok -> return unread response.Status
+        | Http.Answered (response, body) ->
+            try
+                let user = unbox<GitHubUser> (JS.JSON.parse body)
+                return
+                    {| ok = true
+                       status = response.Status
+                       login = (if isNull (box user.login) then "" else user.login)
+                       id = (if isNull (box user.id) then 0.0 else user.id)
+                       name = user.name
+                       email = user.email |}
+            with _ ->
+                return unread 0
+    }
 
 /// The profile behind a token, or why there is none — unreachable, refused, or an answer
 /// with no login in it, which is not a profile whatever the status said.
 let profileAt (url: string) (token: string) : Async<Result<Profile, string>> =
     async {
-        let! reply = getProfile url token |> Interop.awaitPromise
+        let! reply = getProfile url token
         if not reply.ok then
             return Error (if reply.status = 0 then "github could not be reached" else sprintf "github answered %d" reply.status)
         elif reply.login = "" then

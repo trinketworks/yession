@@ -19,36 +19,64 @@ open Yession.Domain.Tools
 
 /// What one POST came back as.
 type private PostOutcome =
-    /// Did the request REACH the server? `false` is a transport failure (nothing listening,
-    /// DNS, a socket dropped); an HTTP error status is `ok = true` with that status.
-    abstract ok : bool
-    abstract status : int
-    abstract session : string
-    abstract body : string
-    abstract reason : string
+    { /// Did the request REACH the server? `false` is a transport failure (nothing
+      /// listening, DNS, a socket dropped); an HTTP error status is `Reached = true` with
+      /// that status.
+      Reached : bool
+      Status : int
+      /// `mcp-session-id` off the reply, or "" when it carried none.
+      Session : string
+      Body : string
+      Reason : string }
+
+/// The headers one JSON-RPC POST carries.
+///
+/// `accept` names both content types the spec allows a Streamable HTTP server to answer
+/// with — a server picks, and a client that offered only one would work against half of
+/// them.
+///
+/// The session and protocol headers are sent only when there is one to send: a server that
+/// has not named a session is not quoted an empty one back.
+let postHeaders (session: string) (protocol: string) : (string * string) list =
+    [ yield "content-type", "application/json"
+      yield "accept", "application/json, text/event-stream"
+      if not (String.IsNullOrEmpty session) then yield "mcp-session-id", session
+      if not (String.IsNullOrEmpty protocol) then yield "mcp-protocol-version", protocol ]
+
+/// Why a POST produced no frame to read, or `None` when it did.
+///
+/// `"404"` is addressed to the caller rather than to a person: a 404 is a RESTARTED
+/// provider rather than a failure, and only a caller in the middle of a request knows
+/// whether re-handshaking and retrying is the right response to that.
+let postFailure (reached: bool) (status: int) (reason: string) : string option =
+    if not reached then Some reason
+    elif status = 404 then Some "404"
+    elif status < 200 || status >= 300 then Some (sprintf "the server answered %d" status)
+    else None
 
 /// POST one JSON-RPC frame and hand back the status, the response headers we care about,
 /// and the body. Distinct from `Interop.postText` because all three matter: a `404` is a
 /// restarted provider rather than a failure, and `mcp-session-id` is what a stateful server
 /// asks us to quote back.
-///
-/// `accept` names both content types the spec allows a Streamable HTTP server to answer
-/// with — a server picks, and a client that offered only one would work against half of
-/// them.
-[<Emit("""(async function (url, session, protocol, body) {
-  try {
-    const headers = { 'content-type': 'application/json', 'accept': 'application/json, text/event-stream' }
-    if (session) headers['mcp-session-id'] = session
-    if (protocol) headers['mcp-protocol-version'] = protocol
-    const r = await fetch(url, { method: 'POST', headers, body: body })
-    const text = await r.text()
-    return { ok: true, status: r.status, session: r.headers.get('mcp-session-id') || '', body: text, reason: '' }
-  } catch (err) {
-    return { ok: false, status: 0, session: '', body: '', reason: String((err && err.message) || err) }
-  }
-})($0, $1, $2, $3)""")>]
-let private post (url: string) (session: string) (protocol: string) (body: string) : JS.Promise<PostOutcome> =
-    jsNative
+let private post (url: string) (session: string) (protocol: string) (body: string) : Async<PostOutcome> =
+    async {
+        let! attempt =
+            Http.text
+                url
+                [ Fetch.Types.RequestProperties.Method Fetch.Types.HttpMethod.POST
+                  Http.headers (postHeaders session protocol)
+                  Fetch.Types.RequestProperties.Body (U3.Case3 body) ]
+        match attempt with
+        | Http.Answered (response, text) ->
+            return
+                { Reached = true
+                  Status = response.Status
+                  Session = Http.headerOf "mcp-session-id" response
+                  Body = text
+                  Reason = "" }
+        | Http.Unreachable reason ->
+            return { Reached = false; Status = 0; Session = ""; Body = ""; Reason = reason }
+    }
 
 /// Streamable HTTP lets a server answer a POST with either `application/json` or an SSE
 /// stream carrying the same frame. We do not open the optional GET stream (see below), so a
@@ -154,17 +182,13 @@ let create () : McpConnections =
             let id = connection.NextId
             connection.NextId <- id + 1
             let body = Codec.toString Codec.jsonRpcRequest { Id = id; Method = method; Params = parameters }
-            let! outcome =
-                post (urlOf connection.Server) connection.SessionId McpProtocol.Version body
-                |> Async.AwaitPromise
-            if not outcome.ok then return Error outcome.reason
-            elif outcome.status = 404 then return Error "404"
-            elif outcome.status < 200 || outcome.status >= 300 then
-                return Error (sprintf "the server answered %d" outcome.status)
-            else
+            let! outcome = post (urlOf connection.Server) connection.SessionId McpProtocol.Version body
+            match postFailure outcome.Reached outcome.Status outcome.Reason with
+            | Some failure -> return Error failure
+            | None ->
                 // A server that names a session wants it quoted on everything after.
-                if outcome.session <> "" then connection.SessionId <- outcome.session
-                match Codec.fromString Codec.jsonRpcResponse (frameOf outcome.body) with
+                if outcome.Session <> "" then connection.SessionId <- outcome.Session
+                match Codec.fromString Codec.jsonRpcResponse (frameOf outcome.Body) with
                 | Error e -> return Error (sprintf "could not read the reply to %s: %s" method e)
                 | Ok (JsonRpcFailure (_, code, message)) ->
                     return Error (sprintf "%s failed (%d): %s" method code message)
@@ -177,7 +201,6 @@ let create () : McpConnections =
         async {
             let! _ =
                 post (urlOf connection.Server) connection.SessionId McpProtocol.Version (Codec.jsonRpcNotification method)
-                |> Async.AwaitPromise
             return ()
         }
 
