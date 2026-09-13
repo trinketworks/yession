@@ -57,7 +57,7 @@ let private runOnPty (executable: string) (arguments: string list) : Async<Resul
             | Some spawnPty ->
                 let output = System.Text.StringBuilder ()
                 let exec =
-                    { Executable = executable; Arguments = arguments; Env = Map.empty; WorkingDirectory = None }
+                    { Executable = executable; Arguments = arguments; Env = Map.empty; WorkingDirectory = None; Via = Entrypoint }
                 match! spawnPty exec 80 24 (fun data -> output.Append data |> ignore) with
                 | Error e -> return Error e
                 | Ok pty ->
@@ -86,7 +86,7 @@ let private runOnPty (executable: string) (arguments: string list) : Async<Resul
 /// properties under the one dialect nothing ships, and a `/bin/sh` that never emitted its
 /// prompt mark went unnoticed through every green run.
 let private withShellTerminal
-    (shell: SessionTerminals.TerminalShell)
+    (shell: TerminalShell)
     (prepare: SessionTerminals.SessionTerminals -> Async<unit>)
     (name: string)
     (body: SessionTerminals.SessionTerminals
@@ -124,6 +124,7 @@ let private withShellTerminal
                         }
                   Stop = fun () -> async { return () }
                   CurrentRef = fun () -> Some "host"
+                  Shell = fun () -> None
                   Realisation = fun () -> [] }
             // The shell is real and its I/O takes the time it takes; the manager's windows —
             // the detector's, the open-probe's, an idle lease's — are the clock's, and the
@@ -183,7 +184,7 @@ let private withShellTerminal
     }
 
 let private withPreparedTerminal prepare name body =
-    withShellTerminal SessionTerminals.TerminalShell.bash prepare name body
+    withShellTerminal TerminalShell.bash prepare name body
 
 let private withLiveTerminal (name: string) body =
     withPreparedTerminal (fun _ -> async { return () }) name body
@@ -193,7 +194,7 @@ let private withLiveTerminal (name: string) body =
 /// under bash, which is the right fixture for the bash dialect's own hooks and the wrong one
 /// for asking whether what ships works.
 let private withPosixTerminal (name: string) body =
-    withShellTerminal SessionTerminals.TerminalShell.posix (fun _ -> async { return () }) name body
+    withShellTerminal TerminalShell.posix (fun _ -> async { return () }) name body
 
 /// A queue entry for a terminal, as the drain would hand one over.
 let private queueEntry (terminal: TerminalId) (author: Principal) (n: string) : PendingAct =
@@ -880,7 +881,7 @@ let tests =
                     // learns its size is the one that redraws wrongly, so this is the
                     // behaviour that matters rather than the call returning unit.
                     let script = "trap 'stty size' WINCH; sleep 2 & wait; stty size"
-                    let exec = { Executable = "/bin/sh"; Arguments = [ "-c"; script ]; Env = Map.empty; WorkingDirectory = None }
+                    let exec = { Executable = "/bin/sh"; Arguments = [ "-c"; script ]; Env = Map.empty; WorkingDirectory = None; Via = Entrypoint }
                     match! spawnPty exec 80 24 (fun d -> output.Append d |> ignore) with
                     | Error e -> failwith e
                     | Ok pty ->
@@ -914,7 +915,8 @@ let tests =
                         { Executable = "/bin/sh"
                           Arguments = [ "-c"; "read line; echo \"got:$line\"" ]
                           Env = Map.empty
-                          WorkingDirectory = None }
+                          WorkingDirectory = None
+                          Via = Entrypoint }
                     match! spawnPty exec 80 24 (fun d -> output.Append d |> ignore) with
                     | Error e -> failwith e
                     | Ok pty ->
@@ -960,7 +962,8 @@ let tests =
                         { Executable = "/bin/bash"
                           Arguments = [ "--noprofile"; "--rcfile"; rcPath; "-i" ]
                           Env = Map.empty
-                          WorkingDirectory = None }
+                          WorkingDirectory = None
+                          Via = Entrypoint }
                     match! spawnPty exec 80 24 (fun data ->
                               let scanned, rest = Marks.scan nonce carry data
                               marks.AddRange (Marks.marksOf scanned)
@@ -1129,7 +1132,7 @@ let tests =
                 | Ok sandbox ->
                     let spawnPty = Option.get sandbox.SpawnPty
                     let exec =
-                        { Executable = "/bin/sh"; Arguments = [ "-c"; "sleep 30" ]; Env = Map.empty; WorkingDirectory = None }
+                        { Executable = "/bin/sh"; Arguments = [ "-c"; "sleep 30" ]; Env = Map.empty; WorkingDirectory = None; Via = Entrypoint }
                     match! spawnPty exec 80 24 ignore with
                     | Error e -> failwith e
                     | Ok pty ->

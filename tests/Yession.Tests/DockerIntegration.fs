@@ -119,6 +119,54 @@ let tests =
                 Expect.equal remaining 0 "the sandbox's container is removed on dispose"
             })
 
+            // compose's `entrypoint`, as the rule `ProcessEntry` adopts: work runs behind
+            // it, housekeeping runs bare. `env VAR=…` is an entrypoint whose effect a
+            // command can report, which is what makes the two sides observable.
+            testCaseAsync "work runs behind the container's entrypoint, and housekeeping does not" (async {
+                let spec =
+                    alpineSpec
+                    |> withContainer (fun c -> { c with Entrypoint = Some [ "/usr/bin/env"; "BEHIND=entrypoint" ] })
+                let! _, sandbox = startOrFail spec
+                let! run, out, _ = runInSandbox sandbox "sh" [ "-c"; "echo behind=$BEHIND" ] Map.empty None
+                Expect.equal run (SandboxExited 0) "the work ran"
+                Expect.isTrue (out.Contains "behind=entrypoint") (sprintf "and saw the entrypoint's effect, got: %s" out)
+                let bare = System.Text.StringBuilder ()
+                let! spawned =
+                    sandbox.Spawn
+                        { Executable = "sh"
+                          Arguments = [ "-c"; "echo bare=$BEHIND" ]
+                          Env = Map.empty
+                          WorkingDirectory = None
+                          Via = Direct }
+                        (fun (_, text) -> bare.Append text |> ignore)
+                let! _ = (spawned |> expect).Exited
+                Expect.isTrue (bare.ToString().Contains "bare=\n" || bare.ToString().Trim() = "bare=") (sprintf "housekeeping runs bare, got: %s" (bare.ToString ()))
+                do! sandbox.Dispose ()
+            })
+
+            // The shell a terminal opens is looked for behind the entrypoint at start, most
+            // capable first. alpine has no bash and no zsh, so the answer is its `sh`.
+            testCaseAsync "the shell a terminal opens is detected behind the entrypoint" (async {
+                let! _, sandbox = startOrFail alpineSpec
+                match sandbox.Shell with
+                | Some shell ->
+                    Expect.equal shell.Name "sh" "alpine has neither bash nor zsh, so a terminal gets sh"
+                    Expect.equal shell.Executable "/bin/sh" "at the path `command -v` answered with"
+                | None -> failwith "a container backend says which shell it found"
+                do! sandbox.Dispose ()
+            })
+
+            testCaseAsync "a declared dialect that is not there refuses the start, naming what was looked for" (async {
+                let spec = alpineSpec |> withContainer (fun c -> { c with Dialect = Some "bash" })
+                match! start envSecrets spec with
+                | Ok (_, sandbox) ->
+                    do! sandbox.Dispose ()
+                    failwith "alpine has no bash: a repo that asked for one has to be told"
+                | Error reason ->
+                    Expect.stringContains reason "looked for bash" "it says what it looked for"
+                    Expect.stringContains reason "found none" "and that nothing was there"
+            })
+
             testCaseAsync "a non-zero command exit maps to its exit code" (async {
                 let! _, sandbox = startOrFail alpineSpec
                 let! run, _, _ = runInSandbox sandbox "sh" [ "-c"; "exit 7" ] Map.empty None

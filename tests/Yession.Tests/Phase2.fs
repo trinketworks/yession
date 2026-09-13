@@ -38,6 +38,7 @@ let private sandboxAnswering (answer: (OutputStream * string -> unit) -> Async<R
     { Ref = "fake"
       Spawn = fun _ onChunk -> answer onChunk
       SpawnPty = None
+      Shell = None
       Dispose = fun () -> async { return () } }
 
 /// A sandbox whose verification program reports the check at `index` as the first failure —
@@ -523,17 +524,36 @@ let private sandboxPolicyTests =
         // runs behind it, and nothing declared idles behind it. Symlinked /etc files
         // are materialised so Docker 29's os.Root exec-user resolution can read them.
         testCase "a container's start command carries the /etc materialisation" <| fun () ->
-            match Sandboxes.DockerSandbox.startCommand (Some "./serve --port 80") with
+            match Sandboxes.DockerSandbox.startCommand None (Some "./serve --port 80") with
             | [| "sh"; "-c"; script |] ->
                 Expect.isTrue (script.Contains "-L /etc/$f") "fixes the symlinks first"
                 // libgit2's copy of the checkout trust: nix's flake fetcher ignores the
                 // policy env's GIT_CONFIG spelling, so the file half exists for it.
                 Expect.isTrue (script.Contains "/etc/gitconfig") "then trusts the mounted checkouts for libgit2"
+                // The handshake the backend's first exec waits on: an exec before the
+                // fixes trips the very daemon bug they repair.
+                Expect.isTrue (script.Contains ("echo " + Sandboxes.DockerSandbox.startedMark)) "then says the fixes are in, on its own stdout"
                 Expect.isTrue (script.EndsWith "./serve --port 80") "then runs what was declared"
             | other -> failwithf "expected a sh -c wrap, got %A" other
-            match Sandboxes.DockerSandbox.startCommand None with
+            match Sandboxes.DockerSandbox.startCommand None None with
             | [| "sh"; "-c"; script |] ->
                 Expect.isTrue (script.EndsWith "exec tail -f /dev/null") "nothing declared still idles for exec"
+            | other -> failwithf "expected a sh -c wrap, got %A" other
+
+        // compose composes the two: the container's own process is the entrypoint's
+        // command. The declared string keeps its meaning — a shell sequence — so it goes
+        // behind the entrypoint as `sh -c` of itself, each word quoted for the `sh -c` the
+        // daemon workaround already wraps everything in.
+        testCase "a declared command runs behind the entrypoint, as its command" <| fun () ->
+            match Sandboxes.DockerSandbox.startCommand (Some [ "nix"; "develop"; "--command" ]) (Some "./serve --port 80") with
+            | [| "sh"; "-c"; script |] ->
+                Expect.isTrue
+                    (script.EndsWith "exec 'nix' 'develop' '--command' 'sh' '-c' './serve --port 80'")
+                    (sprintf "the entrypoint, then sh -c of the sequence, got: %s" script)
+            | other -> failwithf "expected a sh -c wrap, got %A" other
+            match Sandboxes.DockerSandbox.startCommand (Some [ "nix"; "develop"; "--command" ]) None with
+            | [| "sh"; "-c"; script |] ->
+                Expect.isTrue (script.EndsWith "exec tail -f /dev/null") "and nothing declared still idles bare — the entrypoint is for work, and idling is not work"
             | other -> failwithf "expected a sh -c wrap, got %A" other
 
         // A granted socket on Linux is COARSENED, not lost: the policy still holds it, says so,
@@ -1909,7 +1929,8 @@ let private commandFoldTests =
                                   Arguments =
                                     [ "-e"; "console.log('key=' + (process.env.ANTHROPIC_API_KEY || 'absent'))" ]
                                   Env = Map.empty
-                                  WorkingDirectory = None }
+                                  WorkingDirectory = None
+                                  Via = Entrypoint }
                                 (fun (_, text) -> output <- output + text)
                         match spawned with
                         | Error e -> failwith e

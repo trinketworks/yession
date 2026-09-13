@@ -128,6 +128,22 @@ type SandboxPolicy =
       /// clone sandbox — see `FilesystemConfinement`.
       Filesystem : FilesystemConfinement }
 
+/// Whether a process runs behind the sandbox's declared entrypoint, or bare.
+///
+/// Compose's line, adopted as the rule: `entrypoint` governs the container's own process
+/// and `docker exec` bypasses it. Here the entrypoint is what a repo puts in front of WORK
+/// — a devshell that assembles the toolchain — and the two kinds of process a session
+/// starts fall on the two sides of that line. What a person or agent runs (a terminal's
+/// shell, a block, `setup:`) is work and runs behind it; what the session runs to keep
+/// house (the start-up checks, `git` by path, a `test -d` for a profile) needs no
+/// toolchain and must not pay for one, and runs bare. Carried on the exec rather than
+/// decided by the backend, because the exec is the only thing that knows which it is.
+type ProcessEntry =
+    /// Behind the entrypoint when one is declared; bare when none is.
+    | Entrypoint
+    /// Bare, whatever is declared.
+    | Direct
+
 /// One process to run inside a sandbox. `Env` is merged over the sandbox's policy env
 /// (the request wins); there is no timeout here — callers race `Exited` and `Kill`.
 type SandboxExec =
@@ -138,7 +154,79 @@ type SandboxExec =
       /// (`SandboxPath`): relative to where the sandbox puts a process, or absolute. The
       /// BACKEND resolves it — see `SandboxPath.resolvedFrom` — because the sandbox is the
       /// only thing that knows its own root. `None` = wherever the policy puts it.
-      WorkingDirectory : string option }
+      WorkingDirectory : string option
+      /// Behind the sandbox's entrypoint, or bare — see `ProcessEntry`.
+      Via : ProcessEntry }
+
+/// One shell, as a terminal opens it: what to run, how to hand it a command line, how to
+/// run it interactively, and which instrumentation it speaks.
+///
+/// Composed by whoever knows the shell — the session's default for the host and srt
+/// backends, and a container backend for what it found on the far side of the
+/// entrypoint (`Sandbox.Shell`). The DIALECT is the part that has to be right: it names
+/// the marks a terminal types in (`Marks.rcFor`), and a wrong one is a terminal that
+/// waits for a prompt mark that never comes.
+type TerminalShell =
+    { Executable : string
+      /// Arguments before the command line itself.
+      Arguments : string list
+      /// Which instrumentation dialect this shell speaks — the key `Marks.rcFor` is
+      /// asked for. A name we do not know means no instrumentation, and therefore a
+      /// terminal that keeps the per-block path.
+      Name : string
+      /// How to launch this shell INTERACTIVELY, with its own startup files suppressed
+      /// so ours is the only instrumentation in play.
+      InteractiveArguments : string list }
+
+module TerminalShell =
+
+    /// The dialects a shell can be asked for, most capable first — the order a container
+    /// backend prefers when the repo left the choice to it. bash has a preexec hook
+    /// emulated with a DEBUG trap and is the best instrumented; zsh has real hooks; a
+    /// POSIX `sh` has neither, and rides its marks in the prompt.
+    let dialects = [ "bash"; "zsh"; "sh" ]
+
+    /// The shell for a dialect, at `executable` — how a backend turns what it found on a
+    /// container's PATH into a shell a terminal can open. `None` for a name that is not a
+    /// dialect.
+    let forDialect (dialect: string) (executable: string) : TerminalShell option =
+        match dialect with
+        | "bash" ->
+            Some
+                { Executable = executable
+                  Arguments = [ "-c" ]
+                  Name = "bash"
+                  InteractiveArguments = [ "--noprofile"; "--norc"; "-i" ] }
+        | "zsh" ->
+            Some
+                { Executable = executable
+                  Arguments = [ "-c" ]
+                  Name = "zsh"
+                  // `-f`: no rc files, so ours is the only instrumentation in play.
+                  InteractiveArguments = [ "-f"; "-i" ] }
+        | "sh" ->
+            Some
+                { Executable = executable
+                  Arguments = [ "-c" ]
+                  Name = "sh"
+                  InteractiveArguments = [ "-i" ] }
+        | _ -> None
+
+    /// The host's `/bin/sh` — what a terminal opens where no backend said otherwise. `sh`
+    /// on purpose: it is the one shell every host has at that path, and the probe decides
+    /// by observation whether what is there marks its prompt.
+    let posix : TerminalShell =
+        { Executable = "/bin/sh"
+          Arguments = [ "-c" ]
+          Name = "sh"
+          InteractiveArguments = [ "-i" ] }
+
+    /// The host's bash — what the pty cases open to exercise the bash dialect.
+    let bash : TerminalShell =
+        { Executable = "/bin/bash"
+          Arguments = [ "-c" ]
+          Name = "bash"
+          InteractiveArguments = [ "--noprofile"; "--norc"; "-i" ] }
 
 /// The path vocabulary everything OUTSIDE a sandbox speaks: a directory as a terminal in
 /// that sandbox reaches it — relative to where a shell there starts when it is under
@@ -398,6 +486,11 @@ type Sandbox =
       /// discovered when someone runs `vim`, which is the same declare-and-skip honesty the
       /// capability-tagged test tiers use.
       SpawnPty : (SandboxExec -> int -> int -> (string -> unit) -> Async<Result<PtyHandle, string>>) option
+      /// The shell a terminal in this sandbox opens, when the backend knows better than the
+      /// session's default: a container backend looks on the far side of the entrypoint
+      /// for the dialects it can instrument and says which it found. `None` is the host
+      /// and srt backends — the session's own `/bin/sh` is the right answer there.
+      Shell : TerminalShell option
       Dispose : unit -> Async<unit> }
 
 /// Create a sandbox under a policy. The policy is assembled fresh per creation —

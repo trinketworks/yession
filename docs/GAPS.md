@@ -699,8 +699,14 @@ first's.
     What that leaves out, deliberately:
     - **No inter-sandbox networking.** A `db:` sandbox's process is reachable from inside
       that sandbox only; a compose-like shared network is a design of its own.
-    - **A `cmd` is docker-only.** It lives inside the `container:` block, so under `srt` or
-      `host` there is nowhere to write one rather than a refusal to explain.
+    - **A `command` (`cmd`), an `entrypoint` and a `dialect` are docker-only.** They live
+      inside or beside the `container:` block, so under `srt` or `host` there is nowhere to
+      write one rather than a refusal to explain — except `dialect`, which is refused on a
+      sandbox with no container because it reads as if it would apply.
+    - **No `${VAR}` in an entrypoint.** compose interpolates from the host's environment at
+      parse time, which is the wrong environment here — the sandbox's is the one that means
+      something — and nothing has needed it. The string form is read into words and nothing
+      else; a value that needs expansion is one to run through an actual `sh -c`.
     - **No per-session ceiling.** The tier-3 operator env is host-wide, so a widening ask is
       bounded by a human at the command gate rather than by a policy for this session.
     - **No file watcher.** A `git pull` that changes the file takes effect at the next fold

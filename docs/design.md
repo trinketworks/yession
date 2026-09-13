@@ -271,17 +271,36 @@ into the commands it already has (Plan 27). Undotted, matching the other files a
 people to read.
 
 ```yaml
-version: 1
+version: 2
 sandboxes:
   app:
-    container: { image: node:24 }
+    container:
+      image: node:24
+      entrypoint: nix develop --command   # compose's word: what every piece of WORK runs behind
+      command: ./serve                    # compose's word for the container's own process (`cmd` still reads)
+    dialect: bash                         # optional: the shell a terminal opens, else detected
     workdir: ./packages/web
     env:
       DATABASE_URL: { secret: db-url }   # a name, never a value
-    net: [ registry.npmjs.org ]
-    read: [ ~/.cache/npm ]
+    uses: [ npm-cache ]
     forward: [ github ]
 ```
+
+A container's `entrypoint` is read the way compose reads it — a list of words, or one
+string split as a shell would split it, with nothing expanded — and it governs what compose
+says it governs and one thing more. The container's own `command` runs behind it, as in
+compose. So does every piece of **work** the session starts in the container: a terminal's
+shell, a block, `setup:`. The session's own housekeeping — its start-up checks, `git` run by
+path, the probe behind `set_shell_profile` — runs bare, the way `docker exec` bypasses an
+entrypoint. The line is the one compose drew, adopted as the rule (`ProcessEntry`): work is
+what a repo's toolchain is for, and a devshell that assembles the toolchain is exactly what a
+repo puts here; housekeeping needs no toolchain and must not pay for one.
+
+Which shell a terminal opens is found, not assumed: at start the backend runs one
+`command -v` behind the entrypoint for the dialects a terminal can instrument, most capable
+first (`bash`, `zsh`, `sh`), and a terminal opens the first found — which is also what warms
+a devshell, once, off the first terminal. `dialect:` names one instead, and a container that
+does not have it refuses to start, naming what was looked for.
 
 Two top-level keys, and one is a version. **The whole file is sandboxes**, because a sandbox
 is the only scope where "two repos both said something" has a total answer: a sandbox is

@@ -36,6 +36,10 @@ module SessionEnvironment =
           Stop : unit -> Async<unit>
           /// The running sandbox's backend reference, if any.
           CurrentRef : unit -> string option
+          /// The shell a terminal here opens, when the RUNNING sandbox's backend found one
+          /// (`Sandbox.Shell`); `None` while nothing runs, or for a backend that leaves the
+          /// choice to the session.
+          Shell : unit -> TerminalShell option
           /// Where the RUNNING sandbox holds something other than what its resources named,
           /// one line each, empty when this host gave the whole of it.
           ///
@@ -54,6 +58,7 @@ module SessionEnvironment =
           SpawnPty = fun _ _ _ _ -> async { return Error "this session has no environment" }
           Stop = fun () -> async { return () }
           CurrentRef = fun () -> None
+          Shell = fun () -> None
           Realisation = fun () -> [] }
 
     /// Run this sandbox's own checks in it, once, before anybody else can reach it.
@@ -128,7 +133,11 @@ module SessionEnvironment =
                             { Executable = "/bin/sh"
                               Arguments = [ "-c"; SandboxVerification.program checks ]
                               Env = Map.empty
-                              WorkingDirectory = None }
+                              WorkingDirectory = None
+                              // The checks ask whether the sandbox holds what it was
+                              // granted; the entrypoint is what work runs behind, and
+                              // its own start is checked separately (`Sandbox.Shell`).
+                              Via = Direct }
                         match! sandbox.Spawn exec (fun (_, chunk) -> said.Append chunk |> ignore) with
                         | Error reason ->
                             return Error (Named (sprintf "this sandbox cannot run a command at all: %s" reason))
@@ -321,4 +330,5 @@ module SessionEnvironment =
           SpawnPty = spawnPty
           Stop = stop
           CurrentRef = fun () -> running |> Option.map (fun (sandbox, _) -> sandbox.Ref)
+          Shell = fun () -> running |> Option.bind (fun (sandbox, _) -> sandbox.Shell)
           Realisation = fun () -> running |> Option.map snd |> Option.defaultValue [] }

@@ -1771,6 +1771,7 @@ let private scriptedEnvironment (script: string -> (OutputStream * string) list 
           SpawnPty = fun _ _ _ _ -> async { return Error "no pty in this fixture" }
           Stop = fun () -> async { return () }
           CurrentRef = fun () -> Some "scripted"
+          Shell = fun () -> None
           Realisation = fun () -> [] }
     environment, spawned
 
@@ -1855,7 +1856,7 @@ let private mintFrom (ids: string list) =
         if remaining.Count > 1 then remaining.RemoveAt 0
         next
 
-let private makeTerminalsFrom attach classifier (log: EventLog<SessionEvent>) environment openTranscript readTranscript openAtBoot profilesAtBoot =
+let private makeTerminalsOn (clock: Clock) attach classifier (log: EventLog<SessionEvent>) environment openTranscript readTranscript openAtBoot profilesAtBoot =
     let mintTerminal = mintFrom [ "term-a"; "term-b"; "term-c"; "term-d"; "term-e"; "term-f" ]
     let mintBlock = mintFrom [ "b-1"; "b-2"; "b-3" ]
     let records = ResizeArray<TerminalId * int * TranscriptRecord> ()
@@ -1873,10 +1874,8 @@ let private makeTerminalsFrom attach classifier (log: EventLog<SessionEvent>) en
             // renders with, and a stub here would test the wiring while proving nothing
             // about the screen.
             Yession.Host.Emulator.openEmulator
-            SessionTerminals.TerminalShell.posix
-            // A fixed NOW, and real waiting: these cases are about the manager's rules, and
-            // the few that hold a read open (`Tail` with a wait) look again in real time.
-            { Clock.system with Now = fixedClock }
+            TerminalShell.posix
+            clock
             (fun () -> TerminalId.create (mintTerminal ()) |> expect)
             (fun () -> BlockId.create (mintBlock ()) |> expect)
             // Fixed, because a test that cannot predict the nonce cannot assert on a mark.
@@ -1893,6 +1892,12 @@ let private makeTerminalsFrom attach classifier (log: EventLog<SessionEvent>) en
             openAtBoot
             profilesAtBoot
     terminals, records, opens
+
+/// A fixed NOW, and real waiting: most cases are about the manager's rules, and the few
+/// that hold a read open (`Tail` with a wait) look again in real time. A case about a
+/// window the manager keeps uses `makeTerminalsOn` with a clock it turns.
+let private makeTerminalsFrom attach classifier log environment openTranscript readTranscript openAtBoot profilesAtBoot =
+    makeTerminalsOn { Clock.system with Now = fixedClock } attach classifier log environment openTranscript readTranscript openAtBoot profilesAtBoot
 
 /// No shell profile (Plan 25) — what a session that has never set one replays as, and what
 /// every case here but the profile ones is about.
@@ -3400,6 +3405,8 @@ let private probeAnswer (resolved: string) : string = sprintf "%s\n%s\n" fixture
 /// thing the fallback exists for.
 let private profileEnvironment (present: unit -> Set<string>) =
     let ptySpawned = ResizeArray<SandboxExec> ()
+    /// Every line typed at a shell this fixture spawned, in order — the bootstrap included.
+    let typed = ResizeArray<string> ()
     let exists path = Set.contains path (present ())
     let environment : SessionEnvironment.SessionEnvironment =
         { Ensure = fun _ _ -> async { return EnvironmentAvailable }
@@ -3429,25 +3436,40 @@ let private profileEnvironment (present: unit -> Set<string>) =
             fun exec _ _ onOutput ->
                 async {
                     ptySpawned.Add exec
-                    // Resolved before it is looked for, exactly as a backend does it: what a
-                    // terminal is handed is a path in the session's vocabulary.
-                    match exec.WorkingDirectory |> Option.map resolvedIn with
-                    | Some path when not (exists path) -> return Error (sprintf "chdir %s: no such directory" path)
-                    | _ ->
-                        return
-                            Ok
-                                // The shell's own prompt hook, as this fixture's shell runs it:
-                                // the rc bootstrap is typed in, and the next prompt carries the
-                                // `A` mark that makes the terminal instrumented.
-                                { Write = fun _ -> onOutput "\u001b]133;A;y=test-nonce\u0007"
-                                  Resize = fun _ _ -> ()
-                                  Kill = ignore
-                                  Exited = async { return SandboxExited 0 } }
+                    // A shell that stays up until it is killed — `Exited` is the latch a
+                    // real shell's is, not a value — and reads the lines typed at it the way
+                    // one does: the profile's own `cd` line ends the shell with its code when
+                    // the directory is not there, exactly as `|| exit 97` would; anything
+                    // else is a prompt cycle, and the next prompt carries the `A` mark that
+                    // makes the terminal instrumented.
+                    let exit, exited = latch ()
+                    let mutable code = 0
+                    return
+                        Ok
+                            { Write =
+                                fun line ->
+                                    typed.Add line
+                                    match line.Trim().Split ' ' with
+                                    | [| "cd"; "--"; quoted; "||"; "exit"; on |] ->
+                                        let path = quoted.Trim '\''
+                                        if exists (resolvedIn path) then onOutput "\u001b]133;A;y=test-nonce\u0007"
+                                        else
+                                            code <- int on
+                                            exit ()
+                                    | _ -> onOutput "\u001b]133;A;y=test-nonce\u0007"
+                              Resize = fun _ _ -> ()
+                              Kill = exit
+                              Exited =
+                                async {
+                                    do! exited
+                                    return SandboxExited code
+                                } }
                 }
           Stop = fun () -> async { return () }
           CurrentRef = fun () -> Some "scripted"
+          Shell = fun () -> None
           Realisation = fun () -> [] }
-    environment, ptySpawned
+    environment, ptySpawned, typed
 
 /// A sandbox whose BLOCKS do not finish until the test says so — the only way to hold a
 /// terminal busy without a clock. Its `test -d` still answers, because the profile verb has to
@@ -3476,8 +3498,84 @@ let private blockingEnvironment () =
           SpawnPty = fun _ _ _ _ -> async { return Error "no pty in this fixture" }
           Stop = fun () -> async { return () }
           CurrentRef = fun () -> Some "scripted"
+          Shell = fun () -> None
           Realisation = fun () -> [] }
     environment, spawned, release
+
+/// A terminal's shell is the sandbox's own when its backend found one, and a block that
+/// arrives while the shell is starting waits for it.
+let private shellStartTests =
+    testList "The shell a terminal opens" [
+        testCaseAsync "a terminal opens the shell its sandbox's backend found, and its blocks run through it" <|
+            async {
+                // A container backend looks behind the entrypoint and says what it found;
+                // the terminal opens THAT, with that dialect's bootstrap, rather than the
+                // session's `/bin/sh` — and a block on the degraded path runs it too.
+                let log = newLog ()
+                let environment, ptySpawned, typed = profileEnvironment (fun () -> Set.empty)
+                let found = { TerminalShell.bash with Executable = "/nix/store/abc-bash/bin/bash" }
+                let theirs = { environment with Shell = fun () -> Some found }
+                let openTranscript, _, _, _, readTranscript = recordingTranscripts ()
+                let terminals, _, _ = makeTerminals log theirs openTranscript readTranscript []
+                let! opened = terminals.Open (PeerRef ada) (SandboxShell SandboxRef.defaultRef) (TerminalTitle.fromProse "build")
+                let _ = opened |> expect
+                Expect.equal (ptySpawned |> Seq.map (fun e -> e.Executable) |> List.ofSeq) [ found.Executable ] "the shell spawned is the one the backend found"
+                Expect.equal (ptySpawned.[0].Arguments) found.InteractiveArguments "started the way that dialect is started"
+                Expect.equal (ptySpawned.[0].Via) Entrypoint "behind the sandbox's entrypoint: a terminal's shell is work"
+                Expect.isTrue (typed |> Seq.exists (fun line -> line.Contains "__y_pre")) "and bootstrapped in bash's dialect, not sh's"
+            }
+
+        testCaseAsync "a block that arrives while the shell is starting waits for it rather than running beside it" <|
+            async {
+                // The shell answers when the case says (a devshell takes what it takes); the
+                // block queued meanwhile is typed into it once it is up, and never spawned as
+                // its own process next to it.
+                let log = newLog ()
+                let environment, _, typed = profileEnvironment (fun () -> Set.empty)
+                let mark, marked = latch ()
+                let spawned = ResizeArray<SandboxExec> ()
+                let slow : SessionEnvironment.SessionEnvironment =
+                    { environment with
+                        Spawn =
+                            fun exec onChunk ->
+                                spawned.Add exec
+                                environment.Spawn exec onChunk
+                        SpawnPty =
+                            fun _ _ _ onOutput ->
+                                async {
+                                    let _, never = latch ()
+                                    Async.StartImmediate (
+                                        async {
+                                            do! marked
+                                            onOutput "\u001b]133;A;y=test-nonce\u0007"
+                                        })
+                                    return
+                                        Ok
+                                            { Write = fun line -> typed.Add line
+                                              Resize = fun _ _ -> ()
+                                              Kill = ignore
+                                              Exited =
+                                                async {
+                                                    do! never
+                                                    return SandboxExited 0
+                                                } }
+                                } }
+                let openTranscript, _, _, _, readTranscript = recordingTranscripts ()
+                let terminals, _, _ = makeTerminals log slow openTranscript readTranscript []
+                let! opened = terminals.Open (PeerRef ada) (SandboxShell SandboxRef.defaultRef) (TerminalTitle.fromProse "build")
+                let id = opened |> expect
+                Expect.isTrue (terminals.IsOpen id) "the terminal is open before its shell is up"
+                let started, awaitStarted = latch ()
+                Async.StartImmediate (terminals.RunBlock id (entry "b1" id byAda 1.0) "echo waited" started)
+                Expect.isTrue (terminals.Busy () |> Set.contains (TerminalId.value id)) "the block is this terminal's, waiting"
+                Expect.isEmpty spawned "and has not been run as its own process meanwhile"
+                Expect.isFalse (typed |> Seq.exists (fun line -> line.Contains "echo waited")) "nor typed into a shell that is not ready"
+                mark ()
+                do! awaitStarted
+                Expect.isTrue (typed |> Seq.exists (fun line -> line.Contains "echo waited")) "once the shell marks its prompt, the block is typed into it"
+                Expect.isEmpty spawned "and still not spawned beside it"
+            }
+    ]
 
 let private shellProfileTests =
     /// The checkout the way everything in this session says it: as a terminal reaches it,
@@ -3490,12 +3588,21 @@ let private shellProfileTests =
     let fixture () =
         let log = newLog ()
         let mutable present = Set.singleton checkoutAt
-        let environment, ptySpawned = profileEnvironment (fun () -> present)
+        let environment, ptySpawned, typed = profileEnvironment (fun () -> present)
         let openTranscript, linesOf, _, _, readTranscript = recordingTranscripts ()
         let terminals, _, _ = makeTerminals log environment openTranscript readTranscript []
-        terminals, log, ptySpawned, linesOf, (fun () -> present <- Set.empty)
-    let ptyDirectories (ptySpawned: ResizeArray<SandboxExec>) =
-        ptySpawned |> Seq.map (fun e -> e.WorkingDirectory) |> List.ofSeq
+        terminals, log, (ptySpawned, typed), linesOf, (fun () -> present <- Set.empty)
+    /// Where each shell this fixture spawned was told to start: the profile's directory
+    /// is the shell's own first line, `cd -- '<path>' || exit 97`, and the spawn itself
+    /// names none (`openShell`). Read off what was typed, per spawn.
+    let shellStarts (ptySpawned: ResizeArray<SandboxExec>, typed: ResizeArray<string>) =
+        let spawnedIn = ptySpawned |> Seq.map (fun e -> e.WorkingDirectory) |> List.ofSeq
+        let cdLines =
+            typed
+            |> Seq.filter (fun line -> line.StartsWith " cd -- ")
+            |> Seq.map (fun line -> line.Substring(" cd -- ".Length).Split(" || ").[0].Trim '\'')
+            |> List.ofSeq
+        spawnedIn, cdLines
     testList "The shell profile" [
 
         // A terminal whose shell would not start says so in its own transcript, naming the
@@ -3526,58 +3633,103 @@ let private shellProfileTests =
                 release ()
             }
 
-        // The other way a terminal ends up shell-less: a shell that runs but never prints the
-        // mark. The notice carries what it DID print, escaped, so a prompt without marks and
-        // no prompt at all read as different failures — which on a deployed host they were.
-        testCaseAsync "a shell that never marks its prompt is given up on, and the notice quotes it" <|
+        // A shell that runs but has not printed the mark is WAITED for, not given up on: a
+        // devshell takes minutes cold and is not broken. What the terminal does at the
+        // window is say so, with what the shell DID print, escaped — so a prompt without
+        // marks and no prompt at all read as different situations, which on a deployed
+        // host they were. The window is the clock's, so passing it is a turn.
+        testCaseAsync "a shell that has not marked its prompt is waited for, and the notice quotes it" <|
             async {
                 let log = newLog ()
-                let environment, _ = profileEnvironment (fun () -> Set.empty)
+                let environment, _, _ = profileEnvironment (fun () -> Set.empty)
                 let mute : SessionEnvironment.SessionEnvironment =
+                    { environment with
+                        SpawnPty =
+                            fun _ _ _ onOutput ->
+                                async {
+                                    let _, never = latch ()
+                                    return
+                                        Ok
+                                            { Write = fun _ -> onOutput "\u001b[?1034hsh-3.2$ "
+                                              Resize = fun _ _ -> ()
+                                              Kill = ignore
+                                              Exited =
+                                                async {
+                                                    do! never
+                                                    return SandboxExited 0
+                                                } }
+                                } }
+                let clock = virtualClock (fixedClock ())
+                let openTranscript, linesOf, _, _, readTranscript = recordingTranscripts ()
+                let terminals, _, _ =
+                    makeTerminalsOn clock.Clock AttachTerminal.unavailable Classifier.approveAll log mute openTranscript readTranscript [] ShellProfileProjection.empty
+                let! opened = terminals.Open (PeerRef ada) (SandboxShell SandboxRef.defaultRef) (TerminalTitle.fromProse "build")
+                let id = opened |> expect
+                let said () =
+                    linesOf id
+                    |> List.choose (function TranscriptRecordLine r when r.Kind = TranscriptStderr -> Some r.Data | _ -> None)
+                    |> String.concat ""
+                Expect.equal (said ()) "" "nothing is said before the window"
+                clock.Advance (TimeSpan.FromSeconds 5.0)
+                Expect.stringContains (said ()) "still waiting" "the terminal says it is waiting, not that it gave up"
+                Expect.stringContains (said ()) "sh-3.2$" "and quotes what the shell printed so far"
+                Expect.stringContains (said ()) "\\x1b" "with its control bytes escaped, not carried"
+            }
+
+        // The one thing that DOES give a shell up: it ended. Evidence, not a timer — and the
+        // notice says how it ended and what it said.
+        testCaseAsync "a shell that exits before it marks its prompt is given up on, and the notice says so" <|
+            async {
+                let log = newLog ()
+                let environment, _, _ = profileEnvironment (fun () -> Set.empty)
+                let dying : SessionEnvironment.SessionEnvironment =
                     { environment with
                         SpawnPty =
                             fun _ _ _ onOutput ->
                                 async {
                                     return
                                         Ok
-                                            { Write = fun _ -> onOutput "\u001b[?1034hsh-3.2$ "
+                                            { Write = fun _ -> onOutput "sh: not found\r\n"
                                               Resize = fun _ _ -> ()
                                               Kill = ignore
-                                              Exited = async { return SandboxExited 0 } }
+                                              Exited = async { return SandboxExited 127 } }
                                 } }
                 let openTranscript, linesOf, _, _, readTranscript = recordingTranscripts ()
-                let terminals, _, _ = makeTerminals log mute openTranscript readTranscript []
+                let terminals, _, _ = makeTerminals log dying openTranscript readTranscript []
                 let! opened = terminals.Open (PeerRef ada) (SandboxShell SandboxRef.defaultRef) (TerminalTitle.fromProse "build")
                 let id = opened |> expect
                 let said =
                     linesOf id
                     |> List.choose (function TranscriptRecordLine r when r.Kind = TranscriptStderr -> Some r.Data | _ -> None)
                     |> String.concat ""
-                Expect.stringContains said "never printed an instrumented prompt" "the terminal says it gave the shell up"
-                Expect.stringContains said "sh-3.2$" "and quotes what the shell printed instead"
-                Expect.stringContains said "\\x1b" "with its control bytes escaped, not carried"
+                Expect.stringContains said "exited with code 127" "the terminal says how the shell ended"
+                Expect.stringContains said "own process instead" "and that blocks run without it"
+                Expect.stringContains said "sh: not found" "quoting what it said"
             }
 
         testCaseAsync "a terminal opened afterwards starts its shell there" <|
             async {
-                // The invariant the whole plan exists for, and it is asserted on the SPAWN:
-                // a `cd` typed at the prompt would echo into the audit trail on the re-arm
-                // path, need quoting for a path this code did not choose, and fail invisibly.
-                let terminals, _, ptySpawned, _, _ = fixture ()
+                // The invariant the whole plan exists for. It is the shell's own FIRST line —
+                // `cd -- '<path>' || exit 97` — and the spawn names no directory: a sandbox
+                // whose work runs behind an entrypoint needs the process to start where the
+                // entrypoint is valid, and a line typed before the first prompt mark reaches
+                // no transcript (Plan 25's objection to a typed `cd`, answered by #580).
+                let terminals, _, shells, _, _ = fixture ()
                 let! set = terminals.SetProfile ActorRef.Agent SandboxRef.defaultRef (Some checkout)
                 Expect.isOk set "the directory is there, so the profile takes"
                 let! _ = terminals.Open (PeerRef ada) (SandboxShell SandboxRef.defaultRef) (TerminalTitle.fromProse "build")
-                Expect.equal (ptyDirectories ptySpawned) [ Some checkout ] "the shell is spawned in the profile's directory"
+                Expect.equal (shellStarts shells) ([ None ], [ checkout ]) "the shell is spawned where the sandbox puts one, and told to cd to the profile's directory"
+                Expect.isTrue ((snd shells).[0].StartsWith " cd -- ") "as the first thing it is told, before any instrumentation"
             }
 
         testCaseAsync "a terminal opened BEFORE it keeps the directory it is in" <|
             async {
                 // A shell's cwd is state its user is relying on. The one terminal that does
                 // move is the one nobody named, and it moves by being reopened.
-                let terminals, _, ptySpawned, _, _ = fixture ()
+                let terminals, _, shells, _, _ = fixture ()
                 let! _ = terminals.Open (PeerRef ada) (SandboxShell SandboxRef.defaultRef) (TerminalTitle.fromProse "build")
                 let! _ = terminals.SetProfile ActorRef.Agent SandboxRef.defaultRef (Some checkout)
-                Expect.equal (ptyDirectories ptySpawned) [ None ] "nothing is re-spawned under a terminal already open"
+                Expect.equal (shellStarts shells) ([ None ], []) "nothing is re-spawned or re-directed under a terminal already open"
             }
 
         testCaseAsync "the degraded per-block path runs its blocks there too" <|
@@ -3677,20 +3829,20 @@ let private shellProfileTests =
 
         testCaseAsync "a clear returns new terminals to wherever the sandbox puts them" <|
             async {
-                let terminals, _, ptySpawned, _, _ = fixture ()
+                let terminals, _, shells, _, _ = fixture ()
                 let! _ = terminals.SetProfile ActorRef.Agent SandboxRef.defaultRef (Some checkout)
                 let! _ = terminals.SetProfile ActorRef.Agent SandboxRef.defaultRef None
                 let! _ = terminals.Open (PeerRef ada) (SandboxShell SandboxRef.defaultRef) (TerminalTitle.fromProse "build")
-                Expect.equal (ptyDirectories ptySpawned) [ None ] "back to what every terminal did before there were profiles"
+                Expect.equal (shellStarts shells) ([ None ], []) "back to what every terminal did before there were profiles"
             }
 
         testCaseAsync "a profile set in one sandbox does not move another's terminals" <|
             async {
-                let terminals, _, ptySpawned, _, _ = fixture ()
+                let terminals, _, shells, _, _ = fixture ()
                 let other = SandboxRef.parse "test" |> expect
                 let! _ = terminals.SetProfile ActorRef.Agent SandboxRef.defaultRef (Some checkout)
                 let! _ = terminals.Open (PeerRef ada) (SandboxShell other) (TerminalTitle.fromProse "build")
-                Expect.equal (ptyDirectories ptySpawned) [ None ] "a path is only a path inside the filesystem that has it"
+                Expect.equal (shellStarts shells) ([ None ], []) "a path is only a path inside the filesystem that has it"
             }
 
         testCaseAsync "a session that restarts still opens terminals where it left off" <|
@@ -3698,7 +3850,7 @@ let private shellProfileTests =
                 // The restart promise: the profile is folded from the durable log, exactly as
                 // the terminals left open are.
                 let log = newLog ()
-                let environment, ptySpawned = profileEnvironment (fun () -> Set.singleton checkoutAt)
+                let environment, ptySpawned, typed = profileEnvironment (fun () -> Set.singleton checkoutAt)
                 let openTranscript, _, _, _, readTranscript = recordingTranscripts ()
                 let replayed =
                     [ SessionEvent.ShellProfileSet
@@ -3719,8 +3871,8 @@ let private shellProfileTests =
                         replayed
                 let! _ = terminals.Open (PeerRef ada) (SandboxShell SandboxRef.defaultRef) (TerminalTitle.fromProse "build")
                 Expect.equal
-                    (ptyDirectories ptySpawned)
-                    [ Some checkout ]
+                    (shellStarts (ptySpawned, typed))
+                    ([ None ], [ checkout ])
                     "a restarted session opens its next terminal where the last one started"
             }
 
@@ -3782,7 +3934,7 @@ let private shellProfileTests =
                 // The directory can go away between being set and being opened in. A terminal
                 // that refuses to open because of a DEFAULT is a worse failure than the default
                 // being wrong, so it falls back once and records the reason where people read.
-                let terminals, _, _, linesOf, vanish = fixture ()
+                let terminals, _, shells, linesOf, vanish = fixture ()
                 let! _ = terminals.SetProfile ActorRef.Agent SandboxRef.defaultRef (Some checkout)
                 vanish ()
                 let! opened = terminals.Open (PeerRef ada) (SandboxShell SandboxRef.defaultRef) (TerminalTitle.fromProse "build")
@@ -3793,6 +3945,9 @@ let private shellProfileTests =
                     |> List.choose (function TranscriptRecordLine r -> Some r.Data | _ -> None)
                     |> String.concat ""
                 Expect.isTrue (printed.Contains checkout) "and the transcript names the directory it could not use"
+                // The `cd` ended the first shell with the code nothing else uses; a second
+                // was started without it, and is the one in front of the terminal.
+                Expect.equal (shellStarts shells) ([ None; None ], [ checkout ]) "one shell told to cd there, then one told nothing"
             }
 
         testCaseAsync "a tree that goes away takes the profiles pointing into it" <|
@@ -3847,11 +4002,11 @@ let private shellProfileTests =
 
         testCaseAsync "the next terminal after a cleared profile opens where the sandbox puts it" <|
             async {
-                let terminals, _, ptySpawned, _, _ = fixture ()
+                let terminals, _, shells, _, _ = fixture ()
                 let! _ = terminals.SetProfile ActorRef.Agent SandboxRef.defaultRef (Some checkout)
                 let! _ = terminals.ClearProfilesUnder ActorRef.Agent checkout
                 let! _ = terminals.Open (PeerRef ada) (SandboxShell SandboxRef.defaultRef) (TerminalTitle.fromProse "build")
-                Expect.equal (ptyDirectories ptySpawned) [ None ] "nothing is asked for a directory that has gone"
+                Expect.equal (shellStarts shells) ([ None ], []) "nothing is asked for a directory that has gone"
             }
 
         testCaseAsync "the query reports where each sandbox's terminals start" <|
@@ -3991,7 +4146,7 @@ let private agentVerbTests =
                 // but the `D` mark that closes a block died with the shell, so the block stayed
                 // `BlockRunning` for ever — and whoever was waiting on it waited for ever.
                 let log = newLog ()
-                let environment, _ = profileEnvironment (fun () -> Set.empty)
+                let environment, _, _ = profileEnvironment (fun () -> Set.empty)
                 let openTranscript, _, _, _, readTranscript = recordingTranscripts ()
                 let terminals, _, _ = makeTerminals log environment openTranscript readTranscript []
                 let! opened = terminals.AgentTerminal SandboxRef.defaultRef "perl -pi -e 1"
@@ -4119,6 +4274,7 @@ let tests =
         transcriptTests
         agentTerminalTests
         agentVerbTests
+        shellStartTests
         shellProfileTests
         codecTests
         orderTests

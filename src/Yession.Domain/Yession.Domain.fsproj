@@ -88,6 +88,8 @@
          path or a hostname is named. After Resources.fs, whose algebra it decodes
          into and whose refusals it reaches through rather than repeating. -->
     <Compile Include="OperatorProfile.fs" />
+    <!-- A compose-style command line read into words, for `entrypoint`/`command` strings. -->
+    <Compile Include="ShellWords.fs" />
     <Compile Include="Config.fs" />
     <!-- The read half of the imperative session API (Plan 15). Depends on nothing but
          System: a query is a declaration, and what it declares about is somebody else's. -->

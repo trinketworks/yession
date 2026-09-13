@@ -18,6 +18,8 @@ type [<AllowNullLiteral>] Stream =
     abstract on: event: string * handler: (obj -> unit) -> Stream
     abstract write: chunk: obj -> bool
     abstract ``end``: unit -> unit
+    /// Tear the stream down — what a follower does once it has read what it came for.
+    abstract destroy: unit -> unit
 
 /// A `node:stream` PassThrough — a writable sink `demuxStream` pushes one output stream
 /// into, and a readable we drain via its `'data'`/`'end'` events.
@@ -39,6 +41,9 @@ type [<AllowNullLiteral>] Container =
     abstract remove: options: obj -> JS.Promise<obj>
     abstract exec: options: obj -> JS.Promise<Exec>
     abstract inspect: unit -> JS.Promise<obj>
+    /// The container's own output. With `follow: true` a stream that stays open as the
+    /// process prints; multiplexed like an exec's, so `demuxStream` reads it.
+    abstract logs: options: obj -> JS.Promise<Stream>
 
 /// A named-volume handle.
 type [<AllowNullLiteral>] Volume =

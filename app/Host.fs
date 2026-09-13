@@ -378,7 +378,7 @@ let startFull
                 transcripts.Open
                 transcripts.ReadRange
                 Emulator.openEmulator
-                SessionTerminals.TerminalShell.posix
+                TerminalShell.posix
                 clock
                 TerminalId.mint
                 mintBlockId
