@@ -31,5 +31,6 @@
   <Folder Name="/tests/">
     <Project Path="tests/Yession.Tests/Yession.Tests.fsproj" />
     <Project Path="tools/Yession.Probe/Yession.Probe.fsproj" />
+    <Project Path="tools/Yession.Frames/Yession.Frames.fsproj" />
   </Folder>
 </Solution>

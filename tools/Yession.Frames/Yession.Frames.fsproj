@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- A session's first load, frame by frame, against a real deployment: every painted frame
+       and every client render, labelled so a picture can be traced to the render that drew it.
+       An instrument on the same terms as the probe beside it — NOT shipped, and nothing
+       arranges for it not to be: the package bundles from each bin's entry, so a project no
+       bin references is simply never reached.
+
+       It references the App for `Cli` and the promise builder the App already carries; it
+       drives nothing of the App's — the page under the camera is whatever the deployment
+       serves. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Frames.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/Yession.App/Yession.App.fsproj" />
+  </ItemGroup>
+
+</Project>
