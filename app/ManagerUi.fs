@@ -145,21 +145,24 @@ let private nameView (access: PublicAccess) (view: ProcessManager.SessionView) :
 let private actions (view: ProcessManager.SessionView) : TemplateResult =
     let id = SessionId.value view.Record.SessionId
     let name = view.Record.DisplayName
+    // Each control carries the address it posts to, spelled by the server: the script that
+    // presses it reads the attribute and builds nothing.
+    let posts (verb: SessionVerb) = ManagerRoute.path (ManagerRoute.Session (view.Record.SessionId, verb))
     match view.Record.ArchivedAt with
     | Some _ ->
-        html $"""<button type="button" class="{Style.btn} w-full" data-unarchive="{id}">Unarchive</button>"""
+        html $"""<button type="button" class="{Style.btn} w-full" data-unarchive="{id}" data-post="{posts SessionVerb.Unarchive}">Unarchive</button>"""
     | None ->
         let verb =
             match view.Status with
             | ProcessManager.Running _ ->
-                html $"""<button type="button" class="{Style.btnDanger} flex-1 min-w-0" data-stop="{id}">Stop</button>"""
+                html $"""<button type="button" class="{Style.btnDanger} flex-1 min-w-0" data-stop="{id}" data-post="{posts SessionVerb.Stop}">Stop</button>"""
             | ProcessManager.NotRunning
             | ProcessManager.Exited _ ->
-                html $"""<button type="button" class="{Style.btn} flex-1 min-w-0" data-launch="{id}">Launch</button>"""
+                html $"""<button type="button" class="{Style.btn} flex-1 min-w-0" data-launch="{id}" data-post="{posts SessionVerb.Launch}">Launch</button>"""
         html $"""
             <div class="flex items-center gap-2">
               {verb}
-              <button type="button" class="{Style.btnIconBare}" data-archive="{id}"
+              <button type="button" class="{Style.btnIconBare}" data-archive="{id}" data-post="{posts SessionVerb.Archive}"
                       aria-label="Archive {name}" title="Archive {name}">{Icon.archive}</button>
             </div>"""
 
@@ -255,7 +258,7 @@ let private tableTemplate
         | NewestFirst -> "↓", "descending"
         | OldestFirst -> "↑", "ascending"
     html $"""
-        <section class="flex flex-col gap-3" data-sessions>
+        <section class="flex flex-col gap-3" data-sessions data-stream="{ManagerRoute.path ManagerRoute.SessionRows}">
           <div class="flex items-baseline gap-2.5 flex-wrap">
             <span class="{Style.label}">sessions</span>
             <span class="font-semibold text-[11px] leading-4 tracking-[0.18em] text-ink-faint tabular-nums">{List.length views}</span>
@@ -327,10 +330,8 @@ let private script =
     const sessionsEl = () => document.querySelector('[data-sessions]')
     document.addEventListener('click', async (e) => {
       const b = e.target.closest('[data-launch],[data-stop]'); if (!b) return
-      const id = b.getAttribute('data-launch') || b.getAttribute('data-stop')
-      const action = b.hasAttribute('data-launch') ? 'launch' : 'stop'
       const row = b.closest('tr')
-      const r = await fetch('/sessions/' + id + '/' + action, { method: 'POST' })
+      const r = await fetch(b.getAttribute('data-post'), { method: 'POST' })
       if (r.ok) swap(row, await r.text())
     })
     // Archiving answers with the WHOLE table, not a row: it can move a session out of the
@@ -338,9 +339,7 @@ let private script =
     // rides along because the answer has to be rendered for the list this page is showing.
     document.addEventListener('click', async (e) => {
       const b = e.target.closest('[data-archive],[data-unarchive]'); if (!b) return
-      const id = b.getAttribute('data-archive') || b.getAttribute('data-unarchive')
-      const action = b.hasAttribute('data-archive') ? 'archive' : 'unarchive'
-      const r = await fetch('/sessions/' + id + '/' + action + location.search, { method: 'POST' })
+      const r = await fetch(b.getAttribute('data-post') + location.search, { method: 'POST' })
       if (r.ok) swap(sessionsEl(), await r.text())
     })
     // A filter or sort click is a navigation this page performs itself: adopt the href the
@@ -365,22 +364,24 @@ let private script =
     document.addEventListener('submit', async (e) => {
       const f = e.target.closest('[data-declare-mcp]'); if (!f) return
       e.preventDefault()
-      const r = await fetch('/mcp/servers', { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams(new FormData(f)) })
+      const r = await fetch(f.getAttribute('action'), { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams(new FormData(f)) })
       const text = await r.text()
       if (r.ok) { mcpSwap(text) } else { const p = f.querySelector('[data-mcp-error]'); if (p) p.textContent = text }
     })
     document.addEventListener('click', async (e) => {
       const b = e.target.closest('[data-mcp-withdraw]'); if (!b) return
       const body = new URLSearchParams({ name: b.getAttribute('data-mcp-withdraw'), session: b.getAttribute('data-mcp-audience') || '' })
-      const r = await fetch('/mcp/servers/withdraw', { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body })
+      const r = await fetch(b.getAttribute('data-post'), { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body })
       if (r.ok) mcpSwap(await r.text())
     })
     // The stream is opened AT the current query and reopened when it changes; the server
     // filters per connection, so live status keeps arriving under whatever is being shown.
+    // Its address is on the section it fills, like every other address on this page: the
+    // server spells them all (`ManagerRoute`), and this script spells none.
     let rows = null
     const openRows = () => {
       if (rows) rows.close()
-      rows = new EventSource('/sessions/rows' + location.search)
+      rows = new EventSource(sessionsEl().getAttribute('data-stream') + location.search)
       rows.onmessage = (e) => { if (e.data) swap(sessionsEl(), e.data) }
     }
     openRows()
@@ -411,7 +412,7 @@ let private mcpRowTemplate (views: ProcessManager.SessionView list) (declaration
               title="{McpTransport.describe declaration.Server.Transport}">{McpTransport.describe declaration.Server.Transport}</td>
           <td class="py-3 pr-4 align-middle {Style.small} truncate" title="{audience}">{audience}</td>
           <td class="py-3 pl-4 align-middle">
-            <button type="button" class="{Style.btnDanger} w-full" data-mcp-withdraw="{name}" data-mcp-audience="{audienceValue}">Withdraw</button>
+            <button type="button" class="{Style.btnDanger} w-full" data-mcp-withdraw="{name}" data-mcp-audience="{audienceValue}" data-post="{ManagerRoute.path ManagerRoute.WithdrawMcpServer}">Withdraw</button>
           </td>
         </tr>"""
 
@@ -448,7 +449,7 @@ let private mcpTemplate (views: ProcessManager.SessionView list) (declarations: 
             </thead>
             <tbody>{rows}</tbody>
           </table>
-          <form class="flex flex-col gap-3 pt-3" data-declare-mcp>
+          <form class="flex flex-col gap-3 pt-3" method="post" action="{ManagerRoute.path ManagerRoute.DeclareMcpServer}" data-declare-mcp>
             <div class="flex flex-wrap items-end gap-3">
               <div class="flex flex-col gap-1.5">
                 <label class="{Style.label}" for="mcp-name">name</label>
@@ -584,7 +585,7 @@ let private bodyTemplate
                  out of one fact: what was typed on this page never reached the session, so a
                  session created as "design review" opened as its raw id with an empty title
                  field, and the name had to be typed a second time to have any effect. -->
-            <form class="flex flex-col gap-3 pt-6 pb-8" method="post" action="/sessions" data-create-session>
+            <form class="flex flex-col gap-3 pt-6 pb-8" method="post" action="{ManagerRoute.path ManagerRoute.CreateSession}" data-create-session>
               <span class="{Style.label}">new session</span>
               <div class="flex flex-wrap items-center gap-3">
                 <button type="submit" class="{Style.btnPrimary}">Create</button>
@@ -597,14 +598,6 @@ let private bodyTemplate
             {hooksSection}
           </div>
         </main>"""
-
-/// How this Manager spells an address on any page it serves: anchored at the origin root.
-/// The Manager declares no `<base href>` and lives at its origin root by `ManagerOrigin`'s
-/// own rule, so the root-anchored form is the one that is true from every page here — the
-/// management page at `/` and the standalone pages under `/sessions/{id}/` alike. The
-/// relative form was true from the first and a 404 from the second, which `RelativeUrl` now
-/// makes a question this file has to answer rather than a string it can copy.
-let private atRoot (url: RelativeUrl) = RelativeUrl.under "" url
 
 /// `styleSheetUrl` is passed in rather than read from the module below: F# scopes top-down, and
 /// the stylesheet's address is derived from bytes read further down the file.
@@ -621,7 +614,7 @@ let page
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         "<title>Yession Manager</title>"
         Style.headTags styleSheetUrl
-        WebApp.managerHeadTags (atRoot (SessionRoute.relative Icon))
+        WebApp.managerHeadTags (ManagerRoute.path ManagerRoute.Icon)
         sprintf "</head><body class=\"%s\">" Style.app
         Ssr.render (bodyTemplate access query views declarations hooks)
         sprintf "<script>%s</script>" script
@@ -642,7 +635,7 @@ let private formField (body: string) (name: string) : string = Fable.Core.Util.j
 /// which is also why this page can link a stylesheet whose faces this file has never heard of.
 let private assets = Assets.configured ()
 
-let private cssUrl = atRoot (Assets.url assets AssetFile.``app``)
+let private cssUrl = ManagerRoute.path (ManagerRoute.asset assets.Build AssetFile.``app``)
 
 /// The icon's constant is base64 (it lives in source); the wire wants the PNG. Same decode
 /// the session server does, for the same reason — `res.end` takes what Node's `end` takes.
@@ -703,10 +696,11 @@ let private answeredFor (status: int) : bool =
 /// impossible to reintroduce: whatever the ground becomes, these pages have it, because it
 /// is declared once, on the document, in the one file every surface links.
 ///
-/// Linked from the ROOT, like every address the Manager emits (`atRoot`). These pages live
-/// under `/sessions/{id}/`, and a relative link copied from the management page at `/`
-/// resolved to `/sessions/{id}/assets/…`, a 404 — the page was white with a stylesheet link
-/// in it. `RelativeUrl` is what makes that a compile error now rather than a review catch.
+/// Linked from the ROOT, like every address the Manager emits (`ManagerRoute.path`). These
+/// pages live under `/sessions/{id}/`, and a relative link copied from the management page
+/// at `/` resolved to `/sessions/{id}/assets/…`, a 404 — the page was white with a
+/// stylesheet link in it. `ManagerRoute` has no relative form at all now, which is what
+/// makes that a compile error rather than a review catch.
 ///
 /// HTML, and that is the point rather than a detail. Every other answer this file gives is
 /// read by the page's script, so `text/plain` is right for them — but these are NAVIGATIONS
@@ -738,16 +732,11 @@ let private problemPage (title: string) (detail: string) : string =
     standalonePage
         title
         (sprintf """<p class="%s">%s</p>
-<p><a class="%s" href="/">Back to the session manager</a></p>""" Style.body (Ssr.escapeText detail) Style.proseLink)
+<p><a class="%s" href="%s">Back to the session manager</a></p>""" Style.body (Ssr.escapeText detail) Style.proseLink (ManagerRoute.path ManagerRoute.Home))
 
 /// A refusal a BROWSER is holding: the status it deserves, and a page that says so.
 let private problem (res: ServerResponse) (status: int) (title: string) (detail: string) =
     respond res status "text/html; charset=utf-8" (problemPage title detail)
-
-/// Where the opening page asks whether the front door has caught up. Spelled once, beside
-/// the page that fetches it and the route that answers it.
-let private readyRoute (sessionId: SessionId) : string =
-    sprintf "/sessions/%s/ready" (SessionId.value sessionId)
 
 /// The `/sessions/{id}/open` landing page (Plan 11).
 ///
@@ -833,241 +822,208 @@ let tryHandle
     // An action's outcome is not discarded: a launch that fails leaves the session stopped,
     // and answering with an ordinary row said nothing about why. The row still comes back on
     // success (it is the swap unit); a failure answers with its reason.
-    let sessionAction (id: string) (action: SessionId -> Async<Result<unit, string>>) =
-        match SessionId.create id with
-        | Error e -> respond res 400 "text/plain" e
-        | Ok sessionId ->
-            Async.StartImmediate (
-                async {
-                    match! action sessionId with
-                    | Ok () -> html res (rowOf sessionId)
-                    | Error reason -> respond res (refusalStatus sessionId) "text/plain" reason
-                })
+    let sessionAction (sessionId: SessionId) (action: SessionId -> Async<Result<unit, string>>) =
+        Async.StartImmediate (
+            async {
+                match! action sessionId with
+                | Ok () -> html res (rowOf sessionId)
+                | Error reason -> respond res (refusalStatus sessionId) "text/plain" reason
+            })
     // Route first (pure — did the UI claim this path?), authenticate second: the gate
     // runs once, ahead of every claimed route, and unclaimed paths fall through to the
-    // composing server untouched.
-    let route : (unit -> unit) option =
-        match req.``method``, path with
-        | "GET", "/" ->
-            Some (fun () -> html res (page cssUrl pm.Public query (pm.Sessions ()) (pm.McpServers ()) pm.HookEndpoints))
-        | "GET", path when path.StartsWith ("/" + SessionRoute.assetsPrefix) ->
+    // composing server untouched. ONE match over the contract, so a route added to
+    // `ManagerRoute` fails the build here until it is answered.
+    let handle (route: ManagerRoute) : unit =
+        match route with
+        | ManagerRoute.Home ->
+            html res (page cssUrl pm.Public query (pm.Sessions ()) (pm.McpServers ()) pm.HookEndpoints)
+        | ManagerRoute.Asset (build, file) ->
             // Everything static this build ships, served by path and by nothing else — the
             // same service the Session Process runs, over this process's own set. The Manager
             // page links the stylesheet, and the stylesheet names its own faces; neither this
             // route nor this file knows what those are, which is the point: a build that adds
             // an asset adds a file, not a case.
-            //
-            // The Manager has no `<base href>` and always sits at its origin root, so the
-            // relative addresses the page and the stylesheet emit resolve to exactly here.
-            match SessionRoute.parse "GET" path with
-            | Some (Asset (build, file)) -> Some (fun () -> Assets.serve assets build file res)
-            | _ -> None
-        | "GET", path when path = atRoot (SessionRoute.relative Icon) ->
+            Assets.serve assets build file res
+        | ManagerRoute.Icon ->
             // The same mark the session shells wear, from the same constant, at the address
             // the page emits for it.
-            Some (fun () ->
-                res.writeHead (
-                    200,
-                    createObj [ "content-type", box "image/png"; "cache-control", box CachePolicy.shell ])
-                |> ignore
-                res.``end`` (decodeBase64 WebApp.iconPngBase64))
+            res.writeHead (
+                200,
+                createObj [ "content-type", box "image/png"; "cache-control", box CachePolicy.shell ])
+            |> ignore
+            res.``end`` (decodeBase64 WebApp.iconPngBase64)
         // Creating a session is asking to WORK in one. It used to answer with a refreshed
         // table, which left the primary path at three acts — create, find the row, Launch —
         // and then a fourth to open what you had just made. So the answer says where the
-        // session now is, and `/open` (below) does what it has always done: launch it if it
-        // is stopped and land the browser on its address.
+        // session now is, and `OpenSession` (below) does what it has always done: launch it
+        // if it is stopped and land the browser on its address.
         //
         // One answer, for every caller. A route that returned a fragment to some callers and
         // a redirect to others would be two contracts wearing one address, and the one nobody
         // was looking at is the one that would rot — which is precisely how the vanishing-row
         // bug lived: two renderings of the session list, only one of them exercised.
-        | "POST", "/sessions" ->
-            Some (fun () ->
-                readBody req (fun body ->
-                    // The human UI omits the id, so mint a Docker-safe Crockford one; a caller that
-                    // supplies an explicit id (automation, tests) keeps it.
-                    let id =
-                        match formField body "id" with
-                        | "" -> SessionId.value (SessionId.mint ())
-                        | provided -> provided
-                    // No name: a session is named from inside itself and reports it back
-                    // (`setDisplayName`), so `DisplayName` starts as the minted id and the
-                    // list shows that until somebody names it.
-                    match pm.CreateSession id "" with
-                    | Ok record -> seeOther res (sprintf "/sessions/%s/open" (SessionId.value record.SessionId))
-                    | Error e -> respond res 400 "text/plain" e))
+        | ManagerRoute.CreateSession ->
+            readBody req (fun body ->
+                // The human UI omits the id, so mint a Docker-safe Crockford one; a caller that
+                // supplies an explicit id (automation, tests) keeps it.
+                let id =
+                    match formField body "id" with
+                    | "" -> SessionId.value (SessionId.mint ())
+                    | provided -> provided
+                // No name: a session is named from inside itself and reports it back
+                // (`setDisplayName`), so `DisplayName` starts as the minted id and the
+                // list shows that until somebody names it.
+                match pm.CreateSession id "" with
+                | Ok record -> seeOther res (ManagerRoute.path (ManagerRoute.OpenSession record.SessionId))
+                | Error e -> respond res 400 "text/plain" e)
         // Declaring an MCP server (Plan 17). The ONE act that names a url, and the only
         // one that is not read-only. There is deliberately no per-session enable beside it:
         // an operator who declares a server declares it in order for it to be used.
-        | "POST", "/mcp/servers" ->
-            Some (fun () ->
-                readBody req (fun body ->
-                    let audience =
-                        match formField body "session" with
-                        | "" -> Ok AnySession
-                        | id -> SessionId.create id |> Result.map OneSession
-                    let declared =
-                        match McpServerName.create (formField body "name"), audience with
-                        | Error e, _ -> Error e
-                        | _, Error e -> Error e
-                        | Ok name, Ok audience ->
-                            match formField body "url" with
-                            | "" -> Error "an MCP server needs an address"
-                            | url ->
-                                Ok
-                                    { Server =
-                                        { Name = name
-                                          Transport = McpHttp url
-                                          Description =
-                                            (match formField body "description" with
-                                             | "" -> None
-                                             | description -> Some description) }
-                                      Audience = audience }
-                    match declared |> Result.bind pm.DeclareMcpServer with
-                    | Ok () -> html res (mcpSection (pm.Sessions ()) (pm.McpServers ()))
-                    | Error e -> respond res 400 "text/plain" e))
-        | "POST", "/mcp/servers/withdraw" ->
-            Some (fun () ->
-                readBody req (fun body ->
-                    let audience =
-                        match formField body "session" with
-                        | "" -> Ok AnySession
-                        | id -> SessionId.create id |> Result.map OneSession
+        | ManagerRoute.DeclareMcpServer ->
+            readBody req (fun body ->
+                let audience =
+                    match formField body "session" with
+                    | "" -> Ok AnySession
+                    | id -> SessionId.create id |> Result.map OneSession
+                let declared =
                     match McpServerName.create (formField body "name"), audience with
-                    | Error e, _
-                    | _, Error e -> respond res 400 "text/plain" e
+                    | Error e, _ -> Error e
+                    | _, Error e -> Error e
                     | Ok name, Ok audience ->
-                        pm.WithdrawMcpServer name audience
-                        html res (mcpSection (pm.Sessions ()) (pm.McpServers ()))))
-        | method', path when path.StartsWith "/sessions/" ->
-            let rest = path.Substring "/sessions/".Length
-            match method', rest.Split '/' with
-            // Both streams are the same subscription projected differently — one publish per
-            // launch, exit, and rename; snapshots, never deltas, so a reconnect is the whole
-            // recovery protocol and a consumer that connects, reads one frame, and disconnects
-            // has done a poll.
-            | "GET", [| "stream" |] ->
-                // The session registry: the Running set as wire frames. An
-                // operator's serving binding holds this open to reconcile its proxy.
-                Some (fun () ->
-                    Sse.stream req res
-                        (ProcessManager.registryFrameOf >> ControlWire.toString ControlWire.sessionRegistryFrame)
-                        pm.SubscribeSessions
-                    |> ignore)
-            | "GET", [| "rows" |] ->
-                // The management page's live status, pushed rather than polled: the WHOLE table,
-                // rendered by the same `tableTemplate` the page and the action swaps use, so the
-                // browser keeps no reconciliation logic. Stopped and exited rows are in the
-                // published views, which is why the page renders them and the registry does not.
-                Some (fun () -> Sse.stream req res (sessionsTable pm.Public query) pm.SubscribeSessions |> ignore)
-            | "POST", [| id; "launch" |] ->
-                Some (fun () ->
-                    sessionAction id (fun sessionId ->
-                        async {
-                            let! outcome = pm.Launch sessionId
-                            return outcome |> Result.map ignore
-                        }))
-            | "POST", [| id; "stop" |] ->
-                Some (fun () -> sessionAction id pm.Stop)
-            // Archiving answers with the WHOLE table rather than a row: it can move a session
-            // out of the filter the caller is looking at, so the row is no longer the unit
-            // that changed. (The verbs also publish, which is what reaches every OTHER open
-            // page and the registry stream — the same split `launch` already makes.)
-            | "POST", [| id; "archive" |] ->
-                Some (fun () ->
-                    match SessionId.create id with
-                    | Error e -> respond res 400 "text/plain" e
-                    | Ok sessionId ->
-                        Async.StartImmediate (
-                            async {
-                                match! pm.Archive sessionId with
-                                | Ok () -> html res (tableNow ())
-                                | Error reason -> respond res 500 "text/plain" reason
-                            }))
-            | "POST", [| id; "unarchive" |] ->
-                Some (fun () ->
-                    match SessionId.create id with
-                    | Error e -> respond res 400 "text/plain" e
-                    | Ok sessionId ->
-                        match pm.Unarchive sessionId with
-                        | Ok () -> html res (tableNow ())
-                        | Error reason -> respond res 500 "text/plain" reason)
-            // The stable way back into a session (Plan 11). A session's own address changes
-            // whenever it is relaunched, and under idle reaping that is routine rather than
-            // rare — so THIS is the URL to bookmark and the one the session client's
-            // reconnect offer points at. Launch it if it is stopped, then hand the browser
-            // to wherever this deployment says the session lives.
-            | "GET", [| id; "open" |] ->
-                Some (fun () ->
-                    match SessionId.create id with
-                    | Error e -> problem res 400 "That is not a session id" e
-                    | Ok sessionId ->
-                        Async.StartImmediate (
-                            async {
-                                match pm.TryFind sessionId with
-                                | None -> problem res 404 "No such session" (sprintf "This Manager has no session %s." id)
-                                | Some view ->
-                                    // Already running is the common case once a client has
-                                    // reconnected on its own; asking for the port it already
-                                    // has is not a relaunch.
-                                    let! port =
-                                        match view.Status with
-                                        | ProcessManager.Running (port, _, _) -> async { return Ok port }
-                                        | ProcessManager.NotRunning
-                                        | ProcessManager.Exited _ -> pm.Launch sessionId
-                                    match port with
-                                    | Error reason -> problem res (refusalStatus sessionId) "Cannot open this session" reason
-                                    | Ok port ->
-                                        let address = PublicAccess.sessionAddress sessionId port pm.Public
-                                        html res (openingPage (sprintf "%s/" address.Url) (readyRoute sessionId))
-                            }))
-            // Does this deployment's front door reach the session yet? The question the
-            // opening page above is really asking, answered HERE because here is the only
-            // place it CAN be answered: a browser can read the status of a same-origin
-            // address and learns nothing at all about a cross-origin one (an opaque `no-cors`
-            // answer carries status `0` whether the session served the page or the proxy
-            // served a 404), while this process has no origin to be blinded by. The page that
-            // guessed instead redirected whoever pressed Create straight into the front
-            // door's 404, a few hundred milliseconds before the mapping appeared.
-            //
-            // Read by a script, so `text/plain` — unlike `/open` beside it, nothing navigates
-            // here.
-            | "GET", [| id; "ready" |] ->
-                Some (fun () ->
-                    match SessionId.create id with
-                    | Error e -> respond res 400 "text/plain" e
-                    | Ok sessionId ->
-                        match pm.TryFind sessionId with
-                        | None -> respond res 404 "text/plain" (sprintf "unknown session %s" id)
-                        | Some view ->
+                        match formField body "url" with
+                        | "" -> Error "an MCP server needs an address"
+                        | url ->
+                            Ok
+                                { Server =
+                                    { Name = name
+                                      Transport = McpHttp url
+                                      Description =
+                                        (match formField body "description" with
+                                         | "" -> None
+                                         | description -> Some description) }
+                                  Audience = audience }
+                match declared |> Result.bind pm.DeclareMcpServer with
+                | Ok () -> html res (mcpSection (pm.Sessions ()) (pm.McpServers ()))
+                | Error e -> respond res 400 "text/plain" e)
+        | ManagerRoute.WithdrawMcpServer ->
+            readBody req (fun body ->
+                let audience =
+                    match formField body "session" with
+                    | "" -> Ok AnySession
+                    | id -> SessionId.create id |> Result.map OneSession
+                match McpServerName.create (formField body "name"), audience with
+                | Error e, _
+                | _, Error e -> respond res 400 "text/plain" e
+                | Ok name, Ok audience ->
+                    pm.WithdrawMcpServer name audience
+                    html res (mcpSection (pm.Sessions ()) (pm.McpServers ())))
+        // Both streams are the same subscription projected differently — one publish per
+        // launch, exit, and rename; snapshots, never deltas, so a reconnect is the whole
+        // recovery protocol and a consumer that connects, reads one frame, and disconnects
+        // has done a poll.
+        | ManagerRoute.SessionRegistry ->
+            // The session registry: the Running set as wire frames. An
+            // operator's serving binding holds this open to reconcile its proxy.
+            Sse.stream req res
+                (ProcessManager.registryFrameOf >> ControlWire.toString ControlWire.sessionRegistryFrame)
+                pm.SubscribeSessions
+            |> ignore
+        | ManagerRoute.SessionRows ->
+            // The management page's live status, pushed rather than polled: the WHOLE table,
+            // rendered by the same `tableTemplate` the page and the action swaps use, so the
+            // browser keeps no reconciliation logic. Stopped and exited rows are in the
+            // published views, which is why the page renders them and the registry does not.
+            Sse.stream req res (sessionsTable pm.Public query) pm.SubscribeSessions |> ignore
+        | ManagerRoute.Session (sessionId, SessionVerb.Launch) ->
+            sessionAction sessionId (fun sessionId ->
+                async {
+                    let! outcome = pm.Launch sessionId
+                    return outcome |> Result.map ignore
+                })
+        | ManagerRoute.Session (sessionId, SessionVerb.Stop) -> sessionAction sessionId pm.Stop
+        // Archiving answers with the WHOLE table rather than a row: it can move a session
+        // out of the filter the caller is looking at, so the row is no longer the unit
+        // that changed. (The verbs also publish, which is what reaches every OTHER open
+        // page and the registry stream — the same split `launch` already makes.)
+        | ManagerRoute.Session (sessionId, SessionVerb.Archive) ->
+            Async.StartImmediate (
+                async {
+                    match! pm.Archive sessionId with
+                    | Ok () -> html res (tableNow ())
+                    | Error reason -> respond res 500 "text/plain" reason
+                })
+        | ManagerRoute.Session (sessionId, SessionVerb.Unarchive) ->
+            match pm.Unarchive sessionId with
+            | Ok () -> html res (tableNow ())
+            | Error reason -> respond res 500 "text/plain" reason
+        // The stable way back into a session (Plan 11). A session's own address changes
+        // whenever it is relaunched, and under idle reaping that is routine rather than
+        // rare — so THIS is the URL to bookmark and the one the session client's
+        // reconnect offer points at. Launch it if it is stopped, then hand the browser
+        // to wherever this deployment says the session lives.
+        | ManagerRoute.OpenSession sessionId ->
+            Async.StartImmediate (
+                async {
+                    match pm.TryFind sessionId with
+                    | None ->
+                        problem res 404 "No such session" (sprintf "This Manager has no session %s." (SessionId.value sessionId))
+                    | Some view ->
+                        // Already running is the common case once a client has
+                        // reconnected on its own; asking for the port it already
+                        // has is not a relaunch.
+                        let! port =
                             match view.Status with
-                            // Not running is not ready, and it is not an error either: `/open`
-                            // launches, and a session can exit under a reader who is watching.
+                            | ProcessManager.Running (port, _, _) -> async { return Ok port }
                             | ProcessManager.NotRunning
-                            | ProcessManager.Exited _ ->
-                                respond res 503 "text/plain" "the session is not running"
-                            | ProcessManager.Running (port, _, _) ->
-                                let address = PublicAccess.sessionAddress sessionId port pm.Public
-                                Async.StartImmediate (
-                                    async {
-                                        let! status = statusOf (sprintf "%s/" address.Url) |> awaitPromise
-                                        if answeredFor status then respond res 200 "text/plain" "ready"
-                                        else
-                                            respond
-                                                res
-                                                503
-                                                "text/plain"
-                                                (sprintf "%s answered %d" address.Url status)
-                                    }))
-            | _ -> None
-        | _ -> None
+                            | ProcessManager.Exited _ -> pm.Launch sessionId
+                        match port with
+                        | Error reason -> problem res (refusalStatus sessionId) "Cannot open this session" reason
+                        | Ok port ->
+                            let address = PublicAccess.sessionAddress sessionId port pm.Public
+                            html res (openingPage (sprintf "%s/" address.Url) (ManagerRoute.path (ManagerRoute.SessionReady sessionId)))
+                })
+        // Does this deployment's front door reach the session yet? The question the
+        // opening page above is really asking, answered HERE because here is the only
+        // place it CAN be answered: a browser can read the status of a same-origin
+        // address and learns nothing at all about a cross-origin one (an opaque `no-cors`
+        // answer carries status `0` whether the session served the page or the proxy
+        // served a 404), while this process has no origin to be blinded by. The page that
+        // guessed instead redirected whoever pressed Create straight into the front
+        // door's 404, a few hundred milliseconds before the mapping appeared.
+        //
+        // Read by a script, so `text/plain` — unlike `OpenSession` beside it, nothing
+        // navigates here.
+        | ManagerRoute.SessionReady sessionId ->
+            match pm.TryFind sessionId with
+            | None -> respond res 404 "text/plain" (sprintf "unknown session %s" (SessionId.value sessionId))
+            | Some view ->
+                match view.Status with
+                // Not running is not ready, and it is not an error either: `OpenSession`
+                // launches, and a session can exit under a reader who is watching.
+                | ProcessManager.NotRunning
+                | ProcessManager.Exited _ ->
+                    respond res 503 "text/plain" "the session is not running"
+                | ProcessManager.Running (port, _, _) ->
+                    let address = PublicAccess.sessionAddress sessionId port pm.Public
+                    Async.StartImmediate (
+                        async {
+                            let! status = statusOf (sprintf "%s/" address.Url) |> awaitPromise
+                            if answeredFor status then respond res 200 "text/plain" "ready"
+                            else
+                                respond
+                                    res
+                                    503
+                                    "text/plain"
+                                    (sprintf "%s answered %d" address.Url status)
+                        })
+    let route = ManagerRoute.parse req.``method`` path
     match route with
     | None -> false
-    | Some handle ->
+    | Some route ->
         Async.StartImmediate (
             async {
                 match! identify req with
                 | Denied reason -> respond res 401 "text/plain" reason
-                | Attributed _ | Unattributed _ -> handle ()
+                | Attributed _ | Unattributed _ -> handle route
             })
         true

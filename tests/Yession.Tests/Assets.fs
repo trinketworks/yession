@@ -113,10 +113,10 @@ let tests =
         testCase "a document names a file through the build's address" <| fun () ->
             withAssets "urls" (fun assets ->
                 let inShell, _ = DocumentBase.declare ""
-                let url = RelativeUrl.inDocument inShell (Assets.url assets AssetFile.``app``)
+                let url = RelativeUrl.inDocument inShell (AssetBuild.url assets.Build AssetFile.``app``)
                 Expect.isFalse (url.StartsWith "/") "relative, so a path-mounted session resolves it under its own prefix"
                 Expect.equal
-                    (SessionRoute.parse "GET" (RelativeUrl.under "" (Assets.url assets AssetFile.``app``)))
+                    (SessionRoute.parse "GET" (RelativeUrl.under "" (AssetBuild.url assets.Build AssetFile.``app``)))
                     (Some (Asset (buildOf assets, AssetFile.path AssetFile.``app``)))
                     "and what the document names is what the router claims")
 

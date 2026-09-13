@@ -355,7 +355,7 @@ module View =
     let private reopenAction (model: ClientModel) (extra: string) : TemplateResult option =
         match model.Connection, model.Manager, model.Session with
         | Disconnected (Some _), Some origin, Some sessionId ->
-            let target = sprintf "%s/sessions/%s/open" origin (SessionId.value sessionId)
+            let target = ManagerRoute.at origin (ManagerRoute.OpenSession sessionId)
             Some (
                 html $"""
                     <a class="{Style.cls [ Style.btnPrimary; extra ]}"

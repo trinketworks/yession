@@ -14,6 +14,7 @@ open Yession.Domain.Access
 open Yession.Domain.Hooks
 open Yession.Manager
 open Yession.Oidc
+open Yession.App
 
 [<Emit("""fetch($0, { method: 'POST', headers: { 'x-yession-control': $1, 'content-type': 'application/json' }, body: $2 })
   .then(r => { if (!r.ok) throw new Error('control rpc failed: ' + r.status); return r.text() })""")>]
@@ -64,7 +65,7 @@ let subscribeMcp (baseUrl: string) (secret: string) (onSet: Sink<McpServerSet>) 
 /// cancel that stops the subscription and closes the connection.
 let subscribeSessionsAs (headers: (string * string) list) (baseUrl: string) (onFrame: Sink<ControlWire.SessionRegistryFrame>) : Subscription =
     Sse.subscribe
-        (sprintf "%s/sessions/stream" baseUrl)
+        (ManagerRoute.at baseUrl ManagerRoute.SessionRegistry)
         headers
         (decoding "session registry" ControlWire.sessionRegistryFrame onFrame)
 

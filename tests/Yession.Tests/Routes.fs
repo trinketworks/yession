@@ -206,4 +206,107 @@ let private mountTests =
                     (sprintf "%A resolves to %s and comes back" route asked)
     ]
 
-let tests = testList "Routes" [ routeTests; mountTests ]
+/// Every management route, for the same reason `every` above lists every session route: a
+/// case added to `ManagerRoute` fails `path`'s and `parse`'s matches until handled, and this
+/// list is what makes it fail these tests until it is listed.
+let private everyManager =
+    let ui = SessionId.create "ui-1" |> Result.defaultWith failwith
+    [ ManagerRoute.Home
+      ManagerRoute.Asset ("K3nR7pQx2wL0", "app.css")
+      ManagerRoute.Asset ("8fZs1mVb4tHc", "fonts/noto-sans-latin-400-normal.woff2")
+      ManagerRoute.Icon
+      ManagerRoute.CreateSession
+      ManagerRoute.SessionRegistry
+      ManagerRoute.SessionRows
+      ManagerRoute.Session (ui, SessionVerb.Launch)
+      ManagerRoute.Session (ui, SessionVerb.Stop)
+      ManagerRoute.Session (ui, SessionVerb.Archive)
+      ManagerRoute.Session (ui, SessionVerb.Unarchive)
+      ManagerRoute.OpenSession ui
+      ManagerRoute.SessionReady ui
+      ManagerRoute.DeclareMcpServer
+      ManagerRoute.WithdrawMcpServer ]
+
+let private managerMethodOf (route: ManagerRoute) =
+    match route with
+    | ManagerRoute.CreateSession
+    | ManagerRoute.Session _
+    | ManagerRoute.DeclareMcpServer
+    | ManagerRoute.WithdrawMcpServer -> "POST"
+    | _ -> "GET"
+
+let private managerRouteTests =
+    testList "Manager route contract" [
+        testCase "every route is root-anchored, with one slash" <| fun () ->
+            // The property the Manager's contract has and a session's must not: the Manager
+            // owns its origin root (`ManagerOrigin` refuses a path), and its pages sit at
+            // different depths, so only a root-anchored address is right from all of them.
+            for route in everyManager do
+                let path = ManagerRoute.path route
+                Expect.isTrue (path.StartsWith "/") (sprintf "%A is root-anchored" route)
+                Expect.isFalse (path.StartsWith "//") (sprintf "%A has one slash, not two" route)
+
+        testCase "every route round-trips through its own rendering" <| fun () ->
+            // The page emits `path`, the server matches `parse`: two directions of one
+            // declaration, which is what stops the inline script's `/sessions/{id}/launch`
+            // and the router's `[| id; "launch" |]` drifting apart.
+            for route in everyManager do
+                let path = ManagerRoute.path route
+                Expect.equal
+                    (ManagerRoute.parse (managerMethodOf route) path)
+                    (Some route)
+                    (sprintf "%A parses back from %s" route path)
+
+        testCase "a route reached with the wrong method is no route at all" <| fun () ->
+            Expect.equal (ManagerRoute.parse "GET" "/sessions") None "creating is POST only"
+            Expect.equal (ManagerRoute.parse "POST" "/sessions/stream") None "the registry is GET only"
+            Expect.equal (ManagerRoute.parse "GET" "/sessions/ui-1/launch") None "a lifecycle act is POST only"
+            Expect.equal (ManagerRoute.parse "POST" "/sessions/ui-1/open") None "opening is a navigation, GET only"
+
+        testCase "a session path needs a session id" <| fun () ->
+            // Not a 400: an address naming a session the Manager could not have is an address
+            // the Manager does not serve, the same answer an unknown path gets.
+            Expect.equal (ManagerRoute.parse "GET" "/sessions/-nope/open") None "an id may not start with a dash"
+            Expect.equal (ManagerRoute.parse "POST" "/sessions/x/launch") None "or be one character"
+            Expect.equal (ManagerRoute.parse "GET" "/sessions//open") None "or be empty"
+
+        testCase "a session's routes are not the Manager's" <| fun () ->
+            // The two static shapes are shared — the Manager links the same stylesheet and
+            // wears the same mark — and NOTHING else is: a session's `/me`, `/signal`,
+            // `/events` at the Manager's origin are unclaimed and fall through.
+            Expect.equal (ManagerRoute.parse "GET" "/me") None "the auth probe"
+            Expect.equal (ManagerRoute.parse "POST" "/signal") None "signalling"
+            Expect.equal (ManagerRoute.parse "GET" "/events") None "the event cursor"
+            Expect.equal (ManagerRoute.parse "GET" "/sw.js") None "the worker"
+            Expect.equal (ManagerRoute.parse "GET" "/nope") None "and an unknown path is unclaimed"
+
+        testCase "the static shapes are the session's own, at the origin root" <| fun () ->
+            // What a session emits for a file, anchored at a root, is what the Manager claims
+            // for its own copy of that file — the two servers cannot disagree about where a
+            // build's files sit, because there is one rendering.
+            let file = Asset ("K3nR7pQx2wL0", "app.css")
+            Expect.equal
+                (ManagerRoute.parse "GET" (RelativeUrl.under "" (SessionRoute.relative file)))
+                (Some (ManagerRoute.Asset ("K3nR7pQx2wL0", "app.css")))
+                "the asset set"
+            Expect.equal
+                (ManagerRoute.parse "GET" (RelativeUrl.under "" (SessionRoute.relative Icon)))
+                (Some ManagerRoute.Icon)
+                "the mark"
+
+        testCase "a Manager's absolute URLs join with exactly one slash" <| fun () ->
+            // The session client's reconnect link and the registry subscriber, given an
+            // origin with or without its trailing slash.
+            let ui = SessionId.create "ui-1" |> Result.defaultWith failwith
+            Expect.equal
+                (ManagerRoute.at "https://manager.example" (ManagerRoute.OpenSession ui))
+                "https://manager.example/sessions/ui-1/open"
+                "bare origin"
+            Expect.equal
+                (ManagerRoute.at "http://127.0.0.1:8321/" ManagerRoute.SessionRegistry)
+                "http://127.0.0.1:8321/sessions/stream"
+                "a trailing slash does not double up"
+            Expect.equal (ManagerRoute.at "http://127.0.0.1:8321" ManagerRoute.Home) "http://127.0.0.1:8321/" "the page is the origin itself"
+    ]
+
+let tests = testList "Routes" [ routeTests; mountTests; managerRouteTests ]
