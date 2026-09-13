@@ -419,22 +419,37 @@ let limitsFor (backend: SandboxBackend) (platform: string) : HostLimits =
 /// ever agrees with the first on the box it was written on.
 let limitsHere (backend: SandboxBackend) : HostLimits = limitsFor backend (platform ())
 
-/// The name by which a sandbox on this backend reaches a listener bound on THIS host, or
-/// none when it cannot — a fact about the backend, stated by the backend, so that whatever
-/// hands a sandbox a route to this process (the git gateway) asks rather than guesses.
+/// The name by which a sandbox on this backend, on this platform, reaches a listener bound
+/// on THIS host — none when it cannot. A fact about the backend, stated by the backend, so
+/// that whatever hands a sandbox a route to this process (the git gateway) asks rather than
+/// guesses. The platform is an argument for the reason `limitsFor`'s is: every claim about
+/// it stays checkable from either machine.
 ///
 /// docker: `host.docker.internal`, which every container is given as an alias for the
 /// daemon's `host-gateway`. That is the host's loopback under Colima and Docker Desktop and
 /// the bridge address under a native Linux daemon — which is why a listener meant for a
 /// container binds every interface, not loopback. host: loopback, there being no boundary.
-/// srt: none yet. Its egress is a filtering proxy whose `NO_PROXY` covers loopback and every
-/// private range, and on Linux its network namespace has no route to the host at all; a name
-/// the proxy will carry and the host will answer to is a question for a later change.
-let hostAddressFrom (backend: SandboxBackend) : string option =
+///
+/// srt: a name its filtering proxy will carry. The proxy sets `NO_PROXY` over `localhost`,
+/// `127.0.0.1` and every private range, so any of those is dialled DIRECTLY — into a
+/// network namespace with no route on Linux, a seatbelt deny on macOS. What is left splits
+/// by platform, and the split IS the fault this takes the platform for: on Linux loopback
+/// is the whole of `127/8`, so `127.0.0.2` is a loopback address `NO_PROXY` does not name —
+/// it goes through the proxy and the parent dials it with no resolver involved. macOS
+/// configures `.1` alone on `lo0`, so `127.0.0.2` is not up; the name there is the box's own
+/// hostname, which macOS resolves for itself (mDNS) and reaches the every-interface listener.
+/// The macOS answer assumes the box resolves its own name; where it does not, a confined git
+/// gets a proxy error naming the host, not a route.
+let hostAddressFrom (hostname: string) (platform: string) (backend: SandboxBackend) : string option =
     match backend with
     | DockerBackend -> Some "host.docker.internal"
     | HostBackend -> Some "127.0.0.1"
-    | SrtBackend -> None
+    | SrtBackend -> if platform = "darwin" then Some hostname else Some "127.0.0.2"
+
+/// `hostAddressFrom` on the host this process runs on — the same one-place reading of the
+/// platform `limitsHere` is, for the same reason.
+let hostAddressHere (hostname: string) (backend: SandboxBackend) : string option =
+    hostAddressFrom hostname (platform ()) backend
 
 /// What one set of granted leaves comes to, each channel beside the others because they
 /// are one fact read by different consumers: the host family closes path SETS over the
@@ -1893,14 +1908,41 @@ module SrtSandbox =
                             return failwith "this platform has no srt sandbox"
                         let attempt (_: unit) =
                             async {
+                                // srt opens its egress bridge socket in the PARENT's
+                                // `os.tmpdir()` — read from `TMPDIR` — and bind-mounts that
+                                // one path into every confined sandbox so the in-sandbox
+                                // socat can carry traffic back to this proxy. A root-deny
+                                // filesystem lays a tmpfs over `/tmp` and re-binds only the
+                                // paths the policy named; the session tmp dir is always one
+                                // of them (`configFor` writes it, and reads derive from
+                                // writes) but the ambient `/tmp` the socket would otherwise
+                                // sit in is not — so a socket created there is a path the
+                                // tmpfs masks, the socat connects to nothing, and every
+                                // egress request comes back an empty reply with the
+                                // destination never dialled. srt derives the CHILD's TMPDIR
+                                // from `CLAUDE_CODE_TMPDIR` but the socket from `os.tmpdir()`
+                                // alone, so this is the one lever that moves it. Only around
+                                // `initialize`, which is where the socket path is settled and
+                                // kept: restored the moment it is set — an unset `TMPDIR`
+                                // round-trips as empty, which `os.tmpdir()` still reads as its
+                                // default — so nothing else in this process, least of all a
+                                // fixture that reads `os.tmpdir()` to place a path OUTSIDE the
+                                // sandbox, inherits a temp directory the sandbox happens to
+                                // allow.
+                                let previousTmpdir = Interop.envOr "TMPDIR" ""
                                 try
-                                    // Always CONFINED, whichever sandbox got here first: srt
-                                    // reads the session config for anything a spawn does not
-                                    // name, so an exempt one initializing the manager would
-                                    // hand its exemption to the session. The exemption rides
-                                    // `customConfig` per spawn, which wins outright over this.
-                                    do! Interop.awaitPromise (initialize srt (toJs { config with FilesystemDisabled = false }))
-                                    return Ok srt
+                                    try
+                                        Interop.setEnv "TMPDIR" (SessionLayout.tmpDir ())
+                                        // Always CONFINED, whichever sandbox got here first:
+                                        // srt reads the session config for anything a spawn
+                                        // does not name, so an exempt one initializing the
+                                        // manager would hand its exemption to the session.
+                                        // The exemption rides `customConfig` per spawn, which
+                                        // wins outright over this.
+                                        do! Interop.awaitPromise (initialize srt (toJs { config with FilesystemDisabled = false }))
+                                        return Ok srt
+                                    finally
+                                        Interop.setEnv "TMPDIR" previousTmpdir
                                 with ex ->
                                     return Error (startFailure Fs.executable config, ex)
                             }

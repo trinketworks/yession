@@ -105,7 +105,10 @@ let createFull
                                                             { policy with
                                                                 Env =
                                                                     Sandboxes.mergeEnv policy.Env provision.Env
-                                                                    |> Sandboxes.withGitConfig provision.GitConfig }
+                                                                    |> Sandboxes.withGitConfig provision.GitConfig
+                                                                AllowedDomains =
+                                                                    policy.AllowedDomains
+                                                                    |> Option.map (fun domains -> List.distinct (domains @ provision.Domains)) }
                                             })
                                         (Sandboxes.summaryFor HostBackend spec)
                                         (sprintf "env-%s-%s" (SessionId.value request.SessionId) (SandboxRef.render name)))
