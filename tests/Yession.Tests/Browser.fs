@@ -1059,23 +1059,18 @@ let tests =
                     (sprintf "expected a session-keyed doc store, found: %s" (String.Join (", ", dbNames)))
             }
 
-        sessionCase "a first-visit browser connects as the peer id it keeps" <|
+        sessionCase "a first-visit browser can begin connecting a credential" <|
             fun page ->
             async {
-                // The peer a browser SIGNS IN as (the id riding the login bounce, which the
-                // Manager witnesses into the launch) must be the peer it KEEPS (the id in
-                // localStorage that every later load asserts) — otherwise the whole
-                // peer-scoped surface is denied for the life of the launch. The break was
-                // invisible to the HTTP tests, which pass one id through by hand: it needs a
-                // FIRST VISIT in a real browser.
-                //
-                // Which is what every case here now gets — the fixture opens a context of its
-                // own and the page it hands over has been nowhere. This case used to arrange
-                // that for itself, because it was the only one that could not use the pages
-                // the suite kept.
+                // A browser that has been nowhere — no stored peer id, no cookie until the
+                // bounce it just rode — is entitled to connect a credential the moment it is
+                // signed in: ownership comes off the cookie's identity, never off anything the
+                // browser kept. The HTTP tests pass an identity through by hand; this needs a
+                // FIRST VISIT in a real browser, which is what every case here gets — the
+                // fixture opens a context of its own and the page it hands over has been
+                // nowhere.
 
-                // Sign a credential in for "all my sessions" — the peer's own scope — from
-                // settings, exactly as a human does. The control is the sidebar's `settings`
+                // Sign a credential in from settings, exactly as a human does. The control is the sidebar's `settings`
                 // pivot: its own accessible name is the word it shows, so the hook — which is
                 // the contract — is what to click. (`data-settings-toggle="prompt"` marks the
                 // calls to action that also lead there; `open` is the pivot alone.)
@@ -1092,7 +1087,7 @@ let tests =
                 let! error =
                     await (page.EvaluateAsync<string>
                             "() => document.querySelector('[data-claude-error]')?.textContent ?? ''")
-                Expect.equal error "" "connecting must not be refused for the browser's own peer"
+                Expect.equal error "" "connecting must not be refused on a first visit"
             }
     ]
 

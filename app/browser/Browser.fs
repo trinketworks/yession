@@ -658,15 +658,13 @@ let private mintId (prefix: string) =
 
 // The peer id is STABLE per browser profile (Plan 07): minted once, kept in
 // localStorage under a browser-wide key (not per session — it names the browser, the
-// same human across sessions), so colours, draft slots, and peer-scoped secrets survive
-// reloads. Storage denied (private mode) falls back to the per-load mint.
+// same human across sessions), so colours and draft slots survive reloads. Storage
+// denied (private mode) falls back to the per-load mint.
 //
 // `$0` is substituted TEXTUALLY, so the argument expression must be bound to a const
 // once: with `$0` written three times, the argument (a fresh random mint) evaluated
-// three times, and a first visit stored one id while returning a different one. The
-// returned id rode the login bounce and was witnessed; the stored id — the one every
-// later load reads — was not, so every peer-scoped call (the whole connections surface)
-// was denied for the life of the launch.
+// three times, and a first visit stored one id while returning a different one — the
+// id everything else in this page used was not the id every later load read.
 [<Emit("""(function (minted) {
   try {
     const key = 'yession/peer-id'
@@ -1334,10 +1332,7 @@ let private start () =
         match outcome with
         | ProbeUnreachable detail ->
             dispatchRef (ConnectFailedMsg (Client.ChannelFault.describe (Client.ChannelUnreachable detail)))
-        | ProbeUnauthorized ->
-            // The peer id rides the login bounce so the Manager can witness which peer
-            // signed in for this session (Plan 07 — peer-scoped secrets).
-            renavigateTo (Page.href Login + "?peer_id=" + urlEncode (PeerId.value peerId))
+        | ProbeUnauthorized -> renavigateTo (Page.href Login)
         | ProbeAuthorized me ->
             // Authenticated: the Claude panel's status is knowable now, and the read
             // surface's stream has a cookie that will be accepted.

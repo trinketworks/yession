@@ -522,7 +522,7 @@ let private startControlServerOver
         let table =
             secrets
             |> List.map (fun (secret, sessionId) ->
-                let caller : Control.ControlCaller = { SessionId = sessionId; Users = Set.empty; Peers = Set.empty; Local = false }
+                let caller : Control.ControlCaller = { SessionId = sessionId; Users = Set.empty; Local = false }
                 secret, caller)
             |> Map.ofList
         let hub = NotificationHub.create ()

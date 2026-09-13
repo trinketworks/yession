@@ -93,11 +93,6 @@ first's.
   exits are documented: `--secrets ephemeral` bounds the lifetime to the Manager process,
   `--auth trusted-headers` removes the sharing. Event ATTRIBUTION is unaffected — authors
   stay `PeerRef`.
-- **Pre-`LocalScope` peer-scoped connection entries are never migrated.** They stay in
-  `secrets.json`, encrypted and untouched, and are inert: `PeerScope` was dropped from the
-  connection path entirely (a half-live entry would shadow the new one at turn time). No UI
-  addresses them and no route deletes them; the operator connects once and moves on.
-  `PeerScope` is unchanged for generic Plan 07 secrets.
 - **No transport encryption guarantees beyond WebRTC/DTLS.** Everything binds
   127.0.0.1; loopback HTTP is the RFC 8252 pattern, but nothing here is LAN-safe
   without the operator's proxy in front.
@@ -331,8 +326,8 @@ first's.
   `<DataDir>/secrets.json`, the KEK in the OS credential manager (`@napi-rs/keyring`, imported
   non-extractably each start), a `/control/secrets/*` surface whose only value-returning
   route is `resolve` (below), a pure default-deny `Policy.authorize` over the composite
-  session+user+peer identity, and store-backed `SecretRef` injection (session scope ▸ bound
-  users' scopes ▸ witnessed peers' scopes ▸ Manager process env — peers per Plan 07).
+  session+user identity, and store-backed `SecretRef` injection (session scope ▸ bound
+  users' scopes ▸ Manager process env).
   Remaining, deliberate:
   - **Hosts without a credential manager run in-memory only** (dev containers, CI,
     headless servers): secrets die with the Manager; loud at boot, never a plaintext

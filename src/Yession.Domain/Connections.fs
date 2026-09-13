@@ -102,9 +102,7 @@ module ConnectionStatusList =
     /// told by the Manager, because the frame is the one thing the session is already
     /// given about this.
     ///
-    /// A peer's scope is not an arrival: `CredentialOwner.ofPrincipal` refuses a peer, so a
-    /// fold on a peer's authority would resolve exactly what the boot fold did. And a
-    /// connection that LEFT is not one either — what a departure calls for is nothing,
+    /// A connection that LEFT is not an arrival — what a departure calls for is nothing,
     /// since a sandbox already started keeps what it was given.
     let arrivals
         (before: Map<SecretId, ConnectionStatus>)
@@ -117,6 +115,5 @@ module ConnectionStatusList =
             else
                 match id.Scope with
                 | UserScope user -> Some (CredentialFor.Person (Principal.User user))
-                | SessionScope _ | LocalScope -> Some CredentialFor.Deployment
-                | PeerScope _ -> None)
+                | SessionScope _ | LocalScope -> Some CredentialFor.Deployment)
         |> List.distinct

@@ -24,20 +24,18 @@ let private sessionB = SessionId.create "session-bb" |> expect
 let private alice = UserId.create "alice" |> expect
 let private bob = UserId.create "bob" |> expect
 let private name = SecretName.create "deploy-token" |> expect
+/// A browser peer — nobody the Manager verified, so nothing is owned by one.
+let private peer1 = PeerId.create "browser-1" |> expect
 
 /// A launch of session A that alice (and only alice) has signed in to.
-let private callerA : Subject = { Session = Some sessionA; Users = Set.singleton alice; Peers = Set.empty; Local = false }
+let private callerA : Subject = { Session = Some sessionA; Users = Set.singleton alice; Local = false }
 /// A launch of session A with no completed login.
-let private callerANoUsers : Subject = { Session = Some sessionA; Users = Set.empty; Peers = Set.empty; Local = false }
-/// A launch of session A the Manager witnessed peer "browser-1" into (Plan 07).
-let private peer1 = PeerId.create "browser-1" |> expect
-let private peer2 = PeerId.create "browser-2" |> expect
-let private callerAWithPeer : Subject = { Session = Some sessionA; Users = Set.empty; Peers = Set.empty |> Set.add peer1; Local = false }
+let private callerANoUsers : Subject = { Session = Some sessionA; Users = Set.empty; Local = false }
 /// A launch of session A whose login was UNATTRIBUTED — `--auth localhost`. It has a
 /// subject (every launch does) but nobody was named behind it.
-let private callerALocal : Subject = { Session = Some sessionA; Users = Set.singleton alice; Peers = Set.empty; Local = true }
+let private callerALocal : Subject = { Session = Some sessionA; Users = Set.singleton alice; Local = true }
 /// A subject with no session at all (the future UI shape).
-let private noSession : Subject = { Session = None; Users = Set.singleton alice; Peers = Set.empty; Local = false }
+let private noSession : Subject = { Session = None; Users = Set.singleton alice; Local = false }
 
 let private request subject action resource : Request =
     { Subject = subject; Action = SecretAction action; Resource = resource }
@@ -51,7 +49,6 @@ let private denies msg r =
 let private onOwn action = request callerA action (SecretResource { Scope = SessionScope sessionA; Name = name })
 let private onSibling action = request callerA action (SecretResource { Scope = SessionScope sessionB; Name = name })
 let private onUser subject user action = request subject action (SecretResource { Scope = UserScope user; Name = name })
-let private onPeer subject peer action = request subject action (SecretResource { Scope = PeerScope peer; Name = name })
 
 let private constructorTests =
     testList "constructors" [
@@ -62,7 +59,6 @@ let private constructorTests =
         testCase "SecretScope.describe distinguishes scopes" <| fun () ->
             Expect.equal (SecretScope.describe (SessionScope sessionA)) "session:session-aa" "session form"
             Expect.equal (SecretScope.describe (UserScope alice)) "user:alice" "user form"
-            Expect.equal (SecretScope.describe (PeerScope peer1)) "peer:browser-1" "peer form"
             // No key: the deployment IS the owner, so there is nothing to name after it.
             // This string is also the cipher AAD, so it is a stored-data contract.
             Expect.equal (SecretScope.describe LocalScope) "local" "local form"
@@ -107,20 +103,6 @@ let private policyTests =
         testCase "write aimed at a COLLECTION has no rule and denies" <| fun () ->
             denies "set collection" (request callerA SetSecret (SecretCollection (SessionScope sessionA)))
 
-        // Peer scope (Plan 07): full management for a session the Manager witnessed
-        // the peer into; nothing for anyone else.
-        testCase "witnessed peer: set/delete/inject/list permit" <| fun () ->
-            permits "set" (onPeer callerAWithPeer peer1 SetSecret)
-            permits "delete" (onPeer callerAWithPeer peer1 DeleteSecret)
-            permits "inject" (onPeer callerAWithPeer peer1 InjectSecret)
-            permits "list" (request callerAWithPeer ListSecrets (SecretCollection (PeerScope peer1)))
-
-        testCase "unwitnessed peer: every action denies" <| fun () ->
-            denies "set other peer" (onPeer callerAWithPeer peer2 SetSecret)
-            denies "set before any login" (onPeer callerANoUsers peer1 SetSecret)
-            denies "inject other peer" (onPeer callerAWithPeer peer2 InjectSecret)
-            denies "list other peer" (request callerAWithPeer ListSecrets (SecretCollection (PeerScope peer2)))
-
         testCase "deny reasons never echo the secret name" <| fun () ->
             match Policy.authorize (onSibling SetSecret) with
             | Deny reason -> Expect.isFalse (reason.Contains "deploy-token") "reason is generic"
@@ -147,11 +129,6 @@ let private connectionPolicyTests =
                 permits (sprintf "%A bound" action) (onConnection callerA action (UserScope alice))
                 denies (sprintf "%A other user" action) (onConnection callerA action (UserScope bob))
                 denies (sprintf "%A before login" action) (onConnection callerANoUsers action (UserScope alice))
-
-        testCase "witnessed peer: every connection action permits; unwitnessed denies" <| fun () ->
-            for action in connActions do
-                permits (sprintf "%A witnessed" action) (onConnection callerAWithPeer action (PeerScope peer1))
-                denies (sprintf "%A other peer" action) (onConnection callerAWithPeer action (PeerScope peer2))
 
         testCase "a session-less subject with a bound user permits (the future UI shape)" <| fun () ->
             permits "connect without a session" (onConnection noSession ConnectCredential (UserScope alice))
@@ -200,7 +177,6 @@ let private envelopeTests =
                 SecretsFile.empty "kek-1"
                 |> SecretsFile.upsert (entry (SessionScope sessionA) name "aXY" "Y3Q")
                 |> SecretsFile.upsert (entry (UserScope alice) name "aXYy" "Y3Qy")
-                |> SecretsFile.upsert (entry (PeerScope peer1) name "aXYz" "Y3Qz")
             let round = SecretsCodec.toString file |> SecretsCodec.fromString |> expect
             Expect.equal round file "identical after round-trip"
 
@@ -279,7 +255,7 @@ let private wireTests =
             // `local` carries no key, so it is the one scope whose encoding could silently
             // lose information and still decode. This is a stored-file contract too — the
             // same codec writes `secrets.json`.
-            for scope in [ SessionScope sessionA; UserScope alice; PeerScope peer1; LocalScope ] do
+            for scope in [ SessionScope sessionA; UserScope alice; LocalScope ] do
                 let r : ControlWire.DeleteSecretRequest = { Scope = scope; Name = name }
                 let round = ControlWire.toString ControlWire.deleteSecretRequest r |> ControlWire.fromString ControlWire.deleteSecretRequest |> expect
                 Expect.equal round r (sprintf "%A round-trips" scope)
@@ -523,9 +499,8 @@ let private resolutionTests =
                 let id scope = sid scope "deploy-token"
                 let! _ = store.Set (id (SessionScope sessionA)) "from-session"
                 let! _ = store.Set (id (UserScope alice)) "from-user"
-                let! _ = store.Set (id (PeerScope peer1)) "from-peer"
                 let fallback : SecretStore.ResolveSecret = fun _ _ -> async { return Ok "from-env" }
-                let resolve = SecretStore.SecretResolution.compose (fun _ _ _ -> ()) store (fun _ -> Set.singleton alice) (fun _ -> Set.singleton peer1) (fun _ -> false) fallback
+                let resolve = SecretStore.SecretResolution.compose (fun _ _ _ -> ()) store (fun _ -> Set.singleton alice) (fun _ -> false) fallback
 
                 let! full = resolve sessionA name
                 Expect.equal (expect full) "from-session" "the session's own secret wins"
@@ -535,10 +510,6 @@ let private resolutionTests =
                 Expect.equal (expect userLevel) "from-user" "a bound user's secret is next"
 
                 let! _ = store.Delete (id (UserScope alice))
-                let! peerLevel = resolve sessionA name
-                Expect.equal (expect peerLevel) "from-peer" "a witnessed peer's secret is next (Plan 07)"
-
-                let! _ = store.Delete (id (PeerScope peer1))
                 let! envLevel = resolve sessionA name
                 Expect.equal (expect envLevel) "from-env" "the process-env fallback is last"
             }
@@ -550,7 +521,7 @@ let private resolutionTests =
                 // Session B has no bound users: alice's scope is never a candidate, and
                 // even a hand-crafted walk would be denied by the policy.
                 let fallback : SecretStore.ResolveSecret = fun _ n -> async { return Error (sprintf "secret '%s' is not available" (SecretName.value n)) }
-                let resolve = SecretStore.SecretResolution.compose (fun _ _ _ -> ()) store (fun _ -> Set.empty) (fun _ -> Set.empty) (fun _ -> false) fallback
+                let resolve = SecretStore.SecretResolution.compose (fun _ _ _ -> ()) store (fun _ -> Set.empty) (fun _ -> false) fallback
                 let! outcome = resolve sessionB name
                 Expect.isError outcome "nothing resolves"
             }
@@ -563,12 +534,12 @@ let private resolutionTests =
                 let observe sid n outcome = observed <- (SecretName.value n, outcome) :: observed
                 let ok : SecretStore.ResolveSecret = fun _ _ -> async { return Ok "env-v" }
                 let miss : SecretStore.ResolveSecret = fun _ _ -> async { return Error "nope" }
-                let resolveHit = SecretStore.SecretResolution.compose observe store (fun _ -> Set.empty) (fun _ -> Set.empty) (fun _ -> false) miss
+                let resolveHit = SecretStore.SecretResolution.compose observe store (fun _ -> Set.empty) (fun _ -> false) miss
                 let! _ = resolveHit sessionA name
-                let resolveEnv = SecretStore.SecretResolution.compose observe store (fun _ -> Set.empty) (fun _ -> Set.empty) (fun _ -> false) ok
+                let resolveEnv = SecretStore.SecretResolution.compose observe store (fun _ -> Set.empty) (fun _ -> false) ok
                 let other = SecretName.create "OTHER" |> expect
                 let! _ = resolveEnv sessionA other
-                let resolveMiss = SecretStore.SecretResolution.compose observe store (fun _ -> Set.empty) (fun _ -> Set.empty) (fun _ -> false) miss
+                let resolveMiss = SecretStore.SecretResolution.compose observe store (fun _ -> Set.empty) (fun _ -> false) miss
                 let! _ = resolveMiss sessionA other
                 Expect.equal
                     (List.rev observed)
@@ -581,7 +552,7 @@ let private resolutionTests =
         testCaseAsync "a total miss reports the fallback's legible error" <|
             async {
                 let! store = openEphemeral ()
-                let resolve = SecretStore.SecretResolution.compose (fun _ _ _ -> ()) store (fun _ -> Set.empty) (fun _ -> Set.empty) (fun _ -> false) SecretStore.SecretResolution.processEnv
+                let resolve = SecretStore.SecretResolution.compose (fun _ _ _ -> ()) store (fun _ -> Set.empty) (fun _ -> false) SecretStore.SecretResolution.processEnv
                 let missing = SecretName.create "YESSION_DEFINITELY_MISSING" |> expect
                 let! outcome = resolve sessionA missing
                 match outcome with
@@ -590,26 +561,10 @@ let private resolutionTests =
             }
     ]
 
-// --- Audit rendering (incl. the Plan 08 PeerScope fix) -----------------------------------
-// `Audit.scopeAttrs`/`injectObserver` predate PeerScope and threw MatchFailureException on
-// peer-scoped entries; peer-scoped connections make those paths routine.
+// --- Audit rendering ----------------------------------------------------------------------
 
 let private auditTests =
     testList "audit records" [
-        testCase "a peer-scoped secret op renders scope=peer" <| fun () ->
-            let record = SecretStore.Audit.secretSet sessionA { Scope = PeerScope peer1; Name = name } true
-            let line = SecretStore.Audit.format record
-            Expect.isTrue (line.Contains "yession.secret.scope=peer") "peer scope named"
-            Expect.isTrue (line.Contains "yession.secret.scope_key=browser-1") "peer id named"
-
-        testCase "the injection observer handles a peer-scoped hit" <| fun () ->
-            let mutable seen : SecretStore.Audit.Record list = []
-            let observe = SecretStore.Audit.injectObserver (fun r -> seen <- r :: seen)
-            observe sessionA name (SecretStore.SecretResolution.InjectedFromScope (PeerScope peer1))
-            match seen with
-            | [ record ] -> Expect.isTrue ((SecretStore.Audit.format record).Contains "yession.inject.source=peer") "peer source"
-            | other -> failwithf "expected one record, got %d" (List.length other)
-
         testCase "a connection-action deny renders through the shared record" <| fun () ->
             let record =
                 SecretStore.Audit.authzDeny
@@ -663,7 +618,7 @@ let private startControlServer (callers: (string * Control.ControlCaller) list) 
     }
 
 let private caller sessionId users : Control.ControlCaller =
-    { SessionId = sessionId; Users = users; Peers = Set.empty; Local = false }
+    { SessionId = sessionId; Users = users; Local = false }
 
 /// The pre-authorized handlers over a store, with the SAME readable-scope walk the
 /// Manager composes for `resolve` — the user table injected per test.
@@ -673,7 +628,6 @@ let private apiOver (audit: SecretStore.Audit.Sink) (usersOf: SessionId -> Set<U
             (fun _ _ _ -> ())
             store
             usersOf
-            (fun _ -> Set.empty)
             (fun _ -> false)
             (fun _ n -> async { return Error (sprintf "secret '%s' is not available in any readable scope" (SecretName.value n)) })
     ProcessManager.secretsApiFor audit walk store

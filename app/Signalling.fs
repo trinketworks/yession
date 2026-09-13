@@ -424,17 +424,9 @@ let start
                 res.writeHead (302, createObj [ "location", box "./"; "cache-control", box "no-store" ]) |> ignore
                 res.``end`` ""
             | Some a ->
-                // The browser's stable peer id rides the bounce so the
-                // Manager can witness which peer signed in; absent for headless logins.
-                let peer =
-                    queryOf req.url "peer_id"
-                    |> Option.bind (fun raw ->
-                        match PeerId.create raw with
-                        | Ok peerId -> Some peerId
-                        | Error _ -> None)
                 Async.StartImmediate (
                     async {
-                        match! a.BeginLogin peer with
+                        match! a.BeginLogin () with
                         | Some url ->
                             res.writeHead (302, createObj [ "location", box url; "cache-control", box "no-store" ]) |> ignore
                             res.``end`` ""

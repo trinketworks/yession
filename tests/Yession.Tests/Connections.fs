@@ -33,6 +33,7 @@ let private expect =
 let private sessionA = SessionId.create "conn-session-a" |> expect
 let private sessionB = SessionId.create "conn-session-b" |> expect
 let private alice = UserId.create "alice" |> expect
+let private bob = UserId.create "bob" |> expect
 let private peer1 = PeerId.create "browser-1" |> expect
 let private claudeName = SecretName.create "claude-code" |> expect
 
@@ -240,7 +241,7 @@ let private wireTests =
         testCase "complete/put/disconnect/resolve round-trip" <| fun () ->
             let complete : ControlWire.ConnectionCompleteRequest = { Target = target (SessionScope sessionA); Code = "c#st" }
             Expect.equal (ControlWire.toString ControlWire.connectionCompleteRequest complete |> ControlWire.fromString ControlWire.connectionCompleteRequest |> expect) complete "complete"
-            let put : ControlWire.ConnectionPutRequest = { Target = target (PeerScope peer1); Value = "sk-ant-x" }
+            let put : ControlWire.ConnectionPutRequest = { Target = target LocalScope; Value = "sk-ant-x" }
             Expect.equal (ControlWire.toString ControlWire.connectionPutRequest put |> ControlWire.fromString ControlWire.connectionPutRequest |> expect) put "put"
             let disc : ControlWire.ConnectionDisconnectRequest = { Target = target (UserScope alice) }
             Expect.equal (ControlWire.toString ControlWire.connectionDisconnectRequest disc |> ControlWire.fromString ControlWire.connectionDisconnectRequest |> expect) disc "disconnect"
@@ -326,12 +327,6 @@ let private arrivalTests =
             let after = frame [ status (SessionScope sessionA) "github"; status LocalScope "github" ]
             Expect.equal (ConnectionStatusList.arrivals before after) [ CredentialFor.Deployment ] "one fold, nobody named"
 
-        // A peer owns nothing (`CredentialOwner.ofPrincipal`), so a fold on a peer's authority
-        // would resolve exactly what the boot fold did: nothing new to do.
-        testCase "a peer's credential is not an arrival" <| fun () ->
-            let before = frame []
-            let after = frame [ status (PeerScope peer1) "github" ]
-            Expect.equal (ConnectionStatusList.arrivals before after) [] "no fold"
     ]
 
 // --- Pure: the session-side Claude module ---------------------------------------------------
@@ -758,7 +753,7 @@ let private brokerTests =
             async {
                 let! store = openEphemeral ()
                 let broker = Broker.create (fun () -> "http://m/cb") store ignore noGrantRetries
-                let t = target (PeerScope peer1)
+                let t = target (UserScope bob)
                 let! put = broker.Put t "sk-ant-oat01-tok"
                 expect put
                 let! resolved = broker.Resolve t
@@ -1139,8 +1134,8 @@ let private brokerTests =
 
 // --- [Ports]: the control routes + status stream --------------------------------------------
 
-let private caller sessionId users peers local : Control.ControlCaller =
-    { SessionId = sessionId; Users = users; Peers = peers; Local = local }
+let private caller sessionId users local : Control.ControlCaller =
+    { SessionId = sessionId; Users = users; Local = local }
 
 [<Emit("setTimeout($0, $1)")>]
 let private setTimer (f: unit -> unit) (ms: int) : float = jsNative
@@ -1258,8 +1253,8 @@ let private routeTests =
                 let! endpoint = startTokenEndpoint ()
                 let! url =
                     startConnectionsServer
-                        [ "secret-a", caller sessionA (Set.singleton alice) Set.empty false
-                          "secret-b", caller sessionB Set.empty (Set.singleton peer1) false ]
+                        [ "secret-a", caller sessionA (Set.singleton alice) false
+                          "secret-b", caller sessionB (Set.singleton bob) false ]
                 let clientA = ControlClient.connections url "secret-a"
                 let clientB = ControlClient.connections url "secret-b"
 
@@ -1274,13 +1269,14 @@ let private routeTests =
                 let! denied = clientB.Begin request
                 Expect.isError denied "unbound user denied"
 
-                // B manages its witnessed peer's credential; A cannot resolve it.
-                let! put = clientB.Put (target (PeerScope peer1)) "sk-ant-oat01-x"
+                // B manages its bound user's credential; A, where bob is not signed in,
+                // cannot resolve it.
+                let! put = clientB.Put (target (UserScope bob)) "sk-ant-oat01-x"
                 expect put
-                let! resolvedB = clientB.Resolve (target (PeerScope peer1))
-                Expect.equal (expect resolvedB) (StaticConnection, "sk-ant-oat01-x") "peer resolve"
-                let! crossResolve = clientA.Resolve (target (PeerScope peer1))
-                Expect.isError crossResolve "unwitnessed peer target denied"
+                let! resolvedB = clientB.Resolve (target (UserScope bob))
+                Expect.equal (expect resolvedB) (StaticConnection, "sk-ant-oat01-x") "bound user resolve"
+                let! crossResolve = clientA.Resolve (target (UserScope bob))
+                Expect.isError crossResolve "unbound user target denied"
 
                 // Session scope stays per-session.
                 let! putSession = clientA.Put (target (SessionScope sessionA)) "sk-ant-api03-k"
@@ -1290,14 +1286,14 @@ let private routeTests =
 
                 // Reporting a refusal is gated like resolving, because the only caller who
                 // can have been refused is one entitled to spend it.
-                let! putBack = clientB.Put (target (PeerScope peer1)) "sk-ant-oat01-x"
+                let! putBack = clientB.Put (target (UserScope bob)) "sk-ant-oat01-x"
                 expect putBack
-                let! crossReject = clientA.Reject (target (PeerScope peer1)) "the provider said no"
-                Expect.isError crossReject "unwitnessed peer target denied"
-                let! ownReject = clientB.Reject (target (PeerScope peer1)) "the provider said no"
+                let! crossReject = clientA.Reject (target (UserScope bob)) "the provider said no"
+                Expect.isError crossReject "unbound user target denied"
+                let! ownReject = clientB.Reject (target (UserScope bob)) "the provider said no"
                 Expect.isTrue (expect ownReject) "the owner may report on its own credential"
 
-                let! disconnected = clientB.Disconnect (target (PeerScope peer1))
+                let! disconnected = clientB.Disconnect (target (UserScope bob))
                 Expect.isTrue (expect disconnected) "disconnected"
             }
 
@@ -1372,7 +1368,7 @@ let private routeTests =
 
         testCaseAsync "the status stream sends a snapshot on subscribe and a fresh frame on change" <|
             async {
-                let! url = startConnectionsServer [ "secret-a", caller sessionA (Set.singleton alice) Set.empty false ]
+                let! url = startConnectionsServer [ "secret-a", caller sessionA (Set.singleton alice) false ]
                 let clientA = ControlClient.connections url "secret-a"
                 let! _ = clientA.Put (target (UserScope alice)) "sk-ant-oat01-x"
 
@@ -1400,7 +1396,7 @@ let private routeTests =
         // while every turn that touched the credential failed.
         testCaseAsync "a credential that stops working pushes a fresh frame, with no write to the store" <|
             async {
-                let! url = startConnectionsServer [ "secret-a", caller sessionA (Set.singleton alice) Set.empty false ]
+                let! url = startConnectionsServer [ "secret-a", caller sessionA (Set.singleton alice) false ]
                 let clientA = ControlClient.connections url "secret-a"
                 let t = target (UserScope alice)
                 // Connected, and finished: a refresh token that has already lapsed.
@@ -1509,8 +1505,8 @@ let private e2eTests =
                 let port = launched |> expect
                 let sessionUrl = sprintf "http://127.0.0.1:%d" port
 
-                // Peer A signs into the session (witnessed via the bounce), then joins.
-                let! openedA = OidcHttp.openSessionVia [] "/login?peer_id=browser-a" sessionUrl
+                // Peer A signs into the session, then joins.
+                let! openedA = OidcHttp.openSessionVia [] "/login" sessionUrl
                 let cookieA = cookieOf openedA.Jar
                 let! a = connectClient (sessionUrl + "/signal") openedA.PeerToken "browser-a" "Ada"
 
@@ -1552,7 +1548,7 @@ let private e2eTests =
                 //    strategy every peer is the same principal, so B's turn runs on the
                 //    credential A connected. This is the reconnect bug pinned: B used to be
                 //    told to connect a Claude account of its own.
-                let! openedB = OidcHttp.openSessionVia [] "/login?peer_id=browser-b" sessionUrl
+                let! openedB = OidcHttp.openSessionVia [] "/login" sessionUrl
                 let! b = connectClient (sessionUrl + "/signal") openedB.PeerToken "browser-b" "Bob"
                 do! compose b b.Hello.PeerId "bob on the deployment's credential"
                 b.Connection.SendDraft b.Hello.PeerId

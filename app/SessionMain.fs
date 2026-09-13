@@ -810,17 +810,8 @@ let private credentialProbe (credential: (string * string) option) : RunAgent =
 // is live. Without either the session still works as a human-only collaborative
 // session — messages drain to `MessageSent` with no turn.
 let private connectedSomewhere () =
-    // Only scopes a TURN can actually reach. A pre-`LocalScope` deployment can still hold
-    // peer-scoped claude entries, and they remain readable (the peer is witnessed) — but
-    // nothing dispatches on them any more, so counting them here would open the gate on a
-    // credential every turn then fails to find. The gate has to promise what the
-    // dispatcher can deliver.
     connectionStatus
-    |> Map.exists (fun target _ ->
-        target.Name = ClaudeConnection.secretName
-        && (match target.Scope with
-            | PeerScope _ -> false
-            | SessionScope _ | UserScope _ | LocalScope -> true))
+    |> Map.exists (fun target _ -> target.Name = ClaudeConnection.secretName)
 
 /// Writing a few words, read at each pass (Plan 25), on whosever credential the caller names
 /// — the session's creator, which the Host knows and this does not.

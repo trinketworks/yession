@@ -33,11 +33,9 @@ type Auth =
       /// The authenticated identity behind the request's cookie, when any: the subject
       /// plus the attribution the validated ID token carried.
       IdentityOf : IncomingMessage -> CookieIdentity option
-      /// Start a login: mint state + PKCE verifier, return the authorize URL. The
-      /// browser's peer id (when the /login request carried one) rides along so the
-      /// Manager can witness which peer signed in.
+      /// Start a login: mint state + PKCE verifier, return the authorize URL.
       /// None until `Configure` has completed.
-      BeginLogin : PeerId option -> Async<string option>
+      BeginLogin : unit -> Async<string option>
       /// Handle the callback request URL. Ok = the `Set-Cookie` value to send with the
       /// redirect back to `/`; Error = (status, message).
       HandleCallback : string -> Async<Result<string, int * string>>
@@ -77,7 +75,7 @@ let create (sessionId: SessionId) (mount: string) : Auth =
       IsAuthenticated = identityOf >> Option.isSome
       IdentityOf = identityOf
       BeginLogin =
-        fun peer ->
+        fun () ->
             async {
                 match configuration with
                 | None -> return None
@@ -94,10 +92,7 @@ let create (sessionId: SessionId) (mount: string) : Auth =
                                   "scope" ==> "openid"
                                   "state" ==> state
                                   "code_challenge" ==> challenge
-                                  "code_challenge_method" ==> "S256"
-                                  match peer with
-                                  | Some peerId -> "peer_id" ==> PeerId.value peerId
-                                  | None -> () ])
+                                  "code_challenge_method" ==> "S256" ])
                     return Some (urlHref url)
             }
       HandleCallback =
