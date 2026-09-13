@@ -1908,14 +1908,41 @@ module SrtSandbox =
                             return failwith "this platform has no srt sandbox"
                         let attempt (_: unit) =
                             async {
+                                // srt opens its egress bridge socket in the PARENT's
+                                // `os.tmpdir()` — read from `TMPDIR` — and bind-mounts that
+                                // one path into every confined sandbox so the in-sandbox
+                                // socat can carry traffic back to this proxy. A root-deny
+                                // filesystem lays a tmpfs over `/tmp` and re-binds only the
+                                // paths the policy named; the session tmp dir is always one
+                                // of them (`configFor` writes it, and reads derive from
+                                // writes) but the ambient `/tmp` the socket would otherwise
+                                // sit in is not — so a socket created there is a path the
+                                // tmpfs masks, the socat connects to nothing, and every
+                                // egress request comes back an empty reply with the
+                                // destination never dialled. srt derives the CHILD's TMPDIR
+                                // from `CLAUDE_CODE_TMPDIR` but the socket from `os.tmpdir()`
+                                // alone, so this is the one lever that moves it. Only around
+                                // `initialize`, which is where the socket path is settled and
+                                // kept: restored the moment it is set — an unset `TMPDIR`
+                                // round-trips as empty, which `os.tmpdir()` still reads as its
+                                // default — so nothing else in this process, least of all a
+                                // fixture that reads `os.tmpdir()` to place a path OUTSIDE the
+                                // sandbox, inherits a temp directory the sandbox happens to
+                                // allow.
+                                let previousTmpdir = Interop.envOr "TMPDIR" ""
                                 try
-                                    // Always CONFINED, whichever sandbox got here first: srt
-                                    // reads the session config for anything a spawn does not
-                                    // name, so an exempt one initializing the manager would
-                                    // hand its exemption to the session. The exemption rides
-                                    // `customConfig` per spawn, which wins outright over this.
-                                    do! Interop.awaitPromise (initialize srt (toJs { config with FilesystemDisabled = false }))
-                                    return Ok srt
+                                    try
+                                        Interop.setEnv "TMPDIR" (SessionLayout.tmpDir ())
+                                        // Always CONFINED, whichever sandbox got here first:
+                                        // srt reads the session config for anything a spawn
+                                        // does not name, so an exempt one initializing the
+                                        // manager would hand its exemption to the session.
+                                        // The exemption rides `customConfig` per spawn, which
+                                        // wins outright over this.
+                                        do! Interop.awaitPromise (initialize srt (toJs { config with FilesystemDisabled = false }))
+                                        return Ok srt
+                                    finally
+                                        Interop.setEnv "TMPDIR" previousTmpdir
                                 with ex ->
                                     return Error (startFailure Fs.executable config, ex)
                             }
