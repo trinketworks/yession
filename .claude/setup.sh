@@ -143,9 +143,22 @@ fi
 # filter that runs and fails. `tests/Yession.Tests/LockSource.fs` refuses the content instead,
 # on every pull request, and cannot be missing from anybody's clone; read it before changing
 # anything here.
-mkdir -p "$repo/.git/info"
-grep -qs '^devenv\.lock filter=devenv-lock$' "$repo/.git/info/attributes" \
-  || echo 'devenv.lock filter=devenv-lock' >> "$repo/.git/info/attributes"
+#
+# `.git` is a DIRECTORY only in an ordinary clone. In a WORKTREE — which is what a Claude Code
+# session gets when it runs work in parallel — it is a file naming the real one, so
+# `$repo/.git/info` is a path that cannot be created and `mkdir -p` fails: under `set -e`, and
+# after devenv.local.yaml has already been written, which is how a session in a worktree got a
+# half-configured checkout and no filter at all. Two agents hit it independently.
+#
+# Ask git instead, and ask for the COMMON directory rather than this worktree's own. Git reads
+# `info/attributes` from the common one for every worktree (verified: a per-worktree copy is
+# not consulted even when it exists), which is also where `git config` puts the filter that
+# attribute names — so both halves land in the one place, installed once for every worktree
+# cut from this clone.
+gitdir="$(cd "$repo" && cd "$(git rev-parse --git-common-dir)" && pwd)"
+mkdir -p "$gitdir/info"
+grep -qs '^devenv\.lock filter=devenv-lock$' "$gitdir/info/attributes" \
+  || echo 'devenv.lock filter=devenv-lock' >> "$gitdir/info/attributes"
 git -C "$repo" config filter.devenv-lock.clean "python3 -c 'import json,sys; d=json.load(sys.stdin); d[\"nodes\"].pop(\"devenv\",None); d[\"nodes\"].get(\"root\",{}).get(\"inputs\",{}).pop(\"devenv\",None); json.dump(d,sys.stdout,indent=2); sys.stdout.write(chr(10))'"
 # A clean filter that FAILS is IGNORED by default: git prints `error: external filter ...
 # failed` into the middle of its output and stages the unfiltered content anyway — the store
