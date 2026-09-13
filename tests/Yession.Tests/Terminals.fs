@@ -1687,14 +1687,14 @@ let private codecTests =
                   Command (Request (RequestId.fresh (), ReleaseTerminalLease terminalA))
                   Command (Request (RequestId.fresh (), RearmTerminal terminalA))
                   Presence
-                      { PeerId = ada
+                      { Who = PeerRef ada
                         DisplayName = "Ada"
                         Focus =
                           Some
                               { Field = TerminalDraftBody (terminalA, ada)
                                 Pos = { Anchor = "AQI="; Head = "AwQ=" } } }
                   Presence
-                      { PeerId = bob
+                      { Who = PeerRef bob
                         DisplayName = "Bob"
                         Focus = Some { Field = TerminalQueuedBody (queue "a1"); Pos = { Anchor = "AQI="; Head = "AQI=" } } } ]
             for frame in frames do

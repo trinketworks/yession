@@ -12,7 +12,7 @@ open Yession.App.ProseMirror
 module Editor =
 
     /// One remote peer's caret+selection to overlay on a body editor. Positions are base64 Yjs
-    /// relative positions over this body's fragment; colours are precomputed (`PeerColour`).
+    /// relative positions over this body's fragment; colours are precomputed (`EditorColour`).
     type RemoteBodyCursor =
         { Colour : string      // solid — the caret bar and name label
           Selection : string   // translucent — the selection highlight

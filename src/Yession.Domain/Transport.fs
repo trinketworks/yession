@@ -207,7 +207,16 @@ type Focus = { Field : FocusField; Pos : CursorPos }
 /// The typed frame costs a little more render code and buys one identity, one relay, and a
 /// payload the cheap tier can round-trip.
 type PresencePayload =
-    { PeerId : PeerId
+    { /// Who is present. An `ActorRef` rather than a `PeerId` because the Session Process is
+      /// one of the parties editing now (Plan 25): it writes a name into the same `Y.Text` a
+      /// person types into, and a collaborator you cannot see the caret of is the thing this
+      /// frame exists to prevent.
+      ///
+      /// The alternative was a reserved peer id for the process, and it is the aliasing this
+      /// repository has paid for before: a `PeerId` that is not a peer reads as one at every
+      /// site, and nothing in the type says otherwise. Widening the key costs one refactor
+      /// the compiler enumerates; the alias costs a wrong answer somewhere nobody is looking.
+      Who : ActorRef
       DisplayName : string
       Focus : Focus option }
 

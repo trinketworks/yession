@@ -189,7 +189,7 @@ type ComposerChoice =
 /// A remote peer's live caret+selection: the peer's name (for the cursor label) plus its
 /// `Focus` — which collaborative field it is in and its position there. Ephemeral presence,
 /// delivered over `Presence` frames — never synced through Yjs, never durable. The peer's
-/// colour is derived from its id (`PeerColour`), not carried.
+/// colour is derived from its id (`EditorColour`), not carried.
 type RemotePresence = { DisplayName : string; Focus : Focus }
 
 /// One terminal's live transcript as this client has it (Plan 13). Records are keyed by
@@ -495,9 +495,13 @@ type ClientModel =
       Timeline      : TimelineProjection
       EventConsumer : EventConsumerState
       Agent         : AgentViewState
-      /// Other peers' live carets+selections, keyed by peer. Cleared when a peer moves its
-      /// caret out of every collaborative field, or disconnects (its `Focus` becomes `None`).
-      Presence      : Map<PeerId, RemotePresence>
+      /// Live carets+selections, keyed by WHO. Cleared when somebody moves their caret out of
+      /// every collaborative field, or disconnects (their `Focus` becomes `None`).
+      ///
+      /// Keyed by actor rather than peer because the Session Process edits here too (Plan 25),
+      /// and it never joined as a peer. `Peers` below stays peer-keyed: it is a fold of who
+      /// has connected, which is a different question with a different answer.
+      Presence      : Map<ActorRef, RemotePresence>
       /// Every peer this session has seen, with the display name it joined under — folded from
       /// the durable log (`PeerJoined`/`PeerLeft`), so it survives a reload and names a draft's
       /// author even while that author is away. Presence is who is here NOW; this is who is who.
@@ -946,7 +950,7 @@ module ClientModel =
     /// Who is editing this draft right now, by their live caret (never the local peer — you are
     /// not your own collaborator). Names come from presence, which is where a live caret's name
     /// already travels.
-    let editorsOf (peer: PeerId) (model: ClientModel) : (PeerId * string) list =
+    let editorsOf (peer: PeerId) (model: ClientModel) : (ActorRef * string) list =
         model.Presence
         |> Map.toList
         |> List.filter (fun (_, presence) -> presence.Focus.Field = DraftBody peer)
@@ -1354,7 +1358,7 @@ module ClientModel =
         |> Option.defaultValue false
 
     /// Who is editing a terminal composer right now, by their live caret.
-    let terminalEditorsOf (terminal: TerminalId) (author: PeerId) (model: ClientModel) : (PeerId * string) list =
+    let terminalEditorsOf (terminal: TerminalId) (author: PeerId) (model: ClientModel) : (ActorRef * string) list =
         model.Presence
         |> Map.toList
         |> List.filter (fun (_, presence) -> presence.Focus.Field = TerminalDraftBody (terminal, author))
@@ -1395,12 +1399,14 @@ module ClientModel =
           needing "github" model.GitHub.Status.SessionCredential ]
         |> List.choose id
 
-    let presentPeers (model: ClientModel) : (PeerId * string * FocusField) list =
+    /// Everyone whose caret is somewhere right now, except you. Actors rather than peers,
+    /// because the Session Process is one of them.
+    let presentEditors (model: ClientModel) : (ActorRef * string * FocusField) list =
         model.Presence
         |> Map.toList
-        |> List.filter (fun (peer, _) -> peer <> model.Peer.PeerId)
-        |> List.map (fun (peer, presence) -> peer, presence.DisplayName, presence.Focus.Field)
-        |> List.sortBy (fun (peer, name, _) -> name, PeerId.value peer)
+        |> List.filter (fun (who, _) -> who <> ActorRef.PeerRef model.Peer.PeerId)
+        |> List.map (fun (who, presence) -> who, presence.DisplayName, presence.Focus.Field)
+        |> List.sortBy (fun (who, name, _) -> name, ActorRef.token who)
 
     /// The terminal a focus is in, when it is in one. A composer slot names its terminal
     /// directly; a queued command names only its entry, and the entry names the terminal —
@@ -1414,10 +1420,10 @@ module ClientModel =
 
     /// Who is in a given terminal right now — whether writing a new command or editing a
     /// queued one, because from the strip they are the same fact: someone is in there.
-    let peersInTerminal (terminal: TerminalId) (model: ClientModel) : (PeerId * string) list =
-        presentPeers model
+    let editorsInTerminal (terminal: TerminalId) (model: ClientModel) : (ActorRef * string) list =
+        presentEditors model
         |> List.filter (fun (_, _, field) -> terminalOfFocus field model = Some terminal)
-        |> List.map (fun (peer, name, _) -> peer, name)
+        |> List.map (fun (who, name, _) -> who, name)
 
     /// A peer's display name: your own connection's, else the roster's, else the peer's own
     /// live presence, else the raw id (an id is a last resort, not a label — `PEER-129755065`
@@ -1435,7 +1441,7 @@ module ClientModel =
             match Map.tryFind peer model.Peers with
             | Some name -> name
             | None ->
-                match Map.tryFind peer model.Presence with
+                match Map.tryFind (ActorRef.PeerRef peer) model.Presence with
                 | Some presence when presence.DisplayName <> "" -> presence.DisplayName
                 | _ -> PeerId.value peer
 
@@ -1746,14 +1752,14 @@ module ClientModel =
         | EditTitleMsg title ->
             model |> withSynced { model.Synced with Title = title }
         | RemotePresenceMsg payload ->
-            // Never render your own remote caret; a cleared focus removes the peer's entry.
-            if payload.PeerId = model.Peer.PeerId then model
+            // Never render your own remote caret; a cleared focus removes the entry.
+            if payload.Who = ActorRef.PeerRef model.Peer.PeerId then model
             else
                 let presence =
                     match payload.Focus with
                     | Some focus ->
-                        Map.add payload.PeerId { DisplayName = payload.DisplayName; Focus = focus } model.Presence
-                    | None -> Map.remove payload.PeerId model.Presence
+                        Map.add payload.Who { DisplayName = payload.DisplayName; Focus = focus } model.Presence
+                    | None -> Map.remove payload.Who model.Presence
                 { model with Presence = presence }
         | EnsureDraftMsg (peerId, queueId) ->
             // Materialise the slot keyed by `peerId` (author only) if absent, so the codec

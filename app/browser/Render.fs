@@ -133,7 +133,7 @@ let private keepSurfacesPinned (selector: string) : unit = jsNative
 // A native <input> has no per-character DOM geometry, so we measure the pixel offset of a
 // substring with a canvas using the input's own font. Given a peer's decoded selection
 // (`anchor`,`head` indices), size its highlight span to `lo..hi` and offset the caret bar to
-// `head`. Colour is set by the view (`PeerColour`); this only positions. Called per peer whose
+// `head`. Colour is set by the view (`EditorColour`); this only positions. Called per peer whose
 // caret is in a collaborative input after every render — the DOM is up to date synchronously.
 //
 // Everything the marker needs is READ OFF THE FIELD, never assumed from the stylesheet: the
@@ -589,8 +589,8 @@ let create (deps: Deps) : Renderer =
             |> Map.toList
             |> List.filter (fun (_, p) -> p.Focus.Field = field)
             |> List.map (fun (peerId, p) ->
-                ({ Colour = PeerColour.ofPeer peerId
-                   Selection = PeerColour.translucent peerId
+                ({ Colour = EditorColour.ofEditor peerId
+                   Selection = EditorColour.translucent peerId
                    Name = p.DisplayName
                    Anchor = p.Focus.Pos.Anchor
                    Head = p.Focus.Pos.Head } : Editor.RemoteBodyCursor))
@@ -677,11 +677,11 @@ let create (deps: Deps) : Renderer =
             | ChapterName messageId ->
                 Some (sprintf "input[data-chapter-name=\"%s\"]" (MessageId.value messageId))
             | DraftBody _ | QueueBody _ | TerminalDraftBody _ | TerminalQueuedBody _ -> None
-        for (peerId, p) in Map.toList model.Presence do
+        for (who, p) in Map.toList model.Presence do
             match selectorOf p.Focus.Field with
             | Some selector ->
                 match ProseMirror.absIndexInDoc doc p.Focus.Pos.Anchor, ProseMirror.absIndexInDoc doc p.Focus.Pos.Head with
-                | Some a, Some h -> placeInputCursor selector (PeerId.value peerId) a h
+                | Some a, Some h -> placeInputCursor selector (ActorRef.token who) a h
                 | _ -> ()
             | None -> ()
 

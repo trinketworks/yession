@@ -1496,7 +1496,7 @@ module Style =
     // A draft nobody has open here: one line of it, so the composer reads as "what is being
     // written" rather than a stack of boxes. Clicking it opens it (and closes whatever was).
     //
-    // Its leading edge is the AUTHOR'S colour (set inline, from `PeerColour`) — the same
+    // Its leading edge is the AUTHOR'S colour (set inline, from `EditorColour`) — the same
     // move the terminal's peer-draft row makes, and the reason is the same: the row's whole
     // subject is whose words these are, so the edge should say it rather than repeat a
     // generic hover tint.
@@ -1512,7 +1512,7 @@ module Style =
         "flex-1 min-w-0 " + messageVoice false + " text-small leading-8 text-ink-dim "
         + "overflow-hidden whitespace-nowrap [&_*]:inline [&_*]:truncate [&_*]:m-0"
 
-    /// Who is in this draft right now: one dot per live caret, coloured by peer (`PeerColour`).
+    /// Who is in this draft right now: one dot per live caret, coloured by peer (`EditorColour`).
     let draftEditors = "shrink-0 flex items-center gap-1 pr-1"
     let draftEditorDot = "inline-block w-1.5 h-1.5 rounded-full"
 
