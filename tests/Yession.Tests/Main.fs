@@ -83,6 +83,10 @@ let all =
         // The upgrade IS the thing being tested, and there is no in-memory stand-in for it.
         Tag.needs "Foreign terminal attach" [ Tag.Ports ] (fun () -> Attach.portsTests)
         Tag.needs "Editor" [] (fun () -> Editor.tests)
+        // The SDK binding, before the adapter written over it. The live case spawns the
+        // real CLI, so it needs `Ports` beside the credential.
+        Tag.needs "Claude Agent SDK binding" [] (fun () -> ClaudeSdk.tests)
+        Tag.needs "Claude Agent SDK live" [ Tag.LiveAgent; Tag.Ports ] (fun () -> ClaudeSdk.liveTests)
         Tag.needs "Agent" [] (fun () -> Agent.tests)
         Tag.needs "Version" [] (fun () -> Version.tests)
         Tag.needs "Telemetry" [] (fun () -> Telemetry.tests)
