@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Fable bindings to what a program running on Node needs and `Fable.Node` does not type —
+    including the web-platform globals Node ships (`TextDecoder`, `WebSocket`, WebCrypto,
+    `ReadableStream`), which from the Node host's point of view are part of its platform and
+    not somebody else's. Exactly parallel to `Fable.BrowserExtras`, which is the browser APIs
+    the `Fable.Browser.*` family does not cover. Fable-only: `dotnet build` only type-checks
+    it; the runnable JS comes from Fable. A standalone project so the bindings are a distinct
+    layer, mirroring Fable.Dockerode and Fable.Jose — with the same difference worth stating
+    that BrowserExtras states, since the neighbours' names suggest otherwise: these bind
+    PLATFORM surface, not an npm package, so there is nothing to install and nothing in
+    package.json to keep them in step with.
+
+    The bar for adding to this file is that `Fable.Node` (or a sibling that is already
+    referenced — `Fable.Fetch`, `Fable.Core`) genuinely lacks it, not that reaching for it
+    here was quicker. Everything the upstream bindings type comes from them, so that this
+    stays small enough to read and rare enough to touch: an emit body is inlined into its
+    callers, which is exactly what makes a file of them a file nobody notices going stale.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="NodeExtras.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Fable.Core" />
+    <PackageReference Include="Fable.Node" />
+    <!-- `Response` — the type `responseBody` below reads a stream off. -->
+    <PackageReference Include="Fable.Fetch" />
+  </ItemGroup>
+
+</Project>

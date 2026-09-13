@@ -53,6 +53,7 @@
     <Compile Include="TerminalPattern.fs" />
     <Compile Include="Terminals.fs" />
     <Compile Include="Attach.fs" />
+    <Compile Include="NodeExtras.fs" />
     <Compile Include="Timeline.fs" />
     <!-- The launch surface, through the model a browser folds and the renderer it serves. -->
     <Compile Include="LaunchSurface.fs" />
@@ -113,6 +114,10 @@
     <ProjectReference Include="..\..\src\Yession.App\Yession.App.fsproj" />
     <ProjectReference Include="..\..\app\Yession.Host.fsproj" />
     <ProjectReference Include="..\..\src\Yession.Peer\Yession.Peer.fsproj" />
+    <!-- The Node bindings, referenced HERE rather than from the product: nothing in
+         app/ calls them yet — the call sites migrate one at a time — and a binding
+         project nothing calls is a project nothing proves. -->
+    <ProjectReference Include="..\..\src\Fable.NodeExtras\Fable.NodeExtras.fsproj" />
     <!-- The serial provider is an EXAMPLE, not a component: nothing in the product
          references it. The suite does, because the tests it came with are worth keeping —
          the pure ones in the cheap tier, and a `Serial`-tagged one that drives a real pty. -->

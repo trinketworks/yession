@@ -82,6 +82,9 @@ let all =
         Tag.needs "Timeline" [] (fun () -> Timeline.tests)
         // The upgrade IS the thing being tested, and there is no in-memory stand-in for it.
         Tag.needs "Foreign terminal attach" [ Tag.Ports ] (fun () -> Attach.portsTests)
+        Tag.needs "Node platform bindings" [] (fun () -> NodeExtras.tests)
+        Tag.needs "Node platform bindings, spawning" [ Tag.Ports ] (fun () -> NodeExtras.portsTests)
+        Tag.needs "Node platform bindings, WebSocket" [ Tag.Ports ] (fun () -> NodeExtras.socketTests)
         Tag.needs "Editor" [] (fun () -> Editor.tests)
         Tag.needs "Agent" [] (fun () -> Agent.tests)
         Tag.needs "Version" [] (fun () -> Version.tests)

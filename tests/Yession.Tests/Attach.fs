@@ -33,7 +33,10 @@ let private expect =
 /// and then closes. `/abrupt` accepts the upgrade and drops the connection without saying
 /// anything — which is the case an in-band termination frame exists FOR, since an abnormal
 /// closure carries nothing.
-type private Provider =
+/// Public rather than private to this module: `NodeExtras.fs` drives the WebSocket BINDING
+/// against the same provider. A second hand-rolled RFC 6455 server in this suite would be a
+/// second thing to keep in step with the spec the first one is the reference for.
+type Provider =
     abstract port : int
     abstract stop : unit -> JS.Promise<unit>
 
@@ -103,7 +106,7 @@ type private Provider =
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
   return { port: server.address().port, stop: () => new Promise((r) => server.close(() => r())) }
 })()""")>]
-let private startProvider () : JS.Promise<Provider> = jsNative
+let startProvider () : JS.Promise<Provider> = jsNative
 
 let private ticket (port: int) (path: string) (capabilities: SourceCapabilities) : AttachTicket =
     { Url = sprintf "ws://127.0.0.1:%d%s" port path
