@@ -46,8 +46,12 @@ in
   # and the suite that drives it runs `uv run --project`. UV_PYTHON_DOWNLOADS=never below is
   # what makes this interpreter the one it uses — otherwise uv fetches an interpreter of its
   # own, which is a second, unpinned toolchain arriving over the network mid-run.
+  #
+  # caddy backs the `Caddy` capability: the fronted-deployment E2E runs the proxy example's
+  # own Caddyfile (examples/proxy/caddy) in front of a real Manager, so the file the README
+  # tells an operator to deploy is the file the suite drives.
   packages =
-    [ pkgs.git pkgs.actionlint pkgs.uv pkgs.python312 ]
+    [ pkgs.git pkgs.actionlint pkgs.uv pkgs.python312 pkgs.caddy ]
     ++ lib.optionals pkgs.stdenv.hostPlatform.isLinux
          [ pkgs.dbus pkgs.gnome-keyring pkgs.bubblewrap pkgs.socat pkgs.ripgrep pkgs.eudev ];
 

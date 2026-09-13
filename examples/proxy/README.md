@@ -108,4 +108,7 @@ can only forward, not translate, still fronts sessions correctly.
 
 Verified against a live tailnet: Tailscale 1.102.3 with HTTPS certificates, Caddy 2.11.2,
 macOS. `tests/Yession.Tests/ProxyMap.fs` drives `main.mjs` against a real Manager and a real
-session; the Caddyfile is checked by hand, since the suite has no tailnet.
+session, and the fronted case in `tests/Yession.Tests/Browser.fs` runs this Caddyfile — with
+`main.mjs` beside it and a Manager under `trusted-headers` behind it — with Chromium standing
+in for `serve`: the `Tailscale-User-*` headers on every request, and nothing else the suite
+has no tailnet for.

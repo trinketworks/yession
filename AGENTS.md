@@ -339,6 +339,8 @@ check Nix                    # + the build-source contract, then builds the inst
                              #   the WORKING TREE and boots it. Minutes; the only gate on it.
 check Jumpstarter            # + our MCP client driven against the Python example's provider,
                              #   over two real child processes. Needs uv and a CPython.
+check Browser Native Caddy   # + the fronted deployment: the proxy example's Caddyfile, for
+                             #   real, in front of a Manager under trusted headers. Needs caddy.
 check Docker Dogfood         # + the self-hosting run: this repo's whole suite inside the
                              #   dev container its own yession.yaml declares (`check`, behind
                              #   the file's `nix develop --impure --command` entrypoint, in the
@@ -346,7 +348,8 @@ check Docker Dogfood         # + the self-hosting run: this repo's whole suite i
                              #   tier — run it when the container environment story changes,
                              #   locally or via a verify.yml dispatch naming both caps.
 verify                       # == check Browser Ports Native Docker LiveAgent Keyring Nix Srt
-                             #    Pty Serial Jumpstarter. Release gate; what CI runs on master.
+                             #    Pty Serial Jumpstarter Caddy. Release gate; what CI runs on
+                             #    master.
                              #    Takes check's trailing args, so `verify --only "<text>"` works.
 lint                         # actionlint over .github/workflows, then the F# analyzers over
                              #   every project in Yession.slnx. Runs first in the PR gate.
@@ -610,6 +613,10 @@ Capabilities:
   and "this box can assemble that environment" are different questions and only the second
   one is the suite's. devenv provides uv and a CPython, and pins the interpreter through
   `UV_PYTHON`/`UV_PYTHON_DOWNLOADS=never` so uv never fetches a second, unpinned toolchain.
+- `Caddy` — the `caddy` binary, probed by running it. The fronted-deployment browser case runs
+  `examples/proxy/caddy/Caddyfile` — the file the README tells an operator to deploy — in front
+  of a real Manager, with Chromium playing `tailscale serve`; without it that file is only ever
+  read. devenv provides caddy on both platforms.
 - `Dogfood` — consent to the LONG self-hosting case (`tests/Yession.Tests/DevContainer.fs`):
   the suite re-running itself inside the dev container this repo declares. Needs `Docker`
   beside it; its own probe is egress to cache.nixos.org, because the in-container devshell

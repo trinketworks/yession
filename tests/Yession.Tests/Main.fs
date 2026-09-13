@@ -156,6 +156,7 @@ let all =
         // only place the difference between "the address answered" and "the session answered"
         // is observable, because it is the browser that acts on the answer.
         Tag.needs "Creating a session behind a front door (browser)" [ Tag.Browser; Tag.Native ] (fun () -> Browser.frontDoorTests)
+        Tag.needs "A fronted deployment, for real (browser)" [ Tag.Browser; Tag.Native; Tag.Caddy ] (fun () -> Browser.frontedTests)
     ]
 
 [<EntryPoint>]
