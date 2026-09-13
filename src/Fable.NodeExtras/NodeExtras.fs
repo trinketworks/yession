@@ -376,3 +376,30 @@ module WebCrypto =
     /// length, which it already leaked by sending it).
     [<Import("timingSafeEqual", "node:crypto")>]
     let timingSafeEqual (left: Buffer) (right: Buffer) : bool = jsNative
+
+// --- Buffers over bytes -----------------------------------------------------------------------
+
+/// The two directions between a `Buffer` and the `Uint8Array` the web-platform half of this
+/// file speaks. They are here rather than at a call site because they are the seam between the
+/// two byte types Node has, and a program that has to convert once has to convert everywhere.
+[<AutoOpen>]
+module Bytes =
+
+    /// A `Buffer` over a typed array's bytes — the direction WebCrypto forces: `getRandomValues`
+    /// fills a `Uint8Array`, and the only thing that encodes bytes as base64url is a `Buffer`.
+    ///
+    /// `Fable.Node` types both its `Buffer.from` overloads over `obj`, differing only in an
+    /// optional second argument, so a lone typed array is an AMBIGUITY there (FS0041) rather
+    /// than a conversion — and `obj` would not have checked it either way.
+    ///
+    /// `Buffer.from(typedArray)` COPIES the bytes — unlike `Buffer.from(arrayBuffer)`, which
+    /// is a view over the same memory — so writing through the array afterwards does not
+    /// change what this returned.
+    [<Emit("Buffer.from($0)")>]
+    let bufferOf (bytes: JS.Uint8Array) : Buffer = jsNative
+
+    /// The same bytes as a `Uint8Array`, which a Node `Buffer` already IS — it is a subclass,
+    /// so nothing is copied and nothing is converted. Declared once, here, for the reason
+    /// `base64url` is: it is a cast, the compiler has stopped checking, and a cast written at
+    /// each call site is a check nobody performs several times over.
+    let bytesOf (bytes: Buffer) : JS.Uint8Array = !!bytes

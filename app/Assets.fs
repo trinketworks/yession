@@ -18,14 +18,11 @@ module Yession.Host.Assets
 
 open Fable.Core
 open Fable.Core.JsInterop
+open Fable.NodeExtras
+open Node.Api
+open Node.Buffer
 open Yession.App
 open Yession.Host.Interop
-
-[<Fable.Core.ImportAll("node:fs")>]
-let private fs : obj = jsNative
-
-[<ImportAll("node:crypto")>]
-let private nodeCrypto : obj = jsNative
 
 [<Import("fileURLToPath", "node:url")>]
 let private fileUrlToPath (url: obj) : string = jsNative
@@ -40,26 +37,31 @@ let private packagedAssets : obj = jsNative
 /// rather than a crash at boot.
 ///
 /// Bytes, not text: a set holds woff2 as readily as CSS, and `utf8` would mangle it.
-[<Emit("""(function (fs, packaged, fallback, path) {
-  for (const root of [packaged, fallback]) { try { return fs.readFileSync(root + '/' + path) } catch {} }
-  return null
-})($0, $1, $2, $3)""")>]
-let private readFile (fs: obj) (packaged: string) (fallback: string) (path: string) : obj option = jsNative
+///
+/// A root that cannot answer is not a failure, it is the OTHER root's turn: a missing file, a
+/// missing directory and an unreadable one are one answer here, and only both roots failing is
+/// `None`.
+let private readFile (packaged: string) (fallback: string) (path: string) : Buffer option =
+    [ packaged; fallback ]
+    |> List.tryPick (fun root ->
+        try Some (fs.readFileSync (root + "/" + path)) with _ -> None)
 
 /// One digest over the whole set: every path and every byte, in the map's own (sorted) order,
 /// so the same set always addresses the same. Twelve base64url characters, the same content
 /// address `Interop.contentDigest` gives a document.
-[<Emit("""(function (cryptoModule, entries) {
-  const hash = cryptoModule.createHash('sha256')
-  for (const [path, bytes] of entries) { hash.update(path); hash.update(bytes) }
-  return hash.digest('base64url').slice(0, 12)
-})($0, $1)""")>]
-let private digestEntries (cryptoModule: obj) (entries: (string * obj) array) : string = jsNative
+let private digestEntries (entries: (string * Buffer) array) : string =
+    let hash = crypto.createHash "sha256"
+    for path, bytes in entries do
+        hash.update path |> ignore
+        hash.update bytes |> ignore
+    // The digest as bytes, encoded here rather than by `digest(encoding)` — which Fable.Node
+    // types as returning `obj`, so the string would be an unchecked cast away.
+    (hash.digest().toString base64url).Substring (0, 12)
 
 /// What a build ships, and the one address it all sits under.
 type AssetSet =
     { Build: AssetBuild
-      Files: Map<string, obj> }
+      Files: Map<string, Buffer> }
 
 /// Read the asset set once, at boot. Per process, never per request: the addresses a shell
 /// hands out have to be the addresses this process will answer for, and a re-read could drift
@@ -69,10 +71,10 @@ let load (fallbackDir: string) : AssetSet =
     let files =
         AssetFile.all
         |> List.choose (fun file ->
-            readFile fs packaged fallbackDir (AssetFile.path file)
+            readFile packaged fallbackDir (AssetFile.path file)
             |> Option.map (fun bytes -> AssetFile.path file, bytes))
         |> Map.ofList
-    { Build = AssetBuild (digestEntries nodeCrypto (Map.toArray files))
+    { Build = AssetBuild (digestEntries (Map.toArray files))
       Files = files }
 
 /// The set this process serves: the build output, or wherever `YESSION_ASSETS` says an

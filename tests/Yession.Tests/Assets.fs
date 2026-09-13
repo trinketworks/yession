@@ -102,6 +102,37 @@ let tests =
             Expect.notEqual after.Build before.Build "a byte anywhere is a new set"
             Expect.equal (Assets.load dir).Build after.Build "and the same set always addresses the same"
 
+        testCase "a declared file no root has is an absence, not a failure" <| fun () ->
+            // Each root is TRIED in turn, and a read that throws is that root not having the
+            // file rather than an error to propagate — which is why the un-built and the
+            // half-built directory both boot rather than taking the process down.
+            let dir = "tests/Yession.Tests/out/.assets/partial"
+            rmrf nodeFs dir
+            mkdirp nodeFs dir
+            writeFile nodeFs (dir + "/" + AssetFile.path AssetFile.``app``) "body{color:red}"
+            let assets = Assets.load dir
+            Expect.equal
+                (assets.Files |> Map.toList |> List.map fst)
+                [ AssetFile.path AssetFile.``app`` ]
+                "the file that is there, and only it"
+
+        testCase "the digest is over the paths as well as the bytes" <| fun () ->
+            // The same bytes under a different NAME are a different set. A digest over the
+            // bytes alone would hand a renamed file the old address, and every cached copy
+            // under it would stay `immutable` and wrong — which is the one failure the
+            // set-wide address exists to make impossible.
+            let setOf (name: string) (file: AssetFile) =
+                let dir = "tests/Yession.Tests/out/.assets/" + name
+                rmrf nodeFs dir
+                mkdirp nodeFs (dir + "/fonts")
+                writeFile nodeFs (dir + "/" + AssetFile.path file) "the very same bytes"
+                Assets.load dir
+
+            Expect.notEqual
+                (setOf "named-face" AssetFile.``source-serif-350``).Build
+                (setOf "named-css" AssetFile.``app``).Build
+                "one file's bytes under another file's name is another set"
+
         testCase "an unbuilt directory is an empty set that says so" <| fun () ->
             // The developer case: not a crash at boot, and not a bare 404 on an address that
             // looks perfectly reasonable.

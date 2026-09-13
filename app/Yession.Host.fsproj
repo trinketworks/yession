@@ -117,6 +117,9 @@
   <ItemGroup>
     <ProjectReference Include="..\src\Fable.Dockerode\Fable.Dockerode.fsproj" />
     <ProjectReference Include="..\src\Fable.Jose\Fable.Jose.fsproj" />
+    <!-- The Node platform slice `Fable.Node` does not type: the WHATWG streams and decoder the
+         SSE consumer reads, WebCrypto, `base64url`, and the two byte types it takes to get
+         from one to the other. -->
     <ProjectReference Include="..\src\Fable.NodeExtras\Fable.NodeExtras.fsproj" />
     <ProjectReference Include="..\src\Fable.Keyring\Fable.Keyring.fsproj" />
     <ProjectReference Include="..\src\Fable.OpenIdClient\Fable.OpenIdClient.fsproj" />
