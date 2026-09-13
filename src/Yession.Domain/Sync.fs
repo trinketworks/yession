@@ -579,72 +579,73 @@ module SyncedStateSync =
         foldRoot doc "chapters" (fun entry -> entryStringOpt entry "opens", entryText entry "name")
         |> chaptersToDomain
 
-    /// Write a chapter's name — but only while it still reads `expected`.
+    /// The live text a naming subject is written in, when the doc has one.
     ///
-    /// A compare-and-set rather than a write, because what asks for this asks a model first,
+    /// One lookup for both surfaces, because everything above it treats them as one question.
+    /// A chapter's is nested in its entry and only exists once somebody has touched it; the
+    /// title's is a root and always does.
+    let nameTextOf (doc: Yjs.Y.Doc) (subject: NamingSubject) : Yjs.Y.Text option =
+        match subject with
+        | NamingSubject.Chapter messageId -> chapterNameText doc (MessageId.value messageId)
+        | NamingSubject.Title -> Some (doc.getText "title")
+
+    /// What a subject's name reads now.
+    let nameOf (doc: Yjs.Y.Doc) (subject: NamingSubject) : string =
+        match nameTextOf doc subject with
+        | Some text -> textString text
+        | None -> ""
+
+    /// Edit a subject's name — but only while it still reads `expected`.
+    ///
+    /// A compare-and-set rather than a write, because what asks for this asked a model first,
     /// and a second passes between reading a name and having something to put there. Somebody
-    /// typing in that second has named the chapter themselves, and the answer arriving after
-    /// them must not be what the session keeps. The read and the write are one transaction, so
-    /// there is no window between them here either.
+    /// typing in that second has named this themselves, and the answer arriving after them must
+    /// not be what the session keeps. The read and the write are ONE transaction, so there is
+    /// no window between them here either.
     ///
-    /// Answers what STANDS when it is done — the new name where it wrote, and whatever it
-    /// found where it did not. A caller can tell "named it" from "somebody got there first"
-    /// by comparing, and the one that needs to record what the session may write over next
-    /// time gets that without reading the doc a second time. `""` where there is no chapter
-    /// entry here at all, which is the one answer that is about neither.
-    let nameChapter (doc: Yjs.Y.Doc) (messageId: MessageId) (expected: string) (name: string) : string =
+    /// Answers what STANDS when it is done — what it wrote where it wrote, and whatever it
+    /// found where it did not. A caller can tell "wrote it" from "somebody got there first" by
+    /// comparing, and the one that records what the session may write over next time gets that
+    /// without reading the doc a second time.
+    let private editName
+        (doc: Yjs.Y.Doc)
+        (subject: NamingSubject)
+        (expected: string)
+        (edit: Yjs.Y.Text -> string -> unit)
+        : string =
         let mutable stands = ""
         doc.transact (
             (fun _ ->
-                let chapters : Yjs.Y.Map<obj> = doc.getMap "chapters"
-                match chapters.get (MessageId.value messageId) with
-                | Some entryObj when not (isNull entryObj) ->
-                    match (unbox<Yjs.Y.Map<obj>> entryObj).get "name" with
-                    | Some textObj when not (isNull textObj) ->
-                        let text = unbox<Yjs.Y.Text> textObj
-                        let held = textString text
-                        stands <- held
-                        if held = expected && held <> name then
-                            // Delete then insert, which is what replacing a whole name is. A
-                            // splice against the words would be the intent-preserving edit a
-                            // person's keystroke is — and there is no intent to preserve here:
-                            // these are not the same name shortened, they are other words.
-                            if held.Length > 0 then text.delete (0, held.Length)
-                            text.insert (0, name)
-                            stands <- name
-                    | _ -> ()
-                | _ -> ()),
+                match nameTextOf doc subject with
+                | Some text ->
+                    let held = textString text
+                    stands <- held
+                    if held = expected then
+                        edit text held
+                        stands <- textString text
+                | None -> ()),
             processOrigin)
         stands
 
-    /// What the session is called, read straight from its root.
-    let titleOf (doc: Yjs.Y.Doc) : string =
-        if shareHas doc "title" then textString (doc.getText "title") else ""
+    /// Replace the whole name. What a caller uses when the words are not the same name
+    /// shortened but other words entirely — there is no intent to preserve, so this is a
+    /// delete and an insert rather than a splice against what was there.
+    let nameSubject (doc: Yjs.Y.Doc) (subject: NamingSubject) (expected: string) (name: string) : string =
+        editName doc subject expected (fun text held ->
+            if held <> name then
+                if held.Length > 0 then text.delete (0, held.Length)
+                if name.Length > 0 then text.insert (0, name))
 
-    /// Write the session's title — but only while it still reads `expected`.
+    /// Add to the end of the name, which is what TYPING is.
     ///
-    /// `nameChapter`'s sibling, and the same compare-and-set for the same reason: a second
-    /// passes between reading a name and having something to put there, and somebody typing
-    /// in that second has named the session themselves. The read and the write are one
-    /// transaction, so there is no window between them here either, and it answers what
-    /// STANDS so the caller records the doc rather than its own hope.
-    ///
-    /// A session that has never been titled reads `""`, which is a real expectation rather
-    /// than a missing one: a title has no guess seeded into it the way a chapter does, so
-    /// empty IS the state nobody has chosen.
-    let nameTitle (doc: Yjs.Y.Doc) (expected: string) (name: string) : string =
-        let mutable stands = ""
-        doc.transact (
-            (fun _ ->
-                let text : Yjs.Y.Text = doc.getText "title"
-                let held = textString text
-                stands <- held
-                if held = expected && held <> name then
-                    if held.Length > 0 then text.delete (0, held.Length)
-                    text.insert (0, name)
-                    stands <- name),
-            processOrigin)
-        stands
+    /// The session writes a name a few characters at a time so people can watch it arrive
+    /// (Plan 25), and each of those is this: an insert at the end, under the same
+    /// compare-and-set, so the tick that finds somebody else's words there stops rather than
+    /// typing over them. A splice rather than a replacement, so a caret anybody is holding in
+    /// the same text keeps its place.
+    let appendToName (doc: Yjs.Y.Doc) (subject: NamingSubject) (expected: string) (addition: string) : string =
+        editName doc subject expected (fun text held ->
+            if addition.Length > 0 then text.insert (held.Length, addition))
 
     /// The Markdown of a queue entry's rich body, read straight from its top-level fragment
     /// root — the drain's snapshot into the durable `MessageSent` (the Session Process observes

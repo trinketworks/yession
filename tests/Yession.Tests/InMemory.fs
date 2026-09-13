@@ -234,6 +234,74 @@ let tests =
                 do! host.Stop ()
             }
 
+        // The point of the whole redesign, through the real Host: a name does not appear, it
+        // is TYPED — and while it is being typed the session wears a caret in that field,
+        // which is how anybody watching knows who is writing there.
+        testCaseAsync "a name is typed, and the session wears a caret while it types" <|
+            async {
+                let summarize : Summarize = fun _ -> async { return Ok "Where it was settled" }
+                let! host =
+                    Host.startFull Clock.system (fun () -> None) (fun _ -> Some summarize) None None None None None None None (fun _ _ -> ()) None McpClient.McpConnections.none None (sid ()) None "" None false None 0
+                let! a = connectInMemoryClient host "ada" "Ada"
+                let ada = a.Hello.PeerId
+                do! compose a ada "ship it"
+                a.Connection.SendDraft ada
+                do! a.Runner.WaitFor (fun m -> m.Conversation.Items |> List.exists (fun i -> i.Body = "ship it"))
+                let item = (a.Runner.Model ()).Conversation.Items |> List.head
+                a.Runner.Dispatch (user (ToggleChapterMsg item.MessageId))
+                // A caret of the session's own, in the field it is writing — seen BEFORE the
+                // words are all there, which is the promise.
+                do! a.Runner.WaitFor (fun m ->
+                        match Map.tryFind ActorRef.Agent m.Presence with
+                        | Some p -> p.Focus.Field = ChapterName item.MessageId
+                        | None -> false)
+                do! a.Runner.WaitFor (fun m -> Chat.Chapters.name m.Synced.Chapters item = "Where it was settled")
+                // ...and it is gone when the typing is. A caret left by a writer that has
+                // stopped says somebody is still there.
+                do! a.Runner.WaitFor (fun m -> not (Map.containsKey ActorRef.Agent m.Presence))
+                do! host.Stop ()
+            }
+
+        // The courtesy half of the rule. Somebody with their caret in these words was here
+        // first, and whatever they are doing there is about them.
+        testCaseAsync "a field somebody's caret is already in is not typed into" <|
+            async {
+                let asked = ResizeArray<SummaryAsk> ()
+                let summarize : Summarize =
+                    fun ask -> async { asked.Add ask; return Ok "Where it was settled" }
+                // A clock the case turns, so typing cannot progress unless this test says so
+                // — which is what makes "nothing was typed" an assertion rather than a race
+                // against a real forty-five milliseconds.
+                let vc = virtualClock (System.DateTimeOffset (2026, 6, 14, 0, 0, 0, System.TimeSpan.Zero))
+                let! host =
+                    Host.startFull vc.Clock (fun () -> None) (fun _ -> Some summarize) None None None None None None None (fun _ _ -> ()) None McpClient.McpConnections.none None (sid ()) None "" None false None 0
+                let! a = connectInMemoryClient host "ada" "Ada"
+                let! b = connectInMemoryClient host "bob" "Bob"
+                let ada = a.Hello.PeerId
+                do! compose a ada "ship it"
+                a.Connection.SendDraft ada
+                do! a.Runner.WaitFor (fun m -> m.Conversation.Items |> List.exists (fun i -> i.Body = "ship it"))
+                let item = (a.Runner.Model ()).Conversation.Items |> List.head
+                // Bob's caret goes into the chapter's name BEFORE the chapter is opened, so
+                // the pass that the opening wakes finds him already there. Ordered this way
+                // deliberately: opening is what makes the chapter owed a name, and a caret
+                // arriving after that would be a different rule (stopping) than this one
+                // (not starting).
+                b.Connection.ReportPresence (
+                    Some { Field = ChapterName item.MessageId; Pos = { Anchor = "AQI="; Head = "AQI=" } })
+                do! a.Runner.WaitFor (fun m -> Map.containsKey (PeerRef b.Hello.PeerId) m.Presence)
+                a.Runner.Dispatch (user (ToggleChapterMsg item.MessageId))
+                // It IS owed, and it IS asked — so the only thing left that can stop the
+                // words landing is whose field it is.
+                do! a.Runner.WaitFor (fun _ -> asked.Count >= 1)
+                // Far more time than typing the whole name would take. Nothing of it lands,
+                // because none of it was ever started.
+                for _ in 1 .. 40 do vc.Advance (System.TimeSpan.FromMilliseconds 100.0)
+                Expect.equal (Chat.Chapters.name (a.Runner.Model ()).Synced.Chapters item) "ship it" "his field, so the guess stands"
+                Expect.isFalse (Map.containsKey ActorRef.Agent (a.Runner.Model ()).Presence) "and it never put a caret there"
+                do! host.Stop ()
+            }
+
         // The session names ITSELF, not only its parts — and the name reaches the Manager
         // through the hook that already carries a typed title, so a session list shows what
         // a session is for without anybody having titled it.
