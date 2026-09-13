@@ -14,9 +14,13 @@ namespace Fable.NodeExtras
 //
 // Only the slice actually used is declared, and the bar for adding is that `Fable.Node` (or a
 // sibling already referenced) genuinely lacks it. What Fable.Node already covers and nothing
-// here re-declares: `node:stream` entire, `node:events`, `node:http`, `createHash`/
-// `createHmac`/`randomBytes` from `node:crypto`, and `Buffer`'s `from`/`toString`/`concat`/
-// `alloc`.
+// here re-declares: `node:events`, `createHash`/`createHmac`/`randomBytes` from `node:crypto`,
+// and `Buffer`'s `from`/`toString`/`concat`/`alloc`.
+//
+// `node:stream` and `node:http` are the two it covers only in part, and the part it misses is
+// the one a proxy is made of: `Fable.Node`'s `ClientRequest<'T>` has no `pipe`, no `destroy`
+// and no events, and its `IncomingMessage` reaches its headers as `obj`. So the streaming
+// slice of both is declared at the end of this file, and nothing else of either is.
 //
 // Nothing in this file runs on .NET. `dotnet build` type-checks it and stops there; every
 // binding below is `jsNative`, an import, or — in `base64url`'s case — a cast that is only
@@ -403,3 +407,130 @@ module Bytes =
     /// `base64url` is: it is a cast, the compiler has stopped checking, and a cast written at
     /// each call site is a check nobody performs several times over.
     let bytesOf (bytes: Buffer) : JS.Uint8Array = !!bytes
+
+// --- Streams, and the HTTP client that speaks over them --------------------------------------
+
+/// What a stream's `error` event carries. Node's own streams emit an `Error`, but only by
+/// convention — `emit('error', …)` can carry anything, `undefined` included — so this types
+/// the one property worth reading and `StreamError.describe` is what reads it safely.
+[<AllowNullLiteral>]
+type StreamError =
+    abstract message : string
+
+[<RequireQualifiedAccess>]
+module StreamError =
+
+    /// JavaScript's own `String` conversion, for the cases `message` cannot answer.
+    [<Emit("String($0)")>]
+    let private stringify (error: StreamError) : string = jsNative
+
+    /// What to put in a sentence somebody reads: the error's message, or — when there is
+    /// none, because what arrived was not an `Error` or carried an empty message — whatever
+    /// JavaScript makes of the value itself. Declared here, beside the type, rather than
+    /// written out at each stream that can fail: it is the same defensive dance every time,
+    /// and one spelled out per call site is one that is subtly different per call site.
+    let describe (error: StreamError) : string =
+        if isNull (box error) || System.String.IsNullOrEmpty error.message then stringify error else error.message
+
+/// A byte stream something can be written INTO — an outgoing request, a server response, a
+/// child's stdin. Only what a proxy needs of one: somewhere for `pipe` to end up, a way to
+/// tear it down, and the failure it reports.
+[<AllowNullLiteral>]
+type Writable =
+    /// Tear the stream down NOW, without finishing what is in flight — the socket goes with
+    /// it. What a proxy does to the half it can no longer answer for.
+    abstract destroy : unit -> unit
+
+    /// An `error` here is terminal: a stream that has errored never emits `finish`. Declared
+    /// as its own member rather than a `on(name, handler)` taking a string for the reason the
+    /// WebSocket bindings above are: the event's name and its handler's type are one fact,
+    /// and a member per event is how the type gets to say so.
+    [<Emit("$0.on('error', $1)")>]
+    abstract onError : handler: (StreamError -> unit) -> unit
+
+/// A byte stream bytes can be read OUT of — an incoming request, an upstream response.
+[<AllowNullLiteral>]
+type Readable =
+    /// `source.pipe(destination)`: Node moves the bytes, applying backpressure, and nothing
+    /// in this process ever holds them. That is the whole reason a proxy pipes rather than
+    /// reads — bytes that are never decoded cannot be decoded WRONG.
+    abstract pipe : destination: Writable -> unit
+
+    /// Start the stream flowing with nothing attached to read it, so the bytes are
+    /// DISCARDED and the socket is freed. What to do with a response whose body is not
+    /// wanted: leaving it paused instead leaks the connection.
+    abstract resume : unit -> unit
+
+    abstract destroy : unit -> unit
+
+    /// The stream ended: every byte it had has been handed on. Mutually exclusive with
+    /// `onError`, which is why a caller that settles on either settles once.
+    [<Emit("$0.on('end', $1)")>]
+    abstract onEnd : handler: (unit -> unit) -> unit
+
+    [<Emit("$0.on('error', $1)")>]
+    abstract onError : handler: (StreamError -> unit) -> unit
+
+/// A message that ARRIVED over HTTP — its headers, and its body as the stream it is. Both
+/// halves of an exchange are one of these on the receiving side, which is why the shape is
+/// shared rather than written twice.
+[<AllowNullLiteral>]
+type HttpMessage =
+    inherit Readable
+
+    /// Every header that arrived, as `name, value` pairs — Node LOWERCASES the names on the
+    /// way in, so a caller comparing them compares lowercase.
+    ///
+    /// A value is `obj` because it is a string OR an array of them (a header that repeated),
+    /// and a proxy that narrowed it to `string` would silently drop the second `set-cookie`.
+    /// Pairs rather than the object itself so that deciding WHICH headers to carry is F# a
+    /// test can run, instead of an `Object.entries` loop inside an emit.
+    [<Emit("Object.entries($0.headers)")>]
+    abstract headerEntries : unit -> (string * obj)[]
+
+/// The upstream's answer to a request this process made.
+[<AllowNullLiteral>]
+type HttpResponse =
+    inherit HttpMessage
+
+    /// The status line's code. Always present on a response that was RECEIVED — Node types
+    /// it optional only because the same type is a server's view of a request.
+    abstract statusCode : int
+
+/// A request this process is MAKING: write the body into it, and its answer arrives at the
+/// callback `httpRequest` took.
+[<AllowNullLiteral>]
+type HttpRequest =
+    inherit Writable
+
+[<AutoOpen>]
+module HttpClient =
+
+    // Node splits its client across two modules by scheme, and the two take the same
+    // arguments — so the pair is imported once here and `httpRequest` below is the only
+    // place that has to know there are two.
+    [<Import("request", "node:http")>]
+    let private overHttp (url: string) (options: obj) (onResponse: HttpResponse -> unit) : HttpRequest = jsNative
+
+    [<Import("request", "node:https")>]
+    let private overHttps (url: string) (options: obj) (onResponse: HttpResponse -> unit) : HttpRequest = jsNative
+
+    /// Open an HTTP request to `url` and call back with the response's head as soon as it
+    /// lands — before the body, which is what makes a streaming proxy possible at all.
+    ///
+    /// `Fable.Node` types this as `ClientRequest<'T>` over a `RequestOptions` whose `method`
+    /// is a closed enum and whose `headers` is `obj`, and the request it returns has no
+    /// `pipe`, no `destroy` and no events — so the one thing a proxy does with it is exactly
+    /// what cannot be said through it.
+    ///
+    /// The scheme decides the module, here rather than at the call site: `https:` is the one
+    /// URL Node's `node:http` cannot open, and a caller that forgot would get a connection
+    /// that speaks plaintext at a TLS port and reports it as a parse error.
+    let httpRequest
+        (url: string)
+        (``method``: string)
+        (headers: (string * obj)[])
+        (onResponse: HttpResponse -> unit)
+        : HttpRequest =
+        let options = createObj [ "method" ==> ``method``; "headers" ==> createObj headers ]
+        if url.StartsWith "https:" then overHttps url options onResponse else overHttp url options onResponse

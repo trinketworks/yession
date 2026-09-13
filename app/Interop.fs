@@ -5,6 +5,7 @@ module Yession.Host.Interop
 // actually used is bound; everything is event-callback based, matching libdatachannel.
 
 open Fable.Core
+open Fable.NodeExtras
 open Yession.Domain.Link
 open Fable.Core.JsInterop
 
@@ -112,12 +113,20 @@ let createPeerConnection (name: string) : PeerConnection =
 
 // --- node:http ---------------------------------------------------------------
 
+/// A request as it ARRIVED at this process's server. `HttpMessage` is where its headers and
+/// its body-as-a-stream come from, stated as inheritance rather than re-declared here,
+/// because a Node server's request and a Node client's response are the same received thing
+/// — and the gateway pipes one straight into the other.
 type [<AllowNullLiteral>] IncomingMessage =
+    inherit HttpMessage
     abstract url : string
     abstract ``method`` : string
     abstract on : string * (obj -> unit) -> IncomingMessage
 
+/// The response this process's server is writing. `Writable` for the same reason: it is
+/// where an upstream body is piped, and what gets destroyed when that body cannot finish.
 type [<AllowNullLiteral>] ServerResponse =
+    inherit Writable
     abstract writeHead : int * obj -> ServerResponse
     abstract write : string -> bool
     abstract ``end`` : string -> unit
