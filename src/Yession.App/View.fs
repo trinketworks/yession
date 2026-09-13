@@ -1215,82 +1215,20 @@ module View =
 })($0)""")>]
     let private commitOnEnter (e: obj) : unit = Fable.Core.Util.jsNative
 
-    /// The bytes a keydown means to a pty (Plan 14, stage 6).
+    /// The bytes a keydown sends to a pty, and the browser told not to also act on it.
     ///
-    /// A keyboard event is not a byte stream, and the translation is the whole of what a
-    /// terminal front end does with keys: printable characters go as themselves, Ctrl-<key>
-    /// as the control code, and the keys with no character at all (arrows, Home, the
-    /// function block) as the escape sequences a program is waiting for. `null` means a key
-    /// that sends nothing — a bare modifier, or a shortcut the browser owns.
-    ///
-    /// `preventDefault` on everything that IS sent, because otherwise the browser also acts
-    /// on it: Tab would leave the terminal mid-session, and Backspace used to navigate.
-    ///
-    /// **Modifiers are part of the key, not a reason to drop it.** This used to refuse every
-    /// event carrying `altKey`, and to refuse `ctrlKey` with anything that was not a single
-    /// character — which is every way of moving by WORD rather than by character. Alt-B,
-    /// Alt-F and Ctrl-arrow are how a person navigates a line they have already typed, so a
-    /// terminal that swallows all three is one you can only walk through a character at a
-    /// time. Alt is `ESC` before the key, which is what `metaSendsEscape` means and what
-    /// readline is reading; a modified arrow is the same CSI with a parameter saying which
-    /// modifier (`2` shift, `3` alt, `5` ctrl — xterm's encoding, the one every shell reads).
-    ///
-    /// `metaKey` still sends nothing. Cmd belongs to the browser and the OS, and a terminal
-    /// that ate Cmd-W would be a terminal you cannot close.
-    ///
-    /// One honest limit, on macOS: Option COMPOSES. `ev.key` for Option-B is `∫`, so what
-    /// goes is `ESC∫` unless the browser or the OS has been told to treat Option as Meta,
-    /// which is the setting every terminal emulator on that platform also asks for. Deriving
-    /// the unmodified letter from `ev.code` would be a guess about a keyboard layout — right
-    /// on QWERTY, wrong on Dvorak and on every non-Latin layout — so the limit is stated
-    /// rather than papered over.
-    [<Fable.Core.Emit("""(function (e) {
-  const ev = e
-  if (ev.metaKey) return null
-  const k = ev.key
-  const send = d => { ev.preventDefault(); return d }
-  // xterm's modifier parameter: 1 + shift(1) + alt(2) + ctrl(4). 1 is "no modifier", which is
-  // spelled by leaving the parameter off entirely.
-  const mod = 1 + (ev.shiftKey ? 1 : 0) + (ev.altKey ? 2 : 0) + (ev.ctrlKey ? 4 : 0)
-  const csi = final => send(mod === 1 ? '\x1b[' + final : '\x1b[1;' + mod + final)
-  switch (k) {
-    case 'ArrowUp': return csi('A')
-    case 'ArrowDown': return csi('B')
-    case 'ArrowRight': return csi('C')
-    case 'ArrowLeft': return csi('D')
-    case 'Home': return csi('H')
-    case 'End': return csi('F')
-  }
-  if (ev.ctrlKey) {
-    // Ctrl-Backspace is the other delete-word, and the byte it sends is the one readline
-    // binds: `\b`, not the `\x7f` an unmodified Backspace sends.
-    if (k === 'Backspace') return send('\b')
-    if (k.length === 1) {
-      const c = k.toUpperCase().charCodeAt(0)
-      if (c >= 64 && c <= 95) return send(String.fromCharCode(c - 64))
-    }
-    return null
-  }
-  if (ev.altKey) {
-    // ESC then the key: Alt-B, Alt-F, Alt-D, Alt-Backspace — a word back, a word on, kill a
-    // word, rub one out. Only for keys that ARE a character; the named ones above already
-    // carried their modifier in the sequence, and the rest have nothing to prefix.
-    if (k === 'Backspace') return send('\x1b\x7f')
-    if (k.length === 1) return send('\x1b' + k)
-    return null
-  }
-  switch (k) {
-    case 'Enter': return send('\r')
-    case 'Backspace': return send('\x7f')
-    case 'Tab': return send('\t')
-    case 'Escape': return send('\x1b')
-    case 'PageUp': return send('\x1b[5~')
-    case 'PageDown': return send('\x1b[6~')
-    case 'Delete': return send('\x1b[3~')
-  }
-  return k.length === 1 ? send(k) : null
-})($0)""")>]
-    let private keystrokeOf (e: obj) : string option = Fable.Core.Util.jsNative
+    /// `Keystroke.bytesOf` decides them — what a key means to a terminal is pure, and is
+    /// written down (with the reasoning) where a test can reach it without a browser. This is
+    /// the half that needs the event: reading its fields, and `preventDefault` on everything
+    /// that IS sent, because otherwise the browser also acts on it — Tab would leave the
+    /// terminal mid-session, and Backspace used to navigate. Deciding and preventing are one
+    /// verb, so no caller can send a key and leave the browser acting on it too.
+    let private keystrokeOf (e: Browser.Types.KeyboardEvent) : string option =
+        let sent =
+            Keystroke.bytesOf
+                { Key = e.key; Ctrl = e.ctrlKey; Alt = e.altKey; Shift = e.shiftKey; Meta = e.metaKey }
+        if Option.isSome sent then e.preventDefault ()
+        sent
 
     /// One collaborator's title caret+selection marker: a selection highlight span and a caret
     /// bar with a name label. The browser positions all three by measurement after render (from
@@ -2498,8 +2436,8 @@ module View =
             html $"""
                 <div class="{Style.terminalScreen}" data-terminal-screen="{id}"
                      role="application" tabindex="0" aria-label="Live terminal, you are typing here"
-                     @keydown={Ev(fun e ->
-                                     match keystrokeOf e with
+                     @keydown={Ev(fun (e: Browser.Types.Event) ->
+                                     match keystrokeOf (e :?> Browser.Types.KeyboardEvent) with
                                      | Some data -> actions.TypeIntoTerminal terminal data
                                      | None -> ())}>{body}</div>"""
         else

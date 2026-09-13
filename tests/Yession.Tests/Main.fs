@@ -76,6 +76,7 @@ let all =
         Tag.needs "Sync" [] (fun () -> Sync.tests)
         Tag.needs "TerminalPattern" [] (fun () -> TerminalPattern.tests)
         Tag.needs "Terminals" [] (fun () -> Terminals.tests)
+        Tag.needs "Keystrokes" [] (fun () -> Keystrokes.tests)
         Tag.needs "Timeline" [] (fun () -> Timeline.tests)
         // The upgrade IS the thing being tested, and there is no in-memory stand-in for it.
         Tag.needs "Foreign terminal attach" [ Tag.Ports ] (fun () -> Attach.portsTests)
