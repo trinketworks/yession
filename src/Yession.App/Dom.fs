@@ -644,6 +644,14 @@ module Dom =
         /// The row's archive verb, and the archived row's way back. Both carry the session id.
         let archive = "data-archive"
         let unarchive = "data-unarchive"
+        /// The address a control POSTs to, spelled by the server (`ManagerRoute.path`) on
+        /// every control that has one. The page's script reads it and builds no address of
+        /// its own — so the routes it speaks and the routes the server claims are one
+        /// declaration, not a string here and a match there.
+        let post = "data-post"
+        /// The rows stream's address, on the section it fills — the same rule, for the one
+        /// address the script opens rather than posts to.
+        let stream = "data-stream"
         /// Which build the MANAGER is running, on the page's own header. There is no
         /// per-session twin any more: the roster row's plumbing line was cut so the summary
         /// could have the column, and a session's build rides the registry stream instead of

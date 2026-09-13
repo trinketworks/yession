@@ -174,9 +174,9 @@ type SessionRoute =
 module SessionRoute =
 
     /// Where every static file sits, relative to whatever the session is mounted at.
-    /// Public because the Manager serves its own set from its own origin root and has to
-    /// recognise the same addresses — the two servers agreeing by inspection is exactly what
-    /// this type exists to prevent.
+    /// Public because the service worker keeps everything under it and nothing else
+    /// (`WebApp.serviceWorker`) — the worker and the router agreeing by inspection is
+    /// exactly what this type exists to prevent.
     let assetsPrefix = "assets/"
 
     /// A path inside the asset set, as a build emits it. Segments are ordinary file names, so
@@ -433,3 +433,125 @@ module CachePolicy =
     /// the reason the ranges left: a keyframe is fetched only by a replay a person opened,
     /// so there is nothing to read back offline that they did not just ask for.
     let keyframe = "private, max-age=259200, immutable"
+
+/// The lifecycle acts the management page performs on ONE session, each a POST to
+/// `/sessions/{id}/<verb>`. Named apart from the routes so a row's control and the route it
+/// posts to are one value rather than a string the page builds and the server re-parses.
+[<RequireQualifiedAccess>]
+type SessionVerb =
+    | Launch
+    | Stop
+    | Archive
+    | Unarchive
+
+/// The HTTP contract of the Manager's management surface (`ManagerUi`): every path it
+/// claims, declared once — the same role `SessionRoute` plays for a Session Process. The
+/// server dispatches over this, the page emits these, and the session client's reconnect
+/// link and the registry subscriber address the Manager through them. Before this, the
+/// page's inline script spelled `/sessions/{id}/launch` on its own, the router matched
+/// `[| id; "launch" |]`, and the create redirect `sprintf`'d `/sessions/%s/open` — one
+/// contract in three hand-kept copies.
+///
+/// Root-anchored, unlike a session's routes, and deliberately so: the Manager lives at its
+/// origin root by `ManagerOrigin`'s own rule (a public address with a path is refused), and
+/// its pages sit at different depths — `/` and `/sessions/{id}/open` — so the root-anchored
+/// form is the one that is true from every one of them, and a relative form is the bug
+/// `RelativeUrl` exists to prevent. Hence `path`, a string that always begins with `/`,
+/// and no `RelativeUrl` here at all.
+///
+/// The control routes (`ControlServer`, secret-bearing, spoken by a session rather than a
+/// browser) are a different contract and are not here.
+[<RequireQualifiedAccess>]
+type ManagerRoute =
+    /// The management page.
+    | Home
+    /// A static file of THIS process's build — the same shape a session serves
+    /// (`SessionRoute.Asset`), because the Manager's page links the same stylesheet.
+    | Asset of build: string * path: string
+    /// The mark the page wears, from the same constant a session shell wears.
+    | Icon
+    /// Register a session; answers with a redirect to `OpenSession`.
+    | CreateSession
+    /// The registry stream: the Running set as wire frames, for an operator's proxy.
+    | SessionRegistry
+    /// The page's live table, rendered server-side and pushed.
+    | SessionRows
+    /// A lifecycle act on one session.
+    | Session of SessionId * SessionVerb
+    /// The stable way into a session: launch it if stopped, then hand the browser over.
+    | OpenSession of SessionId
+    /// Whether this deployment's front door reaches the session yet — what `OpenSession`'s
+    /// page polls before it goes.
+    | SessionReady of SessionId
+    /// Declare an MCP server (Plan 17).
+    | DeclareMcpServer
+    /// Withdraw one.
+    | WithdrawMcpServer
+
+module ManagerRoute =
+
+    let private verbSegment (verb: SessionVerb) =
+        match verb with
+        | SessionVerb.Launch -> "launch"
+        | SessionVerb.Stop -> "stop"
+        | SessionVerb.Archive -> "archive"
+        | SessionVerb.Unarchive -> "unarchive"
+
+    /// The file `file` of `build`, as the page should link it.
+    let asset (AssetBuild digest) (file: AssetFile) : ManagerRoute =
+        ManagerRoute.Asset (digest, AssetFile.path file)
+
+    /// A route as the root-anchored path the Manager serves it at: always begins with `/`,
+    /// which is right from every page the Manager serves (see the type's remarks). The two
+    /// static shapes render through `SessionRoute`, so the Manager and a session cannot
+    /// disagree about where a build's files sit.
+    let path (route: ManagerRoute) : string =
+        match route with
+        | ManagerRoute.Home -> "/"
+        | ManagerRoute.Asset (build, file) -> RelativeUrl.under "" (SessionRoute.relative (Asset (build, file)))
+        | ManagerRoute.Icon -> RelativeUrl.under "" (SessionRoute.relative Icon)
+        | ManagerRoute.CreateSession -> "/sessions"
+        | ManagerRoute.SessionRegistry -> "/sessions/stream"
+        | ManagerRoute.SessionRows -> "/sessions/rows"
+        | ManagerRoute.Session (id, verb) -> sprintf "/sessions/%s/%s" (SessionId.value id) (verbSegment verb)
+        | ManagerRoute.OpenSession id -> sprintf "/sessions/%s/open" (SessionId.value id)
+        | ManagerRoute.SessionReady id -> sprintf "/sessions/%s/ready" (SessionId.value id)
+        | ManagerRoute.DeclareMcpServer -> "/mcp/servers"
+        | ManagerRoute.WithdrawMcpServer -> "/mcp/servers/withdraw"
+
+    /// A route as an absolute URL at a Manager's origin — what a session client's reconnect
+    /// link and a registry subscriber need. The join lives here, so an origin given with or
+    /// without its trailing slash reads the same.
+    let at (origin: string) (route: ManagerRoute) : string =
+        origin.TrimEnd '/' + path route
+
+    /// The route a request is for, or None when the management surface claims nothing there
+    /// — an unknown path, a known one reached with the wrong method, or a session path whose
+    /// id is not a session id at all, which is not a session the Manager could have.
+    let parse (method: string) (path: string) : ManagerRoute option =
+        let session (id: string) (make: SessionId -> ManagerRoute) =
+            match SessionId.create id with
+            | Ok sessionId -> Some (make sessionId)
+            | Error _ -> None
+        match method, path.Trim('/').Split '/' |> Array.toList with
+        | "GET", [ "" ] -> Some ManagerRoute.Home
+        | "POST", [ "sessions" ] -> Some ManagerRoute.CreateSession
+        | "GET", [ "sessions"; "stream" ] -> Some ManagerRoute.SessionRegistry
+        | "GET", [ "sessions"; "rows" ] -> Some ManagerRoute.SessionRows
+        | "POST", [ "sessions"; id; "launch" ] -> session id (fun s -> ManagerRoute.Session (s, SessionVerb.Launch))
+        | "POST", [ "sessions"; id; "stop" ] -> session id (fun s -> ManagerRoute.Session (s, SessionVerb.Stop))
+        | "POST", [ "sessions"; id; "archive" ] -> session id (fun s -> ManagerRoute.Session (s, SessionVerb.Archive))
+        | "POST", [ "sessions"; id; "unarchive" ] -> session id (fun s -> ManagerRoute.Session (s, SessionVerb.Unarchive))
+        | "GET", [ "sessions"; id; "open" ] -> session id ManagerRoute.OpenSession
+        | "GET", [ "sessions"; id; "ready" ] -> session id ManagerRoute.SessionReady
+        | "POST", [ "mcp"; "servers" ] -> Some ManagerRoute.DeclareMcpServer
+        | "POST", [ "mcp"; "servers"; "withdraw" ] -> Some ManagerRoute.WithdrawMcpServer
+        | "GET", _ ->
+            // The static shapes, recognised by the same parse a session runs so the two
+            // servers agree about them by construction — and ONLY those two: a session's
+            // other routes are not the Manager's.
+            match SessionRoute.parse method path with
+            | Some (Asset (build, file)) -> Some (ManagerRoute.Asset (build, file))
+            | Some Icon -> Some ManagerRoute.Icon
+            | _ -> None
+        | _ -> None

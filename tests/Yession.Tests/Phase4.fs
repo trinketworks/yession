@@ -734,9 +734,44 @@ let private uiRenderTests =
                     []
                     []
             Expect.isTrue (html.Contains "<script>") "an inline script drives the UI (no bundle)"
-            Expect.isTrue (html.Contains "/sessions/") "the inline script talks to the fragment routes"
             Expect.isFalse (html.Contains "src=\"http") "no external/CDN scripts (local-first)"
             Expect.isTrue (html.Contains Dom.Manager.createSession) "the create form renders"
+
+        // The page and the server are one declaration (`ManagerRoute`): every address the
+        // page carries — on a control, a form, the section the rows stream fills — is a
+        // route the server claims, by the method the control uses. The script that presses
+        // a control reads its address off it and spells none of its own, so this is the
+        // whole set the page can ask for; a control whose address the server would 404 is
+        // caught here, on the cheap tier, rather than by pressing it.
+        testCase "every address the page emits is a route the server claims" <| fun () ->
+            let views =
+                [ { ProcessManager.Record = uiRecord; ProcessManager.Status = ProcessManager.NotRunning; ProcessManager.Summary = None }
+                  { ProcessManager.Record = uiRecord
+                    ProcessManager.Status = ProcessManager.Running (8199, 42, Some "1.2.3-beta.4")
+                    ProcessManager.Summary = None }
+                  { ProcessManager.Record = { uiRecord with ArchivedAt = Some archivedAt }
+                    ProcessManager.Status = ProcessManager.NotRunning
+                    ProcessManager.Summary = None } ]
+            let html =
+                ManagerUi.page
+                    "app.css"
+                    PublicAccess.Loopback
+                    { SessionQuery.defaults with Show = Set.ofList [ Active; Archived ] }
+                    views
+                    [ { Server = serialServer; Audience = AnySession } ]
+                    []
+            let emitted (attribute: string) =
+                System.Text.RegularExpressions.Regex.Matches (html, attribute + "=\"([^\"]+)\"")
+                |> Seq.map (fun m -> m.Groups.[1].Value)
+                |> List.ofSeq
+            let posted = emitted Dom.Manager.post @ emitted "action"
+            let opened = emitted Dom.Manager.stream
+            Expect.isTrue (posted.Length >= 6) "launch, stop, archive, unarchive, withdraw, and the two forms all carry one"
+            Expect.equal opened.Length 1 "the section the stream fills carries its address"
+            for address in posted do
+                Expect.isSome (ManagerRoute.parse "POST" address) (sprintf "%s is a route the server claims for a POST" address)
+            for address in opened do
+                Expect.isSome (ManagerRoute.parse "GET" address) (sprintf "%s is a route the server claims for a GET" address)
 
         // Archiving. What must hold however this table is redrawn: a session that cannot be
         // started is not offered a control that starts it, and the one act it CAN take is
