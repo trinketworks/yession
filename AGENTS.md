@@ -354,7 +354,9 @@ verify                       # == check Browser Ports Native Docker LiveAgent Ke
 lint                         # actionlint over .github/workflows, then the F# analyzers over
                              #   every project in Yession.slnx. Runs first in the PR gate.
                              #   Exits 1 having judged the source and rejected it; exits 2
-                             #   having judged NOTHING, because it does not compile — `build`.
+                             #   having judged NOTHING, because it does not compile — `build`;
+                             #   exits 3 having judged nothing because the ANALYZER did not
+                             #   finish — nothing to fix, run it again.
 check --only "<text>"        # narrow BOTH runtimes to cases whose full name contains <text>.
                              #   Buys back the RUNNING, not the compiling: 66s -> 44s on the
                              #   cheap tier, and far more on a tier that spawns browsers.
@@ -480,6 +482,16 @@ the variable's name, which under Fable means reading the `[<Emit>]` macro, since
 `process.env[$0]` is exactly that answer. A verdict over a whole population is the same for
 every file in it, so it is reported once, on the project's last authored source file, anchored
 at the declaration or the call it is about.
+
+A third exit says the run itself did not happen. The CLI exits non-zero for a finding and for
+its own death alike, and a process that is KILLED — a runner reclaimed, a container out of
+memory — prints nothing on its way out, so "a rule rejected your source" and "the analyzer
+never finished" arrived as one sentence with an empty body under it. That reached CI twice in
+one day, each time sending a reader to hunt a rule that had never fired. So the verdict is read
+from a SARIF report `lint` asks for and names, rather than inferred from the exit code: a run
+that finishes writes one whether or not it found anything, and a run that is killed writes none.
+The same report is what the fixture check compares against, so there is one reader of what the
+analyzers said rather than a second one scraping their stdout.
 
 One rule answers for the others (`Unjudged.fs`). A declaration the compiler could not build is
 not in the typed tree, so no rule sees it, each correctly reports nothing, and the run ends in

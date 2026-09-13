@@ -1652,6 +1652,29 @@ let private unjudged = "YES000"
 [<Literal>]
 let private unjudgedExit = 2
 
+/// A run that did not FINISH judged nothing either, and it exits on a code of its own for the
+/// same reason `unjudgedExit` does: the next step is a different verb again. Source that does
+/// not compile is answered by `build`; an analyzer that died is answered by running it again,
+/// and there is nothing in the product to go and fix.
+[<Literal>]
+let private unfinishedExit = 3
+
+/// One finding, as the report gives it: which rule, in which file, on which line. The message
+/// is deliberately not carried — pinning its text would make every reword of a rule a failure
+/// of that rule, and stdout already shows a reader the words.
+type private Finding =
+    { Rule : string
+      File : string
+      Line : int }
+
+/// What one run of the CLI amounted to, which is NOT what its exit code says.
+type private Verdict =
+    /// It finished and reported what it found — possibly nothing, which is a clean product.
+    | Judged of Finding list
+    /// It did not finish. That is not a verdict about the source: every rule is still looking,
+    /// and the reason belongs to the run rather than to anything in the repository.
+    | Unfinished of string
+
 /// Every fixture, and every one of its files whose markers are checked. Usually one — a rule
 /// about a declaration can put all its cases in a single file. A rule about how many FILES do
 /// something cannot: one file could not break it, so one file could not prove the rule still
@@ -1681,22 +1704,68 @@ let private fixtureSource name file =
 /// by error recovery throws out of FCS — so an unrestored project takes the whole run down.
 /// A run that died judged nothing, and reporting it as "a hole renders the wrong thing" sends
 /// the next reader to a template that is fine.
-let private analyze (projects: string list) =
-    let code, output =
-        runCapturing
-            "dotnet"
-            [ "fsharp-analyzers"
-              for p in projects do
-                  "--project"
-                  p
-              "--analyzers-path"
-              analyzerOutput ]
+let private findingsIn (report: string) : Finding list option =
+    try
+        use doc = Text.Json.JsonDocument.Parse (File.ReadAllText report)
 
-    if output.Contains "critical: Unhandled exception" then
-        printfn "%s" output
-        failwith "lint: an analyzer died reading these projects, so it has judged their source neither way"
+        Some
+            [ for run in doc.RootElement.GetProperty("runs").EnumerateArray () do
+                  for result in run.GetProperty("results").EnumerateArray () do
+                      // One location each: the rules anchor a finding at the declaration or the
+                      // call it is about, and a second would be the same finding again.
+                      for location in result.GetProperty("locations").EnumerateArray () |> Seq.truncate 1 do
+                          let at = location.GetProperty "physicalLocation"
 
-    code, output
+                          yield
+                              { Rule = result.GetProperty("ruleId").GetString ()
+                                File = at.GetProperty("artifactLocation").GetProperty("uri").GetString ()
+                                Line = at.GetProperty("region").GetProperty("startLine").GetInt32 () } ]
+    with _ ->
+        // A report that will not parse is a report that was not finished being written.
+        None
+
+let private analyze (projects: string list) : Verdict * string =
+    // A path of this run's own. Two `lint`s can be in flight on one box — several agents
+    // working in parallel worktrees is exactly how this repository is often driven — and a
+    // shared path would let one run read the other's receipt, or delete it mid-write.
+    let runId = Guid.NewGuid().ToString "N"
+    let report = Path.Combine (Path.GetTempPath (), $"yession-lint-%s{runId}.sarif")
+
+    try
+        let code, output =
+            runCapturing
+                "dotnet"
+                [ "fsharp-analyzers"
+                  for p in projects do
+                      "--project"
+                      p
+                  "--analyzers-path"
+                  analyzerOutput
+                  // So the report's paths are relative to the repository rather than to
+                  // whatever directory this happened to run from.
+                  "--code-root"
+                  repoRoot
+                  "--report"
+                  report ]
+
+        let verdict =
+            // A death the CLI lives long enough to NAME. Read first because it says more than
+            // the missing report does, and it is the same answer either way.
+            if output.Contains "critical: Unhandled exception" then
+                Unfinished "an analyzer died reading these projects"
+            elif not (File.Exists report) then
+                Unfinished $"the analyzer exited %d{code} without writing a report"
+            else
+                match findingsIn report with
+                | Some findings -> Judged findings
+                | None -> Unfinished $"the analyzer exited %d{code} leaving a report nothing could read"
+
+        verdict, output
+    finally
+        try
+            File.Delete report
+        with _ ->
+            ()
 
 /// The lines ONE rule reported on in one fixture, whatever else it said. Enough to compare
 /// against that fixture's markers and nothing more: pinning the message text would make every
@@ -1707,10 +1776,14 @@ let private analyze (projects: string list) =
 /// one of them is asking about is routinely something the other has an opinion on — a repeated
 /// `$0` is a correct macro to `YES002` and a re-evaluated argument to `YES003`, and each
 /// fixture needs to be able to carry it without the other's verdict landing in the count.
-let private reportedLines (code: string) (source: string) (output: string) =
-    let at = Text.RegularExpressions.Regex.Escape source + @"\((\d+),\d+\): \w+ " + code + " :"
-
-    [ for m in Text.RegularExpressions.Regex.Matches (output, at) -> int m.Groups.[1].Value ]
+let private reportedLines (code: string) (source: string) (findings: Finding list) =
+    // `source` is the fixture file's NAME, and the report spells a path relative to
+    // `--code-root`; matching on the tail is what makes the comparison independent of which
+    // prefix the CLI chose. One fixture project is analyzed at a time, so a name is unambiguous
+    // within the findings it is asked about.
+    findings
+    |> List.filter (fun f -> f.Rule = code && f.File.Replace('\\', '/').EndsWith ("/" + source))
+    |> List.map (fun f -> f.Line)
     |> List.distinct
     |> List.sort
 
@@ -1741,30 +1814,56 @@ let private analyzers () =
     for _, name, _ in fixtures do
         exec "dotnet" [ "restore"; fixtureProject name ]
 
-    let code, output = analyze (solutionProjects ())
+    let verdict, output = analyze (solutionProjects ())
 
-    if code <> 0 then
+    // THREE answers, not two, and each calls for a different verb. A rule rejecting source is a
+    // fault to fix right here. A file the compiler could not build is not a verdict at all:
+    // what it could not build is missing from the tree every rule reads, so the rules passed
+    // over it in silence. And a run that never finished is not a verdict either — nothing was
+    // judged, and nothing in the repository is what went wrong.
+    //
+    // The last of those used to arrive as the first. The CLI exits non-zero for a finding and
+    // for its own death alike, and a process that is KILLED — a runner reclaimed, a container
+    // out of memory — says nothing at all on its way out, so "your source is bad" and "I never
+    // ran" were one sentence with an empty body under it. That reached CI twice in a day, each
+    // time sending a reader to hunt a rule that had never fired.
+    //
+    // So the verdict is read from the report rather than inferred from the exit code, because
+    // the report is ours: this run names the path, and a run that finishes writes one whether
+    // or not it found anything while a run that is killed writes none.
+    match verdict with
+    | Unfinished why ->
         printfn "%s" output
 
-        // Two different answers arrive on the same non-zero exit, and they call for opposite
-        // next steps. A rule rejecting source is a fault to fix right here. A file the compiler
-        // could not build is not a verdict at all: what it could not build is missing from the
-        // tree every rule reads, so the rules passed over it in silence and `lint` has judged
-        // nothing about it. Saying "rejected" there sends the reader hunting a rule violation
-        // that may not exist, and the run has to be repeated once the source compiles either
-        // way — so it exits on a code of its own, and says which verb gets there.
-        if output.Contains (unjudged + " :") then
-            eprintfn
-                "lint: %s"
-                ("source that does not compile cannot be judged — the rules read a tree missing "
-                 + "whatever the compiler dropped. Run `build`, fix the errors above, then lint again.")
+        eprintfn
+            "lint: %s — so nothing was judged. This is not a finding to fix: run `lint` again."
+            why
 
-            exit unjudgedExit
+        exit unfinishedExit
+    | Judged findings when findings |> List.exists (fun f -> f.Rule = unjudged) ->
+        printfn "%s" output
 
+        eprintfn
+            "lint: %s"
+            ("source that does not compile cannot be judged — the rules read a tree missing "
+             + "whatever the compiler dropped. Run `build`, fix the errors above, then lint again.")
+
+        exit unjudgedExit
+    | Judged findings when not (List.isEmpty findings) ->
+        printfn "%s" output
         failwith "lint: an analyzer rejected something in the product — see above for which rule and where"
+    | Judged _ -> ()
 
     for code, name, files in fixtures do
-        let _, fixtureOutput = analyze [ fixtureProject name ]
+        // The same three answers, and the middle one matters most here: a fixture exists to
+        // catch a rule that has gone blind, so a run that died must not be read as one that
+        // saw nothing. That was silently possible while this discarded the exit code.
+        let fixtureFindings, fixtureOutput =
+            match analyze [ fixtureProject name ] with
+            | Judged findings, output -> findings, output
+            | Unfinished why, output ->
+                printfn "%s" output
+                failwithf "lint: the %s fixture could not be judged: %s. Run `lint` again." name why
 
         for file in files do
             let expected =
@@ -1774,7 +1873,7 @@ let private analyzers () =
                 |> Array.map (fun (i, _) -> i + 1)
                 |> List.ofArray
 
-            let actual = reportedLines code file fixtureOutput
+            let actual = reportedLines code file fixtureFindings
 
             if actual <> expected then
                 printfn "%s" fixtureOutput
