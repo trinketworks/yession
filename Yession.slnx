@@ -15,6 +15,7 @@
     <Project Path="src/Fable.OpenIdClient/Fable.OpenIdClient.fsproj" />
     <Project Path="src/Fable.OpenTelemetry/Fable.OpenTelemetry.fsproj" />
     <Project Path="src/Fable.BrowserExtras/Fable.BrowserExtras.fsproj" />
+    <Project Path="src/Fable.ClaudeAgentSdk/Fable.ClaudeAgentSdk.fsproj" />
     <Project Path="src/Fable.Zod/Fable.Zod.fsproj" />
     <Project Path="src/Yession.App/Yession.App.fsproj" />
     <Project Path="src/Yession.Domain/Yession.Domain.fsproj" />

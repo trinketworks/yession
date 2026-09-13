@@ -64,6 +64,8 @@
     <!-- The launch surface, through the model a browser folds and the renderer it serves. -->
     <Compile Include="LaunchSurface.fs" />
     <Compile Include="Editor.fs" />
+    <!-- The Claude Agent SDK binding, beside the adapter that will be written over it. -->
+    <Compile Include="ClaudeSdk.fs" />
     <Compile Include="Agent.fs" />
     <!-- The zod bindings, exercised. Beside Agent.fs because the agent adapter is
          their one caller: a tool descriptor's JSON Schema becomes a zod shape there. -->
@@ -116,6 +118,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\..\src\Fable.ClaudeAgentSdk\Fable.ClaudeAgentSdk.fsproj" />
     <ProjectReference Include="..\..\src\Fable.OpenTelemetry\Fable.OpenTelemetry.fsproj" />
     <ProjectReference Include="..\..\src\Yession.Domain\Yession.Domain.fsproj" />
     <ProjectReference Include="..\..\src\Yession.Manager\Yession.Manager.fsproj" />
