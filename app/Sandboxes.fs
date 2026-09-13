@@ -1492,7 +1492,14 @@ module DockerSandbox =
                                            | None -> [])
                                         |> createObj
                                     let! started = container.exec execOpts |> Interop.awaitPromise
-                                    let! stream = started.start (createObj [ "hijack", box true; "stdin", box true ]) |> Interop.awaitPromise
+                                    // `Tty` on the START as well as on the create: the Engine
+                                    // API's exec-start takes its own, and without it the daemon
+                                    // multiplexes the stream as it would for a pipe — eight
+                                    // bytes of frame header in front of every chunk, in the
+                                    // middle of a shell's output. Unseen for as long as no
+                                    // docker terminal ran a shell through the Host; the first
+                                    // one printed `\x01\x00…\x14sed (GNU sed) 4.10`.
+                                    let! stream = started.start (createObj [ "hijack", box true; "stdin", box true; "Tty", box true ]) |> Interop.awaitPromise
                                     stream.on ("data", fun d -> onOutput (bufToStr d)) |> ignore
                                     // Size it before anything runs: a program that reads its
                                     // dimensions at startup must not read 80x24 and then be
