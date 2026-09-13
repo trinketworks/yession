@@ -563,6 +563,34 @@ let private flowTests =
 
                 do! pm.StopAll ()
             }
+
+        // The Manager's `/open` page enters every session through `/login`, on every visit,
+        // so this is the route a returning browser arrives by too. What is pinned is that a
+        // sign-in the browser already holds is not restarted: one hop to the shell, and the
+        // same identity on the other side of it.
+        testCaseAsync "a /login already holding the session's cookie is one hop to the shell, not another bounce" <|
+            async {
+                let dataDir =
+                    sprintf "tests/Yession.Tests/out/.data/oidc-again-%d" (int (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds ()) % 1000000)
+                let! pm =
+                    ProcessManager.create
+                        { ProcessManager.Options.defaults dataDir nodePath [ "app/SessionMain.js" ] with
+                            Strategy = Some Strategy.localhost }
+                let managerUrl = sprintf "http://127.0.0.1:%d" pm.EndpointPort.Value
+                let record = pm.CreateSession "oidc-again" "OIDC again" |> expect
+                let! launched = pm.Launch record.SessionId
+                let sessionUrl = sprintf "http://127.0.0.1:%d" (launched |> expect)
+
+                let! opened = OidcHttp.openSession sessionUrl
+                let! again = OidcHttp.getWithJar opened.Jar (sessionUrl + "/login")
+                Expect.equal again.Status 302 "/login with the cookie still redirects"
+                Expect.equal again.Location "./" "straight to the shell, not the manager's authorize endpoint"
+                Expect.isFalse (again.Location.StartsWith managerUrl) "no second bounce"
+                let! me = OidcHttp.getWithJar opened.Jar (sessionUrl + "/me")
+                Expect.equal me.Status 200 "the identity it arrived with is the one it keeps"
+
+                do! pm.StopAll ()
+            }
     ]
 
 // --- BYO trusted-header authorization ([Ports], Plan 07) ----------------------------

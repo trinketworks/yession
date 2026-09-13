@@ -1445,9 +1445,12 @@ let private uiFlowTests =
                     match (pm.TryFind sessionId).Value.Status with
                     | ProcessManager.Running (port, _, _) -> port
                     | other -> failwithf "expected /open to have launched it, got %A" other
+                // Its sign-in entry, not its shell: entered at the shell, a browser paints
+                // it, is told 401 by `/me`, bounces, and paints it again. The page hands
+                // the browser to `/login` so the bounce runs BEFORE the one paint.
                 Expect.isTrue
-                    (opened.Contains (sprintf "http://127.0.0.1:%d/" launchedPort))
-                    "the landing page names the session's own address"
+                    (opened.Contains (sprintf "http://127.0.0.1:%d/login" launchedPort))
+                    "the landing page names the session's sign-in entry"
 
                 // Already running: /open is not a relaunch — it hands back the same address,
                 // which is what makes the URL safe to keep clicking.
@@ -1455,7 +1458,7 @@ let private uiFlowTests =
                 match (pm.TryFind sessionId).Value.Status with
                 | ProcessManager.Running (port, _, _) ->
                     Expect.equal port launchedPort "the running session was not restarted"
-                    Expect.isTrue (again.Contains (sprintf "http://127.0.0.1:%d/" port)) "same address"
+                    Expect.isTrue (again.Contains (sprintf "http://127.0.0.1:%d/login" port)) "same address"
                 | other -> failwithf "expected it to still be running, got %A" other
 
                 // An unknown session is a 404, not a launch attempt.

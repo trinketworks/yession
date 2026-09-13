@@ -1322,7 +1322,11 @@ let private start () =
 
         // Authorization by renavigation: probe `/me` for a peer token. 401 -> bounce
         // through `/login` (code + PKCE via the Manager) and land back on this shell,
-        // where the probe succeeds. A NETWORK failure (offline, session down) is a
+        // where the probe succeeds. The common first visit never takes this branch: the
+        // Manager's `/open` page enters a session through `/login`, so the cookie is
+        // already there by the time this shell loads, and the shell is painted once. The
+        // bounce from here is for a shell reached any other way — a bookmark, a home-screen
+        // icon, an expired cookie. A NETWORK failure (offline, session down) is a
         // `Disconnected` with its reason, not silence: the local-first shell — IndexedDB doc
         // plus the event ranges in this client's own store — stays fully usable, and the model
         // says why it is alone.
