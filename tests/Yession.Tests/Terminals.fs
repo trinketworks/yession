@@ -924,14 +924,15 @@ let private idleLeaseTests =
     ]
 
 let private typingTests =
-    testList "Who may type into a shell terminal (Typing)" [
-        // The rule alone. Both admitted parties are typing into something already on the
-        // record; the fourth case is the door the rule exists to keep shut.
-        testCase "the lease holder and the running block's author may type; nobody else, and nobody into an idle shell" <| fun () ->
-            Expect.isTrue (Typing.admits (Some (PeerRef ada)) None (PeerRef ada)) "the holder detection handed it to"
-            Expect.isTrue (Typing.admits None (Some ActorRef.Agent) ActorRef.Agent) "the author of the block running now"
-            Expect.isFalse (Typing.admits (Some (PeerRef ada)) (Some (PeerRef ada)) ActorRef.Agent) "not a third party, whoever holds and runs"
-            Expect.isFalse (Typing.admits None None ActorRef.Agent) "and not into a shell at its prompt — that is a command, and commands are blocks"
+    testList "Who may reach into a shell terminal mid-block (BlockAccess)" [
+        // The rule alone, and it is one rule for typing and for reading. Both admitted
+        // parties are in the middle of something already on the record; the fourth case is
+        // the door the rule exists to keep shut.
+        testCase "the lease holder and the running block's author may type and read; nobody else, and nobody into an idle shell" <| fun () ->
+            Expect.isTrue (BlockAccess.admits (Some (PeerRef ada)) None (PeerRef ada)) "the holder detection handed it to"
+            Expect.isTrue (BlockAccess.admits None (Some ActorRef.Agent) ActorRef.Agent) "the author of the block running now"
+            Expect.isFalse (BlockAccess.admits (Some (PeerRef ada)) (Some (PeerRef ada)) ActorRef.Agent) "not a third party, whoever holds and runs"
+            Expect.isFalse (BlockAccess.admits None None ActorRef.Agent) "and not into a shell at its prompt — that is a command, and commands are blocks"
     ]
 
 let private flipTests =
@@ -2811,7 +2812,7 @@ let private sourceTests =
                 let terminals, _, _ = makeTerminalsWith attach log environment openTranscript readTranscript []
                 let! opened = terminals.Open (PeerRef ada) (Attached { Ticket = deviceTicket; Renewable = false }) (TerminalTitle.fromProse "USB serial")
                 let id = opened |> expect
-                let! head = terminals.Tail id (Some 0) None
+                let! head = terminals.Tail id ActorRef.Agent (Some 0) None
                 let page = head |> expect
                 Expect.equal page.From 0 "it starts where it was asked to"
                 Expect.stringContains page.Text "ready" "and carries what the device said first"
@@ -2839,13 +2840,13 @@ let private sourceTests =
                 // run of the same thing.
                 for line in [ "alpha\n"; "bravo\n"; "charlie\n"; "delta\n" ] do
                     say line
-                let! whole = terminals.Tail id (Some 0) None
+                let! whole = terminals.Tail id ActorRef.Agent (Some 0) None
                 let whole = (whole |> expect).Text
                 // Walk it in pages, following the cursor exactly as an agent would.
                 let rec walk (at: int) (seen: string) (guard: int) =
                     async {
                         if guard <= 0 then return failwith "the cursor never reached the end"
-                        let! page = terminals.Tail id (Some at) None
+                        let! page = terminals.Tail id ActorRef.Agent (Some at) None
                         let page = page |> expect
                         if page.Through >= page.Length then return seen + page.Text
                         else return! walk page.Through (seen + page.Text) (guard - 1)
@@ -2868,7 +2869,7 @@ let private sourceTests =
                 let id = opened |> expect
                 say "one\n"
                 say "two\n"
-                let! page = terminals.Tail id (Some 0) None
+                let! page = terminals.Tail id ActorRef.Agent (Some 0) None
                 let page = page |> expect
                 Expect.equal page.Through page.Length "a page holding everything has reached the live edge"
             }
@@ -2885,10 +2886,10 @@ let private sourceTests =
                 let! opened = terminals.Open (PeerRef ada) (Attached { Ticket = deviceTicket; Renewable = false }) (TerminalTitle.fromProse "USB serial")
                 let id = opened |> expect
                 say "before\n"
-                let! first = terminals.Tail id (Some 0) None
+                let! first = terminals.Tail id ActorRef.Agent (Some 0) None
                 let first = first |> expect
                 say "after\n"
-                let! second = terminals.Tail id (Some first.Through) None
+                let! second = terminals.Tail id ActorRef.Agent (Some first.Through) None
                 let second = second |> expect
                 Expect.stringContains second.Text "after" "what arrived since is returned"
                 Expect.isFalse (second.Text.Contains "before") "and what was already handed over is not"
@@ -2906,7 +2907,7 @@ let private sourceTests =
                 let terminals, _, _ = makeTerminalsWith attach log environment openTranscript readTranscript []
                 let! opened = terminals.Open (PeerRef ada) (Attached { Ticket = deviceTicket; Renewable = false }) (TerminalTitle.fromProse "USB serial")
                 let id = opened |> expect
-                let! tail = terminals.Tail id None None
+                let! tail = terminals.Tail id ActorRef.Agent None None
                 let tail = tail |> expect
                 Expect.equal tail.Through tail.Length "a tail is up to date, and says so"
             }
@@ -2922,7 +2923,7 @@ let private sourceTests =
                 let terminals, _, _ = makeTerminalsWith attach log environment openTranscript readTranscript []
                 let! opened = terminals.Open (PeerRef ada) (Attached { Ticket = deviceTicket; Renewable = false }) (TerminalTitle.fromProse "USB serial")
                 let id = opened |> expect
-                let! answer = terminals.Tail id (Some 0) (Some { Until = MatchLiteral "ready"; TimeoutSeconds = 5.0 })
+                let! answer = terminals.Tail id ActorRef.Agent (Some 0) (Some { Until = MatchLiteral "ready"; TimeoutSeconds = 5.0 })
                 let answer = answer |> expect
                 Expect.equal answer.Matched (Some true) "it arrived"
                 Expect.stringContains answer.Text "ready" "and the text carries it"
@@ -2941,11 +2942,11 @@ let private sourceTests =
                 let terminals, _, _ = makeTerminalsWith attach log environment openTranscript readTranscript []
                 let! opened = terminals.Open (PeerRef ada) (Attached { Ticket = deviceTicket; Renewable = false }) (TerminalTitle.fromProse "USB serial")
                 let id = opened |> expect
-                let! first = terminals.Tail id (Some 0) None
+                let! first = terminals.Tail id ActorRef.Agent (Some 0) None
                 let first = first |> expect
                 Expect.stringContains first.Text "ready" "the caller has been handed it"
                 // Waiting from where that read stopped: "ready" is behind the cursor now.
-                let! again = terminals.Tail id (Some first.Through) (Some { Until = MatchLiteral "ready"; TimeoutSeconds = 0.05 })
+                let! again = terminals.Tail id ActorRef.Agent (Some first.Through) (Some { Until = MatchLiteral "ready"; TimeoutSeconds = 0.05 })
                 let again = again |> expect
                 Expect.equal again.Matched (Some false) "what it already saw does not count as having arrived"
             }
@@ -2961,7 +2962,7 @@ let private sourceTests =
                 let terminals, _, _ = makeTerminalsWith attach log environment openTranscript readTranscript []
                 let! opened = terminals.Open (PeerRef ada) (Attached { Ticket = deviceTicket; Renewable = false }) (TerminalTitle.fromProse "USB serial")
                 let id = opened |> expect
-                let! answer = terminals.Tail id (Some 0) (Some { Until = MatchLiteral "never-appears"; TimeoutSeconds = 0.05 })
+                let! answer = terminals.Tail id ActorRef.Agent (Some 0) (Some { Until = MatchLiteral "never-appears"; TimeoutSeconds = 0.05 })
                 let answer = answer |> expect
                 Expect.equal answer.Matched (Some false) "it did not arrive"
                 Expect.stringContains answer.Text "ready" "and what DID arrive is the answer"
@@ -2982,12 +2983,13 @@ let private sourceTests =
                 let id = opened |> expect
                 say "root@box:~# "
                 let pattern = Pattern.compile "[#$>] $" |> expect
-                let! first = terminals.Tail id (Some 0) None
+                let! first = terminals.Tail id ActorRef.Agent (Some 0) None
                 let first = first |> expect
                 Expect.stringContains first.Text "#" "the prompt has been handed over"
                 let! again =
                     terminals.Tail
                         id
+                        ActorRef.Agent
                         (Some first.Through)
                         (Some { Until = MatchPattern (pattern, "[#$>] $"); TimeoutSeconds = 0.05 })
                 Expect.equal (again |> expect).Matched (Some false) "a prompt already read is not a prompt that just arrived"
@@ -3002,13 +3004,14 @@ let private sourceTests =
                 let terminals, _, _ = makeTerminalsWith attach log environment openTranscript readTranscript []
                 let! opened = terminals.Open (PeerRef ada) (Attached { Ticket = deviceTicket; Renewable = false }) (TerminalTitle.fromProse "USB serial")
                 let id = opened |> expect
-                let! first = terminals.Tail id (Some 0) None
+                let! first = terminals.Tail id ActorRef.Agent (Some 0) None
                 let first = first |> expect
                 say "U-Boot 2024.01\n"
                 let pattern = Pattern.compile "U-Boot \\d+\\.\\d+" |> expect
                 let! found =
                     terminals.Tail
                         id
+                        ActorRef.Agent
                         (Some first.Through)
                         (Some { Until = MatchPattern (pattern, "U-Boot"); TimeoutSeconds = 2.0 })
                 Expect.equal (found |> expect).Matched (Some true) "what arrived since is what a wait is for"
@@ -3024,7 +3027,7 @@ let private sourceTests =
                 let terminals, _, _ = makeTerminalsWith attach log environment openTranscript readTranscript []
                 let! opened = terminals.Open (PeerRef ada) (Attached { Ticket = deviceTicket; Renewable = false }) (TerminalTitle.fromProse "USB serial")
                 let id = opened |> expect
-                let! answer = terminals.Tail id None None
+                let! answer = terminals.Tail id ActorRef.Agent None None
                 Expect.equal (answer |> expect).Matched None "no wait, no verdict"
             }
 
@@ -3121,7 +3124,7 @@ let private sourceTests =
                 let terminals, _, _ = makeTerminalsWith attach log environment openTranscript readTranscript []
                 let! device = terminals.Open (PeerRef ada) (Attached { Ticket = deviceTicket; Renewable = false }) (TerminalTitle.fromProse "USB serial")
 
-                match! terminals.Tail (expect device) None None with
+                match! terminals.Tail (expect device) ActorRef.Agent None None with
                 | Error e -> failwithf "a device has nothing but its transcript to read: %s" e
                 | Ok tail ->
                     // `loopback` greets with "ready\n" on attach, so there is something to read
@@ -3144,7 +3147,7 @@ let private sourceTests =
                 let! closed = terminals.Close id "the device went away"
                 Expect.isOk closed "the terminal closes"
 
-                match! terminals.Tail id None None with
+                match! terminals.Tail id ActorRef.Agent None None with
                 | Error e -> failwithf "a closed device still has a recording: %s" e
                 | Ok tail -> Expect.stringContains tail.Text "ready" "and it still reads"
             }
@@ -3158,7 +3161,7 @@ let private sourceTests =
                 let terminals, _, _ = makeTerminalsWith attach log environment openTranscript readTranscript []
                 let! shell = terminals.Open (PeerRef ada) (SandboxShell SandboxRef.defaultRef) (TerminalTitle.fromProse "build")
 
-                match! terminals.Tail (expect shell) None None with
+                match! terminals.Tail (expect shell) ActorRef.Agent None None with
                 | Ok _ -> failwith "a shell's output is its blocks', and reading it twice is two answers to one question"
                 | Error reason -> Expect.stringContains reason "execute_command" "and it says where the answer is"
             }
@@ -3176,7 +3179,7 @@ let private sourceTests =
                 let attach, _, _, _ = loopback ()
                 let terminals, _, _ = makeTerminalsWith attach log environment openTranscript readTranscript []
                 let! shell = terminals.Open (PeerRef ada) (SandboxShell SandboxRef.defaultRef) (TerminalTitle.fromProse "build")
-                match! terminals.Tail (expect shell) (Some 0) None with
+                match! terminals.Tail (expect shell) ActorRef.Agent (Some 0) None with
                 | Ok page -> Expect.equal page.From 0 "the page starts where it was asked to"
                 | Error reason -> failwithf "a page of a shell's transcript is how its elided output is read: %s" reason
             }
