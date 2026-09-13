@@ -44,6 +44,7 @@ type Need =
     | Pty         // the native `node-pty` addon — a real pseudo-terminal, not a pipe
     | Serial      // a real serial engine: the `serialport` addon, `udevadm`, and socat for a PTY pair
     | Jumpstarter // uv, and a resolvable Python environment for the jumpstarter example
+    | Caddy       // the caddy binary, to run the proxy example's Caddyfile in front of a deployment
     | Bench       // this run is MEASURING, not asserting — see `tasks.fsx bench`
     | Dogfood     // consent to the LONG self-hosting run: this repo's own suite inside the
                   // dev container it declares. Needs Docker beside it, egress, and patience.
@@ -66,7 +67,7 @@ let private getEnv (name: string) : string =
 // first substitutes, which is tens of minutes buying a proof the gate already has piecewise —
 // it is asked for by name (`check Docker Dogfood`, or a `verify.yml` dispatch naming both) when
 // the container environment story changes.
-let private allNeeds = [ Browser; Ports; Native; Docker; LiveAgent; Keyring; Nix; Srt; Pty; Serial; Jumpstarter ]
+let private allNeeds = [ Browser; Ports; Native; Docker; LiveAgent; Keyring; Nix; Srt; Pty; Serial; Jumpstarter; Caddy ]
 
 let private parseNeed (s: string) : Need option =
     match s.Trim().ToLowerInvariant () with
@@ -81,6 +82,7 @@ let private parseNeed (s: string) : Need option =
     | "pty"       -> Some Pty
     | "serial"    -> Some Serial
     | "jumpstarter" -> Some Jumpstarter
+    | "caddy"     -> Some Caddy
     | "bench"     -> Some Bench
     | "dogfood"   -> Some Dogfood
     | _           -> None

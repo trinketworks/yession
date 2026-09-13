@@ -129,8 +129,10 @@ jobs:
       # processes per test. Worth it — that suite is the only place our MCP client is driven
       # against a server nobody here wrote, and a break in it is a break in the contract the
       # whole examples directory advertises.
-      - name: Cheap tier + browser + native WebRTC/host E2E + sandbox escape probes + serial + jumpstarter
-        run: devenv shell -- check Browser Ports Native Srt Serial Jumpstarter
+      # `Caddy` is one browser case: the proxy example's Caddyfile in front of a real Manager,
+      # which is the only run the file the README tells an operator to deploy ever gets.
+      - name: Cheap tier + browser + native WebRTC/host E2E + sandbox escape probes + serial + jumpstarter + caddy
+        run: devenv shell -- check Browser Ports Native Srt Serial Jumpstarter Caddy
 
   # What a person waits for, and whether this pull request made it worse. Its own job, parallel
   # to `test`, so it costs nothing on the gate's critical path — and blocking, because a

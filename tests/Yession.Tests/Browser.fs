@@ -3592,6 +3592,216 @@ let frontDoorTests =
             }
     ]
 
+// --- A fronted deployment, for real (browser) ---------------------------------------------
+//
+// The door above is a fixture: a stand-in reconciler with a lag the case can count. This is
+// the deployment the proxy example's README tells an operator to run — its own Caddyfile
+// (examples/proxy/caddy) in front of a Manager under `--auth trusted-headers`, `main.mjs`
+// following the registry stream into the session map Caddy imports, and Chromium playing
+// `tailscale serve`: TLS terminated somewhere else, and the calling tailnet user asserted in
+// `Tailscale-User-*` headers on every request.
+//
+// Nothing between the browser and the session is a double, so what this pins is the promise
+// all of those pieces make together and none of them makes alone: a person on the tailnet
+// who presses Create is in the session that made, as themselves. The Caddyfile was checked
+// by hand before this case existed, and its identity translation has an ordering trap (the
+// README) that reads fine and strips the user — which only a run can see.
+
+let private FRONTED_PORT = 8192
+let private FRONTED_MANAGER_PORT = 8193
+let private frontedDataDir = "tests/browser/.data-fronted"
+let private frontedMapDir = frontedDataDir + "/proxy"
+
+/// Who the ingress says is calling. `serve` asserts these on every request and overwrites
+/// anything the client sent, which is what the Caddyfile is entitled to trust.
+let private FRONTED_LOGIN = "alice@example.com"
+let private FRONTED_NAME = "Alice Example"
+
+/// A child process of the deployment, kept with what it has said so the failure report can
+/// say which of three processes went wrong, in its own words.
+type private Deployed =
+    { Label: string
+      Process: Process
+      Said: Text.StringBuilder }
+    member this.Stop () =
+        try if not this.Process.HasExited then this.Process.Kill true with _ -> ()
+
+/// Spawn one piece of the deployment and wait for the line that says it is up. A piece that
+/// dies on its arguments fails here, naming itself, rather than as a wait downstream that
+/// never settles.
+let private deploy
+    (label: string)
+    (command: string)
+    (args: string list)
+    (env: (string * string) list)
+    (ready: string -> bool)
+    : Deployed =
+    let psi = ProcessStartInfo command
+    args |> List.iter psi.ArgumentList.Add
+    env |> List.iter (fun (name, value) -> psi.EnvironmentVariables.[name] <- value)
+    psi.UseShellExecute <- false
+    psi.RedirectStandardOutput <- true
+    psi.RedirectStandardError <- true
+    let p = new Process (StartInfo = psi)
+    let said = Text.StringBuilder ()
+    let up = TaskCompletionSource<bool> ()
+    let heard (line: string) =
+        if line <> null then
+            lock said (fun () -> said.AppendLine line |> ignore)
+            if ready line then up.TrySetResult true |> ignore
+    p.OutputDataReceived.Add (fun e -> heard e.Data)
+    p.ErrorDataReceived.Add (fun e -> heard e.Data)
+    p.EnableRaisingEvents <- true
+    p.Exited.Add (fun _ -> up.TrySetResult false |> ignore)
+    p.Start () |> ignore
+    p.BeginOutputReadLine ()
+    p.BeginErrorReadLine ()
+    let deployed = { Label = label; Process = p; Said = said }
+    if not (up.Task.Wait 60000) || not up.Task.Result then
+        deployed.Stop ()
+        failwithf "%s never came up; it said:\n%s" label (string said)
+    deployed
+
+/// The three processes, in the order a cold boot needs them: the proxy first, because the
+/// Manager's public origin IS the proxy and its default session runs OIDC discovery against
+/// it while booting; the Manager; then the map, which needs the Manager's stream to follow.
+/// Everything here is what the README says to run, with the README's own template.
+let private deployFronted () : Deployed list =
+    if Directory.Exists frontedDataDir then Directory.Delete (frontedDataDir, true)
+    Directory.CreateDirectory frontedMapDir |> ignore
+    let origin = sprintf "http://127.0.0.1:%d" FRONTED_PORT
+    let proxy =
+        deploy
+            "caddy"
+            "caddy"
+            [ "run"; "--config"; "examples/proxy/caddy/Caddyfile"; "--adapter"; "caddyfile"; "--watch" ]
+            [ "YESSION_PROXY_PORT", string FRONTED_PORT
+              "YESSION_PROXY_MANAGER", sprintf "127.0.0.1:%d" FRONTED_MANAGER_PORT
+              // Absolute: an `import` glob is resolved against the Caddyfile's own directory,
+              // and the map is written under this suite's, not the example's.
+              "YESSION_PROXY_SESSIONS", Path.GetFullPath frontedMapDir + "/sessions*.caddy" ]
+            (fun line -> line.Contains "serving initial configuration")
+    let manager =
+        deploy
+            "the Manager"
+            "node"
+            [ "app/out/Main.js"; "--auth"; "trusted-headers"; "--secrets"; "ephemeral"
+              "--port"; string FRONTED_MANAGER_PORT; "--data-dir"; frontedDataDir ]
+            [ "YESSION_MANAGER_URL", origin
+              "YESSION_SESSION_URL", origin + "/s/{id}" ]
+            (fun line -> line.Contains "management UI at")
+    let map =
+        deploy
+            "sessions-map"
+            "node"
+            [ "examples/proxy/main.mjs"
+              "--manager"; sprintf "http://127.0.0.1:%d" FRONTED_MANAGER_PORT
+              "--as"; "proxy-map"
+              "--out"; frontedMapDir + "/sessions.caddy"
+              "--empty"; "# no running sessions"
+              "--template"; "@s_{id} path /s/{id} /s/{id}/*\nhandle @s_{id} {\n\treverse_proxy 127.0.0.1:{port}\n}" ]
+            []
+            (fun line -> line.Contains " follows ")
+    [ proxy; manager; map ]
+
+let frontedTests =
+    testList "A fronted deployment, for real (browser)" [
+        testCaseAsync "pressing Create on the tailnet lands you in that session, as yourself" <|
+            async {
+                let deployed = deployFronted ()
+                let mutable browserToClose : IBrowser option = None
+                let mutable playwrightToDispose : IPlaywright option = None
+                try
+                    let! pw = await (Playwright.CreateAsync ())
+                    playwrightToDispose <- Some pw
+                    let! br = await (pw.Chromium.LaunchAsync (BrowserTypeLaunchOptions (ExecutablePath = chromiumPath ())))
+                    browserToClose <- Some br
+                    // The browser IS the ingress here: what `serve` would assert about the
+                    // caller rides every request, including the sign-in bounce a session sends
+                    // through the Manager — which is the request the identity has to survive.
+                    let! context =
+                        await (br.NewContextAsync (
+                            BrowserNewContextOptions (
+                                ExtraHTTPHeaders =
+                                    dict [ "Tailscale-User-Login", FRONTED_LOGIN
+                                           "Tailscale-User-Name", FRONTED_NAME
+                                           "Tailscale-User-Profile-Pic", "https://example.com/alice.png" ])))
+                    let! page = await (context.NewPageAsync ())
+                    page.SetDefaultTimeout 30000.0f
+                    let evidence = watching page
+                    do! reporting "a fronted deployment" page evidence <| async {
+                    // The first answer is the Manager's own verdict on the identity the proxy
+                    // handed it, so read it rather than wait thirty seconds for a Create
+                    // button a 401 page will never show. (The deletion-ordering trap in the
+                    // Caddyfile fails exactly here: the Manager sees nobody.)
+                    let! landing = await (page.GotoAsync (sprintf "http://127.0.0.1:%d/" FRONTED_PORT))
+                    if landing.Status <> 200 then
+                        let! body = await (landing.TextAsync ())
+                        failwithf
+                            "the Manager answered %d through the proxy — the identity the ingress asserted did not survive it: %s"
+                            landing.Status
+                            (body.Trim ())
+                    let create = sprintf "[%s] button[type=submit]" Yession.App.Dom.Manager.createSession
+                    let! _ = await (page.WaitForSelectorAsync create)
+                    do! awaitU (page.ClickAsync create)
+
+                    // One promise, read off the page: the address names a session, the shell
+                    // says it is that one, the client is connected to it (so the sign-in went
+                    // through the Manager as issuer, at the proxy's origin, and came back),
+                    // and the name on the roster is the one the ingress asserted — through
+                    // caddy's translation, the Manager's ID token and the session's cookie.
+                    let landedAsYourself =
+                        sprintf
+                            """() => {
+                                 const at = /^\/s\/([^/]+)\//.exec(location.pathname)
+                                 const shell = document.querySelector('meta[name="%s"]')?.getAttribute('content')
+                                 const connection = document.querySelector('[%s]')?.getAttribute('%s')
+                                 const name = document.querySelector('[%s]')?.textContent?.trim()
+                                 return !!at && shell === at[1] && connection === 'Connected' && name === '%s'
+                               }"""
+                            Yession.App.Dom.sessionMetaName
+                            Yession.App.Dom.Hooks.connection
+                            Yession.App.Dom.Hooks.connection
+                            Yession.App.Dom.Hooks.displayName
+                            FRONTED_NAME
+                    // A real child launches, the map catches up, caddy re-adapts within a
+                    // second, and the sign-in round-trips — slow on a cold runner, and the
+                    // faults this guards are all instant, so a long wait only costs green time.
+                    try
+                        do!
+                            await (page.WaitForFunctionAsync (landedAsYourself, null, PageWaitForFunctionOptions (Timeout = 90000.0f)))
+                            |> Async.Ignore
+                    with _ ->
+                        let! showing =
+                            await (page.EvaluateAsync<string>
+                                    (sprintf
+                                        """() => JSON.stringify({
+                                             url: location.href,
+                                             title: document.title,
+                                             connection: document.querySelector('[%s]')?.getAttribute('%s') ?? null,
+                                             name: document.querySelector('[%s]')?.textContent ?? null,
+                                             text: document.body?.innerText?.slice(0, 200) ?? null
+                                           })"""
+                                        Yession.App.Dom.Hooks.connection
+                                        Yession.App.Dom.Hooks.connection
+                                        Yession.App.Dom.Hooks.displayName))
+                        let said =
+                            deployed
+                            |> List.map (fun d -> sprintf "--- %s said ---\n%s" d.Label (lock d.Said (fun () -> string d.Said)))
+                            |> String.concat "\n"
+                        failwithf
+                            "pressing Create must land in that session as the asserted user; the browser is showing %s\n%s"
+                            showing
+                            said
+                    }
+                finally
+                    browserToClose |> Option.iter (fun b -> b.CloseAsync () |> ignore)
+                    playwrightToDispose |> Option.iter (fun p -> p.Dispose ())
+                    // Reverse order: the map and the Manager before the proxy they sit behind.
+                    for d in List.rev deployed do d.Stop ()
+            }
+    ]
+
 #else
 
 // Fable (JS on Node): Playwright is a .NET driver and does not exist here, so the flows above
@@ -3601,5 +3811,6 @@ let tests : Fable.Pyxpecto.Model.TestCase = testList "Browser E2E" []
 let editorTests : Fable.Pyxpecto.Model.TestCase = testList "Editor rendering (browser)" []
 let mountedTests : Fable.Pyxpecto.Model.TestCase = testList "Path-mounted session (browser)" []
 let frontDoorTests : Fable.Pyxpecto.Model.TestCase = testList "Creating a session behind a front door (browser)" []
+let frontedTests : Fable.Pyxpecto.Model.TestCase = testList "A fronted deployment, for real (browser)" []
 
 #endif

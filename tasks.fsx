@@ -837,6 +837,10 @@ let private serialAvailable () =
 let private jumpstarterAvailable () =
     probeWithin 600000 "uv" [ "sync"; "--project"; "examples/jumpstarter"; "--all-groups"; "--frozen" ]
 
+// The proxy example's Caddyfile, run for real in front of a Manager. `caddy version` is the
+// cheapest thing that only a runnable caddy answers; the dev shell provides one.
+let private caddyAvailable () = probeSucceeds "caddy" [ "version" ]
+
 // ASKING FOR A CAPABILITY IS REQUIRING IT. A run names the capabilities it wants; anything it
 // named and cannot host is an ERROR, with the reason, before a single test runs.
 //
@@ -867,6 +871,8 @@ let private requireCapabilities (caps: string list) =
             "Jumpstarter: the example's Python environment would not resolve (needs `uv` and a "
             + "CPython >= 3.11 it can find, plus a network on the first run — try "
             + "`uv sync --project examples/jumpstarter --all-groups`)"
+          if List.contains "Caddy" caps && not (caddyAvailable ()) then
+            "Caddy: no `caddy` on PATH (`devenv shell` provides one)"
           if List.contains "Srt" caps && not (srtAvailable ()) then
             "Srt: no working confinement (bubblewrap, socat, ripgrep, and — under the strict "
             + "profile — a nested user namespace; an unprivileged container needs "
@@ -1093,7 +1099,7 @@ let check (args: string list) =
 let verify (args: string list) =
     check
         ([ "Browser"; "Ports"; "Native"; "Docker"; "LiveAgent"; "Keyring"; "Nix"; "Srt"; "Pty"; "Serial"
-           "Jumpstarter" ]
+           "Jumpstarter"; "Caddy" ]
          @ args)
 
 // --- bench: what a person waits for, and whether it is getting worse --------------------------
