@@ -52,6 +52,9 @@
     <Compile Include="Sync.fs" />
     <Compile Include="TerminalPattern.fs" />
     <Compile Include="Terminals.fs" />
+    <!-- The other end of the same wire: what a keydown means to a pty, which the browser
+         tier could only ever reach one key at a time. Pure, so it sits in the cheap tier. -->
+    <Compile Include="Keystrokes.fs" />
     <Compile Include="Attach.fs" />
     <Compile Include="Timeline.fs" />
     <!-- The launch surface, through the model a browser folds and the renderer it serves. -->
