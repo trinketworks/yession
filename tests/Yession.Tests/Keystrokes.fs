@@ -20,6 +20,7 @@ let private chord (key: string) : KeyChord =
 
 let private ctrl (c: KeyChord) : KeyChord = { c with Ctrl = true }
 let private alt (c: KeyChord) : KeyChord = { c with Alt = true }
+let private shift (c: KeyChord) : KeyChord = { c with Shift = true }
 
 /// The keys that send a CSI rather than a character, and the final byte each ends with.
 let private cursorKeys =
@@ -79,6 +80,36 @@ let tests =
             for key in [ "1"; "9"; "-"; "/"; "{"; "~" ] do
                 Expect.equal (Keystroke.bytesOf (ctrl (chord key))) None (sprintf "Ctrl-%s" key)
 
+        // `ev.key` for this chord is a space, which has no control code of its own — so the
+        // range above cannot answer for it and the mark-setting chord sent nothing at all.
+        testCase "Ctrl-Space sends NUL" <| fun () ->
+            Expect.equal (Keystroke.bytesOf (ctrl (chord " "))) (Some "\u0000") "the byte set-mark reads"
+
+        // Upper-casing a character is not a character-for-character map: `ß` upper-cases to
+        // `SS`, and reading the first of those made Ctrl-ß mean Ctrl-S — XOFF, which stops
+        // the terminal dead until something sends XON. A character with no control code
+        // sends nothing, which is the same answer every other one outside the range gets.
+        testCase "Ctrl sends nothing for a character that upper-cases into more than one" <| fun () ->
+            for key in [ "ß"; "ﬁ"; "ŉ" ] do
+                Expect.equal (Keystroke.bytesOf (ctrl (chord key))) None (sprintf "Ctrl-%s" key)
+
+        // AltGr reports as Ctrl and Alt both down, with `ev.key` already carrying whatever it
+        // composed. Every layout outside US-ASCII puts punctuation there — `@` and `\` on a
+        // German one — so reading the flags as a Ctrl chord is a keyboard that answers NUL
+        // when you ask it for an at-sign.
+        testCase "AltGr types the character it composed, not a control code" <| fun () ->
+            for key in [ "@"; "\\"; "~"; "{"; "["; "€"; "µ" ] do
+                Expect.equal
+                    (Keystroke.bytesOf (alt (ctrl (chord key))))
+                    (Some key)
+                    (sprintf "AltGr-%s" key)
+
+        // The other half of the same rule: AltGr with a key that composed nothing is still
+        // just a modifier combination, and a named key has no character to send.
+        testCase "Ctrl-Alt with a named key sends nothing" <| fun () ->
+            for key in [ "F5"; "Shift"; "CapsLock" ] do
+                Expect.equal (Keystroke.bytesOf (alt (ctrl (chord key)))) None (sprintf "Ctrl-Alt-%s" key)
+
         // The two deletes: readline binds them to different bytes, so a terminal that sent
         // one for both would have no delete-word at all.
         testCase "Ctrl-Backspace sends the byte readline binds to delete-word" <| fun () ->
@@ -105,6 +136,11 @@ let tests =
 
         testCase "Tab sends a tab" <| fun () ->
             Expect.equal (Keystroke.bytesOf (chord "Tab")) (Some "\t") "completion, not focus movement"
+
+        // Completion cycles forward on TAB and back on CBT. Sending a plain TAB for both
+        // leaves a shell whose completion list can only ever be walked one way.
+        testCase "Shift-Tab sends back-tab" <| fun () ->
+            Expect.equal (Keystroke.bytesOf (shift (chord "Tab"))) (Some "\u001b[Z") "CBT, not another TAB"
 
         testCase "Escape sends ESC" <| fun () ->
             Expect.equal (Keystroke.bytesOf (chord "Escape")) (Some "\u001b") "what a modal program waits for"
