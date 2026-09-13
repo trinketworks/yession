@@ -63,13 +63,13 @@ type Provider =
 /// Create the provider. `issuerOf` is read lazily per request because the Manager's
 /// endpoint port is only known once its server listens. `onTokenIssued` fires on every
 /// successful /token redeem with the launch's control secret, the client session, the
-/// authenticated subject, the verified claims behind it (None = unattributed), and the
-/// peer that rode the bounce — the Manager's one chance to RECORD which
-/// user (and peer) it verified into which launch (Plan 06: the bindings behind ABAC).
+/// authenticated subject, and the verified claims behind it (None = unattributed) — the
+/// Manager's one chance to RECORD which user it verified into which launch (Plan 06: the
+/// bindings behind ABAC).
 let create
     (issuerOf: unit -> string)
     (strategy: AuthenticationStrategy)
-    (onTokenIssued: string -> SessionId -> UserId -> UserClaims option -> PeerId option -> unit)
+    (onTokenIssued: string -> SessionId -> UserId -> UserClaims option -> unit)
     : Async<Provider> =
     async {
         // Ed25519 via WebCrypto; the `false` here is the non-extractability invariant.
@@ -109,7 +109,7 @@ let create
                             let reason = match outcome with Denied r -> r | _ -> "denied"
                             respond res 401 "text/plain" reason
                         | Some identity ->
-                            let code = codes.Issue request.Client request.Challenge identity request.Peer
+                            let code = codes.Issue request.Client request.Challenge identity
                             redirect
                                 res
                                 (sprintf
@@ -133,7 +133,7 @@ let create
                     // surfaced by the policy denying, never a crash here.
                     (match SessionId.create grant.Client.ClientId, UserId.create grant.Identity.Subject with
                      | Ok sessionId, Ok subject ->
-                         onTokenIssued grant.Client.ControlSecret sessionId subject grant.Identity.Claims grant.Peer
+                         onTokenIssued grant.Client.ControlSecret sessionId subject grant.Identity.Claims
                      | _ -> ())
                     // Standard profile claims when the strategy attributed a real user,
                     // plus `yession_attribution` — the RP-side discriminator between a

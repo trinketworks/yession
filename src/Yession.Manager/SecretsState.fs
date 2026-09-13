@@ -96,7 +96,9 @@ module SecretsCodec =
                 | Error e -> Decode.fail e) }
 
     /// Shared with the control wire:
-    /// {"kind":"session",...} | {"kind":"user",...} | {"kind":"peer",...} | {"kind":"local"}.
+    /// {"kind":"session",...} | {"kind":"user",...} | {"kind":"local"}. A stored `peer` entry
+    /// is a scope this build no longer has (see `SecretScope`), and the user said no
+    /// deployment holds one — so it is refused as unknown rather than read into anything.
     /// `local` carries no key — the deployment IS the owner, so there is nothing to name.
     let secretScope : Codec<SecretScope> =
         { Encode =
@@ -106,8 +108,6 @@ module SecretsCodec =
                     Encode.object [ "kind", Encode.string "session"; "sessionId", Codec.sessionId.Encode sessionId ]
                 | UserScope user ->
                     Encode.object [ "kind", Encode.string "user"; "sub", userSubject.Encode user ]
-                | PeerScope peer ->
-                    Encode.object [ "kind", Encode.string "peer"; "peerId", Codec.peerId.Encode peer ]
                 | LocalScope ->
                     Encode.object [ "kind", Encode.string "local" ])
           Decode =
@@ -115,7 +115,6 @@ module SecretsCodec =
             |> Decode.andThen (function
                 | "session" -> Decode.field "sessionId" Codec.sessionId.Decode |> Decode.map SessionScope
                 | "user" -> Decode.field "sub" userSubject.Decode |> Decode.map UserScope
-                | "peer" -> Decode.field "peerId" Codec.peerId.Decode |> Decode.map PeerScope
                 | "local" -> Decode.succeed LocalScope
                 | other -> Decode.fail (sprintf "Unknown secret scope: %s" other)) }
 

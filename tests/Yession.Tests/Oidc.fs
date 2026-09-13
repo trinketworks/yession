@@ -116,13 +116,13 @@ let private providerTests =
             let registry, codes, setNow = makeProvider ()
             let client = registry.Register "s" sessionId "http://127.0.0.1:9001/callback"
             // Happy path, then replay.
-            let code = codes.Issue client challenge localIdentity None
-            Expect.equal (codes.Redeem code client.ClientId client.RedirectUri verifier) (Ok (localIdentity, None)) "redeems to the identity"
+            let code = codes.Issue client challenge localIdentity
+            Expect.equal (codes.Redeem code client.ClientId client.RedirectUri verifier) (Ok localIdentity) "redeems to the identity"
             match codes.Redeem code client.ClientId client.RedirectUri verifier with
             | Error _ -> ()
             | Ok _ -> failwith "a code redeems at most once"
             // A failed check burns the code too.
-            let burned = codes.Issue client challenge localIdentity None
+            let burned = codes.Issue client challenge localIdentity
             match codes.Redeem burned client.ClientId client.RedirectUri "wrong-verifier" with
             | Error _ -> ()
             | Ok _ -> failwith "a bad verifier must not redeem"
@@ -130,16 +130,16 @@ let private providerTests =
             | Error _ -> ()
             | Ok _ -> failwith "a failed redeem must burn the code"
             // Binding checks.
-            let bound = codes.Issue client challenge localIdentity None
+            let bound = codes.Issue client challenge localIdentity
             match codes.Redeem bound "other-client" client.RedirectUri verifier with
             | Error _ -> ()
             | Ok _ -> failwith "a code is bound to its client"
-            let bound2 = codes.Issue client challenge localIdentity None
+            let bound2 = codes.Issue client challenge localIdentity
             match codes.Redeem bound2 client.ClientId "http://evil/" verifier with
             | Error _ -> ()
             | Ok _ -> failwith "a code is bound to its redirect_uri"
             // Expiry.
-            let stale = codes.Issue client challenge localIdentity None
+            let stale = codes.Issue client challenge localIdentity
             setNow 1061L
             match codes.Redeem stale client.ClientId client.RedirectUri verifier with
             | Error _ -> ()
@@ -168,7 +168,7 @@ let private providerTests =
             match Provider.token registry codes (=) (goodForm "never-issued") with
             | Error (InvalidGrant _) -> ()
             | other -> failwithf "expected invalid_grant for an unknown code, got %A" other
-            let code = codes.Issue client challenge localIdentity None
+            let code = codes.Issue client challenge localIdentity
             match Provider.token registry codes (=) (goodForm code) with
             | Ok grant -> Expect.equal grant.Identity.Subject "local" "the grant carries the subject"
             | other -> failwithf "expected a grant, got %A" other
@@ -356,7 +356,7 @@ let private opTests =
         testCaseAsync "authorize -> token issues a jose-verifiable ID token; replay, bad verifier, and bad secret are refused per spec" <|
             async {
                 let mutable issuer = ""
-                let! provider = ManagerOidc.create (fun () -> issuer) Strategy.localhost (fun _ _ _ _ _ -> ())
+                let! provider = ManagerOidc.create (fun () -> issuer) Strategy.localhost (fun _ _ _ _ -> ())
                 let handler (req: Interop.IncomingMessage) (res: Interop.ServerResponse) =
                     if not (provider.TryHandle req res) then
                         res.writeHead (404, createObj [ "content-type", box "text/plain" ]) |> ignore
@@ -627,9 +627,9 @@ let private byoTests =
                 let! headerless = OidcHttp.followWithJar probeJar (sessionUrl + "/login")
                 Expect.equal headerless.Status 401 "the bounce dies at /authorize without the identity header"
 
-                // The full chain with headers (and the browser's stable peer id on
-                // /login): cookie, attributed /me, and the Manager's launch bindings.
-                let! opened = OidcHttp.openSessionVia nick "/login?peer_id=browser-abc" sessionUrl
+                // The full chain with headers: cookie, attributed /me, and the Manager's
+                // launch bindings.
+                let! opened = OidcHttp.openSessionVia nick "/login" sessionUrl
                 Expect.isTrue (opened.PeerToken.Length > 0) "a peer token is minted for the attributed user"
                 let! me = OidcHttp.getWithJar opened.Jar (sessionUrl + "/me")
                 Expect.isTrue (me.Body.Contains "\"sub\":\"nick@example.com\"") "/me carries the verified subject"
@@ -638,18 +638,14 @@ let private byoTests =
                     (pm.UsersOf record.SessionId)
                     (Set.singleton (UserId.create "nick@example.com" |> expect))
                     "the login bound the asserted user to the launch"
-                Expect.equal
-                    (pm.PeersOf record.SessionId)
-                    (Set.singleton (PeerId.create "browser-abc" |> expect))
-                    "the peer id that rode the bounce is witnessed into the launch"
                 // A real human was named, so this launch is granted NO local access — which
                 // is what keeps one deployment-wide credential out of an attributed
                 // deployment entirely.
                 Expect.isFalse (pm.LocalOf record.SessionId) "an attributed login grants no local access"
 
-                // Bindings die with the launch, peers exactly like users (Plan 06 rule).
+                // Bindings die with the launch (Plan 06 rule).
                 do! pm.Stop record.SessionId |> Async.Ignore
-                Expect.equal (pm.PeersOf record.SessionId) Set.empty "peer bindings die with the launch"
+                Expect.equal (pm.UsersOf record.SessionId) Set.empty "user bindings die with the launch"
                 do! pm.StopAll ()
             }
 

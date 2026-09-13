@@ -192,26 +192,24 @@ module SecretResolution =
             }
 
     /// The scopes a launch may read from, most specific first: the session's own, then
-    /// its bound users', then its witnessed peers', then — where the Manager granted it
-    /// unattributed access — the deployment's own.
+    /// its bound users', then — where the Manager granted it unattributed access — the
+    /// deployment's own.
     ///
     /// `LocalScope` sits LAST because it is the least specific owner there is. Generic
     /// secret injection walks it and the policy denies (there is no local rule for
     /// `SecretAction`), so the walk simply moves on; it is here for the connection status
     /// listing, which derives a caller's readable set from this same list.
-    let scopesFor (sessionId: SessionId) (users: Set<UserId>) (peers: Set<PeerId>) (local: bool) : SecretScope list =
+    let scopesFor (sessionId: SessionId) (users: Set<UserId>) (local: bool) : SecretScope list =
         SessionScope sessionId
         :: (users |> Set.toList |> List.map UserScope)
-        @ (peers |> Set.toList |> List.map PeerScope)
         @ (if local then [ LocalScope ] else [])
 
-    let compose (observe: Observe) (store: SecretStore) (usersOf: SessionId -> Set<UserId>) (peersOf: SessionId -> Set<PeerId>) (localOf: SessionId -> bool) (fallback: ResolveSecret) : ResolveSecret =
+    let compose (observe: Observe) (store: SecretStore) (usersOf: SessionId -> Set<UserId>) (localOf: SessionId -> bool) (fallback: ResolveSecret) : ResolveSecret =
         fun sessionId name ->
             async {
                 let users = usersOf sessionId
-                let peers = peersOf sessionId
                 let local = localOf sessionId
-                let subject : Subject = { Session = Some sessionId; Users = users; Peers = peers; Local = local }
+                let subject : Subject = { Session = Some sessionId; Users = users; Local = local }
                 let rec walk scopes =
                     async {
                         match scopes with
@@ -242,7 +240,7 @@ module SecretResolution =
                                 | Ok None -> return! walk rest
                                 | Error e -> return Error e
                     }
-                return! walk (scopesFor sessionId users peers local)
+                return! walk (scopesFor sessionId users local)
             }
 
 /// The secrets/ABAC feature's audit telemetry (Plan 06). Audit is a cross-cutting concern,
@@ -295,9 +293,6 @@ module Audit =
         | UserScope user ->
             [ "yession.secret.scope", StringValue "user"
               "yession.secret.scope_key", StringValue (UserId.value user) ]
-        | PeerScope peer ->
-            [ "yession.secret.scope", StringValue "peer"
-              "yession.secret.scope_key", StringValue (PeerId.value peer) ]
         // No scope_key: the deployment is the owner, so there is no id to name — and an
         // empty key would read as a missing one.
         | LocalScope ->
@@ -479,7 +474,6 @@ module Audit =
             match outcome with
             | SecretResolution.InjectedFromScope (SessionScope _) -> sink (inject sessionId name "session")
             | SecretResolution.InjectedFromScope (UserScope _) -> sink (inject sessionId name "user")
-            | SecretResolution.InjectedFromScope (PeerScope _) -> sink (inject sessionId name "peer")
             // Unreachable while the policy has no local rule for `SecretAction` — generic
             // injection never resolves at this scope. Recorded honestly rather than
             // silently, so the day a rule is added the audit already says so.

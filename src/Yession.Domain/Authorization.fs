@@ -16,13 +16,9 @@ type Subject =
       Session : SessionId option
       /// Users the Manager bound to that launch at ID-token issuance.
       Users : Set<UserId>
-      /// Peers the Manager witnessed into that launch at ID-token issuance (the
-      /// browser's peer id rides the authorize bounce, Plan 07). Like Users,
-      /// recorded only by the Manager — never from request content.
-      Peers : Set<PeerId>
       /// Did the Manager grant this launch UNATTRIBUTED access — an ID token whose
-      /// strategy named no user behind the subject (`--auth localhost`)? Like Users and
-      /// Peers: recorded by the Manager at issuance, never from request content, and gone
+      /// strategy named no user behind the subject (`--auth localhost`)? Like Users:
+      /// recorded by the Manager at issuance, never from request content, and gone
       /// when the launch is. False under every attributed strategy, which is what keeps
       /// `LocalScope` unreadable there.
       Local : bool }
@@ -75,10 +71,7 @@ module Policy =
 
     /// The v1 policy. A session owns its session-scoped secrets outright; user-scoped
     /// secrets are listable/injectable by a session a bound user signed into, and never
-    /// writable by sessions (the user surface is the recorded follow-up); peer-scoped
-    /// secrets (Plan 07) are fully managed by a session the Manager witnessed
-    /// that peer into — a peer that never completed a sign-in bounce holds nothing.
-    /// Local-scoped CONNECTION credentials belong to a launch the Manager granted
+    /// writable by sessions (the user surface is the recorded follow-up). Local-scoped CONNECTION credentials belong to a launch the Manager granted
     /// unattributed access; generic secrets have no local rule at all, so they deny.
     /// Anything not explicitly permitted is denied.
     let authorize (request: Request) : Decision =
@@ -89,24 +82,19 @@ module Policy =
         let boundUser (user: UserId) =
             if Set.contains user request.Subject.Users then Permit
             else Deny "user is not signed in to this session"
-        let witnessedPeer (peer: PeerId) =
-            if Set.contains peer request.Subject.Peers then Permit
-            else Deny "peer is not signed in to this session"
         let localAccess () =
             if request.Subject.Local then Permit
             else Deny "this deployment attributes its users, so it has no local credential"
         match request.Action, request.Resource with
         // Connection credentials (Plan 08): every action — including the write — is
         // permitted exactly where the caller IS the scope's owner: its own session
-        // scope, a user the Manager bound to it, a peer it witnessed. That makes an
+        // scope, a user the Manager bound to it. That makes an
         // owner-scoped sign-in usable (and replaceable) from any session that owner is
         // signed into, and a session-scoped one from only that session.
         | ConnectionAction _, SecretResource { Scope = SessionScope owner } ->
             ownSession owner
         | ConnectionAction _, SecretResource { Scope = UserScope user } ->
             boundUser user
-        | ConnectionAction _, SecretResource { Scope = PeerScope peer } ->
-            witnessedPeer peer
         // The unattributed deployment's own credential. Deliberately CONNECTION-only:
         // `LocalScope` exists so a shared-access deployment can name the one principal it
         // has, not as a Manager-wide secret drawer — generic secret actions on it fall
@@ -123,9 +111,5 @@ module Policy =
             boundUser user
         | SecretAction (SetSecret | DeleteSecret), SecretResource { Scope = UserScope _ } ->
             Deny "user-scoped secrets are managed by the user, not sessions"
-        | SecretAction (SetSecret | DeleteSecret | InjectSecret), SecretResource { Scope = PeerScope peer } ->
-            witnessedPeer peer
-        | SecretAction ListSecrets, SecretCollection (PeerScope peer) ->
-            witnessedPeer peer
         | _ ->
             Deny "no rule permits this request"

@@ -109,10 +109,6 @@ type ProcessManager =
       /// issuance (Plan 06). Empty for a stopped session or before any login —
       /// bindings die with the launch.
       UsersOf : SessionId -> Set<UserId>
-      /// Peers the Manager witnessed into the session's live launch at ID-token
-      /// issuance: the browser's peer id rode the authorize bounce.
-      /// Same lifetime as UsersOf.
-      PeersOf : SessionId -> Set<PeerId>
       /// Has the session's live launch had an UNATTRIBUTED login — the strategy naming a
       /// subject with nobody behind it? What makes `LocalScope` readable there. Same
       /// lifetime as UsersOf; false under every attributed strategy.
@@ -332,7 +328,7 @@ let secretsApiFor
     : Control.SecretsApi =
     let authorize (caller: Control.ControlCaller) (action: SecretAction) (resource: Resource) =
         let request =
-            { Subject = { Session = Some caller.SessionId; Users = caller.Users; Peers = caller.Peers; Local = caller.Local }
+            { Subject = { Session = Some caller.SessionId; Users = caller.Users; Local = caller.Local }
               Action = SecretAction action
               Resource = resource }
         match Policy.authorize request with
@@ -401,7 +397,7 @@ let connectionsApiFor
     : Control.ConnectionsApi =
     let authorize (caller: Control.ControlCaller) (action: ConnectionAction) (target: SecretId) =
         let request =
-            { Subject = { Session = Some caller.SessionId; Users = caller.Users; Peers = caller.Peers; Local = caller.Local }
+            { Subject = { Session = Some caller.SessionId; Users = caller.Users; Local = caller.Local }
               Action = ConnectionAction action
               Resource = SecretResource target }
         match Policy.authorize request with
@@ -485,14 +481,14 @@ let connectionsApiFor
       Status =
         fun caller ->
             // Every connection in the caller's own readable scopes (its session, its
-            // bound users, its witnessed peers, and — where the deployment attributes
-            // nobody — its own) — the same walk injection uses. Entries that do not decode
+            // bound users, and — where the deployment attributes nobody — its own) — the
+            // same walk injection uses. Entries that do not decode
             // as broker envelopes are generic secrets and stay out.
             //
             // This list is also what lets a session name `LocalScope` on every turn
             // without knowing the auth strategy: an attributed launch never sees one here,
             // so the session's candidate filter drops it before anything is resolved.
-            SecretStore.SecretResolution.scopesFor caller.SessionId caller.Users caller.Peers caller.Local
+            SecretStore.SecretResolution.scopesFor caller.SessionId caller.Users caller.Local
             |> List.collect (fun scope -> store.List scope |> List.map (fun m -> m.Id))
             |> broker.StatusOf }
 
@@ -550,13 +546,9 @@ let createWithUi
     // keyed by the per-launch control secret so the binding dies with the launch, exactly
     // like the client registration it derives from. Durable secrets, per-login access.
     let mutable launchUsers : Map<string, Set<UserId>> = Map.empty
-    // Peers the Manager witnessed into a LAUNCH: the browser's peer id
-    // rides the authorize bounce and is recorded at ID-token issuance, exactly like
-    // launchUsers — keyed by the per-launch control secret, dying with the launch.
-    let mutable launchPeers : Map<string, Set<PeerId>> = Map.empty
     // Launches the Manager granted UNATTRIBUTED access to: an ID token whose strategy
     // named a subject with no user behind it (`--auth localhost`). Keyed and revoked like
-    // the two above, and for the same reason — access is per-login, not per-installation.
+    // the one above, and for the same reason — access is per-login, not per-installation.
     // What makes `LocalScope` readable, and empty under every attributed strategy.
     let mutable launchLocal : Set<string> = Set.empty
 
@@ -830,7 +822,7 @@ let createWithUi
     // the most recent token issuance. Display and audit material — never policy input.
     let mutable userClaims : Map<UserId, UserClaims> = Map.empty
 
-    let recordTokenIssued (controlSecret: string) (sessionId: SessionId) (subject: UserId) (claims: UserClaims option) (peer: PeerId option) : unit =
+    let recordTokenIssued (controlSecret: string) (sessionId: SessionId) (subject: UserId) (claims: UserClaims option) : unit =
         // Guarded by the live secret: a token redeemed in the same instant a launch
         // dies must not resurrect its authority.
         if Map.containsKey controlSecret secretSessions then
@@ -842,10 +834,6 @@ let createWithUi
             // value `yession_attribution` is derived from, so the two cannot disagree
             // about whether a login was attributed.
             if claims.IsNone then launchLocal <- Set.add controlSecret launchLocal
-            peer
-            |> Option.iter (fun p ->
-                let witnessed = Map.tryFind controlSecret launchPeers |> Option.defaultValue Set.empty
-                launchPeers <- Map.add controlSecret (Set.add p witnessed) launchPeers)
             audit (SecretStore.Audit.bindingRecorded sessionId subject)
             // A new binding grows the launch's readable connection set — refresh its
             // status stream so a sign-in surfaces already-connected credentials.
@@ -856,13 +844,12 @@ let createWithUi
     let! provider = ManagerOidc.create issuerOf strategy recordTokenIssued
 
     // What a control secret resolves to: WHICH launch is calling, with its verified
-    // user/peer bindings. The secrets/connections handlers apply their own policy.
+    // user bindings. The secrets/connections handlers apply their own policy.
     let resolveCaller (secret: string) : Control.ControlCaller option =
         Map.tryFind secret secretSessions
         |> Option.map (fun sessionId ->
             { Control.ControlCaller.SessionId = sessionId
               Users = Map.tryFind secret launchUsers |> Option.defaultValue Set.empty
-              Peers = Map.tryFind secret launchPeers |> Option.defaultValue Set.empty
               Local = Set.contains secret launchLocal })
 
     // The connection broker (Plan 08): exists exactly when the secret store does — its
@@ -927,18 +914,8 @@ let createWithUi
                 else acc)
             Set.empty
 
-    // The union of witnessed-peer bindings across a session's live launches (Plan 07).
-    let peersOf (sessionId: SessionId) : Set<PeerId> =
-        secretSessions
-        |> Map.fold
-            (fun acc secret sid ->
-                if sid = sessionId then
-                    Set.union acc (Map.tryFind secret launchPeers |> Option.defaultValue Set.empty)
-                else acc)
-            Set.empty
-
-    // Has ANY live launch of this session had an unattributed login? Same fold as the two
-    // above, and `any` for the same reason their union is: one launch's access is the
+    // Has ANY live launch of this session had an unattributed login? Same fold as the one
+    // above, and `any` for the same reason its union is: one launch's access is the
     // session's access.
     let localOf (sessionId: SessionId) : bool =
         secretSessions
@@ -952,7 +929,7 @@ let createWithUi
     let resolveSecret : SecretStore.ResolveSecret =
         match secretStore with
         | Some store ->
-            SecretStore.SecretResolution.compose (SecretStore.Audit.injectObserver audit) store usersOf peersOf localOf SecretStore.SecretResolution.processEnv
+            SecretStore.SecretResolution.compose (SecretStore.Audit.injectObserver audit) store usersOf localOf SecretStore.SecretResolution.processEnv
         | None -> SecretStore.SecretResolution.processEnv
 
     let secretsApi : Control.SecretsApi option =
@@ -1135,7 +1112,6 @@ let createWithUi
                          hookRelay.Drop secret
                          provider.RevokeByControlSecret secret
                          launchUsers <- Map.remove secret launchUsers
-                         launchPeers <- Map.remove secret launchPeers
                          launchLocal <- Set.remove secret launchLocal
                      | None -> ())
                 // Plan 11: the idle clock starts BEFORE the spawn, not after it resolves.
@@ -1323,7 +1299,6 @@ let createWithUi
           McpServers = fun () -> state.McpServers
           McpSetFor = fun sessionId -> mcp.Current sessionId
           UsersOf = usersOf
-          PeersOf = peersOf
           LocalOf = localOf
           EndpointPort = controlServer |> Option.map Interop.serverPort
           Public = options.Public

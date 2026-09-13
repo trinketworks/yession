@@ -1,6 +1,8 @@
 # An unattributed deployment owns credentials as itself, not as a browser
 
-> Decided 2026-08-10 · Superseded by nothing · Supersedes in part: the connections
+> Decided 2026-08-10 · Superseded in part 2026-09-14: `PeerScope` was removed from the
+> secrets vocabulary altogether, with the peer witnessing that served it — no deployment
+> held an entry · Supersedes in part: the connections
 > design's decisions 1–2, and peer-scoped secrets from the trusted-header identity
 > design · Related: [deployment.md](../deployment.md) `--auth localhost`, `--secrets`
 

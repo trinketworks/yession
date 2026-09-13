@@ -57,14 +57,12 @@ open Yession.Manager
 open Yession.Oidc
 open Yession.Host.Interop
 
-/// What a control secret resolves to: WHICH launch is calling, and the users and peers
-/// the Manager verified into the launch at ID-token issuance (empty until a login
-/// completes). Manager-verified, never self-asserted — this is the ABAC composite
-/// identity (Plan 06; peers per Plan 07).
+/// What a control secret resolves to: WHICH launch is calling, and the users the Manager
+/// verified into the launch at ID-token issuance (empty until a login completes).
+/// Manager-verified, never self-asserted — this is the ABAC composite identity (Plan 06).
 type ControlCaller =
     { SessionId : SessionId
       Users : Set<UserId>
-      Peers : Set<PeerId>
       /// Was any login into this launch UNATTRIBUTED — the strategy naming a subject with
       /// no user behind it (`--auth localhost`)? What makes `LocalScope` readable, and
       /// false under every attributed strategy.
