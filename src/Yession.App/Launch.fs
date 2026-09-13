@@ -7,10 +7,11 @@ open Yession.Domain.Repos
 /// The launch surface (the session's first screen): a person choosing which repo this
 /// session is FOR, before any turn has run.
 ///
-/// One gesture: tap a repo in the list, or paste what was copied out of the forge's address
-/// bar, and the clone begins on the branch shown. There is no "start" and no "back" —
-/// a row is the act — and no "start without one", because the composer beside it already is
-/// that: say something, and the session has begun without a repo.
+/// An ASK CARD, docked above the composer: the session asks which repository, offers the
+/// ones the person's credential reaches (or a search, or a pasted link), and one bordered
+/// button commits. Choosing is a STATE — a row held, its branch named inside it — and
+/// starting is a press; nothing is sent by choosing. That split is what the card's next
+/// use needs too: the agent asking a question with several answers held at once.
 ///
 /// View state, local to this client and never synced — choosing is one person's act on one
 /// screen, and what it produces is the `AddRepo` command, whose outcome everybody reads off
@@ -20,7 +21,7 @@ open Yession.Domain.Repos
 /// Pure: what the browser does — fetch a listing, resolve a link, send the command — is in
 /// `Browser.fs`, and what it learns comes back through `LaunchMsg`.
 
-/// What the picker has to choose from. Three honest states, for the model catalogue's
+/// What the card has to choose from. Three honest states, for the model catalogue's
 /// reason: "not looked yet" and "looked and there is nothing" are different facts, and the
 /// difference is what decides whether a person waits or goes and connects an account.
 type LaunchListing =
@@ -31,11 +32,10 @@ type LaunchListing =
     /// button rather than a retry.
     | ListingUnavailable of reason: string * signIn: bool
 
-/// One row's branches, asked for when its branch mark is opened and not before: thirty
-/// rows are thirty lookups, and nearly every launch is on the default.
+/// A held row's branches, asked for when the row is held and not before: thirty rows are
+/// thirty lookups, and nearly every launch is on the default.
 type LaunchBranches =
     | BranchesUnknown
-    | BranchesLoading
     | BranchesLoaded of string list
     | BranchesUnavailable of reason: string
 
@@ -47,11 +47,9 @@ type LaunchTarget =
     { Repo : RepoRef
       Branch : string option }
 
-/// Where the act stands. `Resolving` is a pasted link being asked about (a pull request's
-/// head is a fact only the provider holds); `Sent` carries the request so the session's
-/// answer can be told apart from any other command's; `Cloning` is admitted — the answer
-/// arrives as events. All but `Choosing` carry the target, so the row that was tapped is
-/// the one that says what is happening to it.
+/// Where the act stands. `Resolving` is a pasted link being asked about; `Sent` carries
+/// the request so the session's answer can be told apart from any other command's;
+/// `Cloning` is admitted — the answer arrives as events.
 type LaunchStage =
     | Choosing
     | Resolving of RepoLink
@@ -62,25 +60,40 @@ type LaunchViewState =
     { /// What was typed into the field. Empty means "my repos".
       Query : string
       Listing : LaunchListing
-      /// Each row's branches, by repo, once its mark has been opened.
+      /// The row held, if one is. One for now; the shape of a set, so holding several
+      /// later is a list rather than a redesign.
+      Selected : RepoRef option
+      /// Whether the list is shown whole, or its first few.
+      Expanded : bool
+      /// Each held row's branches, by repo.
       Branches : Map<RepoRef, LaunchBranches>
-      /// A branch picked on a row, by repo, when it is not the row's default.
-      Picked : Map<RepoRef, string>
+      /// The branch named on a row, by repo, when it is not the row's default. Named, not
+      /// picked: a field with the provider's branches to choose from, that also takes a
+      /// name the provider has not got yet — `switch_branch` creates one.
+      Named : Map<RepoRef, string>
       Stage : LaunchStage
       /// The last thing that went wrong with a launch — a link that could not be resolved,
       /// a rejection at the door, or a clone that failed — shown until the next attempt.
-      Problem : string option }
+      Problem : string option
+      /// The card was dismissed: it steps aside for this client. The ordinary empty
+      /// timeline and the composer are what is left, which is how a session that is not
+      /// about a repository begins.
+      Dismissed : bool }
 
 type LaunchMsg =
     | LaunchQueryTyped of string
     | LaunchListingArrived of LaunchListing
-    /// A row's branch mark was opened: its branches are being fetched.
-    | LaunchBranchesOpened of RepoRef
+    /// A row was tapped: held if it was not, let go if it was.
+    | LaunchSelected of RepoCandidate
+    /// A pasted link resolved to a row: put at the head of the list if it is not in it,
+    /// and held, with the branch the link named.
+    | LaunchLinked of RepoCandidate * branch: string option
+    | LaunchExpanded
     /// Branches for a repo. Carries WHICH repo, so an answer for one row cannot land on
     /// another.
     | LaunchBranchesArrived of RepoRef * LaunchBranches
-    | LaunchBranchPicked of RepoRef * string
-    /// A pasted link is being asked about before it can be sent.
+    | LaunchBranchNamed of RepoRef * string
+    /// A pasted link is being asked about before it can be held.
     | LaunchResolving of RepoLink
     /// The command left, under this request id, for this target.
     | LaunchSent of RequestId * LaunchTarget
@@ -89,27 +102,36 @@ type LaunchMsg =
     /// An attempt failed — a link the provider could not resolve, or the log saying the
     /// clone did (`GatedCommandFailed` for `add_repo`). Choosing is open again.
     | LaunchFailed of reason: string
+    | LaunchDismissed
 
 module Launch =
+
+    /// How many rows the card shows before "more": a person choosing reads the top of a
+    /// list ordered by recency, and a card that stands over the composer has a phone's
+    /// height to stand in.
+    let shown = 4
 
     let empty : LaunchViewState =
         { Query = ""
           Listing = ListingUnknown
+          Selected = None
+          Expanded = false
           Branches = Map.empty
-          Picked = Map.empty
+          Named = Map.empty
           Stage = Choosing
-          Problem = None }
+          Problem = None
+          Dismissed = false }
 
-    /// Whether the surface is OFFERED: this client is connected, has read the log through
+    /// Whether the card is OFFERED: this client is connected, has read the log through
     /// to where the session says it ends, and the session has not BEGUN — no repo in it and
     /// nothing said. A session that has begun is the agent's to add a repo to (Plan 15).
     ///
     /// "Begun" is a repo or a message, deliberately not "anything on the timeline": a launch
     /// that failed leaves its failure on the timeline, and a person whose clone could not
-    /// reach the repo needs the picker still there to try another, not a note and a blank.
+    /// reach the repo needs the card still there to try another, not a note and a blank.
     ///
     /// The catch-up conditions are what keep it honest: a client that has not looked yet, or
-    /// is still reading, has an empty projection too, and a launch screen that flashed over
+    /// is still reading, has an empty projection too, and a launch card that flashed over
     /// every cold open of an old session would teach people it means nothing.
     let offered
         (connected: bool)
@@ -117,63 +139,74 @@ module Launch =
         (latestKnown: EventOffset option)
         (catchingUp: bool)
         (begun: bool)
+        (launch: LaunchViewState)
         : bool =
-        connected && historyRead && latestKnown.IsSome && not catchingUp && not begun
+        connected && historyRead && latestKnown.IsSome && not catchingUp && not begun && not launch.Dismissed
 
-    /// Whether the surface is busy with an attempt: rows are not for tapping while one is
+    /// Whether the card is busy with an attempt: rows are not for holding while one is
     /// under way, because two clones of two repos is not what anyone meant.
     let busy (launch: LaunchViewState) : bool =
         match launch.Stage with
         | Choosing -> false
         | Resolving _ | Sent _ | Cloning _ -> true
 
-    /// The branch a row launches on: the one picked on it, or the provider's default.
+    let candidates (launch: LaunchViewState) : RepoCandidate list =
+        match launch.Listing with
+        | ListingLoaded candidates -> candidates
+        | ListingUnknown | ListingUnavailable _ -> []
+
+    /// The row held, as a candidate — if the list still has it.
+    let held (launch: LaunchViewState) : RepoCandidate option =
+        launch.Selected |> Option.bind (fun repo -> candidates launch |> List.tryFind (fun c -> c.Repo = repo))
+
+    /// The branch a row launches on: the one named on it, or the provider's default.
     let branchOf (launch: LaunchViewState) (candidate: RepoCandidate) : string =
-        launch.Picked |> Map.tryFind candidate.Repo |> Option.defaultValue candidate.DefaultBranch
+        match launch.Named |> Map.tryFind candidate.Repo with
+        | Some named when named.Trim () <> "" -> named.Trim ()
+        | _ -> candidate.DefaultBranch
 
-    /// What tapping a row asks for: its repo, and its branch only when it is not the
-    /// default (see `LaunchTarget`).
-    let targetOf (launch: LaunchViewState) (candidate: RepoCandidate) : LaunchTarget =
-        let branch = branchOf launch candidate
-        { LaunchTarget.Repo = candidate.Repo
-          LaunchTarget.Branch = if branch = candidate.DefaultBranch then None else Some branch }
-
-    /// What a link asks for, when it can be sent without asking the provider: a repo, or a
-    /// branch of one. A pull request is the one that cannot — its head is the provider's to
-    /// say — and answers `None` here.
-    let targetOfLink (link: RepoLink) : LaunchTarget option =
-        match link with
-        | RepoLink.Repo repo -> Some { LaunchTarget.Repo = repo; LaunchTarget.Branch = None }
-        | RepoLink.Branch (repo, branch) -> Some { LaunchTarget.Repo = repo; LaunchTarget.Branch = Some branch }
-        | RepoLink.PullRequest _ -> None
+    /// What starting asks for: the held repo, and its branch only when it is not the
+    /// default (see `LaunchTarget`). Nothing, when nothing is held.
+    let target (launch: LaunchViewState) : LaunchTarget option =
+        held launch
+        |> Option.map (fun candidate ->
+            let branch = branchOf launch candidate
+            { LaunchTarget.Repo = candidate.Repo
+              LaunchTarget.Branch = if branch = candidate.DefaultBranch then None else Some branch })
 
     /// What pressing Enter on the field means. A link copied from the forge — a hosted URL,
-    /// a clone URL — is a launch: what was copied is the thing wanted, and a second tap to
-    /// confirm it is a tax on the gesture. Anything else, a bare `owner/name` included, is a
-    /// search: a name half typed still parses as a name, and a search shows what it matched
-    /// where a launch would fail against it.
+    /// a clone URL — names a repo, and is resolved to a row and held. Anything else, a bare
+    /// `owner/name` included, is a search: a name half typed still parses as a name, and a
+    /// search shows what it matched where a lookup would fail against it.
     let linkOf (query: string) : RepoLink option =
         let text = query.Trim ()
-        let hosted =
-            text.Contains "github.com/" || text.StartsWith "git@github.com:"
+        let hosted = text.Contains "github.com/" || text.StartsWith "git@github.com:"
         if hosted then RepoLink.parse text else None
-
-    /// The target under way, when there is one: what the row that was tapped, or the field
-    /// that was pasted into, is waiting on.
-    let underway (launch: LaunchViewState) : LaunchTarget option =
-        match launch.Stage with
-        | Sent (_, target)
-        | Cloning target -> Some target
-        | Choosing
-        | Resolving _ -> None
 
     let update (msg: LaunchMsg) (launch: LaunchViewState) : LaunchViewState =
         match msg with
         | LaunchQueryTyped text -> { launch with Query = text }
-        | LaunchListingArrived listing -> { launch with Listing = listing }
-        | LaunchBranchesOpened repo -> { launch with Branches = launch.Branches |> Map.add repo BranchesLoading }
+        | LaunchListingArrived listing -> { launch with Listing = listing; Expanded = false }
+        | LaunchSelected candidate ->
+            if launch.Selected = Some candidate.Repo then { launch with Selected = None }
+            else { launch with Selected = Some candidate.Repo; Problem = None }
+        | LaunchLinked (candidate, branch) ->
+            let listed = candidates launch
+            let listing =
+                if listed |> List.exists (fun c -> c.Repo = candidate.Repo) then listed
+                else candidate :: listed
+            { launch with
+                Listing = ListingLoaded listing
+                Selected = Some candidate.Repo
+                Named =
+                    match branch with
+                    | Some branch -> launch.Named |> Map.add candidate.Repo branch
+                    | None -> launch.Named |> Map.remove candidate.Repo
+                Stage = Choosing
+                Problem = None }
+        | LaunchExpanded -> { launch with Expanded = true }
         | LaunchBranchesArrived (repo, branches) -> { launch with Branches = launch.Branches |> Map.add repo branches }
-        | LaunchBranchPicked (repo, branch) -> { launch with Picked = launch.Picked |> Map.add repo branch }
+        | LaunchBranchNamed (repo, branch) -> { launch with Named = launch.Named |> Map.add repo branch }
         | LaunchResolving link -> { launch with Stage = Resolving link; Problem = None }
         | LaunchSent (request, target) -> { launch with Stage = Sent (request, target); Problem = None }
         | LaunchAnswered (request, result) ->
@@ -184,3 +217,4 @@ module Launch =
                 | CommandRejected reason -> { launch with Stage = Choosing; Problem = Some reason }
             | _ -> launch
         | LaunchFailed reason -> { launch with Stage = Choosing; Problem = Some reason }
+        | LaunchDismissed -> { launch with Dismissed = true }

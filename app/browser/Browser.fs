@@ -1190,22 +1190,40 @@ let private start () =
                     |> Option.iter (fun c -> dispatchRef (LaunchMsg (LaunchSent (c.AddRepo target.Repo target.Branch, target))))
               LaunchLink =
                 fun link ->
-                    match Launch.targetOfLink link, link with
-                    | Some target, _ ->
-                        connectionRef
-                        |> Option.iter (fun c -> dispatchRef (LaunchMsg (LaunchSent (c.AddRepo target.Repo target.Branch, target))))
-                    | None, RepoLink.PullRequest (repo, number) ->
-                        dispatchRef (LaunchMsg (LaunchResolving link))
-                        Async.StartImmediate (
-                            async {
-                                match! fetchPullHead repo number with
-                                | Ok head ->
-                                    let target = { LaunchTarget.Repo = head.Repo; LaunchTarget.Branch = Some head.Branch }
-                                    connectionRef
-                                    |> Option.iter (fun c -> dispatchRef (LaunchMsg (LaunchSent (c.AddRepo target.Repo target.Branch, target))))
-                                | Error reason -> dispatchRef (LaunchMsg (LaunchFailed reason))
-                            })
-                    | None, _ -> ()
+                    // A link becomes a ROW, held — never a send: the same listing lookup a
+                    // search makes, asked for the one name, answers the candidate under the
+                    // provider's current name with its real default branch. A pull request is
+                    // asked about first, since which fork its branch lives in only the
+                    // provider knows.
+                    dispatchRef (LaunchMsg (LaunchResolving link))
+                    Async.StartImmediate (
+                        async {
+                            let! resolved =
+                                match link with
+                                | RepoLink.Repo repo -> async { return Ok (repo, None) }
+                                | RepoLink.Branch (repo, branch) -> async { return Ok (repo, Some branch) }
+                                | RepoLink.PullRequest (repo, number) ->
+                                    async {
+                                        match! fetchPullHead repo number with
+                                        | Ok head -> return Ok (head.Repo, Some head.Branch)
+                                        | Error reason -> return Error reason
+                                    }
+                            match resolved with
+                            | Error reason -> dispatchRef (LaunchMsg (LaunchFailed reason))
+                            | Ok (repo, branch) ->
+                                match! fetchRepoListing (RepoRef.value repo) with
+                                | ListingLoaded (candidate :: _) ->
+                                    dispatchRef (LaunchMsg (LaunchLinked (candidate, branch)))
+                                    Async.StartImmediate (
+                                        async {
+                                            let! branches = fetchRepoBranches candidate.Repo
+                                            dispatchRef (LaunchMsg (LaunchBranchesArrived (candidate.Repo, branches)))
+                                        })
+                                | ListingLoaded [] ->
+                                    dispatchRef (LaunchMsg (LaunchFailed (sprintf "github does not show %s to this credential" (RepoRef.value repo))))
+                                | ListingUnavailable (reason, _) -> dispatchRef (LaunchMsg (LaunchFailed reason))
+                                | ListingUnknown -> ()
+                        })
               CloseTerminal = fun id -> connectionRef |> Option.iter (fun c -> c.CloseTerminal id)
               TakeTerminal = fun id -> connectionRef |> Option.iter (fun c -> c.TakeTerminal id)
               ReleaseTerminal = fun id -> connectionRef |> Option.iter (fun c -> c.ReleaseTerminal id)
