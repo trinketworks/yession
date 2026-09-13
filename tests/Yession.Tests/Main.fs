@@ -51,6 +51,10 @@ let all =
         // Finding a repo is an HTTP conversation on both sides — the provider's listing and
         // the session's own gated route — with no in-memory stand-in for what the cases turn on.
         Tag.needs "GitHubRepos over HTTP" [ Tag.Ports ] (fun () -> GitHubRepos.portsTests)
+        // What each provider request says on the wire, and what this host makes of the
+        // answer. Cheap because none of it needs a provider: these are the decisions taken
+        // BEFORE a conversation, and they used to be unreachable inside `[<Emit>]` strings.
+        Tag.needs "Requests" [] (fun () -> Requests.tests)
         Tag.needs "Tools" [] (fun () -> Tools.tests)
         // The layers above join here: what a model calls, and what it is told back.
         Tag.needs "Tool calls" [] (fun () -> ToolCalls.tests)
@@ -87,6 +91,10 @@ let all =
         Tag.needs "Node platform bindings, spawning" [ Tag.Ports ] (fun () -> NodeExtras.portsTests)
         Tag.needs "Node platform bindings, WebSocket" [ Tag.Ports ] (fun () -> NodeExtras.socketTests)
         Tag.needs "Editor" [] (fun () -> Editor.tests)
+        // The SDK binding, before the adapter written over it. The live case spawns the
+        // real CLI, so it needs `Ports` beside the credential.
+        Tag.needs "Claude Agent SDK binding" [] (fun () -> ClaudeSdk.tests)
+        Tag.needs "Claude Agent SDK live" [ Tag.LiveAgent; Tag.Ports ] (fun () -> ClaudeSdk.liveTests)
         Tag.needs "Agent" [] (fun () -> Agent.tests)
         // The zod bindings, built and asked to accept and refuse. Beside Agent because the
         // agent adapter is their one caller — a tool descriptor's JSON Schema becomes a zod

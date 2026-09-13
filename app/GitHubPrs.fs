@@ -106,34 +106,58 @@ let rollupOf (runs: (string * string option) list) : ChecksRollup =
 // --- the two conditional GETs -----------------------------------------------------------
 
 type private FetchReply =
-    abstract reachable : bool
-    abstract status : int
-    abstract etag : string
-    abstract reset : string
-    /// `x-ratelimit-remaining` and `x-ratelimit-resource`, read from EVERY reply — a
-    /// conditional request answering 304 costs nothing and still carries the counter, so a
-    /// cadence that spends nothing keeps the reading current.
-    abstract remaining : string
-    abstract resource : string
-    abstract body : string
+    { Reachable : bool
+      Status : int
+      Etag : string
+      Reset : string
+      /// `x-ratelimit-remaining` and `x-ratelimit-resource`, read from EVERY reply — a
+      /// conditional request answering 304 costs nothing and still carries the counter, so a
+      /// cadence that spends nothing keeps the reading current.
+      Remaining : string
+      Resource : string
+      Body : string }
 
-/// One conditional GET, as GitHub wants it asked: a bearer token when there is one, the
-/// versioned accept header, a user agent (GitHub refuses requests without one), and the
-/// caller's ETag so an unchanged resource costs a 304 rather than a body.
-[<Emit("""(function (url, token, etag) {
-  const headers = { 'accept': 'application/vnd.github+json', 'user-agent': 'yession',
-                    'x-github-api-version': '2022-11-28' }
-  if (token) headers['authorization'] = 'Bearer ' + token
-  if (etag) headers['if-none-match'] = etag
-  return fetch(url, { headers })
-    .then(async r => ({ reachable: true, status: r.status, etag: r.headers.get('etag') || '',
-                        reset: r.headers.get('x-ratelimit-reset') || '',
-                        remaining: r.headers.get('x-ratelimit-remaining') || '',
-                        resource: r.headers.get('x-ratelimit-resource') || '', body: await r.text() }))
-    .catch(e => ({ reachable: false, status: 0, etag: '', reset: '', remaining: '', resource: '',
-                   body: String((e && e.message) || e) }))
-})($0, $1, $2)""")>]
-let private getConditional (url: string) (token: string) (etag: string) : JS.Promise<FetchReply> = jsNative
+/// How every request in this file presents itself to GitHub: the versioned accept header, a
+/// user agent (GitHub refuses requests without one), and a bearer token when there is one.
+///
+/// `GitHubRepos.fs` carries its own copy of these three, deliberately: each of these files
+/// is the whole of one endpoint family and owns what it knows about the provider outright,
+/// so a second forge is a second copy of a file rather than a shared GitHub layer that
+/// neither of them owns.
+let sentHeaders (token: string) : (string * string) list =
+    [ yield "accept", "application/vnd.github+json"
+      yield "user-agent", "yession"
+      yield "x-github-api-version", "2022-11-28"
+      if not (String.IsNullOrEmpty token) then yield "authorization", "Bearer " + token ]
+
+/// What a look adds to those: the caller's ETag, so an unchanged resource costs a 304
+/// rather than a body. Nothing is sent when there is no ETag to send — a first look has
+/// none, and `if-none-match: ` would be a condition on the empty string.
+let conditionalHeaders (token: string) (etag: string) : (string * string) list =
+    [ yield! sentHeaders token
+      if not (String.IsNullOrEmpty etag) then yield "if-none-match", etag ]
+
+/// The reply as this file reads one, whichever request made it: the status, the four
+/// headers a look acts on, and the body.
+let private replyOf (attempt: Http.Attempt<string>) (etagOf: Fetch.Types.Response -> string) : FetchReply =
+    match attempt with
+    | Http.Answered (response, body) ->
+        { Reachable = true
+          Status = response.Status
+          Etag = etagOf response
+          Reset = Http.headerOf "x-ratelimit-reset" response
+          Remaining = Http.headerOf "x-ratelimit-remaining" response
+          Resource = Http.headerOf "x-ratelimit-resource" response
+          Body = body }
+    | Http.Unreachable reason ->
+        { Reachable = false; Status = 0; Etag = ""; Reset = ""; Remaining = ""; Resource = ""; Body = reason }
+
+/// One conditional GET.
+let private getConditional (url: string) (token: string) (etag: string) : Async<FetchReply> =
+    async {
+        let! attempt = Http.text url [ Http.headers (conditionalHeaders token etag) ]
+        return replyOf attempt (Http.headerOf "etag")
+    }
 
 /// What a reply said about the budget behind this credential.
 ///
@@ -145,23 +169,28 @@ let private getConditional (url: string) (token: string) (etag: string) : JS.Pro
 /// Both numbers or neither, which is what `Allowance` requires: a remaining with no window
 /// to wait for is a hold nobody can end.
 let private allowanceIn (reply: FetchReply) : Resilience.Allowance =
-    if not reply.reachable || reply.resource <> "core" then Resilience.Unknown
+    if not reply.Reachable || reply.Resource <> "core" then Resilience.Unknown
     else
-        match Int32.TryParse reply.remaining, Int64.TryParse reply.reset with
+        match Int32.TryParse reply.Remaining, Int64.TryParse reply.Reset with
         | (true, remaining), (true, resetEpoch) ->
             Resilience.Seen (remaining, DateTimeOffset.FromUnixTimeSeconds resetEpoch)
         | _ -> Resilience.Unknown
 
-let private failureOf (reply: FetchReply) : PrFetchFailure =
-    if not reply.reachable then PrUnreachable reply.body
-    elif reply.status = 401 then PrUnauthorized
-    elif reply.status = 404 then PrNotFound
+/// What a status GitHub answered with means for a look, and the one number that comes with
+/// it — `x-ratelimit-reset`, which is the only thing a caller can do something with.
+let failureAt (status: int) (reset: string) : PrFetchFailure =
+    if status = 401 then PrUnauthorized
+    elif status = 404 then PrNotFound
     // 403 and 429 are both how GitHub says "too many"; a 403 for any other reason
     // (scopes, a blocked App) is also not something a retry sooner would fix, so the
     // wait it implies is the safe reading either way.
-    elif reply.status = 403 || reply.status = 429 then
-        PrRateLimited (match Int32.TryParse reply.reset with | true, epoch -> Some epoch | _ -> None)
-    else PrUnreachable (sprintf "github answered %d" reply.status)
+    elif status = 403 || status = 429 then
+        PrRateLimited (match Int32.TryParse reset with | true, epoch -> Some epoch | _ -> None)
+    else PrUnreachable (sprintf "github answered %d" status)
+
+/// A reply that never arrived carries why in place of a body; everything else is a status.
+let private failureOf (reply: FetchReply) : PrFetchFailure =
+    if not reply.Reachable then PrUnreachable reply.Body else failureAt reply.Status reply.Reset
 
 /// What a look may spend, and where what it learns is kept.
 ///
@@ -214,10 +243,10 @@ let fetchOver (apiBase: string) (spending: Spending) : FetchPr =
             | Resilience.Go ->
                 let bearer = Option.toObj token
                 let repo = RepoRef.value pr.Repo
-                let succeeded (reply: FetchReply) = reply.reachable && reply.status >= 200 && reply.status < 300
-                let notModified (reply: FetchReply) = reply.reachable && reply.status = 304
+                let succeeded (reply: FetchReply) = reply.Reachable && reply.Status >= 200 && reply.Status < 300
+                let notModified (reply: FetchReply) = reply.Reachable && reply.Status = 304
                 let prUrl = sprintf "%s/repos/%s/pulls/%d" (apiBase.TrimEnd '/') repo pr.Number
-                let! prReply = getConditional prUrl bearer etags.Pr |> Interop.awaitPromise
+                let! prReply = getConditional prUrl bearer etags.Pr
                 spending.Learned (allowanceIn prReply)
                 // The pull request's own fields, decoded when it answered with a body and
                 // carried over from the last look when it answered 304.
@@ -242,7 +271,7 @@ let fetchOver (apiBase: string) (spending: Spending) : FetchPr =
                                   Queued = s.Queued
                                   Mergeable = s.Mergeable }))
                     elif succeeded prReply then
-                        Decode.fromString prDecoder prReply.body
+                        Decode.fromString prDecoder prReply.Body
                         |> Result.map Some
                         |> Result.mapError (sprintf "unrecognised pull request reply: %s")
                     else Ok None
@@ -257,7 +286,7 @@ let fetchOver (apiBase: string) (spending: Spending) : FetchPr =
                             (apiBase.TrimEnd '/')
                             repo
                             fields.HeadSha
-                    let! checksReply = getConditional checksUrl bearer etags.Checks |> Interop.awaitPromise
+                    let! checksReply = getConditional checksUrl bearer etags.Checks
                     spending.Learned (allowanceIn checksReply)
                     if notModified prReply && notModified checksReply then
                         // Both halves unchanged: there is nothing to fold and nothing to say.
@@ -276,7 +305,7 @@ let fetchOver (apiBase: string) (spending: Spending) : FetchPr =
                             | _ -> ChecksPending
                         let checks =
                             if succeeded checksReply then
-                                match Decode.fromString checkRunsDecoder checksReply.body with
+                                match Decode.fromString checkRunsDecoder checksReply.Body with
                                 | Ok runs -> rollupOf runs
                                 | Error _ -> unread
                             else unread
@@ -291,33 +320,32 @@ let fetchOver (apiBase: string) (spending: Spending) : FetchPr =
                         // A 304 carries back the ETag we sent, so keeping the old one says the
                         // same thing without depending on the provider echoing it.
                         let nextEtags =
-                            { Pr = (if succeeded prReply then prReply.etag else etags.Pr)
-                              Checks = (if succeeded checksReply then checksReply.etag else etags.Checks) }
+                            { Pr = (if succeeded prReply then prReply.Etag else etags.Pr)
+                              Checks = (if succeeded checksReply then checksReply.Etag else etags.Checks) }
                         return PrChanged (snapshot, nextEtags)
         }
 
 // --- opening one -------------------------------------------------------------------------
 
-/// `POST /repos/{o}/{r}/pulls`, with the headers a look sends plus a body. Its own macro
+/// `POST /repos/{o}/{r}/pulls`, with the headers a look sends plus a body. Its own verb
 /// rather than a mode flag on the one above: the method, the body and the absent conditional
 /// header are all of what the two requests differ by, and a flag would hide that in a branch.
-[<Emit("""(function (url, token, payload) {
-  const headers = { 'accept': 'application/vnd.github+json', 'content-type': 'application/json',
-                    'user-agent': 'yession', 'x-github-api-version': '2022-11-28' }
-  if (token) headers['authorization'] = 'Bearer ' + token
-  return fetch(url, { method: 'POST', headers, body: payload })
-    .then(async r => ({ reachable: true, status: r.status, etag: '',
-                        reset: r.headers.get('x-ratelimit-reset') || '',
-                        remaining: r.headers.get('x-ratelimit-remaining') || '',
-                        resource: r.headers.get('x-ratelimit-resource') || '', body: await r.text() }))
-    .catch(e => ({ reachable: false, status: 0, etag: '', reset: '', remaining: '', resource: '',
-                   body: String((e && e.message) || e) }))
-})($0, $1, $2)""")>]
-let private postJson (url: string) (token: string) (payload: string) : JS.Promise<FetchReply> = jsNative
+///
+/// No ETag comes back from it — a create has nothing to be conditional about — which is why
+/// the reply's is read as "" rather than off the response.
+let private postJson (url: string) (token: string) (payload: string) : Async<FetchReply> =
+    async {
+        let! attempt =
+            Http.text
+                url
+                [ Fetch.Types.RequestProperties.Method Fetch.Types.HttpMethod.POST
+                  Http.headers (("content-type", "application/json") :: sentHeaders token)
+                  Fetch.Types.RequestProperties.Body (U3.Case3 payload) ]
+        return replyOf attempt (fun _ -> "")
+    }
 
-/// A value on its way into a query string. Branch names carry `/` and, on a fork's head, `:`.
-[<Emit("encodeURIComponent($0)")>]
-let private urlPart (value: string) : string = jsNative
+// A value on its way into a query string goes through `Http.urlPart`. Branch names carry
+// `/` and, on a fork's head, `:`.
 
 /// How GitHub names the branch a pull request comes FROM: `owner:branch`, which is what the
 /// list endpoint requires and what the create endpoint accepts. A head a caller already
@@ -385,19 +413,19 @@ let openOver (apiBase: string) (spending: Spending) : OpenPr =
                 let bearer = Option.toObj token
                 let repo = RepoRef.value draft.Repo
                 let root = apiBase.TrimEnd '/'
-                let succeeded (reply: FetchReply) = reply.reachable && reply.status >= 200 && reply.status < 300
+                let succeeded (reply: FetchReply) = reply.Reachable && reply.Status >= 200 && reply.Status < 300
                 let listUrl =
                     sprintf
                         "%s/repos/%s/pulls?state=open&head=%s&base=%s"
                         root
                         repo
-                        (urlPart (headRef draft))
-                        (urlPart draft.Base)
-                let! listing = getConditional listUrl bearer "" |> Interop.awaitPromise
+                        (Http.urlPart (headRef draft))
+                        (Http.urlPart draft.Base)
+                let! listing = getConditional listUrl bearer ""
                 spending.Learned (allowanceIn listing)
                 if not (succeeded listing) then return PrOpenFailed (failureOf listing)
                 else
-                    match Decode.fromString openNumbersDecoder listing.body with
+                    match Decode.fromString openNumbersDecoder listing.Body with
                     | Error e -> return PrOpenFailed (PrUnreachable (sprintf "unrecognised pull request list: %s" e))
                     | Ok (number :: _) ->
                         match PrRef.create draft.Repo number with
@@ -406,18 +434,17 @@ let openOver (apiBase: string) (spending: Spending) : OpenPr =
                     | Ok [] ->
                         let! created =
                             postJson (sprintf "%s/repos/%s/pulls" root repo) bearer (createBody draft)
-                            |> Interop.awaitPromise
                         spending.Learned (allowanceIn created)
                         // A refusal is not a failure: GitHub read the draft and said no, which
                         // is an answer somebody can act on. Every other non-2xx is the same
                         // four facts a look classifies.
-                        if created.reachable && created.status = 422 then
-                            match Decode.fromString refusalOf created.body with
+                        if created.Reachable && created.Status = 422 then
+                            match Decode.fromString refusalOf created.Body with
                             | Ok (Some said) -> return PrOpenRefused said
                             | _ -> return PrOpenRefused "it would not say why"
                         elif not (succeeded created) then return PrOpenFailed (failureOf created)
                         else
-                            match Decode.fromString numberDecoder created.body with
+                            match Decode.fromString numberDecoder created.Body with
                             | Error e ->
                                 return PrOpenFailed (PrUnreachable (sprintf "unrecognised pull request reply: %s" e))
                             | Ok number ->

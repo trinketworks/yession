@@ -2485,6 +2485,46 @@ let private syncTests =
     ]
 
 
+// --- A command line's caret ---------------------------------------------------------------
+
+/// Pushing the CRDT's value into the `<input>` showing it, which happens after every render
+/// and every doc update. The DOM's half is one assignment; what can be WRONG is where the
+/// caret ends up, and that is arithmetic (`TerminalText.lineWrite`) — so it is pinned here,
+/// in the cheap tier, rather than inferred from a browser that typed something.
+let private commandLineCaretTests =
+    testList "A command line's caret when the root's value is pushed in" [
+        testCase "a caret past the end of a shorter value clamps to the end" <| fun () ->
+            Expect.equal
+                (TerminalText.lineWrite "echo status" "echo" (Some (9, 9)))
+                (TerminalText.LineWrite.ValueAndCaret (4, 4))
+                "the caret lands at the end of what is now there, never past it"
+
+        testCase "a selection's start and end clamp independently" <| fun () ->
+            Expect.equal
+                (TerminalText.lineWrite "echo status" "echo s" (Some (2, 9)))
+                (TerminalText.LineWrite.ValueAndCaret (2, 6))
+                "the start still fits and is kept; only the end comes back"
+
+        testCase "a caret inside the new value is kept exactly" <| fun () ->
+            Expect.equal
+                (TerminalText.lineWrite "echo status" "echo statuses" (Some (4, 4)))
+                (TerminalText.LineWrite.ValueAndCaret (4, 4))
+                "a value that grew past the caret does not move it"
+
+        testCase "an unchanged value is not written, so the caret is untouched" <| fun () ->
+            Expect.equal
+                (TerminalText.lineWrite "echo status" "echo status" (Some (4, 4)))
+                TerminalText.LineWrite.Unchanged
+                "not writing is the only thing that leaves a caret alone"
+
+        testCase "a line nobody is typing in is written with no caret to put back" <| fun () ->
+            Expect.equal
+                (TerminalText.lineWrite "echo status" "echo done" None)
+                TerminalText.LineWrite.Value
+                "an unfocused line takes the value and claims no selection"
+    ]
+
+
 // --- Foreign sources (Plan 16, part D) ----------------------------------------------------
 
 /// An environment that REFUSES to start, so "did the open ensure the sandbox?" is answerable
@@ -4085,6 +4125,7 @@ let tests =
         managerTests
         schedulerTests
         syncTests
+        commandLineCaretTests
         viewportTests
         transcriptCursorTests
         terminalTitleTests

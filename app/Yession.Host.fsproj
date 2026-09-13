@@ -12,6 +12,10 @@
   <ItemGroup>
     <Compile Include="Version.fs" />
     <Compile Include="Interop.fs" />
+    <!-- Every request this host makes over HTTP, through the `Fable.Fetch` binding rather
+         than a hand-rolled Emit string. After Interop.fs, whose `awaitPromise` it needs,
+         and before every module that talks to a provider. -->
+    <Compile Include="Http.fs" />
     <Compile Include="Assets.fs" />
     <Compile Include="Retirements.fs" />
     <Compile Include="ManagerCli.fs" />
@@ -103,6 +107,7 @@
 
   <ItemGroup>
     <PackageReference Include="Fable.Core" />
+    <PackageReference Include="Fable.Fetch" />
     <PackageReference Include="Fable.Lit" />
     <PackageReference Include="Fable.Node" />
     <PackageReference Include="Fable.Yjs" />

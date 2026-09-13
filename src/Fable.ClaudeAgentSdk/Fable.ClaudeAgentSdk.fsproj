@@ -1,0 +1,21 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Fable bindings to the `@anthropic-ai/claude-agent-sdk` npm package — the agent runner
+    behind the `RunAgent` capability. Fable-only, like src/Fable.Dockerode: `dotnet build`
+    only type-checks it; the runnable JS comes from Fable. Kept a standalone project so the
+    bindings are a distinct layer, mirroring how Fable.Dockerode wraps dockerode.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="ClaudeAgentSdk.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Fable.Core" />
+  </ItemGroup>
+
+</Project>

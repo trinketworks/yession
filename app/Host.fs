@@ -115,10 +115,15 @@ let startFull
     // credential connected mid-session enables turns without a relaunch.
     (runAgent: unit -> RunAgent option)
     // The same, for the other thing a model is asked to do here: write a few words for a
-    // chapter nobody has named (Plan 25). A thunk for the same reason — a credential
-    // connected mid-session starts naming chapters without a relaunch — and `None` means
-    // the guesses stand, which is what a session with no credential has always shown.
-    (summarize: unit -> Summarize option)
+    // chapter nobody has named (Plan 25). Read at each pass for the same reason — a
+    // credential connected mid-session starts naming chapters without a relaunch — and
+    // `None` means the guesses stand, which is what a session with no credential has always
+    // shown.
+    //
+    // It takes WHOSE credential rather than answering for itself, because the answer is a
+    // fact about this log: the session's creator. That is known here and nowhere above here,
+    // so a thunk that decided on its own could only have decided on somebody else's behalf.
+    (summarize: CredentialFor -> Summarize option)
     (makeSandboxes: (EventLog<SessionEvent> -> WorkSandboxes.WorkSandboxes) option)
     // Secrets (Plan 06): the Manager-granted, session-scoped secrets surface
     // (write/list/delete — never read). None = turns see the `none` denials.
@@ -701,7 +706,15 @@ let startFull
                                 Yession.Domain.Chat.ConversationProjection.empty
                             |> fst
                     })
-                summarize
+                // On the CREATOR's credential. Naming a chapter is nobody's turn — no one
+                // asked for it and a chapter mark carries no author — so the session cannot
+                // spend whichever human happens to be connected without attributing a
+                // request to somebody who did not make it. Whose session it is, is a
+                // different question with a stable answer, and it is the one this log can
+                // answer. An unattributed session has no creator, which `ofOption` reads as
+                // the deployment's own credential — the scope `--auth localhost` actually
+                // grants.
+                (fun () -> summarize (CredentialFor.ofOption (Attribution.creator attribution)))
 
         // The drain re-arms on every doc update observed while idle, so an enqueue can
         // never be missed (liveness; recursion during a drain's own removal is cut by the
@@ -1055,7 +1068,7 @@ let startWithEnvironment
     // No mount: these helpers serve an unfronted, origin-root session. No transcript store
     // either — terminals fall back to the in-memory one, which is the right default for a
     // host with no data directory.
-    startFull Clock.system (fun () -> runAgent) (fun () -> None) makeSandboxes None baseLog None None None None (fun _ _ -> ()) None McpClient.McpConnections.none None sessionId None "" None false None port
+    startFull Clock.system (fun () -> runAgent) (fun _ -> None) makeSandboxes None baseLog None None None None (fun _ _ -> ()) None McpClient.McpConnections.none None sessionId None "" None false None port
 
 /// `startWithEnvironment` without an environment — Step 08-era topology.
 let startWith (runAgent: RunAgent option) (sessionId: SessionId) (port: int) : Async<SessionHost> =

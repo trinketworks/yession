@@ -25,9 +25,20 @@ module Attribution =
           /// current": its keys are peers, so several can map to the same user with
           /// nothing to say which is newest. This is that answer, kept up to date by the
           /// same fold.
-          UserPeers : Map<UserId, PeerId> }
+          UserPeers : Map<UserId, PeerId>
+          /// The first user this session ever attributed — whose session it is.
+          ///
+          /// Folded here rather than derived, because it cannot be derived: the maps above
+          /// are keyed, and a map has no first. It is a fact about the ORDER of the log, and
+          /// the fold is the only thing that sees that order.
+          ///
+          /// `None` under an unattributed deployment, which is the honest answer rather than
+          /// a missing one: `--auth localhost` grants one principal and verifies nobody, so
+          /// there is no user whose session this is. What reads this for a credential turns
+          /// that into `CredentialFor.Deployment`, which is the scope such a launch holds.
+          Creator : UserId option }
 
-    let empty : State = { PeerUsers = Map.empty; UserPeers = Map.empty }
+    let empty : State = { PeerUsers = Map.empty; UserPeers = Map.empty; Creator = None }
 
     /// The single-event step: fold one more event into an existing state, updating both
     /// directions from the one match arm. This is what a live process replays
@@ -37,7 +48,11 @@ module Attribution =
         match event with
         | PeerJoined { PeerId = peer; User = Some user } ->
             { PeerUsers = Map.add peer user acc.PeerUsers
-              UserPeers = Map.add user peer acc.UserPeers }
+              UserPeers = Map.add user peer acc.UserPeers
+              // First wins, for ever. A session's creator is not its most recent visitor, and
+              // a rule that let the newest join take it would hand the session to whoever
+              // opened the tab last.
+              Creator = acc.Creator |> Option.orElse (Some user) }
         | _ -> acc
 
     /// A whole event log, folded from empty. Same result as replaying `applyEvent` one
@@ -58,3 +73,12 @@ module Attribution =
 
     let actorFor (peerUsers: Map<PeerId, UserId>) (peer: PeerId) : ActorRef =
         Principal.toActor (principalFor peerUsers peer)
+
+    /// Whose session this is: the first person it ever attributed, as a principal.
+    ///
+    /// A `Principal` rather than a `UserId` because what asks is asking whose authority
+    /// something runs on, and that is the vocabulary the rest of that question is written in.
+    /// Never a peer: a peer is by definition somebody nobody verified, so an unattributed
+    /// session has no creator rather than an anonymous one.
+    let creator (state: State) : Principal option =
+        state.Creator |> Option.map Principal.User

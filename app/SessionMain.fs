@@ -816,25 +816,22 @@ let private connectedSomewhere () =
             | PeerScope _ -> false
             | SessionScope _ | UserScope _ | LocalScope -> true))
 
-/// Writing a few words, read at each pass (Plan 25).
+/// Writing a few words, read at each pass (Plan 25), on whosever credential the caller names
+/// — the session's creator, which the Host knows and this does not.
 ///
-/// On the DEPLOYMENT's credential, not a person's: naming a chapter is nobody's turn. No one
-/// asked for it, a chapter mark carries no author, and a session that spent whichever human
-/// happened to be connected would be attributing a request to somebody who did not make it.
-///
-/// Which is why the gate is the DISPATCHER's own question rather than the turn's.
-/// `connectedSomewhere` counts a user scope, correctly, because a turn names the acting
-/// person's own scope; these calls never do — `turnTargets … Deployment` is the session's
-/// scope and the deployment's, and nobody has no own scope. Gated the turn's way, a
-/// deployment where everybody signed in as themselves reads as connected, every chapter is
-/// asked about once, every ask fails to resolve a credential, and no chapter is ever named
-/// again. The gate has to promise what the dispatcher can deliver.
-let private summarize () : Summarize option =
-    if not (envCreds || (claudeTargetFor CredentialFor.Deployment).IsSome) then None
+/// The gate is the DISPATCHER's own question, asked of that same credential rather than a
+/// second question like it. `connectedSomewhere` counts a user scope, correctly, because a
+/// turn names the acting person's own scope; gated that way this reads as connected wherever
+/// ANY person is signed in, so a deployment whose creator had connected nothing would ask
+/// about every chapter once, fail to resolve a credential every time, and never name another
+/// chapter for the life of the process. The gate has to promise what the dispatcher can
+/// deliver, which means asking about the same credential the dispatcher will go and get.
+let private summarize (credential: CredentialFor) : Summarize option =
+    if not (envCreds || (claudeTargetFor credential).IsSome) then None
     else
         Some (fun ask ->
             async {
-                match! resolveCredential CredentialFor.Deployment with
+                match! resolveCredential credential with
                 | Error reason -> return Error reason
                 | Ok (Some credential) -> return! ClaudeConnection.summarize credential ask
                 | Ok None ->
