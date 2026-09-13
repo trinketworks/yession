@@ -415,8 +415,31 @@ let private sessionTests =
                         }))
                 let! answer = registry.Invoke (call "yession" "execute_command" """{"command":"echo hi"}""")
                 Expect.equal seen "echo hi" "the argument was decoded and passed through"
-                Expect.equal answer (Ok (ToolAnswer.text "exit code 0 in terminal t1\necho hi")) "and the outcome came back as text"
+                Expect.equal answer (Ok (ToolAnswer.text "FINISHED with exit code 0 in terminal t1\necho hi")) "and the outcome came back as text"
             }
+
+        testCase "a finished command is told apart from a running one at the first word" <| fun () ->
+            // Two answers with the same output under them — and a devshell's prelude makes
+            // that the usual case — have to differ before the output starts. The first word
+            // is upper-case on both, so neither reads as a continuation of the other, and
+            // the words differ.
+            let render (status: TerminalCommandStatus) =
+                AgentTools.renderOutcome
+                    { Handle = QueueId.create "q1" |> expect
+                      Terminal = TerminalId.create "t1" |> expect
+                      Block = None
+                      Status = status
+                      Output = "warning: Git tree is dirty\nRunning tasks devenv:enterShell\n"
+                      Kept = OutputEnd.Whole
+                      Elided = 0
+                      From = None }
+            let first (text: string) = text.Split(' ').[0]
+            let finished = render (TerminalCommandRan (CommandSucceeded 0))
+            let running = render TerminalCommandRunning
+            Expect.equal (first finished) "FINISHED" "a command that ended says so first"
+            Expect.equal (first running) "STILL" "and one that has not says that first"
+            for word in [ first finished; first running; first (render (TerminalCommandRan (CommandFailed 1))) ] do
+                Expect.equal word (word.ToUpperInvariant ()) (sprintf "%s is shouted, like the rest" word)
 
         // `open_terminal` hands back an id and says to pass it here as `terminal`. For a
         // while the schema had no such field and the decoder read none, so every command the
