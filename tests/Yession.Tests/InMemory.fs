@@ -302,6 +302,39 @@ let tests =
                 do! host.Stop ()
             }
 
+        // A session can end in the middle of a name. Typing takes time, and a pass in flight
+        // is parked on the clock with a caret out on every connection — while the host's
+        // shutdown waits for exactly those connections to report themselves closed. A writer
+        // that went on writing into them is a shutdown that does not finish, which is how
+        // this arrived: as a libdatachannel cleanup deadlock in the release gate.
+        testCaseAsync "stopping the session stops the typing, and keeps what it had written" <|
+            async {
+                let summarize : Summarize =
+                    fun _ -> async { return Ok "A name long enough to still be arriving" }
+                let vc = virtualClock (System.DateTimeOffset (2026, 6, 14, 0, 0, 0, System.TimeSpan.Zero))
+                let! host =
+                    Host.startFull vc.Clock (fun () -> None) (fun _ -> Some summarize) None None None None None None None (fun _ _ -> ()) None McpClient.McpConnections.none None (sid ()) None "" None false None 0
+                let! a = connectInMemoryClient host "ada" "Ada"
+                let ada = a.Hello.PeerId
+                do! compose a ada "ship it"
+                a.Connection.SendDraft ada
+                do! a.Runner.WaitFor (fun m -> m.Conversation.Items |> List.exists (fun i -> i.Body = "ship it"))
+                let item = (a.Runner.Model ()).Conversation.Items |> List.head
+                let subject = Chat.NamingSubject.Chapter item.MessageId
+                a.Runner.Dispatch (user (ToggleChapterMsg item.MessageId))
+                // Part of the way through: the typing is parked on the clock mid-name.
+                do! vc.Armed ()
+                vc.Advance (System.TimeSpan.FromMilliseconds 200.0)
+                let partway = SyncedStateSync.nameOf host.Doc subject
+                Expect.isTrue (partway.Length > 0) "some of it has arrived"
+                Expect.isTrue (partway.Length < "A name long enough to still be arriving".Length) "and not all of it"
+                do! host.Stop ()
+                // However much time passes now, nothing more is written — and what had
+                // arrived is still there, because a session ending is not a write undone.
+                for _ in 1 .. 40 do vc.Advance (System.TimeSpan.FromMilliseconds 100.0)
+                Expect.equal (SyncedStateSync.nameOf host.Doc subject) partway "stopped where it was, and kept it"
+            }
+
         // The session names ITSELF, not only its parts — and the name reaches the Manager
         // through the hook that already carries a typed title, so a session list shows what
         // a session is for without anybody having titled it.

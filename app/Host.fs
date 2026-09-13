@@ -778,8 +778,8 @@ let startFull
         // what make harmless. More being SAID is a log append rather than a doc write, so it
         // looks on that too (`subscribeToChanges`, below), and a credential arriving is
         // neither, which is what `Wake` is for.
-        DocSync.onAnyUpdate doc (fun () -> nameThings ())
-        subscribeToChanges (fun () -> nameThings ()) |> ignore
+        DocSync.onAnyUpdate doc (fun () -> nameThings.Look ())
+        subscribeToChanges (fun () -> nameThings.Look ()) |> ignore
         // The terminal queue re-arms on the same signal, for the same liveness reason.
         DocSync.onAnyUpdate doc (fun () -> drainTerminals ())
         // ...and so does a command waiting on that queue: an approval a peer just granted is a
@@ -1095,7 +1095,7 @@ let startFull
               // Both looks, because both wait on the same thing a caller has: a credential
               // that has just arrived is work for the scheduler AND work for the namer, and
               // a caller that had to know which is a caller that will pick one.
-              Wake = fun () -> scheduler.Wake (); nameThings ()
+              Wake = fun () -> scheduler.Wake (); nameThings.Look ()
               RunGated = commandGate.Run
               ResumeGated = commandGate.Read
               TerminalCommands = terminalCommands
@@ -1105,6 +1105,11 @@ let startFull
                 fun () ->
                     async {
                         stopIdleLeaseBeat ()
+                        // Before the connections close, because a pass in flight is still
+                        // sending carets down them and `closeConnections` waits for each to
+                        // report itself closed — a writer that went on writing into a
+                        // closing channel is a shutdown that never finishes.
+                        nameThings.Stop ()
                         notifications |> Option.iter (fun s -> s.Stop ())
                         // Sandbox lifetime = session lifetime: take the WorkSandbox (and
                         // anything still running in it) down with the session.

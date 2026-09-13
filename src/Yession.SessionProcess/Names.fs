@@ -41,6 +41,19 @@ module Names =
           /// Say where the session's caret is, or that it is nowhere.
           Caret : (NamingSubject * int) option -> unit }
 
+    /// The namer, as the composition holds it.
+    ///
+    /// Two verbs, because typing takes time and a session can end in the middle of it. A pass
+    /// in flight is parked on the clock with a caret out on every connection, and the host's
+    /// shutdown waits for those connections to report themselves closed — so a writer that
+    /// went on sending into them is a shutdown that does not finish.
+    type Namer =
+        { /// Something may have made naming work; look and see.
+          Look : unit -> unit
+          /// Put nothing more into the doc and send no more carets. What is already written
+          /// stays: this is a session ending, not a write being undone.
+          Stop : unit -> unit }
+
     /// How much arrives per tick, and how often. Fast enough not to be a performance, slow
     /// enough to read as somebody typing rather than as a field changing under you.
     let [<Literal>] private PerTick = 3
@@ -66,8 +79,11 @@ module Names =
         (record: SessionNamed -> Async<unit>)
         (creator: unit -> Principal option)
         (summarize: unit -> Summarize option)
-        : unit -> unit =
+        : Namer =
         let mutable running = false
+        /// Set once, by `Stop`. Read between ticks and before each pass, so a session ending
+        /// stops the typing at the next character rather than at the end of the name.
+        let mutable stopped = false
         /// What the last pass was answered against: the doc's title and chapters, and how far
         /// the log had got. Between them they are everything `Naming.owed` reads, so a trigger that
         /// leaves both alone — somebody typing in a draft, a terminal record landing — cannot
@@ -102,9 +118,9 @@ module Names =
                 if cleared <> "" then return cleared
                 else
                     let mutable stands = ""
-                    let mutable stopped = false
+                    let mutable interrupted = false
                     let mutable at = 0
-                    while not stopped && at < name.Length do
+                    while not interrupted && not stopped && at < name.Length do
                         do! clock.After tick
                         let next = min name.Length (at + PerTick)
                         let addition = name.Substring (at, next - at)
@@ -116,14 +132,16 @@ module Names =
                             // what deleting a range somebody has since typed inside cannot
                             // promise.
                             stands <- after
-                            stopped <- true
+                            interrupted <- true
                         else
                             stands <- after
                             at <- next
                             typing.Caret (Some (subject, stands.Length))
                     // Cleared however it ended: a caret left behind by a writer that has
                     // stopped is worse than no caret, because it says somebody is still there.
-                    typing.Caret None
+                    // Not after a session-level stop, though — there is nobody left to tell,
+                    // and the connections are being closed out from under it.
+                    if not stopped then typing.Caret None
                     return stands
             }
 
@@ -160,7 +178,7 @@ module Names =
 
         let pass () =
             async {
-                match summarize () with
+                match (if stopped then None else summarize ()) with
                 | None -> return ()
                 | Some write ->
                     let seen = here ()
@@ -178,7 +196,7 @@ module Names =
             }
 
         let rec run () =
-            if not running then
+            if not running && not stopped then
                 running <- true
                 // What was true when this pass started, so the re-arm below asks whether
                 // something moved DURING it rather than whether there is anything to do.
@@ -198,7 +216,8 @@ module Names =
                             // swallowed by the single-flight guard, so the pass that missed
                             // it has to be the one to look again; the look is cheap, and it
                             // settles as soon as nothing is moving.
-                            if here () <> before then run ()
+                            if not stopped && here () <> before then run ()
                     })
 
-        run
+        { Look = run
+          Stop = fun () -> stopped <- true }
