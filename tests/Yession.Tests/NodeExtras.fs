@@ -100,6 +100,38 @@ let tests =
             Expect.equal text "hello stream" "every chunk arrived, and the end said so"
         }
 
+        // The two byte types Node has, and the seam between them: WebCrypto fills and reads a
+        // `Uint8Array`, while the only thing that encodes bytes as base64url is a `Buffer`.
+        testCase "bufferOf carries a typed array's bytes into a Buffer" <| fun () ->
+            let bytes = JS.Constructors.Uint8Array.Create 3
+            bytes.[0] <- 0xFBuy
+            bytes.[1] <- 0xEFuy
+            bytes.[2] <- 0xBEuy
+            // The same three bytes the base64url case above uses, so a Buffer that took them in
+            // the wrong order, or took the array's fields instead, says so in the answer.
+            Expect.equal ((bufferOf bytes).toString base64url) "----" "the same bytes, in order"
+
+        testCase "bufferOf copies, so the array cannot change what it handed over" <| fun () ->
+            // `Buffer.from(typedArray)` copies; `Buffer.from(arrayBuffer)` — one property
+            // away — is a VIEW over the same memory. Which of the two this is decides whether
+            // an IV encoded for the wire can still be rewritten by whoever minted it.
+            let bytes = JS.Constructors.Uint8Array.Create 3
+            bytes.[0] <- 0xFBuy
+            bytes.[1] <- 0xEFuy
+            bytes.[2] <- 0xBEuy
+            let copied = bufferOf bytes
+            bytes.[0] <- 0uy
+            Expect.equal (copied.toString base64url) "----" "the copy is not the array's to change"
+
+        testCase "bytesOf views the Buffer's own bytes" <| fun () ->
+            // The other direction is a CAST — a Node Buffer already IS a Uint8Array — so the
+            // result shares the Buffer's memory rather than copying it. That is what makes it
+            // free, and it is only true while it stays a cast.
+            let original = buffer.Buffer.from("yes", utf8)
+            let view = bytesOf original
+            view.[0] <- 0x6Euy
+            Expect.equal (original.toString utf8) "nes" "the same memory, not a copy of it"
+
         testCase "equal buffers compare equal" <| fun () ->
             let left = buffer.Buffer.from("the same secret", utf8)
             let right = buffer.Buffer.from("the same secret", utf8)

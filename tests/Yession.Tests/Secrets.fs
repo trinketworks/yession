@@ -290,6 +290,8 @@ let private wireTests =
 
 // --- Step 3: cipher + store (real WebCrypto AES-GCM on Node; cheap tier) ----------------
 
+open Fable.NodeExtras
+open Node.Api
 open Yession.Host
 
 [<Fable.Core.Emit("crypto.subtle.exportKey('raw', $0)")>]
@@ -339,6 +341,27 @@ let private cipherTests =
                 let! iv, ct = sealer.Encrypt aad "value"
                 let! r = other.Decrypt aad iv ct
                 Expect.isError r "wrong key detected"
+            }
+
+        // The IV is minted per CALL, inside the operation, and never handed in: a repeat under
+        // one key is the one thing GCM has no defence against, and a caller that COULD supply
+        // an IV is the caller that eventually supplies the same one twice. What a repeat would
+        // leak is exactly this: that two entries hold the same secret.
+        testCaseAsync "the same plaintext encrypts differently every time" <|
+            async {
+                let! cipher = SecretsCipher.importKey (SecretsCipher.generateKek ())
+                let aad = SecretsCipher.aadFor (SessionScope sessionA) name
+                let! ivOne, ctOne = cipher.Encrypt aad "the same secret"
+                let! ivTwo, ctTwo = cipher.Encrypt aad "the same secret"
+                Expect.notEqual ivTwo ivOne "a fresh IV per call"
+                Expect.notEqual ctTwo ctOne "so one plaintext is never twice the same ciphertext"
+            }
+
+        testCaseAsync "the IV is 96 bits, the size GCM is specified for" <|
+            async {
+                let! cipher = SecretsCipher.importKey (SecretsCipher.generateKek ())
+                let! iv, _ = cipher.Encrypt (SecretsCipher.aadFor (SessionScope sessionA) name) "value"
+                Expect.equal (int (buffer.Buffer.from(iv, base64url)).length) 12 "twelve bytes, base64url on the wire"
             }
 
         testCaseAsync "the imported KEK is non-extractable: exportKey rejects" <|
