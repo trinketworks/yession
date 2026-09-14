@@ -936,6 +936,46 @@ let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
 
 let private shellModel : ClientModel = shellModelOf Lines 16
 
+/// The session's FIRST screen: connected, the log read to an end holding nothing, and the
+/// provider's listing arrived — so the ask card stands where the timeline's first line will
+/// (`Launch.offered`). Folded through the same messages a browser takes, in the order it
+/// takes them, rather than assembled by hand: a card that only stands over a model nothing
+/// produces is a card this page proves nothing about.
+///
+/// Two rows and no more, one of them described: what the card's geometry needs is a row to
+/// hold and a row's second line beside it, and a longer list is a scroll to fight.
+let private launchModel : ClientModel =
+    let peerId : PeerId = PeerId.create "ada" |> expect
+    let sessionId : SessionId = SessionId.create "harness-launch" |> expect
+    let offset (n: int64) : EventOffset = EventOffset.create n |> expect
+    let at (n: int64) (event: SessionEvent) : EventEnvelope<SessionEvent> =
+        { EventId = EventId.fresh ()
+          SessionId = sessionId
+          Offset = offset n
+          Actor = ActorRef.SessionProcess
+          Timestamp = System.DateTimeOffset (2026, 9, 12, 0, 0, 0, System.TimeSpan.Zero)
+          Event = event }
+    let candidate (name: string) (description: string option) : Repos.RepoCandidate =
+        { Repos.RepoCandidate.Repo = RepoRef.create name |> expect
+          Description = description
+          DefaultBranch = "main"
+          Private = false
+          PushedAt = None }
+    let events =
+        [ at 0L (SessionCreated { SessionCreated.SessionId = sessionId })
+          at 1L (PeerJoined { PeerId = peerId; DisplayName = "swift-heron"; User = None }) ]
+    ClientModel.init { PeerId = peerId; DisplayName = "swift-heron" }
+    |> ClientModel.update
+        (ConnectedMsg { SessionId = sessionId; AssignedDisplayName = "swift-heron"; LatestOffset = Some (offset 1L) })
+    |> ClientModel.update HistoryReadMsg
+    |> ClientModel.update (EventsPageMsg { Events = events; LastOffset = Some (offset 1L); IsEnd = true })
+    |> ClientModel.update
+        (LaunchMsg
+            (LaunchListingArrived
+                (ListingLoaded
+                    [ candidate "octo/hello" None
+                      candidate "octo/sandbox-runner" (Some "a lightweight sandboxing runner for agents") ])))
+
 /// What a client that has been to this session before holds when it opens it again: the
 /// event log as the kept answers of its own history store, and the one terminal's transcript
 /// as the kept answers of its transcript store. Built as EVENTS rather than as a model,
@@ -1105,6 +1145,13 @@ let private exposeAgentTurn (f: unit -> unit) : unit = jsNative
 [<Emit("(function(f){ window.__take = f })($0)")>]
 let private exposeTake (f: string -> unit) : unit = jsNative
 
+/// Swap the shell between the session's first screen and a conversation. Both, from one hook,
+/// because the question the card raises is about the two TOGETHER: the ask card stands only
+/// where nothing has been said and a message body only where something has, so the one column
+/// they are both supposed to start on can be measured no other way on one page.
+[<Emit("(function(f){ window.__launch = f })($0)")>]
+let private exposeLaunch (f: bool -> unit) : unit = jsNative
+
 /// A collaborator's caret in a chapter's NAME, with no session to relay one from. The
 /// positions handed over are real relative positions over a real `Y.Text` on this page's doc,
 /// which is the whole of what the placement reads: it resolves them against the doc and
@@ -1223,6 +1270,9 @@ do
         match TerminalId.create id with
         | Ok terminal -> takeRef terminal
         | Error _ -> ())
+    exposeLaunch (fun asking ->
+        model <- (if asking then launchModel else shellModel)
+        render ())
     exposeChapterCaret (fun id anchor head ->
         match MessageId.create id, PeerId.create "brave-owl" with
         | Ok messageId, Ok peerId ->
