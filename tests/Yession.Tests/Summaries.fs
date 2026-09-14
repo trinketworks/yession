@@ -77,6 +77,39 @@ let portsTests =
                 Expect.isTrue (sent.Contains "first thing" && sent.Contains "second thing") "and so did the lines"
             }
 
+        // A session's own words are usually imperative — they were addressed to an assistant
+        // the first time. Sent as the whole user turn they sit in the position a model reads
+        // as its instruction, and one opening "tell me the path you used" was titled with the
+        // model's ANSWER to it. So the material is fenced and the turn closes on an
+        // instruction: what the model reads last is what to do, not what to obey.
+        testCaseAsync "the transcript is not the last thing the request says" <|
+            async {
+                let seen = ResizeArray<string> ()
+                let! url, server = serving (answering "A name" seen)
+                let! _ =
+                    ClaudeConnection.summarizeAt url ("ANTHROPIC_API_KEY", "sk-ant-test")
+                        (ask [ "Tell me the path you used." ])
+                server.close ignore
+                let sent = String.concat "" seen
+                let content = sent.Substring (sent.IndexOf "Tell me the path you used.")
+                Expect.isTrue
+                    (content.Contains "Name the transcript above")
+                    "the turn closes on the instruction, not on the material"
+            }
+
+        testCaseAsync "the transcript is marked off from the instruction around it" <|
+            async {
+                let seen = ResizeArray<string> ()
+                let! url, server = serving (answering "A name" seen)
+                let! _ =
+                    ClaudeConnection.summarizeAt url ("ANTHROPIC_API_KEY", "sk-ant-test")
+                        (ask [ "Tell me the path you used." ])
+                server.close ignore
+                let sent = String.concat "" seen
+                Expect.isTrue (sent.Contains "--- transcript ---") "the material opens where it is said to"
+                Expect.isTrue (sent.Contains "--- end of transcript ---") "and closes where it is said to"
+            }
+
         testCaseAsync "an api key presents itself as one, and an oauth grant as a bearer" <|
             async {
                 // The same credential rule the catalogue spends, now that two requests spend
