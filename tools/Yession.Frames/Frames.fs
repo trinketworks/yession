@@ -78,6 +78,7 @@ module Yession.Frames
 open Fable.Core
 open Fable.Core.JsInterop
 open Yession.Domain
+open Yession.App
 
 // --- Node --------------------------------------------------------------------------------------
 
@@ -89,6 +90,9 @@ let private crypto : obj = importAll "node:crypto"
 
 [<Emit("fetch($0, $1)")>]
 let private fetch (url: string) (init: obj) : JS.Promise<obj> = jsNative
+
+[<Emit("new URL($0).pathname")>]
+let private pathnameOf (url: string) : string = jsNative
 
 [<Emit("Buffer.from($0, 'base64')")>]
 let private bytesOfBase64 (data: string) : obj = jsNative
@@ -414,7 +418,7 @@ let private run () =
                 | Some given -> return given, false
                 | None ->
                     let! r =
-                        fetch (sprintf "%s/sessions" manager)
+                        fetch (ManagerRoute.at manager ManagerRoute.CreateSession)
                             (createObj [ "method" ==> "POST"; "redirect" ==> "manual"; "headers" ==> createObj [ "content-type" ==> "application/x-www-form-urlencoded" ]; "body" ==> "" ])
                     let status : int = r?status |> unbox
                     let location : string = r?headers?get "location" |> unbox
@@ -599,9 +603,15 @@ let private run () =
         child?kill () |> ignore
         // Stopped, like the probe's: a session made for a camera has nobody coming back to it.
         if created && not (Cli.isSet keepOption args) then
-            let id = System.Text.RegularExpressions.Regex.Match(openUrl, "/sessions/([A-Z0-9]+)").Groups.[1].Value
-            let! stopped = fetch (sprintf "%s/sessions/%s/stop" manager id) (createObj [ "method" ==> "POST" ])
-            say (sprintf "stop %s %d" id (unbox<int> stopped?status))
+            // Which session, read back off the `/open` address the Manager answered with —
+            // through the same parser the Manager routes it by, so a route that moves moves
+            // both ends of this at once.
+            let id =
+                match ManagerRoute.parse "GET" (pathnameOf openUrl) with
+                | Some (ManagerRoute.OpenSession id) -> id
+                | _ -> failwithf "not an /open address: %s" openUrl
+            let! stopped = fetch (ManagerRoute.at manager (ManagerRoute.Session (id, SessionVerb.Stop))) (createObj [ "method" ==> "POST" ])
+            say (sprintf "stop %s %d" (SessionId.value id) (unbox<int> stopped?status))
         exitWith 0
     }
 

@@ -153,11 +153,16 @@ let private run () =
             |> Option.bind (fun raw -> match System.Int32.TryParse raw with | true, n -> Some n | _ -> None)
             |> Option.defaultValue 40
         // A session id is Crockford base32. Minted here when none was named, so two runs of
-        // the same probe do not land in one another's session.
-        let id =
+        // the same probe do not land in one another's session; a named one is checked here,
+        // because the Manager answers a malformed id with 404 and no explanation.
+        let sessionId =
             match Cli.valueOf sessionOption args with
-            | Some named -> named
-            | None -> SessionId.value (SessionId.mint ())
+            | Some named ->
+                match SessionId.create named with
+                | Ok id -> id
+                | Error reason -> Cli.abort (sprintf "--session %s: %s" named reason)
+            | None -> SessionId.mint ()
+        let id = SessionId.value sessionId
 
         // Retried, because a Manager restarted under a promotion is the ordinary case for
         // anything measuring one build against the next, and the address is the first thing
@@ -167,8 +172,8 @@ let private run () =
         while session = "" && attempts < 30 do
             attempts <- attempts + 1
             try
-                let! _ = fetch (sprintf "%s/sessions" manager) (post (cookie ()) (idBody id))
-                let! opened = get (sprintf "%s/sessions/%s/open" manager id) 10
+                let! _ = fetch (ManagerRoute.at manager ManagerRoute.CreateSession) (post (cookie ()) (idBody id))
+                let! opened = get (ManagerRoute.at manager (ManagerRoute.OpenSession sessionId)) 10
                 session <- firstMatch opened "https?://[^\"'<>\\s]*/s/[0-9A-Z]+/"
             with _ -> ()
             if session = "" then do! delay 2000
@@ -230,7 +235,7 @@ let private run () =
             shown <- at
         say (sprintf "# %d tool calls" calls)
         // Stopped rather than left running: a probe's session has nobody coming back to it.
-        let! _ = fetch (sprintf "%s/sessions/%s/stop" manager id) (post (cookie ()) (idBody id))
+        let! _ = fetch (ManagerRoute.at manager (ManagerRoute.Session (sessionId, SessionVerb.Stop))) (post (cookie ()) (idBody id))
         exitWith 0
     }
 
