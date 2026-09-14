@@ -106,8 +106,9 @@ the Manager would see nobody. Measured, which is how it was found.
 OIDC issuer, not by header, so the session routes carry none of the above — and a proxy that
 can only forward, not translate, still fronts sessions correctly.
 
-Verified against a live tailnet: Tailscale 1.102.3 with HTTPS certificates, Caddy 2.11.2,
-macOS. `tests/Yession.Tests/ProxyMap.fs` drives `main.mjs` against a real Manager and a real
+Verified against a live tailnet: Tailscale 1.102.3 with HTTPS certificates, macOS. The Caddy
+half is re-verified on every pull request, against whichever Caddy the dev shell pins:
+`tests/Yession.Tests/ProxyMap.fs` drives `main.mjs` against a real Manager and a real
 session, and the fronted case in `tests/Yession.Tests/Browser.fs` runs this Caddyfile — with
 `main.mjs` beside it and a Manager under `trusted-headers` behind it — with Chromium standing
 in for `serve`: the `Tailscale-User-*` headers on every request, and nothing else the suite

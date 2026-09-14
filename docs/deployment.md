@@ -351,7 +351,8 @@ reverse_proxy 127.0.0.1:8321 {
   the three sets are the strip for those three; email and claims must be deleted by name or a
   client chooses its own.
 - **Delete by name, not `-x-yession-*`** — Caddy applies deletions after sets, so the wildcard
-  strips what was just asserted and the Manager sees nobody (measured, Caddy 2.11.2).
+  strips what was just asserted and the Manager sees nobody (measured; the fronted browser
+  case in the suite keeps measuring it).
 - **The Manager is reachable only through the proxy** — under `trusted-headers` the header
   *is* the subject, so on a shared box bind the Manager where only the proxy can dial.
 
@@ -362,9 +363,10 @@ never by header.
 `x-yession-user` naming what they are (`main.mjs --as proxy-map`), because the gate is the same
 for a request that never left the machine. Under `localhost` the header is read by nothing.
 
-> Verified against a live tailnet: Tailscale 1.102.3 with HTTPS certificates, Caddy 2.11.2,
-> macOS — the identity headers, the overwrite, the `x-yession-*` pass-through, the deletion
-> ordering, and the composition below with a Manager and a session behind it.
+> Verified against a live tailnet: Tailscale 1.102.3 with HTTPS certificates, macOS — the
+> identity headers, the overwrite, the `x-yession-*` pass-through, the deletion ordering, and
+> the composition below with a Manager and a session behind it. The Caddy half is re-verified
+> on every pull request, against whichever Caddy the dev shell pins.
 
 ##### What `--auth localhost` costs here
 

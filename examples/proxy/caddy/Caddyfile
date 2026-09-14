@@ -56,7 +56,8 @@ http://:{$YESSION_PROXY_PORT} {
 			# DELETE the two it reads that `serve` does not assert, or a client chooses its own
 			# email and claims. Named one by one rather than `-x-yession-*`: Caddy applies
 			# deletions AFTER sets, so the wildcard would take the three above with it
-			# (measured on Caddy 2.11.2 — the request arrived with no identity at all).
+			# (measured: the request arrived with no identity at all — and kept measured by
+			# the fronted browser case in tests/Yession.Tests, which runs this file).
 			header_up -x-yession-user-email
 			header_up -x-yession-user-claims
 			# Translated, so nothing downstream reads an identity Yession did not sanction.
