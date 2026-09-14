@@ -114,7 +114,9 @@ module Naming =
     /// it is not a subject here and is never named. That is the right line rather than an
     /// oversight — an act note is a sentence somebody already wrote short ("PR octo/hello#12
     /// merged"), and what this names is where a person divided the session and left the guess
-    /// standing.
+    /// standing. The same line runs through what a subject is READ from: a name is made from
+    /// what people said, never from the agent's words or the session's own notes
+    /// (`Chapters.reading`).
     /// The session's own name, when it wants one.
     ///
     /// A title has no guess, so the state nobody chose is the empty one — which makes the
@@ -127,15 +129,16 @@ module Naming =
         (items: ConversationItem list)
         : Job option =
         let last = Map.tryFind NamingSubject.Title settled
+        let reading = Titles.reading items
         if not (title = "" || ours last title) then None
         elif finished last Titles.ReadItems then None
-        elif not (worthAsking last (List.length items)) then None
+        elif not (worthAsking last (List.length reading)) then None
         else
             Some
                 { Subject = NamingSubject.Title
-                  Ask = Titles.summaryAsk items (last |> Option.map (fun fact -> fact.Name))
+                  Ask = Titles.summaryAsk reading (last |> Option.map (fun fact -> fact.Name))
                   Held = title
-                  Read = List.length items }
+                  Read = List.length reading }
 
     let owed
         (settled: Map<NamingSubject, Settled>)
@@ -156,7 +159,7 @@ module Naming =
                 if not (Chapters.unwritten chapters item || ours last held) then None
                 elif finished last Chapters.ReadItems then None
                 else
-                    let covered = Chapters.covers chapters items item
+                    let covered = Chapters.reading chapters items item
                     if not (worthAsking last (List.length covered)) then None
                     else
                         Some
@@ -166,7 +169,7 @@ module Naming =
                               // nothing to keep, and the guess is not a name anybody chose —
                               // handing it over would be asking a model to reword the first
                               // line of a message rather than to name what the part is about.
-                              Ask = Chapters.summaryAsk chapters items item (last |> Option.map (fun fact -> fact.Name))
+                              Ask = Chapters.summaryAsk covered (last |> Option.map (fun fact -> fact.Name))
                               Held = held
                               Read = List.length covered })
         // The session's own name first, because it is the one a person sees before they have

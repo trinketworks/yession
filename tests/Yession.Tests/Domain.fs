@@ -809,9 +809,10 @@ let private repoTests =
     ]
 
 let private chapterTests =
+    /// Somebody's own words, unless a case says otherwise — what a name is made from.
     let itemSaying id body kind : ConversationItem =
         { MessageId = MessageId.create id |> expect
-          Author = ActorRef.Agent
+          Author = ActorRef.UserRef (UserId.create "ada" |> expect)
           Body = body
           Status = Complete
           Kind = kind
@@ -983,14 +984,15 @@ let private chapterTests =
                 Map.ofList
                     [ a.MessageId, { Opens = true; Name = Ylmish.Text.empty }
                       c.MessageId, { Opens = true; Name = Ylmish.Text.empty } ]
-            Expect.equal (Chapters.summaryAsk chapters [ a; b; c ] a None).Lines [ "first"; "second" ] "its own, and no more"
+            Expect.equal (Chapters.summaryAsk (Chapters.reading chapters [ a; b; c ] a) None).Lines [ "first"; "second" ] "its own, and no more"
 
         // A session can hold a stack trace, a diff, or forty messages. A name is made from
         // the shape of a chapter, and an ask that sent all of it would spend a model's
         // context on the part that moves a name least.
         testCase "a chapter longer than anybody reads is not sent whole" <| fun () ->
             let long = itemSaying "l" (String.replicate 500 "word ") ConversationItemKind.Message
-            let ask = Chapters.summaryAsk (Map.ofList [ long.MessageId, { Opens = true; Name = Ylmish.Text.empty } ]) [ long ] long None
+            let chapters = Map.ofList [ long.MessageId, { Opens = true; Name = Ylmish.Text.empty } ]
+            let ask = Chapters.summaryAsk (Chapters.reading chapters [ long ] long) None
             let sent = ask.Lines |> List.sumBy (fun line -> line.Length)
             Expect.isTrue (sent < long.Body.Length) "bounded, rather than the whole of it"
 
@@ -2598,9 +2600,11 @@ let private attributionTests =
 // want naming, and the guard that is the only thing between a model and a name somebody
 // typed themselves.
 let private namingTests =
+    /// Somebody's own words. A name is made from these and nothing else, so a case about
+    /// what is NOT read says so by naming another author or another kind.
     let saying id body : ConversationItem =
         { MessageId = MessageId.create id |> expect
-          Author = ActorRef.Agent
+          Author = ActorRef.UserRef (UserId.create "ada" |> expect)
           Body = body
           Status = Complete
           Kind = ConversationItemKind.Message
@@ -2791,6 +2795,45 @@ let private namingTests =
                 (settled |> Map.tryFind (subjectOf item) |> Option.map (fun s -> s.Name, s.Read))
                 (Some ("Second", 4))
                 "the last word is the current one"
+
+        // --- whose words a name is made from ----------------------------------------------
+
+        // A busy stretch is mostly the agent answering and the session noting what it did.
+        // Those are a name for the WORK, not for what somebody came for — and because the
+        // reading is bounded and they arrive first, they do not dilute the person's words,
+        // they push them out of the window.
+        testCase "what the agent said is not read" <| fun () ->
+            let asked = saying "a" "fix the refresh token"
+            let answered = { saying "b" "I have updated the middleware" with Author = ActorRef.Agent }
+            Expect.equal
+                (Naming.owed Map.empty "" Map.empty [ asked; answered ] |> List.collect (fun job -> job.Ask.Lines))
+                [ "fix the refresh token" ]
+                "the agent's answer names the work, not the task"
+
+        testCase "what the session noted is not read" <| fun () ->
+            let asked = saying "a" "fix the refresh token"
+            let noted =
+                { saying "b" "repo octo/hello added" with
+                    Author = ActorRef.SessionProcess
+                    Kind = ConversationItemKind.ActNote { Detail = None; Notable = true } }
+            Expect.equal
+                (Naming.owed Map.empty "" Map.empty [ asked; noted ] |> List.collect (fun job -> job.Ask.Lines))
+                [ "fix the refresh token" ]
+                "an act note is a sentence somebody already wrote short"
+
+        // The other half: what is not read is not COUNTED either. A trigger that counts
+        // material the ask cannot read fires on a question whose answer it already has.
+        testCase "a session whose only new material is the agent's is not asked again" <| fun () ->
+            let items =
+                [ saying "a" "clone z"
+                  { saying "b" "cloned; here is what I found" with Author = ActorRef.Agent }
+                  { saying "c" "and the tests pass" with Author = ActorRef.Agent } ]
+            let settled = settledFrom [ fact NamingSubject.Title "Cloning z" 1 ]
+            Expect.equal (Naming.owed settled "Cloning z" Map.empty items) [] "one person's message is still one"
+
+        testCase "a session nobody but the agent has spoken in is owed no title" <| fun () ->
+            let items = [ { saying "a" "starting up" with Author = ActorRef.Agent } ]
+            Expect.equal (Naming.owed Map.empty "" Map.empty items) [] "there is nothing of anybody's to name it after"
 
         // --- when the asking is over -----------------------------------------------------
 
