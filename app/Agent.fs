@@ -223,11 +223,12 @@ module Turn =
 
     /// The pending thought, forwarded and cleared.
     ///
-    /// Three things end a block and all three come here: the provider's own
-    /// `content_block_stop`, the next `message_start`, and the end of the stream. So a block
+    /// A block ends four ways and all four come here: the provider's own
+    /// `content_block_stop`, the next `message_start`, and either way a turn ENDS — the
+    /// stream running out, and the SDK throwing (`finish` below, which is both). So a block
     /// the provider never closes is still reported rather than lost — an unterminated thought
     /// is worth reading and this is the only copy of it.
-    let flush (state: State) : State * AgentResponseChunk list =
+    let private flush (state: State) : State * AgentResponseChunk list =
         if state.Thinking = "" then state, []
         else { state with Thinking = "" }, [ AgentResponseChunk.Thinking state.Thinking ]
 
@@ -279,10 +280,35 @@ module Turn =
     /// stream can simply run out, and answering that with `Body` alone reported a success
     /// over an empty body while throwing away everything the model had streamed. The deltas
     /// are the only copy left in either case, so one fallback answers both.
-    let outcome (state: State) : Result<string, string> =
+    let private outcome (state: State) : Result<string, string> =
         match state.Failed with
         | Some reason -> Error reason
         | None -> Ok (if state.Body = "" then state.Streamed else state.Body)
+
+    /// How the stream ended, which is two ways and not one.
+    type Ending =
+        /// The SDK's iterator ran out: every message it had to deliver is folded in.
+        | StreamEnded
+        /// The SDK threw instead of yielding an ending — which is where the endings that
+        /// happen arrive — carrying the reason it threw.
+        | Threw of string
+
+    /// The end of the turn, whichever way it came: what is still pending to forward, what the
+    /// turn answers with, and what it spent.
+    ///
+    /// One verb for both endings, because the flush is not the caller's to remember. It used
+    /// to be: the runner flushed after the loop, inside the `try`, and the `with` returned
+    /// without one — so a turn that ended by throwing, which is how a step ceiling and a
+    /// refused credential both arrive, discarded whatever thought had been accumulated and
+    /// not yet closed. A thought that was thought is reported however the turn ended, and
+    /// that holds here because there is no way to reach an answer without passing the flush.
+    let finish (ending: Ending) (state: State) : AgentResponseChunk list * Result<string, string> * AgentUsage =
+        let state, pending = flush state
+        let answer =
+            match ending with
+            | StreamEnded -> outcome state
+            | Threw reason -> Error reason
+        pending, answer, state.Usage
 
 // --- one turn, run ------------------------------------------------------------------------
 
@@ -343,8 +369,8 @@ let private runQuery
     : Async<Result<string, string> * AgentUsage> =
     async {
         // Held OUTSIDE the try because a turn does not always end by returning: the SDK
-        // reports a non-success ending by THROWING, and what the turn spent before that has
-        // to survive the throw. See the `with` below.
+        // reports a non-success ending by THROWING, and what the turn thought and spent
+        // before that has to survive the throw. See the `with` below.
         let mutable state = Turn.empty
         try
             let controller = Fetch.newAbortController ()
@@ -359,22 +385,25 @@ let private runQuery
                     let next, chunks = Turn.step state step.value
                     state <- next
                     chunks |> List.iter forward
-            let ended, chunks = Turn.flush state
-            state <- ended
-            chunks |> List.iter forward
-            return Turn.outcome state, state.Usage
+            let pending, answer, usage = Turn.finish Turn.StreamEnded state
+            pending |> List.iter forward
+            return answer, usage
         with error ->
             // Where a real ending arrives. The `Result` branch of `Turn.step` reads the ending
             // the SDK YIELDS; the endings that happen — a step ceiling, a refused credential —
             // are thrown instead, so they land here, and answering with zeros threw away the
             // usage of the longest turns in the session. The streamed text is already durable
             // (every chunk was forwarded as a delta while it arrived), so what is recovered
-            // here is the spend and the reason; `sdkFailureReason` below unwraps the latter.
+            // here is the spend, the reason — `sdkFailureReason` below unwraps it — and the
+            // thought the turn had not finished: a block is bracketed by nothing, so until it
+            // is flushed the accumulated deltas are the only copy of it anywhere.
             //
-            // A thought still PENDING when the throw arrives is not forwarded — the flush sits
-            // inside the try, above. That is how this has always behaved, and this change is
-            // deliberately not where it gets decided.
-            return Error (Http.reasonOf error), state.Usage
+            // That last one is `Turn.finish` doing it rather than this path remembering to.
+            // The flush used to sit inside the `try` and this branch returned without one, so
+            // the thinking of every turn that ended the way turns actually end was dropped.
+            let pending, answer, usage = Turn.finish (Turn.Threw (Http.reasonOf error)) state
+            pending |> List.iter forward
+            return answer, usage
     }
 
 /// What the SDK threw, said as the reason a turn stopped.
