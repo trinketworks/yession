@@ -163,7 +163,9 @@ module Turn =
 
     /// What has arrived so far.
     type State =
-        { /// The body a successful ending settled on.
+        { /// The ending's own words, when it carried any. Not the answer on its own: an
+          /// ending that carried none — and a stream that ends with no ending at all — falls
+          /// back to `Streamed`, and `outcome` below is where that happens.
           Body : string
           /// The LAST message's text deltas — the fallback body for an ending that carries
           /// none. Reset at every `message_start`, because a turn is several messages once
@@ -262,17 +264,25 @@ module Turn =
         | MessageCase.Result result ->
             let state = { state with Usage = usageFrom state.Usage result }
             if result.subtype = "success" then
-                // The ending's own text, and what was streamed when the ending carries none.
+                // The ending's own text, and nothing in its place when it has none: the
+                // fallback to what was streamed lives in `outcome`, because an ending is not
+                // the only way a turn ends and both ways fall back to the same text.
                 let said = result.result
-                { state with Body = (if String.IsNullOrEmpty said then state.Streamed else said) }, []
+                { state with Body = (if String.IsNullOrEmpty said then "" else said) }, []
             else { state with Failed = Some ("agent run ended: " + result.subtype) }, []
         | MessageCase.Other _ -> state, []
 
-    /// What the turn answers with.
+    /// What the turn answers with: the reason it stopped, or what the model said.
+    ///
+    /// What it said is the ending's own words when it carried any, and the last message's
+    /// deltas when it did not — INCLUDING when there was no `result` message at all. A
+    /// stream can simply run out, and answering that with `Body` alone reported a success
+    /// over an empty body while throwing away everything the model had streamed. The deltas
+    /// are the only copy left in either case, so one fallback answers both.
     let outcome (state: State) : Result<string, string> =
         match state.Failed with
         | Some reason -> Error reason
-        | None -> Ok state.Body
+        | None -> Ok (if state.Body = "" then state.Streamed else state.Body)
 
 // --- one turn, run ------------------------------------------------------------------------
 

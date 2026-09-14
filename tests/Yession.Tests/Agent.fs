@@ -1555,6 +1555,17 @@ let private bodyTests =
                 (Ok "it is a lockfile")
                 "the last message, alone"
 
+        testCase "a stream that just runs out answers with what it streamed" <| fun () ->
+            // The SDK does not always deliver a `result`: a stream can end with the last
+            // delta. The deltas are then the only copy of what the model said, exactly as
+            // they are for an ending that carries no words of its own — so the same fallback
+            // answers both. Reported as `Ok ""`, a turn that had spoken looked like a turn
+            // that had said nothing.
+            Expect.equal
+                (Stream.outcome [ Stream.messageStart; Stream.text "it is a lockfile" ])
+                (Ok "it is a lockfile")
+                "what was streamed, rather than nothing"
+
         testCase "a non-success ending is the reason the turn stopped" <| fun () ->
             Expect.equal
                 (Stream.outcome [ Stream.text "streamed"; Stream.ending "error_max_turns" [] ])
