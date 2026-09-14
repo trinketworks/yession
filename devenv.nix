@@ -139,7 +139,7 @@ ${lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
     # for a task.
     case "''${DEVENV_CMDLINE:-}" in
       *" -- "*) ;;
-      *) echo "yession — tasks: restore build start dev check verify lint package clean  (check <caps>: Browser Ports Native Docker LiveAgent Keyring Nix Srt)" ;;
+      *) echo "yession — tasks: restore build start dev check verify lint package clean  (check <caps>: see AGENTS.md § Testing)" ;;
     esac
   '';
 
