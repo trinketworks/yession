@@ -249,7 +249,7 @@ let private ensureTests =
             let projection, _ =
                 ConversationProjection.applyEvents None [ envelope ] ConversationProjection.empty
             match projection.Items with
-            | [ item ] -> Expect.stringContains item.Body "/repos/owner/name" "a reader is told where the work is"
+            | [ item ] -> Expect.stringContains (ConversationItem.said item) "/repos/owner/name" "a reader is told where the work is"
             | other -> failwithf "expected one note, got %d" (List.length other)
 
         // The hazard this shape exists to avoid. A description is metadata, never part of what

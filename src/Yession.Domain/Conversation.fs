@@ -645,28 +645,26 @@ module ConversationProjection =
                         sprintf
                             "where this host could not give exactly what was asked: %s"
                             (String.concat "; " lines))
+            let checkout = s.Checkout |> Option.map (sprintf "the checkout is at %s in here")
             { proj with
                 Items =
                     proj.Items
                     @ [ { MessageId = s.MessageId
                           Author = s.Actor
-                          Body =
-                            // Two facts about one sandbox, in the order they are wanted:
-                            // whether to reach for it, then where its work is once you have.
-                            let named =
-                                match s.Description with
-                                | Some said -> sprintf "started sandbox %s (%s) — %s" (SandboxRef.render s.Sandbox) s.Backend said
-                                | None -> sprintf "started sandbox %s (%s)" (SandboxRef.render s.Sandbox) s.Backend
-                            match s.Checkout with
-                            | Some at -> sprintf "%s — the checkout is at %s in here" named at
-                            | None -> named
+                          // The headline names the one thing worth deciding from at a
+                          // glance: which sandbox, on what backend. What it is for, where
+                          // its checkout sits, whose credential rode in, and what this host
+                          // could not give exactly are separate facts, not clauses chained
+                          // onto the headline (as this line once did) - they ride in the
+                          // detail instead, semicolon-joined, so each stays its own fact.
+                          Body = sprintf "started sandbox %s (%s)" (SandboxRef.render s.Sandbox) s.Backend
                           Status = Complete
                           Kind =
                             ConversationItemKind.ActNote
                                 { Detail =
-                                    match List.choose id [ forwarded; realisation ] with
+                                    match List.choose id [ s.Description; checkout; forwarded; realisation ] with
                                     | [] -> None
-                                    | parts -> Some (String.concat ". " parts)
+                                    | parts -> Some (String.concat "; " parts)
                                   Notable = false }
                           Offset = envelope.Offset
                           Woke = None; Replying = None } ] }
