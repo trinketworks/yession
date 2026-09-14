@@ -173,6 +173,11 @@ let private launchTests =
 [<Fable.Core.Emit("Promise.reject(new Error($0))")>]
 let private rejectedPromise (message: string) : JS.Promise<unit> = Fable.Core.Util.jsNative
 
+// The same, rejecting with nothing at all — legal JavaScript, and what a rejection whose
+// reason never reaches `raise` as a value looks like.
+[<Fable.Core.Emit("Promise.reject()")>]
+let private rejectedWithNothing () : JS.Promise<unit> = Fable.Core.Util.jsNative
+
 // Count Node's unhandled-rejection reports. Registering a listener is also what stops
 // Node from killing the process over one, so the count is observable rather than fatal.
 [<Fable.Core.Emit("(() => { const w = { count: 0 }; const on = () => { w.count++ }; process.on('unhandledRejection', on); w.stop = () => process.off('unhandledRejection', on); return w })()")>]
@@ -208,6 +213,30 @@ let private promiseAwaitTests =
                 stopWatching watch
                 Expect.equal caught "boom" "the rejection arrives as a catchable exception"
                 Expect.equal unhandled 0 "and Node never reports it unhandled — which would kill the process"
+            }
+
+        // A rejection carries whatever was thrown, and JavaScript lets that be nothing:
+        // `Promise.reject()` is legal and a `node:` API that rejects with `null` is not
+        // exotic. The settling has to NAME that, because the workflow's half of this raises
+        // what it is given and `raise null` is not an exception a `try/with` can describe.
+        // This is the one thing `Promise.result` does not say on its own.
+        testCaseAsync "a rejection with no reason still arrives as something raisable" <|
+            async {
+                let watch = watchUnhandledRejections ()
+                let awaiting = Interop.awaitPromise (rejectedWithNothing ())
+                do! Async.Sleep 10
+                let! caught =
+                    async {
+                        try
+                            do! awaiting
+                            return "no error"
+                        with ex -> return ex.Message
+                    }
+                do! Async.Sleep 10
+                let unhandled = unhandledCount watch
+                stopWatching watch
+                Expect.equal caught "promise rejected" "the reason it could not carry is named instead"
+                Expect.equal unhandled 0 "and it is still handled at the call"
             }
     ]
 

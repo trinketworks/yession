@@ -24,21 +24,33 @@ open Fable.Core.JsInterop
 // through it: one answer to the hazard rather than one per call site. (The browser keeps
 // `Async.AwaitPromise` — an unhandled rejection there is a console warning, not a dead
 // process, and this module is Node-only.)
-
-[<Emit("$0.then(value => [value, null], error => [null, error ?? new Error('promise rejected')])")>]
-let private settled (promise: JS.Promise<'a>) : JS.Promise<'a * exn> = jsNative
+//
+// The settling is `Fable.Promise`'s own `Promise.either` — `.then(onOk, onErr)` — rather
+// than an `[<Emit>]` of the same shape. This used to hand-roll it, which is how the fix
+// read as bespoke cleverness instead of what it is: the library's ordinary way to hold a
+// promise's outcome as a value. `Promise.result` is that exact function, and the only
+// reason it is not what appears below is the falsy-reason case it does not name.
 
 /// Await a promise; a rejection surfaces as an ordinary exception inside the workflow.
 let awaitPromise (promise: JS.Promise<'a>) : Async<'a> =
-    // Settle HERE, not inside the workflow below: this call runs in the same tick that
-    // created the promise, which is the only tick in which attaching a handler is
-    // guaranteed to beat Node's check. Deferring it into the `async` would reproduce the
-    // very gap this exists to close.
-    let outcome = settled promise
+    // Settle HERE, not inside the workflow below: `Promise.either` attaches in the same tick
+    // that created the promise, which is the only tick in which attaching a handler is
+    // guaranteed to beat Node's check. Deferring it into the `async` would reproduce the very
+    // gap this exists to close.
+    //
+    // The failure side is `Promise.result`'s `Error` with one thing added: a rejection whose
+    // reason is falsy — `Promise.reject()`, or `reject(null)` — still has to arrive as
+    // something raisable, so it is NAMED here rather than reaching `raise` as null.
+    let outcome =
+        promise
+        |> Promise.either Ok (fun error -> Error (if isNull (box error) then exn "promise rejected" else error))
+
     async {
         // `outcome` never rejects, so this await is safe whenever the workflow reaches it.
-        let! value, error = outcome |> Async.AwaitPromise
-        if isNull (box error) then return value else return raise error
+        let! settled = outcome |> Async.AwaitPromise
+        match settled with
+        | Ok value -> return value
+        | Error error -> return raise error
     }
 
 // --- node-datachannel --------------------------------------------------------
