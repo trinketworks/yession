@@ -646,7 +646,12 @@ let policyFor
     // keys still wins, like the rest of the baseline.
     let dockerBaseline =
         Map.ofList
-            [ "GIT_CONFIG_COUNT", "1"
+            [ // The container's own `/tmp` is already private to the session, so it needs no
+              // redirect — but it needs NAMING, because the prompt tells the agent that every
+              // sandbox sets `$TMPDIR`, and an image that leaves it unset would make that
+              // sentence false in the one backend where `/tmp` was fine all along.
+              "TMPDIR", "/tmp"
+              "GIT_CONFIG_COUNT", "1"
               "GIT_CONFIG_KEY_0", "safe.directory"
               "GIT_CONFIG_VALUE_0", "*" ]
     let env =
