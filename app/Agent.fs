@@ -203,10 +203,15 @@ module Turn =
     let private counted (read: Usage -> int) (usage: Usage) : int =
         if isNull usage then 0 else read usage
 
-    /// The same, per model: an entry the map holds but does not fill is zero rather than
+    /// The same, per model: a key the map holds with no entry under it reads zero rather than
     /// `undefined` leaking into an `int`. A named model with no counts is still a model that
     /// ran, so it is REPORTED at zero rather than dropped — dropping it would put the turn
     /// back to guessing which of the rest answered.
+    ///
+    /// Only a null entry, not a half-filled one: the SDK types every count inside `ModelUsage`
+    /// as required, so an entry missing one is off its own contract and this would be reading
+    /// a shape nobody has ever sent. `counted` above guards its block the same way and for the
+    /// same reason.
     let private spent (read: ModelUsage -> int) (usage: ModelUsage) : int =
         if isNull usage then 0 else read usage
 
