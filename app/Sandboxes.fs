@@ -2308,18 +2308,21 @@ module AgentSandbox =
     let startDirectory (options: Sdk.SpawnOptions) : string option =
         if isNullOrUndefined options.cwd || options.cwd = "" then None else Some options.cwd
 
-    /// Take the child's whole process GROUP down, and the child alone if there is no group
-    /// left to signal.
+    /// Take the child's whole process GROUP down, and tell Node the child was asked to die.
     ///
-    /// The group is what `detached: true` bought, and what the agent CLI needs: it spawns
-    /// children of its own, and a signal to the leader alone leaves them running. Both
-    /// failures are swallowed on purpose — this is asked while something is being torn down,
-    /// and a process that is already gone is the answer that was wanted.
+    /// Both signals are sent, and neither is a fallback for the other — they answer different
+    /// halves of one request. The GROUP is what `detached: true` bought and what the agent CLI
+    /// needs: it spawns children of its own, and a signal to the leader alone leaves them
+    /// running. `child.kill` is the only thing that sets Node's `killed`, which is what the SDK
+    /// reads to know a kill has been ASKED for — the group signal never touches it, so a
+    /// host-backend child torn down by the group alone answered `false` while it was dying, and
+    /// the srt stand-in answered `true` for the same event.
+    ///
+    /// Every failure is swallowed on purpose — this is asked while something is being torn
+    /// down, and a process that is already gone is the answer that was wanted.
     let private killTree (child: ChildProcess) (signal: string) : unit =
-        try
-            Node.Api.``process``.kill (-child.pid, !^signal)
-        with _ ->
-            try child.kill signal with _ -> ()
+        try Node.Api.``process``.kill (-child.pid, !^signal) with _ -> ()
+        try child.kill signal with _ -> ()
 
     /// Whatever was thrown, as the `Error` a listener registered on `error` is written
     /// against. JavaScript admits a `throw` of any value at all, and an `error` event

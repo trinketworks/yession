@@ -2292,8 +2292,37 @@ let private askSpawner (spawner: obj) (fields: (string * obj) list) : Fable.Clau
     (unbox<Func<Fable.ClaudeAgentSdk.SpawnOptions, Fable.ClaudeAgentSdk.SpawnedProcess>> spawner)
         .Invoke (unbox<Fable.ClaudeAgentSdk.SpawnOptions> (Fable.Core.JsInterop.createObj fields))
 
+/// A wrap that confines nothing: the argv it was handed, back. The srt spawner takes its wrap
+/// as a PARAMETER, so a case about the SEAM needs a wrap rather than a sandbox — which is why
+/// these cases ask for `Ports` alone and never for `Srt`.
+let private passthroughWrap (command: string) (arguments: string list) (_cwd: string) : Async<string list> =
+    async { return command :: arguments }
+
+/// What a spawner answers for `killed` once the SDK's forwarded abort has fired — waited out
+/// to the child's exit, so the answer is read after the teardown it is about and no sleeper
+/// outlives the case.
+let private killedAfterAbort (spawner: obj) : Async<bool> =
+    async {
+        let controller = abortController ()
+
+        let spawned =
+            askSpawner
+                spawner
+                [ "command", box (nodePath ())
+                  "args", box [| "-e"; "setTimeout(() => {}, 60000)" |]
+                  "env", Fable.Core.JsInterop.createObj []
+                  "signal", signalOf controller ]
+
+        let exited = ref false
+        spawned.on ("exit", box (Func<obj, obj, unit> (fun _ _ -> exited.Value <- true)))
+
+        abortNow controller
+        do! Support.waitUntilWithin 5000 "the child exits" (fun () -> exited.Value)
+        return spawned.killed
+    }
+
 let private agentSpawnerPortsTests =
-    testList "The agent CLI's host spawner" [
+    testList "The agent CLI's spawners, driven" [
 
         testCaseAsync "the command, arguments and environment a request names are the child's" <| async {
             let spawned =
@@ -2357,6 +2386,21 @@ let private agentSpawnerPortsTests =
                 (Some "SIGKILL")
                 "an already-fired signal is still a kill"
         }
+
+        // `killed` is the one fact the SDK reads to know whether it has already asked a
+        // process to die, and it is asked of whichever process the backend handed back — so
+        // two spawners answering differently means a session's answer depends on where it
+        // runs. The stand-in's own answer is pinned in the cheap tier; what this pins is that
+        // one question has one answer.
+        testCaseAsync "both spawners answer killed the same after a forwarded abort" <| async {
+            let! host = killedAfterAbort (Sandboxes.AgentSandbox.hostClaudeSpawner ())
+            let! srt = killedAfterAbort (Sandboxes.AgentSandbox.srtClaudeSpawner passthroughWrap)
+
+            Expect.equal
+                host
+                srt
+                "the host spawner and the srt stand-in say the same thing about a killed agent"
+        }
     ]
 
 let tests =
@@ -2377,6 +2421,6 @@ let tests =
         Tag.needs "Command execution" [ Tag.Ports; Tag.Native ] (fun () -> commandTests)
         Tag.needs "Phase 2 acceptance E2E" [ Tag.Ports; Tag.Native ] (fun () -> acceptanceE2eTests)
         Tag.needs "Durable event log" [ Tag.Ports; Tag.Native ] (fun () -> persistenceTests)
-        // Only ports: the agent CLI's host spawner really spawning, with no WebRTC in it.
-        Tag.needs "The agent CLI's host spawner" [ Tag.Ports ] (fun () -> agentSpawnerPortsTests)
+        // Only ports: the agent CLI's spawners really spawning, with no WebRTC in it.
+        Tag.needs "The agent CLI's spawners, driven" [ Tag.Ports ] (fun () -> agentSpawnerPortsTests)
     ]
