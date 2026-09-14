@@ -1896,6 +1896,59 @@ let private sseStreamTests =
     ]
 
 // -----------------------------------------------------------------------------
+// A subscription that gives up for good. What the client does with a refusal its
+// `Retry` called permanent is invisible from the client — the socket is the whole
+// question — so the SERVER watches the connection the request arrived on.
+// -----------------------------------------------------------------------------
+
+/// Watch the socket a request arrived on, from the server's end: this fires when the far
+/// side lets go of the connection. The honest observation of "the client is no longer
+/// holding this open", where a client-side handle would only say what the client thinks.
+[<Emit("$0.socket.on('close', $1)")>]
+let private onRequestSocketClosed (req: Interop.IncomingMessage) (closed: unit -> unit) : unit =
+    Fable.Core.Util.jsNative
+
+let private sseGiveUpTests =
+    testList "SSE subscription that gives up for good" [
+        testCaseAsync "a refusal the caller calls permanent releases the connection" <|
+            async {
+                // A refusal still in flight: the head has gone out, so the client has its
+                // status and its verdict, and the body has not ended, so the connection is
+                // held by whoever is attached to it. That is the only state in which letting
+                // go is observable — an ENDED refusal returns to the keep-alive pool either
+                // way, where nothing the subscription does can be seen from here.
+                let mutable socketClosed = false
+
+                let handler (req: Interop.IncomingMessage) (res: Interop.ServerResponse) =
+                    onRequestSocketClosed req (fun () -> socketClosed <- true)
+                    res.writeHead (404, Fable.Core.JsInterop.createObj [ "content-type", box "text/plain" ])
+                    |> ignore
+                    // Node holds a head until something is written, so this is what puts the
+                    // status on the wire — and it deliberately does not end the response.
+                    res.write "no stream here" |> ignore
+
+                let server = Interop.createServer handler
+                let! listening =
+                    Async.FromContinuations (fun (cont, _, _) ->
+                        server.listen (0, "127.0.0.1", fun () -> cont server) |> ignore)
+                let url = sprintf "http://127.0.0.1:%d/stream" (Interop.serverPort listening)
+
+                // What a caller that knows its peer says about a 404: this endpoint is not
+                // here, and asking again every second is a hot loop against a server that is
+                // behaving correctly.
+                let permanentOn404 : Sse.Retry = fun status -> status <> 404
+                let subscription = Sse.subscribeWhile url [] permanentOn404 ignore
+                do!
+                    waitUntilWithin
+                        2000
+                        "the connection a permanently-refused subscription gave up on to be released"
+                        (fun () -> socketClosed)
+                subscription.Stop ()
+                listening.close ignore
+            }
+    ]
+
+// -----------------------------------------------------------------------------
 // Manager→Session notifications — the reverse leg of the control RPC. The wire
 // codec and the subscriber hub's fan-out are cheap-tier; the SSE stream end to
 // end (real sockets, real client parser) is verify-tier.
@@ -2807,6 +2860,9 @@ let tests =
         // `Ports` only: one bare `node:http` server writing two strings, and the SSE client
         // reading them. Nothing spawns, so nothing here needs `Native`.
         Tag.needs "SSE consumption across read boundaries" [ Tag.Ports ] (fun () -> sseStreamTests)
+        // `Ports` for the same reason: one `node:http` server refusing one connection, and
+        // the only observer of what the client did with it is that server's own socket.
+        Tag.needs "SSE subscription that gives up for good" [ Tag.Ports ] (fun () -> sseGiveUpTests)
         Tag.needs "Manager→Session notifications over SSE (reverse control leg)" [ Tag.Ports ] (fun () -> notificationStreamTests)
         Tag.needs "A hook delivery across the control channel (the relay end to end)" [ Tag.Ports ] (fun () -> hookDeliveryStreamTests)
         Tag.needs "MCP server set over SSE (reverse control leg)" [ Tag.Ports ] (fun () -> mcpStreamTests)

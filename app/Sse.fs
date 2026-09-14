@@ -110,7 +110,9 @@ type private Attempt =
     /// closed, a socket that dropped, a refusal the caller called temporary.
     | Reconnect
     /// Stop for good, because the caller called this refusal permanent. The subscription is left
-    /// inert rather than errored.
+    /// inert rather than errored — and, like an unsubscribe, holding nothing: the connection the
+    /// refusal arrived on is released rather than left to the keep-alive pool for a stream nobody
+    /// will ever read.
     | Finished
 
 /// How long a connection that ended waits before it is made again. Fixed rather than backed off,
@@ -121,8 +123,9 @@ let private retryAfterMs = 1000
 // Consume an SSE stream: connect (with whatever request headers the caller's authentication
 // wants — a control secret, a strategy's identity assertion, or none), hand each event's rejoined
 // `data:` lines to the sink, reconnect with a fixed backoff when the connection drops, and cancel
-// both the retry loop and the live fetch on unsubscribe. Best-effort by design: a transport error
-// is a dropped connection, retried, never thrown.
+// both the retry loop and the live fetch when the subscription ends — on unsubscribe, and equally
+// on a refusal the caller called permanent. Best-effort by design: a transport error is a dropped
+// connection, retried, never thrown.
 let private openStream
     (url: string)
     (headers: (string * string) list)
@@ -135,6 +138,12 @@ let private openStream
     // connection apart: aborting alone would not stop a subscription, because the loop's answer to
     // a request that ended is to make another one.
     let mutable cancelled = false
+
+    // Let go of whatever connection is live. Both ways a subscription ENDS go through this —
+    // the teardown below, and the loop deciding it will never connect again — because a
+    // subscription that has stopped holds nothing open either way, and the in-flight response
+    // of a refusal nobody will read is as much of a held socket as a stream is.
+    let release () = controller.abort ()
 
     let request =
         [ Fetch.Types.RequestProperties.Method Fetch.Types.HttpMethod.GET
@@ -198,7 +207,9 @@ let private openStream
                 }
 
             match attempt with
-            | Attempt.Finished -> return ()
+            | Attempt.Finished ->
+                release ()
+                return ()
             | Attempt.Reconnect ->
                 if cancelled then
                     return ()
@@ -213,7 +224,7 @@ let private openStream
 
     fun () ->
         cancelled <- true
-        controller.abort ()
+        release ()
 
 /// Subscribe, but stop for good when `retry` says a refusal is permanent. The stopped
 /// subscription is inert rather than errored: a server that does not offer a stream is not a
