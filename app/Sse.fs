@@ -71,21 +71,37 @@ let stream (req: IncomingMessage) (res: ServerResponse) (encode: Encode<'a>) (su
     |> ignore
     sink
 
-/// Whether a connect that was REFUSED should be tried again, asked once per failure with the
-/// status the server answered.
+/// Why a connect attempt left no stream open.
+[<RequireQualifiedAccess>]
+type Refusal =
+    /// The server ANSWERED, and this is what it said.
+    | Answered of status: int
+    /// Nothing answered — the host is not there, the name did not resolve, the socket dropped
+    /// before a response arrived. There is no status, and inventing one (0, -1) would be a
+    /// number a caller could mistake for something a server said.
+    | Unanswered
+
+/// Whether a connect that left no stream open should be tried again, asked once per failed
+/// attempt with what that attempt came back as.
 ///
 /// The default is yes, forever, and that is right for every leg inside this product: the
 /// Manager is coming back, and a stream is the only way it can reach us. It is wrong the
 /// moment we talk to a server somebody else wrote — a refusal can mean "this endpoint does
 /// not exist here", which is permanent, and retrying it every second is a hot loop against a
-/// server behaving correctly. So the caller that knows what a status MEANS says so; this
-/// module does not guess.
-type Retry = int -> bool
+/// server behaving correctly.
+///
+/// Both cases are the caller's to judge, and that is why this takes a value rather than a
+/// status: an `int -> bool` cannot be asked about a host that never answered, so every
+/// unanswered connect used to reconnect at a fixed second FOREVER, whatever the caller had
+/// decided. A caller that knows the far end is optional says so once, rather than dialling a
+/// dead address for the life of the process. This module does not guess either outcome.
+type Retry = Refusal -> bool
 
 module Retry =
 
-    /// Keep trying whatever the server says. What the control legs and the registry stream
-    /// want: the peer is ours, and its absence is always temporary.
+    /// Keep trying whatever came back — a status, or nothing at all. What the control legs and
+    /// the registry stream want: the peer is ours, and its absence is always temporary, whether
+    /// it is refusing us or not up yet.
     let always : Retry = fun _ -> true
 
 /// The whole events in what has arrived so far, and the tail that is not one yet.
@@ -107,9 +123,10 @@ let events (buffered: string) : string list * string =
 [<RequireQualifiedAccess>]
 type private Attempt =
     /// Connect again after the backoff. Every ordinary end of a stream is this one: a server that
-    /// closed, a socket that dropped, a refusal the caller called temporary.
+    /// closed, and any failed attempt — answered or not — the caller called temporary.
     | Reconnect
-    /// Stop for good, because the caller called this refusal permanent. The subscription is left
+    /// Stop for good, because the caller called this refusal — a status, or a silence —
+    /// permanent. The subscription is left
     /// inert rather than errored — and, like an unsubscribe, holding nothing: the connection the
     /// refusal arrived on is released rather than left to the keep-alive pool for a stream nobody
     /// will ever read.
@@ -122,10 +139,11 @@ let private retryAfterMs = 1000
 
 // Consume an SSE stream: connect (with whatever request headers the caller's authentication
 // wants — a control secret, a strategy's identity assertion, or none), hand each event's rejoined
-// `data:` lines to the sink, reconnect with a fixed backoff when the connection drops, and cancel
+// `data:` lines to the sink (whose own exceptions are its bug and stay out of this loop's
+// decisions), reconnect with a fixed backoff when the connection drops, and cancel
 // both the retry loop and the live fetch when the subscription ends — on unsubscribe, and equally
 // on a refusal the caller called permanent. Best-effort by design: a transport error is a dropped
-// connection, retried, never thrown.
+// connection the caller is asked about, never thrown.
 let private openStream
     (url: string)
     (headers: (string * string) list)
@@ -152,6 +170,20 @@ let private openStream
           Http.headers (headers @ [ "accept", "text/event-stream" ])
           Fetch.Types.RequestProperties.Signal controller.signal ]
 
+    // A sink that throws is OUR bug and must not reach the attempt decision: a dropped socket is
+    // retried, where a broken subscriber retried forever silently drops every event it was given.
+    // Said once here, and the stream carries on — one bad event is not a dead connection.
+    //
+    // The url names the connection because it is safe to: the control legs authenticate with a
+    // header (`x-yession-control`), the registry and query streams with a header or a cookie, and
+    // nothing in this repository puts a credential in an SSE url. A caller that ever does has to
+    // give this line another name for the connection.
+    let deliver (event: string) =
+        try
+            onEvent event
+        with error ->
+            eprintfn "sse subscriber for %s threw on an event: %s" url (Http.reasonOf error)
+
     let drain (reader: ReadableStreamDefaultReader) =
         // One decoder for the whole connection, because a multi-byte character split across two
         // reads is completed by the decoder holding its tail; one buffer beside it, because an
@@ -167,7 +199,7 @@ let private openStream
                 else
                     let text = chunk.value |> Option.map (decodeChunk decoder) |> Option.defaultValue ""
                     let whole, tail = events (buffered + text)
-                    whole |> List.iter onEvent
+                    whole |> List.iter deliver
                     return! loop tail
             }
 
@@ -178,10 +210,10 @@ let private openStream
             let! response = Fetch.fetchUnsafe url request |> Interop.awaitPromise
 
             if not response.Ok then
-                // The one place a subscription ends by DECISION rather than by teardown, and the
-                // only place `retry` is asked at all: a refusal is the server ANSWERING, which is
-                // the only outcome that carries a status for the caller to judge.
-                return (if retry response.Status then Attempt.Reconnect else Attempt.Finished)
+                // A refusal is the server ANSWERING, so what the caller judges is the status it
+                // sent. The other way an attempt ends with no stream — nothing answering at all —
+                // reaches `retry` in `run` below, where the transport fault arrives.
+                return (if retry (Refusal.Answered response.Status) then Attempt.Reconnect else Attempt.Finished)
             else
                 // A response with no body to read is a 204, or the answer to a HEAD. Nothing this
                 // module asks for answers that way, and the reconnect is what covers a server that
@@ -200,10 +232,17 @@ let private openStream
                     try
                         return! connect ()
                     with _ ->
-                        // Every transport fault lands here — nothing listening, a socket that
-                        // dropped mid-stream, and the abort the teardown fires — and none of them
-                        // reaches the caller. `cancelled` below is what tells the last one apart.
-                        return Attempt.Reconnect
+                        // Two unrelated things land here: a transport fault — nothing listening, a
+                        // name that did not resolve, a socket that dropped mid-stream — and the
+                        // abort the teardown fires. `cancelled` is what tells them apart, and only
+                        // the first is a refusal: an unsubscribe is not an outcome the caller gets
+                        // a vote on, and asking would hand it one. The abort `release ()` fires on
+                        // a permanent refusal cannot arrive here at all — that branch has already
+                        // left this workflow.
+                        if cancelled then
+                            return Attempt.Reconnect
+                        else
+                            return (if retry Refusal.Unanswered then Attempt.Reconnect else Attempt.Finished)
                 }
 
             match attempt with
@@ -226,9 +265,10 @@ let private openStream
         cancelled <- true
         release ()
 
-/// Subscribe, but stop for good when `retry` says a refusal is permanent. The stopped
-/// subscription is inert rather than errored: a server that does not offer a stream is not a
-/// fault, it is a server whose news has to arrive another way.
+/// Subscribe, but stop for good when `retry` says a failed attempt — a status the server sent,
+/// or a connect nothing answered — is permanent. The stopped subscription is inert rather than
+/// errored: a server that does not offer a stream is not a fault, it is a server whose news has
+/// to arrive another way.
 let subscribeWhile (url: string) (headers: (string * string) list) (retry: Retry) (onFrame: Sink<string>) : Subscription =
     Subscription.ofStop (openStream url headers (fun event -> dataOf event |> Option.iter onFrame) retry)
 
