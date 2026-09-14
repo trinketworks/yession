@@ -2295,7 +2295,11 @@ let private askSpawner (spawner: obj) (fields: (string * obj) list) : Fable.Clau
 /// A wrap that confines nothing: the argv it was handed, back. The srt spawner takes its wrap
 /// as a PARAMETER, so a case about the SEAM needs a wrap rather than a sandbox — which is why
 /// these cases ask for `Ports` alone and never for `Srt`.
-let private passthroughWrap (command: string) (arguments: string list) (_cwd: string) : Async<string list> =
+let private passthroughWrap
+    (command: string)
+    (arguments: string list)
+    (_directory: string option)
+    : Async<string list> =
     async { return command :: arguments }
 
 /// What a spawner answers for `killed` once the SDK's forwarded abort has fired — waited out

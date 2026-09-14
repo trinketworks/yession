@@ -1956,6 +1956,14 @@ module SrtSandbox =
     [<Emit("$0.SandboxManager.wrapWithSandboxArgv($1, undefined, $2, undefined, $3 || undefined)")>]
     let private wrapArgv (srt: obj) (command: string) (custom: obj) (cwd: string) : JS.Promise<obj> = jsNative
 
+    /// How srt is told "no directory": its wrapper takes the child's start directory as a
+    /// string and reads any falsy one — nothing at all, or the empty string this seam used to
+    /// be handed — as "wherever this process is", which is the `|| undefined` above. That
+    /// spelling is srt's business, so an absent directory takes it HERE, at the binding that
+    /// knows it, rather than at a caller who would otherwise have to know which of srt and
+    /// `spawn` reads which spelling.
+    let private wrapCwd (directory: string option) : string = Option.toObj directory
+
     [<Emit("$0.argv")>]
     let private argvOf (wrapped: obj) : string array = jsNative
 
@@ -2222,13 +2230,21 @@ module SrtSandbox =
     /// Wrap one command under a policy, yielding the argv that runs it confined. The
     /// agent CLI's spawner needs exactly this and nothing else around it: it is handed a
     /// command by the SDK and has to produce a confined process from it.
-    let wrapperFor (tools: SrtTools) (policy: SandboxPolicy) : string -> string list -> string -> Async<string list> =
+    ///
+    /// The start directory arrives as an option — a child that starts wherever this process is
+    /// is a case, not a path — and `wrapCwd` puts it in srt's own spelling below.
+    let wrapperFor
+        (tools: SrtTools)
+        (policy: SandboxPolicy)
+        : string -> string list -> string option -> Async<string list> =
         let config = configFor tools policy
-        fun executable arguments cwd ->
+        fun executable arguments directory ->
             async {
                 let! srt = managerFor config
                 let config = withBridgeSockets srt config
-                let! wrapped = Interop.awaitPromise (wrapArgv srt (commandLine executable arguments) (toJs config) cwd)
+                let! wrapped =
+                    Interop.awaitPromise
+                        (wrapArgv srt (commandLine executable arguments) (toJs config) (wrapCwd directory))
                 match List.ofArray (argvOf wrapped) with
                 | [] -> return failwith "srt returned an empty argv"
                 | argv -> return argv
@@ -2299,8 +2315,10 @@ module AgentSandbox =
           WorkingDirectory = None
           Filesystem = Confined }
 
-    /// Where a spawn request says to start the child, as `spawn` takes one: `None` for a
-    /// request that named no directory.
+    /// Where a spawn request says to start the child: `None` for a request that named no
+    /// directory. Both spawners read the request here and hand this on as it is — each
+    /// consumer's own spelling of absence (`spawn`'s `undefined`, srt's falsy `cwd`) is
+    /// produced at that consumer's boundary, by whatever knows what it means there.
     ///
     /// The SDK spells "none" both ways — an absent field and the empty string — and the
     /// difference is not cosmetic: `spawn` handed `cwd: ''` fails with ENOENT rather than
@@ -2407,7 +2425,7 @@ module AgentSandbox =
 
     /// The srt-backend agent spawner: the same seam, with the CLI coming up inside the
     /// sandbox `wrap` describes.
-    let srtClaudeSpawner (wrap: string -> string list -> string -> Async<string list>) : obj =
+    let srtClaudeSpawner (wrap: string -> string list -> string option -> Async<string list>) : obj =
         box (
             Func<Sdk.SpawnOptions, Sdk.SpawnedProcess> (fun options ->
                 let relay = createRelay ()
@@ -2436,13 +2454,7 @@ module AgentSandbox =
 
                 async {
                     try
-                        // The wrap spells a directory the same way the request did — a
-                        // string, with "none" as the empty one — so there is nothing to
-                        // decide here, only an absent field to settle into the empty string
-                        // it already means. `startDirectory` is the other half of the same
-                        // convention, for `spawn`, which spells "none" as `undefined`.
-                        let cwd = if isNullOrUndefined options.cwd then "" else options.cwd
-                        match! wrap options.command (List.ofArray options.args) cwd with
+                        match! wrap options.command (List.ofArray options.args) (startDirectory options) with
                         | executable :: arguments -> join executable arguments
                         // Unreachable: `wrapperFor` refuses an empty argv before it returns
                         // one. Said rather than assumed, because the alternative is a
