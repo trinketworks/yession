@@ -152,6 +152,11 @@ let private turnTests =
                 match List.rev seen.Value with
                 | [ guided; bare ] ->
                     Expect.equal bare AgentTurn.systemPrompt "no guidance is the core alone"
+                    // Where scratch goes is part of the core, not the operator's to add: the
+                    // directory is one the BUILD sets, and `/tmp` is denied on a host the
+                    // operator's words never mention.
+                    Expect.stringContains AgentTurn.systemPrompt "$TMPDIR" "the core names the scratch directory"
+                    Expect.stringContains AgentTurn.systemPrompt "/tmp" "and names /tmp as not the agent's"
                     Expect.isTrue (guided.StartsWith AgentTurn.systemPrompt) "the core comes first, whole"
                     Expect.isTrue (guided.EndsWith words) "the operator's words come last, whole"
                     Expect.isTrue

@@ -28,6 +28,16 @@ module AgentTurn =
     /// the prompt names the split — look and edit in the default sandbox, build and test in a
     /// work sandbox — because every tool description says how to reach either and none of
     /// them can say which to prefer.
+    ///
+    /// And where SCRATCH goes. Every sandbox sets `$TMPDIR` to a directory of the session's
+    /// own — the srt backends bake the session's `tmp/` into it, the container backend names
+    /// its private `/tmp` — but `/tmp` itself is three things across them: the container's
+    /// own, a tmpfs that Linux drops when the command exits, and a path macOS denies. An
+    /// agent that guessed `/tmp` on a Mac lost a line of a file to `sed -i … && cat >
+    /// /tmp/…` refused at the second half. The prompt says where scratch goes the way the
+    /// agent CLI's own does — a directory named as the session's, and `/tmp` named as not
+    /// its — and, for the half of that fault the directory does not fix, says to write
+    /// before deleting.
     let systemPrompt =
         "You are participating in a collaborative engineering session. "
         + "Reply to the latest message, using the conversation so far as context. "
@@ -39,6 +49,11 @@ module AgentTurn =
         + "Read and edit the checkout in the default sandbox, with git, grep and sed, so the "
         + "people in the session see what you looked at and what you changed; use a work "
         + "sandbox for what needs its toolchain — building, tests, running the code. "
+        + "Put temporary files — intermediate results, scripts, output that does not belong "
+        + "in the checkout — under `$TMPDIR`, which every sandbox sets to a directory of this "
+        + "session's own; `/tmp` and other system temp directories are not yours to write. "
+        + "When you edit a file, write the new content before you remove anything: a command "
+        + "line that deletes and then writes can be refused halfway, and the delete stands. "
         + "Commands you queue in a terminal run outside your turn, so their results reach "
         + "you on a later turn as terminal activity rather than as a tool result — read it "
         + "before assuming a queued command did nothing. "

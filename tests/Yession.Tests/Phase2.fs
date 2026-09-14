@@ -449,6 +449,20 @@ let private sandboxPolicyTests =
                 |> expect
             Expect.equal (policy.Env |> Map.tryFind "GIT_CONFIG_COUNT") (Some "0") "a baseline, not a mandate"
 
+        // The prompt promises every sandbox sets `$TMPDIR`. The srt backends redirect it to
+        // the session's `tmp/`; the container's own `/tmp` is already private, so the
+        // promise there is a name, not a redirect — and an unset one would be a broken
+        // promise in the one backend where `/tmp` was fine.
+        testCase "a docker sandbox names its private /tmp as TMPDIR" <| fun () ->
+            let policy =
+                Sandboxes.policyFor
+                    DockerBackend (Sandboxes.limitsFor DockerBackend "linux") Map.empty Map.empty None None None
+                    []
+                    Set.empty
+                    EnvironmentSpec.defaults
+                |> expect
+            Expect.equal (policy.Env |> Map.tryFind "TMPDIR") (Some "/tmp") "named, so the prompt's promise holds"
+
         // What the container backend actually DOES with a grant. Until this, the policy
         // carried granted paths and sockets, `limitsFor` claimed docker scopes a socket
         // by path, and `DockerSandbox` dropped every one — a grant that read as held and
