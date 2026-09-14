@@ -337,6 +337,14 @@ let private postMessage (url: string) (headers: obj) (body: string) : JS.Promise
 /// and not a short name. The cut that makes a name fit belongs to whoever asked
 /// (`Chapters.shaped`); this only has to ask for roughly the right thing.
 ///
+/// And it asks for it as a LIMIT rather than a length. `Chapters.Limit` is what fits on one
+/// rule across a phone's reading column — a fact about the surface, shared with the guess,
+/// which is somebody's own sentence cut to it. Said to a model as "keep it under 48
+/// characters" it reads as the length wanted, and a model writes to the number it is given:
+/// the answers came back at forty-odd characters, a sentence's worth, when a name is three
+/// words. The shape is the ask's to state (`Chapters.summaryAsk`, at most four words) and
+/// this is only the ceiling that shape has to fit inside.
+///
 /// The lines are FENCED and the turn closes on an instruction, which is the difference
 /// between naming a transcript and being given one to obey. Sent bare as the whole user
 /// turn, they occupy the position a model reads as "this is what you are being asked to
@@ -362,7 +370,8 @@ let private summaryBody (ask: SummaryAsk) : string =
     Encode.object
         [ "model", Encode.string summaryModel
           "max_tokens", Encode.int summaryTokens
-          "system", Encode.string (sprintf "%s Keep it under %d characters." ask.Task ask.Budget)
+          "system",
+          Encode.string (sprintf "%s It must fit in %d characters; shorter is better." ask.Task ask.Budget)
           "messages",
           Encode.list
               [ Encode.object
