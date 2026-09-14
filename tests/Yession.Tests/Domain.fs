@@ -2298,6 +2298,15 @@ let private configTests =
         testCase "a sandbox nobody could name is refused rather than parsed" <| fun () ->
             Expect.isError (SandboxRef.parse "octo/hello:dev:extra") "two colons name nothing"
             Expect.isError (SandboxRef.parse "not-a-repo:dev") "the scope has to be an owner/repo"
+
+        // Observed: the agent asked for `trinketworks/yession` — the repo, no `:name` — and
+        // was told the `/` was not allowed in a name. The mistake was the missing name.
+        testCase "a bare owner/repo is told it named a repo, not that it used a bad character" <| fun () ->
+            match SandboxRef.parse "octo/hello" with
+            | Error reason ->
+                Expect.stringContains reason "is a repo" "names the mistake"
+                Expect.stringContains reason "owner/repo:name" "and shows the shape"
+            | Ok parsed -> failwithf "parsed a repo as a sandbox: %A" parsed
     ]
 
 // -----------------------------------------------------------------------------
