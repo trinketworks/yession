@@ -1688,14 +1688,19 @@ module View =
                     candidate.Description
                     |> Option.map (fun said -> html $"""<span class="{Style.askRowDescription}">{said}</span>""")
                     |> Option.toList
-            let mark = if heldNow then html $"""<span class="{Style.askRowMark}" aria-hidden="true">{Icon.check}</span>""" else Lit.nothing
+            // The mark's CELL is on every row and its contents only on the held one — the
+            // gutter is what the names are aligned against, so a column that came and went
+            // with the tick would move every name each time one was chosen.
+            let mark =
+                html $"""
+                    <span class="{Style.askRowMark}" aria-hidden="true">{if heldNow then Icon.check else Lit.nothing}</span>"""
             html $"""
                 <li class="{if heldNow then Style.askRowHeld else Style.askRow}">
                   <button type="button" class="{Style.askRowButton}" data-repo-candidate="{name}"
                           aria-pressed="{if heldNow then "true" else "false"}" ?disabled={busy}
                           @click={Ev(fun _ -> hold candidate)}>
-                    <span class="{Style.askRowName}">{name}</span>
                     {mark}
+                    <span class="{Style.askRowName}" data-repo-candidate-name="{name}">{name}</span>
                     {description}
                   </button>
                   {if heldNow then branchField candidate else Lit.nothing}
@@ -1750,6 +1755,7 @@ module View =
                             @click={Ev(fun _ -> target |> Option.iter actions.LaunchStart)}>{Dom.Text.repoPickerStart}</button>"""
         html $"""
             <section class="{Style.ask}" data-repo-picker="{stage}" aria-labelledby="repo-picker-title">
+              <div class="{Style.askLeadBar}" aria-hidden="true"></div>
               <div class="{Style.askBody}">
               <div class="{Style.askHead}">
                 <span class="{Style.askFrom}"><span class="{Style.askWho}">{Dom.Text.repoPickerAsker}</span> <span class="{Style.askVerb}">{Dom.Text.repoPickerAsks}</span></span>
@@ -1758,7 +1764,7 @@ module View =
               </div>
               <span id="repo-picker-title" class="{Style.askQuestion}">{Dom.Text.repoPickerTitle}</span>
               <label class="{Style.srOnly}" for="repo-picker-search">{Dom.Text.repoPickerSearchLabel}</label>
-              <input id="repo-picker-search" type="search" class="{Style.field}" data-repo-picker-search
+              <input id="repo-picker-search" type="search" class="{Style.askSearch}" data-repo-picker-search
                      placeholder="{Dom.Text.repoPickerSearchPlaceholder}"
                      autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false"
                      enterkeyhint="go" ?disabled={busy}

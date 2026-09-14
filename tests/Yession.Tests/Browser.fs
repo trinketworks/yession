@@ -1612,6 +1612,69 @@ let editorTests =
                                }""")
                 Expect.isFalse sideways "the conversation column does not scroll sideways"
             }
+        // The ask card stands where the conversation will, so it reads on the conversation's
+        // leading line — the one the header's title and every message body start on. It did
+        // not: the card spent its own gutter, three quarters of the transcript's, and the
+        // question, the search field and four bordered rows all began a centimetre to the
+        // left of every other word on the screen.
+        //
+        // Only a rendered page can settle it. The two columns are built from different tokens
+        // in different files — the band's padding and the transcript's, plus the avatar gutter
+        // the bodies carry — and a change to any of them leaves markup that still reads right
+        // everywhere the cheap tier looks. And the two states cannot be on screen at once (the
+        // card stands only over a session that has not begun, a body only over one that has),
+        // which is what `window.__launch` is for.
+        //
+        // What is asserted is the COLUMN and nothing else: not the rules, not the tick's berth
+        // in the gutter, not what the rows look like. Those are the design, and the design
+        // changing is not a regression.
+        let askCardColumnCase width height port =
+            editorCaseIn width height
+                (sprintf "at %dpx the ask card's lines start where the conversation's words do" width) port <| fun page ->
+                async {
+                    let! measured = await (page.EvaluateAsync<int> "() => window.innerWidth")
+                    Expect.equal measured width "a true viewport, not a clamped window"
+
+                    // Where the conversation's words start, read off the page the harness
+                    // loads with: the body's own box plus the avatar gutter it carries.
+                    let! _ = await (page.WaitForSelectorAsync "#shell [data-conversation] [data-message-body]")
+                    let! column =
+                        await (page.EvaluateAsync<int>
+                                """() => {
+                                     const body = document.querySelector('#shell [data-conversation] [data-message-body]')
+                                     const box = body.getBoundingClientRect()
+                                     return Math.round(box.left + parseFloat(getComputedStyle(body).paddingLeft))
+                                   }""")
+
+                    // The same session before it began, with a row held — so the branch line
+                    // inside a row is on screen as well as the lines outside them.
+                    do! awaitU (page.EvaluateAsync "() => window.__launch(true)")
+                    let! _ = await (page.WaitForSelectorAsync "#shell [data-repo-picker] [data-repo-candidate]")
+                    do! awaitU (page.ClickAsync "#shell [data-repo-picker] [data-repo-candidate]")
+                    let! _ = await (page.WaitForSelectorAsync "#shell [data-repo-picker] [data-repo-candidate-branch]")
+
+                    let! adrift =
+                        await (page.EvaluateAsync<string[]> (sprintf """() => {
+                            const column = %d
+                            const card = document.querySelector('#shell [data-repo-picker]')
+                            return [
+                                    ['the question', card.querySelector('#repo-picker-title')],
+                                    ['the search field', card.querySelector('[data-repo-picker-search]')],
+                                    ['a row’s name', card.querySelector('[data-repo-candidate-name]')],
+                                    ['the branch label', card.querySelector('label[for="repo-branch"]')],
+                                    ['the start button', card.querySelector('[data-repo-picker-start]')]
+                                  ]
+                                .map(([what, el]) => [what, Math.round(el.getBoundingClientRect().left)])
+                                .filter(([_, left]) => left !== column)
+                                .map(([what, left]) => `${what} starts at ${left}px, the conversation at ${column}px`)
+                          }""" column))
+                    Expect.isEmpty
+                        adrift
+                        (sprintf "every line of the ask card starts on the conversation's own column, these did not: %s"
+                            (String.Join (" | ", adrift)))
+                }
+        askCardColumnCase 390 844 (EDITOR_PORT + 43)
+        askCardColumnCase 1440 900 (EDITOR_PORT + 44)
         // The title is written per keystroke, so Enter has nothing to save — and that is
         // exactly why it has to DO something: a phone holds its keyboard open for as long as
         // the field holds focus, and a return key that answers nothing reads as an edit the
