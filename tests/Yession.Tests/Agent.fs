@@ -716,7 +716,8 @@ let private toolFinished (block: string option) =
     SessionEvent.ToolUseFinished
         { ToolUseId = ToolUseId.create "u1" |> expect
           Outcome = Yession.Domain.Tools.ToolCallOk
-          Block = block |> Option.map (fun n -> BlockId.create n |> expect) }
+          Block = block |> Option.map (fun n -> BlockId.create n |> expect)
+          Result = None }
 
 let private wakeTests =
     testList "The wake (Plan 20, stage 2)" [

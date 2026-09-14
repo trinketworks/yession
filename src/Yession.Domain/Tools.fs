@@ -301,7 +301,11 @@ type ToolUseBegin =
 /// …and when it ends.
 type ToolUseEnd =
     { Outcome : ToolOutcome
-      Block : BlockId option }
+      Block : BlockId option
+      /// The answer text a chip may disclose, already capped — set only for a call that
+      /// succeeded, drew its own chip (no `Block`), and is one of OUR tools. See
+      /// `ToolUseFinished.Result` for why those are the conditions.
+      Result : string option }
 
 /// The audit seam: ONE service, injected into every path a tool call can take, so the
 /// session's own tools and a proxied external server are recorded the same way. Different
@@ -363,16 +367,35 @@ module ToolUseLog =
     /// Wrap a registry so every call through it is recorded. Applied ONCE, to the merged
     /// registry, which is what makes "the same way" true rather than aspirational: a
     /// provider added later cannot arrive with its own logging, or without any.
+    /// How much of a non-block answer a chip keeps. Small on purpose: this is a preview a
+    /// reader expands, not the record the agent reads — the agent already has the whole
+    /// answer in its own transcript. A tool whose answer is genuinely large (`repo_diff`)
+    /// caps itself and points at a terminal for the rest; this is the backstop under that.
+    let private resultCap = 4000
+
+    let private cappedResult (text: string) : string =
+        if text.Length <= resultCap then text
+        else text.Substring (0, resultCap) + sprintf "\n… (%d more characters — read the full answer in a terminal)" (text.Length - resultCap)
+
     let wrap (log: ToolUseLog) (registry: ToolRegistry) : ToolRegistry =
         { registry with
             Invoke =
               fun call ->
                 async {
-                    let recorded =
+                    // Whether this is one of OUR tools decides two things the same way: an
+                    // argument value may only be recorded from a schema we wrote, and — below
+                    // — a result may only be disclosed from a body we wrote. A foreign call is
+                    // trusted for neither.
+                    let ours =
                         match ToolRegistry.tryFind call registry with
-                        | Some descriptor when not descriptor.Foreign ->
-                            ToolArguments.redact descriptor.InputSchema call.Arguments
-                        | _ -> None
+                        | Some descriptor -> not descriptor.Foreign
+                        | None -> false
+                    let recorded =
+                        if ours then
+                            match ToolRegistry.tryFind call registry with
+                            | Some descriptor -> ToolArguments.redact descriptor.InputSchema call.Arguments
+                            | None -> None
+                        else None
                     let! handle =
                         log.Started { Namespace = call.Namespace; Name = call.Name; Arguments = recorded }
                     // A tool body that throws is still a call that happened, and an audit
@@ -389,8 +412,18 @@ module ToolUseLog =
                     | Some id ->
                         let ending =
                             match answer with
-                            | Ok answer -> { Outcome = ToolCallOk; Block = answer.Block }
-                            | Error reason -> { Outcome = ToolCallFailed reason; Block = None }
+                            | Ok answer ->
+                                // Disclosed only when this chip is the only place to read the
+                                // answer: a call that became a block has its output on the
+                                // block's chip already, and a foreign call's result is no more
+                                // ours to broadcast than its arguments were to record.
+                                let result =
+                                    match answer.Block with
+                                    | Some _ -> None
+                                    | None when not ours -> None
+                                    | None -> Some (cappedResult answer.Text)
+                                { Outcome = ToolCallOk; Block = answer.Block; Result = result }
+                            | Error reason -> { Outcome = ToolCallFailed reason; Block = None; Result = None }
                         do! log.Finished id ending
                         // Only onto an answer that HAPPENED. A refusal is about the call, and
                         // appending the session's unrelated news to it would make a reader
