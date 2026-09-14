@@ -1909,6 +1909,76 @@ let private sseStreamTests =
     ]
 
 // -----------------------------------------------------------------------------
+// A subscriber that throws. Its exception used to arrive at the same catch a
+// dropped socket does, so our own bug became a flaky network: the rest of the
+// chunk was discarded and the connection re-dialled a second later, with
+// nothing said anywhere. These pin the two halves of that — what the stream
+// still delivers, and what it does NOT conclude — so they need a server that
+// offers more than one event and says when it was asked for a second
+// connection.
+// -----------------------------------------------------------------------------
+
+/// One server writing two events in a SINGLE write, counting the connections it is asked for,
+/// and a subscriber that throws on the first event it is ever handed. The two cases below vary
+/// nothing about this arrangement — they ask different questions of it — so it is one helper.
+///
+/// The single write is load-bearing: both events reach the client in one chunk, so what the
+/// first one's exception did to the second is a question about the dispatch loop rather than
+/// about what happened to arrive together. So is throwing only ONCE: a sink that threw every
+/// time would make every reconnect look exactly like the first attempt.
+let private aThrowingSubscriber () =
+    async {
+        let connections = ResizeArray<int> ()
+
+        let handler (_req: Interop.IncomingMessage) (res: Interop.ServerResponse) =
+            connections.Add 1
+            res.writeHead (200, Fable.Core.JsInterop.createObj [ "content-type", box "text/event-stream" ])
+            |> ignore
+            res.write "data: one\n\ndata: two\n\n" |> ignore
+
+        let server = Interop.createServer handler
+        let! listening =
+            Async.FromContinuations (fun (cont, _, _) ->
+                server.listen (0, "127.0.0.1", fun () -> cont server) |> ignore)
+        let url = sprintf "http://127.0.0.1:%d/stream" (Interop.serverPort listening)
+
+        let received = ResizeArray<string> ()
+        let mutable thrown = false
+        let subscription =
+            Sse.subscribe url [] (fun payload ->
+                received.Add payload
+                if not thrown then
+                    thrown <- true
+                    failwith "this subscriber is broken")
+
+        return connections, received, subscription, listening
+    }
+
+let private sseThrowingSinkTests =
+    testList "SSE delivery to a subscriber that throws" [
+        testCaseAsync "the events after the one that threw are still delivered" <|
+            async {
+                let! _, received, subscription, listening = aThrowingSubscriber ()
+                do! waitUntil "the second event of the chunk the first one threw on" (fun () -> received.Count >= 2)
+                // Exactly these two, in this order. A dispatch loop that abandoned the chunk
+                // reconnects and reads the SAME first event again, so a looser assertion —
+                // "two arrived eventually" — is satisfied by the very fault this is about.
+                Expect.equal (List.ofSeq received) [ "one"; "two" ] "the chunk finished being dispatched"
+                subscription.Stop ()
+                listening.close ignore
+            }
+
+        testCaseAsync "a subscriber that threw is not a dropped connection" <|
+            async {
+                let! connections, received, subscription, listening = aThrowingSubscriber ()
+                do! waitUntil "the stream to have delivered past the event that threw" (fun () -> received.Count >= 2)
+                Expect.equal connections.Count 1 "our own bug did not re-dial the server"
+                subscription.Stop ()
+                listening.close ignore
+            }
+    ]
+
+// -----------------------------------------------------------------------------
 // A subscription that gives up for good. What the client does with a refusal its
 // `Retry` called permanent is invisible from the client — the socket is the whole
 // question — so the SERVER watches the connection the request arrived on.
@@ -2958,6 +3028,9 @@ let tests =
         // `Ports` for the same reason: one `node:http` server refusing one connection, and
         // the only observer of what the client did with it is that server's own socket.
         Tag.needs "SSE subscription that gives up for good" [ Tag.Ports ] (fun () -> sseGiveUpTests)
+        // `Ports` for the same reason again: one `node:http` server, two events in one write,
+        // and the only observer of what the client concluded is that server's connection count.
+        Tag.needs "SSE delivery to a subscriber that throws" [ Tag.Ports ] (fun () -> sseThrowingSinkTests)
         Tag.needs "Manager→Session notifications over SSE (reverse control leg)" [ Tag.Ports ] (fun () -> notificationStreamTests)
         Tag.needs "A hook delivery across the control channel (the relay end to end)" [ Tag.Ports ] (fun () -> hookDeliveryStreamTests)
         Tag.needs "MCP server set over SSE (reverse control leg)" [ Tag.Ports ] (fun () -> mcpStreamTests)

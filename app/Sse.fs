@@ -139,7 +139,8 @@ let private retryAfterMs = 1000
 
 // Consume an SSE stream: connect (with whatever request headers the caller's authentication
 // wants — a control secret, a strategy's identity assertion, or none), hand each event's rejoined
-// `data:` lines to the sink, reconnect with a fixed backoff when the connection drops, and cancel
+// `data:` lines to the sink (whose own exceptions are its bug and stay out of this loop's
+// decisions), reconnect with a fixed backoff when the connection drops, and cancel
 // both the retry loop and the live fetch when the subscription ends — on unsubscribe, and equally
 // on a refusal the caller called permanent. Best-effort by design: a transport error is a dropped
 // connection the caller is asked about, never thrown.
@@ -169,6 +170,20 @@ let private openStream
           Http.headers (headers @ [ "accept", "text/event-stream" ])
           Fetch.Types.RequestProperties.Signal controller.signal ]
 
+    // A sink that throws is OUR bug and must not reach the attempt decision: a dropped socket is
+    // retried, where a broken subscriber retried forever silently drops every event it was given.
+    // Said once here, and the stream carries on — one bad event is not a dead connection.
+    //
+    // The url names the connection because it is safe to: the control legs authenticate with a
+    // header (`x-yession-control`), the registry and query streams with a header or a cookie, and
+    // nothing in this repository puts a credential in an SSE url. A caller that ever does has to
+    // give this line another name for the connection.
+    let deliver (event: string) =
+        try
+            onEvent event
+        with error ->
+            eprintfn "sse subscriber for %s threw on an event: %s" url (Http.reasonOf error)
+
     let drain (reader: ReadableStreamDefaultReader) =
         // One decoder for the whole connection, because a multi-byte character split across two
         // reads is completed by the decoder holding its tail; one buffer beside it, because an
@@ -184,7 +199,7 @@ let private openStream
                 else
                     let text = chunk.value |> Option.map (decodeChunk decoder) |> Option.defaultValue ""
                     let whole, tail = events (buffered + text)
-                    whole |> List.iter onEvent
+                    whole |> List.iter deliver
                     return! loop tail
             }
 
