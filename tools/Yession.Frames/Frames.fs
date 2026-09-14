@@ -41,13 +41,16 @@ module Yession.Frames
 //   <out>/frames/        the frames the report shows.
 //   <out>/log.json       everything, for a question the report did not anticipate.
 //
-// What it found on the first run, so the next reader knows what a clean run looks like
-// (phone viewport, a fresh session, Chromium): SIX jumps before a repo is even chosen. The
-// server-rendered shell paints the terminals pane OPEN full-width (the `<html>` element
-// carries no `term-closed`; only the first client render adds it), so the pane then slides
-// shut over 200ms; `/me` answers 401, the shell bounces through `/login` and LOADS AGAIN, so
-// both happen twice; then the repo picker appears at the foot of the conversation, and grows
-// to 982px when the list arrives, scrolling the pinned conversation by 360px to keep its end.
+// What it found on the first run (phone viewport, a fresh session, Chromium): SIX jumps
+// before a repo was even chosen. The server-rendered shell painted the terminals pane OPEN
+// full-width and the first client render slid it shut over 200ms; `/me` answered 401, the
+// shell bounced through `/login` and LOADED AGAIN, so both happened twice; then the repo
+// picker appeared at the foot of the conversation and grew when the list arrived, scrolling
+// the pinned conversation to keep its end. The first four are fixed — the shell now carries
+// `term-closed` from the model (`Ssr.page`), and the Manager's `/open` page enters a session
+// through `/login` so the shell is painted once. What a clean run looks like NOW: the `/open`
+// page, one shell document with the pane off-canvas from its first frame, then the picker
+// appearing and growing at connect — the one jump left, a design choice rather than a fault.
 //
 // How to read what it makes. Start at the sheets: a jump is two adjacent frames that differ
 // by a lot, and the red box says where. Read the stamps. Same stamp on both frames — the
@@ -63,7 +66,9 @@ module Yession.Frames
 //
 // Caveats that shape what it can say. The stamp changes every animation frame, so it FORCES
 // a paint per frame — frame counts are the stamp's, and a frame whose only change is the
-// stamp is dropped by the pixel threshold (`--min-px`). Screencast timestamps and the page's
+// stamp is dropped by the pixel threshold (`--min-px`). A run whose shell never lands films
+// for a full minute, some thousands of frames; they are diffed in batches, because handing
+// the analyzer every frame in one call is a request the browser never answers. Screencast timestamps and the page's
 // clock are different clocks; the stamp is the truth and the timestamps are for ordering.
 // The session is created the way the Create button creates one (`POST /sessions`, then the
 // `/open` page that launches it and hands the browser over) and STOPPED afterwards unless
@@ -317,13 +322,17 @@ let private instrument = """{
 /// before, the count of changed pixels and their bounding box (in CSS px). Frames arrive as
 /// data URLs, because a `file://` image taints the canvas and `getImageData` then refuses.
 let private analyzer = """<!doctype html><meta charset=utf-8><script>
+  // Called once per BATCH of frames, in order; the previous batch's last frame is kept so
+  // the first of the next is diffed against it, and the very first frame of the run against
+  // nothing (`changed: -1`).
+  let prev = null
   globalThis.__analyze = async (urls) => {
     const load = (u) => new Promise((res, rej) => { const im = new Image(); im.onload = () => res(im); im.onerror = rej; im.src = u })
     const imgs = await Promise.all(urls.map(load))
     const cv = document.createElement('canvas'); cv.width = imgs[0].width; cv.height = imgs[0].height
     const ctx = cv.getContext('2d', { willReadFrequently: true })
     const px = (im) => { ctx.drawImage(im, 0, 0); return ctx.getImageData(0, 0, cv.width, cv.height).data }
-    const out = []; let prev = null
+    const out = []
     for (const im of imgs) {
       const d = px(im)
       if (!prev) { out.push({ changed: -1, box: null }); prev = d; continue }
@@ -505,9 +514,15 @@ let private run () =
         writeFile (joinTwo out "analyze.html") (box analyzer)
         let! _ = cdp.Send "Page.navigate" (createObj [ "url" ==> sprintf "file://%s" (joinTwo out "analyze.html") ])
         do! delay 500
-        let urls = attributed |> List.map (fun f -> "data:image/png;base64," + f.Data) |> List.toArray
-        let! diffsJson = evaluate cdp (sprintf "__analyze(%s)" (JS.JSON.stringify urls))
-        let diffs : obj array = JS.JSON.parse (unbox diffsJson) |> unbox
+        // In batches: one `Runtime.evaluate` carrying every frame of a long run as data URLs
+        // is tens of megabytes of expression, and the browser never answers it.
+        let batches = attributed |> List.chunkBySize 32
+        let diffs = ResizeArray<obj> ()
+        for batch in batches do
+            let urls = batch |> List.map (fun f -> "data:image/png;base64," + f.Data) |> List.toArray
+            let! diffsJson = evaluate cdp (sprintf "__analyze(%s)" (JS.JSON.stringify urls))
+            let these : obj array = JS.JSON.parse (unbox diffsJson) |> unbox
+            diffs.AddRange these
         let analyzed =
             attributed
             |> List.mapi (fun i f ->
@@ -543,7 +558,7 @@ let private run () =
                 [ sprintf "<!doctype html><meta charset=utf-8><title>first load</title>%s" style
                   sprintf "<h1>%s</h1><p>%d frames painted, %d distinct, %d shown (Δ ≥ %dpx or carrying a render); %d renders</p>" (escapeHtml sessionUrl) (List.length frames) (List.length distinct) (List.length shown) minPx (List.length renders)
                   sprintf "<h2>Navigations and auth</h2><pre>%s</pre>" (requests |> List.map escapeHtml |> String.concat "\n")
-                  "<p>The stamp in each frame's corner is written by the page itself: rN = renders landed, tN = ms since that document started. A stamp whose clock runs backwards belongs to an earlier document — a fresh session's shell loads twice (the sign-in bounce).</p>"
+                  "<p>The stamp in each frame's corner is written by the page itself: rN = renders landed, tN = ms since that document started. A stamp whose clock runs backwards belongs to an earlier document; the navigation timeline above says why there was one.</p>"
                   sprintf "<h2>Frames</h2>%s" (shown |> List.map card |> String.concat "\n")
                   (if List.isEmpty trailing then "" else sprintf "<h2>Renders after the last frame</h2>%s" (trailing |> List.map renderLines |> String.concat ""))
                   sprintf "<h2>All renders</h2>%s" allRenders ]
