@@ -71,19 +71,36 @@ let private asText (value: obj) : string = jsNative
 [<Emit("!!$0")>]
 let private isTruthy (value: obj) : bool = jsNative
 
-/// `x | 0` — ToInt32, the coercion an `exited` frame's code has always been read through. An
-/// absent or non-numeric code therefore reads as 0 rather than as a refusal, which is a fault
-/// of this client's rather than of the wire's: a provider that sends a bare `{"type":"exited"}`
-/// is reported as having exited SUCCESSFULLY.
+/// `x | 0` — ToInt32, the coercion an `exited` frame's code is read through once there is
+/// something to read. Asked only of a value `isNumber` has already admitted, because ToInt32
+/// answers 0 for everything it cannot make sense of, and 0 is the one answer a person acts on
+/// differently.
 [<Emit("$0 | 0")>]
 let private toInt32 (value: obj) : int = jsNative
 
+/// Is this a number at all — finite, and a number rather than the text of one? `Number.isFinite`
+/// and not the global `isFinite`, which coerces first and so answers true for `"7"`, `[]` and
+/// `null` alike. It is the question `toInt32` cannot ask for itself: a bare `{"type":"exited"}`
+/// and `{"type":"exited","code":0}` are the same value to it, and only one of them is a clean
+/// exit.
+[<Emit("Number.isFinite($0)")>]
+let private isNumber (value: obj) : bool = jsNative
+
+/// The code an `exited` frame that named none is reported with: `SandboxRun`'s own answer for
+/// a process whose exit code nobody could read. NOT 0, which says the source ended well.
+[<Literal>]
+let private noExitCode = -1
+
+/// What a `failed` frame that named no reason a person could read says instead. A `failed`
+/// frame is a failure whatever its reason renders as, so there is always something to say.
+[<Literal>]
+let private unstatedFailure = "the source failed"
+
 /// What a TEXT frame said.
 ///
-/// Three cases and not two: a frame this client cannot act on is the same outcome whether it
-/// was JSON from a later version of the protocol or not JSON at all (`docs/streams.md` MAY 9 —
-/// an unrecognised control type is ignored, never fatal), and the warning in `connect` is about
-/// both.
+/// Four cases and not three, because the two this client cannot act on are two different facts
+/// about the provider and only one of them is anybody's fault. Both are ignored; they differ
+/// in what `connect` SAYS about them.
 [<RequireQualifiedAccess>]
 type Control =
     /// `{"type":"exited","code":N}` — the stream ended, and this is what the source exited
@@ -92,8 +109,15 @@ type Control =
     /// `{"type":"failed","reason":"…"}` — it ended, and not because the device finished. The
     /// reason reaches the person verbatim, so a provider that named none still says something.
     | Failed of reason: string
-    /// Anything else, which is ignored.
-    | Unrecognised
+    /// A control frame whose `type` this build has no meaning for. `docs/streams.md` MAY 9
+    /// says new control types will appear and an implementation must ignore the ones it does
+    /// not know — so this is a provider written against a later spec doing exactly the right
+    /// thing, and it is ignored SILENTLY.
+    | Unknown
+    /// A TEXT frame that is not a control frame at all: it would not parse, or it parsed into
+    /// something carrying no `type`. That is what reaching for a framework's `send_text` to
+    /// emit device output looks like from here, and it is the one `connect` warns about.
+    | NotControl
 
 /// Read a TEXT frame.
 let control (text: string) : Control =
@@ -103,11 +127,19 @@ let control (text: string) : Control =
         with _ ->
             null
 
-    if isNull frame then Control.Unrecognised
-    elif frame.``type`` = "exited" then Control.Exited (toInt32 frame.code)
+    // JSON admits `null`, a number and a bare string, none of which carry a `type` — and text
+    // that would not parse at all arrived here as `null` too. A control frame is one that says
+    // which control it is.
+    if isNull frame || not (isTruthy (box frame.``type``)) then Control.NotControl
+    elif frame.``type`` = "exited" then
+        Control.Exited (if isNumber frame.code then toInt32 frame.code else noExitCode)
     elif frame.``type`` = "failed" then
-        Control.Failed (if isTruthy frame.reason then asText frame.reason else "the source failed")
-    else Control.Unrecognised
+        // The frame's TYPE is what says it failed; the reason is only the words. `String([])`
+        // is "", so a reason can coerce to nothing at all and there is still a failure to
+        // report.
+        let reason = if isTruthy frame.reason then asText frame.reason else ""
+        Control.Failed (if reason = "" then unstatedFailure else reason)
+    else Control.Unknown
 
 /// What a frame MEANS on this wire — a different question from what it CARRIED, which is
 /// `Frame` and the one runtime test only JavaScript can make. Text is control, binary is the
@@ -115,15 +147,21 @@ let control (text: string) : Control =
 /// mean two things.
 [<RequireQualifiedAccess>]
 type Heard =
-    /// A BINARY frame: bytes from the device, decoded as UTF-8.
+    /// A BINARY frame: bytes from the device, as text.
     | Output of string
     /// A TEXT frame: what the provider said ABOUT the stream, never what came out of it.
     | Said of Control
 
-/// Read a frame.
-let heard (frame: Frame) : Heard =
+/// Read a frame, through the CONNECTION's decoder.
+///
+/// The decoder is threaded rather than made here because UTF-8 does not respect frame
+/// boundaries: a device that emits a multi-byte character across two binary frames — which a
+/// real one does, at whatever buffer size it has — had each half decoded on its own and each
+/// half became U+FFFD. The decoder is the thing that holds the tail of a split character
+/// between calls, so it belongs to the connection and one per frame is no decoder at all.
+let heard (decoder: TextDecoder) (frame: Frame) : Heard =
     match frame with
-    | Frame.Binary bytes -> Heard.Output (buffer.Buffer.from(bytes).toString BufferEncoding.Utf8)
+    | Frame.Binary bytes -> Heard.Output (decodeChunk decoder (JS.Constructors.Uint8Array.Create bytes))
     | Frame.Text text -> Heard.Said (control text)
 
 /// How the stream ENDED, given what the connection heard before the socket closed.
@@ -131,16 +169,52 @@ let heard (frame: Frame) : Heard =
 /// Decided in one place, at the close, because `docs/streams.md` MUST 3 puts it there: the
 /// close is what ends the terminal and the frames only say why. A named failure wins over an
 /// exit code, because a provider that sends both is saying the exit is not the story (MAY 8).
+/// A `failed` frame is a failure whatever its reason renders as: what failed is the frame's
+/// TYPE, and the reason is only the words. An empty one reaching here means a frame decoder let
+/// one through rather than that nothing failed — `control` already fills it, and this says the
+/// same thing where the outcome is decided, because the two go red at different times.
 let ending (failure: string option) (exitCode: int option) : SandboxRun =
     match failure, exitCode with
-    // PRESERVED, not endorsed: a failure whose reason came out EMPTY is reported as an exit
-    // with -1 rather than as a failure. The JavaScript this replaced carried an ending as a
-    // `{code, reason}` pair and read an empty reason as "nothing failed", and the case is
-    // reachable — `String([])` is "". A fix belongs in a change that is about that.
-    | Some "", _ -> SandboxExited -1
+    | Some "", _ -> SandboxRunFailed unstatedFailure
     | Some reason, _ -> SandboxRunFailed reason
     | None, Some code -> SandboxExited code
     | None, None -> SandboxRunFailed "the stream closed without saying why"
+
+/// How a connection is NAMED in anything a person or a log reads.
+///
+/// Never by its url, which is a CREDENTIAL: `docs/streams.md` tells a provider whose resource
+/// is exclusive to mint a single-use token and spend it on attach, so the url is the one thing
+/// about a ticket that must not be reproduced anywhere it outlives the connection. What is left
+/// is what whoever reads the line already knows — the label the provider put on the stream, and
+/// the authority it is served from. Path and query go because that is where a token rides;
+/// userinfo goes because it is a credential of its own, and the admission rule refuses one
+/// anyway.
+let describing (ticket: AttachTicket) : string =
+    let authority =
+        match ticket.Url.IndexOf "://" with
+        | -1 -> None
+        | scheme ->
+            let rest = ticket.Url.Substring (scheme + 3)
+            let authority =
+                match rest.IndexOfAny [| '/'; '?'; '#' |] with
+                | -1 -> rest
+                | cut -> rest.Substring (0, cut)
+            // The port stays: it is how two providers on one box are told apart, and it is no
+            // more secret than the host.
+            let withoutUserInfo =
+                match authority.LastIndexOf '@' with
+                | -1 -> authority
+                | at -> authority.Substring (at + 1)
+
+            if withoutUserInfo = "" then None else Some withoutUserInfo
+
+    match ticket.Label, authority with
+    | Some label, Some host -> sprintf "%s (%s)" label host
+    | Some label, None -> label
+    | None, Some host -> host
+    // A url with no authority to read is one nothing could have connected to, and there is
+    // still a sentence to write about it that is not the url.
+    | None, None -> "a stream whose url names no host"
 
 // --- The connection -------------------------------------------------------------------------
 
@@ -196,7 +270,7 @@ let private closeOnDeadline (socket: WebSocket) =
 /// afterwards still gets the answer. Both settle-once guards are load-bearing — a `close`
 /// follows an `error`, and it follows a successful open too.
 let private connect
-    (url: string)
+    (ticket: AttachTicket)
     (onData: string -> unit)
     : JS.Promise<Result<WebSocket * JS.Promise<SandboxRun>, string>> =
     JS.Constructors.Promise.Create (fun resolve _ ->
@@ -219,7 +293,7 @@ let private connect
         // never reaches an event.
         let opening =
             try
-                Ok (WebSockets.connect url)
+                Ok (WebSockets.connect ticket.Url)
             with error ->
                 Error (if isTruthy error.Message then error.Message else asText error)
 
@@ -235,22 +309,31 @@ let private connect
         let mutable failure : string option = None
         let mutable warnedText = false
 
+        // One decoder for the whole connection: it is what holds the tail of a character a
+        // frame boundary cut in half until the frame carrying the rest of it arrives.
+        let decoder = createDecoder ()
+
         socket.onMessage (fun event ->
-            match heard (payload event) with
+            match heard decoder (payload event) with
             | Heard.Output text -> onData text
             // Text is CONTROL. A provider that reaches for its framework's `send_text` to emit
             // device output gets a terminal showing nothing, and every layer below here is
             // working correctly, so nothing else can say why. Said once per connection: the
-            // fault repeats per frame and the diagnosis does not.
-            | Heard.Said Control.Unrecognised ->
+            // fault repeats per frame and the diagnosis does not. Named by `describing` and
+            // never by the url, which carries the attach token.
+            | Heard.Said Control.NotControl ->
                 if not warnedText then
                     warnedText <- true
 
                     JS.console.warn (
                         "attach "
-                        + url
+                        + describing ticket
                         + ": ignoring a TEXT frame — text frames are control, device output goes in BINARY frames (docs/streams.md)"
                     )
+            // A control frame of a type this build does not know is a provider written against
+            // a later spec, doing what `docs/streams.md` MAY 9 asks of THIS end: ignored, and
+            // ignored without comment, because there is nothing for anybody to fix.
+            | Heard.Said Control.Unknown -> ()
             | Heard.Said (Control.Exited code) -> exitCode <- Some code
             | Heard.Said (Control.Failed reason) -> failure <- Some reason)
 
@@ -267,7 +350,7 @@ let private connect
         socket.onClose (fun () ->
             if not settled then
                 settled <- true
-                resolve (Error ("could not attach to " + url))
+                resolve (Error ("could not attach to " + describing ticket))
 
             endWith (ending failure exitCode)))
 
@@ -281,7 +364,7 @@ let private connect
 let attach : AttachTerminal =
     fun ticket cols rows onData ->
         async {
-            let! opened = connect ticket.Url onData |> Interop.awaitPromise
+            let! opened = connect ticket onData |> Interop.awaitPromise
 
             match opened with
             | Error reason -> return Error reason
