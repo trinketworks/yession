@@ -25,6 +25,13 @@ open Fable.Pyxpecto
 open Fable.NodeExtras
 open Node.Api
 open Node.Buffer
+// For `Interop.awaitPromise`. Every await below goes through it rather than
+// `Async.AwaitPromise`, for the reason that seam exists — see its own comment: Fable's
+// trampoline can hijack a workflow onto a `setTimeout` before `Async.AwaitPromise` has
+// attached its rejection handler, and a promise that rejects inside that window kills the
+// Node process. A `try/with` or an `Async.Catch` around the await cannot help, because the
+// handler they install is not attached yet either.
+open Yession.Host
 
 let private utf8 = BufferEncoding.Utf8
 
@@ -49,7 +56,7 @@ let private importedKey () : Async<CryptoKey> =
 
     (webcrypto ())
         .subtle.importKey (Raw, buffer.Buffer.from(kek, base64url), AesGcm.algorithm, false, [| Encrypt; Decrypt |])
-    |> Async.AwaitPromise
+    |> Interop.awaitPromise
 
 let tests =
     testList "Node platform bindings (Fable.NodeExtras)" [
@@ -86,14 +93,14 @@ let tests =
         // real fetch with a real stream and no port to bind.
         testCaseAsync "a response body reads to the end a chunk at a time" <| async {
             let! response =
-                Fetch.fetchUnsafe "data:text/plain,hello%20stream" [] |> Async.AwaitPromise
+                Fetch.fetchUnsafe "data:text/plain,hello%20stream" [] |> Interop.awaitPromise
 
             let reader = (responseBody response |> Option.get).getReader ()
             let decoder = createDecoder ()
 
             let rec drain (acc: string) =
                 async {
-                    let! chunk = reader.read () |> Async.AwaitPromise
+                    let! chunk = reader.read () |> Interop.awaitPromise
 
                     if chunk.``done`` then
                         return acc
@@ -158,11 +165,11 @@ let tests =
 
             let! ciphertext =
                 (webcrypto ()).subtle.encrypt (AesGcm.parameters iv aad, key, buffer.Buffer.from("the plaintext", utf8))
-                |> Async.AwaitPromise
+                |> Interop.awaitPromise
 
             let! plaintext =
                 (webcrypto ()).subtle.decrypt (AesGcm.parameters iv aad, key, buffer.Buffer.from ciphertext)
-                |> Async.AwaitPromise
+                |> Interop.awaitPromise
 
             Expect.equal (buffer.Buffer.from(plaintext).toString utf8) "the plaintext" "the round trip"
         }
@@ -170,6 +177,12 @@ let tests =
         // And that the AAD is CARRIED rather than dropped on the way through the anonymous
         // record: a binding that lost `additionalData` would pass the round trip above and
         // silently stop binding a ciphertext to its entry.
+        //
+        // This is the case the seam above is load-bearing for, because its decrypt is MEANT
+        // to reject — so the window is not a rare coincidence here, it is every run, and
+        // whether the process survives comes down to where the trampoline happened to be.
+        // Off the seam it killed CI once with `Cipher job failed` and no failing assertion
+        // anywhere, on a branch that had changed nothing but how much async ran first.
         testCaseAsync "a ciphertext presented with another AAD is refused" <| async {
             let! key = importedKey ()
             let iv = (webcrypto ()).getRandomValues (JS.Constructors.Uint8Array.Create 12)
@@ -177,13 +190,13 @@ let tests =
 
             let! ciphertext =
                 (webcrypto ()).subtle.encrypt (AesGcm.parameters iv aad, key, buffer.Buffer.from("the plaintext", utf8))
-                |> Async.AwaitPromise
+                |> Interop.awaitPromise
 
             let elsewhere = buffer.Buffer.from("yession-secret:1:session:other", utf8)
 
             let! outcome =
                 (webcrypto ()).subtle.decrypt (AesGcm.parameters iv elsewhere, key, buffer.Buffer.from ciphertext)
-                |> Async.AwaitPromise
+                |> Interop.awaitPromise
                 |> Async.Catch
 
             Expect.isTrue
@@ -299,7 +312,7 @@ let socketTests =
     testList "Node platform bindings, WebSocket (Fable.NodeExtras)" [
 
         testCaseAsync "a binary frame sent through the binding comes back as binary" <| async {
-            let! provider = Attach.startProvider () |> Async.AwaitPromise
+            let! provider = Attach.startProvider () |> Interop.awaitPromise
 
             let! data =
                 firstFrame (sprintf "ws://127.0.0.1:%d/echo" provider.port) (fun socket ->
@@ -311,13 +324,13 @@ let socketTests =
                 | Frame.Binary bytes -> buffer.Buffer.from(bytes).toString utf8
 
             Expect.equal seen "echo:hello" "the bytes went out and came back as bytes"
-            do! provider.stop () |> Async.AwaitPromise
+            do! provider.stop () |> Interop.awaitPromise
         }
 
         // The other arm of the union, and the distinction the wire is built on: text is CONTROL,
         // and a binding that answered every frame as one kind would erase it.
         testCaseAsync "a text frame arrives as text" <| async {
-            let! provider = Attach.startProvider () |> Async.AwaitPromise
+            let! provider = Attach.startProvider () |> Interop.awaitPromise
             let! data = firstFrame (sprintf "ws://127.0.0.1:%d/talkative" provider.port) ignore
 
             let seen =
@@ -326,7 +339,7 @@ let socketTests =
                 | Frame.Binary _ -> "binary"
 
             Expect.stringContains seen "from-a-later-version" "the control frame arrived as text"
-            do! provider.stop () |> Async.AwaitPromise
+            do! provider.stop () |> Interop.awaitPromise
         }
     ]
 
