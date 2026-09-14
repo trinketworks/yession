@@ -49,7 +49,7 @@ let private fetchChunk (url: string) : JS.Promise<{| ok: bool; status: int; url:
 let private chunkGet : Client.HttpGet =
     fun url ->
         async {
-            let! reply = fetchChunk url |> Async.AwaitPromise
+            let! reply = fetchChunk url |> Interop.awaitPromise
             return
                 if reply.ok then Ok { Url = reply.url; Body = reply.detail }
                 elif reply.status = 0 then Error (Client.HttpUnreachable reply.detail)
@@ -82,14 +82,14 @@ let private endpointTests =
                 let offset (n: int64) = EventOffset.create n |> expect
 
                 // The cursor itself: no events, never cached, and it says where to look.
-                let! start = httpGetRaw (at (EventsAfter None) mintedToken) |> Async.AwaitPromise
+                let! start = httpGetRaw (at (EventsAfter None) mintedToken) |> Interop.awaitPromise
                 Expect.equal start.status 307 "a cursor redirects rather than answering"
                 Expect.equal start.cacheControl "no-store" "where the events are is a thing that moves"
                 Expect.stringContains start.location (sprintf "events/0-%d" (EventChunk.size - 1)) "to the first range"
                 Expect.stringContains start.location "token=" "carrying the token, which a redirect would otherwise drop"
 
                 // Following it lands on the events.
-                let! first = httpGet (at (EventsAfter None) mintedToken) |> Async.AwaitPromise
+                let! first = httpGet (at (EventsAfter None) mintedToken) |> Interop.awaitPromise
                 Expect.equal first.status 200 "the range serves"
                 Expect.equal first.cacheControl "no-store" "the client keeps this, not the HTTP cache"
                 let lines (body: string) = body.Split '\n' |> Array.filter (fun l -> l.Trim().Length > 0)
@@ -102,34 +102,34 @@ let private endpointTests =
                 // meant "whatever chunk 2 holds now", so the newest events were unkeepable.
                 let tailFirst = int64 (2 * EventChunk.size)
                 let tailRange = Events (tailFirst, tailFirst + 4L)
-                let! tail = httpGet (at tailRange mintedToken) |> Async.AwaitPromise
+                let! tail = httpGet (at tailRange mintedToken) |> Interop.awaitPromise
                 Expect.equal tail.status 200 "the tail has an address"
                 Expect.equal (lines tail.body).Length 5 "and five events in it"
                 do! append 10
-                let! tailAgain = httpGet (at tailRange mintedToken) |> Async.AwaitPromise
+                let! tailAgain = httpGet (at tailRange mintedToken) |> Interop.awaitPromise
                 Expect.equal tailAgain.body tail.body "the same address answers the same bytes after the log grew"
 
                 // A range the log has not reached is a 404, never a short answer: a partial
                 // body here would be kept for ever as if it were the whole range.
-                let! unreached = httpGet (at (Events (10_000L, 10_009L)) mintedToken) |> Async.AwaitPromise
+                let! unreached = httpGet (at (Events (10_000L, 10_009L)) mintedToken) |> Interop.awaitPromise
                 Expect.equal unreached.status 404 "a range beyond the log does not exist yet"
 
                 // Current: nothing to keep, so nothing to give an address to.
-                let! current = httpGetRaw (at (EventsAfter (Some (offset (2L * int64 EventChunk.size + 14L)))) mintedToken) |> Async.AwaitPromise
+                let! current = httpGetRaw (at (EventsAfter (Some (offset (2L * int64 EventChunk.size + 14L)))) mintedToken) |> Interop.awaitPromise
                 Expect.equal current.status 204 "a caller at the end is told it is current"
                 Expect.equal current.cacheControl "no-store" "and emptiness is never kept"
 
-                let! wrongToken = httpGet (at (EventsAfter None) "stolen") |> Async.AwaitPromise
+                let! wrongToken = httpGet (at (EventsAfter None) "stolen") |> Interop.awaitPromise
                 Expect.equal wrongToken.status 401 "the cursor is gated on minted tokens"
                 Expect.equal wrongToken.cacheControl "no-store" "rejections never cache"
 
-                let! wrongTokenRange = httpGet (at (Events (0L, 9L)) "stolen") |> Async.AwaitPromise
+                let! wrongTokenRange = httpGet (at (Events (0L, 9L)) "stolen") |> Interop.awaitPromise
                 Expect.equal wrongTokenRange.status 401 "and so are the events themselves"
 
-                let! bare = httpGet (sprintf "http://127.0.0.1:%d/events" h.Port) |> Async.AwaitPromise
+                let! bare = httpGet (sprintf "http://127.0.0.1:%d/events" h.Port) |> Interop.awaitPromise
                 Expect.equal bare.status 401 "no cookie and no token is unauthorized"
 
-                let! notARange = httpGet (sprintf "http://127.0.0.1:%d/events/nope?token=%s" h.Port mintedToken) |> Async.AwaitPromise
+                let! notARange = httpGet (sprintf "http://127.0.0.1:%d/events/nope?token=%s" h.Port mintedToken) |> Interop.awaitPromise
                 Expect.equal notARange.status 404 "an unparseable range is not a route"
                 do! h.Stop ()
             }
