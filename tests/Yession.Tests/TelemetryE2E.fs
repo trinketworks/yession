@@ -35,9 +35,14 @@ let tests =
                 let! stub = OtlpStub.start ()
 
                 let sessionId = SessionId.create "e2e-telemetry" |> expect
-                let usage =
+                let usage : AgentUsage =
                     { InputTokens = 123; OutputTokens = 45; CacheReadTokens = 6; CacheCreationTokens = 7
-                      Model = Some "claude-opus-4-8" }
+                      Models =
+                        [ { Model = "claude-opus-4-8"
+                            InputTokens = 123
+                            OutputTokens = 45
+                            CacheReadTokens = 6
+                            CacheCreationTokens = 7 } ] }
                 let emitter = Telemetry.createOtlp sessionId stub.Url
 
                 // A turn-complete signal taken off the emit sink itself: it fires exactly when

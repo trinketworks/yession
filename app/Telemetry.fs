@@ -48,6 +48,34 @@ type Emitter =
 /// Telemetry off: every emit is a no-op, shutdown resolves immediately.
 let disabled : Emitter = { Emit = (fun _ _ -> ()); Log = (fun _ _ -> ()); Shutdown = resolved }
 
+/// Which models the turn ran, as attributes.
+///
+/// `gen_ai.response.model` names THE model that produced the response, so a turn that ran two
+/// — a fallback did what a fallback does — has no such single answer, and naming either of
+/// them would be this process inventing one. So the convention's attribute is emitted only
+/// where it means what it says, and everything else is reported as the breakdown the provider
+/// actually gave: four parallel arrays under our own prefix, aligned with `...models` by
+/// index, so a collector can read what each model spent without a key per model id.
+///
+/// A turn that reported no model at all gets neither. That is the honest reading of a
+/// provider that said nothing, and it is what the previous shape could not express — it kept
+/// whichever model an EARLIER ending had named, so a turn's last word about itself could be
+/// overruled by its first.
+let private modelAttributes (models: ModelSpend list) : (string * obj) list =
+    match models with
+    | [] -> []
+    | [ only ] -> [ "gen_ai.response.model", box only.Model ]
+    | several ->
+        [ "yession.agent.turn.models", box (several |> List.map (fun m -> m.Model) |> Array.ofList)
+          "yession.agent.turn.models.input_tokens",
+          box (several |> List.map (fun m -> m.InputTokens) |> Array.ofList)
+          "yession.agent.turn.models.output_tokens",
+          box (several |> List.map (fun m -> m.OutputTokens) |> Array.ofList)
+          "yession.agent.turn.models.cache_read_input_tokens",
+          box (several |> List.map (fun m -> m.CacheReadTokens) |> Array.ofList)
+          "yession.agent.turn.models.cache_creation_input_tokens",
+          box (several |> List.map (fun m -> m.CacheCreationTokens) |> Array.ofList) ]
+
 /// Build and emit one log record on `logger` for a completed turn. Attribute names follow
 /// the OTel GenAI conventions; the `cache_*` pair is an Anthropic extension. Identifiers
 /// only — no message body, prompt, or completion ever appears here.
@@ -61,9 +89,7 @@ let emitTo (logger: OpenTelemetry.Logger) (sessionId: SessionId) (turnId: AgentT
           "anthropic.usage.cache_creation_input_tokens", box usage.CacheCreationTokens
           "yession.session.id", box (SessionId.value sessionId)
           "yession.agent.turn.id", box (AgentTurnId.value turnId) ]
-        @ (match usage.Model with
-           | Some model -> [ "gen_ai.response.model", box model ]
-           | None -> [])
+        @ modelAttributes usage.Models
     logger.emit (
         createObj
             [ "severityNumber", box OpenTelemetry.severityInfo

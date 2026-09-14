@@ -76,6 +76,16 @@ type AgentResponseChunk =
     | Thinking of string
     | MessageBoundary
 
+/// What ONE model spent on this turn. The provider reports its spend keyed by model id
+/// because a turn is usually one model and a fallback makes it two — so which one "the"
+/// model was is a question it will not answer, and nothing here answers it on its behalf.
+type ModelSpend =
+    { Model               : string
+      InputTokens         : int
+      OutputTokens        : int
+      CacheReadTokens     : int
+      CacheCreationTokens : int }
+
 /// Token/cache usage the runner reports for one turn (Plan 04, Step 28). Telemetry only —
 /// never a durable session fact and never written to the event log. `None` when the runner
 /// reports no usage (scripted runners, or an SDK result with no usage block).
@@ -84,11 +94,15 @@ type AgentResponseChunk =
 /// turn most worth costing is the long one that ran into something, not the short one that
 /// finished. A failure that reported nothing left that spend uncounted.
 type AgentUsage =
-    { InputTokens         : int
+    { /// The turn's totals, which is what a budget spends.
+      InputTokens         : int
       OutputTokens        : int
       CacheReadTokens     : int
       CacheCreationTokens : int
-      Model               : string option }
+      /// Every model that ran, in the order the provider reported them. Empty when it said
+      /// nothing — never a guess at which one it "probably" was, and never one model's name
+      /// standing for a turn that ran two.
+      Models              : ModelSpend list }
 
 type AgentRunResult =
     | AgentCompleted of body: string * usage: AgentUsage option

@@ -244,15 +244,31 @@ type [<AllowNullLiteral>] Usage =
     abstract cache_read_input_tokens : int
     abstract cache_creation_input_tokens : int
 
+/// What ONE model spent, as an entry of `modelUsage` holds it. Camel-cased, unlike `Usage`
+/// above: the per-model breakdown is the SDK's own record rather than the API's usage block,
+/// and the two wear their own spellings.
+type [<AllowNullLiteral>] ModelUsage =
+    abstract inputTokens : int
+    abstract outputTokens : int
+    abstract cacheReadInputTokens : int
+    abstract cacheCreationInputTokens : int
+
+/// The per-model breakdown: a MAP keyed by model id, not a model and a total. It is keyed
+/// that way because a turn is usually one model and a fallback makes it two, so the provider
+/// will not promise one — read every key (`Object.keys`), never the first.
+type [<AllowNullLiteral>] ModelUsageMap =
+    [<EmitIndexer>]
+    abstract Item : string -> ModelUsage with get
+
 /// The one message that ends a turn. `result` carries the final text on `subtype =
 /// "success"` and is absent on every other subtype, so read `subtype` first. `modelUsage` is
-/// keyed by model id — which is the only place a turn says which model actually answered.
+/// keyed by model id — which is the only place a turn says which models actually ran.
 type [<AllowNullLiteral>] ResultMessage =
     inherit Message
     abstract subtype : string
     abstract result : string
     abstract usage : Usage
-    abstract modelUsage : obj
+    abstract modelUsage : ModelUsageMap
 
 /// What one delta is. `Other` keeps the tag rather than discarding it, so a delta kind that
 /// appears later is readable at the call site instead of being indistinguishable from one

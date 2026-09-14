@@ -195,7 +195,7 @@ module Turn =
               OutputTokens = 0
               CacheReadTokens = 0
               CacheCreationTokens = 0
-              Model = None } }
+              Models = [] } }
 
     /// One count off the usage block. A result carrying no usage block at all is zero, and
     /// that is the only absence there is to answer for: the SDK types every count inside one
@@ -203,23 +203,60 @@ module Turn =
     let private counted (read: Usage -> int) (usage: Usage) : int =
         if isNull usage then 0 else read usage
 
-    /// Which model actually answered. `modelUsage` is keyed by model id, and it is the only
-    /// place a turn says which one ran; an empty key is no answer.
-    let private modelOf (result: ResultMessage) : string option =
-        if isNull result.modelUsage then None
+    /// The same, per model: a key the map holds with no entry under it reads zero rather than
+    /// `undefined` leaking into an `int`. A named model with no counts is still a model that
+    /// ran, so it is REPORTED at zero rather than dropped — dropping it would put the turn
+    /// back to guessing which of the rest answered.
+    ///
+    /// Only a null entry, not a half-filled one: the SDK types every count inside `ModelUsage`
+    /// as required, so an entry missing one is off its own contract and this would be reading
+    /// a shape nobody has ever sent. `counted` above guards its block the same way and for the
+    /// same reason.
+    let private spent (read: ModelUsage -> int) (usage: ModelUsage) : int =
+        if isNull usage then 0 else read usage
+
+    /// Which models ran, and what each spent. `modelUsage` is a MAP keyed by model id — keyed
+    /// that way because a turn is usually one model and a fallback makes it two, so the
+    /// provider will not promise one. EVERY key is reported, in the order it holds them; an
+    /// empty key names no model and is not one.
+    ///
+    /// It used to take `Seq.tryHead`, which reports whichever key the SDK happened to record
+    /// first — insertion order, a choice nobody made, and lossy by construction the moment a
+    /// fallback ran.
+    let private modelsOf (result: ResultMessage) : ModelSpend list =
+        if isNull result.modelUsage then []
         else
             JS.Constructors.Object.keys result.modelUsage
-            |> Seq.tryHead
-            |> Option.filter (fun id -> id <> "")
+            |> Seq.filter (fun id -> id <> "")
+            |> Seq.map (fun id ->
+                let usage = result.modelUsage.[id]
+                { Model = id
+                  InputTokens = spent (fun u -> u.inputTokens) usage
+                  OutputTokens = spent (fun u -> u.outputTokens) usage
+                  CacheReadTokens = spent (fun u -> u.cacheReadInputTokens) usage
+                  CacheCreationTokens = spent (fun u -> u.cacheCreationInputTokens) usage })
+            |> List.ofSeq
 
-    /// The spend, read off an ending. An ending that says nothing about the model leaves the
-    /// one already read standing rather than clearing it.
-    let private usageFrom (previous: AgentUsage) (result: ResultMessage) : AgentUsage =
+    /// The spend, read off an ending — both halves off the SAME ending, which is the whole of
+    /// what this decides.
+    ///
+    /// A query in single message input mode ends in exactly one `result`, so there is usually
+    /// nothing to choose; in streaming input mode each turn of the call emits its own, and the
+    /// SDK's guidance for that is to "read the latest result for call totals rather than
+    /// summing across results" — `usage` covers that turn, and `modelUsage` carries the
+    /// running total for the call so far, so summing would double-count the breakdown.
+    /// (Claude Agent SDK, "Track cost and usage" → "Track costs in streaming input mode".)
+    /// So: the last ending wins, whole. Nothing carries over from an earlier one.
+    ///
+    /// It used to carry the model over — the counts came from the LATEST ending and the model
+    /// from the EARLIEST that named one — so after two endings the two halves of one reading
+    /// described different results, and the telemetry described a turn that never happened.
+    let private usageFrom (result: ResultMessage) : AgentUsage =
         { InputTokens = counted (fun usage -> usage.input_tokens) result.usage
           OutputTokens = counted (fun usage -> usage.output_tokens) result.usage
           CacheReadTokens = counted (fun usage -> usage.cache_read_input_tokens) result.usage
           CacheCreationTokens = counted (fun usage -> usage.cache_creation_input_tokens) result.usage
-          Model = modelOf result |> Option.orElse previous.Model }
+          Models = modelsOf result }
 
     /// The pending thought, forwarded and cleared.
     ///
@@ -263,7 +300,7 @@ module Turn =
             // already meets.
             | StreamEventCase.Other _ -> state, []
         | MessageCase.Result result ->
-            let state = { state with Usage = usageFrom state.Usage result }
+            let state = { state with Usage = usageFrom result }
             if result.subtype = "success" then
                 // The ending's own text, and nothing in its place when it has none: the
                 // fallback to what was streamed lives in `outcome`, because an ending is not
