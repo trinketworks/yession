@@ -455,6 +455,16 @@ let private routeTests =
                 subscription.Stop ()
             }
 
+        // What a caller that reads the MCP spec says about each way a connect can fail: a 405
+        // is a conforming server declining to offer the GET stream, which is permanent and must
+        // never be asked again; anything else it ANSWERS is a server having a bad moment. A
+        // connect nothing answered is a provider that is down or restarting — the same server,
+        // reachable again later — so that one is worth dialling.
+        let optionalStream : Sse.Retry =
+            function
+            | Sse.Refusal.Answered status -> status <> 405
+            | Sse.Refusal.Unanswered -> true
+
         // A stream the server does not OFFER (Plan 20, stage 5b). Every leg inside this
         // product retries a refusal for ever, because the peer is ours and its absence is
         // always temporary. That is exactly wrong against a server somebody else wrote: MCP
@@ -471,7 +481,7 @@ let private routeTests =
                 let! listening =
                     Async.FromContinuations (fun (cont, _, _) -> server.listen (0, "127.0.0.1", fun () -> cont server) |> ignore)
                 let url = sprintf "http://127.0.0.1:%d/stream" (Interop.serverPort listening)
-                let subscription = Sse.subscribeWhile url [] (fun status -> status <> 405) ignore
+                let subscription = Sse.subscribeWhile url [] optionalStream ignore
                 // The retry delay is one second, so anything past it that still reads ONE is
                 // a subscription that gave up rather than one that has not come round yet.
                 let! _ = Async.Sleep 2500
@@ -493,7 +503,7 @@ let private routeTests =
                 let! listening =
                     Async.FromContinuations (fun (cont, _, _) -> server.listen (0, "127.0.0.1", fun () -> cont server) |> ignore)
                 let url = sprintf "http://127.0.0.1:%d/stream" (Interop.serverPort listening)
-                let subscription = Sse.subscribeWhile url [] (fun status -> status <> 405) ignore
+                let subscription = Sse.subscribeWhile url [] optionalStream ignore
                 let! _ = Async.Sleep 2500
                 Expect.isTrue (Seq.length attempts > 1) "a server that is merely down is still coming back"
                 subscription.Stop ()

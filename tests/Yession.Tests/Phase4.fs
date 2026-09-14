@@ -1853,6 +1853,19 @@ let private sseTests =
             let _, held = Sse.events "data: tw"
             let whole, _ = Sse.events (held + "o\n\n")
             Expect.equal whole [ "data: two" ] "the event the two reads spell between them"
+
+        // What a `Retry` is asked, and the one answer this product ships. `Refusal` is a pair of
+        // pure values, so a caller's verdict is settled here, with no socket anywhere near it;
+        // the tier below only pins that the loop actually ASKS.
+        testCase "the control legs retry a refusal the server answered" <| fun () ->
+            Expect.isTrue
+                (Sse.Retry.always (Sse.Refusal.Answered 503))
+                "the Manager refusing us for a moment is the Manager restarting"
+
+        testCase "the control legs retry a connect nothing answered" <| fun () ->
+            Expect.isTrue
+                (Sse.Retry.always Sse.Refusal.Unanswered)
+                "a Manager not up yet is the ordinary case: the stream is the only way it reaches us"
     ]
 
 // -----------------------------------------------------------------------------
@@ -1908,8 +1921,86 @@ let private sseStreamTests =
 let private onRequestSocketClosed (req: Interop.IncomingMessage) (closed: unit -> unit) : unit =
     Fable.Core.Util.jsNative
 
+/// A URL nothing is listening on: a port this box held for a moment and let go, so a connect
+/// to it is REFUSED rather than merely slow — which is what makes the outcome under test a
+/// connect nobody answered, and not a deadline the case would have to wait out.
+let private aDeadUrl () : Async<string> =
+    async {
+        let server = Interop.createServer (fun _ res -> res.``end`` "")
+        let! listening =
+            Async.FromContinuations (fun (cont, _, _) ->
+                server.listen (0, "127.0.0.1", fun () -> cont server) |> ignore)
+        let port = Interop.serverPort listening
+        do! Async.FromContinuations (fun (cont, _, _) -> listening.close (fun _ -> cont ()))
+        return sprintf "http://127.0.0.1:%d/stream" port
+    }
+
 let private sseGiveUpTests =
     testList "SSE subscription that gives up for good" [
+        // The other way an attempt leaves no stream open, and the one a status cannot describe:
+        // nothing answered at all. These two are a pair — the first says the caller's verdict
+        // REACHES an unanswered connect, the second that the verdict is still the caller's, so a
+        // change that made every silence permanent could not pass both.
+        testCaseAsync "a caller that refuses an unanswered connect is asked once, and believed" <|
+            async {
+                let! url = aDeadUrl ()
+                let asked = ResizeArray<Sse.Refusal> ()
+                let refuseSilence : Sse.Retry = fun refusal -> asked.Add refusal; false
+                let subscription = Sse.subscribeWhile url [] refuseSilence ignore
+                // Past two retry windows, so anything still reading ONE is a subscription that
+                // gave up rather than one that has not come round again yet.
+                do! Async.Sleep 2500
+                Expect.equal
+                    (List.ofSeq asked)
+                    [ Sse.Refusal.Unanswered ]
+                    "asked once, about a connect nobody answered, and believed the answer"
+                subscription.Stop ()
+            }
+
+        testCaseAsync "a caller that accepts an unanswered connect keeps dialling" <|
+            async {
+                let! url = aDeadUrl ()
+                let asked = ResizeArray<Sse.Refusal> ()
+                let acceptSilence : Sse.Retry = fun refusal -> asked.Add refusal; true
+                let subscription = Sse.subscribeWhile url [] acceptSilence ignore
+                do! Async.Sleep 2500
+                Expect.isTrue
+                    (asked.Count > 1)
+                    "a peer that is not up YET is what every leg in this product waits for"
+                subscription.Stop ()
+            }
+
+        // The teardown's own abort lands in the same catch a transport fault does, so the one
+        // thing that tells them apart is `cancelled`. An unsubscribe is not a refusal and the
+        // caller gets no vote on it — which is invisible unless the verdict has a SIDE EFFECT,
+        // so this one records what it was asked and the assertion is that it was asked nothing.
+        testCaseAsync "an unsubscribe is not a refusal, and is never put to the caller" <|
+            async {
+                // A stream that is open and stays open: the only way this connection can end is
+                // the teardown, so anything reaching `retry` came from the unsubscribe.
+                let handler (_req: Interop.IncomingMessage) (res: Interop.ServerResponse) =
+                    res.writeHead (200, Fable.Core.JsInterop.createObj [ "content-type", box "text/event-stream" ])
+                    |> ignore
+                    res.write ": subscribed\n\n" |> ignore
+
+                let server = Interop.createServer handler
+                let! listening =
+                    Async.FromContinuations (fun (cont, _, _) ->
+                        server.listen (0, "127.0.0.1", fun () -> cont server) |> ignore)
+                let url = sprintf "http://127.0.0.1:%d/stream" (Interop.serverPort listening)
+
+                let asked = ResizeArray<Sse.Refusal> ()
+                let recording : Sse.Retry = fun refusal -> asked.Add refusal; true
+                let subscription = Sse.subscribeWhile url [] recording ignore
+                do! Async.Sleep 250
+                subscription.Stop ()
+                // Past a retry window, so a subscription that had asked and been told yes would
+                // have re-dialled and asked again by now.
+                do! Async.Sleep 1500
+                Expect.equal (List.ofSeq asked) [] "the caller was asked about no refusal, because there was none"
+                listening.close ignore
+            }
+
         testCaseAsync "a refusal the caller calls permanent releases the connection" <|
             async {
                 // A refusal still in flight: the head has gone out, so the client has its
@@ -1935,8 +2026,12 @@ let private sseGiveUpTests =
 
                 // What a caller that knows its peer says about a 404: this endpoint is not
                 // here, and asking again every second is a hot loop against a server that is
-                // behaving correctly.
-                let permanentOn404 : Sse.Retry = fun status -> status <> 404
+                // behaving correctly. A server that did not answer at all said nothing about
+                // whether the endpoint exists, so that one is still worth another attempt.
+                let permanentOn404 : Sse.Retry =
+                    function
+                    | Sse.Refusal.Answered status -> status <> 404
+                    | Sse.Refusal.Unanswered -> true
                 let subscription = Sse.subscribeWhile url [] permanentOn404 ignore
                 do!
                     waitUntilWithin
