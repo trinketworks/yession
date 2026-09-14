@@ -1391,9 +1391,12 @@ module private Stream =
 
     let answeredBy (model: string) : string * obj = "modelUsage" ==> createObj [ model ==> createObj [] ]
 
-    /// Every message in order, then the end of the stream — which is where a block the
-    /// provider never closed is flushed.
-    let run (messages: Message list) : Turn.State * AgentResponseChunk list =
+    /// Every message in order, then the ending — which is where a block the provider never
+    /// closed is flushed, whichever ending it was.
+    let private upTo
+        (ending: Turn.Ending)
+        (messages: Message list)
+        : AgentResponseChunk list * Result<string, string> * AgentUsage =
         let state, forwarded =
             messages
             |> List.fold
@@ -1401,17 +1404,40 @@ module private Stream =
                     let state, chunks = Turn.step state message
                     state, forwarded @ chunks)
                 (Turn.empty, [])
-        let state, last = Turn.flush state
-        state, forwarded @ last
+        let pending, answer, usage = Turn.finish ending state
+        forwarded @ pending, answer, usage
+
+    /// The stream running out, which is how a turn ends when nothing goes wrong.
+    let private ran (messages: Message list) = upTo Turn.StreamEnded messages
+
+    /// The other ending, and the one the endings that happen arrive by: the SDK threw rather
+    /// than yielding a `result`.
+    let private threw (reason: string) (messages: Message list) = upTo (Turn.Threw reason) messages
 
     /// What the turn handed the session, in order.
-    let forwarded (messages: Message list) : AgentResponseChunk list = run messages |> snd
+    let forwarded (messages: Message list) : AgentResponseChunk list =
+        let chunks, _, _ = ran messages
+        chunks
 
     /// What the turn answered with.
-    let outcome (messages: Message list) : Result<string, string> = run messages |> fst |> Turn.outcome
+    let outcome (messages: Message list) : Result<string, string> =
+        let _, answer, _ = ran messages
+        answer
 
     /// What the turn spent.
-    let spend (messages: Message list) : AgentUsage = (run messages |> fst).Usage
+    let spend (messages: Message list) : AgentUsage =
+        let _, _, usage = ran messages
+        usage
+
+    /// What the turn handed the session when it ended by throwing.
+    let forwardedOnThrow (reason: string) (messages: Message list) : AgentResponseChunk list =
+        let chunks, _, _ = threw reason messages
+        chunks
+
+    /// What it answered with when it ended by throwing.
+    let outcomeOnThrow (reason: string) (messages: Message list) : Result<string, string> =
+        let _, answer, _ = threw reason messages
+        answer
 
 let private deltaTests =
     testList "What one delta is" [
@@ -1487,6 +1513,18 @@ let private thoughtTests =
                 [ AgentResponseChunk.Thinking "now to answer"; AgentResponseChunk.MessageBoundary ]
                 "the thought, then the break"
 
+        testCase "a turn that ends by throwing still reports what it thought" <| fun () ->
+            // Where the endings that happen arrive: a step ceiling, a refused credential. The
+            // flush used to sit inside the runner's `try` and the `with` returned without
+            // one, so a thought still open when the throw came was the one thing the turn
+            // never handed over — and an unterminated thought is the only copy there is.
+            Expect.equal
+                (Stream.forwardedOnThrow
+                    "Reached maximum number of turns (32)"
+                    [ Stream.thought "one more look at the lockfile" ])
+                [ AgentResponseChunk.Thinking "one more look at the lockfile" ]
+                "a turn that ended badly still thought what it thought"
+
         testCase "a thought is not part of what the model said" <| fun () ->
             // The streamed text is the fallback body for what the model SAID; reasoning in it
             // would put the model's private thinking in its own mouth on a shared transcript.
@@ -1554,6 +1592,25 @@ let private bodyTests =
                       Stream.ending "success" [] ])
                 (Ok "it is a lockfile")
                 "the last message, alone"
+
+        testCase "a stream that just runs out answers with what it streamed" <| fun () ->
+            // The SDK does not always deliver a `result`: a stream can end with the last
+            // delta. The deltas are then the only copy of what the model said, exactly as
+            // they are for an ending that carries no words of its own — so the same fallback
+            // answers both. Reported as `Ok ""`, a turn that had spoken looked like a turn
+            // that had said nothing.
+            Expect.equal
+                (Stream.outcome [ Stream.messageStart; Stream.text "it is a lockfile" ])
+                (Ok "it is a lockfile")
+                "what was streamed, rather than nothing"
+
+        testCase "a turn that ends by throwing answers with what was thrown" <| fun () ->
+            // The throw is the ending, so what it says is the reason — never a success over
+            // the text the turn had streamed before it.
+            Expect.equal
+                (Stream.outcomeOnThrow "Reached maximum number of turns (32)" [ Stream.text "streamed" ])
+                (Error "Reached maximum number of turns (32)")
+                "the reason, not the half-said answer"
 
         testCase "a non-success ending is the reason the turn stopped" <| fun () ->
             Expect.equal
