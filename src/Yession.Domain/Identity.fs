@@ -625,6 +625,11 @@ module SandboxRef =
     let parse (raw: string) : Result<SandboxRef, string> =
         let trimmed = raw |> Option.ofObj |> Option.map (fun r -> r.Trim ()) |> Option.defaultValue ""
         match trimmed.Split ':' with
+        // A lone `owner/repo` is a repo, not a sandbox — the agent named the scope and
+        // forgot the name. Said as that, because the name branch below would otherwise
+        // refuse the `/` as a bad character, which is true and beside the point.
+        | [| repo |] when repo.Contains '/' ->
+            Error (sprintf "'%s' is a repo, not a sandbox; a repo's sandbox is 'owner/repo:name'" trimmed)
         | [| name |] -> SandboxName.create name |> Result.map (fun n -> SandboxRef (SessionOwned, n))
         | [| repo; name |] ->
             RepoRef.create repo
