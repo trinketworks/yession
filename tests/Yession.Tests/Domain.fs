@@ -338,9 +338,9 @@ let private frameSerializationTests =
                   // are not recorded at all.
                   ToolUseStarted { ToolUseId = toolUseId; AgentTurnId = turnId; Namespace = "yession"; Name = "set_secret"; Arguments = Some """{"name":"DEPLOY_TOKEN","value":null}""" }
                   ToolUseStarted { ToolUseId = toolUseId; AgentTurnId = turnId; Namespace = "serial"; Name = "acquire_device"; Arguments = None }
-                  ToolUseFinished { ToolUseId = toolUseId; Outcome = ToolCallOk; Block = None }
-                  ToolUseFinished { ToolUseId = toolUseId; Outcome = ToolCallOk; Block = Some blockId }
-                  ToolUseFinished { ToolUseId = toolUseId; Outcome = ToolCallFailed "no such tool"; Block = None }
+                  ToolUseFinished { ToolUseId = toolUseId; Outcome = ToolCallOk; Block = None; Result = Some "repo: octo/hello, branch: master" }
+                  ToolUseFinished { ToolUseId = toolUseId; Outcome = ToolCallOk; Block = Some blockId; Result = None }
+                  ToolUseFinished { ToolUseId = toolUseId; Outcome = ToolCallFailed "no such tool"; Block = None; Result = None }
                   // Plan 17: the two the operator's declarations produce.
                   McpServerAvailable { MessageId = messageId; Name = McpServerName.create "serial" |> expect }
                   McpServerUnavailable { MessageId = messageId; Name = McpServerName.create "printer" |> expect }

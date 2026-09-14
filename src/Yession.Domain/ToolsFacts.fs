@@ -49,4 +49,13 @@ and ToolUseFinished =
       /// The block the call became, when it became one. Set means the block's own chip
       /// already says who ran what and how it went, so this draws nothing beside it — two
       /// renderings of one fact are free to disagree.
-      Block : BlockId option }
+      Block : BlockId option
+      /// What the call ANSWERED, capped, for a chip to disclose — so a call that drew a chip
+      /// but no output (`repos`, `list_secrets`) is no longer a line that says only that it
+      /// happened. `None` in three cases that each mean "nowhere to read it here": the call
+      /// became a `Block` (its own chip already shows the output), it was a FOREIGN tool
+      /// (whose result we no more trust to be free of secrets than its arguments), or it
+      /// failed (the reason is the outcome). Recorded for the SCREEN, never fed back to the
+      /// agent — the conversation projection ignores tool-use events, so this cannot
+      /// double-feed a turn that already has the answer in its own transcript.
+      Result : string option }

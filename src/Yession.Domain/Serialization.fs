@@ -1422,12 +1422,19 @@ module Codec =
                 Encode.object
                     [ "toolUseId", toolUseId.Encode p.ToolUseId
                       "outcome", toolOutcome.Encode p.Outcome
-                      "block", (match p.Block with Some b -> blockId.Encode b | None -> Encode.nil) ]
+                      "block", (match p.Block with Some b -> blockId.Encode b | None -> Encode.nil)
+                      // Written only when there is one, so an event that carries no disclosable
+                      // result is byte-identical to one from before the field existed.
+                      "result", (match p.Result with Some r -> Encode.string r | None -> Encode.nil) ]
           Decode =
             Decode.object (fun get ->
                 { ToolUseFinished.ToolUseId = get.Required.Field "toolUseId" toolUseId.Decode
                   ToolUseFinished.Outcome = get.Required.Field "outcome" toolOutcome.Decode
-                  ToolUseFinished.Block = get.Required.Field "block" (Decode.option blockId.Decode) }) }
+                  ToolUseFinished.Block = get.Required.Field "block" (Decode.option blockId.Decode)
+                  // Optional so every tool-use event written before this field decodes: an
+                  // absent `result` is a call with nothing to disclose, same as an explicit null.
+                  ToolUseFinished.Result =
+                    get.Optional.Field "result" (Decode.option Decode.string) |> Option.flatten }) }
 
     let sessionEvent : Codec<SessionEvent> =
         { Encode =

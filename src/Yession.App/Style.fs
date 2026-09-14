@@ -1239,6 +1239,23 @@ module Style =
     /// The arguments as recorded. Dim and truncated: this is evidence, not content.
     let chatToolArgs = "font-terminal text-code-sm text-ink-faint truncate min-w-0 flex-1"
 
+    /// A tool call and, under it, its disclosable answer. A block wrapper so the answer sits
+    /// BELOW the line rather than in it — the line stays one row whether or not there is a
+    /// result to open.
+    let chatToolItem = "w-full"
+    /// The answer disclosure — collapsed by default, aligned under the name. A result a
+    /// reader opens, never a thing that fills the chat on its own.
+    let chatToolResult = "pl-2 mt-0.5"
+    /// "output ›" — the same faint label the rest of these chips use, and a pointer cursor so
+    /// it reads as openable.
+    let chatToolResultSummary =
+        cls [ label; "inline-flex items-center gap-1 cursor-pointer select-none hover:text-ink transition-colors"; focusRing ]
+    /// The answer itself: mono, wrapped, dim, and bounded — a preview that scrolls rather than
+    /// a pane that grows. The `resultCap` upstream keeps the text small; this keeps a small
+    /// text from still being a wall.
+    let chatToolResultBody =
+        cls [ monoOut; "mt-1 max-h-64 overflow-auto bg-surface-2 p-2 rounded" ]
+
     /// One agent burst (Plan 20, stage 4). A `<details>` on the same content column the chips
     /// and tool runs sit on, for the same reason: a turn that ran twelve commands reads as
     /// one line until somebody wants the twelve.

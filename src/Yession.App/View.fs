@@ -1992,13 +1992,29 @@ module View =
                 match use'.Arguments with
                 | Some recorded -> recorded
                 | None -> "(arguments not recorded)"
+            // The answer, when this chip is the only place to read it (a non-block call of one
+            // of our own tools). Collapsed: the line still reads as one row, and the output is
+            // there for whoever wants it — which is the whole of what was missing when a
+            // `repos` call showed its name, its `{}` and nothing it came back with.
+            let result =
+                match use'.Result with
+                | Some text when text <> "" ->
+                    html $"""
+                        <details class="{Style.chatToolResult}" data-chat-tool-result="{ToolUseId.value use'.ToolUseId}">
+                          <summary class="{Style.chatToolResultSummary}">output</summary>
+                          <pre class="{Style.chatToolResultBody}">{text}</pre>
+                        </details>"""
+                | _ -> Lit.nothing
             html $"""
-                <div class="{Style.chatToolCall}"
-                     data-chat-tool="{ToolUseId.value use'.ToolUseId}"
-                     data-chat-tool-status="{status}">
-                  <code class="{Style.chatToolName}">{ToolUse.label use'}</code>
-                  <code class="{Style.chatToolArgs}">{args}</code>
-                  <span class="shrink-0">{rendered}</span>
+                <div class="{Style.chatToolItem}">
+                  <div class="{Style.chatToolCall}"
+                       data-chat-tool="{ToolUseId.value use'.ToolUseId}"
+                       data-chat-tool-status="{status}">
+                    <code class="{Style.chatToolName}">{ToolUse.label use'}</code>
+                    <code class="{Style.chatToolArgs}">{args}</code>
+                    <span class="shrink-0">{rendered}</span>
+                  </div>
+                  {result}
                 </div>"""
         let toolRun (turn: AgentTurnId) (uses: ToolUse list) =
             let summary =

@@ -745,6 +745,55 @@ let private auditTests =
                 Expect.equal begun.Arguments None "and nothing of the arguments"
             }
 
+        // The result side of the same trust boundary: a foreign body is no more ours to
+        // broadcast than a foreign schema was to record. It ran, it answered, and the record
+        // says only that it ended — the answer stays in the agent's own transcript.
+        testCaseAsync "a foreign tool's answer is not disclosed on the timeline" <|
+            async {
+                let log, _, finished = recorder ()
+                let foreign =
+                    ToolRegistry.ofNamespace
+                        "serial"
+                        [ ToolDescriptor.foreign "serial" "read_device" "read it"
+                            (ToolSchema.ofFields [ ToolField.required "serial_number" "string" "which one" ]) ]
+                        (fun _ -> async { return Ok (ToolAnswer.text "SECRET-READING-42") })
+                let! _ =
+                    (ToolUseLog.wrap log foreign).Invoke
+                        (call "serial" "read_device" """{"serial_number":"A700eXYZ"}""")
+                Expect.equal (Seq.head finished).Result None "a foreign answer is not put on the shared timeline"
+            }
+
+        // The point of this PR: one of OUR tools that draws a chip but ran no block now
+        // records what it answered, so the chip is not a line that says only that it happened.
+        testCaseAsync "our own non-block tool discloses its answer for the chip" <|
+            async {
+                let log, _, finished = recorder ()
+                let registry = AgentTools.registry AgentCapabilities.none |> ToolUseLog.wrap log
+                let! _ = registry.Invoke (call "yession" "list_secrets" "{}")
+                match (Seq.head finished).Result with
+                | Some text -> Expect.isFalse (text = "") "the answer is there for the chip to open"
+                | None -> failwith "a non-block call of our own tool should disclose its answer"
+            }
+
+        // The backstop under a tool that forgot to cap itself: a huge answer is previewed, not
+        // pasted whole into the log the chunked timeline serves.
+        testCaseAsync "a large answer is capped before it reaches the record" <|
+            async {
+                let log, _, finished = recorder ()
+                let big = String.replicate 10000 "x"
+                let huge =
+                    ToolRegistry.ofNamespace
+                        "yession"
+                        [ ToolDescriptor.create "yession" "spew" "a lot" ToolSchema.none ]
+                        (fun _ -> async { return Ok (ToolAnswer.text big) })
+                let! _ = (ToolUseLog.wrap log huge).Invoke (call "yession" "spew" "{}")
+                match (Seq.head finished).Result with
+                | Some text ->
+                    Expect.isTrue (text.Length < big.Length) "the record does not carry the whole thing"
+                    Expect.stringContains text "more characters" "and says it was cut"
+                | None -> failwith "a successful non-block answer should be disclosed"
+            }
+
         testCaseAsync "a call that became a block says so, so the chat does not draw it twice" <|
             async {
                 let log, _, finished = recorder ()
@@ -754,7 +803,7 @@ let private auditTests =
                         (capabilities (fun (request: CommandRequest) -> async { return Ok { ran request.Command with Block = Some block } }))
                     |> ToolUseLog.wrap log
                 let! _ = registry.Invoke (call "yession" "execute_command" """{"command":"ls"}""")
-                Expect.equal (Seq.head finished) { Outcome = ToolCallOk; Block = Some block } "the block travelled to the record"
+                Expect.equal (Seq.head finished) { Outcome = ToolCallOk; Block = Some block; Result = None } "the block travelled to the record, with no separate result to disclose"
             }
 
         // An audit that loses exactly the calls that went worst is worse than none.

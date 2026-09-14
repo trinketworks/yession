@@ -187,7 +187,11 @@ type ToolUse =
       /// As recorded: secrets already gone, `None` for a tool whose schema we did not write.
       Arguments : string option
       Outcome : ToolOutcome option
-      Block : BlockId option }
+      Block : BlockId option
+      /// What the call answered, capped, for the chip to disclose — `None` while it runs, and
+      /// `None` when it finished with nothing to show here (a block, a foreign tool, a
+      /// failure). See `ToolUseFinished.Result`.
+      Result : string option }
 
 module ToolUse =
 
@@ -348,7 +352,8 @@ module TimelineProjection =
                   Name = e.Name
                   Arguments = e.Arguments
                   Outcome = None
-                  Block = None }
+                  Block = None
+                  Result = None }
             { proj with
                 TerminalItems = proj.TerminalItems @ [ TimelineToolUse (envelope.Offset, e.ToolUseId) ]
                 ToolUses = Map.add (ToolUseId.value e.ToolUseId) use' proj.ToolUses }
@@ -360,7 +365,7 @@ module TimelineProjection =
                     ToolUses =
                         Map.add
                             (ToolUseId.value e.ToolUseId)
-                            { use' with Outcome = Some e.Outcome; Block = e.Block }
+                            { use' with Outcome = Some e.Outcome; Block = e.Block; Result = e.Result }
                             proj.ToolUses }
             | None -> proj
         | SessionEvent.TerminalClosed e ->

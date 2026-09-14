@@ -1106,7 +1106,10 @@ let private used (n: string) (t: string) (name: string) =
           Arguments = Some "{}" }
 
 let private toolDone (n: string) (outcome: ToolOutcome) (blk: BlockId option) =
-    SessionEvent.ToolUseFinished { ToolUseId = toolUse n; Outcome = outcome; Block = blk }
+    SessionEvent.ToolUseFinished { ToolUseId = toolUse n; Outcome = outcome; Block = blk; Result = None }
+
+let private toolDoneWith (n: string) (outcome: ToolOutcome) (blk: BlockId option) (result: string option) =
+    SessionEvent.ToolUseFinished { ToolUseId = toolUse n; Outcome = outcome; Block = blk; Result = result }
 
 let private drawn (events: EventEnvelope<SessionEvent> list) : string list =
     let conversation, _ = ConversationProjection.applyEvents None events ConversationProjection.empty
@@ -1146,6 +1149,19 @@ let private toolTests =
                 (TimelineProjection.toolUse (toolUse "1") finished |> Option.bind (fun u -> u.Outcome))
                 (Some (ToolCallFailed "no such tool"))
                 "and the finish is what changes it"
+
+        testCase "a non-block call carries its answer for the chip to disclose" <| fun () ->
+            // The finish moves what the chip SAYS (above); this is the other thing it now
+            // moves — what the chip can OPEN. A block call carries none (its own chip shows
+            // the output); a plain call carries the capped answer.
+            let events =
+                [ at 1L 0.0 (used "1" "a" "repo_status")
+                  at 2L 1.0 (toolDoneWith "1" ToolCallOk None (Some "On branch master")) ]
+            let finished, _ = TimelineProjection.applyEvents None events TimelineProjection.empty
+            Expect.equal
+                (TimelineProjection.toolUse (toolUse "1") finished |> Option.bind (fun u -> u.Result))
+                (Some "On branch master")
+                "the answer travelled to the chip"
 
         testCase "a call that became a block draws no second chip" <| fun () ->
             // The block chip already says who ran what and how it went. Two renderings of one
