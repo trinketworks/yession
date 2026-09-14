@@ -66,13 +66,20 @@ type Provider =
       'HTTP/1.1 101 Switching Protocols\r\n' +
       'Upgrade: websocket\r\nConnection: Upgrade\r\n' +
       'Sec-WebSocket-Accept: ' + accept + '\r\n\r\n')
-    if (req.url === '/abrupt') { setTimeout(() => socket.destroy(), 30); return }
+    // The token an exclusive provider spends on attach rides the url, so a route is the PATH
+    // and never the whole of it.
+    const path = req.url.split('?')[0]
+    if (path === '/abrupt') { setTimeout(() => socket.destroy(), 30); return }
     // A provider that says things on the TEXT channel we have no meaning for: a control type
     // from a later version, and something that is not JSON at all — which is what reaching
     // for a framework's `send_text` to emit device output looks like from here.
-    if (req.url === '/talkative') {
+    if (path === '/talkative') {
       socket.write(frame(0x1, JSON.stringify({ type: 'from-a-later-version' })))
       socket.write(frame(0x1, 'device output on the wrong channel'))
+    }
+    // Only the first of those: a conforming provider written against a later spec.
+    if (path === '/later-version') {
+      socket.write(frame(0x1, JSON.stringify({ type: 'from-a-later-version' })))
     }
     let buffer = Buffer.alloc(0)
     socket.on('data', (chunk) => {
@@ -132,6 +139,23 @@ let private until (predicate: unit -> bool) : Async<bool> =
                 return! loop (remaining - 20)
         }
     loop 3000
+
+/// What `console.warn` was told, and the real one put back on `restore`.
+///
+/// A diagnostic is the only place this client's warning about a TEXT frame goes, so reading it
+/// back is the only way to ask what it said — and what it must never contain is the ticket's
+/// url, which carries a single-use attach token.
+type private WarningLog =
+    abstract said : string []
+    abstract restore : unit -> unit
+
+[<Emit("""(() => {
+  const original = console.warn
+  const said = []
+  console.warn = (...parts) => { said.push(parts.join(' ')) }
+  return { said, restore: () => { console.warn = original } }
+})()""")>]
+let private captureWarnings () : WarningLog = jsNative
 
 let private device = { SourceCapabilities.byteStream with CanResize = true }
 
@@ -228,6 +252,61 @@ let portsTests =
                     do! provider.stop () |> Async.AwaitPromise
             }
 
+        // The url IS the credential: `docs/streams.md` tells an exclusive provider to mint a
+        // single-use token and spend it on attach. A diagnostic that reproduces the url puts
+        // that token in a log, where whatever reads logs can spend it — so the warning names
+        // the connection by what an operator already knows instead.
+        testCaseAsync "the text-frame warning does not put the attach token in the log" <|
+            async {
+                let! provider = startProvider () |> Async.AwaitPromise
+                let warnings = captureWarnings ()
+
+                try
+                    let! attached =
+                        Yession.Host.AttachWs.attach
+                            (ticket provider.port "/talkative?token=s3cr3t-single-use" device)
+                            80
+                            24
+                            ignore
+                    let handle = attached |> expect
+                    let! warned = until (fun () -> warnings.said.Length > 0)
+                    Expect.isTrue warned "the provider's text frame drew the diagnostic"
+                    Expect.isFalse
+                        (warnings.said |> Array.exists (fun said -> said.Contains "s3cr3t-single-use"))
+                        "the attach token is not recoverable from the log"
+                    handle.Kill ()
+                    let! _ = handle.Exited
+                    do! provider.stop () |> Async.AwaitPromise
+                finally
+                    warnings.restore ()
+            }
+
+        // MAY 9 from the client's end: a text frame that PARSES as a control frame IS one, of a
+        // version this build does not know, and is ignored silently. Warning about it tells a
+        // conforming provider its control frame should have been device output — a diagnosis
+        // that sends them looking at the one thing they got right.
+        testCaseAsync "a control type from a later version is ignored silently" <|
+            async {
+                let! provider = startProvider () |> Async.AwaitPromise
+                let received = System.Text.StringBuilder ()
+                let warnings = captureWarnings ()
+
+                try
+                    let! attached =
+                        Yession.Host.AttachWs.attach (ticket provider.port "/later-version" device) 80 24 (fun text ->
+                            received.Append text |> ignore)
+                    let handle = attached |> expect
+                    handle.Write "marker"
+                    let! echoed = until (fun () -> received.ToString().Contains "echo:marker")
+                    Expect.isTrue echoed "the round trip completed, so the text frame had arrived by now"
+                    Expect.equal warnings.said.Length 0 "a control frame of a type we do not know says nothing"
+                    handle.Kill ()
+                    let! _ = handle.Exited
+                    do! provider.stop () |> Async.AwaitPromise
+                finally
+                    warnings.restore ()
+            }
+
         testCaseAsync "a provider that is not there is an error, not a hang" <|
             async {
                 // Port 1 on loopback: reserved, never listening, and refused immediately.
@@ -251,18 +330,26 @@ module Ws = Yession.Host.AttachWs
 [<Emit("new TextEncoder().encode($0).buffer")>]
 let private utf8Bytes (text: string) : JS.ArrayBuffer = jsNative
 
+/// One raw byte as a BINARY frame carries it. Two of these are how a multi-byte character
+/// arrives when a chunk boundary cuts it in half, which is what real device output does.
+[<Emit("new Uint8Array([$0]).buffer")>]
+let private oneByte (value: int) : JS.ArrayBuffer = jsNative
+
 let tests =
     testList "Foreign terminal attach, reading the wire (Plan 16)" [
 
         testCase "a binary frame is what the device said" <| fun () ->
-            Expect.equal (Ws.heard (Frame.Binary (utf8Bytes "hello"))) (Ws.Heard.Output "hello") "binary frames are the bytes"
+            Expect.equal
+                (Ws.heard (createDecoder ()) (Frame.Binary (utf8Bytes "hello")))
+                (Ws.Heard.Output "hello")
+                "binary frames are the bytes"
 
         // The other channel, and the distinction the whole wire is built on: a provider that
         // reaches for its framework's `send_text` to emit device output gets a terminal
         // showing nothing, and a client that quietly accepted it would make text mean two
         // things.
         testCase "a text frame is control, never device output" <| fun () ->
-            match Ws.heard (Frame.Text "device output on the wrong channel") with
+            match Ws.heard (createDecoder ()) (Frame.Text "device output on the wrong channel") with
             | Ws.Heard.Said _ -> ()
             | Ws.Heard.Output text -> failwithf "a text frame is never data (got %s)" text
 
@@ -290,14 +377,23 @@ let tests =
         testCase "a control type from a later version is ignored rather than fatal" <| fun () ->
             Expect.equal
                 (Ws.control """{"type":"from-a-later-version"}""")
-                Ws.Control.Unrecognised
+                Ws.Control.Unknown
                 "an unknown control type is nothing, not an error"
 
-        testCase "a text frame that is not JSON at all is ignored rather than fatal" <| fun () ->
+        // The other half of that: what a provider sent is a control frame when it SAYS which
+        // control it is. Text that does not is not a frame from a later spec, it is device
+        // output on the wrong channel — and only that is worth a word to anybody.
+        testCase "a text frame that is not JSON at all is not a control frame" <| fun () ->
             Expect.equal
                 (Ws.control "device output on the wrong channel")
-                Ws.Control.Unrecognised
+                Ws.Control.NotControl
                 "text that will not parse is nothing, not an error"
+
+        testCase "JSON carrying no type at all is not a control frame" <| fun () ->
+            Expect.equal
+                (Ws.control """{"cols":80,"rows":24}""")
+                Ws.Control.NotControl
+                "a control frame is one that says which control it is"
 
         // MAY 8: a provider that sends both is saying the exit is not the story.
         testCase "a named failure outranks an exit code" <| fun () ->
@@ -317,10 +413,79 @@ let tests =
                 (SandboxRunFailed "the stream closed without saying why")
                 "an ending nobody explained is not an exit 0"
 
-        // PRESERVED, not endorsed — see the note on `ending`. The JavaScript this client was
-        // carried an ending as a `{code, reason}` pair and read an empty reason as "nothing
-        // failed"; `String([])` is "", so a provider can reach it. Here so that fixing it is a
-        // deliberate change with this case's name on it.
-        testCase "a failure whose reason came out empty still reads as an exit" <| fun () ->
-            Expect.equal (Ws.ending (Some "") (Some 7)) (SandboxExited -1) "the shape the JavaScript had"
+        // The url IS a credential — `docs/streams.md` has an exclusive provider mint a
+        // single-use token and spend it on attach — so nothing a person or a log reads may
+        // reproduce it.
+        testCase "a connection is named without its attach token" <| fun () ->
+            let named =
+                Ws.describing
+                    { Url = "ws://127.0.0.1:7334/attach/8f2c-single-use"
+                      Capabilities = device
+                      Label = Some "serial console" }
+
+            Expect.isFalse (named.Contains "8f2c-single-use") "the token is not recoverable from the name"
+
+        testCase "a connection is named without credentials from its url" <| fun () ->
+            let named =
+                Ws.describing
+                    { Url = "ws://spender:s3cret@127.0.0.1:7334/attach/8f2c"
+                      Capabilities = device
+                      Label = Some "serial console" }
+
+            Expect.isFalse (named.Contains "s3cret") "userinfo is a credential of its own"
+
+        // Naming it is the point: a diagnostic a reader cannot act on is no better than none,
+        // and the authority is what an operator already knows about their own provider.
+        testCase "a connection is named by the authority it is served from" <| fun () ->
+            let named =
+                Ws.describing
+                    { Url = "ws://127.0.0.1:7334/attach/8f2c-single-use"
+                      Capabilities = device
+                      Label = Some "serial console" }
+
+            Expect.isTrue (named.Contains "127.0.0.1:7334") "which provider, and which port of it"
+
+        // An absent code is not a zero. `x | 0` answered 0 for one, so a provider that said
+        // only "it ended" was reported as having ended WELL — the difference a person acts on.
+        testCase "an exited frame that named no code is not an exit 0" <| fun () ->
+            Expect.equal
+                (Ws.control """{"type":"exited"}""")
+                (Ws.Control.Exited(-1))
+                "no code reported is the domain's -1, never a success"
+
+        testCase "an exited frame whose code is not a number is not an exit 0" <| fun () ->
+            Expect.equal
+                (Ws.control """{"type":"exited","code":"seven"}""")
+                (Ws.Control.Exited(-1))
+                "a code this client cannot read is not a success either"
+
+        // `String([])` is "", so a provider can send a `failed` frame whose reason coerces to
+        // nothing at all — and a failure that says nothing is unreadable.
+        testCase "a failed frame whose reason coerces to empty text still says something" <| fun () ->
+            Expect.equal
+                (Ws.control """{"type":"failed","reason":[]}""")
+                (Ws.Control.Failed "the source failed")
+                "a failure with no readable reason still reaches a person as words"
+
+        // The frame's TYPE decides whether it failed; the reason is only the words. An empty
+        // one reaching here means the frame decoder let one through, not that nothing failed.
+        testCase "a failure whose reason came out empty is still a failure" <| fun () ->
+            Expect.equal
+                (Ws.ending (Some "") (Some 7))
+                (SandboxRunFailed "the source failed")
+                "a failed frame is a failure whatever its reason renders as"
+
+        // One decoder for the connection, because UTF-8 does not respect frame boundaries: a
+        // character decoded per frame becomes two U+FFFDs, which is what real device output at
+        // a buffer boundary looks like.
+        testCase "a character split across two binary frames arrives whole" <| fun () ->
+            let decoder = createDecoder ()
+
+            let decoded frame =
+                match Ws.heard decoder frame with
+                | Ws.Heard.Output text -> text
+                | Ws.Heard.Said _ -> failwith "a binary frame is device output"
+            // The two bytes of "\u00e9".
+            let text = decoded (Frame.Binary (oneByte 0xC3)) + decoded (Frame.Binary (oneByte 0xA9))
+            Expect.equal text "\u00e9" "the tail of a split character is held until the next frame"
     ]

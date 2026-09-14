@@ -24,7 +24,9 @@ implement the other end.
 1. **Accept a WebSocket upgrade** at a url somebody can reach.
 2. **Binary frames are the bytes, both directions.** What the device says goes out as a
    binary frame; whatever arrives as a binary frame goes to the device. No framing of ours.
-   Bytes are decoded as UTF-8.
+   Bytes are decoded as UTF-8, across the whole stream rather than per frame — a multi-byte
+   character split by a frame boundary is held and completed from the frame that carries the
+   rest of it, so your frames need not align to characters.
 3. **Close the socket when the stream ends.** The close is what ends the terminal — the
    frames below only say *why*. A provider that sends `exited` and holds the socket open
    leaves a terminal that nobody can reattach, because nothing has ended yet.
