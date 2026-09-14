@@ -386,7 +386,7 @@ let portsTests =
 
         testCaseAsync "the lifecycle runs, and the tools arrive under the server's namespace" <|
             async {
-                let! provider = startProvider McpProtocol.Version |> Async.AwaitPromise
+                let! provider = startProvider McpProtocol.Version |> Interop.awaitPromise
                 let mcp = connections ()
                 do! mcp.Apply { Servers = [ at provider.port "/mcp" "serial" ] }
 
@@ -401,24 +401,24 @@ let portsTests =
                 // The spec requires the notification before ordinary requests, and a
                 // provider is entitled to enforce it.
                 Expect.isTrue provider.initialized "notifications/initialized was sent"
-                do! provider.stop () |> Async.AwaitPromise
+                do! provider.stop () |> Interop.awaitPromise
             }
 
         testCaseAsync "a foreign tool's arguments are never recorded, because we did not write its schema" <|
             async {
-                let! provider = startProvider McpProtocol.Version |> Async.AwaitPromise
+                let! provider = startProvider McpProtocol.Version |> Interop.awaitPromise
                 let mcp = connections ()
                 do! mcp.Apply { Servers = [ at provider.port "/mcp" "serial" ] }
                 let descriptors = mcp.Registries () |> List.collect (fun r -> r.Tools)
                 Expect.isTrue
                     (descriptors |> List.forall (fun (d: ToolDescriptor) -> d.Foreign))
                     "every descriptor from a server is Foreign, which is what suppresses argument recording"
-                do! provider.stop () |> Async.AwaitPromise
+                do! provider.stop () |> Interop.awaitPromise
             }
 
         testCaseAsync "a call is proxied, and a tool that RAN and went badly is not a failed call" <|
             async {
-                let! provider = startProvider McpProtocol.Version |> Async.AwaitPromise
+                let! provider = startProvider McpProtocol.Version |> Interop.awaitPromise
                 let mcp = connections ()
                 do! mcp.Apply { Servers = [ at provider.port "/mcp" "serial" ] }
                 let registries = mcp.Registries ()
@@ -445,35 +445,35 @@ let portsTests =
                 match! call registries "serial" "nonexistent" "{}" with
                 | Ok _ -> failwith "an undeclared tool is not callable"
                 | Error e -> Expect.stringContains e "nonexistent" "and the refusal names it"
-                do! provider.stop () |> Async.AwaitPromise
+                do! provider.stop () |> Interop.awaitPromise
             }
 
         testCaseAsync "a server that answers over SSE instead of JSON is the same server to us" <|
             async {
                 // Streamable HTTP lets the server pick; a client that offered only one
                 // content type would work against half of them.
-                let! provider = startProvider McpProtocol.Version |> Async.AwaitPromise
+                let! provider = startProvider McpProtocol.Version |> Interop.awaitPromise
                 let mcp = connections ()
                 do! mcp.Apply { Servers = [ at provider.port "/sse" "serial" ] }
                 Expect.equal (List.length (toolNames (mcp.Registries ()))) 2 "the tools arrived through the SSE framing"
                 match! call (mcp.Registries ()) "serial" "echo" """{"text":"framed"}""" with
                 | Ok answer -> Expect.equal answer.Text "echo:framed" "and so did a call's answer"
                 | Error e -> failwithf "an SSE-framed reply should read the same: %s" e
-                do! provider.stop () |> Async.AwaitPromise
+                do! provider.stop () |> Interop.awaitPromise
             }
 
         testCaseAsync "a provider that demands notifications/initialized is satisfied" <|
             async {
-                let! provider = startProvider McpProtocol.Version |> Async.AwaitPromise
+                let! provider = startProvider McpProtocol.Version |> Interop.awaitPromise
                 let mcp = connections ()
                 do! mcp.Apply { Servers = [ at provider.port "/strict" "serial" ] }
                 Expect.equal (List.length (toolNames (mcp.Registries ()))) 2 "tools/list was accepted"
-                do! provider.stop () |> Async.AwaitPromise
+                do! provider.stop () |> Interop.awaitPromise
             }
 
         testCaseAsync "a provider that restarted underneath us is a handshake, not an outage" <|
             async {
-                let! provider = startProvider McpProtocol.Version |> Async.AwaitPromise
+                let! provider = startProvider McpProtocol.Version |> Interop.awaitPromise
                 let mcp = connections ()
                 do! mcp.Apply { Servers = [ at provider.port "/restarts" "serial" ] }
                 // The first call gets a 404 on a session id the provider no longer knows.
@@ -482,12 +482,12 @@ let portsTests =
                 | Ok answer -> Expect.equal answer.Text "echo:after" "the retried call answered"
                 | Error e -> failwithf "a 404 on a session id is a restart, not a failure: %s" e
                 Expect.equal provider.initializes 2 "exactly one re-handshake"
-                do! provider.stop () |> Async.AwaitPromise
+                do! provider.stop () |> Interop.awaitPromise
             }
 
         testCaseAsync "a provider that keeps forgetting is a failure, so a broken one cannot loop" <|
             async {
-                let! provider = startProvider McpProtocol.Version |> Async.AwaitPromise
+                let! provider = startProvider McpProtocol.Version |> Interop.awaitPromise
                 let mcp = connections ()
                 do! mcp.Apply { Servers = [ at provider.port "/amnesiac" "serial" ] }
                 // It cannot even list its tools, so it never connects — and that is a
@@ -497,19 +497,19 @@ let portsTests =
                     [ "unreachable" ]
                     "the status says so"
                 Expect.isEmpty (mcp.Registries ()) "and it contributes no tools"
-                do! provider.stop () |> Async.AwaitPromise
+                do! provider.stop () |> Interop.awaitPromise
             }
 
         testCaseAsync "a protocol version we do not speak is a refusal recorded as a status" <|
             async {
-                let! provider = startProvider McpProtocol.Version |> Async.AwaitPromise
+                let! provider = startProvider McpProtocol.Version |> Interop.awaitPromise
                 let mcp = connections ()
                 do! mcp.Apply { Servers = [ at provider.port "/ancient" "serial" ] }
                 match mcp.Health () |> List.map (fun h -> h.Status) with
                 | [ McpUnreachable reason ] ->
                     Expect.stringContains reason "1999-01-01" "the refusal names what the server said"
                 | other -> failwithf "expected one unreachable server, got %A" other
-                do! provider.stop () |> Async.AwaitPromise
+                do! provider.stop () |> Interop.awaitPromise
             }
 
         testCaseAsync "a server that is not there contributes nothing and fails nothing" <|
@@ -524,7 +524,7 @@ let portsTests =
 
         testCaseAsync "an unchanged server keeps its connection when the set changes around it" <|
             async {
-                let! provider = startProvider McpProtocol.Version |> Async.AwaitPromise
+                let! provider = startProvider McpProtocol.Version |> Interop.awaitPromise
                 let mcp = connections ()
                 let serial = at provider.port "/mcp" "serial"
                 do! mcp.Apply { Servers = [ serial ] }
@@ -542,7 +542,7 @@ let portsTests =
                 // Removed: its tools go, and nothing else does.
                 do! mcp.Apply { Servers = [ at 1 "/mcp" "printer" ] }
                 Expect.isEmpty (mcp.Registries ()) "the withdrawn server's tools left the registry"
-                do! provider.stop () |> Async.AwaitPromise
+                do! provider.stop () |> Interop.awaitPromise
             }
 
         // The GET stream this plan considered would have carried
@@ -551,7 +551,7 @@ let portsTests =
         // notices a provider which was not there when its declaration arrived.
         testCaseAsync "polling notices a tool that appeared, and says the registry moved" <|
             async {
-                let! provider = startProvider McpProtocol.Version |> Async.AwaitPromise
+                let! provider = startProvider McpProtocol.Version |> Interop.awaitPromise
                 let mcp = connections ()
                 do! mcp.Apply { Servers = [ at provider.port "/mcp" "serial" ] }
                 Expect.equal (List.length (toolNames (mcp.Registries ()))) 2 "two tools to begin with"
@@ -567,14 +567,14 @@ let portsTests =
                     [ "mcp__serial__read_ttyACM0" ]
                     "and the device's tool is callable without a new declaration"
                 Expect.equal provider.initializes 1 "re-listing does NOT re-handshake — the session id survives"
-                do! provider.stop () |> Async.AwaitPromise
+                do! provider.stop () |> Interop.awaitPromise
             }
 
         testCaseAsync "a provider that was not there when it was declared is picked up later" <|
             async {
                 // The case a bounded backoff loses: hardware does not come back on a
                 // schedule, and the declaration never changes, so no set frame is coming.
-                let! provider = startProvider McpProtocol.Version |> Async.AwaitPromise
+                let! provider = startProvider McpProtocol.Version |> Interop.awaitPromise
                 let mcp = connections ()
                 // Declared against a port nothing is listening on yet.
                 let late = at provider.port "/mcp" "serial"
@@ -585,7 +585,7 @@ let portsTests =
                 // The operator fixes the url — a set change — and it connects.
                 do! mcp.Apply { Servers = [ late ] }
                 Expect.equal (List.length (toolNames (mcp.Registries ()))) 2 "the corrected declaration connects"
-                do! provider.stop () |> Async.AwaitPromise
+                do! provider.stop () |> Interop.awaitPromise
 
                 // Now it goes away underneath us. The poll is what notices.
                 let! lost = mcp.Poll ()
@@ -598,7 +598,7 @@ let portsTests =
 
         testCaseAsync "the session's own tools and a server's merge into one registry" <|
             async {
-                let! provider = startProvider McpProtocol.Version |> Async.AwaitPromise
+                let! provider = startProvider McpProtocol.Version |> Interop.awaitPromise
                 let mcp = connections ()
                 do! mcp.Apply { Servers = [ at provider.port "/mcp" "serial" ] }
                 let own = AgentTools.registry AgentCapabilities.none
@@ -607,7 +607,7 @@ let portsTests =
                     (ToolRegistry.allowedTools merged)
                     [ "mcp__yession__execute_command"; "mcp__serial__echo" ]
                     "both namespaces reach the model, under distinct wire names"
-                do! provider.stop () |> Async.AwaitPromise
+                do! provider.stop () |> Interop.awaitPromise
             }
 
         // A stream a provider offers (Plan 19), off a REAL result's `_meta` — the half of
@@ -615,7 +615,7 @@ let portsTests =
         // tested is that the field survives the whole `tools/call` round trip.
         testCaseAsync "a stream offered in `_meta` crosses the wire and is admitted" <|
             async {
-                let! provider = startProvider McpProtocol.Version |> Async.AwaitPromise
+                let! provider = startProvider McpProtocol.Version |> Interop.awaitPromise
                 let mcp = connections ()
                 do! mcp.Apply { Servers = [ at provider.port "/streams" "serial" ] }
 
@@ -632,12 +632,12 @@ let portsTests =
                         Expect.isFalse
                             offer.Ticket.Capabilities.CanInstrument
                             "a provider that claimed nothing gets the least a source can be"
-                do! provider.stop () |> Async.AwaitPromise
+                do! provider.stop () |> Interop.awaitPromise
             }
 
         testCaseAsync "a stream on somebody else's host is refused, in the answer the model reads" <|
             async {
-                let! provider = startProvider McpProtocol.Version |> Async.AwaitPromise
+                let! provider = startProvider McpProtocol.Version |> Interop.awaitPromise
                 let mcp = connections ()
                 do! mcp.Apply { Servers = [ at provider.port "/streams" "serial" ] }
 
@@ -647,7 +647,7 @@ let portsTests =
                     Expect.isNone answer.Stream "nothing to attach"
                     Expect.stringContains answer.Text "ttyACM0 is yours." "the tool still answered"
                     Expect.stringContains answer.Text "10.0.0.9" "and the model is told what was refused"
-                do! provider.stop () |> Async.AwaitPromise
+                do! provider.stop () |> Interop.awaitPromise
             }
     ]
 

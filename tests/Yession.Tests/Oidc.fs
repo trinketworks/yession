@@ -330,11 +330,11 @@ let private keyTests =
     testList "Signing key non-extractability" [
         testCaseAsync "a jose keypair generated extractable=false refuses to export its private half" <|
             async {
-                let! keys = Fable.Jose.generateKeyPair "EdDSA" (createObj [ "extractable" ==> false ]) |> Async.AwaitPromise
+                let! keys = Fable.Jose.generateKeyPair "EdDSA" (createObj [ "extractable" ==> false ]) |> Interop.awaitPromise
                 Expect.isFalse keys.privateKey.extractable "the private key is non-extractable"
-                let! publicRefused = refuses (fun () -> Fable.Jose.exportJWK keys.publicKey) |> Async.AwaitPromise
+                let! publicRefused = refuses (fun () -> Fable.Jose.exportJWK keys.publicKey) |> Interop.awaitPromise
                 Expect.isFalse publicRefused "the public half exports (JWKS depends on it)"
-                let! privateRefused = refuses (fun () -> Fable.Jose.exportJWK keys.privateKey) |> Async.AwaitPromise
+                let! privateRefused = refuses (fun () -> Fable.Jose.exportJWK keys.privateKey) |> Interop.awaitPromise
                 Expect.isTrue privateRefused "exporting the private key must throw"
             }
     ]
@@ -409,7 +409,7 @@ let private opTests =
                 // The happy path, verified with jose against the served JWKS.
                 let! code = issueCode ()
                 Expect.isTrue (code.Length > 0) "a code is issued"
-                let! tokens = postFormRaw decoded.TokenEndpoint (tokenForm code client.ClientSecret verifier) |> Async.AwaitPromise
+                let! tokens = postFormRaw decoded.TokenEndpoint (tokenForm code client.ClientSecret verifier) |> Interop.awaitPromise
                 Expect.equal tokens.status 200 "the exchange succeeds"
                 let tokenResponse = Wire.fromString Wire.tokenResponse tokens.body |> expect
                 Expect.equal tokenResponse.TokenType "Bearer" "token_type per RFC 6749 §5.1"
@@ -417,26 +417,26 @@ let private opTests =
                 let keySet = Fable.Jose.createLocalJWKSet (JS.JSON.parse jwksReply.Body)
                 let! verified =
                     Fable.Jose.jwtVerify tokenResponse.IdToken keySet (createObj [ "issuer" ==> issuer; "audience" ==> client.ClientId ])
-                    |> Async.AwaitPromise
+                    |> Interop.awaitPromise
                 let subject : string = verified.payload?sub
                 Expect.equal subject "local" "the ID token's subject is the local user"
                 let attribution : string = verified.payload?yession_attribution
                 Expect.equal attribution "unattributed" "localhost access is unattributed"
 
                 // Replay: the same code again -> invalid_grant.
-                let! replay = postFormRaw decoded.TokenEndpoint (tokenForm code client.ClientSecret verifier) |> Async.AwaitPromise
+                let! replay = postFormRaw decoded.TokenEndpoint (tokenForm code client.ClientSecret verifier) |> Interop.awaitPromise
                 Expect.equal replay.status 400 "a replayed code is refused"
                 Expect.equal (Wire.fromString Wire.tokenError replay.body) (Ok "invalid_grant") "as invalid_grant"
 
                 // A wrong verifier burns its fresh code.
                 let! code2 = issueCode ()
-                let! badVerifier = postFormRaw decoded.TokenEndpoint (tokenForm code2 client.ClientSecret "wrong-verifier-wrong-verifier-wrong-verifier") |> Async.AwaitPromise
+                let! badVerifier = postFormRaw decoded.TokenEndpoint (tokenForm code2 client.ClientSecret "wrong-verifier-wrong-verifier-wrong-verifier") |> Interop.awaitPromise
                 Expect.equal badVerifier.status 400 "PKCE failure is refused"
                 Expect.equal (Wire.fromString Wire.tokenError badVerifier.body) (Ok "invalid_grant") "as invalid_grant"
 
                 // A wrong client secret is invalid_client (401).
                 let! code3 = issueCode ()
-                let! badSecret = postFormRaw decoded.TokenEndpoint (tokenForm code3 "stolen" verifier) |> Async.AwaitPromise
+                let! badSecret = postFormRaw decoded.TokenEndpoint (tokenForm code3 "stolen" verifier) |> Interop.awaitPromise
                 Expect.equal badSecret.status 401 "a bad client secret is a 401"
                 Expect.equal (Wire.fromString Wire.tokenError badSecret.body) (Ok "invalid_client") "as invalid_client"
 
@@ -502,9 +502,9 @@ let private flowTests =
                 Expect.equal stale.Status 404 "a stale asset address is a 404, never a redirect to current bytes"
 
                 // The data surfaces are gated bare.
-                let! bareMe = headRequest (sessionUrl + "/me") |> Async.AwaitPromise
+                let! bareMe = headRequest (sessionUrl + "/me") |> Interop.awaitPromise
                 Expect.equal bareMe.status 401 "bare /me is unauthorized"
-                let! bareEvents = headRequest (sessionUrl + "/events") |> Async.AwaitPromise
+                let! bareEvents = headRequest (sessionUrl + "/events") |> Interop.awaitPromise
                 Expect.equal bareEvents.status 401 "the bare event cursor is unauthorized"
 
                 // /login begins the bounce.
@@ -545,7 +545,7 @@ let private flowTests =
                         (managerUrl + "/control/register-client")
                         "forged-secret"
                         (Wire.toString Wire.registerClientRequest { RedirectUri = "http://127.0.0.1:1/callback" })
-                    |> Async.AwaitPromise
+                    |> Interop.awaitPromise
                 Expect.equal forged 401 "a forged control secret cannot register a client"
 
                 // Stopping the launch revokes its client registration: the authorize
