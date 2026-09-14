@@ -113,6 +113,7 @@
     <PackageReference Include="Fable.Fetch" />
     <PackageReference Include="Fable.Lit" />
     <PackageReference Include="Fable.Node" />
+    <PackageReference Include="Fable.Promise" />
     <PackageReference Include="Fable.Yjs" />
     <PackageReference Include="Ylmish" />
   </ItemGroup>
