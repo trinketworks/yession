@@ -20,6 +20,7 @@ open Fable.Core
 open Fable.Core.JsInterop
 open Fable.Pyxpecto
 open Fable.ClaudeAgentSdk
+open Yession.Host
 
 /// Whether a JS object HAS a key, which is the question `jsOptions` exists to answer: an
 /// option nobody set must be absent, not present and empty.
@@ -55,7 +56,7 @@ let private constructionTests =
             async {
                 // A curried F# lambda would answer this call with a FUNCTION, and the SDK
                 // would await something that is not a promise.
-                let! answer = (ping ()).handler.Invoke (noArguments, noArguments) |> Async.AwaitPromise
+                let! answer = (ping ()).handler.Invoke (noArguments, noArguments) |> Interop.awaitPromise
                 Expect.equal answer.content.[0].text "pong" "the handler ran and its text came back"
             }
 
@@ -194,7 +195,7 @@ let liveTests =
                 let mutable ending : ResultMessage option = None
                 let mutable finished = false
                 while not finished do
-                    let! step = running.next () |> Async.AwaitPromise
+                    let! step = running.next () |> Interop.awaitPromise
                     if step.``done`` then
                         finished <- true
                     else

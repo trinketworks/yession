@@ -531,7 +531,7 @@ let private realFetch (url: string) : JS.Promise<{| ok: bool; status: int; url: 
 let private realHttpGet : Client.HttpGet =
     fun url ->
         async {
-            let! reply = realFetch url |> Async.AwaitPromise
+            let! reply = realFetch url |> Interop.awaitPromise
             return
                 if reply.ok then Ok { Url = reply.url; Body = reply.detail }
                 elif reply.status = 0 then Error (Client.HttpUnreachable reply.detail)

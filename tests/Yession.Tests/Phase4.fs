@@ -432,7 +432,7 @@ let private processTests =
 
                 // The child serves the real bootstrap (session id embedded) and a real
                 // WebRTC client can message it.
-                let! html = Interop.getText (sprintf "http://127.0.0.1:%d/" port) |> Async.AwaitPromise
+                let! html = Interop.getText (sprintf "http://127.0.0.1:%d/" port) |> Interop.awaitPromise
                 Expect.isTrue (html.Contains (Dom.sessionMetaName + "\" " + Dom.attr "content" "proc-1")) "the child serves ITS session's page"
                 let signalUrl = sprintf "http://127.0.0.1:%d/signal" port
                 // Access rides the OIDC bounce: login against the child, which round-trips
@@ -1042,7 +1042,7 @@ let private readinessTests =
         testCaseAsync "a session the front door has not mapped yet is not ready" <|
             async {
                 let! pm, baseUrl, _, door = managerBehindFrontDoor "ready-miss"
-                let! answer = getReply (baseUrl + "/sessions/ready-miss/ready") |> Async.AwaitPromise
+                let! answer = getReply (baseUrl + "/sessions/ready-miss/ready") |> Interop.awaitPromise
                 Expect.equal (statusOfReply answer) 503 "the session is running and its published address is not"
                 do! pm.StopAll ()
                 door.close ignore
@@ -1052,7 +1052,7 @@ let private readinessTests =
             async {
                 let! pm, baseUrl, mapIt, door = managerBehindFrontDoor "ready-hit"
                 mapIt ()
-                let! answer = getReply (baseUrl + "/sessions/ready-hit/ready") |> Async.AwaitPromise
+                let! answer = getReply (baseUrl + "/sessions/ready-hit/ready") |> Interop.awaitPromise
                 Expect.equal (statusOfReply answer) 200 "the door routes to it now, so it is reachable"
                 do! pm.StopAll ()
                 door.close ignore
@@ -1066,7 +1066,7 @@ let private readinessTests =
             async {
                 let! pm = managerWithUi "open-page"
                 let baseUrl = sprintf "http://127.0.0.1:%d" pm.EndpointPort.Value
-                let! missing = getReply (baseUrl + "/sessions/no-such-session/open") |> Async.AwaitPromise
+                let! missing = getReply (baseUrl + "/sessions/no-such-session/open") |> Interop.awaitPromise
                 Expect.equal (statusOfReply missing) 404 "an unknown session is still a 404"
                 Expect.stringContains (contentTypeOfReply missing) "text/html" "and it is a page a browser can show"
                 do! pm.StopAll ()
@@ -1096,13 +1096,13 @@ let private readinessTests =
                     if m.Success then Some m.Groups.[1].Value else None
                 let resolvedFrom (pageUrl: string) (page: string) =
                     stylesheetOf page |> Option.map (fun href -> resolveUrl pageUrl href)
-                let! manager = getReply managerUrl |> Async.AwaitPromise
-                let! standalone = getReply standaloneUrl |> Async.AwaitPromise
+                let! manager = getReply managerUrl |> Interop.awaitPromise
+                let! standalone = getReply standaloneUrl |> Interop.awaitPromise
                 let expected = resolvedFrom managerUrl (bodyOfReply manager)
                 Expect.isSome expected "the Manager page links its stylesheet"
                 let linked = resolvedFrom standaloneUrl (bodyOfReply standalone)
                 Expect.equal linked expected "from where each page lives, both links name the same file"
-                let! sheet = getReply linked.Value |> Async.AwaitPromise
+                let! sheet = getReply linked.Value |> Interop.awaitPromise
                 Expect.equal (statusOfReply sheet) 200 "and the browser can follow it from the standalone page"
                 do! pm.StopAll ()
             }
@@ -1138,7 +1138,7 @@ let private archiveFlowTests =
                 // Over the wire, because `/open` is the URL a session client's reconnect card
                 // points at: a bookmark landing there must read as a conflict it can resolve,
                 // not as the Manager having broken.
-                let! refused = getReply (baseUrl + "/sessions/arch-refuse/open") |> Async.AwaitPromise
+                let! refused = getReply (baseUrl + "/sessions/arch-refuse/open") |> Interop.awaitPromise
                 Expect.equal (statusOfReply refused) 409 "a durable-state conflict, not a server fault"
                 Expect.stringContains (bodyOfReply refused) "archived" "and it says why"
                 do! pm.StopAll ()
@@ -1338,7 +1338,7 @@ let private uiFlowTests =
                 let baseUrl = sprintf "http://127.0.0.1:%d" pm.EndpointPort.Value
 
                 // The page serves, self-contained.
-                let! page = Interop.getText (baseUrl + "/") |> Async.AwaitPromise
+                let! page = Interop.getText (baseUrl + "/") |> Interop.awaitPromise
                 Expect.isTrue (page.Contains Dom.Manager.createSession) "the create form is served"
                 // Fetch the stylesheet the PAGE names rather than a path spelled here: it is
                 // addressed by a digest of its own bytes, so a hardcoded URL would be a second
@@ -1349,21 +1349,21 @@ let private uiFlowTests =
                 let styleSheetLink =
                     System.Text.RegularExpressions.Regex.Match(page, "href=\"([^\"]+/app\\.css)\"")
                 Expect.isTrue styleSheetLink.Success "the page names a stylesheet"
-                let! css = Interop.getText (resolveUrl (baseUrl + "/") styleSheetLink.Groups.[1].Value) |> Async.AwaitPromise
+                let! css = Interop.getText (resolveUrl (baseUrl + "/") styleSheetLink.Groups.[1].Value) |> Interop.awaitPromise
                 Expect.isTrue (css.Length > 500) "the shared local stylesheet serves from the endpoint (no CDN)"
 
                 // Create over the form endpoint. The answer is where the session now IS —
                 // creating one is asking to work in it, and `/open` is the stable route that
                 // launches it and lands you there. Not followed here: this case still wants
                 // it stopped, and what /open does with it is /open's own case below.
-                let! created = postFormHere (baseUrl + "/sessions") "id=ui-1&name=UI+One" |> Async.AwaitPromise
+                let! created = postFormHere (baseUrl + "/sessions") "id=ui-1&name=UI+One" |> Interop.awaitPromise
                 Expect.equal (statusOfReply created) 303 "creating hands the browser onward, rather than a table to look at"
                 Expect.equal (locationOfReply created) "/sessions/ui-1/open" "onward is the session's stable open route"
-                let! duplicate = postFormHere (baseUrl + "/sessions") "id=ui-1&name=Again" |> Async.AwaitPromise
+                let! duplicate = postFormHere (baseUrl + "/sessions") "id=ui-1&name=Again" |> Interop.awaitPromise
                 Expect.equal (statusOfReply duplicate) 400 "duplicates are rejected"
 
                 // Launch from the UI; the fragment reflects it and the child REALLY serves.
-                let! launched = postForm (baseUrl + "/sessions/ui-1/launch") "" |> Async.AwaitPromise
+                let! launched = postForm (baseUrl + "/sessions/ui-1/launch") "" |> Interop.awaitPromise
                 let row = bodyOfReply launched
                 Expect.isTrue (row.Contains (Dom.attr Dom.Manager.status Dom.Manager.statusRunning)) "the row shows running"
                 let sessionPort =
@@ -1371,7 +1371,7 @@ let private uiFlowTests =
                     | ProcessManager.Running (port, _, _) -> port
                     | other -> failwithf "expected Running, got %A" other
                 Expect.isTrue (row.Contains (sprintf "href=\"http://127.0.0.1:%d/\"" sessionPort)) "the open link is live (plain URL, no token)"
-                let! shell = Interop.getText (sprintf "http://127.0.0.1:%d/" sessionPort) |> Async.AwaitPromise
+                let! shell = Interop.getText (sprintf "http://127.0.0.1:%d/" sessionPort) |> Interop.awaitPromise
                 Expect.isTrue (shell.Contains (Dom.sessionMetaName + "\" " + Dom.attr "content" "ui-1")) "the opened session serves its shell"
 
                 // Live status, pushed: the rows stream's first frame is the current table (the
@@ -1385,14 +1385,14 @@ let private uiFlowTests =
 
                 // Stop, resume — each transition pushes a fresh table on the open stream.
                 let beforeStop = tables.Count
-                let! stopped = postForm (baseUrl + "/sessions/ui-1/stop") "" |> Async.AwaitPromise
+                let! stopped = postForm (baseUrl + "/sessions/ui-1/stop") "" |> Interop.awaitPromise
                 Expect.isTrue ((bodyOfReply stopped).Contains (Dom.attr Dom.Manager.status Dom.Manager.statusStopped)) "stopped from the UI"
                 do! waitUntil "the stop frame" (fun () ->
                         tables
                         |> Seq.skip beforeStop
                         |> Seq.exists (fun t -> t.Contains (Dom.attr Dom.Manager.status Dom.Manager.statusStopped)))
                 let beforeResume = tables.Count
-                let! resumed = postForm (baseUrl + "/sessions/ui-1/launch") "" |> Async.AwaitPromise
+                let! resumed = postForm (baseUrl + "/sessions/ui-1/launch") "" |> Interop.awaitPromise
                 Expect.isTrue ((bodyOfReply resumed).Contains (Dom.attr Dom.Manager.status Dom.Manager.statusRunning)) "resume is just launch"
                 do! waitUntil "the resume frame" (fun () ->
                         tables
@@ -1440,7 +1440,7 @@ let private uiFlowTests =
 
                 // Stopped: /open has to start it before there is any address to give.
                 Expect.equal (pm.TryFind sessionId).Value.Status ProcessManager.NotRunning "created, not launched"
-                let! opened = Interop.getText (baseUrl + "/sessions/open-1/open") |> Async.AwaitPromise
+                let! opened = Interop.getText (baseUrl + "/sessions/open-1/open") |> Interop.awaitPromise
                 let launchedPort =
                     match (pm.TryFind sessionId).Value.Status with
                     | ProcessManager.Running (port, _, _) -> port
@@ -1454,7 +1454,7 @@ let private uiFlowTests =
 
                 // Already running: /open is not a relaunch — it hands back the same address,
                 // which is what makes the URL safe to keep clicking.
-                let! again = Interop.getText (baseUrl + "/sessions/open-1/open") |> Async.AwaitPromise
+                let! again = Interop.getText (baseUrl + "/sessions/open-1/open") |> Interop.awaitPromise
                 match (pm.TryFind sessionId).Value.Status with
                 | ProcessManager.Running (port, _, _) ->
                     Expect.equal port launchedPort "the running session was not restarted"
@@ -1462,7 +1462,7 @@ let private uiFlowTests =
                 | other -> failwithf "expected it to still be running, got %A" other
 
                 // An unknown session is a 404, not a launch attempt.
-                let! missing = getReply (baseUrl + "/sessions/nope-nope/open") |> Async.AwaitPromise
+                let! missing = getReply (baseUrl + "/sessions/nope-nope/open") |> Interop.awaitPromise
                 Expect.equal (statusOfReply missing) 404 "unknown sessions are not created by asking to open them"
 
                 do! pm.StopAll ()
@@ -1544,7 +1544,7 @@ let private reapingTests =
                 // address that survives a reap is what lets a client keep what it wrote.
                 // Under a `{id}` template that holds by construction rather than by
                 // bookkeeping — the address never mentioned the port to begin with.
-                let! reopened = Interop.getText (baseUrl + "/sessions/reap-1/open") |> Async.AwaitPromise
+                let! reopened = Interop.getText (baseUrl + "/sessions/reap-1/open") |> Interop.awaitPromise
                 Expect.isTrue
                     (reopened.Contains (origin + "/s/reap-1/"))
                     "reopening lands on the address the reaped session had"
@@ -1666,9 +1666,9 @@ let private compositionTests =
                 // Create and launch a session from the management UI. The redirect is not
                 // followed: creating now launches and opens, and this case wants the launch
                 // to be its own act so the fragment it answers with names the port below.
-                let! created = postFormHere (manager.UiUrl + "sessions") "id=composed&name=Composed" |> Async.AwaitPromise
+                let! created = postFormHere (manager.UiUrl + "sessions") "id=composed&name=Composed" |> Interop.awaitPromise
                 Expect.equal (statusOfReply created) 303 "created via the UI"
-                let! launched = postForm (manager.UiUrl + "sessions/composed/launch") "" |> Async.AwaitPromise
+                let! launched = postForm (manager.UiUrl + "sessions/composed/launch") "" |> Interop.awaitPromise
                 let row = bodyOfReply launched
                 Expect.isTrue (row.Contains (Dom.attr Dom.Manager.status Dom.Manager.statusRunning)) "launched via the UI"
                 let sessionPort = portOfRow row
@@ -1691,9 +1691,9 @@ let private compositionTests =
                 do! a.Channel.Close ()
 
                 // Stop and resume from the UI; history replays into the fresh child.
-                let! stopped = postForm (manager.UiUrl + "sessions/composed/stop") "" |> Async.AwaitPromise
+                let! stopped = postForm (manager.UiUrl + "sessions/composed/stop") "" |> Interop.awaitPromise
                 Expect.isTrue ((bodyOfReply stopped).Contains (Dom.attr Dom.Manager.status Dom.Manager.statusStopped)) "stopped via the UI"
-                let! resumed = postForm (manager.UiUrl + "sessions/composed/launch") "" |> Async.AwaitPromise
+                let! resumed = postForm (manager.UiUrl + "sessions/composed/launch") "" |> Interop.awaitPromise
                 let resumedPort = portOfRow (bodyOfReply resumed)
                 let! openedB = OidcHttp.openSession (sprintf "http://127.0.0.1:%d" resumedPort)
                 let! b = connectClient (sprintf "http://127.0.0.1:%d/signal" resumedPort) openedB.PeerToken "grace" "Grace"
@@ -1706,9 +1706,9 @@ let private compositionTests =
                 // data directory: the registry survives, and resume still works.
                 do! manager.Shutdown ()
                 let! manager2 = startPackagedManager args env
-                let! page = Interop.getText manager2.UiUrl |> Async.AwaitPromise
+                let! page = Interop.getText manager2.UiUrl |> Interop.awaitPromise
                 Expect.isTrue (page.Contains (Dom.attr Dom.Manager.session "composed")) "the registry survived the manager restart"
-                let! relaunched = postForm (manager2.UiUrl + "sessions/composed/launch") "" |> Async.AwaitPromise
+                let! relaunched = postForm (manager2.UiUrl + "sessions/composed/launch") "" |> Interop.awaitPromise
                 let relaunchedPort = portOfRow (bodyOfReply relaunched)
                 let! openedC = OidcHttp.openSession (sprintf "http://127.0.0.1:%d" relaunchedPort)
                 let! c = connectClient (sprintf "http://127.0.0.1:%d/signal" relaunchedPort) openedC.PeerToken "carol" "Carol"
@@ -2932,7 +2932,7 @@ let private registryStreamTests =
                             // The public address reaches both browser-facing URLs: the open link
                             // and the session's registered OAuth redirect URI (via the env the
                             // child inherited at spawn).
-                            let! rendered = Interop.getText (baseUrl + "/") |> Async.AwaitPromise
+                            let! rendered = Interop.getText (baseUrl + "/") |> Interop.awaitPromise
                             Expect.isTrue
                                 (rendered.Contains (sprintf "href=\"http://home.example.ts.net:%d/\"" port))
                                 "the open link carries the public origin"

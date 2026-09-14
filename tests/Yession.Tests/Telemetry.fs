@@ -169,7 +169,7 @@ let private emitterTests =
                     let off = Telemetry.fromEnv sessionId
                     off.Emit (AgentTurnId.create "t" |> expect)
                         { InputTokens = 9; OutputTokens = 9; CacheReadTokens = 0; CacheCreationTokens = 0; Models = [] }
-                    do! off.Shutdown () |> Async.AwaitPromise
+                    do! off.Shutdown () |> Interop.awaitPromise
                 })
             }
 
@@ -179,7 +179,7 @@ let private emitterTests =
                 let dead = Telemetry.createOtlp sessionId "http://127.0.0.1:1/v1/logs"
                 dead.Emit (AgentTurnId.create "t2" |> expect)
                     { InputTokens = 2; OutputTokens = 2; CacheReadTokens = 0; CacheCreationTokens = 0; Models = [] }
-                do! dead.Shutdown () |> Async.AwaitPromise
+                do! dead.Shutdown () |> Interop.awaitPromise
             }
     ]
 
@@ -203,7 +203,7 @@ let private forwardingTests =
                 emitter.Emit (AgentTurnId.create "rt-turn" |> expect)
                     { InputTokens = 42; OutputTokens = 9; CacheReadTokens = 4; CacheCreationTokens = 6
                       Models = [ ranAll "claude-opus-4-8" 42 9 4 6 ] }
-                do! emitter.Shutdown () |> Async.AwaitPromise
+                do! emitter.Shutdown () |> Interop.awaitPromise
 
                 let received = stub.Received ()
                 Expect.equal received.Length 1 "the collector received exactly one record"
@@ -240,7 +240,7 @@ let private forwardingTests =
                             let emitter = Telemetry.fromEnv sessionId
                             emitter.Emit (AgentTurnId.create "env-turn" |> expect)
                                 { InputTokens = 5; OutputTokens = 6; CacheReadTokens = 0; CacheCreationTokens = 0; Models = [] }
-                            do! emitter.Shutdown () |> Async.AwaitPromise
+                            do! emitter.Shutdown () |> Interop.awaitPromise
                         })
 
                 match stub.Received () |> List.choose OtlpStub.turnUsage with
@@ -267,7 +267,7 @@ let private forwardingTests =
                             let emitter = Telemetry.fromEnv sessionId
                             emitter.Emit (AgentTurnId.create "ovr-turn" |> expect)
                                 { InputTokens = 1; OutputTokens = 1; CacheReadTokens = 0; CacheCreationTokens = 0; Models = [] }
-                            do! emitter.Shutdown () |> Async.AwaitPromise
+                            do! emitter.Shutdown () |> Interop.awaitPromise
                         })
 
                 match stub.Received () with

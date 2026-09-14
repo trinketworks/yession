@@ -227,7 +227,7 @@ let private routeTests =
                 // Which models this session can run on is a fact about the session, so it
                 // goes to the people in it and to nobody else.
                 let! url, server = startClaudeRoutes (fun _ -> async { return Ok [] })
-                let! reply = get url "" |> Async.AwaitPromise
+                let! reply = get url "" |> Interop.awaitPromise
                 server.close ignore
                 Expect.equal reply.status 401 "unauthenticated is refused"
             }
@@ -241,7 +241,7 @@ let private routeTests =
                             askedFor <- Some actor
                             return Ok [ AgentModel.create (ModelId.create "model-a" |> expect) "Model A" ]
                         })
-                let! reply = get url "who=ada" |> Async.AwaitPromise
+                let! reply = get url "who=ada" |> Interop.awaitPromise
                 server.close ignore
                 Expect.equal reply.status 200 "an identity gets an answer"
                 Expect.equal
@@ -259,7 +259,7 @@ let private routeTests =
                 // An empty menu with no explanation is the state this whole shape exists to
                 // avoid: the remedy is one panel up, and nothing would have pointed at it.
                 let! url, server = startClaudeRoutes (fun _ -> async { return Error "no Claude account connected" })
-                let! reply = get url "who=ada" |> Async.AwaitPromise
+                let! reply = get url "who=ada" |> Interop.awaitPromise
                 server.close ignore
                 let catalogue = catalogueOf reply.body
                 Expect.isNone catalogue.models "a failed lookup is not a catalogue"
@@ -275,7 +275,7 @@ let private routeTests =
                 // let the picker keep a refusal naming an account the panel beside it had
                 // already shown as connected; one reply cannot disagree with itself.
                 let! url, server = startClaudeRoutes (fun _ -> async { return Error "no Claude account connected" })
-                let! reply = get url "who=ada" |> Async.AwaitPromise
+                let! reply = get url "who=ada" |> Interop.awaitPromise
                 server.close ignore
                 Expect.isTrue (reply.body.Contains "\"owner\"") "the status is on the reply"
                 Expect.isTrue (reply.body.Contains "\"modelsUnavailable\"") "and so is what the picker can offer"

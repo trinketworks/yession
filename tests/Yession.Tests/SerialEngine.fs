@@ -110,7 +110,7 @@ let tests =
 
         testCaseAsync "bytes cross a real serial port in both directions" <|
             async {
-                let! pair = startPair () |> Async.AwaitPromise
+                let! pair = startPair () |> Interop.awaitPromise
                 let received = Text.StringBuilder ()
                 let mutable closedWith = None
                 let! opened =
@@ -149,7 +149,7 @@ let tests =
                 // emits neither `close` nor `error` on an idle port whose device has gone —
                 // it reports the failure only when something next writes. Note that nothing
                 // here writes, deliberately, because a read-only attach is the case that hung.
-                let! pair = startPair () |> Async.AwaitPromise
+                let! pair = startPair () |> Interop.awaitPromise
                 let mutable closedWith = None
                 let! opened =
                     Ports.real.Open pair.ours SerialSettings.defaults ignore (fun why -> closedWith <- Some why)
@@ -166,7 +166,7 @@ let tests =
                 // 9600 8N1 rather than the default 115200: a baud rate that is silently
                 // dropped is the classic serial bug, and it looks exactly like working code
                 // until somebody attaches hardware that cares.
-                let! pair = startPair () |> Async.AwaitPromise
+                let! pair = startPair () |> Interop.awaitPromise
                 let received = Text.StringBuilder ()
                 let! opened =
                     Ports.real.Open

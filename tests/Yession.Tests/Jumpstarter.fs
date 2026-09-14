@@ -106,9 +106,9 @@ let private startStack (timeoutMs: int) : JS.Promise<Stack> = jsNative
 /// down with it, or the next test inherits them.
 let private withStack (body: Stack -> Async<unit>) =
     async {
-        let! stack = startStack 180000 |> Async.AwaitPromise
+        let! stack = startStack 180000 |> Interop.awaitPromise
         let! outcome = body stack |> Async.Catch
-        do! stack.stop () |> Async.AwaitPromise
+        do! stack.stop () |> Interop.awaitPromise
         match outcome with
         | Choice1Of2 () -> ()
         | Choice2Of2 error -> raise error

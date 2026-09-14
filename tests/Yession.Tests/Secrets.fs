@@ -345,7 +345,7 @@ let private cipherTests =
                 let! cipher = SecretsCipher.importKey (SecretsCipher.generateKek ())
                 let mutable threw = false
                 try
-                    let! _ = exportRawKey cipher.Key |> Async.AwaitPromise
+                    let! _ = exportRawKey cipher.Key |> Interop.awaitPromise
                     ()
                 with _ -> threw <- true
                 Expect.isTrue threw "exporting the KEK must throw"
@@ -646,7 +646,7 @@ let private routeTests =
                           "secret-b", caller sessionB Set.empty ]
                         (Some (apiOver (fun r -> audited <- r :: audited) (fun s -> if s = sessionA then Set.singleton alice else Set.empty) store))
                         (fun path -> unauthorized <- path :: unauthorized)
-                let post route secret body = postControl (sprintf "%s/control/secrets/%s" url route) secret body |> Async.AwaitPromise
+                let post route secret body = postControl (sprintf "%s/control/secrets/%s" url route) secret body |> Interop.awaitPromise
                 let eventNames () =
                     audited
                     |> List.rev
@@ -722,7 +722,7 @@ let private routeTests =
                 let userName = SecretName.create "user-held-token" |> expect
                 let! _ = store.Set { Scope = SessionScope sessionA; Name = name } "session-held"
                 let! _ = store.Set { Scope = UserScope alice; Name = userName } "user-held"
-                let post secret body = postControl (url + "/control/secrets/resolve") secret body |> Async.AwaitPromise
+                let post secret body = postControl (url + "/control/secrets/resolve") secret body |> Interop.awaitPromise
                 let resolveBody = ControlWire.toString ControlWire.resolveSecretRequest { Name = name }
 
                 // The caller's own scope resolves — this is the ONE value-returning
@@ -790,7 +790,7 @@ let private routeTests =
                         (url + "/control/secrets/list")
                         "secret-a"
                         (ControlWire.toString ControlWire.listSecretsRequest { Scope = SessionScope sessionA })
-                    |> Async.AwaitPromise
+                    |> Interop.awaitPromise
                 Expect.equal reply.status 403 "no store configured"
             }
     ]

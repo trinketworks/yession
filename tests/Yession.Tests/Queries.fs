@@ -399,7 +399,7 @@ let private routeTests =
             async {
                 let registry = Queries.create [ constant "repos" Value (ValueOf (CellText "x")) ] |> expect
                 let! url = startQueryRoutes registry
-                let! reply = getWithCookie (url + "/queries") "" |> Async.AwaitPromise
+                let! reply = getWithCookie (url + "/queries") "" |> Interop.awaitPromise
                 Expect.equal reply.status 401 "the stream is gated"
                 Expect.isFalse (reply.body.Contains "repos") "and it leaked nothing on the way out"
             }
