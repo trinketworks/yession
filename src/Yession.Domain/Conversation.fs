@@ -122,6 +122,21 @@ module ConversationItem =
         | ConversationItemKind.ActNote _
         | ConversationItemKind.Message -> item.Body
 
+    /// Whether this is a person's OWN words — which is the only thing a name is made from.
+    ///
+    /// What the agent says and what the session notes are the bulk of a busy stretch, and a
+    /// name made from them is a name for the work rather than for what somebody came for:
+    /// one sentence surrounded by twelve act notes reads as "running tests" whatever was
+    /// actually asked. Nor is it only dilution — the reading is bounded, and the notes
+    /// arrive first, so they push the person's words out of the window entirely.
+    ///
+    /// It lives here rather than in the naming rule because it is a fact about an item, and
+    /// the naming rule is not the only reader that will want to know whose words these are.
+    let personal (item: ConversationItem) : bool =
+        match item.Kind, item.Author with
+        | ConversationItemKind.Message, (ActorRef.UserRef _ | ActorRef.PeerRef _) -> true
+        | _ -> false
+
 /// One chapter, as the session holds it: whether one opens at this message, and what it is
 /// called.
 ///
@@ -327,10 +342,32 @@ module Chapters =
     /// one — because a model handed more material and no reason to keep anything will write
     /// something new every time, and a name that changes under a reader as they scroll is
     /// worse than a name that was made too early.
-    let summaryAsk
+    /// What naming this chapter READS: its stretch, less everything that is not somebody's
+    /// own words (`ConversationItem.personal`).
+    ///
+    /// One function rather than a filter at each caller, because the ask and the count of
+    /// what that ask covered have to be the same list. A trigger that counts material the
+    /// ask cannot read is a trigger that fires on a question with a known answer — which is
+    /// what the bounded reading already taught, and an act note would teach again.
+    let reading
         (chapters: Map<MessageId, ChapterMark>)
         (items: ConversationItem list)
         (item: ConversationItem)
+        : ConversationItem list =
+        covers chapters items item |> List.filter ConversationItem.personal
+
+    /// The lines an ask hands over: bounded in number and in length, and never an empty one.
+    /// Shared by both asks because the bound is one judgement, not one per surface.
+    let lines (reading: ConversationItem list) : string list =
+        reading
+        |> List.truncate ReadItems
+        |> List.map (fun i ->
+            let body = i.Body.Trim ()
+            if body.Length <= ReadChars then body else body.Substring (0, ReadChars) + "…")
+        |> List.filter (fun line -> line <> "")
+
+    let summaryAsk
+        (reading: ConversationItem list)
         (current: string option)
         : SummaryAsk =
         { Task =
@@ -349,13 +386,7 @@ module Chapters =
                 + "are. If the newer material shows it is really about something else, answer "
                 + "with a few words that say so, in the session's own vocabulary. Answer with "
                 + "the name alone — no quotes, no preamble, no full stop."
-          Lines =
-            covers chapters items item
-            |> List.truncate ReadItems
-            |> List.map (fun i ->
-                let body = i.Body.Trim ()
-                if body.Length <= ReadChars then body else body.Substring (0, ReadChars) + "…")
-            |> List.filter (fun line -> line <> "")
+          Lines = lines reading
           Budget = Limit }
 
     /// An answer, made into a name — or nothing, when there is nothing usable in it.
@@ -395,9 +426,13 @@ module Titles =
     /// own, because the judgement is the same one, and from the START: a session is named for
     /// what it set out to do, and the fortieth message moves that less than the first.
     let ReadItems = Chapters.ReadItems
-    let [<Literal>] private ReadChars = 400
 
-    let summaryAsk (items: ConversationItem list) (current: string option) : SummaryAsk =
+    /// What naming the SESSION reads: everything somebody said in it. `Chapters.reading`'s
+    /// rule over the whole conversation rather than a stretch, and here for the same reason.
+    let reading (items: ConversationItem list) : ConversationItem list =
+        items |> List.filter ConversationItem.personal
+
+    let summaryAsk (reading: ConversationItem list) (current: string option) : SummaryAsk =
         { Task =
             // The inner binding is NOT `current`, for the reason `Chapters.summaryAsk` says.
             match current with
@@ -412,13 +447,7 @@ module Titles =
                 + "the newer material shows it is really about something else, answer with a "
                 + "few words that say so, in the session's own vocabulary. Answer with the "
                 + "name alone — no quotes, no preamble, no full stop."
-          Lines =
-            items
-            |> List.truncate ReadItems
-            |> List.map (fun i ->
-                let body = i.Body.Trim ()
-                if body.Length <= ReadChars then body else body.Substring (0, ReadChars) + "…")
-            |> List.filter (fun line -> line <> "")
+          Lines = Chapters.lines reading
           Budget = Chapters.Limit }
 
 type ConversationProjection =
