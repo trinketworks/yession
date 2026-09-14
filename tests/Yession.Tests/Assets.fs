@@ -103,9 +103,10 @@ let tests =
             Expect.equal (Assets.load dir).Build after.Build "and the same set always addresses the same"
 
         testCase "a declared file no root has is an absence, not a failure" <| fun () ->
-            // Each root is TRIED in turn, and a read that throws is that root not having the
-            // file rather than an error to propagate — which is why the un-built and the
-            // half-built directory both boot rather than taking the process down.
+            // Each root is TRIED in turn, and a file that is NOT THERE is that root's turn
+            // passing to the next rather than an error to propagate — which is why the
+            // un-built and the half-built directory both boot rather than taking the process
+            // down. Only absence reads that way; see the case below for what does not.
             let dir = "tests/Yession.Tests/out/.assets/partial"
             rmrf nodeFs dir
             mkdirp nodeFs dir
@@ -115,6 +116,28 @@ let tests =
                 (assets.Files |> Map.toList |> List.map fst)
                 [ AssetFile.path AssetFile.``app`` ]
                 "the file that is there, and only it"
+
+        testCase "a declared file that is there and unreadable refuses the boot" <| fun () ->
+            // The other half of the sentence above. `AssetFile.all` is DECLARED, so a file
+            // that exists and cannot be read is a broken deployment — a permission, a mount
+            // that went away, a directory where a file belongs — and no later root answers
+            // for it, because nothing about it is about absence. Reading it as absence boots
+            // a Manager that serves a blank shell and tells whoever looks to run `build`,
+            // which will not help. So the boot stops, naming the file and what the OS said.
+            //
+            // Induced as a DIRECTORY where a declared file belongs (EISDIR): this runs as
+            // root often enough that `chmod 000` is not a denial, and a directory is a
+            // genuine there-and-unreadable for any user.
+            let dir = "tests/Yession.Tests/out/.assets/unreadable"
+            rmrf nodeFs dir
+            mkdirp nodeFs (dir + "/fonts")
+            writeFile nodeFs (dir + "/" + AssetFile.path AssetFile.``app``) "body{color:red}"
+            mkdirp nodeFs (dir + "/" + AssetFile.path AssetFile.``client``)
+            Expect.throwsC
+                (fun () -> Assets.load dir |> ignore)
+                (fun error ->
+                    Expect.stringContains error.Message (AssetFile.path AssetFile.``client``) "it names the file"
+                    Expect.stringContains error.Message "EISDIR" "and what the OS said about it")
 
         testCase "the digest is over the paths as well as the bytes" <| fun () ->
             // The same bytes under a different NAME are a different set. A digest over the

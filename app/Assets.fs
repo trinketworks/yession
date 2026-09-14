@@ -32,19 +32,51 @@ let private fileUrlToPath (url: obj) : string = jsNative
 [<Emit("new URL('./assets', import.meta.url)")>]
 let private packagedAssets : obj = jsNative
 
-/// One declared file's bytes, from the package's `assets/` when installed and the build output
-/// when developing. `None` when it is not there, which is the un-built case: an empty set
-/// rather than a crash at boot.
+/// Why a root did not yield a declared file.
+///
+/// Two facts wearing one answer is how a permissions fault came to read as "run `build`". They
+/// are told apart by the errno Node puts on the error, and only `ENOENT` is an absence: every
+/// other one — `EACCES`, `EISDIR`, `EIO`, `EPERM` — says the path is THERE and this process
+/// cannot have it.
+[<RequireQualifiedAccess>]
+type private Missing =
+    /// Not there. The un-built case, and the only reason to try the next root.
+    | Absent
+    /// There and unreadable — a permission, a directory where a file belongs, a mount that
+    /// went away. No later root answers for this, because nothing about it is about absence.
+    | Unreadable of path: string * reason: string
+
+/// The errno a Node filesystem error carries, or `""` for a failure that is not one of Node's.
+[<Emit("(function (error) { return (error && error.code) || '' })($0)")>]
+let private errnoOf (error: exn) : string = jsNative
+
+/// One declared file's bytes from ONE root, or why that root did not have them.
 ///
 /// Bytes, not text: a set holds woff2 as readily as CSS, and `utf8` would mangle it.
+let private readFrom (root: string) (path: string) : Result<Buffer, Missing> =
+    let full = root + "/" + path
+    try Ok (fs.readFileSync full)
+    with error ->
+        if errnoOf error = "ENOENT" then Error Missing.Absent
+        else Error (Missing.Unreadable (full, error.Message))
+
+/// One declared file's bytes, from the package's `assets/` when installed and the build output
+/// when developing.
 ///
-/// A root that cannot answer is not a failure, it is the OTHER root's turn: a missing file, a
-/// missing directory and an unreadable one are one answer here, and only both roots failing is
-/// `None`.
-let private readFile (packaged: string) (fallback: string) (path: string) : Buffer option =
-    [ packaged; fallback ]
-    |> List.tryPick (fun root ->
-        try Some (fs.readFileSync (root + "/" + path)) with _ -> None)
+/// A root that does not HAVE the file is not a failure, it is the other root's turn, and both
+/// roots not having it is `Missing.Absent` — the un-built case, which `load` boots as an empty
+/// set rather than a crash. A root that has it and cannot read it stops there: the next root
+/// cannot speak to a fault that is not about absence, and finding the file elsewhere would
+/// leave a broken deployment serving as if it were whole.
+let private readFile (packaged: string) (fallback: string) (path: string) : Result<Buffer, Missing> =
+    let rec pick roots =
+        match roots with
+        | [] -> Error Missing.Absent
+        | root :: rest ->
+            match readFrom root path with
+            | Error Missing.Absent -> pick rest
+            | answer -> answer
+    pick [ packaged; fallback ]
 
 /// One digest over the whole set: every path and every byte, in the map's own (sorted) order,
 /// so the same set always addresses the same. Twelve base64url characters, the same content
@@ -66,13 +98,27 @@ type AssetSet =
 /// Read the asset set once, at boot. Per process, never per request: the addresses a shell
 /// hands out have to be the addresses this process will answer for, and a re-read could drift
 /// from the document that named them.
+///
+/// The DECLARED set is what makes a short one readable: a file no root has was never built, and
+/// an empty set is the developer case `serve` names. So absence boots, and a declared file that
+/// is there and unreadable does NOT — it is a fault in this deployment, and a Manager serving a
+/// blank shell while telling whoever looks to run `build` is an empty set standing in for a
+/// permissions fault. The refusal names the file and what the OS said about it, which is the
+/// only place that diagnosis still exists.
 let load (fallbackDir: string) : AssetSet =
     let packaged = fileUrlToPath packagedAssets
     let files =
         AssetFile.all
         |> List.choose (fun file ->
-            readFile packaged fallbackDir (AssetFile.path file)
-            |> Option.map (fun bytes -> AssetFile.path file, bytes))
+            match readFile packaged fallbackDir (AssetFile.path file) with
+            | Ok bytes -> Some (AssetFile.path file, bytes)
+            | Error Missing.Absent -> None
+            | Error (Missing.Unreadable (path, reason)) ->
+                failwithf
+                    "declared asset %s is there and unreadable at %s: %s"
+                    (AssetFile.path file)
+                    path
+                    reason)
         |> Map.ofList
     { Build = AssetBuild (digestEntries (Map.toArray files))
       Files = files }
