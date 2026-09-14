@@ -426,7 +426,12 @@ let private usageProbeAgent : RunAgent =
                           OutputTokens = 22
                           CacheReadTokens = 3
                           CacheCreationTokens = 4
-                          Model = Some "probe-model" })
+                          Models =
+                            [ { Model = "probe-model"
+                                InputTokens = 111
+                                OutputTokens = 22
+                                CacheReadTokens = 3
+                                CacheCreationTokens = 4 } ] })
         }
 
 // Ambient credentials (the documented last resort, and how CI's LiveAgent tier feeds

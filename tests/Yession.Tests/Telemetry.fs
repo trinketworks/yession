@@ -13,6 +13,7 @@ open Fable.Core.JsInterop
 open Fable.Pyxpecto
 open Fable.OpenTelemetry
 open Yession.Domain
+open Yession.Domain.Agent
 open Yession.Domain.Sandboxes
 open Yession.Domain.Access
 open Yession.Host
@@ -24,6 +25,15 @@ let private expect = function Ok v -> v | Error e -> failwith e
 /// Read a JS field by (possibly dotted) string key — attribute keys aren't F# identifiers.
 [<Emit("$0[$1]")>]
 let private field (o: obj) (key: string) : obj = jsNative
+
+/// The ordinary turn: one model, and it spent all of it. Named so a fixture says which case
+/// it is — the interesting one is the turn that ran TWO, and it is built by hand.
+let private ranAll (model: string) (input: int) (output: int) (cacheRead: int) (cacheCreation: int) : ModelSpend =
+    { Model = model
+      InputTokens = input
+      OutputTokens = output
+      CacheReadTokens = cacheRead
+      CacheCreationTokens = cacheCreation }
 
 /// A logger backed by an in-memory exporter, plus the exporter for assertions.
 let private inMemoryLogger () : Logger * InMemoryLogRecordExporter =
@@ -71,7 +81,7 @@ let private emitterTests =
                   OutputTokens = 7
                   CacheReadTokens = 3
                   CacheCreationTokens = 5
-                  Model = Some "claude-opus-4-8" }
+                  Models = [ ranAll "claude-opus-4-8" 11 7 3 5 ] }
 
             let records = mem.getFinishedLogRecords ()
             Expect.equal records.Length 1 "one record emitted"
@@ -91,14 +101,65 @@ let private emitterTests =
             let sessionId = SessionId.create "sess-nomodel" |> expect
             let turnId = AgentTurnId.create "turn-n" |> expect
             Telemetry.emitTo logger sessionId turnId
-                { InputTokens = 1; OutputTokens = 1; CacheReadTokens = 0; CacheCreationTokens = 0; Model = None }
+                { InputTokens = 1; OutputTokens = 1; CacheReadTokens = 0; CacheCreationTokens = 0; Models = [] }
             let attrs = field (mem.getFinishedLogRecords ()).[0] "attributes"
-            Expect.isTrue (isNull (field attrs "gen_ai.response.model")) "no model key when Model = None"
+            Expect.isTrue (isNull (field attrs "gen_ai.response.model")) "no model key when no model ran"
+
+        testCase "a turn that ran two models names neither as gen_ai.response.model" <| fun () ->
+            // The convention's attribute names THE model that produced the response. A turn
+            // that ran two has no such answer, and picking one would be this process making
+            // the choice the provider declined to make.
+            let logger, mem = inMemoryLogger ()
+            let sessionId = SessionId.create "sess-two" |> expect
+            let turnId = AgentTurnId.create "turn-two" |> expect
+            Telemetry.emitTo logger sessionId turnId
+                { InputTokens = 30; OutputTokens = 3; CacheReadTokens = 0; CacheCreationTokens = 0
+                  Models = [ ranAll "claude-opus-5" 10 1 0 0; ranAll "claude-haiku-4-5" 20 2 0 0 ] }
+            let attrs = field (mem.getFinishedLogRecords ()).[0] "attributes"
+            Expect.isTrue (isNull (field attrs "gen_ai.response.model")) "no single model is claimed"
+
+        testCase "a turn that ran two models reports what each of them spent" <| fun () ->
+            // Declining to name one must not lose the answer the provider did give: the
+            // breakdown goes out entire, aligned by index.
+            let logger, mem = inMemoryLogger ()
+            let sessionId = SessionId.create "sess-two-b" |> expect
+            let turnId = AgentTurnId.create "turn-two-b" |> expect
+            Telemetry.emitTo logger sessionId turnId
+                { InputTokens = 30; OutputTokens = 3; CacheReadTokens = 0; CacheCreationTokens = 0
+                  Models = [ ranAll "claude-opus-5" 10 1 4 5; ranAll "claude-haiku-4-5" 20 2 6 7 ] }
+            let attrs = field (mem.getFinishedLogRecords ()).[0] "attributes"
+            // Read back the way a collector would: the arrays are one breakdown, aligned by
+            // index, so they are asserted as the one thing they are.
+            let counts (suffix: string) = unbox<int array> (field attrs ("yession.agent.turn.models." + suffix))
+            let reported =
+                unbox<string array> (field attrs "yession.agent.turn.models")
+                |> Array.mapi (fun i model ->
+                    model,
+                    (counts "input_tokens").[i],
+                    (counts "output_tokens").[i],
+                    (counts "cache_read_input_tokens").[i],
+                    (counts "cache_creation_input_tokens").[i])
+            Expect.equal
+                reported
+                [| "claude-opus-5", 10, 1, 4, 5; "claude-haiku-4-5", 20, 2, 6, 7 |]
+                "every model that ran, in the order the provider reported them, with what each spent"
+
+        testCase "a turn that ran one model reports it as the response model and nothing else" <| fun () ->
+            // The breakdown is what a turn with no single answer falls back to, so a turn
+            // that HAS one does not also carry it — `gen_ai.response.model` already says it.
+            let logger, mem = inMemoryLogger ()
+            let sessionId = SessionId.create "sess-one" |> expect
+            let turnId = AgentTurnId.create "turn-one" |> expect
+            Telemetry.emitTo logger sessionId turnId
+                { InputTokens = 10; OutputTokens = 1; CacheReadTokens = 0; CacheCreationTokens = 0
+                  Models = [ ranAll "claude-opus-5" 10 1 0 0 ] }
+            let attrs = field (mem.getFinishedLogRecords ()).[0] "attributes"
+            Expect.isTrue (isNull (field attrs "yession.agent.turn.models")) "no breakdown beside a single answer"
 
         testCase "the disabled emitter is a no-op and never throws" <| fun () ->
             let turnId = AgentTurnId.create "turn-2" |> expect
             Telemetry.disabled.Emit turnId
-                { InputTokens = 1; OutputTokens = 1; CacheReadTokens = 0; CacheCreationTokens = 0; Model = None }
+                { InputTokens = 1; OutputTokens = 1; CacheReadTokens = 0; CacheCreationTokens = 0; Models = [] }
             Telemetry.disabled.Log "manager started" [ "k", box "v" ]
 
         testCaseAsync "OTEL_LOGS_EXPORTER=none (or OTEL_SDK_DISABLED) yields a disabled emitter" <|
@@ -107,7 +168,7 @@ let private emitterTests =
                 do! Support.withEnv [ "OTEL_LOGS_EXPORTER", Some "none" ] (fun () -> async {
                     let off = Telemetry.fromEnv sessionId
                     off.Emit (AgentTurnId.create "t" |> expect)
-                        { InputTokens = 9; OutputTokens = 9; CacheReadTokens = 0; CacheCreationTokens = 0; Model = None }
+                        { InputTokens = 9; OutputTokens = 9; CacheReadTokens = 0; CacheCreationTokens = 0; Models = [] }
                     do! off.Shutdown () |> Async.AwaitPromise
                 })
             }
@@ -117,7 +178,7 @@ let private emitterTests =
                 let sessionId = SessionId.create "sess-z" |> expect
                 let dead = Telemetry.createOtlp sessionId "http://127.0.0.1:1/v1/logs"
                 dead.Emit (AgentTurnId.create "t2" |> expect)
-                    { InputTokens = 2; OutputTokens = 2; CacheReadTokens = 0; CacheCreationTokens = 0; Model = None }
+                    { InputTokens = 2; OutputTokens = 2; CacheReadTokens = 0; CacheCreationTokens = 0; Models = [] }
                 do! dead.Shutdown () |> Async.AwaitPromise
             }
     ]
@@ -140,7 +201,8 @@ let private forwardingTests =
                 let sessionId = SessionId.create "rt-sess" |> expect
                 let emitter = Telemetry.createOtlp sessionId stub.Url
                 emitter.Emit (AgentTurnId.create "rt-turn" |> expect)
-                    { InputTokens = 42; OutputTokens = 9; CacheReadTokens = 4; CacheCreationTokens = 6; Model = Some "claude-opus-4-8" }
+                    { InputTokens = 42; OutputTokens = 9; CacheReadTokens = 4; CacheCreationTokens = 6
+                      Models = [ ranAll "claude-opus-4-8" 42 9 4 6 ] }
                 do! emitter.Shutdown () |> Async.AwaitPromise
 
                 let received = stub.Received ()
@@ -177,7 +239,7 @@ let private forwardingTests =
                         (fun () -> async {
                             let emitter = Telemetry.fromEnv sessionId
                             emitter.Emit (AgentTurnId.create "env-turn" |> expect)
-                                { InputTokens = 5; OutputTokens = 6; CacheReadTokens = 0; CacheCreationTokens = 0; Model = None }
+                                { InputTokens = 5; OutputTokens = 6; CacheReadTokens = 0; CacheCreationTokens = 0; Models = [] }
                             do! emitter.Shutdown () |> Async.AwaitPromise
                         })
 
@@ -204,7 +266,7 @@ let private forwardingTests =
                         (fun () -> async {
                             let emitter = Telemetry.fromEnv sessionId
                             emitter.Emit (AgentTurnId.create "ovr-turn" |> expect)
-                                { InputTokens = 1; OutputTokens = 1; CacheReadTokens = 0; CacheCreationTokens = 0; Model = None }
+                                { InputTokens = 1; OutputTokens = 1; CacheReadTokens = 0; CacheCreationTokens = 0; Models = [] }
                             do! emitter.Shutdown () |> Async.AwaitPromise
                         })
 

@@ -1389,7 +1389,22 @@ module private Stream =
               "cache_read_input_tokens" ==> cacheRead
               "cache_creation_input_tokens" ==> cacheCreation ]
 
-    let answeredBy (model: string) : string * obj = "modelUsage" ==> createObj [ model ==> createObj [] ]
+    /// The per-model breakdown, as the SDK sends it: a MAP keyed by model id, camelCase, in
+    /// the order given. A turn that ran two models has two keys and there is no third field
+    /// saying which of them "the" model was.
+    let ranOn (models: (string * int * int) list) : string * obj =
+        "modelUsage"
+        ==> createObj
+            [ for model, input, output in models ->
+                model
+                ==> createObj
+                    [ "inputTokens" ==> input
+                      "outputTokens" ==> output
+                      "cacheReadInputTokens" ==> 0
+                      "cacheCreationInputTokens" ==> 0 ] ]
+
+    /// The one-model case, which is most turns.
+    let answeredBy (model: string) : string * obj = ranOn [ model, 0, 0 ]
 
     /// Every message in order, then the ending — which is where a block the provider never
     /// closed is flushed, whichever ending it was.
@@ -1641,11 +1656,48 @@ let private spendTests =
             // The only place a turn says which model actually ran — the session's own choice
             // can be absent, and then nobody else knows.
             let spent = Stream.spend [ Stream.ending "success" [ Stream.answeredBy "claude-opus-5" ] ]
-            Expect.equal spent.Model (Some "claude-opus-5") "which model answered"
+            Expect.equal (spent.Models |> List.map (fun m -> m.Model)) [ "claude-opus-5" ] "which model answered"
+
+        testCase "a turn that ran two models reports both" <| fun () ->
+            // `modelUsage` is keyed by model id because a fallback makes a turn two models,
+            // and the provider will not say which was "the" one. Reading a single key off the
+            // front reported whichever the SDK recorded first — insertion order, which nobody
+            // chose — and threw the other away.
+            let spent =
+                Stream.spend
+                    [ Stream.ending "success" [ Stream.ranOn [ "claude-opus-5", 10, 1; "claude-haiku-4-5", 20, 2 ] ] ]
+            Expect.equal
+                (spent.Models |> List.map (fun m -> m.Model, m.InputTokens, m.OutputTokens))
+                [ "claude-opus-5", 10, 1; "claude-haiku-4-5", 20, 2 ]
+                "both models, in the order the provider reported them, each with its own spend"
 
         testCase "an ending naming no model leaves the model unknown" <| fun () ->
             let spent = Stream.spend [ Stream.ending "success" [] ]
-            Expect.equal spent.Model None "nothing is invented on the provider's behalf"
+            Expect.equal spent.Models [] "nothing is invented on the provider's behalf"
+
+        testCase "an ending that says nothing about the model does not keep the last one that did" <| fun () ->
+            // Two endings, and the second says nothing about the model. The reading is the
+            // SECOND one's, whole: keeping the first's model beside the second's counts
+            // described a turn that never happened.
+            let spent =
+                Stream.spend
+                    [ Stream.ending "success" [ Stream.usage 1 1 0 0; Stream.answeredBy "claude-opus-5" ]
+                      Stream.ending "success" [ Stream.usage 7 7 0 0 ] ]
+            Expect.equal spent.Models [] "the ending that reported nothing reports nothing"
+
+        testCase "two endings read as one ending: the last one, both halves" <| fun () ->
+            // The counts and the models come from the same result or they describe different
+            // results. The SDK's own guidance for the one mode that emits several — streaming
+            // input — is to read the LATEST result rather than sum across them, because its
+            // per-model breakdown is already the running total for the call.
+            let spent =
+                Stream.spend
+                    [ Stream.ending "success" [ Stream.usage 1 1 0 0; Stream.answeredBy "claude-opus-5" ]
+                      Stream.ending "success" [ Stream.usage 7 7 0 0; Stream.answeredBy "claude-haiku-4-5" ] ]
+            Expect.equal
+                (spent.InputTokens, spent.Models |> List.map (fun m -> m.Model))
+                (7, [ "claude-haiku-4-5" ])
+                "the last ending's counts beside the last ending's models"
 
         testCase "a turn that stopped still spent what it spent" <| fun () ->
             // The turn most worth costing is the long one that ran into something, not the
