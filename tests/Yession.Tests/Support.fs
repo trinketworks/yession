@@ -212,7 +212,7 @@ module OidcHttp =
     /// assert on every hop — Plan 07), storing any cookies; no redirect following.
     let getWithJarAs (headers: (string * string) list) (jar: Jar) (url: string) : Async<{| Status: int; Location: string; CacheControl: string; Body: string |}> =
         async {
-            let! reply = fetchManualWith url (cookieHeader jar) (Array.ofList headers) |> Async.AwaitPromise
+            let! reply = fetchManualWith url (cookieHeader jar) (Array.ofList headers) |> Interop.awaitPromise
             store jar reply.setCookies
             return {| Status = reply.status; Location = reply.location; CacheControl = reply.cacheControl; Body = reply.body |}
         }

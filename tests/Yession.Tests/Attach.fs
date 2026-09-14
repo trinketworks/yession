@@ -29,6 +29,7 @@ open Fable.Pyxpecto
 open Yession.Domain
 open Yession.Domain.Sandboxes
 open Yession.Domain.Terminals
+open Yession.Host
 
 let private expect =
     function
@@ -164,7 +165,7 @@ let portsTests =
 
         testCaseAsync "bytes go both ways, and a control frame is control rather than data" <|
             async {
-                let! provider = startProvider () |> Async.AwaitPromise
+                let! provider = startProvider () |> Interop.awaitPromise
                 let received = System.Text.StringBuilder ()
                 let! attached =
                     Yession.Host.AttachWs.attach (ticket provider.port "/echo" device) 80 24 (fun text ->
@@ -184,7 +185,7 @@ let portsTests =
                 handle.Kill ()
                 let! ending = handle.Exited
                 Expect.equal ending (SandboxExited 7) "the in-band exited frame carries the code"
-                do! provider.stop () |> Async.AwaitPromise
+                do! provider.stop () |> Interop.awaitPromise
             }
 
         // Control types will be added, and a client that treated an unknown one as fatal
@@ -192,7 +193,7 @@ let portsTests =
         // `docs/streams.md` states, and this is the rule rather than the wording.
         testCaseAsync "a text frame we have no meaning for does not end the stream" <|
             async {
-                let! provider = startProvider () |> Async.AwaitPromise
+                let! provider = startProvider () |> Interop.awaitPromise
                 let received = System.Text.StringBuilder ()
                 let! attached =
                     Yession.Host.AttachWs.attach (ticket provider.port "/talkative" device) 80 24 (fun text ->
@@ -206,7 +207,7 @@ let portsTests =
                 // suite rather than failing.
                 handle.Kill ()
                 let! _ = handle.Exited
-                do! provider.stop () |> Async.AwaitPromise
+                do! provider.stop () |> Interop.awaitPromise
             }
 
         // Text is CONTROL, and a provider that sends device output on it gets a terminal
@@ -215,7 +216,7 @@ let portsTests =
         // accepted them would make the wire mean two things.
         testCaseAsync "device output sent as text is not mistaken for output" <|
             async {
-                let! provider = startProvider () |> Async.AwaitPromise
+                let! provider = startProvider () |> Interop.awaitPromise
                 let received = System.Text.StringBuilder ()
                 let! attached =
                     Yession.Host.AttachWs.attach (ticket provider.port "/talkative" device) 80 24 (fun text ->
@@ -229,27 +230,27 @@ let portsTests =
                     "a text frame is never data"
                 handle.Kill ()
                 let! _ = handle.Exited
-                do! provider.stop () |> Async.AwaitPromise
+                do! provider.stop () |> Interop.awaitPromise
             }
 
         // The reason termination is a frame and not a close code: an abnormal closure (1006)
         // carries nothing at all, and that path exists whatever the provider intends.
         testCaseAsync "a stream that just stops is a failure, not an exit" <|
             async {
-                let! provider = startProvider () |> Async.AwaitPromise
+                let! provider = startProvider () |> Interop.awaitPromise
                 let! attached =
                     Yession.Host.AttachWs.attach (ticket provider.port "/abrupt" device) 80 24 ignore
                 match attached with
                 | Error _ ->
                     // Racing the drop: the connection may never have opened, which is the
                     // same fact reported one step earlier.
-                    do! provider.stop () |> Async.AwaitPromise
+                    do! provider.stop () |> Interop.awaitPromise
                 | Ok handle ->
                     let! ending = handle.Exited
                     match ending with
                     | SandboxRunFailed reason -> Expect.isFalse (reason = "") "it says why, however little it knows"
                     | SandboxExited code -> failwithf "a dropped connection is not an exit (got %d)" code
-                    do! provider.stop () |> Async.AwaitPromise
+                    do! provider.stop () |> Interop.awaitPromise
             }
 
         // The url IS the credential: `docs/streams.md` tells an exclusive provider to mint a
@@ -258,7 +259,7 @@ let portsTests =
         // the connection by what an operator already knows instead.
         testCaseAsync "the text-frame warning does not put the attach token in the log" <|
             async {
-                let! provider = startProvider () |> Async.AwaitPromise
+                let! provider = startProvider () |> Interop.awaitPromise
                 let warnings = captureWarnings ()
 
                 try
@@ -276,7 +277,7 @@ let portsTests =
                         "the attach token is not recoverable from the log"
                     handle.Kill ()
                     let! _ = handle.Exited
-                    do! provider.stop () |> Async.AwaitPromise
+                    do! provider.stop () |> Interop.awaitPromise
                 finally
                     warnings.restore ()
             }
@@ -287,7 +288,7 @@ let portsTests =
         // that sends them looking at the one thing they got right.
         testCaseAsync "a control type from a later version is ignored silently" <|
             async {
-                let! provider = startProvider () |> Async.AwaitPromise
+                let! provider = startProvider () |> Interop.awaitPromise
                 let received = System.Text.StringBuilder ()
                 let warnings = captureWarnings ()
 
@@ -302,7 +303,7 @@ let portsTests =
                     Expect.equal warnings.said.Length 0 "a control frame of a type we do not know says nothing"
                     handle.Kill ()
                     let! _ = handle.Exited
-                    do! provider.stop () |> Async.AwaitPromise
+                    do! provider.stop () |> Interop.awaitPromise
                 finally
                     warnings.restore ()
             }

@@ -98,7 +98,7 @@ let tests =
                     startMap
                         [| "--manager"; manager; "--as"; "proxy-map"; "--template"; "{id} -> 127.0.0.1:{port}"; "--out"; out |]
                         10000
-                    |> Async.AwaitPromise
+                    |> Interop.awaitPromise
                 // `Async.Catch` rather than `try/finally`: on Node nothing may block the loop
                 // to await a cleanup, and a failed assertion still has to take the child down.
                 let! outcome =
@@ -115,7 +115,7 @@ let tests =
                         do! waitUntil "the map to empty" (fun () -> readFileSync nodeFs out = "")
                     }
                     |> Async.Catch
-                do! map.stop () |> Async.AwaitPromise
+                do! map.stop () |> Interop.awaitPromise
                 do! pm.StopAll ()
                 match outcome with
                 | Choice1Of2 () -> ()
@@ -125,7 +125,7 @@ let tests =
         testCaseAsync "a template naming neither placeholder is refused before anything is written" <|
             async {
                 let out = dataDirFor "refused" + "/never.map"
-                let! result = runMap [| "--template"; "static"; "--out"; out |] |> Async.AwaitPromise
+                let! result = runMap [| "--template"; "static"; "--out"; out |] |> Interop.awaitPromise
                 Expect.equal result.code 64 "EX_USAGE, the way the bins refuse an argument"
                 Expect.isTrue (result.stderr.Contains "neither {id} nor {port}") "it names the rule that refused it"
                 Expect.isFalse (existsSync nodeFs out) "refused means nothing was written"

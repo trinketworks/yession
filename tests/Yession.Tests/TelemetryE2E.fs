@@ -73,7 +73,7 @@ let tests =
                 // Wait for the turn's usage to be emitted, then flush the batch exporter so the
                 // record has certainly reached the receiver.
                 do! Async.FromContinuations (fun (cont, _, _) -> if fired then cont () else waiter <- Some cont)
-                do! emitter.Shutdown () |> Async.AwaitPromise
+                do! emitter.Shutdown () |> Interop.awaitPromise
 
                 match stub.Received () |> List.choose OtlpStub.turnUsage with
                 | [ u ] ->

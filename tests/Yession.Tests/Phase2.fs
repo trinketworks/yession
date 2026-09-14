@@ -116,7 +116,7 @@ let private launchTests =
             async {
                 let m = manager.Value
                 let managed = (m.Registered ()) |> List.head
-                let! html = Interop.getText managed.BootstrapUri |> Async.AwaitPromise
+                let! html = Interop.getText managed.BootstrapUri |> Interop.awaitPromise
                 Expect.isTrue (html.Contains (Dom.attr "id" Dom.appId)) "the served page is the client shell"
             }
 
