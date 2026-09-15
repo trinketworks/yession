@@ -1669,14 +1669,16 @@ module View =
                 | _ -> Lit.nothing
             html $"""
                 <div class="{Style.askBranch}">
-                  <label class="{Style.label}" for="repo-branch">{Dom.Text.repoPickerBranchLabel}</label>
-                  <input id="repo-branch" type="text" class="{Style.askBranchField}" data-repo-candidate-branch="{name}"
-                         list="{listId}" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false"
-                         ?disabled={busy}
-                         .value={Launch.branchOf launch candidate}
-                         @input={EvVal(fun v -> dispatch (LaunchMsg (LaunchBranchNamed (candidate.Repo, v))))} />
-                  <datalist id="{listId}">{options}</datalist>
-                  {note}
+                  <div class="{Style.askBranchLine}">
+                    <label class="{Style.label}" for="repo-branch">{Dom.Text.repoPickerBranchLabel}</label>
+                    <input id="repo-branch" type="text" class="{Style.askBranchField}" data-repo-candidate-branch="{name}"
+                           list="{listId}" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false"
+                           ?disabled={busy}
+                           .value={Launch.branchOf launch candidate}
+                           @input={EvVal(fun v -> dispatch (LaunchMsg (LaunchBranchNamed (candidate.Repo, v))))} />
+                    <datalist id="{listId}">{options}</datalist>
+                    {note}
+                  </div>
                 </div>"""
         let row (candidate: Repos.RepoCandidate) =
             let name = RepoRef.value candidate.Repo
@@ -1699,15 +1701,18 @@ module View =
                   <button type="button" class="{Style.askRowButton}" data-repo-candidate="{name}"
                           aria-pressed="{if heldNow then "true" else "false"}" ?disabled={busy}
                           @click={Ev(fun _ -> hold candidate)}>
-                    {mark}
-                    <span class="{Style.askRowName}" data-repo-candidate-name="{name}">{name}</span>
-                    {description}
+                    <span class="{Style.askRowLine}">
+                      {mark}
+                      <span class="{Style.askRowName}" data-repo-candidate-name="{name}">{name}</span>
+                      {description}
+                    </span>
                   </button>
                   {if heldNow then branchField candidate else Lit.nothing}
                 </li>"""
         // A line the card says rather than one it offers stands where the first row would
         // have been (`askNote`), so an answer and the absence of one arrive in one place.
-        let note (inner: TemplateResult) = html $"""<div class="{Style.askNote}">{inner}</div>"""
+        let note (inner: TemplateResult) =
+            html $"""<div class="{Style.askNote}"><div class="{Style.askNoteLine}">{inner}</div></div>"""
         let listing =
             match launch.Listing with
             | ListingUnknown ->
@@ -1738,8 +1743,10 @@ module View =
                     if rest > 0 then
                         html $"""
                             <div class="{Style.askMore}">
-                              <span class="{Style.label}">{if launch.Query.Trim () = "" then Dom.Text.repoPickerRecent else Dom.Text.repoPickerFound}</span>
-                              <button type="button" class="{Style.askMoreButton}" data-repo-picker-more @click={Ev(fun _ -> dispatch (LaunchMsg LaunchExpanded))}>{rest} more {Icon.right}</button>
+                              <div class="{Style.askMoreLine}">
+                                <span class="{Style.label}">{if launch.Query.Trim () = "" then Dom.Text.repoPickerRecent else Dom.Text.repoPickerFound}</span>
+                                <button type="button" class="{Style.askMoreButton}" data-repo-picker-more @click={Ev(fun _ -> dispatch (LaunchMsg LaunchExpanded))}>{rest} more {Icon.right}</button>
+                              </div>
                             </div>"""
                     else Lit.nothing
                 html $"""<ul class="{Style.askRows}">{shown |> List.map row}</ul>{more}"""
@@ -1762,12 +1769,12 @@ module View =
               <div class="{Style.askLeadBar}" aria-hidden="true"></div>
               <div class="{Style.askBody}">
               <div class="{Style.askHead}">
-                <span class="{Style.cls [ Style.avatar; authorAvatar ActorRef.SessionProcess ]}" aria-hidden="true"></span>
-                <span class="{Style.askFrom}"><span class="{Style.askWho}">{Dom.Text.repoPickerAsker}</span><span class="{Style.askVerb}">{Dom.Text.repoPickerAsks}</span></span>
-                <button type="button" class="{Style.cls [ Style.btnIconBare; "ml-auto" ]}" data-repo-picker-dismiss aria-label="{Dom.Text.repoPickerDismiss}"
-                        @click={Ev(fun _ -> dispatch (LaunchMsg LaunchDismissed))}>{Icon.close}</button>
+                <div class="{Style.askHeadLine}">
+                  <h2 id="repo-picker-title" class="{Style.askQuestion}">{Dom.Text.repoPickerTitle}</h2>
+                  <button type="button" class="{Style.btnIconBare}" data-repo-picker-dismiss aria-label="{Dom.Text.repoPickerDismiss}"
+                          @click={Ev(fun _ -> dispatch (LaunchMsg LaunchDismissed))}>{Icon.close}</button>
+                </div>
               </div>
-              <span id="repo-picker-title" class="{Style.askQuestion}">{Dom.Text.repoPickerTitle}</span>
               <label class="{Style.srOnly}" for="repo-picker-search">{Dom.Text.repoPickerSearchLabel}</label>
               <input id="repo-picker-search" type="search" class="{Style.askSearch}" data-repo-picker-search
                      placeholder="{Dom.Text.repoPickerSearchPlaceholder}"

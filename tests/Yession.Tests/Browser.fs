@@ -1653,18 +1653,27 @@ let editorTests =
                     do! awaitU (page.ClickAsync "#shell [data-repo-picker] [data-repo-candidate]")
                     let! _ = await (page.WaitForSelectorAsync "#shell [data-repo-picker] [data-repo-candidate-branch]")
 
+                    // Two ways to ask where a line starts, because the card's blocks run edge
+                    // to edge (so a row's ground can) and carry the reading inset as PADDING.
+                    // An element a block positions starts at its own box; an element carrying
+                    // the inset itself — the search field — starts inside its padding.
                     let! adrift =
                         await (page.EvaluateAsync<string[]> (sprintf """() => {
                             const column = %d
                             const card = document.querySelector('#shell [data-repo-picker]')
+                            const box = sel => Math.round(card.querySelector(sel).getBoundingClientRect().left)
+                            const inside = sel => {
+                              const el = card.querySelector(sel)
+                              return Math.round(el.getBoundingClientRect().left
+                                                + (parseFloat(getComputedStyle(el).paddingLeft) || 0))
+                            }
                             return [
-                                    ['the question', card.querySelector('#repo-picker-title')],
-                                    ['the search field', card.querySelector('[data-repo-picker-search]')],
-                                    ['a row’s name', card.querySelector('[data-repo-candidate-name]')],
-                                    ['the branch label', card.querySelector('label[for="repo-branch"]')],
-                                    ['the start button', card.querySelector('[data-repo-picker-start]')]
+                                    ['the question', box('#repo-picker-title')],
+                                    ['the search field', inside('[data-repo-picker-search]')],
+                                    ['a row’s name', box('[data-repo-candidate-name]')],
+                                    ['the branch label', box('label[for="repo-branch"]')],
+                                    ['the start button', box('[data-repo-picker-start]')]
                                   ]
-                                .map(([what, el]) => [what, Math.round(el.getBoundingClientRect().left)])
                                 .filter(([_, left]) => left !== column)
                                 .map(([what, left]) => `${what} starts at ${left}px, the conversation at ${column}px`)
                           }""" column))
