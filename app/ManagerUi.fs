@@ -1029,14 +1029,18 @@ let tryHandle
                                     "text/plain"
                                     (sprintf "%s answered %d" address.Url status)
                         })
-    let route = ManagerRoute.parse req.``method`` path
-    match route with
-    | None -> false
-    | Some route ->
+    // Behind the identity gate either way: a malformed id is answered by the Manager, but
+    // only to someone the Manager would answer at all.
+    let gated (answer: unit -> unit) =
         Async.StartImmediate (
             async {
                 match! identify req with
                 | Denied reason -> respond res 401 "text/plain" reason
-                | Attributed _ | Unattributed _ -> handle route
+                | Attributed _ | Unattributed _ -> answer ()
             })
         true
+    match ManagerRoute.parse req.``method`` path with
+    | Error ManagerMiss.Unclaimed -> false
+    | Error (ManagerMiss.MalformedSessionId (raw, reason)) ->
+        gated (fun () -> respond res 400 "text/plain" (sprintf "%s is not a session id: %s" raw reason))
+    | Ok route -> gated (fun () -> handle route)

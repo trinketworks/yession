@@ -488,6 +488,18 @@ type ManagerRoute =
     /// Withdraw one.
     | WithdrawMcpServer
 
+/// Why a request is for no Manager route. Two answers, because they are two different
+/// things to tell a caller: nothing is there, or something is and the caller misspelled it.
+[<RequireQualifiedAccess>]
+type ManagerMiss =
+    /// The management surface claims nothing there — an unknown path, or a known one reached
+    /// with the wrong method. The caller's next question is whoever else serves this origin.
+    | Unclaimed
+    /// A session path whose id could not be a session id. The shape is the Manager's, so the
+    /// Manager answers — and answers 400 with the reason, not 404: "no such session" is what
+    /// 404 says, and a person who mistyped an id can only fix it if told what a session id is.
+    | MalformedSessionId of raw: string * reason: string
+
 module ManagerRoute =
 
     let private verbSegment (verb: SessionVerb) =
@@ -525,33 +537,31 @@ module ManagerRoute =
     let at (origin: string) (route: ManagerRoute) : string =
         origin.TrimEnd '/' + path route
 
-    /// The route a request is for, or None when the management surface claims nothing there
-    /// — an unknown path, a known one reached with the wrong method, or a session path whose
-    /// id is not a session id at all, which is not a session the Manager could have.
-    let parse (method: string) (path: string) : ManagerRoute option =
+    /// The route a request is for, or why it is for none (`ManagerMiss`).
+    let parse (method: string) (path: string) : Result<ManagerRoute, ManagerMiss> =
         let session (id: string) (make: SessionId -> ManagerRoute) =
             match SessionId.create id with
-            | Ok sessionId -> Some (make sessionId)
-            | Error _ -> None
+            | Ok sessionId -> Ok (make sessionId)
+            | Error reason -> Error (ManagerMiss.MalformedSessionId (id, reason))
         match method, path.Trim('/').Split '/' |> Array.toList with
-        | "GET", [ "" ] -> Some ManagerRoute.Home
-        | "POST", [ "sessions" ] -> Some ManagerRoute.CreateSession
-        | "GET", [ "sessions"; "stream" ] -> Some ManagerRoute.SessionRegistry
-        | "GET", [ "sessions"; "rows" ] -> Some ManagerRoute.SessionRows
+        | "GET", [ "" ] -> Ok ManagerRoute.Home
+        | "POST", [ "sessions" ] -> Ok ManagerRoute.CreateSession
+        | "GET", [ "sessions"; "stream" ] -> Ok ManagerRoute.SessionRegistry
+        | "GET", [ "sessions"; "rows" ] -> Ok ManagerRoute.SessionRows
         | "POST", [ "sessions"; id; "launch" ] -> session id (fun s -> ManagerRoute.Session (s, SessionVerb.Launch))
         | "POST", [ "sessions"; id; "stop" ] -> session id (fun s -> ManagerRoute.Session (s, SessionVerb.Stop))
         | "POST", [ "sessions"; id; "archive" ] -> session id (fun s -> ManagerRoute.Session (s, SessionVerb.Archive))
         | "POST", [ "sessions"; id; "unarchive" ] -> session id (fun s -> ManagerRoute.Session (s, SessionVerb.Unarchive))
         | "GET", [ "sessions"; id; "open" ] -> session id ManagerRoute.OpenSession
         | "GET", [ "sessions"; id; "ready" ] -> session id ManagerRoute.SessionReady
-        | "POST", [ "mcp"; "servers" ] -> Some ManagerRoute.DeclareMcpServer
-        | "POST", [ "mcp"; "servers"; "withdraw" ] -> Some ManagerRoute.WithdrawMcpServer
+        | "POST", [ "mcp"; "servers" ] -> Ok ManagerRoute.DeclareMcpServer
+        | "POST", [ "mcp"; "servers"; "withdraw" ] -> Ok ManagerRoute.WithdrawMcpServer
         | "GET", _ ->
             // The static shapes, recognised by the same parse a session runs so the two
             // servers agree about them by construction — and ONLY those two: a session's
             // other routes are not the Manager's.
             match SessionRoute.parse method path with
-            | Some (Asset (build, file)) -> Some (ManagerRoute.Asset (build, file))
-            | Some Icon -> Some ManagerRoute.Icon
-            | _ -> None
-        | _ -> None
+            | Some (Asset (build, file)) -> Ok (ManagerRoute.Asset (build, file))
+            | Some Icon -> Ok ManagerRoute.Icon
+            | _ -> Error ManagerMiss.Unclaimed
+        | _ -> Error ManagerMiss.Unclaimed
