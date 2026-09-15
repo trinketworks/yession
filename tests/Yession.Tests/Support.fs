@@ -188,12 +188,7 @@ module OidcHttp =
     [<Fable.Core.Emit("new URL($0, $1).href")>]
     let private resolveUrl (location: string) (baseUrl: string) : string = Fable.Core.Util.jsNative
 
-    [<Fable.Core.Emit("""fetch($0, { redirect: 'manual', headers: { ...Object.fromEntries($2), cookie: $1 } }).then(async r => ({
-      status: r.status,
-      location: r.headers.get('location') || '',
-      setCookies: r.headers.getSetCookie(),
-      cacheControl: r.headers.get('cache-control') || '',
-      body: await r.text() }))""")>]
+    [<Fable.Core.ImportDefault("./js/fetch-manual.mjs")>]
     let private fetchManualWith (url: string) (cookie: string) (headers: (string * string) []) : Fable.Core.JS.Promise<ManualReply> = Fable.Core.Util.jsNative
 
     let private fetchManual (url: string) (cookie: string) : Fable.Core.JS.Promise<ManualReply> =
