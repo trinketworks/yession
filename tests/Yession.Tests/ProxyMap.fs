@@ -39,41 +39,11 @@ type private MapProcess =
 /// Spawn `main.mjs` with the deployment's arguments and wait for it to announce which stream
 /// it follows — so a process that dies on its arguments fails here, with its own words,
 /// rather than as a wait on a file that never appears.
-[<Emit("""(async function (args, timeoutMs) {
-  const { spawn } = await import('node:child_process')
-  const child = spawn(process.execPath, ['examples/proxy/main.mjs'].concat(args),
-                      { stdio: ['ignore', 'pipe', 'pipe'] })
-  let said = ''
-  await new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('sessions-map never announced itself; said:\n' + said)), timeoutMs)
-    const watch = (stream) => stream.on('data', (chunk) => {
-      said += String(chunk)
-      if (/ follows /.test(said)) { clearTimeout(timer); resolve() }
-    })
-    watch(child.stdout); watch(child.stderr)
-    child.on('exit', (code) => { clearTimeout(timer); reject(new Error('sessions-map exited with ' + code + ':\n' + said)) })
-  })
-  return {
-    said: () => said,
-    stop: () => new Promise((resolve) => {
-      child.on('exit', () => resolve())
-      try { child.kill('SIGTERM') } catch (_) { resolve() }
-    })
-  }
-})($0, $1)""")>]
+[<ImportDefault("./js/proxy-map-start.mjs")>]
 let private startMap (args: string []) (timeoutMs: int) : JS.Promise<MapProcess> = jsNative
 
 /// Run `main.mjs` to completion — for the arguments it refuses.
-[<Emit("""(async function (args) {
-  const { spawn } = await import('node:child_process')
-  return await new Promise((resolve) => {
-    const child = spawn(process.execPath, ['examples/proxy/main.mjs'].concat(args),
-                        { stdio: ['ignore', 'pipe', 'pipe'] })
-    let stderr = ''
-    child.stderr.on('data', (chunk) => { stderr += String(chunk) })
-    child.on('exit', (code) => resolve({ code, stderr }))
-  })
-})($0)""")>]
+[<ImportDefault("./js/proxy-map-run.mjs")>]
 let private runMap (args: string []) : JS.Promise<{| code: int; stderr: string |}> = jsNative
 
 let private dataDirFor (label: string) =
