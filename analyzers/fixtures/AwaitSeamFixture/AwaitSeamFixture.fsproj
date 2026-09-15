@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Not a product project and deliberately not in Yession.slnx, for the same reason the other
+    fixtures are not: every binding below is there to be judged, and most of them are meant to
+    fail. `lint` analyzes it on its own and checks the verdicts against the `// YES010` markers.
+
+    Two files, because the rule is about WHERE an await is written: the seam and everywhere
+    else. One file would still prove it, but not that the two are told apart by the binding
+    rather than by the file.
+
+    Its pair is AwaitNoSeamFixture, which declares no seam and must be reported clean. That is
+    the other half of the rule and no single project can carry both.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Seam.fs" />
+    <Compile Include="Elsewhere.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Fable.Core" />
+  </ItemGroup>
+
+</Project>

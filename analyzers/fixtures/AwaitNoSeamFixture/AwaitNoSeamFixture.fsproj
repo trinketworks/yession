@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The other half of YES010, and the reason it is a second project: the rule judges a project
+    that can NAME a seam, so a project with none must come back clean. That cannot be shown
+    from inside AwaitSeamFixture, which declares one — the whole point of the derivation is
+    that it is per project.
+
+    Nothing here is marked. A finding would mean the rule had started demanding a remedy that
+    does not exist where it is asking, which is what the browser client would get.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Unguarded.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Fable.Core" />
+  </ItemGroup>
+
+</Project>

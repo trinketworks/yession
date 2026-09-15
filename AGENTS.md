@@ -469,6 +469,27 @@ makes that count honest is following a wrapper — `Tags.getEnv` chooses between
 runtime, so a rule seeing only direct reads would find it reading a variable it cannot name three
 times — and stopping at bindings, which is what keeps `Support.withEnv` out of it.
 
+`AwaitSeam.fs` is not about a name at all, and it is the one rule whose population decides
+whether it speaks. Fable's async trampoline hijacks a workflow onto a `setTimeout` every 2000
+steps, and `Async.AwaitPromise` attaches its rejection handler only once the workflow REACHES
+the await — so a promise that rejects inside that window has no handler when Node checks at the
+end of the turn, and Node kills the process. A `try/with` or an `Async.Catch` around the await
+cannot help: the handler is on the side of the gap that has not run yet. That is how a routine
+"no such container" 404, caught and ignored on every other run, killed a whole suite.
+`Interop.awaitPromise` closes it by settling the promise in the tick that created it, and 176
+awaits were converted to go through it across two sweeps. Nothing stopped the 177th being
+written raw: the seam is not a type anything is forced through, it is a function somebody has
+to remember, and which call the trampoline happens to expose is not a property of the call —
+the step counter carries ACROSS test cases, so the same await is fine for a year and fatal the
+day an unrelated case lands ahead of it. Its population is derived, and the derivation is the
+rule's own sentence: a project is judged when it can NAME a seam. `Yession.Host` declares one
+and the suite references it; the serial example owns its own copy, as the examples rule
+requires, and is judged against that. The browser client references none and is not judged —
+it is not Node, where an unhandled rejection is a dead process rather than a console warning,
+and `Yession.Host.Interop` is Node-only, so the exemption is the same fact as the absence. That
+silence is half of what the rule says, and no project that declares a seam can demonstrate it,
+which is why this is the only rule with two fixtures.
+
 `Population.fs` is what the scoping rules read: every declaration one project could name, of
 the code this repository builds — its own contents entire, plus what it references, bounded to
 the repository and cached per project. `Surfaces.fs` is the half the two namespace rules share:
