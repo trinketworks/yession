@@ -601,19 +601,33 @@ let private parseDevicePoll (body: string) : {| status: string; interval: int |}
   .catch(e => ({ ok: false, status: 0, body: String((e && e.message) || e) }))""")>]
 let private getText (url: string) : JS.Promise<{| ok: bool; status: int; body: string |}> = jsNative
 
+/// One page of the listing. The URL is composed here only for the FIRST page, from what was
+/// typed; every page after it is asked for with the cursor the page before it carried, and
+/// this browser never reads that cursor or builds a page url of its own — which is what
+/// makes the cursor the session's to define (`Repos.RepoPage`).
+let private fetchRepoPage (url: string) : Async<Result<RepoPage, string * bool>> =
+    async {
+        let! reply = getText url |> Async.AwaitPromise
+        if not reply.ok then
+            return
+                Error (
+                    (if reply.body = "" then sprintf "the session answered %d" reply.status else reply.body),
+                    reply.status = 401)
+        else
+            match Codec.fromString Codec.repoPage reply.body with
+            | Ok page -> return Ok page
+            | Error reason -> return Error (reason, false)
+    }
+
 let private fetchRepoListing (query: string) : Async<LaunchListing> =
     async {
         let url =
             match query.Trim () with
             | "" -> Page.href GitHubRepos
             | text -> Page.href GitHubRepos + "?q=" + urlEncode text
-        let! reply = getText url |> Async.AwaitPromise
-        if not reply.ok then
-            return ListingUnavailable ((if reply.body = "" then sprintf "the session answered %d" reply.status else reply.body), reply.status = 401)
-        else
-            match Codec.fromString Codec.repoCandidates reply.body with
-            | Ok candidates -> return ListingLoaded candidates
-            | Error reason -> return ListingUnavailable (reason, false)
+        match! fetchRepoPage url with
+        | Ok page -> return ListingLoaded page
+        | Error (reason, signIn) -> return ListingUnavailable (reason, signIn)
     }
 
 let private fetchRepoBranches (repo: RepoRef) : Async<LaunchBranches> =
@@ -1005,6 +1019,15 @@ let private start () =
                             let! listing = fetchRepoListing query
                             dispatchRef (LaunchMsg (LaunchListingArrived listing))
                         })
+              LaunchMore =
+                fun cursor ->
+                    dispatchRef (LaunchMsg LaunchMoreStarted)
+                    Async.StartImmediate (
+                        async {
+                            match! fetchRepoPage (Page.href GitHubRepos + "?page=" + urlEncode cursor) with
+                            | Ok page -> dispatchRef (LaunchMsg (LaunchMoreArrived page))
+                            | Error (reason, _) -> dispatchRef (LaunchMsg (LaunchMoreFailed reason))
+                        })
               LaunchBranches =
                 fun repo ->
                     Async.StartImmediate (
@@ -1040,14 +1063,15 @@ let private start () =
                             | Error reason -> dispatchRef (LaunchMsg (LaunchFailed reason))
                             | Ok (repo, branch) ->
                                 match! fetchRepoListing (RepoRef.value repo) with
-                                | ListingLoaded (candidate :: _) ->
+                                | ListingLoaded page when not (List.isEmpty page.Candidates) ->
+                                    let candidate = List.head page.Candidates
                                     dispatchRef (LaunchMsg (LaunchLinked (candidate, branch)))
                                     Async.StartImmediate (
                                         async {
                                             let! branches = fetchRepoBranches candidate.Repo
                                             dispatchRef (LaunchMsg (LaunchBranchesArrived (candidate.Repo, branches)))
                                         })
-                                | ListingLoaded [] ->
+                                | ListingLoaded _ ->
                                     dispatchRef (LaunchMsg (LaunchFailed (sprintf "github does not show %s to this credential" (RepoRef.value repo))))
                                 | ListingUnavailable (reason, _) -> dispatchRef (LaunchMsg (LaunchFailed reason))
                                 | ListingUnknown -> ()

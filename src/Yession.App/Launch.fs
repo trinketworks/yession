@@ -26,11 +26,21 @@ open Yession.Domain.Repos
 /// difference is what decides whether a person waits or goes and connects an account.
 type LaunchListing =
     | ListingUnknown
-    | ListingLoaded of RepoCandidate list
+    | ListingLoaded of RepoPage
     /// The lookup answered, and what it said was why it could not. `SignIn` is whether the
     /// answer was "connect GitHub" — a 401 either way — which is the one failure with a
     /// button rather than a retry.
     | ListingUnavailable of reason: string * signIn: bool
+
+/// Where the NEXT page stands. Its own state rather than a flag on the listing, because it
+/// is about an attempt and not about what is on screen: the rows already read stay read
+/// while the page after them is in flight, and stay read when it fails.
+type LaunchMore =
+    | MoreIdle
+    | MoreFetching
+    /// The page did not come. Said at the foot, with a way to ask again — never by taking
+    /// the rows above it away.
+    | MoreFailed of reason: string
 
 /// A held row's branches, asked for when the row is held and not before: thirty rows are
 /// thirty lookups, and nearly every launch is on the default.
@@ -63,8 +73,8 @@ type LaunchViewState =
       /// The row held, if one is. One for now; the shape of a set, so holding several
       /// later is a list rather than a redesign.
       Selected : RepoRef option
-      /// Whether the list is shown whole, or its first few.
-      Expanded : bool
+      /// Where the next page stands.
+      More : LaunchMore
       /// Each held row's branches, by repo.
       Branches : Map<RepoRef, LaunchBranches>
       /// The branch named on a row, by repo, when it is not the row's default. Named, not
@@ -88,7 +98,12 @@ type LaunchMsg =
     /// A pasted link resolved to a row: put at the head of the list if it is not in it,
     /// and held, with the branch the link named.
     | LaunchLinked of RepoCandidate * branch: string option
-    | LaunchExpanded
+    /// The foot of the list came into view and a page was asked for.
+    | LaunchMoreStarted
+    /// The next page landed: its rows go after the ones already read, and its own `Next`
+    /// replaces the cursor that fetched it.
+    | LaunchMoreArrived of RepoPage
+    | LaunchMoreFailed of reason: string
     /// Branches for a repo. Carries WHICH repo, so an answer for one row cannot land on
     /// another.
     | LaunchBranchesArrived of RepoRef * LaunchBranches
@@ -106,16 +121,11 @@ type LaunchMsg =
 
 module Launch =
 
-    /// How many rows the card shows before "more": a person choosing reads the top of a
-    /// list ordered by recency, and a card that stands over the composer has a phone's
-    /// height to stand in.
-    let shown = 4
-
     let empty : LaunchViewState =
         { Query = ""
           Listing = ListingUnknown
           Selected = None
-          Expanded = false
+          More = MoreIdle
           Branches = Map.empty
           Named = Map.empty
           Stage = Choosing
@@ -168,8 +178,25 @@ module Launch =
 
     let candidates (launch: LaunchViewState) : RepoCandidate list =
         match launch.Listing with
-        | ListingLoaded candidates -> candidates
+        | ListingLoaded page -> page.Candidates
         | ListingUnknown | ListingUnavailable _ -> []
+
+    /// The cursor the listing on screen would ask with next, whatever else is happening to
+    /// it — so a row put at the head by a pasted link does not throw away the rest of the
+    /// list's paging on its way in.
+    let private nextOf (launch: LaunchViewState) : string option =
+        match launch.Listing with
+        | ListingLoaded page -> page.Next
+        | ListingUnknown | ListingUnavailable _ -> None
+
+    /// The cursor the foot would ask with, if it should ask at all: a page to come, nothing
+    /// already in flight, and no attempt under way. ONE rule, here, rather than a condition
+    /// spelled out at whatever is watching the foot — the thing that watches fires many
+    /// times for one scroll, and a guard it owned would be a guard the reducer could not see.
+    let wanting (launch: LaunchViewState) : string option =
+        match launch.Listing, launch.More with
+        | ListingLoaded page, MoreIdle when not (busy launch) -> page.Next
+        | _ -> None
 
     /// The row held, as a candidate — if the list still has it.
     let held (launch: LaunchViewState) : RepoCandidate option =
@@ -202,7 +229,10 @@ module Launch =
     let update (msg: LaunchMsg) (launch: LaunchViewState) : LaunchViewState =
         match msg with
         | LaunchQueryTyped text -> { launch with Query = text }
-        | LaunchListingArrived listing -> { launch with Listing = listing; Expanded = false }
+        // A listing ARRIVING is the start of a new list, so whatever the foot was doing for
+        // the old one is over: a page in flight for a search two keystrokes ago must not
+        // append itself to what is on screen now.
+        | LaunchListingArrived listing -> { launch with Listing = listing; More = MoreIdle }
         | LaunchSelected candidate ->
             if launch.Selected = Some candidate.Repo then { launch with Selected = None }
             else { launch with Selected = Some candidate.Repo; Problem = None }
@@ -212,7 +242,7 @@ module Launch =
                 if listed |> List.exists (fun c -> c.Repo = candidate.Repo) then listed
                 else candidate :: listed
             { launch with
-                Listing = ListingLoaded listing
+                Listing = ListingLoaded { RepoPage.Candidates = listing; RepoPage.Next = nextOf launch }
                 Selected = Some candidate.Repo
                 Named =
                     match branch with
@@ -220,7 +250,19 @@ module Launch =
                     | None -> launch.Named |> Map.remove candidate.Repo
                 Stage = Choosing
                 Problem = None }
-        | LaunchExpanded -> { launch with Expanded = true }
+        | LaunchMoreStarted -> { launch with More = MoreFetching }
+        | LaunchMoreArrived page ->
+            match launch.Listing with
+            // Only onto the list the page was asked for. A page that lands after the list
+            // under it was replaced belongs to a question nobody is asking any more.
+            | ListingLoaded seen when launch.More = MoreFetching ->
+                let known = seen.Candidates |> List.map (fun c -> c.Repo) |> Set.ofList
+                let added = page.Candidates |> List.filter (fun c -> not (known.Contains c.Repo))
+                { launch with
+                    Listing = ListingLoaded { RepoPage.Candidates = seen.Candidates @ added; RepoPage.Next = page.Next }
+                    More = MoreIdle }
+            | _ -> launch
+        | LaunchMoreFailed reason -> { launch with More = MoreFailed reason }
         | LaunchBranchesArrived (repo, branches) -> { launch with Branches = launch.Branches |> Map.add repo branches }
         | LaunchBranchNamed (repo, branch) -> { launch with Named = launch.Named |> Map.add repo branch }
         | LaunchResolving link -> { launch with Stage = Resolving link; Problem = None }

@@ -54,6 +54,11 @@ let private candidate (name: string) : RepoCandidate =
 
 /// A client that has connected to a session whose log ends at `latest`, read its own store,
 /// and folded `events` — the path a browser takes, in the order it takes it.
+/// A listing page: the rows, and whether the provider says there is more. The cursor is
+/// opaque to everything on this side, so any string is as good as the real one.
+let private page (names: string list) (next: string option) : RepoPage =
+    { RepoPage.Candidates = names |> List.map candidate; RepoPage.Next = next }
+
 let private clientAt (latest: int64) (events: EventEnvelope<SessionEvent> list) : ClientModel =
     ClientModel.init { PeerId = ada; DisplayName = "swift-heron" }
     |> ClientModel.update (ConnectedMsg { SessionId = sessionId; AssignedDisplayName = "swift-heron"; LatestOffset = Some (offset latest) })
@@ -104,7 +109,7 @@ let private choosingTests =
     testList "choosing" [
 
         testCase "the candidates are offered under the provider's names" <| fun () ->
-            let listed = clientAt 1L fresh |> launch (LaunchListingArrived (ListingLoaded [ candidate "trinketworks/yession"; candidate "octo/hello" ]))
+            let listed = clientAt 1L fresh |> launch (LaunchListingArrived (ListingLoaded (page [ "trinketworks/yession"; "octo/hello" ] None)))
             let html = render listed
             Expect.stringContains html "data-repo-candidate=\"trinketworks/yession\"" "the first, by canonical name"
             Expect.stringContains html "data-repo-candidate=\"octo/hello\"" "and the second"
@@ -116,7 +121,7 @@ let private choosingTests =
             Expect.isFalse ((render other).Contains "data-repo-picker-connect") "which a fault that is not a sign-in does not offer"
 
         testCase "holding a row sends nothing; the button does, on the default unless another branch is named" <| fun () ->
-            let listed = clientAt 1L fresh |> launch (LaunchListingArrived (ListingLoaded [ candidate "octo/hello" ]))
+            let listed = clientAt 1L fresh |> launch (LaunchListingArrived (ListingLoaded (page [ "octo/hello" ] None)))
             Expect.equal (Launch.target listed.Launch) None "nothing held, nothing to start"
             let heldRow = listed |> launch (LaunchSelected (candidate "octo/hello"))
             Expect.equal heldRow.Launch.Stage Choosing "still choosing: holding is a state"
@@ -129,7 +134,7 @@ let private choosingTests =
         testCase "the held row carries the branch field; no other row does" <| fun () ->
             let heldRow =
                 clientAt 1L fresh
-                |> launch (LaunchListingArrived (ListingLoaded [ candidate "octo/hello"; candidate "octo/other" ]))
+                |> launch (LaunchListingArrived (ListingLoaded (page [ "octo/hello"; "octo/other" ] None)))
                 |> launch (LaunchSelected (candidate "octo/hello"))
             let html = render heldRow
             let rowOf (name: string) =
@@ -144,21 +149,66 @@ let private choosingTests =
             let other = RepoRef.create "octo/other" |> expect
             let model =
                 clientAt 1L fresh
-                |> launch (LaunchListingArrived (ListingLoaded [ candidate "octo/hello"; candidate "octo/other" ]))
+                |> launch (LaunchListingArrived (ListingLoaded (page [ "octo/hello"; "octo/other" ] None)))
                 |> launch (LaunchBranchesArrived (hello, BranchesLoaded [ "main"; "stale" ]))
             Expect.equal (model.Launch.Branches |> Map.tryFind other) None "other's are still unknown"
 
-        testCase "a few rows are shown, and the held one is among them wherever it is" <| fun () ->
-            let many = [ 1 .. 8 ] |> List.map (fun n -> candidate (sprintf "octo/repo-%d" n))
-            let listed = clientAt 1L fresh |> launch (LaunchListingArrived (ListingLoaded many))
-            let html = render listed
-            Expect.stringContains html "data-repo-candidate=\"octo/repo-4\"" "the first few"
-            Expect.isFalse (html.Contains "data-repo-candidate=\"octo/repo-5\"") "not the rest"
-            Expect.stringContains html "data-repo-picker-more" "which are behind more"
-            let heldLate = listed |> launch (LaunchSelected (candidate "octo/repo-7"))
-            Expect.stringContains (render heldLate) "data-repo-candidate=\"octo/repo-7\"" "a row held from a search stays shown after the list shrinks"
-            let expanded = listed |> launch LaunchExpanded
-            Expect.stringContains (render expanded) "data-repo-candidate=\"octo/repo-8\"" "and more shows them all"
+        // What replaced a case that pinned the opposite: the list used to be truncated to
+        // four rows behind a `more` button, and the held one spliced back in wherever it had
+        // been. Every row the client holds is now drawn, and what is not held is not on the
+        // client yet.
+        testCase "every row the listing holds is drawn" <| fun () ->
+            let many = [ 1 .. 8 ] |> List.map (sprintf "octo/repo-%d")
+            let html = render (clientAt 1L fresh |> launch (LaunchListingArrived (ListingLoaded (page many None))))
+            for name in many do
+                Expect.stringContains html (sprintf "data-repo-candidate=\"%s\"" name) "drawn"
+
+        testCase "the foot stands exactly while the provider says there is more" <| fun () ->
+            let ended = clientAt 1L fresh |> launch (LaunchListingArrived (ListingLoaded (page [ "octo/hello" ] None)))
+            Expect.isFalse ((render ended).Contains "data-repo-picker-foot") "a listing that ended has nothing to reach"
+            let more = clientAt 1L fresh |> launch (LaunchListingArrived (ListingLoaded (page [ "octo/hello" ] (Some "cursor-2"))))
+            Expect.stringContains (render more) "data-repo-picker-foot" "one that has not, does"
+
+        testCase "the cursor is asked for once, not once per look" <| fun () ->
+            let more = clientAt 1L fresh |> launch (LaunchListingArrived (ListingLoaded (page [ "octo/hello" ] (Some "cursor-2"))))
+            Expect.equal (Launch.wanting more.Launch) (Some "cursor-2") "the foot asks with what the page carried"
+            let asking = more |> launch LaunchMoreStarted
+            Expect.equal (Launch.wanting asking.Launch) None "and not again while that page is in flight"
+
+        testCase "a page lands after the rows already read, and brings its own cursor" <| fun () ->
+            let arrived =
+                clientAt 1L fresh
+                |> launch (LaunchListingArrived (ListingLoaded (page [ "octo/one"; "octo/two" ] (Some "cursor-2"))))
+                |> launch LaunchMoreStarted
+                |> launch (LaunchMoreArrived (page [ "octo/two"; "octo/three" ] (Some "cursor-3")))
+            Expect.equal
+                (Launch.candidates arrived.Launch |> List.map (fun c -> RepoRef.value c.Repo))
+                [ "octo/one"; "octo/two"; "octo/three" ]
+                "appended, and a row the provider repeated across a page boundary is not listed twice"
+            Expect.equal (Launch.wanting arrived.Launch) (Some "cursor-3") "the new page's cursor is what the foot asks with next"
+
+        testCase "a page that lands on a list it is not a page of is dropped" <| fun () ->
+            let searched =
+                clientAt 1L fresh
+                |> launch (LaunchListingArrived (ListingLoaded (page [ "octo/one" ] (Some "cursor-2"))))
+                |> launch LaunchMoreStarted
+                // The reader typed, and the search answered, while the page was in flight.
+                |> launch (LaunchListingArrived (ListingLoaded (page [ "found/by-name" ] None)))
+                |> launch (LaunchMoreArrived (page [ "octo/two" ] None))
+            Expect.equal
+                (Launch.candidates searched.Launch |> List.map (fun c -> RepoRef.value c.Repo))
+                [ "found/by-name" ]
+                "what is on screen is what was asked for last"
+
+        testCase "a page that did not come says so and leaves the rows alone" <| fun () ->
+            let failed =
+                clientAt 1L fresh
+                |> launch (LaunchListingArrived (ListingLoaded (page [ "octo/one" ] (Some "cursor-2"))))
+                |> launch LaunchMoreStarted
+                |> launch (LaunchMoreFailed "github is rate limiting this credential")
+            Expect.equal (Launch.candidates failed.Launch |> List.map (fun c -> RepoRef.value c.Repo)) [ "octo/one" ] "the rows read stay read"
+            Expect.stringContains (render failed) "data-repo-picker-again" "with a way to ask again"
+            Expect.equal (Launch.wanting failed.Launch) None "which the foot will not do on its own"
 
         testCase "a link copied from the forge is resolved; anything else typed is a search" <| fun () ->
             Expect.equal (Launch.linkOf "https://github.com/octo/hello/tree/fix") (Some (RepoLink.Branch (hello, "fix"))) "a branch page"
@@ -167,7 +217,7 @@ let private choosingTests =
             Expect.equal (Launch.linkOf "hello") None "so is a word"
 
         testCase "a resolved link is a held row, at the head of the list if it was not in it" <| fun () ->
-            let resolving = clientAt 1L fresh |> launch (LaunchListingArrived (ListingLoaded [ candidate "octo/other" ])) |> launch (LaunchResolving (RepoLink.PullRequest (hello, 42)))
+            let resolving = clientAt 1L fresh |> launch (LaunchListingArrived (ListingLoaded (page [ "octo/other" ] None))) |> launch (LaunchResolving (RepoLink.PullRequest (hello, 42)))
             Expect.stringContains (render resolving) "data-repo-picker=\"resolving\"" "the card says it is asking"
             let linked = resolving |> launch (LaunchLinked (candidate "octo/hello", Some "fix/thing"))
             Expect.equal linked.Launch.Stage Choosing "choosing again, with the row held"
@@ -185,7 +235,7 @@ let private answerTests =
         let target = { LaunchTarget.Repo = hello; LaunchTarget.Branch = None }
         let waiting =
             clientAt 1L fresh
-            |> launch (LaunchListingArrived (ListingLoaded [ candidate "octo/hello"; candidate "octo/other" ]))
+            |> launch (LaunchListingArrived (ListingLoaded (page [ "octo/hello"; "octo/other" ] None)))
             |> launch (LaunchSelected (candidate "octo/hello"))
             |> launch (LaunchSent (request, target))
 

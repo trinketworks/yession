@@ -174,6 +174,9 @@ module Dom =
         /// has begun.
         let repoPicker = "data-repo-picker"
         let repoPickerSearch = "data-repo-picker-search"
+        /// The card's own scroller — what the listing's foot is watched INSIDE, since the
+        /// card scrolls rather than the page.
+        let repoPickerBody = "data-repo-picker-body"
         /// One repo a person can hold, valued by its canonical name. `aria-pressed` says
         /// whether it is held.
         let repoCandidate = "data-repo-candidate"
@@ -181,7 +184,11 @@ module Dom =
         let repoCandidateBranch = "data-repo-candidate-branch"
         /// The one button that sends. Disabled until a row is held.
         let repoPickerStart = "data-repo-picker-start"
-        let repoPickerMore = "data-repo-picker-more"
+        /// The FOOT of the listing, present only while a page is still to come, and valued
+        /// by what reaching it does — `more` while the next page is what a scroll brings,
+        /// `failed` while the last attempt at it is what a press would retry.
+        let repoPickerFoot = "data-repo-picker-foot"
+        let repoPickerAgain = "data-repo-picker-again"
         let repoPickerDismiss = "data-repo-picker-dismiss"
         /// What went wrong with the last launch, in the session's words.
         let repoPickerProblem = "data-repo-picker-problem"
@@ -527,9 +534,10 @@ module Dom =
         let repoPickerSearchLabel = "search repositories, or paste a link"
         let repoPickerSearchPlaceholder = "search github, or paste a link"
         let repoPickerLooking = "looking…"
+        /// At the foot of the list, standing in for the rows still to come.
+        let repoPickerMoreComing = "more"
+        let repoPickerAgain = "try again"
         let repoPickerNothing = "nothing by that name"
-        let repoPickerRecent = "recently pushed"
-        let repoPickerFound = "found"
         let repoPickerBranchLabel = "branch"
         let repoPickerStart = "Start"
         let repoPickerDismiss = "dismiss"
