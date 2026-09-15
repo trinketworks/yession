@@ -521,9 +521,8 @@ module Dom =
         let composerPlaceholder = "write a message"
         /// What the timeline's pulse means, for a reader who cannot see it pulse (Plan 20).
         let readingHistory = "Reading this session's history"
-        // The ask card, asking for the session's repo.
-        let repoPickerAsker = "session"
-        let repoPickerAsks = "asks"
+        // The ask card, asking for the session's repo. The question carries the whole of it —
+        // a caps `session asks` over it said the same thing in fewer words and one line more.
         let repoPickerTitle = "Which repository is this session for?"
         let repoPickerSearchLabel = "search repositories, or paste a link"
         let repoPickerSearchPlaceholder = "search github, or paste a link"
