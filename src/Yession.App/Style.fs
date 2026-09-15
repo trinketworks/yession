@@ -1243,9 +1243,10 @@ module Style =
         cls [ "flex-1 min-w-0 h-7 bg-transparent outline-none appearance-none"
               "font-terminal text-small text-ink"
               Stroke.underline; Stroke.rim; Stroke.hoverInk; Stroke.focus ]
-    let askMore = cls [ askInset; "pt-4" ]
-    let askMoreLine = cls [ askMeasure; "flex items-baseline justify-between" ]
-    let askMoreButton = askLink
+    /// The foot of the list: where the next page is reached rather than pressed for. A row's
+    /// height, because that is what it stands in for — the rows still to come.
+    let askFoot = cls [ askInset; "h-12 flex items-center" ]
+    let askFootLine = cls [ askMeasure; "flex items-center gap-3" ]
     let askActions = cls [ askInset; "flex flex-wrap items-center gap-4 pt-6" ]
     /// The commit button, which is disabled until something is held — and looks it: the
     /// rim recedes to a hairline and the type to faint, so the press state is one a held row

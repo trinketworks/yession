@@ -921,6 +921,15 @@ let private shellModel : ClientModel = shellModelOf Lines 16
 ///
 /// Two rows and no more, one of them described: what the card's geometry needs is a row to
 /// hold and a row's second line beside it, and a longer list is a scroll to fight.
+/// One candidate, as the picker holds it. Module-level because two things name it: the model
+/// the card opens on, and the page the harness answers a cursor with.
+let private candidateRow (name: string) : Repos.RepoCandidate =
+    { Repos.RepoCandidate.Repo = RepoRef.create name |> expect
+      Description = None
+      DefaultBranch = "main"
+      Private = false
+      PushedAt = None }
+
 let private launchModel : ClientModel =
     let peerId : PeerId = PeerId.create "ada" |> expect
     let sessionId : SessionId = SessionId.create "harness-launch" |> expect
@@ -932,12 +941,6 @@ let private launchModel : ClientModel =
           Actor = ActorRef.SessionProcess
           Timestamp = System.DateTimeOffset (2026, 9, 12, 0, 0, 0, System.TimeSpan.Zero)
           Event = event }
-    let candidate (name: string) (description: string option) : Repos.RepoCandidate =
-        { Repos.RepoCandidate.Repo = RepoRef.create name |> expect
-          Description = description
-          DefaultBranch = "main"
-          Private = false
-          PushedAt = None }
     let events =
         [ at 0L (SessionCreated { SessionCreated.SessionId = sessionId })
           at 1L (PeerJoined { PeerId = peerId; DisplayName = "swift-heron"; User = None }) ]
@@ -950,8 +953,16 @@ let private launchModel : ClientModel =
         (LaunchMsg
             (LaunchListingArrived
                 (ListingLoaded
-                    [ candidate "octo/hello" None
-                      candidate "octo/sandbox-runner" (Some "a lightweight sandboxing runner for agents") ])))
+                    // Long enough that the foot starts outside the watch's own reach — the
+                    // page is asked for while the foot is still a screenful below (see
+                    // `watch-listing-foot.mjs`), which is the whole point of it and also what
+                    // makes a short fixture unable to tell reaching the foot apart from the
+                    // foot having been within reach all along.
+                    { Repos.RepoPage.Candidates =
+                        [ yield { candidateRow "octo/sandbox-runner" with
+                                    Description = Some "a lightweight sandboxing runner for agents" }
+                          for n in 1 .. 23 -> candidateRow (sprintf "octo/repo-%d" n) ]
+                      Repos.RepoPage.Next = Some "harness-next" })))
 
 /// What a client that has been to this session before holds when it opens it again: the
 /// event log as the kept answers of its own history store, and the one terminal's transcript
@@ -1150,6 +1161,9 @@ do
     // of a keyboard is `ignore` in the harness, and the browser tier cannot reach live mode
     // except for the terminal that was born holding a lease.
     let mutable takeRef : TerminalId -> unit = ignore
+    /// The listing's next page, answered below once dispatch exists — the same forward
+    /// reference `takeRef` is, for the same reason.
+    let mutable moreRef : string -> unit = ignore
     let actions =
         { ViewActions.ssr with
             FocusPane = PaneShell.toPane
@@ -1159,6 +1173,12 @@ do
             RevealMessage = fun id -> PaneShell.revealMessage (MessageId.value id)
             FocusItemActions = fun id -> PaneShell.toItemActions (MessageId.value id)
             TakeTerminal = fun id -> takeRef id
+            // The listing's next page, answered here because this harness has no session to
+            // ask: a page arrives with two more rows and no cursor after it, which is what
+            // the browser tier needs in order to watch REACHING the foot bring rows in
+            // without a press. What the cursor says is the session's business; that it is
+            // carried back unread is what the harness stands in for.
+            LaunchMore = fun cursor -> moreRef cursor
             TypeIntoTerminal = recordTyped }
     // The forward reference is the same shape `Browser.fs` uses: the render needs dispatch
     // (a rewound cast that plays off its end jumps back to live) and dispatch's render needs
@@ -1247,6 +1267,14 @@ do
         match TerminalId.create id with
         | Ok terminal -> takeRef terminal
         | Error _ -> ())
+    moreRef <-
+        fun _ ->
+            dispatch (LaunchMsg LaunchMoreStarted)
+            dispatch (
+                LaunchMsg (
+                    LaunchMoreArrived
+                        { Repos.RepoPage.Candidates = [ candidateRow "octo/next-one"; candidateRow "octo/next-two" ]
+                          Repos.RepoPage.Next = None }))
     exposeLaunch (fun asking ->
         model <- (if asking then launchModel else shellModel)
         render ())

@@ -61,6 +61,15 @@ let private json (res: Interop.ServerResponse) (status: int) (body: string) =
 
 // --- the provider's JSON -------------------------------------------------------------------
 
+/// A decoded candidate — what the lookups answer with, as against `candidate` below, which
+/// is the provider's JSON for one.
+let private candidateOf (fullName: string) : RepoCandidate =
+    { RepoCandidate.Repo = repo fullName
+      Description = None
+      DefaultBranch = "main"
+      Private = false
+      PushedAt = None }
+
 let private candidate (fullName: string) =
     sprintf
         """{"full_name":%s,"description":"a thing","default_branch":"trunk","private":true,"pushed_at":"2026-09-01T00:00:00Z"}"""
@@ -142,10 +151,10 @@ let private lookupTests =
         testCaseAsync "my repos needs a credential, and says so as a sign-in rather than an empty list" <|
             async {
                 let! api = startStubApi ()
-                let! anonymous = GitHubRepos.recentOver api.Url None
+                let! anonymous = GitHubRepos.recentOver api.Url None 1
                 Expect.equal anonymous (Error GitHubRepos.NoCredential) "no credential is not an empty answer"
                 Expect.equal api.Requests.Count 0 "and nothing was asked of the provider"
-                let! mine = GitHubRepos.recentOver api.Url (Some "ghp_x")
+                let! mine = GitHubRepos.recentOver api.Url (Some "ghp_x") 1
                 Expect.equal (expect mine |> List.map (fun c -> c.Repo)) [ repo "mine/recent" ] "with one, the listing"
                 let asked, bearer = api.Requests.[0]
                 Expect.isTrue (asked.Contains "sort=pushed") "most recently pushed first"
@@ -156,10 +165,10 @@ let private lookupTests =
         testCaseAsync "search works anonymously, and an empty search asks nothing" <|
             async {
                 let! api = startStubApi ()
-                let! nothing = GitHubRepos.searchOver api.Url None "   "
+                let! nothing = GitHubRepos.searchOver api.Url None "   " 1
                 Expect.equal (expect nothing) [] "blank is no question"
                 Expect.equal api.Requests.Count 0 "and reaches no endpoint"
-                let! found = GitHubRepos.searchOver api.Url None "hello"
+                let! found = GitHubRepos.searchOver api.Url None "hello" 1
                 Expect.equal (expect found |> List.map (fun c -> c.Repo)) [ repo "found/by-name" ] "search answers"
                 let asked, _ = api.Requests.[0]
                 Expect.isTrue (asked.Contains "in%3Aname") "matched on the name"
@@ -168,13 +177,40 @@ let private lookupTests =
         testCaseAsync "a whole owner/name is looked up, and answers under the provider's current name" <|
             async {
                 let! api = startStubApi ()
-                let! found = GitHubRepos.searchOver api.Url None "octo/old"
+                let! found = GitHubRepos.searchOver api.Url None "octo/old" 1
                 Expect.equal (found |> Result.map (List.map (fun c -> c.Repo))) (Ok [ repo "octo/hello" ]) "one row, named as the provider names it now"
                 let url, _ = api.Requests.[0]
                 Expect.equal url "/repos/octo/old" "asked of the repo itself, not the search"
-                let! missing = GitHubRepos.searchOver api.Url None "octo/gone"
+                let! missing = GitHubRepos.searchOver api.Url None "octo/gone" 1
                 Expect.equal (missing |> Result.map List.length) (Ok 0) "and one nobody can see is nothing found, as a search would say"
             }
+
+        // The cursor is what the browser carries back to ask for the next page, and the whole
+        // of its contract is that this side reads it and the other side does not. What must
+        // hold: it round-trips what this file needs to re-ask its own question, and anything
+        // that is not one of ours is page one rather than an error — because the browser can
+        // send whatever it likes, and a cursor that could name a URL is the shape of every
+        // server-side request forgery there has ever been.
+        testCase "a cursor round-trips the question, and anything else is page one" <| fun () ->
+            let listing = [ 1 .. GitHubRepos.pageSize ] |> List.map (fun n -> candidateOf (sprintf "octo/repo-%d" n))
+            let cursor = GitHubRepos.nextCursor (Some "in:name hello") 1 listing
+            Expect.equal
+                (cursor |> Option.bind GitHubRepos.readCursor)
+                (Some (Some "in:name hello", 2))
+                "a full page's cursor round-trips the text and the page after this one"
+            Expect.isFalse
+                (cursor |> Option.exists (fun c -> c.Contains "hello"))
+                "and says nothing to a reader of the query string"
+            Expect.equal (GitHubRepos.readCursor "https://evil.example/x") None "a url is not a cursor"
+            Expect.equal (GitHubRepos.readCursor "") None "nor is nothing"
+            Expect.equal (GitHubRepos.readCursor "bm90LWEtY3Vyc29y") None "nor base64 of something else"
+
+        testCase "a listing stops offering pages when it runs short, and when it runs long" <| fun () ->
+            let full = [ 1 .. GitHubRepos.pageSize ] |> List.map (fun n -> candidateOf (sprintf "octo/repo-%d" n))
+            let short = full |> List.truncate (GitHubRepos.pageSize - 1)
+            Expect.equal (GitHubRepos.nextCursor None 1 short) None "a page that came back short is the last one"
+            Expect.isSome (GitHubRepos.nextCursor None 1 full) "a full one is not"
+            Expect.equal (GitHubRepos.nextCursor None GitHubRepos.pageLimit full) None "and the ceiling is a stop, not a 502 at the foot of a scroll"
 
         testCaseAsync "a dead credential, a missing repo and a spent allowance are told apart" <|
             async {
@@ -183,7 +219,7 @@ let private lookupTests =
                 Expect.equal missing (Error GitHubRepos.NotFound) "404"
                 let! branches = GitHubRepos.branchesOver api.Url None (repo "octo/hello")
                 Expect.equal (expect branches) [ "main"; "next" ] "the branches of one that is there"
-                let! refused = GitHubRepos.recentOver api.Url (Some "dead")
+                let! refused = GitHubRepos.recentOver api.Url (Some "dead") 1
                 Expect.equal refused (Error GitHubRepos.Refused) "a 401 is a refusal"
             }
 
@@ -263,9 +299,9 @@ let private routeTests =
                 let! url = startRoutes api [ alice, "ghp_alice" ]
                 let! reply = get (url + "/github/repos") "who=alice" |> Interop.awaitPromise
                 Expect.equal reply.status 200 "answered"
-                let listing = Codec.fromString Codec.repoCandidates reply.body |> expect
-                Expect.equal (listing |> List.map (fun c -> c.Repo)) [ repo "mine/recent" ] "the provider's name for it, in the codec the picker reads"
-                Expect.equal (listing |> List.map (fun c -> c.DefaultBranch)) [ "trunk" ] "and its default branch"
+                let listing = Codec.fromString Codec.repoPage reply.body |> expect
+                Expect.equal (listing.Candidates |> List.map (fun c -> c.Repo)) [ repo "mine/recent" ] "the provider's name for it, in the codec the picker reads"
+                Expect.equal (listing.Candidates |> List.map (fun c -> c.DefaultBranch)) [ "trunk" ] "and its default branch"
                 let _, bearer = api.Requests.[0]
                 Expect.equal bearer (Some "Bearer ghp_alice") "alice's token, not anyone else's"
             }
@@ -286,8 +322,41 @@ let private routeTests =
                 let! url = startRoutes api []
                 let! reply = get (url + "/github/repos?q=hello") "who=alice" |> Interop.awaitPromise
                 Expect.equal reply.status 200 "answered anonymously"
-                let listing = Codec.fromString Codec.repoCandidates reply.body |> expect
-                Expect.equal (listing |> List.map (fun c -> c.Repo)) [ repo "found/by-name" ] "from the search endpoint"
+                let listing = Codec.fromString Codec.repoPage reply.body |> expect
+                Expect.equal (listing.Candidates |> List.map (fun c -> c.Repo)) [ repo "found/by-name" ] "from the search endpoint"
+            }
+
+        // The cursor is the only thing that says which page, and it says which QUESTION too:
+        // a `?q=` beside it is ignored, so a page and the text it is a page of cannot
+        // disagree however the browser composes the request.
+        testCaseAsync "a cursor asks the next page of its own question, whatever rides beside it" <|
+            async {
+                let! api = startStubApi ()
+                let! url = startRoutes api []
+                let cursor = GitHubRepos.nextCursor (Some "hello") 1 ([ 1 .. GitHubRepos.pageSize ] |> List.map (fun n -> candidateOf (sprintf "octo/repo-%d" n)))
+                let! reply =
+                    get (url + "/github/repos?q=something-else&page=" + Http.urlPart (Option.get cursor)) "who=alice"
+                    |> Interop.awaitPromise
+                Expect.equal reply.status 200 "answered"
+                let asked, _ = api.Requests.[0]
+                Expect.isTrue (asked.StartsWith "/search/repositories") "the search endpoint, because the cursor's question was a search"
+                Expect.isTrue (asked.Contains "page=2") "for the page after the one it was minted from"
+                Expect.isTrue (asked.Contains "hello") "of the text the CURSOR carried"
+                Expect.isFalse (asked.Contains "something-else") "not the one alongside it"
+            }
+
+        testCaseAsync "a page token this session did not mint is page one, not a fetch of whatever it names" <|
+            async {
+                let! api = startStubApi ()
+                let! url = startRoutes api []
+                let! reply =
+                    get (url + "/github/repos?q=hello&page=" + Http.urlPart "https://evil.example/drain") "who=alice"
+                    |> Interop.awaitPromise
+                Expect.equal reply.status 200 "answered"
+                let asked, _ = api.Requests.[0]
+                Expect.isTrue (asked.StartsWith "/search/repositories") "against the provider this session was configured with"
+                Expect.isTrue (asked.Contains "page=1") "at the beginning"
+                Expect.isFalse (asked.Contains "evil.example") "and nothing the token named reached anything"
             }
 
         testCaseAsync "branches are read for the repo the path names" <|

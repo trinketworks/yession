@@ -119,6 +119,11 @@ let private keepSurfacesPinned (selector: string) : unit = jsNative
 // The marker is found INSIDE the input's own block rather than on the page: the offsets it is
 // positioned by are its offset parent's, so a marker taken from somewhere else on the page
 // would be laid out against a box it does not live in.
+/// Watch the foot of the picker's listing inside the card's own scroller; the handle stops it
+/// when the foot goes. See the module for why an observer rather than a scroll handler.
+[<ImportDefault("./js/watch-listing-foot.mjs")>]
+let private watchListingFoot (root: obj) (foot: obj) (wanted: unit -> unit) : {| stop: unit -> unit |} = jsNative
+
 [<ImportDefault("./js/place-input-cursor.mjs")>]
 let private placeInputCursor (field: string) (peer: string) (anchor: int) (head: int) : unit = jsNative
 
@@ -647,6 +652,32 @@ let create (deps: Deps) : Renderer =
     // that shows the client caught up is immediate, whatever the hold. A send puts a client
     // one event behind itself for a round trip, and the page that answers it lands caught
     // up, so live traffic renders as it did; what is paced is a client that STAYS behind.
+    // The picker's foot, and the watch on it. Re-bound when the ELEMENT changes — Lit keeps
+    // the same node across renders while the foot is drawn, so that is once when the listing
+    // gains a page to come and once when it runs out.
+    //
+    // What the watch asks is `latest`, not a cursor from the render that made it: one observer
+    // outlives many renders, and `Launch.wanting` is where "should I ask" lives (a page to
+    // come, nothing in flight, no attempt under way).
+    let mutable footSeen : obj = null
+    let mutable footWatch : {| stop: unit -> unit |} option = None
+    let syncListingFoot () =
+        let foot = Browser.Dom.document.querySelector ("[" + Dom.Hooks.repoPickerFoot + "]")
+        if not (obj.ReferenceEquals (box foot, footSeen)) then
+            footWatch |> Option.iter (fun watch -> watch.stop ())
+            footWatch <- None
+            footSeen <- box foot
+            if not (isNull (box foot)) then
+                footWatch <-
+                    Some (
+                        watchListingFoot
+                            (box (Browser.Dom.document.querySelector ("[" + Dom.Hooks.repoPickerBody + "]")))
+                            (box foot)
+                            (fun () ->
+                                latest
+                                |> Option.bind (fun model -> Launch.wanting model.Launch)
+                                |> Option.iter deps.Actions.LaunchMore))
+
     let mutable renderedAt = -infinity
     let mutable held = 0.0
     let rec setState (model: ClientModel) =
@@ -692,6 +723,8 @@ let create (deps: Deps) : Renderer =
         // in more than one, and each slot follows its own command line.
         syncTerminalSlots model
         syncCatchUpTimer model
+        // After the render, because the foot it watches is a node this render just drew.
+        syncListingFoot ()
         pushPresences ()
         placeInputCursorsAll model
         // The tab's name, which lives outside the root and so is the model's to push rather

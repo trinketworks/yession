@@ -78,6 +78,20 @@ type RepoCandidate =
       /// When it was last pushed to, as the provider reports it — what "recent" is ordered by.
       PushedAt : string option }
 
+/// One page of a listing, and the way to ask for what follows it.
+///
+/// `Next` is OPAQUE, and that is the whole of its contract: the session mints it, the
+/// browser carries it back unread, and the session alone knows what is in it. Opaque means
+/// the browser cannot compose one — so what the next page IS stays a decision of the side
+/// that talks to the provider, and a forge that pages by cursor rather than by number needs
+/// no change here.
+///
+/// `None` is the end of the listing, said once, rather than a page that comes back empty.
+[<RequireQualifiedAccess>]
+type RepoPage =
+    { Candidates : RepoCandidate list
+      Next : string option }
+
 module RepoListing =
 
     /// Render one listing line the way both interfaces say it.

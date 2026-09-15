@@ -162,10 +162,13 @@ type ViewActions =
       /// menu strands focus on `body` — the failure the WCAG floor names, and the one a
       /// keyboard reader hits on the very first Escape.
       FocusItemActions : MessageId -> unit
-      /// The launch surface's four effects. Ask the session for the repos this person can
+      /// The launch surface's five effects. Ask the session for the repos this person can
       /// choose from — theirs when the text is empty, a search otherwise; the answer comes
       /// back as `LaunchListingArrived`.
       LaunchSearch : string -> unit
+      /// Ask for the page a cursor names (`LaunchMoreArrived`). The cursor is the session's
+      /// own and is carried back unread — see `Repos.RepoPage`.
+      LaunchMore : string -> unit
       /// Ask for one repo's branches (`LaunchBranchesArrived`).
       LaunchBranches : RepoRef -> unit
       /// Send the choice: the `AddRepo` command, on the branch when one other than the
@@ -197,6 +200,7 @@ module ViewActions =
           GitHubDisconnect = ignore
           Copy = fun _ _ -> ()
           LaunchSearch = ignore
+          LaunchMore = ignore
           LaunchBranches = ignore
           LaunchStart = ignore
           LaunchLink = ignore
@@ -1722,30 +1726,39 @@ module View =
                     </div>"""
             | ListingUnavailable (reason, false) ->
                 note (html $"""<span class="{Style.statusErr}" role="status">{reason}</span>""")
-            | ListingLoaded [] ->
+            | ListingLoaded page when List.isEmpty page.Candidates ->
                 note (html $"""<span class="{Style.small}">{Dom.Text.repoPickerNothing}</span>""")
-            | ListingLoaded candidates ->
-                // The held row is always shown, wherever it is in the list; the rest are the
-                // first few until "more".
-                let shown =
-                    if launch.Expanded then candidates
-                    else
-                        let top = candidates |> List.truncate Launch.shown
-                        match Launch.held launch with
-                        | Some h when not (top |> List.exists (fun c -> c.Repo = h.Repo)) -> top @ [ h ]
-                        | _ -> top
-                let rest = candidates.Length - shown.Length
-                let more =
-                    if rest > 0 then
+            | ListingLoaded page ->
+                // The FOOT of the list: what the reader reaches, and what reaching brings.
+                // Drawn only while there is a page to come, so what ends the scroll is the
+                // list ending rather than a line saying it has.
+                //
+                // It is not a button. A press is what a reader does when the machine has
+                // stopped; this is the machine carrying on, and the only reason it is in the
+                // document at all is that something has to be reached. The one press here is
+                // the one a FAILURE leaves, because a page that did not come will not come
+                // again on its own.
+                let foot =
+                    match page.Next, launch.More with
+                    | None, _ -> Lit.nothing
+                    | Some _, MoreFailed reason ->
                         html $"""
-                            <div class="{Style.askMore}">
-                              <div class="{Style.askMoreLine}">
-                                <span class="{Style.label}">{if launch.Query.Trim () = "" then Dom.Text.repoPickerRecent else Dom.Text.repoPickerFound}</span>
-                                <button type="button" class="{Style.askMoreButton}" data-repo-picker-more @click={Ev(fun _ -> dispatch (LaunchMsg LaunchExpanded))}>{rest} more {Icon.right}</button>
+                            <div class="{Style.askFoot}" data-repo-picker-foot="failed">
+                              <div class="{Style.askFootLine}">
+                                <span class="{Style.statusErr}" role="status">{reason}</span>
+                                <button type="button" class="{Style.askLink}" data-repo-picker-again
+                                        @click={Ev(fun _ -> Launch.wanting { launch with More = MoreIdle } |> Option.iter actions.LaunchMore)}>{Dom.Text.repoPickerAgain}</button>
                               </div>
                             </div>"""
-                    else Lit.nothing
-                html $"""<ul class="{Style.askRows}">{shown |> List.map row}</ul>{more}"""
+                    | Some _, (MoreIdle | MoreFetching) ->
+                        html $"""
+                            <div class="{Style.askFoot}" data-repo-picker-foot="more">
+                              <div class="{Style.askFootLine}">
+                                <span class="{Style.caretWorking}" aria-hidden="true"></span>
+                                <span class="{Style.label}" role="status">{Dom.Text.repoPickerMoreComing}</span>
+                              </div>
+                            </div>"""
+                html $"""<ul class="{Style.askRows}">{page.Candidates |> List.map row}</ul>{foot}"""
         let problem =
             match launch.Problem with
             | Some reason -> note (html $"""<span class="{Style.statusErr}" role="alert" data-repo-picker-problem>{reason}</span>""")
@@ -1763,7 +1776,7 @@ module View =
         html $"""
             <section class="{Style.ask}" data-repo-picker="{stage}" aria-labelledby="repo-picker-title">
               <div class="{Style.askLeadBar}" aria-hidden="true"></div>
-              <div class="{Style.askBody}">
+              <div class="{Style.askBody}" data-repo-picker-body>
               <div class="{Style.askHead}">
                 <div class="{Style.askHeadLine}">
                   <h2 id="repo-picker-title" class="{Style.askQuestion}">{Dom.Text.repoPickerTitle}</h2>

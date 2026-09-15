@@ -1684,6 +1684,49 @@ let editorTests =
                 }
         askCardColumnCase 390 844 (EDITOR_PORT + 43)
         askCardColumnCase 1440 900 (EDITOR_PORT + 44)
+        // The listing pages as it is read, and READ is the word: no press, no button, and
+        // nothing on screen that says there is more except the foot standing where the rows
+        // to come will be.
+        //
+        // Only a browser can settle it. What decides is whether the foot is on screen, which
+        // is a fact about layout inside a scroller the card owns — the model knows only that
+        // a cursor exists, and every cheap tier reads markup that is right either way. And
+        // the thing that watches is an `IntersectionObserver` bound after a render to a node
+        // Lit drew, which is three things a rendered string does not have.
+        editorCaseIn 390 844 "the listing pages as the reader reaches its foot, without a press" (EDITOR_PORT + 45) <| fun page ->
+            async {
+                do! awaitU (page.EvaluateAsync "() => window.__launch(true)")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-repo-picker] [data-repo-candidate]")
+
+                // Ground truth, both halves: the foot is below the card, and the page it
+                // stands for has not arrived. Without the first, this case passes on a foot
+                // that was visible from the start and proves nothing about reaching it.
+                let! below =
+                    await (page.EvaluateAsync<bool>
+                            """() => {
+                                 const body = document.querySelector('#shell [data-repo-picker-body]')
+                                 const foot = document.querySelector('#shell [data-repo-picker-foot]')
+                                 return foot.getBoundingClientRect().top > body.getBoundingClientRect().bottom
+                               }""")
+                Expect.isTrue below "the foot starts below the card, so reaching it is something the reader does"
+                let! arrivedEarly =
+                    await (page.EvaluateAsync<bool> """() => !!document.querySelector('#shell [data-repo-candidate="octo/next-one"]')""")
+                Expect.isFalse arrivedEarly "and the page it stands for has not been asked for"
+
+                // Reaching it. A scroll of the card, which is what a thumb does — never a
+                // call to whatever fetches, which would test the harness rather than the
+                // page.
+                do! awaitU (page.EvaluateAsync
+                                """() => {
+                                     const body = document.querySelector('#shell [data-repo-picker-body]')
+                                     body.scrollTop = body.scrollHeight
+                                   }""")
+
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-repo-candidate='octo/next-one']")
+                let! ended =
+                    await (page.EvaluateAsync<bool> """() => !document.querySelector('#shell [data-repo-picker-foot]')""")
+                Expect.isTrue ended "and a page that carried no cursor is the end of the list, so the foot goes"
+            }
         // The title is written per keystroke, so Enter has nothing to save — and that is
         // exactly why it has to DO something: a phone holds its keyboard open for as long as
         // the field holds focus, and a return key that answers nothing reads as an edit the

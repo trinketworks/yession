@@ -2265,9 +2265,22 @@ module Codec =
 
     /// What a person chooses a repo FROM, as the session serves it to the picker — the
     /// `modelCatalogue` shape, for its reason: an object around the list, with room to grow.
-    let repoCandidates : Codec<Repos.RepoCandidate list> =
-        { Encode = (fun candidates -> Encode.object [ "repos", Encode.list (candidates |> List.map repoCandidate.Encode) ])
-          Decode = Decode.field "repos" (Decode.list repoCandidate.Decode) }
+    ///
+    /// `next` is absent at the end of the listing rather than null-and-present: the picker
+    /// asks whether there is one, and an optional field answers that in the codec rather
+    /// than in a reader downstream.
+    let repoPage : Codec<Repos.RepoPage> =
+        { Encode =
+            fun (page: Repos.RepoPage) ->
+                Encode.object
+                    [ yield "repos", Encode.list (page.Candidates |> List.map repoCandidate.Encode)
+                      match page.Next with
+                      | Some next -> yield "next", Encode.string next
+                      | None -> () ]
+          Decode =
+            Decode.object (fun get ->
+                { Repos.RepoPage.Candidates = get.Required.Field "repos" (Decode.list repoCandidate.Decode)
+                  Repos.RepoPage.Next = get.Optional.Field "next" Decode.string }) }
 
     /// The branches of one repo, by name.
     let branchNames : Codec<string list> =

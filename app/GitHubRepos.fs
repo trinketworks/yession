@@ -132,24 +132,82 @@ let private read (decoder: Decoder<'a>) (url: string) (token: string option) : A
             | Error e -> return Error (Unreadable e)
     }
 
-/// How many a listing carries. One page, deliberately: a person choosing a repo reads the
-/// top of a list ordered by recency, and anything further down is what search is for.
+/// How many a page carries.
 let pageSize = 30
+
+/// How many pages are ever offered. GitHub's search refuses past the thousandth result, so
+/// a listing that kept offering another page would end in a 502 at the foot of a scroll
+/// rather than in a stop. One number for both listings, because the ceiling that bites is
+/// the lower one and thirty-three pages is far more repositories than anyone scrolls.
+let pageLimit = 33
+
+// --- the cursor ---------------------------------------------------------------------------
+// What the browser carries back to ask for the next page. It holds what this file needs to
+// re-ask its OWN question — the text searched, and which page — and never a URL.
+//
+// Never a URL is the point rather than a detail: a cursor this session dereferenced would
+// make the browser the one choosing what this session fetches, which is the shape of every
+// server-side request forgery there has ever been. What comes back is read as two values and
+// a URL is composed here, from `apiBase`, exactly as page one's was.
+//
+// Unsigned, deliberately, and safe for exactly one reason: it says nothing a browser could
+// not have put in the query string itself. If a cursor ever carries something a caller is
+// not otherwise entitled to ask for, it needs a signature and this comment is the warning.
+
+/// `Text` is what was searched for, and NOTHING is "my repos" — not the empty string. The
+/// two are different questions to different endpoints, so a cursor that spelled the absence
+/// as `""` would be a cursor whose reader could not tell them apart.
+type private Cursor = { Text : string option; Page : int }
+
+[<Emit("Buffer.from(JSON.stringify({ q: $0 ?? null, page: $1 })).toString('base64url')")>]
+let private mintCursor (text: string option) (page: int) : string = jsNative
+
+/// The token's JSON, or empty when it is not base64 at all. Total on purpose: the browser
+/// can send anything, and a token this session did not mint is not an error — it is a
+/// request it will not honour.
+[<Emit("(() => { try { return Buffer.from($0, 'base64url').toString('utf8') } catch (e) { return '' } })()")>]
+let private cursorJson (token: string) : string = jsNative
+
+let private cursorDecoder : Decoder<Cursor> =
+    Decode.object (fun get ->
+        { Text = get.Optional.Field "q" Decode.string
+          Page = get.Required.Field "page" Decode.int })
+
+/// The page a cursor asks for, and the text it asks within — or nothing, for a token that
+/// is not one of ours or that names a page outside the offer. Page one is not addressable
+/// by cursor: it is what a request with no cursor answers.
+let readCursor (token: string) : (string option * int) option =
+    match cursorJson token with
+    | "" -> None
+    | json ->
+        match Decode.fromString cursorDecoder json with
+        | Ok cursor when cursor.Page >= 2 && cursor.Page <= pageLimit -> Some (cursor.Text, cursor.Page)
+        | Ok _
+        | Error _ -> None
+
+/// The cursor for what follows this page, if anything does. A FULL page is the only evidence
+/// there is more without reading GitHub's `Link` header, so a listing whose last page is
+/// exactly full offers one more and that one comes back empty. The alternative — teaching
+/// every read in this file to carry response headers — buys one avoided request at the end
+/// of a scroll nobody reaches.
+let nextCursor (text: string option) (page: int) (got: RepoCandidate list) : string option =
+    if List.length got < pageSize || page >= pageLimit then None else Some (mintCursor text (page + 1))
 
 /// The repositories a credential reaches, most recently pushed first. Every affiliation
 /// GitHub knows — owned, collaborated on, and through an organisation — because "the
 /// repos I work on" is all three and the default (`owner`) leaves out most of a working
 /// developer's.
-let recentOver (apiBase: string) (token: string option) : Async<Result<RepoCandidate list, LookupFailure>> =
+let recentOver (apiBase: string) (token: string option) (page: int) : Async<Result<RepoCandidate list, LookupFailure>> =
     match token with
     | None -> async { return Error NoCredential }
     | Some _ ->
         read
             listingDecoder
             (sprintf
-                "%s/user/repos?sort=pushed&per_page=%d&affiliation=owner,collaborator,organization_member"
+                "%s/user/repos?sort=pushed&per_page=%d&page=%d&affiliation=owner,collaborator,organization_member"
                 (apiBase.TrimEnd '/')
-                pageSize)
+                pageSize
+                page)
             token
 
 /// Repositories whose name matches, anywhere on GitHub the credential can see — so a
@@ -161,26 +219,30 @@ let recentOver (apiBase: string) (token: string option) : Async<Result<RepoCandi
 /// find. Looked up, it answers as one row under the name the provider calls it NOW — so
 /// a stale name typed here shows its current one, and a name nobody can see shows
 /// nothing, which is what a search says too.
-let searchOver (apiBase: string) (token: string option) (text: string) : Async<Result<RepoCandidate list, LookupFailure>> =
+/// A whole `owner/name` is ONE row however far a reader scrolls, so pages past the first
+/// are the search's alone.
+let searchOver (apiBase: string) (token: string option) (text: string) (page: int) : Async<Result<RepoCandidate list, LookupFailure>> =
     let query = text.Trim ()
     if query = "" then async { return Ok [] }
     else
         match RepoRef.create query with
-        | Ok repo ->
+        | Ok repo when page = 1 ->
             async {
                 match! read candidateDecoder (sprintf "%s/repos/%s" (apiBase.TrimEnd '/') (RepoRef.value repo)) token with
                 | Ok candidate -> return Ok [ candidate ]
                 | Error NotFound -> return Ok []
                 | Error failure -> return Error failure
             }
+        | Ok _ -> async { return Ok [] }
         | Error _ ->
             read
                 searchDecoder
                 (sprintf
-                    "%s/search/repositories?q=%s&per_page=%d"
+                    "%s/search/repositories?q=%s&per_page=%d&page=%d"
                     (apiBase.TrimEnd '/')
                     (Http.urlPart (query + " in:name"))
-                    pageSize)
+                    pageSize
+                    page)
                 token
 
 /// One repository as GitHub names it NOW, or why it could not say.
@@ -233,7 +295,7 @@ let private respondText (res: ServerResponse) (status: int) (text: string) =
 
 /// The JSON the browser reads a listing as: the codec the picker decodes with, so the
 /// browser reads one wire shape rather than two.
-let encodeListing (candidates: RepoCandidate list) : string = Codec.toString Codec.repoCandidates candidates
+let encodeListing (page: RepoPage) : string = Codec.toString Codec.repoPage page
 
 let encodeBranches (branches: string list) : string = Codec.toString Codec.branchNames branches
 
@@ -276,12 +338,32 @@ let routes
                         let! token = tokenFor actor
                         match route with
                         | Some GitHubRepos ->
+                            // What is asked for comes from the CURSOR when there is one, and
+                            // from `q` only on the first page — so a page and the text it is
+                            // a page of can never disagree, whatever the browser sends beside
+                            // the cursor. A cursor this session did not mint is page one.
+                            let text, page =
+                                match queryParamOf req.url "page" |> Option.bind readCursor with
+                                | Some (text, page) -> text, page
+                                // A `?q=` with nothing in it is not a search for nothing, it
+                                // is no search — the same question as no `?q=` at all.
+                                | None ->
+                                    queryParamOf req.url "q"
+                                    |> Option.map (fun typed -> typed.Trim ())
+                                    |> Option.filter (fun typed -> typed <> ""),
+                                    1
                             let! answer =
-                                match queryParamOf req.url "q" with
-                                | Some text when text.Trim () <> "" -> searchOver apiBase token text
-                                | _ -> recentOver apiBase token
+                                match text with
+                                | Some text -> searchOver apiBase token text page
+                                | None -> recentOver apiBase token page
                             match answer with
-                            | Ok candidates -> respondJson res 200 (encodeListing candidates)
+                            | Ok candidates ->
+                                respondJson
+                                    res
+                                    200
+                                    (encodeListing
+                                        { RepoPage.Candidates = candidates
+                                          RepoPage.Next = nextCursor text page candidates })
                             | Error failure -> respondText res (statusOf failure) (LookupFailure.describe failure)
                         | Some (GitHubBranches (owner, name)) ->
                             match RepoRef.create (owner + "/" + name) with
