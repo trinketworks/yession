@@ -1117,25 +1117,28 @@ module Style =
     let timelineIdle = "pl-8 max-md:pl-8"
 
     // --- The ask card ---------------------------------------------------------------------
-    // A band docked above the composer, in the queue's dock: somebody is asking, and here
-    // are the ways to answer. It wears the blue LEAD a queued command wears, because it
-    // means the same thing — waiting on you — and lifts a tone off the timeline behind it.
+    // A band docked above the composer, in the queue's dock: somebody is asking, and here are
+    // the ways to answer. It wears the blue LEAD a queued command wears, because it means the
+    // same thing — waiting on you — and lifts a tone off the timeline behind it.
     //
-    // It reads on the TIMELINE's leading line, and that is the whole geometry of it: the band
-    // spends the scroller's own gutter (`timeline`), and everything inside is indented by the
-    // avatar column (`askBody`) — so the question, the rows' names and the button start
-    // exactly where the header title and every message body start, rather than a centimetre
-    // to their left. What hangs in that gutter is a MARK, which is what the transcript hangs
-    // there too.
+    // It is a TURN, not a panel, and it is drawn in the conversation's own grammar: the head
+    // is an author line (`askHead` — the session's mark in the gutter, its name in the caps
+    // voice), the question under it is a message body at the reading edge every message body
+    // starts on, and the ways to answer hang off that same edge. So the card occupies the
+    // column the conversation is about to, rather than a centimetre to its left, and reading
+    // down the screen crosses ONE vertical edge instead of four.
     //
-    // Rows are TABLE rows, ruled apart. They used to be bordered rectangles, and stacked four
-    // deep inside a bordered card two centimetres under a bordered search field they read as
-    // a column of input boxes — a vocabulary this product spends on fields. The held one is
-    // told apart by its tick and a tone on the ground: the press state, kept, without a
-    // second edge to notice.
+    // Out in the margin, alone, is the tick. That column is where the transcript puts a face
+    // and where this puts a mark; everything else — rules, grounds, type — begins at the
+    // reading edge, which is what makes the edge visible at all.
+    //
+    // Nothing here is a box. Rows were bordered rectangles under a bordered search field with
+    // a bordered branch field inside the held one: four rectangle vocabularies in eight
+    // centimetres, of which this product has exactly one and spends it on the START button.
+    // What tells rows apart is a rule. What says one is held is its tick and a tone.
 
     let ask =
-        cls [ "relative shrink-0 px-8 max-md:px-4 py-3 bg-surface"; Stroke.dividerTop ]
+        cls [ "relative shrink-0 px-8 max-md:px-4 pt-4 pb-5 bg-surface"; Stroke.dividerTop ]
 
     /// The blue lead, DRAWN rather than bordered — and it has to be, because a `border-l-2`
     /// sits inside the band's padding box and would push every line in the card two pixels
@@ -1146,49 +1149,79 @@ module Style =
 
     /// The transcript's avatar gutter, borrowed whole (`messageBody` spends the same 32px),
     /// so the card's leading line and the conversation's are one number and cannot drift.
-    /// Stated on the BODY rather than per child: a line that forgot it would be the one
-    /// thing this card is for.
+    /// Stated on the BODY rather than per child: a line that forgot it would be the one thing
+    /// this card is for, and the two that reach back out into the gutter say so where they do.
     ///
-    /// The band runs the column's width, as the composer's does; what is in it reads at a
-    /// measure, as the timeline's lines do.
-    let askBody = "flex flex-col gap-2 pl-8 max-w-2xl max-h-[60vh] overflow-y-auto"
-    let askHead = "flex items-baseline justify-between gap-3"
-    let askFrom = cls [ body ]
-    let askWho = "text-ink font-normal"
-    let askVerb = "text-blue"
-    let askQuestion = cls [ body; "text-ink" ]
+    /// At the timeline's measure too (`readingColumn`), because a question is a line of prose
+    /// and the answer to it is the message that would have stood here.
+    ///
+    /// The card's own scroll, rather than the band's — see `askLeadBar`. No `gap`: the spacing
+    /// down this column is a RAMP, not a rhythm (an author line sits close under nothing and
+    /// its question close under it, the ways to answer stand apart from the question, and the
+    /// button stands apart from all of it), so each block states its own.
+    let askBody =
+        cls [ "flex flex-col pl-8 max-h-[60vh] overflow-y-auto"; readingColumn; "max-md:max-w-none" ]
 
-    /// What is searched, as the table's own first line rather than a box standing on it:
-    /// chrome-less but for the rule under it, which is the same rule that divides the rows.
-    /// A bordered field inside an already-ruled card is the double chrome `fieldMonoBare`
-    /// exists to avoid, and here it also broke the leading line, because a box's text starts
-    /// inside the box. The focus signal is the field face's — the rule goes blue.
+    /// The author line, and it is the transcript's: a mark on the avatar's column, the name in
+    /// the caps voice, the verb in the agent's blue. `-ml-8` is what reaches back out for the
+    /// mark — the same reach `askRowMark` makes, for the same column.
+    let askHead = "-ml-8 flex items-center gap-3"
+    let askFrom = "flex items-baseline gap-1.5 min-w-0"
+    let askWho = who
+    let askVerb = caps + " text-blue"
+
+    /// The question, as the message it is: the body face at full ink, close under the line
+    /// saying who is asking it, and the only thing on the card in the reading size.
+    let askQuestion = cls [ body; "mt-1.5" ]
+
+    /// The way in that is not the list — a search, or a link pasted. A step quieter than the
+    /// question and flush with the table under it, whose first rule is this field's own
+    /// underline: in a box it read as a second question with a line drawn under it, and its
+    /// text began inside the box rather than on the edge everything else starts on. The focus
+    /// signal is the field face's — the rule goes blue.
     let askSearch =
-        cls [ "w-full h-control bg-transparent outline-none appearance-none"; fieldType
+        cls [ "w-full h-control mt-5 bg-transparent outline-none appearance-none"; fieldType
               Stroke.underline; Stroke.hair; Stroke.hoverRim; Stroke.focus; touchType ]
 
-    /// The one child that reaches back into the gutter, because its marks live there: the
-    /// rules then span the band and the tick column sits inside the table, the way a table's
-    /// marker column does.
-    let askRows = cls [ "flex flex-col -ml-8 divide-y divide-hair" ]
+    /// A line the card says rather than one it offers — looking, cloning, a refusal, a clone
+    /// that failed. Where the first row would have been, so an answer and the absence of one
+    /// stand in the same place.
+    let askNote = "pt-4"
+
+    let askRows = "flex flex-col divide-y divide-hair"
     let askRow = cls [ "flex flex-col transition-colors"; rowLift ]
     let askRowHeld = "flex flex-col transition-colors bg-surface-2"
     let askRowButton =
-        cls [ "w-full text-left flex items-baseline gap-3 py-1.5 bg-transparent border-0 cursor-pointer min-w-0"
+        cls [ "w-full text-left flex items-baseline gap-3 py-2 bg-transparent border-0 cursor-pointer min-w-0"
               "disabled:cursor-default"; focusRing ]
     let askRowName = "font-terminal text-code text-ink truncate min-w-0"
-    /// The gutter's own column — `w-5` and the button's `gap-3` are the avatar and the gap
-    /// `messageGroupHead` spends, so the tick lands where a face lands and the name lands
-    /// where the words do. Drawn on every row, filled only on the held one: a cell that
-    /// appeared with the tick would move the name out from under the pointer that chose it.
-    let askRowMark = "w-5 shrink-0 self-center text-blue"
+    /// The tick, out in the MARGIN where the column's marks go: `-ml-8` against the button's
+    /// own `gap-3` is the 20px avatar and the 12px gutter `messageGroupHead` spends, so the
+    /// mark lands on the avatar's column and the name on the reading edge. Drawn on every row
+    /// and filled only on the held one — a cell that appeared with the tick would move every
+    /// name out from under the pointer that chose it.
+    let askRowMark = "-ml-8 w-5 shrink-0 self-center text-blue"
     let askRowDescription = cls [ small; "truncate min-w-0 ml-auto max-w-[45%]" ]
-    let askBranch = "flex items-center gap-3 pl-8 pb-2"
-    let askBranchField = cls [ fieldFace; "font-terminal text-code text-ink flex-1 min-w-0 h-8 py-0" ]
-    let askMore = "flex items-baseline justify-between"
+    /// The held row's second line. Bare, because the row it sits in already carries a rule and
+    /// a tone: a bordered field here was a box inside a box, and the last box on the card.
+    ///
+    /// No `touchType`, alone among the fields here: it sets 16px on a phone so that iOS does
+    /// not zoom into a tapped field, and 16px mono directly under a 12px mono name reads as a
+    /// different KIND of thing rather than as the branch of the row above it. The name and the
+    /// branch are one statement, so they are one size.
+    /// Its rule is a `rim` where the search's is a `hair`, because it is drawn on the held
+    /// row's LIFTED ground rather than on the card's: a hairline that reads as a rule against
+    /// `surface` is all but gone against `surface-2`, and a field nobody can see the edge of
+    /// is a field nobody types in.
+    let askBranch = "flex items-center gap-3 pb-2"
+    let askBranchField =
+        cls [ "flex-1 min-w-0 h-7 bg-transparent outline-none appearance-none"
+              "font-terminal text-code text-ink"
+              Stroke.underline; Stroke.rim; Stroke.hoverInk; Stroke.focus ]
+    let askMore = "flex items-baseline justify-between pt-3"
     let askMoreButton =
         cls [ label; "inline-flex items-center gap-1 bg-transparent border-0 cursor-pointer hover:text-ink transition-colors"; focusRing ]
-    let askActions = "flex flex-wrap items-center gap-2 pt-1"
+    let askActions = "flex flex-wrap items-center gap-3 pt-5"
     /// The commit button, which is disabled until something is held — and looks it: the
     /// rim recedes to a hairline and the type to faint, so the press state is one a held row
     /// visibly buys.

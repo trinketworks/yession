@@ -1705,20 +1705,24 @@ module View =
                   </button>
                   {if heldNow then branchField candidate else Lit.nothing}
                 </li>"""
+        // A line the card says rather than one it offers stands where the first row would
+        // have been (`askNote`), so an answer and the absence of one arrive in one place.
+        let note (inner: TemplateResult) = html $"""<div class="{Style.askNote}">{inner}</div>"""
         let listing =
             match launch.Listing with
             | ListingUnknown ->
-                html $"""<span class="{Style.statusRun}" role="status"><span class="{Style.statusDotPulse}"></span>{Dom.Text.repoPickerLooking}</span>"""
+                note (html $"""<span class="{Style.statusRun}" role="status"><span class="{Style.statusDotPulse}"></span>{Dom.Text.repoPickerLooking}</span>""")
             | ListingUnavailable (reason, true) ->
+                let said = note (html $"""<span class="{Style.small}">{reason}</span>""")
                 html $"""
-                    <span class="{Style.small}">{reason}</span>
+                    {said}
                     <div class="{Style.askActions}">
                       <button type="button" class="{Style.btnPrimary}" data-repo-picker-connect @click={Ev(fun _ -> actions.RevealSettings ())}>{Dom.Text.repoPickerConnect}</button>
                     </div>"""
             | ListingUnavailable (reason, false) ->
-                html $"""<span class="{Style.statusErr}" role="status">{reason}</span>"""
+                note (html $"""<span class="{Style.statusErr}" role="status">{reason}</span>""")
             | ListingLoaded [] ->
-                html $"""<span class="{Style.small}">{Dom.Text.repoPickerNothing}</span>"""
+                note (html $"""<span class="{Style.small}">{Dom.Text.repoPickerNothing}</span>""")
             | ListingLoaded candidates ->
                 // The held row is always shown, wherever it is in the list; the rest are the
                 // first few until "more".
@@ -1741,7 +1745,7 @@ module View =
                 html $"""<ul class="{Style.askRows}">{shown |> List.map row}</ul>{more}"""
         let problem =
             match launch.Problem with
-            | Some reason -> html $"""<span class="{Style.statusErr}" role="alert" data-repo-picker-problem>{reason}</span>"""
+            | Some reason -> note (html $"""<span class="{Style.statusErr}" role="alert" data-repo-picker-problem>{reason}</span>""")
             | None -> Lit.nothing
         let actionsRow =
             match launch.Stage, Launch.target launch with
@@ -1758,8 +1762,9 @@ module View =
               <div class="{Style.askLeadBar}" aria-hidden="true"></div>
               <div class="{Style.askBody}">
               <div class="{Style.askHead}">
-                <span class="{Style.askFrom}"><span class="{Style.askWho}">{Dom.Text.repoPickerAsker}</span> <span class="{Style.askVerb}">{Dom.Text.repoPickerAsks}</span></span>
-                <button type="button" class="{Style.btnIconBare}" data-repo-picker-dismiss aria-label="{Dom.Text.repoPickerDismiss}"
+                <span class="{Style.cls [ Style.avatar; authorAvatar ActorRef.SessionProcess ]}" aria-hidden="true"></span>
+                <span class="{Style.askFrom}"><span class="{Style.askWho}">{Dom.Text.repoPickerAsker}</span><span class="{Style.askVerb}">{Dom.Text.repoPickerAsks}</span></span>
+                <button type="button" class="{Style.cls [ Style.btnIconBare; "ml-auto" ]}" data-repo-picker-dismiss aria-label="{Dom.Text.repoPickerDismiss}"
                         @click={Ev(fun _ -> dispatch (LaunchMsg LaunchDismissed))}>{Icon.close}</button>
               </div>
               <span id="repo-picker-title" class="{Style.askQuestion}">{Dom.Text.repoPickerTitle}</span>
