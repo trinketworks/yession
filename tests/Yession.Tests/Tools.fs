@@ -205,6 +205,30 @@ let private sessionTests =
             Expect.stringContains said "check_pending" "or wait for it"
         }
 
+        // The scratch-denial hint (Plan F follow-up). A command that reached for /tmp and was
+        // refused is told where to write instead, in the same answer — because the raw
+        // "Operation not permitted" arrives, on macOS, wrapped in xcode-select noise nowhere
+        // near the cause, and an agent read it a turn late if at all.
+        test "a /tmp denial is told to use $TMPDIR instead" {
+            let denied =
+                { elidedAs OutputEnd.Whole None with
+                    Status = TerminalCommandRan (CommandFailed 1)
+                    Output = "sh: /tmp/patch.py: Operation not permitted" }
+            let said = AgentTools.renderOutcome denied
+            Expect.stringContains said "$TMPDIR" "it names where to write instead"
+        }
+
+        test "an ordinary failure is not given the scratch hint" {
+            // The signature is a /tmp path AND a refusal together; a failure that is neither
+            // must not grow a sentence about a directory it never touched.
+            let failed =
+                { elidedAs OutputEnd.Whole None with
+                    Status = TerminalCommandRan (CommandFailed 2)
+                    Output = "error: test suite failed, 3 assertions" }
+            let said = AgentTools.renderOutcome failed
+            Expect.isFalse (said.Contains "$TMPDIR") "no /tmp, no denial, no hint"
+        }
+
         test "a command still running is told it can be typed into" {
             let said = AgentTools.renderOutcome { elided None with Status = TerminalCommandRunning; Output = "" }
             Expect.stringContains said "write_terminal" "the hand that answers a prompt or ends a stuck one"
@@ -762,6 +786,18 @@ let private auditTests =
                         (call "serial" "read_device" """{"serial_number":"A700eXYZ"}""")
                 Expect.equal (Seq.head finished).Result None "a foreign answer is not put on the shared timeline"
             }
+
+        // Where scratch goes, said in the tool the agent runs commands with — the layer the
+        // subagent research pointed at, because a line in the tool it is about to use ranks
+        // above one buried in the system prompt it read at the top of the turn.
+        test "execute_command's description tells the agent where scratch goes" {
+            let registry = AgentTools.registry AgentCapabilities.none
+            match ToolRegistry.tryFind (call "yession" "execute_command" "{}") registry with
+            | Some descriptor ->
+                Expect.stringContains descriptor.Description "$TMPDIR" "it names the writable scratch dir"
+                Expect.stringContains descriptor.Description "/tmp" "and names /tmp as not the agent's"
+            | None -> failwith "execute_command should be in the registry"
+        }
 
         // The point of this PR: one of OUR tools that draws a chip but ran no block now
         // records what it answered, so the chip is not a line that says only that it happened.

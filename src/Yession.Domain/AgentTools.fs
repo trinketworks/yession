@@ -151,6 +151,28 @@ module AgentTools =
     /// decorative: telling a model "queued" when its command is actually blocked on a person
     /// has it conclude, after a silent pause, that the command failed and try something else
     /// — which is exactly how a review gate turns into the agent routing around the review.
+    /// A command that tried to write under `/tmp` and was refused, named for what it was.
+    ///
+    /// The sandbox denies `/tmp` on macOS and hands Linux a tmpfs that vanishes when the
+    /// command exits, but every sandbox sets `$TMPDIR` to a writable directory of the
+    /// session's own. An agent that reached for `/tmp` learned this only from a raw
+    /// `Operation not permitted` — which on macOS arrives wrapped in `xcode-select` noise
+    /// from the interpreter shim, nowhere near the cause — and recovered a turn later if at
+    /// all. This reads the denial and says where to write instead, in the same answer.
+    ///
+    /// Signature, not a parse: a `/tmp` path and a refusal in the same output. It is a hint
+    /// appended to a failure, so a rare false positive costs a true sentence on a command
+    /// that failed for another reason, never a wrong exit code or a swallowed error.
+    let private scratchDenialHint (text: string) : string =
+        let mentionsTmp = text.Contains "/tmp/" || text.Contains "/tmp " || text.Contains "/tmp:" || text.EndsWith "/tmp"
+        let refused =
+            text.Contains "Operation not permitted"
+            || text.Contains "Permission denied"
+            || text.Contains "Read-only file system"
+        if mentionsTmp && refused then
+            "\n[a write under /tmp was refused: the sandbox does not let you write there. Your writable scratch directory is $TMPDIR, which is set in every sandbox — rerun writing under $TMPDIR instead.]"
+        else ""
+
     let renderOutcome (outcome: TerminalCommandOutcome) : string =
         let where = sprintf "terminal %s" (TerminalId.value outcome.Terminal)
         let handle = QueueId.value outcome.Handle
@@ -183,6 +205,7 @@ module AgentTools =
                         outcome.Elided
                         readOn
                         (outcome.Output.Substring headLength)
+        let output = output + scratchDenialHint output
         // Every status opens with ONE upper-case word that says which it is, and the words
         // differ at the first letter. A finished command used to open `exit code 0 in …`,
         // beside `STILL RUNNING in …` for one that had not — and both were followed by the
@@ -531,7 +554,7 @@ module AgentTools =
                 }
         [ tool
             "execute_command"
-            "Run a shell command in one of this session's terminals, where the people in the session can see it and edit it while it queues, and every run is on the record. This is the only way to run anything. Pass `sandbox` to run in a named work sandbox (start_work_sandbox creates one); omit it for the default sandbox, which is where everything runs unless you say otherwise. Each sandbox has one terminal of yours that runs one command at a time; pass `terminal` to run in a terminal you opened with open_terminal instead, which is how work runs beside something long. It waits for the result and returns the exit code and output; if the terminal is busy, or the command is still going, it says so and returns a handle for check_pending instead of hanging. Your commands have no stdin unless you pass `stdin: true`: anything that reads it gets end-of-file at once, so name files and pass flags rather than expecting a prompt — and when a command genuinely has to prompt, pass `stdin: true` and answer it. Read what it returns: every answer states which of those happened."
+            "Run a shell command in one of this session's terminals, where the people in the session can see it and edit it while it queues, and every run is on the record. This is the only way to run anything. Pass `sandbox` to run in a named work sandbox (start_work_sandbox creates one); omit it for the default sandbox, which is where everything runs unless you say otherwise. Each sandbox has one terminal of yours that runs one command at a time; pass `terminal` to run in a terminal you opened with open_terminal instead, which is how work runs beside something long. It waits for the result and returns the exit code and output; if the terminal is busy, or the command is still going, it says so and returns a handle for check_pending instead of hanging. Your commands have no stdin unless you pass `stdin: true`: anything that reads it gets end-of-file at once, so name files and pass flags rather than expecting a prompt — and when a command genuinely has to prompt, pass `stdin: true` and answer it. Write temporary and scratch files under $TMPDIR, which every sandbox sets to a writable directory of this session's own; /tmp is not yours to write and is denied. When you rewrite a file, write the new content before you delete the old — a line that deletes then writes can be refused halfway, leaving the delete done. Read what it returns: every answer states which of those happened."
             [ ToolField.required "command" "string" "the shell command line to run, e.g. \"npm test -- --watch=false\""
               ToolField.optional "terminal" "string" "the id of a terminal to run in, as open_terminal or list_terminals gave it; omit for your own terminal in the sandbox"
               ToolField.optional "sandbox" "string" "the work sandbox to run in — the session's own by name (\"test\"), a repo's as \"owner/repo:name\" (its bare name also finds it when only one repo declares that name); omit for the default one"
