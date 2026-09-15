@@ -200,10 +200,19 @@ let private answerTests =
             Expect.equal other.Launch.Stage (Sent (request, target)) "still waiting on its own"
             Expect.equal other.Launch.Problem None "and nothing to say"
 
-        testCase "admitted, the surface waits on the clone, on the row that was tapped" <| fun () ->
+        testCase "once the add is sent, the card steps aside for the timeline" <| fun () ->
+            // The switch happens when the add STARTS, not when it lands: a sent add is
+            // committed, so the card is no longer offered and the timeline — where the
+            // add shows and its outcome lands, as an agent's add_repo does — takes over.
+            Expect.isTrue (Launch.committed waiting.Launch) "sent is committed"
+            Expect.isFalse (ClientModel.launchOffered waiting) "so the card is not offered"
+            Expect.isFalse ((render waiting).Contains "data-repo-picker") "and nothing of it is drawn"
+
+        testCase "admitted, the card stays aside while the clone runs, on the row that was tapped" <| fun () ->
             let admitted = ClientModel.update (CommandAnsweredMsg (request, CommandAccepted)) waiting
             Expect.equal admitted.Launch.Stage (Cloning target) "cloning"
-            Expect.stringContains (render admitted) "data-repo-picker=\"cloning\"" "and says so"
+            Expect.isTrue (Launch.committed admitted.Launch) "still committed"
+            Expect.isFalse (ClientModel.launchOffered admitted) "so the card stays aside — the timeline is showing the add"
             Expect.isTrue (Launch.busy admitted.Launch) "and no row is for holding meanwhile"
 
         testCase "a clone that failed reaches the screen that asked, while it is waiting" <| fun () ->
