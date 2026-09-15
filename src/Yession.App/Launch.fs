@@ -122,6 +122,19 @@ module Launch =
           Problem = None
           Dismissed = false }
 
+    /// Whether the add has been SENT and the card is now waiting on events, not on the
+    /// person. `Resolving` is still the person's step — a pasted link being turned into a
+    /// row to hold — so it is NOT committed; `Sent`/`Cloning` are, and once committed the
+    /// card steps aside for the timeline, where the add shows and the outcome lands, exactly
+    /// as an agent's `add_repo` does. A failure returns the stage to `Choosing`
+    /// (`LaunchFailed`/a rejection), which brings the card back to try another — which is
+    /// why this is read here rather than folded into `begun`: a clone that could not reach
+    /// its repo needs the card, not a blank.
+    let committed (launch: LaunchViewState) : bool =
+        match launch.Stage with
+        | Choosing | Resolving _ -> false
+        | Sent _ | Cloning _ -> true
+
     /// Whether the card is OFFERED: this client is connected, has read the log through
     /// to where the session says it ends, and the session has not BEGUN — no repo in it and
     /// nothing said. A session that has begun is the agent's to add a repo to (Plan 15).
@@ -132,7 +145,9 @@ module Launch =
     ///
     /// The catch-up conditions are what keep it honest: a client that has not looked yet, or
     /// is still reading, has an empty projection too, and a launch card that flashed over
-    /// every cold open of an old session would teach people it means nothing.
+    /// every cold open of an old session would teach people it means nothing. Committed is
+    /// the other half of the same rule: once the add is under way the card is not offered,
+    /// so the switch to the timeline happens when the add STARTS, not when it lands.
     let offered
         (connected: bool)
         (historyRead: bool)
@@ -141,7 +156,8 @@ module Launch =
         (begun: bool)
         (launch: LaunchViewState)
         : bool =
-        connected && historyRead && latestKnown.IsSome && not catchingUp && not begun && not launch.Dismissed
+        connected && historyRead && latestKnown.IsSome && not catchingUp && not begun
+        && not launch.Dismissed && not (committed launch)
 
     /// Whether the card is busy with an attempt: rows are not for holding while one is
     /// under way, because two clones of two repos is not what anyone meant.
