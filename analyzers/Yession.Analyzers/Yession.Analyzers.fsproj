@@ -36,6 +36,7 @@
     <Compile Include="EnvWrites.fs" />
     <Compile Include="EnvReaders.fs" />
     <Compile Include="EmptyDefault.fs" />
+    <Compile Include="AwaitSeam.fs" />
   </ItemGroup>
 
   <ItemGroup>

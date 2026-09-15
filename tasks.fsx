@@ -1690,7 +1690,12 @@ let private fixtures =
       "YES006", "DomainExportsFixture", [ "Slices.fs" ]
       "YES007", "EnvWriteFixture", [ "Access.fs"; "Owner.fs"; "Elsewhere.fs" ]
       "YES008", "EnvReaderFixture", [ "Access.fs"; "Boot.fs"; "Elsewhere.fs" ]
-      "YES009", "EmptyDefaultFixture", [ "Defaults.fs" ] ]
+      "YES009", "EmptyDefaultFixture", [ "Defaults.fs" ]
+      // Two projects for one rule, which no other rule needs. YES010 judges a project that can
+      // NAME an awaiting seam, so the silence of a project with none is half of what it says
+      // and cannot be shown from inside a project that declares one.
+      "YES010", "AwaitSeamFixture", [ "Seam.fs"; "Elsewhere.fs" ]
+      "YES010", "AwaitNoSeamFixture", [ "Unguarded.fs" ] ]
 
 let private fixtureProject name =
     Path.Combine ("analyzers", "fixtures", name, name + ".fsproj")
