@@ -29,44 +29,7 @@ open Lit
 //
 // `timeoutMs` bounds the whole handshake (offer, gathering, answer, channel open); it is the
 // difference between "not connected, the session did not answer" and an eternal wait.
-[<Emit("""(function (signalUrl, timeoutMs) { return (
-new Promise((resolve) => {
-  const t0 = performance.now()
-  const took = () => Math.round(performance.now() - t0)
-  const pc = new RTCPeerConnection({ iceServers: [] })
-  const dc = pc.createDataChannel('session')
-  let settled = false
-  const succeed = () => { if (!settled) { settled = true; resolve({ ok: true, channel: dc, connection: pc, timedOut: false, detail: '', tookMs: took() }) } }
-  const fail = (timedOut, detail) => {
-    if (settled) return
-    settled = true
-    try { pc.close() } catch {}
-    resolve({ ok: false, channel: null, connection: null, timedOut, detail: String(detail), tookMs: took() })
-  }
-  let sent = false
-  const send = async () => {
-    if (sent || settled) return
-    sent = true
-    try {
-      const reply = await fetch(signalUrl, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ type: pc.localDescription.type, sdp: pc.localDescription.sdp })
-      })
-      if (!reply.ok) return fail(false, 'signalling refused: ' + reply.status)
-      await pc.setRemoteDescription(await reply.json())
-    } catch (e) { fail(false, e) }
-  }
-  // Non-trickle: send once gathering completes — with a settle fallback, because some
-  // browsers/sandboxes never report 'complete' (mDNS candidate obfuscation can stall).
-  pc.onicegatheringstatechange = () => { if (pc.iceGatheringState === 'complete') send() }
-  pc.onicecandidate = (e) => { if (e.candidate === null) send() }
-  setTimeout(send, 1500)
-  setTimeout(() => fail(true, ''), timeoutMs)
-  dc.onopen = succeed
-  pc.createOffer().then(o => pc.setLocalDescription(o), e => fail(false, e))
-})
-) })($0, $1)""")>]
+[<ImportDefault("./js/open-data-channel.mjs")>]
 let private openDataChannel (signalUrl: string) (timeoutMs: int) : JS.Promise<{| ok: bool; channel: obj; connection: obj; timedOut: bool; detail: string; tookMs: int |}> = jsNative
 
 /// How long a whole handshake gets before it counts as "the session did not answer". Long
@@ -93,20 +56,7 @@ let private sendMessage (dc: obj) (text: string) : bool = jsNative
 /// `disconnected` is deliberately NOT here. It is a maybe, not a verdict, and the honest answer
 /// to a maybe already exists: the heartbeat asks, and gets an answer or does not, inside about
 /// three seconds. A grace timer here would be a second clock measuring the same doubt.
-//
-// The local names here are deliberately NOT `pc`/`dc`: `$0` is substituted TEXTUALLY with the
-// caller's identifier, so `const pc = $0` at a call site whose argument is itself named `pc`
-// emits `const pc = pc` — a temporal dead zone error that takes the whole shell down at load.
-[<Emit("""(function (pc, handler) {
-  const peer = pc, onDead = handler
-  const finished = () =>
-    peer.connectionState === 'failed' || peer.connectionState === 'closed' ||
-    peer.iceConnectionState === 'failed' || peer.iceConnectionState === 'closed'
-  const check = () => { if (finished()) onDead() }
-  peer.addEventListener('connectionstatechange', check)
-  peer.addEventListener('iceconnectionstatechange', check)
-  check()
-})($0, $1)""")>]
+[<ImportDefault("./js/on-peer-finished.mjs")>]
 let private onPeerFinished (pc: obj) (handler: unit -> unit) : unit = jsNative
 
 /// Look again the moment the page comes back — a phone returning from the background, a
@@ -115,23 +65,7 @@ let private onPeerFinished (pc: obj) (handler: unit -> unit) : unit = jsNative
 /// Not a second mechanism: it asks exactly the question `onPeerFinished` answers, at the one
 /// moment a browser is most likely to have torn the transport down while no script was running
 /// to hear about it. That moment is where the reported bug lived.
-[<Emit("""(function (pc, dc, handler) {
-  const peer = pc, chan = dc, onDead = handler
-  const look = () => {
-    if (document.visibilityState === 'hidden') return
-    if (peer.connectionState === 'failed' || peer.connectionState === 'closed' ||
-        peer.iceConnectionState === 'failed' || peer.iceConnectionState === 'closed' ||
-        chan.readyState !== 'open') onDead()
-  }
-  window.addEventListener('pageshow', look)
-  window.addEventListener('online', look)
-  document.addEventListener('visibilitychange', look)
-  return () => {
-    window.removeEventListener('pageshow', look)
-    window.removeEventListener('online', look)
-    document.removeEventListener('visibilitychange', look)
-  }
-})($0, $1, $2)""")>]
+[<ImportDefault("./js/on-resume.mjs")>]
 let private onResume (pc: obj) (dc: obj) (handler: unit -> unit) : (unit -> unit) = jsNative
 
 [<Emit("$0.close()")>]
@@ -222,13 +156,7 @@ let private clearChildren (el: obj) : unit = jsNative
 /// The refusal is written to the console rather than swallowed, because the only symptom
 /// it has otherwise is a button that appears to do nothing — the same shape as a broken
 /// binding, and nothing on the page tells the two apart.
-[<Emit("""(function (text, settled) {
-  const clip = navigator.clipboard
-  if (!clip) { console.debug('yession/copy: no clipboard in this context'); settled(false); return }
-  clip.writeText(text).then(
-    () => settled(true),
-    (err) => { console.debug('yession/copy: refused', String(err)); settled(false) })
-})($0, $1)""")>]
+[<ImportDefault("./js/write-clipboard.mjs")>]
 let private writeClipboard (text: string) (settled: bool -> unit) : unit = jsNative
 
 /// How long a copy says so for. Long enough to be read as an answer to the press, short
@@ -247,41 +175,14 @@ let private copiedShownMs = 1500
 // Focus is moved deliberately: the control that was pressed is the one about to disappear, so
 // it hands focus to whichever control replaces it (the header's reopen chevron, or the nav
 // head's collapse button). Skipping that strands focus on a hidden element.
-[<Emit("""(() => {
-  const root = document.documentElement
-  const desktop = window.matchMedia('(min-width: 768px)').matches
-  root.classList.toggle('nav-alt')
-  // The nav control always returns the column to its workspace face — a column that reopened
-  // on settings would be a surprise, and `settings-open` is what chooses the face.
-  root.classList.remove('settings-open')
-  const shown = desktop !== root.classList.contains('nav-alt')
-  if (desktop) { try { localStorage.setItem('yession.nav', shown ? 'open' : 'collapsed') } catch (e) {} }
-  requestAnimationFrame(() => {
-    const next = document.querySelector(shown ? 'button[data-nav-toggle="hide"]' : '[data-nav-toggle="show"]')
-    if (next) next.focus()
-  })
-})()""")>]
+[<ImportDefault("./js/toggle-nav.mjs")>]
 let private toggleNav () : unit = jsNative
 
 // Settings is the sidebar column's other FACE (Style.settingsPane), not a drawer over the
 // conversation — so opening it has to bring that column on screen, and `nav-alt` means the
 // opposite thing on each side of the breakpoint: uncollapse on desktop, slide the drawer in on
 // mobile. Focus follows the same rule as the nav toggle.
-[<Emit("""(() => {
-  const root = document.documentElement
-  const desktop = window.matchMedia('(min-width: 768px)').matches
-  const opening = !root.classList.contains('settings-open')
-  root.classList.toggle('settings-open', opening)
-  if (desktop) { if (opening) root.classList.remove('nav-alt') }
-  else root.classList.toggle('nav-alt', opening)
-  // TWO frames: the face that is arriving is `visibility: hidden` until the transition it
-  // just started reaches its first style flush, and `focus()` on a hidden element is a no-op
-  // (measured — one frame left focus on <body>).
-  requestAnimationFrame(() => requestAnimationFrame(() => {
-    const next = document.querySelector(opening ? '[data-settings-toggle="close"]' : '[data-settings-toggle="open"]')
-    if (next) next.focus()
-  }))
-})()""")>]
+[<ImportDefault("./js/toggle-settings.mjs")>]
 let private toggleSettings () : unit = jsNative
 
 // The same move, in one direction only.
@@ -294,28 +195,7 @@ let private toggleSettings () : unit = jsNative
 //
 // Idempotent by construction rather than by the caller checking first — `settings-open` is
 // SET, not flipped, so pressing it twice is pressing it once.
-[<Emit("""(() => {
-  const root = document.documentElement
-  const desktop = window.matchMedia('(min-width: 768px)').matches
-  const wasOpen = root.classList.contains('settings-open')
-  root.classList.add('settings-open')
-  // Bring the column on screen: `nav-alt` means the opposite thing on each side of the
-  // breakpoint — collapsed on desktop, drawer-open on mobile.
-  if (desktop) root.classList.remove('nav-alt')
-  else root.classList.add('nav-alt')
-  // Focus moves only when the face actually ARRIVED. Stealing it from whatever the reader
-  // was doing, to a control that was already on screen, would be the prompt reaching into a
-  // panel they are already reading.
-  if (!wasOpen) {
-    // TWO frames, for the reason the toggle needs them: the arriving face is
-    // `visibility: hidden` until the transition it just started reaches its first style
-    // flush, and `focus()` on a hidden element is a no-op.
-    requestAnimationFrame(() => requestAnimationFrame(() => {
-      const next = document.querySelector('[data-settings-toggle="close"]')
-      if (next) next.focus()
-    }))
-  }
-})()""")>]
+[<ImportDefault("./js/reveal-settings.mjs")>]
 let private revealSettings () : unit = jsNative
 
 // The auth probe: `me` answers with a peer token when the browser's cookie (or an
@@ -556,14 +436,7 @@ let private transcriptWrite (cache: obj) (url: string) (firstSeq: int) (body: st
 
 // `null` for an entry that is gone, and for one written without the header — which no build
 // that shipped this ever wrote, but a store outlives the build that filled it.
-[<Emit("""(function (cache, url) { return (
-cache.match(url).then(async r => {
-  if (!r) return null
-  const first = r.headers.get('x-yession-first-seq')
-  if (first === null) return null
-  return [parseInt(first, 10), await r.text()]
-})
-) })($0, $1)""")>]
+[<ImportDefault("./js/transcript-read.mjs")>]
 let private transcriptRead (cache: obj) (url: string) : JS.Promise<(int * string) option> = jsNative
 
 /// Every terminal's store for this session, or the one that keeps nothing.
@@ -622,21 +495,7 @@ let private openTranscriptCaches () : Async<Client.TranscriptCaches> =
 /// Cut the current wait short, if one is running. Replaced each time a wait begins.
 let mutable private pokeRetry : unit -> unit = ignore
 
-[<Emit("""(function (ms, register) { return (
-new Promise(resolve => {
-  let settled = false
-  const finish = () => {
-    if (settled) return
-    settled = true
-    window.removeEventListener('online', finish)
-    if (timer !== null) clearTimeout(timer)
-    resolve(true)
-  }
-  const timer = ms >= 0 ? setTimeout(finish, ms) : null
-  window.addEventListener('online', finish)
-  register(finish)
-})
-) })($0, $1)""")>]
+[<ImportDefault("./js/wait-or-poke.mjs")>]
 let private waitOrPoke (ms: float) (register: (unit -> unit) -> unit) : JS.Promise<bool> = jsNative
 
 let private waitBeforeRetry (delay: System.TimeSpan option) : Async<bool> =
@@ -661,19 +520,7 @@ let private mintId (prefix: string) =
 // same human across sessions), so colours and draft slots survive reloads. Storage
 // denied (private mode) falls back to the per-load mint.
 //
-// `$0` is substituted TEXTUALLY, so the argument expression must be bound to a const
-// once: with `$0` written three times, the argument (a fresh random mint) evaluated
-// three times, and a first visit stored one id while returning a different one — the
-// id everything else in this page used was not the id every later load read.
-[<Emit("""(function (minted) {
-  try {
-    const key = 'yession/peer-id'
-    const existing = window.localStorage.getItem(key)
-    if (existing) return existing
-    window.localStorage.setItem(key, minted)
-    return minted
-  } catch { return minted }
-})($0)""")>]
+[<ImportDefault("./js/persistent-peer-id.mjs")>]
 let private persistentPeerId (minted: string) : string = jsNative
 
 [<Emit("encodeURIComponent($0)")>]
@@ -698,17 +545,7 @@ let private urlEncode (value: string) : string = jsNative
 // reason and one more: it is decoded by the codec the server encoded it with, so the
 // browser reads one wire shape rather than two, and a row it could not decode is a
 // reason to show rather than a silently shorter menu.
-[<Emit("""fetch($0, { cache: 'no-store' })
-  .then(r => r.ok ? r.json().then(s => ({ ok: true,
-    sessionKind: s.session ? String(s.session.kind || '') : null,
-    sessionSignIn: (s.session && s.session.signInRequired) || null,
-    mineKind: s.mine ? String(s.mine.kind || '') : null,
-    mineSignIn: (s.mine && s.mine.signInRequired) || null,
-    owner: s.owner, agent: !!s.agent,
-    models: s.models ? JSON.stringify(s.models) : null,
-    modelsUnavailable: s.modelsUnavailable || null }))
-    : Promise.resolve({ ok: false, sessionKind: null, sessionSignIn: null, mineKind: null, mineSignIn: null, owner: null, agent: false, models: null, modelsUnavailable: null }))
-  .catch(() => ({ ok: false, sessionKind: null, sessionSignIn: null, mineKind: null, mineSignIn: null, owner: null, agent: false, models: null, modelsUnavailable: null }))""")>]
+[<ImportDefault("./js/fetch-claude-status-at.mjs")>]
 let private fetchClaudeStatusAt (url: string) : JS.Promise<{| ok: bool; sessionKind: string option; sessionSignIn: string option; mineKind: string option; mineSignIn: string option; owner: string option; agent: bool; models: string option; modelsUnavailable: string option |}> = jsNative
 
 /// One scope's pair of nullable strings, as the panel's row reads it.
@@ -739,14 +576,7 @@ let private panelInput (selector: string) : string = jsNative
 // Same fetch shapes as the Claude panel's; the flow differs (device code) so the two
 // extra parsers below read the begin/poll replies.
 
-[<Emit("""fetch($0, { cache: 'no-store' })
-  .then(r => r.ok ? r.json().then(s => ({ ok: true,
-    sessionKind: s.session ? String(s.session.kind || '') : null,
-    sessionSignIn: (s.session && s.session.signInRequired) || null,
-    mineKind: s.mine ? String(s.mine.kind || '') : null,
-    mineSignIn: (s.mine && s.mine.signInRequired) || null }))
-    : Promise.resolve({ ok: false, sessionKind: null, sessionSignIn: null, mineKind: null, mineSignIn: null }))
-  .catch(() => ({ ok: false, sessionKind: null, sessionSignIn: null, mineKind: null, mineSignIn: null }))""")>]
+[<ImportDefault("./js/fetch-github-status-at.mjs")>]
 let private fetchGitHubStatusAt (url: string) : JS.Promise<{| ok: bool; sessionKind: string option; sessionSignIn: string option; mineKind: string option; mineSignIn: string option |}> = jsNative
 
 let private fetchGitHubStatus () =

@@ -184,15 +184,7 @@ let private onFrame (f: unit -> unit) : unit = jsNative
 /// update this doc took, `__writebacks` only those the write-back produced. A write-back count
 /// of zero means "drawing a caret wrote nothing" only if the doc was moving at all — otherwise
 /// it means the observer was never wired up, and the two look identical from a test.
-[<Emit("""(function (doc, key) {
-  let all = 0, back = 0
-  window.__docUpdates = 0
-  window.__writebacks = 0
-  doc.on('update', function (_update, origin) {
-    all++; window.__docUpdates = all
-    if (origin === key) { back++; window.__writebacks = back }
-  })
-})($0, $1)""")>]
+[<ImportDefault("./js/count-writebacks.mjs")>]
 let private countWritebacks (doc: Y.Doc) (syncKey: obj) : unit = jsNative
 
 [<Import("ySyncPluginKey", "y-prosemirror")>]
@@ -244,22 +236,7 @@ let private nextFrame () : JS.Promise<unit> = jsNative
 /// the editor and drifted out says exactly when. This is the instrument the size-200 flake
 /// turned on: it showed the keystrokes always landed (`hostKeydowns` 32, focus never leaving)
 /// while `rafs` swung from 32 down to 0 — the frames were pending, not the keys missing.
-[<Emit("""(function (host, take) {
-  window.__benchDiagState = { hostKeydowns: 0, docKeydowns: 0, rafs: 0, focus: [] }
-  document.addEventListener('keydown', function () {
-    var d = window.__benchDiagState, a = document.activeElement
-    d.docKeydowns++
-    if (d.focus.length < 60)
-      d.focus.push(!a ? 'none' : (a.closest && a.closest('#peer-b')) ? 'peer-b' : a.id ? '#' + a.id : a.tagName.toLowerCase())
-  }, true)
-  host.addEventListener('keydown', function (e) {
-    window.__benchDiagState.hostKeydowns++
-    requestAnimationFrame(function () {
-      window.__benchDiagState.rafs++
-      take(performance.now() - e.timeStamp)
-    })
-  }, true)
-})($0, $1)""")>]
+[<ImportDefault("./js/on-keystroke-painted.mjs")>]
 let private onKeystrokePainted (host: obj) (take: float -> unit) : unit = jsNative
 
 /// Clear the typing diagnostic for a fresh burst — reset in place so the listeners above keep
