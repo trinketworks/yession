@@ -608,7 +608,7 @@ let private run () =
             // both ends of this at once.
             let id =
                 match ManagerRoute.parse "GET" (pathnameOf openUrl) with
-                | Some (ManagerRoute.OpenSession id) -> id
+                | Ok (ManagerRoute.OpenSession id) -> id
                 | _ -> failwithf "not an /open address: %s" openUrl
             let! stopped = fetch (ManagerRoute.at manager (ManagerRoute.Session (id, SessionVerb.Stop))) (createObj [ "method" ==> "POST" ])
             say (sprintf "stop %s %d" (SessionId.value id) (unbox<int> stopped?status))

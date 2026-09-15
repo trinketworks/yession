@@ -254,31 +254,40 @@ let private managerRouteTests =
                 let path = ManagerRoute.path route
                 Expect.equal
                     (ManagerRoute.parse (managerMethodOf route) path)
-                    (Some route)
+                    (Ok route)
                     (sprintf "%A parses back from %s" route path)
 
         testCase "a route reached with the wrong method is no route at all" <| fun () ->
-            Expect.equal (ManagerRoute.parse "GET" "/sessions") None "creating is POST only"
-            Expect.equal (ManagerRoute.parse "POST" "/sessions/stream") None "the registry is GET only"
-            Expect.equal (ManagerRoute.parse "GET" "/sessions/ui-1/launch") None "a lifecycle act is POST only"
-            Expect.equal (ManagerRoute.parse "POST" "/sessions/ui-1/open") None "opening is a navigation, GET only"
+            let unclaimed = Error ManagerMiss.Unclaimed
+            Expect.equal (ManagerRoute.parse "GET" "/sessions") unclaimed "creating is POST only"
+            Expect.equal (ManagerRoute.parse "POST" "/sessions/stream") unclaimed "the registry is GET only"
+            Expect.equal (ManagerRoute.parse "GET" "/sessions/ui-1/launch") unclaimed "a lifecycle act is POST only"
+            Expect.equal (ManagerRoute.parse "POST" "/sessions/ui-1/open") unclaimed "opening is a navigation, GET only"
 
-        testCase "a session path needs a session id" <| fun () ->
-            // Not a 400: an address naming a session the Manager could not have is an address
-            // the Manager does not serve, the same answer an unknown path gets.
-            Expect.equal (ManagerRoute.parse "GET" "/sessions/-nope/open") None "an id may not start with a dash"
-            Expect.equal (ManagerRoute.parse "POST" "/sessions/x/launch") None "or be one character"
-            Expect.equal (ManagerRoute.parse "GET" "/sessions//open") None "or be empty"
+        testCase "a session path with something that is not a session id is a miss that says so" <| fun () ->
+            // Distinct from unclaimed: the shape is the Manager's, so the Manager answers —
+            // with the id it was given and the rule it broke, which is what lets the router
+            // say 400 rather than a 404 that reads as "no such session".
+            let malformed (raw: string) =
+                function
+                | Error (ManagerMiss.MalformedSessionId (got, reason)) ->
+                    Expect.equal got raw "carries the id as given"
+                    Expect.isTrue (reason.Contains "SessionId") "and the rule it broke"
+                | other -> failwithf "expected a malformed-id miss for %s, got %A" raw other
+            ManagerRoute.parse "GET" "/sessions/-nope/open" |> malformed "-nope"
+            ManagerRoute.parse "POST" "/sessions/x/launch" |> malformed "x"
+            ManagerRoute.parse "GET" "/sessions//open" |> malformed ""
 
         testCase "a session's routes are not the Manager's" <| fun () ->
             // The two static shapes are shared — the Manager links the same stylesheet and
             // wears the same mark — and NOTHING else is: a session's `/me`, `/signal`,
             // `/events` at the Manager's origin are unclaimed and fall through.
-            Expect.equal (ManagerRoute.parse "GET" "/me") None "the auth probe"
-            Expect.equal (ManagerRoute.parse "POST" "/signal") None "signalling"
-            Expect.equal (ManagerRoute.parse "GET" "/events") None "the event cursor"
-            Expect.equal (ManagerRoute.parse "GET" "/sw.js") None "the worker"
-            Expect.equal (ManagerRoute.parse "GET" "/nope") None "and an unknown path is unclaimed"
+            let unclaimed = Error ManagerMiss.Unclaimed
+            Expect.equal (ManagerRoute.parse "GET" "/me") unclaimed "the auth probe"
+            Expect.equal (ManagerRoute.parse "POST" "/signal") unclaimed "signalling"
+            Expect.equal (ManagerRoute.parse "GET" "/events") unclaimed "the event cursor"
+            Expect.equal (ManagerRoute.parse "GET" "/sw.js") unclaimed "the worker"
+            Expect.equal (ManagerRoute.parse "GET" "/nope") unclaimed "and an unknown path is unclaimed"
 
         testCase "the static shapes are the session's own, at the origin root" <| fun () ->
             // What a session emits for a file, anchored at a root, is what the Manager claims
@@ -287,11 +296,11 @@ let private managerRouteTests =
             let file = Asset ("K3nR7pQx2wL0", "app.css")
             Expect.equal
                 (ManagerRoute.parse "GET" (RelativeUrl.under "" (SessionRoute.relative file)))
-                (Some (ManagerRoute.Asset ("K3nR7pQx2wL0", "app.css")))
+                (Ok (ManagerRoute.Asset ("K3nR7pQx2wL0", "app.css")))
                 "the asset set"
             Expect.equal
                 (ManagerRoute.parse "GET" (RelativeUrl.under "" (SessionRoute.relative Icon)))
-                (Some ManagerRoute.Icon)
+                (Ok ManagerRoute.Icon)
                 "the mark"
 
         testCase "a Manager's absolute URLs join with exactly one slash" <| fun () ->

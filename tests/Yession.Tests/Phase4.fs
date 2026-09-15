@@ -769,9 +769,9 @@ let private uiRenderTests =
             Expect.isTrue (posted.Length >= 6) "launch, stop, archive, unarchive, withdraw, and the two forms all carry one"
             Expect.equal opened.Length 1 "the section the stream fills carries its address"
             for address in posted do
-                Expect.isSome (ManagerRoute.parse "POST" address) (sprintf "%s is a route the server claims for a POST" address)
+                Expect.isOk (ManagerRoute.parse "POST" address) (sprintf "%s is a route the server claims for a POST" address)
             for address in opened do
-                Expect.isSome (ManagerRoute.parse "GET" address) (sprintf "%s is a route the server claims for a GET" address)
+                Expect.isOk (ManagerRoute.parse "GET" address) (sprintf "%s is a route the server claims for a GET" address)
 
         // Archiving. What must hold however this table is redrawn: a session that cannot be
         // started is not offered a control that starts it, and the one act it CAN take is
@@ -1464,6 +1464,12 @@ let private uiFlowTests =
                 // An unknown session is a 404, not a launch attempt.
                 let! missing = getReply (baseUrl + "/sessions/nope-nope/open") |> Interop.awaitPromise
                 Expect.equal (statusOfReply missing) 404 "unknown sessions are not created by asking to open them"
+
+                // An id that could not BE a session's is a 400 that says what one is — not a
+                // 404, which reads as "no such session" to someone who mistyped one.
+                let! malformed = getReply (baseUrl + "/sessions/-nope/open") |> Interop.awaitPromise
+                Expect.equal (statusOfReply malformed) 400 "a malformed id is refused, not looked up"
+                Expect.stringContains (bodyOfReply malformed) "-nope is not a session id" "and the answer names the id and the rule"
 
                 do! pm.StopAll ()
             }
