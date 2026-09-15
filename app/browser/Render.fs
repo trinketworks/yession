@@ -62,14 +62,7 @@ let [<Literal>] private PinnedSurfaces = "[data-conversation],[data-terminal-scr
 // Keyed by what the surface IS, never by its position in the list: a terminal that took its
 // lease between two renders removes its scrollback from the document, and an index would
 // then put its scroll position into the chat.
-[<Emit("""(function (selector) {
-  const key = el => el.getAttribute('data-terminal-id') || 'chat'
-  const taken = {}
-  for (const el of document.querySelectorAll(selector)) {
-    taken[key(el)] = el.scrollTop + el.clientHeight >= el.scrollHeight - 4 ? -1 : el.scrollTop
-  }
-  return taken
-})($0)""")>]
+[<ImportDefault("./js/surface-scroll.mjs")>]
 let private surfaceScroll (selector: string) : obj = jsNative
 
 // A surface that was NOT on screen before this render starts at its end, which is the other
@@ -93,15 +86,7 @@ let private surfaceScroll (selector: string) : obj = jsNative
 // between tasks — so a pinned reader who is not at the end AFTER the render is one the
 // render moved: the surface grew past them (they follow the tail), or Lit replaced it and
 // the new one starts at zero. A reader who had scrolled up is put back on the same terms.
-[<Emit("""(function (selector, positions) {
-  const key = el => el.getAttribute('data-terminal-id') || 'chat'
-  const atEnd = el => el.scrollTop + el.clientHeight >= el.scrollHeight - 4
-  for (const el of document.querySelectorAll(selector)) {
-    const position = positions[key(el)]
-    if (position === undefined || position < 0) { if (!atEnd(el)) el.scrollTop = el.scrollHeight }
-    else if (el.scrollTop !== position) el.scrollTop = position
-  }
-})($0, $1)""")>]
+[<ImportDefault("./js/restore-surface-scroll.mjs")>]
 let private restoreSurfaceScroll (selector: string) (positions: obj) : unit = jsNative
 
 // A RENDER is not the only thing that moves the end of one of those surfaces away from the
@@ -114,20 +99,7 @@ let private restoreSurfaceScroll (selector: string) (positions: obj) : unit = js
 // Whether they were at the end has to be sampled BEFORE the box changes (by the time the
 // resize handler runs the measurement would always say "no"), so it rides the scroll event —
 // captured, because scroll does not bubble, and the element is Lit's to replace.
-[<Emit("""(function (selector) {
-  const sel = selector
-  const atEnd = el => el.scrollTop + el.clientHeight >= el.scrollHeight - 4
-  const pinned = new WeakMap()
-  document.addEventListener('scroll', e => {
-    const el = e.target
-    if (el instanceof Element && el.matches(sel)) pinned.set(el, atEnd(el))
-  }, true)
-  window.addEventListener('resize', () => {
-    for (const el of document.querySelectorAll(sel)) {
-      if (pinned.get(el) !== false) el.scrollTop = el.scrollHeight
-    }
-  })
-})($0)""")>]
+[<ImportDefault("./js/keep-surfaces-pinned.mjs")>]
 let private keepSurfacesPinned (selector: string) : unit = jsNative
 
 // A native <input> has no per-character DOM geometry, so we measure the pixel offset of a
@@ -147,31 +119,7 @@ let private keepSurfacesPinned (selector: string) : unit = jsNative
 // The marker is found INSIDE the input's own block rather than on the page: the offsets it is
 // positioned by are its offset parent's, so a marker taken from somewhere else on the page
 // would be laid out against a box it does not live in.
-[<Emit("""(function(field, peer, a, h){
-  const input = document.querySelector(field)
-  if (!input || !input.parentElement) return
-  const marker = input.parentElement.querySelector('[data-cursor-peer="' + peer + '"]')
-  if (!marker) return
-  const cs = getComputedStyle(input)
-  const canvas = (window.__yInputCanvas || (window.__yInputCanvas = document.createElement('canvas')))
-  const ctx = canvas.getContext('2d')
-  ctx.font = cs.font && cs.font.trim() ? cs.font : (cs.fontStyle + ' ' + cs.fontWeight + ' ' + cs.fontSize + ' ' + cs.fontFamily)
-  const value = input.value || ''
-  const clamp = (i) => Math.max(0, Math.min(value.length, i | 0))
-  const lo = Math.min(clamp(a), clamp(h)), up = Math.max(clamp(a), clamp(h)), head = clamp(h)
-  const px = (v) => parseFloat(v) || 0
-  const padLeft = px(cs.paddingLeft), padTop = px(cs.paddingTop), scroll = input.scrollLeft || 0
-  const left = input.offsetLeft + px(cs.borderLeftWidth) + padLeft
-  const top = input.offsetTop + px(cs.borderTopWidth) + padTop
-  const height = input.clientHeight - padTop - px(cs.paddingBottom)
-  const xOf = (i) => left + ctx.measureText(value.slice(0, i)).width - scroll
-  const loX = xOf(lo)
-  marker.style.left = loX + 'px'
-  marker.style.top = top + 'px'
-  marker.style.height = height + 'px'
-  marker.style.width = Math.max(0, xOf(up) - loX) + 'px'
-  if (marker.firstElementChild) marker.firstElementChild.style.left = (xOf(head) - loX) + 'px'
-})($0, $1, $2, $3)""")>]
+[<ImportDefault("./js/place-input-cursor.mjs")>]
 let private placeInputCursor (field: string) (peer: string) (anchor: int) (head: int) : unit = jsNative
 
 [<Emit("requestAnimationFrame(() => $0())")>]

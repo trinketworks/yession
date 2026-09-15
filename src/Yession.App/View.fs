@@ -1213,11 +1213,7 @@ module View =
     /// `isComposing` guards the IME exactly as the command line's Enter does (`Browser`'s
     /// `bindTerminalInput`): mid-composition, Enter accepts a candidate word, and taking the
     /// field away from someone in the middle of typing one is not what they asked for.
-    [<Fable.Core.Emit("""(function (e) {
-  if (e.key !== 'Enter' || e.isComposing) return
-  e.preventDefault()
-  e.currentTarget.blur()
-})($0)""")>]
+    [<Fable.Core.ImportDefault("./js/commit-on-enter.mjs")>]
     let private commitOnEnter (e: obj) : unit = Fable.Core.Util.jsNative
 
     /// The bytes a keydown sends to a pty, and the browser told not to also act on it.
@@ -2674,32 +2670,13 @@ module View =
     /// Moves FOCUS only; selection follows the Enter/Space the button already handles. That
     /// is ARIA's "manual activation" variant, and it is the right one here: walking the
     /// strip must not mount and unmount a player under the reader on every keypress.
-    [<Fable.Core.Emit("""(function (e) {
-  const key = e.key
-  if (key !== 'ArrowLeft' && key !== 'ArrowRight' && key !== 'Home' && key !== 'End') return
-  const tabs = Array.from(e.currentTarget.querySelectorAll('[role="tab"]'))
-  if (tabs.length === 0) return
-  const here = tabs.indexOf(document.activeElement)
-  const next =
-    key === 'Home' ? 0
-    : key === 'End' ? tabs.length - 1
-    : here < 0 ? 0
-    : (here + (key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length
-  tabs[next].focus()
-  e.preventDefault()
-})($0)""")>]
+    [<Fable.Core.ImportDefault("./js/move-tab-focus.mjs")>]
     let private moveTabFocus (e: obj) : unit = Fable.Core.Util.jsNative
 
     /// Delete/Backspace on a focused tab — the keyboard's unpin (Plan 20, stage 1). Returns
     /// the tab's key, or `""` when this keypress is not that: the strip's other keys are the
     /// arrow walk above, and typing must not unpin anything.
-    [<Fable.Core.Emit("""(function (e) {
-  if (e.key !== 'Delete' && e.key !== 'Backspace') return ''
-  const tab = document.activeElement?.closest('[data-pane-tab]')
-  if (!tab) return ''
-  e.preventDefault()
-  return tab.getAttribute('data-pane-tab')
-})($0)""")>]
+    [<Fable.Core.ImportDefault("./js/unpin-key-on.mjs")>]
     let private unpinKeyOn (e: obj) : string = Fable.Core.Util.jsNative
 
     /// Move focus to the tab that will take the released one's place — BEFORE the release,
@@ -2711,12 +2688,7 @@ module View =
     /// moved it to `body`; on `requestAnimationFrame`, a headless browser that paints no
     /// frames never ran the callback at all. Going first has neither problem: the neighbour
     /// exists right now, and a node that keeps focus keeps it across the patch.
-    [<Fable.Core.Emit("""(function (e) {
-  const tabs = Array.from(e.currentTarget.querySelectorAll('[role="tab"]'))
-  const here = tabs.indexOf(document.activeElement?.closest('[role="tab"]'))
-  if (here < 0 || tabs.length < 2) return
-  tabs[Math.min(here, tabs.length - 2)].focus()
-})($0)""")>]
+    [<Fable.Core.ImportDefault("./js/focus-neighbour-tab.mjs")>]
     let private focusNeighbourTab (e: obj) : unit = Fable.Core.Util.jsNative
 
     /// One block's read-only view, as a tab opened from its chip shows it: the command, and
