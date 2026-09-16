@@ -424,15 +424,49 @@ let private markTests =
             let sh = (Marks.rcFor "sh" nonce |> Option.get).Rc
             Expect.isTrue (sh.Contains ("__y_c() { __y_r=$?; command -p printf '\\033]133;C;y=" + nonce + "\\007'; return $__y_r; }"))
                 (sprintf "sh defines the start mark as a function that keeps $?, got: %s" sh)
-            Expect.equal (Marks.lineFor "sh" BlockStdin.Terminal "echo $?") "__y_c; echo $?" "and a block's line calls it first"
-            Expect.equal (Marks.lineFor "dash" BlockStdin.Terminal "ls # note\nmore") "__y_c; ls # note\nmore"
+            Expect.equal (Marks.lineFor "sh" BlockStdin.Terminal BlockEnv.none "echo $?") "__y_c; echo $?" "and a block's line calls it first"
+            Expect.equal (Marks.lineFor "dash" BlockStdin.Terminal BlockEnv.none "ls # note\nmore") "__y_c; ls # note\nmore"
                 "as a prefix, so a comment and a second line are untouched"
-            Expect.equal (Marks.lineFor "sh" BlockStdin.Closed "cat") "{ __y_c; cat\n} </dev/null"
+            Expect.equal (Marks.lineFor "sh" BlockStdin.Closed BlockEnv.none "cat") "{ __y_c; cat\n} </dev/null"
                 "inside the stdin wrapper, so the mark prints with the redirection in place"
             for shell in [ "bash"; "zsh" ] do
-                Expect.equal (Marks.lineFor shell BlockStdin.Terminal "echo hi") "echo hi" (sprintf "%s types the command as written" shell)
-                Expect.equal (Marks.lineFor shell BlockStdin.Closed "echo hi") (BlockStdin.wrap BlockStdin.Closed "echo hi")
+                Expect.equal (Marks.lineFor shell BlockStdin.Terminal BlockEnv.none "echo hi") "echo hi" (sprintf "%s types the command as written" shell)
+                Expect.equal (Marks.lineFor shell BlockStdin.Closed BlockEnv.none "echo hi") (BlockStdin.wrap BlockStdin.Closed "echo hi")
                     (sprintf "%s wraps for stdin and nothing more" shell)
+
+        testCase "every dialect defines the function a block is lent through, as one copy" <| fun () ->
+            for shell in [ "bash"; "zsh"; "sh" ] do
+                let rc = (Marks.rcFor shell nonce |> Option.get).Rc
+                Expect.isTrue (rc.Contains (" " + Marks.envFunction)) (sprintf "%s's rc defines __y_env" shell)
+            Expect.isTrue (Marks.envFunction.StartsWith "__y_env() { __y_r=$?;") "which reads $? first, like __y_c"
+            Expect.isTrue (Marks.envFunction.EndsWith "return $__y_r; }") "and hands it back"
+
+        testCase "a block's line exports what it was lent, quoted for the shell, before the command" <| fun () ->
+            let lent =
+                { BlockEnv.GitConfig = Some ("http.http://gw:1/.extraheader", "X-Yession-Loan: t1")
+                  BlockEnv.Vars = [ "GIT_AUTHOR_NAME", Some "Ada O'Lovelace"; "GIT_COMMITTER_EMAIL", None ] }
+            let expected =
+                "__y_env '+http.http://gw:1/.extraheader=X-Yession-Loan: t1' 'GIT_AUTHOR_NAME=Ada O'\\''Lovelace' '-GIT_COMMITTER_EMAIL'; "
+            Expect.equal (Marks.envLine lent) expected "git config as +key=value, a value to export, a name to unset — each one word"
+            Expect.equal (Marks.lineFor "bash" BlockStdin.Terminal lent "git push") (expected + "git push") "bash: the loan, then the command"
+            Expect.equal (Marks.lineFor "sh" BlockStdin.Terminal lent "git push") (expected + "__y_c; git push") "sh: the loan, then the start mark, then the command"
+            Expect.equal
+                (Marks.lineFor "sh" BlockStdin.Closed lent "git push")
+                ("{ " + expected + "__y_c; git push\n} </dev/null")
+                "inside the stdin wrapper with the rest"
+
+        testCase "a block lent nothing is typed as written, and its own process is handed nothing extra" <| fun () ->
+            Expect.equal (Marks.envLine BlockEnv.none) "" "no call for no loan"
+            Expect.equal (Marks.spawnLineFor BlockStdin.Terminal BlockEnv.none "echo hi") "echo hi" "the degraded path likewise"
+
+        testCase "a block as its own process defines the function in the line it is handed" <| fun () ->
+            // No rc was typed at a process that IS the block, so the definition rides in
+            // the one line `sh -c` gets.
+            let lent = { BlockEnv.GitConfig = None; BlockEnv.Vars = [ "GIT_AUTHOR_NAME", Some "Ada" ] }
+            Expect.equal
+                (Marks.spawnLineFor BlockStdin.Closed lent "git commit")
+                ("{ " + Marks.envFunction + "; __y_env 'GIT_AUTHOR_NAME=Ada'; git commit\n} </dev/null")
+                "defined, called, then the command, all inside the wrapper"
 
         testCase "a scan keeps output and marks in the order the shell printed them" <| fun () ->
             // A command's last line, the `D` that ends its block and the next prompt can all
@@ -1857,7 +1891,7 @@ let private mintFrom (ids: string list) =
         if remaining.Count > 1 then remaining.RemoveAt 0
         next
 
-let private makeTerminalsOn (clock: Clock) (principalFor: PeerId -> Principal) attach classifier (log: EventLog<SessionEvent>) environment openTranscript readTranscript openAtBoot profilesAtBoot =
+let private makeTerminalsOn (clock: Clock) (principalFor: PeerId -> Principal) (loans: SessionTerminals.BlockLoans) attach classifier (log: EventLog<SessionEvent>) environment openTranscript readTranscript openAtBoot profilesAtBoot =
     let mintTerminal = mintFrom [ "term-a"; "term-b"; "term-c"; "term-d"; "term-e"; "term-f" ]
     let mintBlock = mintFrom [ "b-1"; "b-2"; "b-3" ]
     let records = ResizeArray<TerminalId * int * TranscriptRecord> ()
@@ -1869,6 +1903,7 @@ let private makeTerminalsOn (clock: Clock) (principalFor: PeerId -> Principal) a
             // manager, not about which sandbox a terminal picked.
             (fun _ -> environment)
             principalFor
+            loans
             openTranscript
             readTranscript
             // The REAL emulator, not a stub: the whole point of the manager tests is that
@@ -1899,19 +1934,34 @@ let private makeTerminalsOn (clock: Clock) (principalFor: PeerId -> Principal) a
 /// that hold a read open (`Tail` with a wait) look again in real time. A case about a
 /// window the manager keeps uses `makeTerminalsOn` with a clock it turns.
 let private makeTerminalsFrom attach classifier log environment openTranscript readTranscript openAtBoot profilesAtBoot =
-    // Nobody is attributed: a peer stays a peer, which is what every case but the
-    // attribution ones is written against.
-    makeTerminalsOn { Clock.system with Now = fixedClock } Principal.Peer attach classifier log environment openTranscript readTranscript openAtBoot profilesAtBoot
+    // Nobody is attributed and nothing is lent: a peer stays a peer and a block runs on
+    // what its shell has, which is what every case but the attribution and loan ones is
+    // written against.
+    makeTerminalsOn { Clock.system with Now = fixedClock } Principal.Peer SessionTerminals.BlockLoans.none attach classifier log environment openTranscript readTranscript openAtBoot profilesAtBoot
 
 /// A manager where SOME peers are bound to users — the Process's `Attribution` stand-in,
-/// for the cases about what a block's authority becomes at the durable append.
-let private makeTerminalsBound (bound: (PeerId * UserId) list) classifier log environment openTranscript readTranscript =
+/// for the cases about what a block's authority becomes at the durable append — and whose
+/// loans are the caller's.
+let private makeTerminalsBound (bound: (PeerId * UserId) list) (loans: SessionTerminals.BlockLoans) classifier log environment openTranscript readTranscript =
     let users = Map.ofList bound
     let principalFor (peer: PeerId) =
         match Map.tryFind peer users with
         | Some user -> Principal.User user
         | None -> Principal.Peer peer
-    makeTerminalsOn { Clock.system with Now = fixedClock } principalFor AttachTerminal.unavailable classifier log environment openTranscript readTranscript [] ShellProfileProjection.empty
+    makeTerminalsOn { Clock.system with Now = fixedClock } principalFor loans AttachTerminal.unavailable classifier log environment openTranscript readTranscript [] ShellProfileProjection.empty
+
+/// A lender that records what it was asked and answers with what it was given — the
+/// `BlockLoans` a case about the block's line, or about who a loan is asked for, hands in.
+let private lending (env: BlockEnv) =
+    let asked = ResizeArray<SandboxRef * TerminalId * BlockId * Authority> ()
+    let loans : SessionTerminals.BlockLoans =
+        { Lend =
+            fun sandbox terminal block authority ->
+                async {
+                    asked.Add (sandbox, terminal, block, authority)
+                    return env
+                } }
+    loans, asked
 
 /// No shell profile (Plan 25) — what a session that has never set one replays as, and what
 /// every case here but the profile ones is about.
@@ -2157,7 +2207,7 @@ let private attributionTests =
         let log = newLog ()
         let environment, _ = scriptedEnvironment (fun _ -> [], 0)
         let openTranscript, _, _, _, readTranscript = recordingTranscripts ()
-        let terminals, _, _ = makeTerminalsBound [ ada, adaUser ] classifier log environment openTranscript readTranscript
+        let terminals, _, _ = makeTerminalsBound [ ada, adaUser ] SessionTerminals.BlockLoans.none classifier log environment openTranscript readTranscript
         log, terminals
     let started (events: SessionEvent list) =
         events |> List.pick (function SessionEvent.TerminalBlockStarted e -> Some e | _ -> None)
@@ -2196,6 +2246,24 @@ let private attributionTests =
                 do! terminals.RunBlock id (entry "b1" id byBob 1.0) "echo hello" ignore
                 let! events = eventsOf log
                 Expect.equal (started events).Authority byBob "nothing is invented for an unattributed connection"
+            }
+
+        testCaseAsync "a block is lent for the act as the log records it" <|
+            async {
+                // The lender resolves a credential from what it is handed, so it has to be
+                // handed the resolved act — a peer would own nothing.
+                let loans, asked = lending BlockEnv.none
+                let log = newLog ()
+                let environment, _ = scriptedEnvironment (fun _ -> [], 0)
+                let openTranscript, _, _, _, readTranscript = recordingTranscripts ()
+                let terminals, _, _ = makeTerminalsBound [ ada, adaUser ] loans Classifier.approveAll log environment openTranscript readTranscript
+                let! opened = terminals.Open ActorRef.Agent (SandboxShell SandboxRef.defaultRef) (TerminalTitle.fromProse "build")
+                let id = opened |> expect
+                do! terminals.RunBlock id (entry "a1" id agentForAda 1.0) "echo hello" ignore
+                Expect.equal
+                    (asked |> Seq.map (fun (_, _, _, authority) -> authority) |> List.ofSeq)
+                    [ Authority.agentFor (Principal.User adaUser) ]
+                    "asked once, for the turn human the log names"
             }
 
         testCaseAsync "a refused block is attributed the same way as one that ran" <|
@@ -3747,7 +3815,7 @@ let private shellProfileTests =
                 let clock = virtualClock (fixedClock ())
                 let openTranscript, linesOf, _, _, readTranscript = recordingTranscripts ()
                 let terminals, _, _ =
-                    makeTerminalsOn clock.Clock Principal.Peer AttachTerminal.unavailable Classifier.approveAll log mute openTranscript readTranscript [] ShellProfileProjection.empty
+                    makeTerminalsOn clock.Clock Principal.Peer SessionTerminals.BlockLoans.none AttachTerminal.unavailable Classifier.approveAll log mute openTranscript readTranscript [] ShellProfileProjection.empty
                 let! opened = terminals.Open (PeerRef ada) (SandboxShell SandboxRef.defaultRef) (TerminalTitle.fromProse "build")
                 let id = opened |> expect
                 let said () =

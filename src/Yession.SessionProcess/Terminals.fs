@@ -648,6 +648,20 @@ module SessionTerminals =
             |> System.String
         "\u0015" + kept + "\r" 
 
+    /// What a block is lent for its act, in the sandbox its terminal runs in. The manager
+    /// asks once per block, after the classifier has approved it and before the line is
+    /// typed, and puts the answer at the head of the line (`Marks.envLine`) — so a loan is
+    /// a fact about a BLOCK, carried by its process tree, never about a moment on the
+    /// terminal. Who lends what is the composition's: this seam only knows that a block
+    /// has an act and a sandbox, and that its shell needs telling.
+    type BlockLoans =
+        { Lend : SandboxRef -> TerminalId -> BlockId -> Authority -> Async<BlockEnv> }
+
+    module BlockLoans =
+
+        /// A session that lends nothing — every block runs on what its shell was spawned with.
+        let none : BlockLoans = { Lend = fun _ _ _ _ -> async { return BlockEnv.none } }
+
     type SessionTerminals =
         { /// Open a terminal over a SOURCE (Plan 16, part D). `SandboxShell name` ensures
           /// THAT WorkSandbox exists first — opening one IS a need, so a session where
@@ -848,6 +862,11 @@ module SessionTerminals =
         // and the credential a block spends is resolved from what the log says — so a
         // peer left unresolved here is a person whose own command runs on nobody's.
         (principalFor: PeerId -> Principal)
+        // What each block is lent for its act (`BlockLoans`): asked after the classifier
+        // and before the line is typed, put at the head of the line. Injected like the
+        // classifier is, and for the same reason — an actor that could start a block
+        // without asking would be a block running on whatever the shell happened to hold.
+        (loans: BlockLoans)
         (openTranscript: OpenTranscript)
         // Reading one back (Plan 19). The manager holds the WRITER for every live terminal
         // and none of the readers, because the two have opposite shapes — see
@@ -1810,6 +1829,14 @@ module SessionTerminals =
                         // keeps whatever width the last one to ask for a width left it.
                         entry.Size |> Option.iter (applySize terminalId)
                         let blockId = mintBlockId ()
+                        // What this block is lent for its act, asked BEFORE the block is on
+                        // the record: a block that never started is a block that borrowed
+                        // nothing. A terminal in no sandbox has no shell to export into and
+                        // no blocks either (`Attached` sources are live-only).
+                        let! lent =
+                            match terminal.Sandbox with
+                            | Some sandbox -> loans.Lend sandbox terminalId blockId entry.Authority
+                            | None -> async { return BlockEnv.none }
                         // Taken BEFORE the command is written, which is forced by the anchor
                         // ordering below and is the honest reading anyway: on a pty the shell
                         // echoes the command itself, and that echo is part of what this block put
@@ -1901,7 +1928,7 @@ module SessionTerminals =
                                             // Nothing the shell prints from here to the start
                                             // mark is the block's (`Marks.lineFor`).
                                             awaitingStart.Add key |> ignore
-                                            pty.Write (writeFor (Marks.lineFor terminal.Spec.Name stdin command))
+                                            pty.Write (writeFor (Marks.lineFor terminal.Spec.Name stdin lent command))
                                             // The integration detector (Plan 13, stage 2f), armed
                                             // beside the block rather than awaited: a lost shell
                                             // must not make this block wait, because the block is
@@ -1948,9 +1975,9 @@ module SessionTerminals =
                                         (environmentOf terminalId).Spawn
                                             { Executable = terminal.Spec.Executable
                                               // No shell to render a line and nothing to mark
-                                              // its start: the wrapper alone, and every byte
-                                              // the process prints is the block's.
-                                              Arguments = terminal.Spec.Arguments @ [ BlockStdin.wrap stdin command ]
+                                              // its start: the loan, the wrapper, and every
+                                              // byte the process prints is the block's.
+                                              Arguments = terminal.Spec.Arguments @ [ Marks.spawnLineFor stdin lent command ]
                                               Env = Map.empty
                                               // A block is work, entrypoint or no shell.
                                               Via = Entrypoint

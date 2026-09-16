@@ -20,6 +20,7 @@ open Yession.Domain.Sandboxes
 open Yession.Domain.Agent
 open Yession.Domain.Tools
 open Yession.Domain.Chat
+open Yession.Domain.Terminals
 open Yession.Host
 open Yession.SessionProcess
 
@@ -141,7 +142,12 @@ let private githubSource (value: string option) : WorkSandboxes.CredentialSource
                     | Some v ->
                         WorkSandboxes.CredentialForwarding.Forwarded { Env = Map.ofList [ "GITHUB_ROUTE", v ]; GitConfig = []; Domains = [] }
             }
-      Revoke = fun ref -> revoked.Add (SandboxRef.render ref) },
+      Revoke = fun ref -> revoked.Add (SandboxRef.render ref)
+      // Lends by NAME: what a block gets says whose credential it was asked for, which
+      // is the whole of what the loan cases compare.
+      Lend =
+        fun credential _ ->
+            async { return { BlockEnv.GitConfig = None; BlockEnv.Vars = [ "LENT_TO", Some (CredentialFor.token credential) ] } } },
     revoked
 
 let private githubCredential (value: string option) : WorkSandboxes.CredentialSource = fst (githubSource value)
@@ -688,7 +694,8 @@ let private credentialTests =
                 let source : WorkSandboxes.CredentialSource =
                     { Name = "github"
                       Provision = fun _ _ -> async { return WorkSandboxes.CredentialForwarding.Unforwardable "no route from here" }
-                      Revoke = ignore }
+                      Revoke = ignore
+                      Lend = fun _ _ -> async { return BlockEnv.none } }
                 let sandboxes, built = registry log [ source ]
                 match! sandboxes.Ensure caller (sandbox "test") (forwarding [ "github" ]) with
                 | Ok _ -> failwith "expected a refusal"
@@ -1070,6 +1077,43 @@ let private workspaceVolumeTests =
             Expect.isFalse (ContainerMount.provides "/repos/octo/hello" "/repos") "and never upward")
     ]
 
+/// What a block in a sandbox is lent: the forwarded sources' answers for the credential the
+/// block's ACT runs on — which is not who started the sandbox.
+let private lentTests =
+    let terminal = TerminalId.create "term-a" |> expect
+    let block = BlockId.create "b-1" |> expect
+    let bob = Principal.Peer (PeerId.create "bob" |> expect)
+    testList "what a block is lent" [
+        testCaseAsync "a block in a sandbox that forwards github is lent for its act's credential, not the starter's" <|
+            async {
+                let log = newLog ()
+                let sandboxes, _ = registry log [ githubCredential (Some "route") ]
+                let! _ = sandboxes.Ensure caller (sandbox "test") (forwarding [ "github" ])
+                let! lent = sandboxes.Loans.Lend (sandbox "test") terminal block (Authority.agentFor bob)
+                Expect.equal
+                    lent.Vars
+                    [ "LENT_TO", Some (Principal.token bob) ]
+                    "the source was asked for the turn human of THIS block, though ada started the sandbox"
+            }
+
+        testCaseAsync "a sandbox that forwards nothing lends nothing" <|
+            async {
+                let log = newLog ()
+                let sandboxes, _ = registry log [ githubCredential (Some "route") ]
+                let! _ = sandboxes.Ensure caller (sandbox "test") SandboxRequest.defaults
+                let! lent = sandboxes.Loans.Lend (sandbox "test") terminal block (Authority.agentFor bob)
+                Expect.equal lent BlockEnv.none "a source the sandbox does not forward is not asked"
+            }
+
+        testCaseAsync "a name the session does not have lends nothing" <|
+            async {
+                let log = newLog ()
+                let sandboxes, _ = registry log [ githubCredential (Some "route") ]
+                let! lent = sandboxes.Loans.Lend (sandbox "nope") terminal block (Authority.agentFor bob)
+                Expect.equal lent BlockEnv.none "its environment refuses the spawn; the loan has nothing to add"
+            }
+    ]
+
 let tests =
     testList "WorkSandboxes" [
         nameTests
@@ -1078,6 +1122,7 @@ let tests =
         normaliseTests
         ensureTests
         credentialTests
+        lentTests
         queryTests
         timelineTests
     ]
