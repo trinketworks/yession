@@ -17,14 +17,14 @@
          called, what the four tools take and answer. No IO, so it is testable with neither
          hardware nor the native addon. -->
     <Compile Include="src/Serial.fs" />
-    <!-- The Node surface, and the only file containing raw JavaScript. -->
+    <!-- The Node surface: what this provider binds of its host, and nothing it decides. -->
     <Compile Include="src/Interop.fs" />
     <!-- The two wire protocols, each written out rather than pulled from a library, because
          seeing them is the point of the example. -->
     <Compile Include="src/Mcp.fs" />
     <Compile Include="src/Ws.fs" />
-    <!-- The seam over `serialport`: a lazy dynamic import, so a box without the addon
-         degrades to "no devices" instead of failing to start. -->
+    <!-- The `serialport` binding and the seam over it: a lazy dynamic import, so a box
+         without the addon degrades to "no devices" instead of failing to start. -->
     <Compile Include="src/Ports.fs" />
     <Compile Include="src/Provider.fs" />
     <Compile Include="src/Main.fs" />

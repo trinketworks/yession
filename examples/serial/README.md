@@ -119,10 +119,10 @@ Find the pair with `ioreg -p IOUSB -l` on macOS, or `lsusb` on Linux.
 | | |
 |---|---|
 | [src/Serial.fs](src/Serial.fs) | the vocabulary: devices, ids, line settings, the tool wire. No IO. |
-| [src/Interop.fs](src/Interop.fs) | the Node surface. The only file with raw JavaScript in it — port this one, keep the rest. |
+| [src/Interop.fs](src/Interop.fs) | the Node surface, bound: http, the upgraded socket, a hash, a `stat`, a timer. Port this one to another host, keep the rest. |
 | [src/Mcp.fs](src/Mcp.fs) | MCP over Streamable HTTP, longhand. |
 | [src/Ws.fs](src/Ws.fs) | RFC 6455, only the frames the attach protocol needs. |
-| [src/Ports.fs](src/Ports.fs) | the `serialport` seam: enumerate, open, stream, close. |
+| [src/Ports.fs](src/Ports.fs) | the `serialport` binding, and the seam over it: enumerate, open, stream, close. |
 | [src/Provider.fs](src/Provider.fs) | the four tools, the claims, and the two legs joined. |
 | [src/Main.fs](src/Main.fs) | argument handling, and one line of output naming both legs. |
 
