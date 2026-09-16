@@ -630,16 +630,25 @@ let private fetchRepoListing (query: string) : Async<LaunchListing> =
         | Error (reason, signIn) -> return ListingUnavailable (reason, signIn)
     }
 
+/// One page of a repo's branches, from a url the SESSION composed — the listing's rule, for
+/// the listing's reason (`fetchRepoPage`).
+let private fetchBranchPage (url: string) : Async<Result<BranchPage, string>> =
+    async {
+        let! reply = getText url |> Async.AwaitPromise
+        if not reply.ok then
+            return Error (if reply.body = "" then sprintf "the session answered %d" reply.status else reply.body)
+        else
+            match Codec.fromString Codec.branchPage reply.body with
+            | Ok page -> return Ok page
+            | Error reason -> return Error reason
+    }
+
 let private fetchRepoBranches (repo: RepoRef) : Async<LaunchBranches> =
     async {
         let owner, name = RepoRef.owner repo, RepoRef.repo repo
-        let! reply = getText (Page.href (GitHubBranches (owner, name))) |> Async.AwaitPromise
-        if not reply.ok then
-            return BranchesUnavailable (if reply.body = "" then sprintf "the session answered %d" reply.status else reply.body)
-        else
-            match Codec.fromString Codec.branchNames reply.body with
-            | Ok branches -> return BranchesLoaded branches
-            | Error reason -> return BranchesUnavailable reason
+        match! fetchBranchPage (Page.href (GitHubBranches (owner, name))) with
+        | Ok page -> return BranchesLoaded page
+        | Error reason -> return BranchesUnavailable reason
     }
 
 /// Where a pull request comes from, so a pasted link to one can be launched: the one link
@@ -1027,6 +1036,16 @@ let private start () =
                             match! fetchRepoPage (Page.href GitHubRepos + "?page=" + urlEncode cursor) with
                             | Ok page -> dispatchRef (LaunchMsg (LaunchMoreArrived page))
                             | Error (reason, _) -> dispatchRef (LaunchMsg (LaunchMoreFailed reason))
+                        })
+              LaunchBranchesMore =
+                fun repo cursor ->
+                    dispatchRef (LaunchMsg LaunchBranchMoreStarted)
+                    Async.StartImmediate (
+                        async {
+                            let owner, name = RepoRef.owner repo, RepoRef.repo repo
+                            match! fetchBranchPage (Page.href (GitHubBranches (owner, name)) + "?page=" + urlEncode cursor) with
+                            | Ok page -> dispatchRef (LaunchMsg (LaunchBranchMoreArrived (repo, page)))
+                            | Error reason -> dispatchRef (LaunchMsg (LaunchBranchMoreFailed reason))
                         })
               LaunchBranches =
                 fun repo ->

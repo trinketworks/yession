@@ -1671,7 +1671,6 @@ let editorTests =
                                     ['the question', box('#repo-picker-title')],
                                     ['the search field', inside('[data-repo-picker-search]')],
                                     ['a row’s name', box('[data-repo-candidate-name]')],
-                                    ['the branch label', box('label[for="repo-branch"]')],
                                     ['the start button', box('[data-repo-picker-start]')]
                                   ]
                                 .filter(([_, left]) => left !== column)
@@ -1684,6 +1683,52 @@ let editorTests =
                 }
         askCardColumnCase 390 844 (EDITOR_PORT + 43)
         askCardColumnCase 1440 900 (EDITOR_PORT + 44)
+        // The card asks one thing at a time, and the second is to the RIGHT of the first.
+        //
+        // Both panes are in the document at once — they have to be, or the one arriving would
+        // arrive on an empty stage mid-slide — so what says which is showing is not what is
+        // RENDERED but where it IS, and only a browser knows that. Two halves, and either
+        // alone passes on a bug: a pane off screen that is still reachable is a keyboard trap
+        // in a surface that looks fine, and a pane that never moved is a slide that did not
+        // happen behind markup that says it did.
+        //
+        // Not asserted: how long it takes, what it eases on, whether the rows stagger. Those
+        // are the design.
+        editorCaseIn 390 844 "the branch pane is off to the right until it is asked for, and out of reach until then" (EDITOR_PORT + 46) <| fun page ->
+            async {
+                do! awaitU (page.EvaluateAsync "() => window.__launch(true)")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-repo-picker] [data-repo-candidate]")
+                // Holding a row is what puts a branch on it to go and change.
+                do! awaitU (page.ClickAsync "#shell [data-repo-picker] [data-repo-candidate]")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-repo-candidate-branch]")
+
+                let! away =
+                    await (page.EvaluateAsync<bool>
+                            """() => {
+                                 const card = document.querySelector('#shell [data-repo-picker]')
+                                 const branch = document.querySelector('#shell [data-repo-picker-pane="branch"]')
+                                 return branch.getBoundingClientRect().left >= card.getBoundingClientRect().right - 1
+                               }""")
+                Expect.isTrue away "the branch pane starts off the card's right edge"
+                let! reachable =
+                    await (page.EvaluateAsync<bool> """() => !document.querySelector('#shell [data-repo-picker-pane="branch"]').inert""")
+                Expect.isFalse reachable "and a keyboard cannot get into it while it is there"
+
+                do! awaitU (page.ClickAsync "#shell [data-repo-candidate-branch]")
+
+                // It arrives, and the pane it came from leaves by the other edge.
+                let! _ =
+                    await (page.WaitForFunctionAsync
+                            """(() => {
+                                 const card = document.querySelector('#shell [data-repo-picker]').getBoundingClientRect()
+                                 const branch = document.querySelector('#shell [data-repo-picker-pane="branch"]').getBoundingClientRect()
+                                 const repo = document.querySelector('#shell [data-repo-picker-pane="repo"]').getBoundingClientRect()
+                                 return Math.abs(branch.left - card.left) <= 1 && repo.right <= card.left + 1
+                               })()""")
+                let! trapped =
+                    await (page.EvaluateAsync<bool> """() => !document.querySelector('#shell [data-repo-picker-pane="repo"]').inert""")
+                Expect.isFalse trapped "and the one that left is now the one out of reach"
+            }
         // The listing pages as it is read, and READ is the word: no press, no button, and
         // nothing on screen that says there is more except the foot standing where the rows
         // to come will be.
