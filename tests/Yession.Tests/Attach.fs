@@ -69,17 +69,43 @@ let private until (predicate: unit -> bool) : Async<bool> =
         }
     loop 3000
 
-/// What `console.warn` was told, and the real one put back on `restore`.
+/// The platform's `console.warn` as it stands. `console` is one mutable object for the whole
+/// process, so hearing what was warned means putting something else in `warn`'s place — and
+/// reading the real one first is the only way to put it back.
+[<Emit("console.warn")>]
+let private consoleWarn () : obj = jsNative
+
+[<Emit("console.warn = $0")>]
+let private setConsoleWarn (warn: obj) : unit = jsNative
+
+/// A function called the way `console` calls one: with however many arguments the caller
+/// passed, where an F# function takes exactly one. The parts arrive as an array, so what to
+/// make of them is F#'s decision rather than this line's.
+[<Emit("(...parts) => $0(parts)")>]
+let private variadic (handler: obj [] -> unit) : obj = jsNative
+
+/// Run `body` with a recorder in `console.warn`'s place, and put the real one back however the
+/// body ends. `said` answers with what has been warned so far, one entry per call, spelled the
+/// way `console` would have printed it — arguments joined by spaces.
+///
+/// The body runs INSIDE rather than there being a take and a matching give-back, for
+/// `Support.withEnv`'s reason: the process has one `console`, so a capture that is not given
+/// back swallows every later suite's warnings, and the half a caller forgets is the give-back.
 ///
 /// A diagnostic is the only place this client's warning about a TEXT frame goes, so reading it
 /// back is the only way to ask what it said — and what it must never contain is the ticket's
 /// url, which carries a single-use attach token.
-type private WarningLog =
-    abstract said : string []
-    abstract restore : unit -> unit
+let private withCapturedWarnings (body: (unit -> string list) -> Async<'a>) : Async<'a> =
+    async {
+        let said = ResizeArray<string> ()
+        let original = consoleWarn ()
+        setConsoleWarn (variadic (fun parts -> said.Add (parts |> Array.map Thrown.describe |> String.concat " ")))
 
-[<ImportDefault("./js/capture-warnings.mjs")>]
-let private captureWarnings () : WarningLog = jsNative
+        try
+            return! body (fun () -> List.ofSeq said)
+        finally
+            setConsoleWarn original
+    }
 
 let private device = { SourceCapabilities.byteStream with CanResize = true }
 
@@ -183,26 +209,26 @@ let portsTests =
         testCaseAsync "the text-frame warning does not put the attach token in the log" <|
             async {
                 let! provider = startProvider () |> Interop.awaitPromise
-                let warnings = captureWarnings ()
 
-                try
-                    let! attached =
-                        Yession.Host.AttachWs.attach
-                            (ticket provider.port "/talkative?token=s3cr3t-single-use" device)
-                            80
-                            24
-                            ignore
-                    let handle = attached |> expect
-                    let! warned = until (fun () -> warnings.said.Length > 0)
-                    Expect.isTrue warned "the provider's text frame drew the diagnostic"
-                    Expect.isFalse
-                        (warnings.said |> Array.exists (fun said -> said.Contains "s3cr3t-single-use"))
-                        "the attach token is not recoverable from the log"
-                    handle.Kill ()
-                    let! _ = handle.Exited
-                    do! provider.stop () |> Interop.awaitPromise
-                finally
-                    warnings.restore ()
+                do!
+                    withCapturedWarnings (fun said ->
+                        async {
+                            let! attached =
+                                Yession.Host.AttachWs.attach
+                                    (ticket provider.port "/talkative?token=s3cr3t-single-use" device)
+                                    80
+                                    24
+                                    ignore
+                            let handle = attached |> expect
+                            let! warned = until (fun () -> not (List.isEmpty (said ())))
+                            Expect.isTrue warned "the provider's text frame drew the diagnostic"
+                            Expect.isFalse
+                                (said () |> List.exists (fun line -> line.Contains "s3cr3t-single-use"))
+                                "the attach token is not recoverable from the log"
+                            handle.Kill ()
+                            let! _ = handle.Exited
+                            do! provider.stop () |> Interop.awaitPromise
+                        })
             }
 
         // MAY 9 from the client's end: a text frame that PARSES as a control frame IS one, of a
@@ -213,22 +239,22 @@ let portsTests =
             async {
                 let! provider = startProvider () |> Interop.awaitPromise
                 let received = System.Text.StringBuilder ()
-                let warnings = captureWarnings ()
 
-                try
-                    let! attached =
-                        Yession.Host.AttachWs.attach (ticket provider.port "/later-version" device) 80 24 (fun text ->
-                            received.Append text |> ignore)
-                    let handle = attached |> expect
-                    handle.Write "marker"
-                    let! echoed = until (fun () -> received.ToString().Contains "echo:marker")
-                    Expect.isTrue echoed "the round trip completed, so the text frame had arrived by now"
-                    Expect.equal warnings.said.Length 0 "a control frame of a type we do not know says nothing"
-                    handle.Kill ()
-                    let! _ = handle.Exited
-                    do! provider.stop () |> Interop.awaitPromise
-                finally
-                    warnings.restore ()
+                do!
+                    withCapturedWarnings (fun said ->
+                        async {
+                            let! attached =
+                                Yession.Host.AttachWs.attach (ticket provider.port "/later-version" device) 80 24 (fun text ->
+                                    received.Append text |> ignore)
+                            let handle = attached |> expect
+                            handle.Write "marker"
+                            let! echoed = until (fun () -> received.ToString().Contains "echo:marker")
+                            Expect.isTrue echoed "the round trip completed, so the text frame had arrived by now"
+                            Expect.equal (List.length (said ())) 0 "a control frame of a type we do not know says nothing"
+                            handle.Kill ()
+                            let! _ = handle.Exited
+                            do! provider.stop () |> Interop.awaitPromise
+                        })
             }
 
         testCaseAsync "a provider that is not there is an error, not a hang" <|

@@ -176,23 +176,51 @@ module OidcHttp =
     let cookieHeader (jar: Jar) : string =
         jar.Cookies |> Map.toList |> List.map (fun (k, v) -> sprintf "%s=%s" k v) |> String.concat "; "
 
-    type private ManualReply =
-        abstract status : int
-        abstract location : string
-        abstract setCookies : string []
-        abstract cacheControl : string
-        abstract body : string
-
     /// Resolve a (possibly relative) URL against a base, exactly as a browser resolves a
     /// `Location` header against the request URI.
     [<Fable.Core.Emit("new URL($0, $1).href")>]
     let private resolveUrl (location: string) (baseUrl: string) : string = Fable.Core.Util.jsNative
 
-    [<Fable.Core.ImportDefault("./js/fetch-manual.mjs")>]
-    let private fetchManualWith (url: string) (cookie: string) (headers: (string * string) []) : Fable.Core.JS.Promise<ManualReply> = Fable.Core.Util.jsNative
+    /// `Headers.getSetCookie()` — every `Set-Cookie` the reply carried, one string each.
+    /// `Headers.get` cannot answer this and `Fable.Fetch` does not bind it: `get` joins
+    /// repeated headers with a comma, and a cookie's `Expires` date contains one, so the
+    /// joined form cannot be taken apart again.
+    [<Fable.Core.Emit("$0.getSetCookie()")>]
+    let private setCookiesOf (headers: Fetch.Types.Headers) : string [] = Fable.Core.Util.jsNative
 
-    let private fetchManual (url: string) (cookie: string) : Fable.Core.JS.Promise<ManualReply> =
-        fetchManualWith url cookie [||]
+    /// One GET that does not follow redirects, as the parts of the reply the OIDC cases read.
+    ///
+    /// The `cookie` header goes on LAST, so a caller that asserts its own headers cannot
+    /// displace the jar this module is here to carry.
+    let private fetchManualWith
+        (url: string)
+        (cookie: string)
+        (headers: (string * string) [])
+        : Async<{| Status : int
+                   Location : string
+                   SetCookies : string []
+                   CacheControl : string
+                   Body : string |}> =
+        async {
+            let! attempt =
+                Http.attempt
+                    (fun response -> response.text ())
+                    url
+                    [ Fetch.Types.RequestProperties.Redirect Fetch.Types.RedirectMode.Manual
+                      Http.headers (List.ofArray headers @ [ "cookie", cookie ]) ]
+
+            match attempt with
+            // A request that produced no reply at all is what the promise behind this used to
+            // reject with, and every caller here reads a reply: there is nothing to return.
+            | Http.Unreachable reason -> return failwithf "%s did not answer: %s" url reason
+            | Http.Answered (response, body) ->
+                return
+                    {| Status = response.Status
+                       Location = Http.headerOf "location" response
+                       SetCookies = setCookiesOf response.Headers
+                       CacheControl = Http.headerOf "cache-control" response
+                       Body = body |}
+        }
 
     let private store (jar: Jar) (setCookies: string []) =
         for header in setCookies do
@@ -207,9 +235,9 @@ module OidcHttp =
     /// assert on every hop — Plan 07), storing any cookies; no redirect following.
     let getWithJarAs (headers: (string * string) list) (jar: Jar) (url: string) : Async<{| Status: int; Location: string; CacheControl: string; Body: string |}> =
         async {
-            let! reply = fetchManualWith url (cookieHeader jar) (Array.ofList headers) |> Interop.awaitPromise
-            store jar reply.setCookies
-            return {| Status = reply.status; Location = reply.location; CacheControl = reply.cacheControl; Body = reply.body |}
+            let! reply = fetchManualWith url (cookieHeader jar) (Array.ofList headers)
+            store jar reply.SetCookies
+            return {| Status = reply.Status; Location = reply.Location; CacheControl = reply.CacheControl; Body = reply.Body |}
         }
 
     /// GET with the jar, storing any cookies; no redirect following.

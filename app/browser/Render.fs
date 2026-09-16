@@ -823,24 +823,36 @@ let create (deps: Deps) : Renderer =
     // What the watch asks is `latest`, not a cursor from the render that made it: one observer
     // outlives many renders, and `Launch.wanting` is where "should I ask" lives (a page to
     // come, nothing in flight, no attempt under way).
-    let mutable footSeen : obj = null
-    let mutable footWatch : IntersectionObserver option = None
-    let syncListingFoot () =
-        let foot = Browser.Dom.document.querySelector ("[" + Dom.Hooks.repoPickerFoot + "]")
-        if not (obj.ReferenceEquals (box foot, footSeen)) then
-            footWatch |> Option.iter (fun watch -> watch.disconnect ())
-            footWatch <- None
-            footSeen <- box foot
+    // Two feet, one per pane, watched the same way and independently — the branch pane's list
+    // pages exactly as the repo pane's does, and both are in the document at once because the
+    // track slides rather than swapping.
+    let mutable feetSeen : Map<string, obj> = Map.empty
+    let mutable feetWatched : Map<string, IntersectionObserver> = Map.empty
+    // Each foot is watched inside ITS OWN pane's scroller: the panes scroll independently, so
+    // a watch rooted in the other one would be asking whether the foot is visible in a box it
+    // is not in.
+    let watchFoot (rootHook: string) (hook: string) (wanted: unit -> unit) =
+        let foot = Browser.Dom.document.querySelector ("[" + hook + "]")
+        if not (obj.ReferenceEquals (box foot, feetSeen |> Map.tryFind hook |> Option.defaultValue null)) then
+            feetWatched |> Map.tryFind hook |> Option.iter (fun watch -> watch.disconnect ())
+            feetWatched <- feetWatched |> Map.remove hook
+            feetSeen <- feetSeen |> Map.add hook (box foot)
             if not (isNull (box foot)) then
-                footWatch <-
-                    Some (
-                        watchListingFoot
-                            (Browser.Dom.document.querySelector ("[" + Dom.Hooks.repoPickerBody + "]"))
+                feetWatched <-
+                    feetWatched
+                    |> Map.add
+                        hook
+                        (watchListingFoot
+                            (Browser.Dom.document.querySelector ("[" + rootHook + "]"))
                             foot
-                            (fun () ->
-                                latest
-                                |> Option.bind (fun model -> Launch.wanting model.Launch)
-                                |> Option.iter deps.Actions.LaunchMore))
+                            wanted)
+    let syncListingFoot () =
+        watchFoot Dom.Hooks.repoPickerBody Dom.Hooks.repoPickerFoot (fun () ->
+            latest |> Option.bind (fun model -> Launch.wanting model.Launch) |> Option.iter deps.Actions.LaunchMore)
+        watchFoot Dom.Hooks.repoBranchBody Dom.Hooks.repoBranchFoot (fun () ->
+            latest
+            |> Option.bind (fun model -> Launch.wantingBranches model.Launch)
+            |> Option.iter (fun (repo, cursor) -> deps.Actions.LaunchBranchesMore repo cursor))
 
     let mutable renderedAt = -infinity
     let mutable held = 0.0
