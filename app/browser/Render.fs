@@ -51,81 +51,245 @@ let private countRender () : unit = jsNative
 
 // The two surfaces that are read from their END — the chat, and a terminal's scrollback.
 // Both are pinned to the bottom while the reader is at (or within a few px of) it, and both
-// keep their place when they have scrolled up to read. `-1` marks "was pinned". Lit
-// preserves focus/caret across its diff, but scroll is ours to manage.
+// keep their place when they have scrolled up to read. Lit preserves focus/caret across its
+// diff, but scroll is ours to manage.
 //
 // One selector list, taken once and put back once: the terminal used to have neither half,
 // so a command whose output arrived after the render left the newest line below the fold
 // with nothing to say it was there.
 let [<Literal>] private PinnedSurfaces = "[data-conversation],[data-terminal-scrollback]"
 
-// Keyed by what the surface IS, never by its position in the list: a terminal that took its
-// lease between two renders removes its scrollback from the document, and an index would
-// then put its scroll position into the chat.
-[<ImportDefault("./js/surface-scroll.mjs")>]
-let private surfaceScroll (selector: string) : obj = jsNative
+/// Where one pinned surface stood when the render started. `AtEnd` is a POSITION TO RESTORE
+/// rather than a number to remember: the surface grows under the reader, so the offset that
+/// was its end before the render is somewhere in the middle of it afterwards.
+type private SurfacePosition =
+    | AtEnd
+    | ScrolledTo of float
 
-// A surface that was NOT on screen before this render starts at its end, which is the other
-// half of "content grows from the top and the viewport rides the tail": opening a terminal
-// with a history behind it, or switching to one, should show the newest lines and not the
-// oldest. It used to fall through to `scrollTop = 0` — invisible while the stream hugged the
-// bottom of a short box with `mt-auto`, and plainly wrong the moment the history was longer
-// than the box, which is exactly when the anchoring stopped applying.
-//
-// Written ONLY when the render left the reader somewhere else. A write to `scrollTop` — to
-// the value it already holds included — ends whatever scroll the browser has in flight, in
-// Chromium and WebKit alike (measured in the shell harness: a smooth scroll from the end of
-// two hundred items, with a record landing every frame, stayed at the end for sixty frames
-// under the unconditional write, and reached the top under this one). A record arriving is
-// a render, so while a sandbox ran its setup — a dozen renders a second, none of them
-// touching the timeline — every fling back through the conversation was taken away within a
-// frame and, having started at the end, put back there. Which is what "it keeps jumping to
-// the bottom, no matter where I scroll" was, on a phone.
-//
-// Both reads happen in the one task the render is, and the browser moves a scroll only
-// between tasks — so a pinned reader who is not at the end AFTER the render is one the
-// render moved: the surface grew past them (they follow the tail), or Lit replaced it and
-// the new one starts at zero. A reader who had scrolled up is put back on the same terms.
-[<ImportDefault("./js/restore-surface-scroll.mjs")>]
-let private restoreSurfaceScroll (selector: string) (positions: obj) : unit = jsNative
+/// The surfaces a selector names. `querySelectorAll` answers a list indexed by number and
+/// every caller here wants to walk it.
+let private surfaces (selector: string) : Browser.Types.HTMLElement list =
+    let found = Browser.Dom.document.querySelectorAll selector
+    [ for i in 0 .. found.length - 1 -> found.[i] :?> Browser.Types.HTMLElement ]
 
-// A RENDER is not the only thing that moves the end of one of those surfaces away from the
-// reader — a RESIZE does it too, and on a phone the viewport is not a constant: the
-// browser's toolbars come and go, the device turns. The shell is the visible viewport's
-// height (`Style.app`), so each of those shortens the timeline's box while its `scrollTop`
-// stays exactly where it was, and somebody who was at the end of the conversation is left a
-// line and a half short of it — the last thing said, cut in half, just above the composer.
-//
-// Whether they were at the end has to be sampled BEFORE the box changes (by the time the
-// resize handler runs the measurement would always say "no"), so it rides the scroll event —
-// captured, because scroll does not bubble, and the element is Lit's to replace.
-[<ImportDefault("./js/keep-surfaces-pinned.mjs")>]
-let private keepSurfacesPinned (selector: string) : unit = jsNative
+/// What a surface IS, never where it sits in the list: a terminal that took its lease between
+/// two renders removes its scrollback from the document, and an index would then put its
+/// scroll position into the chat.
+let private surfaceKey (el: Browser.Types.HTMLElement) : string =
+    let terminal = el.getAttribute "data-terminal-id"
+    if isNull (box terminal) || terminal = "" then "chat" else terminal
 
-// A native <input> has no per-character DOM geometry, so we measure the pixel offset of a
-// substring with a canvas using the input's own font. Given a peer's decoded selection
-// (`anchor`,`head` indices), size its highlight span to `lo..hi` and offset the caret bar to
-// `head`. Colour is set by the view (`EditorColour`); this only positions. Called per peer whose
-// caret is in a collaborative input after every render — the DOM is up to date synchronously.
-//
-// Everything the marker needs is READ OFF THE FIELD, never assumed from the stylesheet: the
-// marker is a sibling of the input, and where the input's text sits in the block they share is
-// a function of the input's own offset, padding and content box. The title alone is a 28/32
-// heading at one width and a 19/24 pivot at the other, its padding spent outward so a fill can
-// appear without moving a glyph — and a chapter's name is a third type at a fourth size. A
-// marker placed from constants would be right at exactly one of them and silently wrong at the
-// rest, which is why the field is named by a SELECTOR here and nothing else about it is.
-//
-// The marker is found INSIDE the input's own block rather than on the page: the offsets it is
-// positioned by are its offset parent's, so a marker taken from somewhere else on the page
-// would be laid out against a box it does not live in.
-/// Watch the foot of the picker's listing inside the card's own scroller; the handle stops it
-/// when the foot goes. See the module for why an observer rather than a scroll handler.
-[<ImportDefault("./js/watch-listing-foot.mjs")>]
-let private watchListingFoot (root: obj) (foot: obj) (wanted: unit -> unit) : {| stop: unit -> unit |} = jsNative
+/// Whether the reader is at the end of a surface — within a few pixels of it, because a
+/// fractional scroll offset over sub-pixel line heights never lands on the bottom exactly.
+let private atEnd (el: Browser.Types.HTMLElement) : bool =
+    el.scrollTop + el.clientHeight >= el.scrollHeight - 4.0
 
-[<ImportDefault("./js/place-input-cursor.mjs")>]
-let private placeInputCursor (field: string) (peer: string) (anchor: int) (head: int) : unit = jsNative
+/// Where each pinned surface has the reader, taken before the render moves them.
+let private surfaceScroll (selector: string) : Map<string, SurfacePosition> =
+    surfaces selector
+    |> List.map (fun el -> surfaceKey el, (if atEnd el then AtEnd else ScrolledTo el.scrollTop))
+    |> Map.ofList
+
+/// Every pinned surface put back where the render left the reader.
+///
+/// A surface that was NOT on screen before this render starts at its end, which is the other
+/// half of "content grows from the top and the viewport rides the tail": opening a terminal
+/// with a history behind it, or switching to one, should show the newest lines and not the
+/// oldest. It used to fall through to `scrollTop = 0` — invisible while the stream hugged the
+/// bottom of a short box with `mt-auto`, and plainly wrong the moment the history was longer
+/// than the box, which is exactly when the anchoring stopped applying.
+///
+/// Written ONLY when the render left the reader somewhere else. A write to `scrollTop` — to
+/// the value it already holds included — ends whatever scroll the browser has in flight, in
+/// Chromium and WebKit alike (measured in the shell harness: a smooth scroll from the end of
+/// two hundred items, with a record landing every frame, stayed at the end for sixty frames
+/// under the unconditional write, and reached the top under this one). A record arriving is
+/// a render, so while a sandbox ran its setup — a dozen renders a second, none of them
+/// touching the timeline — every fling back through the conversation was taken away within a
+/// frame and, having started at the end, put back there. Which is what "it keeps jumping to
+/// the bottom, no matter where I scroll" was, on a phone.
+///
+/// Both reads happen in the one task the render is, and the browser moves a scroll only
+/// between tasks — so a pinned reader who is not at the end AFTER the render is one the
+/// render moved: the surface grew past them (they follow the tail), or Lit replaced it and
+/// the new one starts at zero. A reader who had scrolled up is put back on the same terms.
+let private restoreSurfaceScroll (selector: string) (positions: Map<string, SurfacePosition>) : unit =
+    for el in surfaces selector do
+        match Map.tryFind (surfaceKey el) positions with
+        // At the end before the render, and not on the page at all before it, want the same
+        // thing of it now — which is why the two are one case rather than one and a fallback.
+        | Some AtEnd | None -> if not (atEnd el) then el.scrollTop <- el.scrollHeight
+        | Some (ScrolledTo position) -> if el.scrollTop <> position then el.scrollTop <- position
+
+/// A RENDER is not the only thing that moves the end of one of those surfaces away from the
+/// reader — a RESIZE does it too, and on a phone the viewport is not a constant: the
+/// browser's toolbars come and go, the device turns. The shell is the visible viewport's
+/// height (`Style.app`), so each of those shortens the timeline's box while its `scrollTop`
+/// stays exactly where it was, and somebody who was at the end of the conversation is left a
+/// line and a half short of it — the last thing said, cut in half, just above the composer.
+///
+/// Whether they were at the end has to be sampled BEFORE the box changes (by the time the
+/// resize handler runs the measurement would always say "no"), so it rides the scroll event —
+/// captured, because scroll does not bubble, and the element is Lit's to replace.
+let private keepSurfacesPinned (selector: string) : unit =
+    // Keyed by the ELEMENT rather than by what the surface is, because Lit replaces it: a
+    // weak key lets the element it was taken from be collected with the render that dropped it.
+    let pinned = JS.Constructors.WeakMap.Create<Browser.Types.HTMLElement, bool> ()
+    Browser.Dom.document.addEventListener (
+        "scroll",
+        (fun event ->
+            // A capture listener on the document hears the DOCUMENT's own scroll as well as
+            // the surfaces inside it, and a document has no `matches` to be asked — so what
+            // the event reached says whether it is an element before it is asked anything.
+            let node = unbox<Browser.Types.Node> event.target
+            if node.nodeType = node.ELEMENT_NODE then
+                let el = unbox<Browser.Types.HTMLElement> event.target
+                if el.matches selector then pinned.set (el, atEnd el) |> ignore),
+        true)
+    Browser.Dom.window.addEventListener (
+        "resize",
+        fun _ ->
+            for el in surfaces selector do
+                // A surface nobody has scrolled has no entry, and a surface nobody has
+                // scrolled is at its end — so no entry counts as pinned, exactly as a
+                // sampled `true` does.
+                if not (pinned.has el) || pinned.get el then el.scrollTop <- el.scrollHeight)
+
+/// Watch the foot of a paged listing inside the card's own scroller, so the next page arrives
+/// as the reader reaches it rather than on a press. The caller stops the observer when the
+/// foot goes.
+///
+/// `IntersectionObserver` rather than a scroll handler, because it answers the question being
+/// asked — is the foot on screen — including the case a scroll handler never sees at all: a
+/// first page that did not fill the card, where the foot is visible and nobody has scrolled.
+/// Observing fires once immediately for exactly that.
+///
+/// `rootMargin` is what makes it feel like there is no paging: the page is asked for while the
+/// foot is still a screenful below, so the rows are usually there before the reader is.
+///
+/// `wanted` is asked WHETHER to fetch, every time, rather than being handed a cursor when the
+/// observer was made: one observer outlives many renders, and a cursor captured at the first
+/// would go on asking for the same page. Doing nothing is how the caller says "not now" —
+/// already in flight, or nothing more to ask for.
+let private watchListingFoot
+    (root: Browser.Types.Element)
+    (foot: Browser.Types.Element)
+    (wanted: unit -> unit)
+    : IntersectionObserver =
+    let observer =
+        IntersectionObserver.create
+            (fun entries -> if entries |> Array.exists (fun entry -> entry.isIntersecting) then wanted ())
+            root
+            "400px 0px"
+    observer.observe foot
+    observer
+
+/// The canvas a collaborator's caret is measured on, made once and kept. A canvas measures
+/// text without laying any out, which is the only way to ask a font how wide a run of
+/// characters is; making one per caret per render would be a DOM node per frame for an answer
+/// that depends on nothing the canvas holds.
+let mutable private measuringCanvas : Browser.Types.HTMLCanvasElement option = None
+
+let private measuringContext () : Browser.Types.CanvasRenderingContext2D =
+    let canvas =
+        match measuringCanvas with
+        | Some canvas -> canvas
+        | None ->
+            let made = Browser.Dom.document.createElement "canvas" :?> Browser.Types.HTMLCanvasElement
+            measuringCanvas <- Some made
+            made
+    canvas.getContext_2d ()
+
+/// A CSS length as pixels, or zero. `getPropertyValue` answers `"12px"` for a resolved length
+/// and `""` for anything it cannot resolve, and only the first is a number to add.
+let private pixels (el: Browser.Types.HTMLElement) (property: string) : float =
+    match System.Double.TryParse ((computedProperty el property).Trim().Replace ("px", "")) with
+    | true, value -> value
+    | _ -> 0.0
+
+/// A measured length as CSS. Fixed to three decimals rather than written out in full: the
+/// measurement is sub-pixel and a caret has to land on the glyph, but no layout can use what
+/// a float's whole expansion says past that.
+let private px (value: float) : string = sprintf "%.3fpx" value
+
+/// The font a field draws its text in, as a canvas `font` string. The `font` shorthand is the
+/// answer wherever the browser resolves one, and the four longhands it is composed of where it
+/// does not — a canvas measures in whatever font it is told, and in a default one otherwise,
+/// which is a plausible wrong answer rather than a failure.
+let private fieldFont (el: Browser.Types.HTMLElement) : string =
+    let shorthand = computedProperty el "font"
+    if not (System.String.IsNullOrWhiteSpace shorthand) then
+        shorthand
+    else
+        sprintf
+            "%s %s %s %s"
+            (computedProperty el "font-style")
+            (computedProperty el "font-weight")
+            (computedProperty el "font-size")
+            (computedProperty el "font-family")
+
+/// The span a peer's selection covers in a field of `length` characters: its low end, its high
+/// end, and where the caret itself is. Clamped at both ends, because a position decoded
+/// against a document that has since shrunk is a real offset into text that is no longer
+/// there.
+let private selectionSpan (length: int) (anchor: int) (head: int) : int * int * int =
+    let clamp i = max 0 (min length i)
+    let anchor, head = clamp anchor, clamp head
+    min anchor head, max anchor head, head
+
+/// A native <input> has no per-character DOM geometry, so the pixel offset of a substring is
+/// measured on a canvas in the input's own font. Given a peer's decoded selection
+/// (`anchor`,`head` indices), size its highlight span to `lo..hi` and offset the caret bar to
+/// `head`. Colour is set by the view (`EditorColour`); this only positions. Called per peer
+/// whose caret is in a collaborative input after every render — the DOM is up to date
+/// synchronously.
+///
+/// Everything the marker needs is READ OFF THE FIELD, never assumed from the stylesheet: the
+/// marker is a sibling of the input, and where the input's text sits in the block they share is
+/// a function of the input's own offset, padding and content box. The title alone is a 28/32
+/// heading at one width and a 19/24 pivot at the other, its padding spent outward so a fill can
+/// appear without moving a glyph — and a chapter's name is a third type at a fourth size. A
+/// marker placed from constants would be right at exactly one of them and silently wrong at the
+/// rest, which is why the field is named by a SELECTOR here and nothing else about it is.
+///
+/// The marker is found INSIDE the input's own block rather than on the page: the offsets it is
+/// positioned by are its offset parent's, so a marker taken from somewhere else on the page
+/// would be laid out against a box it does not live in.
+let private placeInputCursor (field: string) (peer: string) (anchor: int) (head: int) : unit =
+    match Browser.Dom.document.querySelector field with
+    | null -> ()
+    | found ->
+        let input = found :?> Browser.Types.HTMLInputElement
+        match input.parentElement with
+        | null -> ()
+        | block ->
+            match block.querySelector (sprintf "[data-cursor-peer=\"%s\"]" peer) with
+            | null -> ()
+            | marker ->
+                let marker = marker :?> Browser.Types.HTMLElement
+                let context = measuringContext ()
+                context.font <- fieldFont input
+                let value = input.value
+                let lo, up, head = selectionSpan value.Length anchor head
+                let padLeft = pixels input "padding-left"
+                let padTop = pixels input "padding-top"
+                let left = input.offsetLeft + pixels input "border-left-width" + padLeft
+                let top = input.offsetTop + pixels input "border-top-width" + padTop
+                let height = input.clientHeight - padTop - pixels input "padding-bottom"
+                // Where the i'th character starts, in the block the marker is laid out in: the
+                // text's own origin, plus what the font says the run before it takes, less how
+                // far the field has been scrolled under its own box.
+                let xOf i = left + context.measureText(value.Substring (0, i)).width - input.scrollLeft
+                let loX = xOf lo
+                setStyleProperty marker "left" (px loX)
+                setStyleProperty marker "top" (px top)
+                setStyleProperty marker "height" (px height)
+                setStyleProperty marker "width" (px (max 0.0 (xOf up - loX)))
+                // The caret bar is the marker's only element child. `:scope > *` is that
+                // child; the marker's first NODE is the template's own indentation.
+                match marker.querySelector ":scope > *" with
+                | null -> ()
+                | bar -> setStyleProperty (bar :?> Browser.Types.HTMLElement) "left" (px (xOf head - loX))
 
 [<Emit("requestAnimationFrame(() => $0())")>]
 let internal raf (f: unit -> unit) : unit = jsNative
@@ -660,19 +824,19 @@ let create (deps: Deps) : Renderer =
     // outlives many renders, and `Launch.wanting` is where "should I ask" lives (a page to
     // come, nothing in flight, no attempt under way).
     let mutable footSeen : obj = null
-    let mutable footWatch : {| stop: unit -> unit |} option = None
+    let mutable footWatch : IntersectionObserver option = None
     let syncListingFoot () =
         let foot = Browser.Dom.document.querySelector ("[" + Dom.Hooks.repoPickerFoot + "]")
         if not (obj.ReferenceEquals (box foot, footSeen)) then
-            footWatch |> Option.iter (fun watch -> watch.stop ())
+            footWatch |> Option.iter (fun watch -> watch.disconnect ())
             footWatch <- None
             footSeen <- box foot
             if not (isNull (box foot)) then
                 footWatch <-
                     Some (
                         watchListingFoot
-                            (box (Browser.Dom.document.querySelector ("[" + Dom.Hooks.repoPickerBody + "]")))
-                            (box foot)
+                            (Browser.Dom.document.querySelector ("[" + Dom.Hooks.repoPickerBody + "]"))
+                            foot
                             (fun () ->
                                 latest
                                 |> Option.bind (fun model -> Launch.wanting model.Launch)
