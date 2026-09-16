@@ -1204,13 +1204,18 @@ module Style =
     let askPaneLeft = askPaneBase + " absolute inset-x-0 top-0 -translate-x-full"
     let askPaneRight = askPaneBase + " absolute inset-x-0 top-0 translate-x-full"
 
+    /// The card's own edge margin — what a block spends when what is in it is not a line of
+    /// reading. `askInset` is the rail, and the rail is for WORDS; a block that has no word to
+    /// land on it has nothing to buy with those 64 pixels and only ends up shoved off centre.
+    let private askEdge = "px-8 max-md:px-4"
+
     /// The question and the way out, on one line — there is no author line above it any more.
     /// A caps `session asks` over `Which repository is this session for?` spent two lines
     /// saying one thing, and what the card is asking is legible from the question alone.
     /// The head's own inset is the BAND's, not the reading one: its way out sits in the
     /// gutter, which is the column the ticks are in, so the head starts where they do and the
     /// words after it land on the reading edge by the gutter's own width.
-    let askHead = "pl-8 pr-8 max-md:pl-4 max-md:pr-4 pb-1"
+    let askHead = cls [ askEdge; "pb-1" ]
     let askHeadLine = cls [ askMeasure; "flex items-start gap-3" ]
     /// The subtitle over the title. Both panes fill this slot — `session asks` over `which
     /// repository?`, the repo's name over `which branch?` — so the title sits at the same
@@ -1310,7 +1315,10 @@ module Style =
     /// height, because that is what it stands in for — the rows still to come.
     let askFoot = cls [ askInset; "h-12 flex items-center" ]
     let askFootLine = cls [ askMeasure; "flex items-center gap-3" ]
-    let askActions = cls [ askInset; "shrink-0 flex flex-wrap items-center gap-4 pt-6" ]
+    /// On the card's edge margin rather than the reading rail. START is a control, not a line —
+    /// it has a rim, and a rim held 48px off one edge and 16 off the other is not a margin, it
+    /// is a slab pushed sideways. Full width on a phone, that asymmetry is the whole button.
+    let askActions = cls [ askEdge; "shrink-0 flex flex-wrap items-center gap-4 pt-6" ]
     /// Full width on a phone, where a thumb is the pointer and the band is the screen; on a
     /// desktop it takes the room its word needs.
     let askStartWidth = "w-full md:w-auto"

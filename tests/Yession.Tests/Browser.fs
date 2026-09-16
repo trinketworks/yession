@@ -1657,6 +1657,12 @@ let editorTests =
                     // to edge (so a row's ground can) and carry the reading inset as PADDING.
                     // An element a block positions starts at its own box; an element carrying
                     // the inset itself — the search field — starts inside its padding.
+                    //
+                    // START is not among them, and was: the rail is where a LINE starts, and a
+                    // button is not a line. It has a rim, and a rim on the rail is held 48px
+                    // off one edge of the card and 16 off the other, which reads as a slab
+                    // pushed sideways rather than as a margin. What holds for it instead is
+                    // the case below.
                     let! adrift =
                         await (page.EvaluateAsync<string[]> (sprintf """() => {
                             const column = %d
@@ -1670,8 +1676,7 @@ let editorTests =
                             return [
                                     ['the question', box('#repo-picker-title')],
                                     ['the search field', inside('[data-repo-picker-search]')],
-                                    ['a row’s name', box('[data-repo-candidate-name]')],
-                                    ['the start button', box('[data-repo-picker-start]')]
+                                    ['a row’s name', box('[data-repo-candidate-name]')]
                                   ]
                                 .filter(([_, left]) => left !== column)
                                 .map(([what, left]) => `${what} starts at ${left}px, the conversation at ${column}px`)
@@ -1683,6 +1688,32 @@ let editorTests =
                 }
         askCardColumnCase 390 844 (EDITOR_PORT + 43)
         askCardColumnCase 1440 900 (EDITOR_PORT + 44)
+        // What a control owes the card's edges, where every line owes the reading rail.
+        //
+        // Full width on a phone is what makes this visible and what makes it worth pinning:
+        // a button that spans the band shows both its margins at once, so an inset spent on
+        // one edge and not the other is the whole shape of the thing. Symmetry rather than a
+        // number — the margin is the card's to choose and a redesign may choose again, but
+        // whatever it chooses is owed to both sides.
+        editorCaseIn 390 844 "the start button is centred in the card, not shoved along the reading rail" (EDITOR_PORT + 47) <| fun page ->
+            async {
+                do! awaitU (page.EvaluateAsync "() => window.__launch(true)")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-repo-picker] [data-repo-picker-start]")
+                let! margins =
+                    await (page.EvaluateAsync<int[]>
+                            """() => {
+                                 const card = document.querySelector('#shell [data-repo-picker]')
+                                 const start = card.querySelector('[data-repo-picker-start]')
+                                 const outer = card.getBoundingClientRect()
+                                 const inner = start.getBoundingClientRect()
+                                 return [Math.round(inner.left - outer.left), Math.round(outer.right - inner.right)]
+                               }""")
+                Expect.equal
+                    margins.[0]
+                    margins.[1]
+                    (sprintf "start stands the same distance from both of the card's edges, got %dpx and %dpx"
+                        margins.[0] margins.[1])
+            }
         // The card asks one thing at a time, and the second is to the RIGHT of the first.
         //
         // Both panes are in the document at once — they have to be, or the one arriving would
