@@ -54,6 +54,10 @@ let private candidate (name: string) : RepoCandidate =
 
 /// A client that has connected to a session whose log ends at `latest`, read its own store,
 /// and folded `events` — the path a browser takes, in the order it takes it.
+/// A branch page, on the listing page's terms.
+let private branches (names: string list) (next: string option) : BranchPage =
+    { BranchPage.Names = names; BranchPage.Next = next }
+
 /// A listing page: the rows, and whether the provider says there is more. The cursor is
 /// opaque to everything on this side, so any string is as good as the real one.
 let private page (names: string list) (next: string option) : RepoPage =
@@ -150,7 +154,7 @@ let private choosingTests =
             let model =
                 clientAt 1L fresh
                 |> launch (LaunchListingArrived (ListingLoaded (page [ "octo/hello"; "octo/other" ] None)))
-                |> launch (LaunchBranchesArrived (hello, BranchesLoaded [ "main"; "stale" ]))
+                |> launch (LaunchBranchesArrived (hello, BranchesLoaded (branches [ "main"; "stale" ] None)))
             Expect.equal (model.Launch.Branches |> Map.tryFind other) None "other's are still unknown"
 
         // What replaced a case that pinned the opposite: the list used to be truncated to
@@ -209,6 +213,58 @@ let private choosingTests =
             Expect.equal (Launch.candidates failed.Launch |> List.map (fun c -> RepoRef.value c.Repo)) [ "octo/one" ] "the rows read stay read"
             Expect.stringContains (render failed) "data-repo-picker-again" "with a way to ask again"
             Expect.equal (Launch.wanting failed.Launch) None "which the foot will not do on its own"
+
+        testCase "the branch pane is a pane OF a repo, and what it picks is what the command names" <| fun () ->
+            let held =
+                clientAt 1L fresh
+                |> launch (LaunchListingArrived (ListingLoaded (page [ "octo/hello" ] None)))
+                |> launch (LaunchSelected (candidate "octo/hello"))
+                |> launch (LaunchBranchesArrived (hello, BranchesLoaded (branches [ "main"; "fix/thing" ] None)))
+            Expect.equal held.Launch.Pane ChoosingRepo "the card opens on the repositories"
+            let onBranches = held |> launch (LaunchBranchPaneOpened hello)
+            Expect.equal onBranches.Launch.Pane (ChoosingBranch hello) "and goes to the branches OF the row held"
+            Expect.stringContains (render onBranches) "data-repo-branch=\"fix/thing\"" "which are the ones it has"
+            let picked = onBranches |> launch (LaunchBranchNamed (hello, "fix/thing")) |> launch LaunchBranchPaneClosed
+            Expect.equal picked.Launch.Pane ChoosingRepo "picking comes back"
+            Expect.equal
+                (Launch.target picked.Launch)
+                (Some { LaunchTarget.Repo = hello; LaunchTarget.Branch = Some "fix/thing" })
+                "with the branch on the command"
+
+        testCase "a name the provider does not have is offered, because switch_branch makes one" <| fun () ->
+            let typing =
+                clientAt 1L fresh
+                |> launch (LaunchListingArrived (ListingLoaded (page [ "octo/hello" ] None)))
+                |> launch (LaunchSelected (candidate "octo/hello"))
+                |> launch (LaunchBranchesArrived (hello, BranchesLoaded (branches [ "main"; "fix/thing" ] None)))
+                |> launch (LaunchBranchPaneOpened hello)
+                |> launch (LaunchBranchQueryTyped "fix/")
+            Expect.equal (Launch.branchesOn typing.Launch hello) [ "fix/thing" ] "what is typed narrows what is listed"
+            Expect.equal (Launch.namingNew typing.Launch hello) (Some "fix/") "and stands as a name of its own"
+            let exact = typing |> launch (LaunchBranchQueryTyped "main")
+            Expect.equal (Launch.namingNew exact.Launch hello) None "a name the provider HAS is not a new one"
+
+        testCase "the branch pane does not page into a search, because the provider has no branch search" <| fun () ->
+            let opened =
+                clientAt 1L fresh
+                |> launch (LaunchListingArrived (ListingLoaded (page [ "octo/hello" ] None)))
+                |> launch (LaunchSelected (candidate "octo/hello"))
+                |> launch (LaunchBranchesArrived (hello, BranchesLoaded (branches [ "main" ] (Some "branch-2"))))
+                |> launch (LaunchBranchPaneOpened hello)
+            Expect.equal (Launch.wantingBranches opened.Launch) (Some (hello, "branch-2")) "the foot asks with what the page carried"
+            let narrowing = opened |> launch (LaunchBranchQueryTyped "fi")
+            Expect.equal (Launch.wantingBranches narrowing.Launch) None "and stands down while what is listed is a filter over what arrived"
+
+        testCase "a branch pane reopened is a question asked again" <| fun () ->
+            let reopened =
+                clientAt 1L fresh
+                |> launch (LaunchListingArrived (ListingLoaded (page [ "octo/hello" ] None)))
+                |> launch (LaunchSelected (candidate "octo/hello"))
+                |> launch (LaunchBranchPaneOpened hello)
+                |> launch (LaunchBranchQueryTyped "fix/")
+                |> launch LaunchBranchPaneClosed
+                |> launch (LaunchBranchPaneOpened hello)
+            Expect.equal reopened.Launch.BranchQuery "" "what was typed on it does not survive it"
 
         testCase "a link copied from the forge is resolved; anything else typed is a search" <| fun () ->
             Expect.equal (Launch.linkOf "https://github.com/octo/hello/tree/fix") (Some (RepoLink.Branch (hello, "fix"))) "a branch page"

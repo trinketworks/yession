@@ -46,8 +46,15 @@ type LaunchMore =
 /// thirty lookups, and nearly every launch is on the default.
 type LaunchBranches =
     | BranchesUnknown
-    | BranchesLoaded of string list
+    | BranchesLoaded of BranchPage
     | BranchesUnavailable of reason: string
+
+/// Which of the card's two panes is on screen. The branch pane names the repo it is FOR,
+/// because there is no branch without one — a pane that could stand over no repository would
+/// be a pane with nothing to list.
+type LaunchPane =
+    | ChoosingRepo
+    | ChoosingBranch of RepoRef
 
 /// What a launch is FOR: the repo, and the branch when it is not the provider's default.
 /// `None` deliberately, rather than the default's name — a launch that names the default
@@ -75,6 +82,15 @@ type LaunchViewState =
       Selected : RepoRef option
       /// Where the next page stands.
       More : LaunchMore
+      /// Which pane is on screen, and the one the branch pane is for.
+      Pane : LaunchPane
+      /// What was typed on the BRANCH pane. It both narrows what is listed and stands as a
+      /// name of its own: `switch_branch` creates a branch the provider has not got, so what
+      /// is typed here is always offerable even when it matches nothing.
+      BranchQuery : string
+      /// Where the branch listing's next page stands. One, not one per repo, because one
+      /// branch pane is open at a time.
+      BranchMore : LaunchMore
       /// Each held row's branches, by repo.
       Branches : Map<RepoRef, LaunchBranches>
       /// The branch named on a row, by repo, when it is not the row's default. Named, not
@@ -108,6 +124,14 @@ type LaunchMsg =
     /// another.
     | LaunchBranchesArrived of RepoRef * LaunchBranches
     | LaunchBranchNamed of RepoRef * string
+    /// The card moved to the branch pane, and back. The repo is carried because the pane is
+    /// ABOUT one — going there from a row is the only way in.
+    | LaunchBranchPaneOpened of RepoRef
+    | LaunchBranchPaneClosed
+    | LaunchBranchQueryTyped of string
+    | LaunchBranchMoreStarted
+    | LaunchBranchMoreArrived of RepoRef * BranchPage
+    | LaunchBranchMoreFailed of reason: string
     /// A pasted link is being asked about before it can be held.
     | LaunchResolving of RepoLink
     /// The command left, under this request id, for this target.
@@ -126,6 +150,9 @@ module Launch =
           Listing = ListingUnknown
           Selected = None
           More = MoreIdle
+          Pane = ChoosingRepo
+          BranchQuery = ""
+          BranchMore = MoreIdle
           Branches = Map.empty
           Named = Map.empty
           Stage = Choosing
@@ -202,6 +229,41 @@ module Launch =
     let held (launch: LaunchViewState) : RepoCandidate option =
         launch.Selected |> Option.bind (fun repo -> candidates launch |> List.tryFind (fun c -> c.Repo = repo))
 
+    /// The branches on screen for the pane's repo, narrowed by what was typed. Narrowing is
+    /// done HERE, over the pages already read, because the provider has no branch search to
+    /// ask — `/branches` takes a page and nothing else. So what is typed filters what has
+    /// arrived, and `namingNew` is what covers the rest: a name nobody has scrolled to yet
+    /// and a name that does not exist are the same offer, and `switch_branch` makes both work.
+    let branchesOn (launch: LaunchViewState) (repo: RepoRef) : string list =
+        let typed = launch.BranchQuery.Trim ()
+        let all =
+            match launch.Branches |> Map.tryFind repo with
+            | Some (BranchesLoaded page) -> page.Names
+            | Some (BranchesUnavailable _) | Some BranchesUnknown | None -> []
+        if typed = "" then all
+        else all |> List.filter (fun name -> name.Contains typed)
+
+    /// What was typed, when it is a branch to NAME rather than one already listed. Offered
+    /// above the listing, because a name the provider does not have is the one thing a list
+    /// can never contain.
+    let namingNew (launch: LaunchViewState) (repo: RepoRef) : string option =
+        match launch.BranchQuery.Trim () with
+        | "" -> None
+        | typed when branchesOn launch repo |> List.exists (fun name -> name = typed) -> None
+        | typed -> Some typed
+
+    /// The cursor the BRANCH pane's foot would ask with — `wanting`'s rule, for the other
+    /// listing. Nothing while a search is narrowing, because what is on screen is then a
+    /// filter over what has arrived rather than the head of the listing, and paging into a
+    /// filter fetches pages nobody sees.
+    let wantingBranches (launch: LaunchViewState) : (RepoRef * string) option =
+        match launch.Pane, launch.BranchMore with
+        | ChoosingBranch repo, MoreIdle when not (busy launch) && launch.BranchQuery.Trim () = "" ->
+            match launch.Branches |> Map.tryFind repo with
+            | Some (BranchesLoaded page) -> page.Next |> Option.map (fun next -> repo, next)
+            | Some (BranchesUnavailable _) | Some BranchesUnknown | None -> None
+        | _ -> None
+
     /// The branch a row launches on: the one named on it, or the provider's default.
     let branchOf (launch: LaunchViewState) (candidate: RepoCandidate) : string =
         match launch.Named |> Map.tryFind candidate.Repo with
@@ -263,10 +325,31 @@ module Launch =
                     More = MoreIdle }
             | _ -> launch
         | LaunchMoreFailed reason -> { launch with More = MoreFailed reason }
-        | LaunchBranchesArrived (repo, branches) -> { launch with Branches = launch.Branches |> Map.add repo branches }
+        | LaunchBranchesArrived (repo, branches) ->
+            { launch with Branches = launch.Branches |> Map.add repo branches; BranchMore = MoreIdle }
+        // The pane's own query does not survive it. A branch typed on one repo's pane is not
+        // a filter over another's, and a pane reopened is a question asked again.
+        | LaunchBranchPaneOpened repo -> { launch with Pane = ChoosingBranch repo; BranchQuery = ""; BranchMore = MoreIdle }
+        | LaunchBranchPaneClosed -> { launch with Pane = ChoosingRepo; BranchQuery = "" }
+        | LaunchBranchQueryTyped text -> { launch with BranchQuery = text }
+        | LaunchBranchMoreStarted -> { launch with BranchMore = MoreFetching }
+        | LaunchBranchMoreArrived (repo, page) ->
+            match launch.Branches |> Map.tryFind repo with
+            // Only onto the listing it is a page of, and only while it was asked for — the
+            // repo listing's rule, for the same reason.
+            | Some (BranchesLoaded seen) when launch.BranchMore = MoreFetching ->
+                let known = Set.ofList seen.Names
+                let added = page.Names |> List.filter (fun name -> not (known.Contains name))
+                { launch with
+                    Branches =
+                        launch.Branches
+                        |> Map.add repo (BranchesLoaded { BranchPage.Names = seen.Names @ added; BranchPage.Next = page.Next })
+                    BranchMore = MoreIdle }
+            | _ -> launch
+        | LaunchBranchMoreFailed reason -> { launch with BranchMore = MoreFailed reason }
         | LaunchBranchNamed (repo, branch) -> { launch with Named = launch.Named |> Map.add repo branch }
         | LaunchResolving link -> { launch with Stage = Resolving link; Problem = None }
-        | LaunchSent (request, target) -> { launch with Stage = Sent (request, target); Problem = None }
+        | LaunchSent (request, target) -> { launch with Stage = Sent (request, target); Problem = None; Pane = ChoosingRepo }
         | LaunchAnswered (request, result) ->
             match launch.Stage with
             | Sent (sent, target) when sent = request ->

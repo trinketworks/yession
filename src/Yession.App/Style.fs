@@ -1146,7 +1146,10 @@ module Style =
     /// off the reading edge the card exists to meet. Same device and the same reason as
     /// `bandRail`. It spans the band rather than the scrollport, which is why the card's
     /// scroll is `askBody`'s: on the band it would carry the lead up out of sight with it.
-    let askLeadBar = "absolute inset-y-0 left-0 w-0.5 bg-blue"
+    /// `z-10` because the rows beneath it run edge to edge: a ground that reached the card's
+    /// left edge painted over the lead, so the one mark that says this card is waiting on you
+    /// was broken into dashes by whichever rows happened to be lit.
+    let askLeadBar = "absolute inset-y-0 left-0 w-0.5 bg-blue z-10"
 
     /// The reading inset, spent by each BLOCK rather than once by the band. 64px is the
     /// timeline's `px-8` plus the avatar gutter `messageBody` carries, and 48 is that same sum
@@ -1169,16 +1172,69 @@ module Style =
     /// down this column is a RAMP, not a rhythm (the question stands alone at the top, the
     /// ways to answer stand apart from it, and the button apart from all of it), so each block
     /// states its own.
-    let askBody = "flex flex-col max-h-[60vh] overflow-y-auto"
+    let askBody = "flex flex-col overflow-x-hidden"
+
+    /// Two panes, one box. The card asks one thing at a time and the second thing is to the
+    /// RIGHT of the first, because that is where a thing you went INTO is — the Zune move,
+    /// and the reason the way back is a chevron pointing the way the surface will go.
+    ///
+    /// The pane on screen is IN FLOW, so the card is exactly as tall as what is showing; the
+    /// other sits absolute in the same box, pushed a full width aside — there to slide in,
+    /// and contributing no height while it is not. Without that the card stands at the height
+    /// of its TALLER pane always, with a grey void under whichever is shorter.
+    /// `shrink-0` is load bearing: this is a flex child of a `max-h` scroller, so without it
+    /// the track is COMPRESSED to the card's height and its `overflow-hidden` clips the rest
+    /// of the list away — the rows below the fold stop existing rather than being scrolled
+    /// to, and the foot that pages is never reachable. The clip is for the pane that is off
+    /// to the side, and only that.
+    let askTrack = "relative shrink-0 overflow-hidden"
+    /// A pane is a COLUMN with three parts: what it asks, what there is to answer with, and
+    /// the commit. Only the middle scrolls — the question stays legible while a long list is
+    /// read, and START is where a thumb already is rather than a screenful below the last row
+    /// somebody scrolled past.
+    let private askPaneBase =
+        "min-w-0 flex flex-col max-h-[60vh] transition-transform duration-300 ease-out motion-reduce:transition-none"
+    /// The list, and the only thing in a pane that scrolls. `min-h-0` is what lets it: a flex
+    /// child's floor is its content, so without it the column grows past its own `max-h` and
+    /// the pane scrolls instead of the list inside it.
+    let askScroll = "flex-1 min-h-0 overflow-y-auto"
+    /// On screen. `min-w-0` so a long repo name in the subtitle truncates rather than widening
+    /// the pane.
+    let askPaneHere = askPaneBase + " translate-x-0"
+    let askPaneLeft = askPaneBase + " absolute inset-x-0 top-0 -translate-x-full"
+    let askPaneRight = askPaneBase + " absolute inset-x-0 top-0 translate-x-full"
+
+    /// The card's own edge margin — what a block spends when what is in it is not a line of
+    /// reading. `askInset` is the rail, and the rail is for WORDS; a block that has no word to
+    /// land on it has nothing to buy with those 64 pixels and only ends up shoved off centre.
+    let private askEdge = "px-8 max-md:px-4"
 
     /// The question and the way out, on one line — there is no author line above it any more.
     /// A caps `session asks` over `Which repository is this session for?` spent two lines
     /// saying one thing, and what the card is asking is legible from the question alone.
-    /// `items-start` so the dismiss sits by the question's FIRST line, wherever it wraps, and
-    /// at the measure's right edge rather than the screen's — a way out a desktop column's
-    /// width away from the thing it closes is a control nobody finds.
-    let askHead = cls [ askInset; "pb-1" ]
-    let askHeadLine = cls [ askMeasure; "flex items-start justify-between gap-4" ]
+    /// The head's own inset is the BAND's, not the reading one: its way out sits in the
+    /// gutter, which is the column the ticks are in, so the head starts where they do and the
+    /// words after it land on the reading edge by the gutter's own width.
+    let askHead = cls [ askEdge; "pb-1" ]
+    let askHeadLine = cls [ askMeasure; "flex items-start gap-3" ]
+    /// The subtitle over the title. Both panes fill this slot — `session asks` over `which
+    /// repository?`, the repo's name over `which branch?` — so the title sits at the same
+    /// height on both and only the line above it changes.
+    let askHeadWords = "flex flex-col min-w-0"
+    let askSubtitle = "font-light text-small leading-4 text-ink-faint truncate"
+    /// The branch pane's subtitle: the repo it is a pane OF, in the terminal face because it
+    /// is an identifier, on the same line box so the title under it does not move.
+    let askSubject = cls [ askSubtitle; "font-terminal" ]
+
+    /// The way out, in the gutter. The mark column is the NAVIGATION column here: × leaves the
+    /// card, ‹ leaves the pane, and a tick marks a row — one slot, one meaning, which is what
+    /// lets the two panes share a shape.
+    ///
+    /// ONE face for both, and grey: blue is what this card spends on the thing you are being
+    /// asked to do, and leaving is not it. A blue back chevron read as the answer.
+    let askWay =
+        cls [ "w-5 h-5 shrink-0 mt-1 grid place-items-center bg-transparent border-0 cursor-pointer transition-colors"
+              "text-ink-faint hover:text-ink"; focusRing ]
 
     /// The navigation voice: the wordmark's family, lowercased, at the heading step. Not
     /// `heading`, which truncates — a question is allowed to take the second line it needs.
@@ -1226,6 +1282,18 @@ module Style =
     /// name out from under the pointer that chose it.
     let askRowMark = "-ml-8 w-5 shrink-0 self-center text-blue"
     let askRowDescription = cls [ small; "truncate min-w-0 ml-auto max-w-[45%]" ]
+    /// The branch a held row will launch on, at its trailing edge, and the way into the pane
+    /// that changes it. Blue because it is a link; the chevron because it goes somewhere, and
+    /// that somewhere is to the right.
+    let askRowBranch =
+        cls [ caps; "ml-auto shrink-0 inline-flex items-center gap-1.5 bg-transparent border-0 cursor-pointer"
+              "text-blue hover:text-blue-bright transition-colors"; focusRing ]
+    let askRowBranchName = "font-terminal text-small normal-case tracking-normal"
+    /// What a branch row says about itself beside its name — the provider's default, or that
+    /// this one does not exist yet.
+    let askRowNote = cls [ label; "ml-auto shrink-0" ]
+    let askRowNoteNew = cls [ caps; "ml-auto shrink-0 text-blue" ]
+
     /// The held row's second line. Bare, because the row it sits in already carries a ground:
     /// a bordered field here was a box inside a box, and the last box on the card.
     ///
@@ -1247,11 +1315,17 @@ module Style =
     /// height, because that is what it stands in for — the rows still to come.
     let askFoot = cls [ askInset; "h-12 flex items-center" ]
     let askFootLine = cls [ askMeasure; "flex items-center gap-3" ]
-    let askActions = cls [ askInset; "flex flex-wrap items-center gap-4 pt-6" ]
+    /// On the card's edge margin rather than the reading rail. START is a control, not a line —
+    /// it has a rim, and a rim held 48px off one edge and 16 off the other is not a margin, it
+    /// is a slab pushed sideways. Full width on a phone, that asymmetry is the whole button.
+    let askActions = cls [ askEdge; "shrink-0 flex flex-wrap items-center gap-4 pt-6" ]
+    /// Full width on a phone, where a thumb is the pointer and the band is the screen; on a
+    /// desktop it takes the room its word needs.
+    let askStartWidth = "w-full md:w-auto"
     /// The commit button, which is disabled until something is held — and looks it: the
     /// rim recedes to a hairline and the type to faint, so the press state is one a held row
     /// visibly buys.
-    let askStart = cls [ btnPrimary; "disabled:border-hair disabled:text-ink-faint disabled:cursor-default" ]
+    let askStart = cls [ btnPrimary; askStartWidth; "h-12 disabled:border-hair disabled:text-ink-faint disabled:cursor-default" ]
     let caretIdle = caret + " opacity-50"
 
 

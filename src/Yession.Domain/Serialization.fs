@@ -2282,10 +2282,20 @@ module Codec =
                 { Repos.RepoPage.Candidates = get.Required.Field "repos" (Decode.list repoCandidate.Decode)
                   Repos.RepoPage.Next = get.Optional.Field "next" Decode.string }) }
 
-    /// The branches of one repo, by name.
-    let branchNames : Codec<string list> =
-        { Encode = (fun branches -> Encode.object [ "branches", Encode.list (branches |> List.map Encode.string) ])
-          Decode = Decode.field "branches" (Decode.list Decode.string) }
+    /// One page of a repo's branches, by name — `repoPage`'s shape, since it is the same
+    /// question asked of a different listing.
+    let branchPage : Codec<Repos.BranchPage> =
+        { Encode =
+            fun (page: Repos.BranchPage) ->
+                Encode.object
+                    [ yield "branches", Encode.list (page.Names |> List.map Encode.string)
+                      match page.Next with
+                      | Some next -> yield "next", Encode.string next
+                      | None -> () ]
+          Decode =
+            Decode.object (fun get ->
+                { Repos.BranchPage.Names = get.Required.Field "branches" (Decode.list Decode.string)
+                  Repos.BranchPage.Next = get.Optional.Field "next" Decode.string }) }
 
     /// Where a pull request comes from: the repository holding its head, and the branch.
     let pullHead : Codec<Repos.PullHead> =

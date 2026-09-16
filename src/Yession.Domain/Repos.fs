@@ -92,6 +92,14 @@ type RepoPage =
     { Candidates : RepoCandidate list
       Next : string option }
 
+/// One page of a repository's branches, on the same terms as `RepoPage` and for the same
+/// reason: a repository with six hundred branches is read the way one with six is, and what
+/// the next page IS stays the provider side's to decide.
+[<RequireQualifiedAccess>]
+type BranchPage =
+    { Names : string list
+      Next : string option }
+
 module RepoListing =
 
     /// Render one listing line the way both interfaces say it.

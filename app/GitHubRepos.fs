@@ -190,7 +190,7 @@ let readCursor (token: string) : (string option * int) option =
 /// exactly full offers one more and that one comes back empty. The alternative — teaching
 /// every read in this file to carry response headers — buys one avoided request at the end
 /// of a scroll nobody reaches.
-let nextCursor (text: string option) (page: int) (got: RepoCandidate list) : string option =
+let nextCursor (text: string option) (page: int) (got: 'row list) : string option =
     if List.length got < pageSize || page >= pageLimit then None else Some (mintCursor text (page + 1))
 
 /// The repositories a credential reaches, most recently pushed first. Every affiliation
@@ -258,12 +258,16 @@ let canonicalOver (apiBase: string) (token: string option) (repo: RepoRef) : Asy
         | Error failure -> return Error failure
     }
 
-/// The branches a repository has. One page of a hundred, which is every branch of nearly
-/// every repository and the first hundred of the rest.
-let branchesOver (apiBase: string) (token: string option) (repo: RepoRef) : Async<Result<string list, LookupFailure>> =
+/// The branches a repository has, a page at a time — read the way the repo listing is, and
+/// with the same cursor, since "which page" is the whole of what either needs to carry.
+///
+/// A repo-listing cursor replayed here is harmless and deliberately not guarded against: the
+/// repository is in the PATH, so all a cursor can move is which page of it, which is what a
+/// cursor is for.
+let branchesOver (apiBase: string) (token: string option) (repo: RepoRef) (page: int) : Async<Result<string list, LookupFailure>> =
     read
         branchesDecoder
-        (sprintf "%s/repos/%s/branches?per_page=100" (apiBase.TrimEnd '/') (RepoRef.value repo))
+        (sprintf "%s/repos/%s/branches?per_page=%d&page=%d" (apiBase.TrimEnd '/') (RepoRef.value repo) pageSize page)
         token
 
 /// Where a pull request comes from — the repository holding its head, and the branch — so
@@ -297,7 +301,7 @@ let private respondText (res: ServerResponse) (status: int) (text: string) =
 /// browser reads one wire shape rather than two.
 let encodeListing (page: RepoPage) : string = Codec.toString Codec.repoPage page
 
-let encodeBranches (branches: string list) : string = Codec.toString Codec.branchNames branches
+let encodeBranches (page: BranchPage) : string = Codec.toString Codec.branchPage page
 
 let encodePullHead (head: PullHead) : string = Codec.toString Codec.pullHead head
 
@@ -369,8 +373,19 @@ let routes
                             match RepoRef.create (owner + "/" + name) with
                             | Error e -> respondText res 400 (sprintf "not a repo name: %s" e)
                             | Ok repo ->
-                                match! branchesOver apiBase token repo with
-                                | Ok branches -> respondJson res 200 (encodeBranches branches)
+                                let page =
+                                    queryParamOf req.url "page"
+                                    |> Option.bind readCursor
+                                    |> Option.map snd
+                                    |> Option.defaultValue 1
+                                match! branchesOver apiBase token repo page with
+                                | Ok branches ->
+                                    respondJson
+                                        res
+                                        200
+                                        (encodeBranches
+                                            { BranchPage.Names = branches
+                                              BranchPage.Next = nextCursor None page branches })
                                 | Error failure -> respondText res (statusOf failure) (LookupFailure.describe failure)
                         | Some (GitHubPullHead (owner, name, number)) ->
                             match RepoRef.create (owner + "/" + name), Int32.TryParse number with
