@@ -59,6 +59,10 @@
     <!-- The other end of the same wire: what a keydown means to a pty, which the browser
          tier could only ever reach one key at a time. Pure, so it sits in the cheap tier. -->
     <Compile Include="Keystrokes.fs" />
+    <!-- The other half of the keyboard the browser tier could only reach one key at a
+         time: where focus lands when the tablist is walked. Pure arithmetic over an
+         index and a count, so it sits in the cheap tier beside the keystrokes. -->
+    <Compile Include="TabStrips.fs" />
     <Compile Include="Attach.fs" />
     <Compile Include="NodeExtras.fs" />
     <Compile Include="Timeline.fs" />

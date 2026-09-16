@@ -537,6 +537,20 @@ written — the tell is one name meaning an option in the outer scope and its co
 inner. Do not give a binding two types under one name; why CI's checker minds when nothing here
 does is not yet known, and until it is, the rename is the fix.
 
+CI's `lint` also costs far more than this box's, and what it costs is decided by the assembly
+GRAPH rather than by how much source a change touches. A four-line conversion in `View.fs`
+needed one field `Fable.Browser.Dom` does not type, so it declared `Fable.BrowserExtras` and
+`Fable.Browser.Dom` on `Yession.App` — which `Yession.Host` and `Yession.Tests` both reference,
+so one line of `.fsproj` widened the population three of the scoping rules walk, over the two
+biggest projects there are. The step ran past 48 minutes, twice, where it takes about ten; the
+same commit linted in 610s from a cold worktree here and 585s warm, exit 0 every time, and no
+local run of any shape reproduced it. Removing those two references — nothing else — brought CI
+back to 10m24s and green. So: a `ProjectReference` or a binding `PackageReference` added to a
+project that sits LOW in the graph is not the free tidiness it looks like, and the tell that you
+are about to pay for one is that CI hangs somewhere no local run does. Declare the dependency on
+the project that actually uses it, and where that is not the same project, a one-line `[<Emit>]`
+beside the use costs two duplicated lines and nothing else.
+
 Every rule carries a fixture — `analyzers/fixtures/<Rule>Fixture` — whose source says in
 `// YES00n` markers which of its cases must be reported (across several files where the rule is
 about how many files do something, since one file could then neither break it nor prove the rule

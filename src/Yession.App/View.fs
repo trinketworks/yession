@@ -1221,8 +1221,22 @@ module View =
     /// `isComposing` guards the IME exactly as the command line's Enter does (`Browser`'s
     /// `bindTerminalInput`): mid-composition, Enter accepts a candidate word, and taking the
     /// field away from someone in the middle of typing one is not what they asked for.
-    [<Fable.Core.ImportDefault("./js/commit-on-enter.mjs")>]
-    let private commitOnEnter (e: obj) : unit = Fable.Core.Util.jsNative
+    /// Whether this key event arrived while an input method editor was composing.
+    /// `Fable.Browser.Dom`'s `KeyboardEvent` stops at the key and the modifiers, so the one
+    /// field that decides whether an Enter is a person committing a candidate word has to be
+    /// read directly. `Fable.BrowserExtras` declares the same binding for the browser client;
+    /// this project cannot reach it, and giving it that reference is not worth what it costs
+    /// the analyzer over `Yession.Host` and `Yession.Tests`, which both reference this.
+    [<Fable.Core.Emit("$0.isComposing")>]
+    let private isComposing (e: Browser.Types.KeyboardEvent) : bool = Fable.Core.Util.jsNative
+
+    let private commitOnEnter (e: Browser.Types.KeyboardEvent) : unit =
+        if e.key = "Enter" && not (isComposing e) then
+            // Both halves, together: the browser told not to also act on the key, and the field
+            // given up — which is what the caller reads as "done". Preventing without blurring
+            // would leave the keyboard open over a field that had stopped responding to Enter.
+            e.preventDefault ()
+            (e.currentTarget :?> Browser.Types.HTMLElement).blur ()
 
     /// The bytes a keydown sends to a pty, and the browser told not to also act on it.
     ///
@@ -1325,7 +1339,7 @@ module View =
                        value="{titleStr}"
                        .value={titleStr}
                        @input={EvVal(fun v -> dispatch (EditTitleMsg (Ylmish.Text.edit v model.Synced.Title)))}
-                       @keydown={Ev(fun e -> commitOnEnter e)}
+                       @keydown={Ev(fun (e: Browser.Types.Event) -> commitOnEnter (e :?> Browser.Types.KeyboardEvent))}
                        @keyup={Ev(fun e -> actions.ReportFieldSelection Title (selectionOf e))}
                        @click={Ev(fun e -> actions.ReportFieldSelection Title (selectionOf e))}
                        @select={Ev(fun e -> actions.ReportFieldSelection Title (selectionOf e))}
@@ -2251,7 +2265,7 @@ module View =
                          value="{named}"
                          .value={named}
                          @input={EvVal(fun v -> dispatch (EditChapterNameMsg (item.MessageId, Ylmish.Text.edit v held)))}
-                         @keydown={Ev(fun e -> commitOnEnter e)}
+                         @keydown={Ev(fun (e: Browser.Types.Event) -> commitOnEnter (e :?> Browser.Types.KeyboardEvent))}
                          @keyup={Ev(fun e -> actions.ReportFieldSelection (ChapterName item.MessageId) (selectionOf e))}
                          @click={Ev(fun e -> actions.ReportFieldSelection (ChapterName item.MessageId) (selectionOf e))}
                          @select={Ev(fun e -> actions.ReportFieldSelection (ChapterName item.MessageId) (selectionOf e))}
@@ -2825,6 +2839,38 @@ module View =
               </div>
             </section>"""
 
+    // The three handlers below share one reading of the strip, and it is the only part of the
+    // tabs pattern that needs a browser: which elements the tabs are, and which one focus is
+    // on. Where focus GOES is `TabStrip`, decided on an index and a count.
+
+    /// The strip's tabs, in document order — which is the order the view rendered them in, and
+    /// so the order both of `TabStrip`'s answers index into. Read off the event's own
+    /// `currentTarget` rather than the document, because the handler is bound to the tablist
+    /// and a page may hold more than one.
+    let private stripTabs (e: Browser.Types.Event) : Browser.Types.HTMLElement list =
+        let strip = e.currentTarget :?> Browser.Types.Element
+        let found = strip.querySelectorAll "[role=\"tab\"]"
+        [ for i in 0 .. found.length - 1 -> found.[i] :?> Browser.Types.HTMLElement ]
+
+    /// The focused element's nearest enclosing `selector`, or `None` when focus is elsewhere.
+    /// `closest` rather than an identity test on `activeElement`: what a tab holds is a
+    /// button's worth of markup, and focus landing on something inside one is still focus on
+    /// that tab.
+    let private focusedWithin (selector: string) : Browser.Types.Element option =
+        let active = Browser.Dom.document.activeElement
+        if isNull (box active) then None else active.closest selector
+
+    /// Where focus sits in the strip, or `-1` for "not on a tab" — which is a real state (the
+    /// tablist itself can hold focus) and the one `TabStrip.walk` reads as "start at the
+    /// beginning".
+    let private focusedTab (tabs: Browser.Types.HTMLElement list) : int =
+        match focusedWithin "[role=\"tab\"]" with
+        | None -> -1
+        | Some onTab ->
+            tabs
+            |> List.tryFindIndex (fun tab -> System.Object.ReferenceEquals (tab, onTab))
+            |> Option.defaultValue -1
+
     /// Arrow-key movement inside the pane's tablist — the half of the ARIA tabs pattern a
     /// plain row of buttons does not give you. Declaring `role="tablist"` and leaving
     /// Left/Right dead would be a worse lie than not declaring it.
@@ -2832,14 +2878,28 @@ module View =
     /// Moves FOCUS only; selection follows the Enter/Space the button already handles. That
     /// is ARIA's "manual activation" variant, and it is the right one here: walking the
     /// strip must not mount and unmount a player under the reader on every keypress.
-    [<Fable.Core.ImportDefault("./js/move-tab-focus.mjs")>]
-    let private moveTabFocus (e: obj) : unit = Fable.Core.Util.jsNative
+    let private moveTabFocus (e: Browser.Types.KeyboardEvent) : unit =
+        let tabs = stripTabs e
+        match TabStrip.walk e.key (focusedTab tabs) tabs.Length with
+        | None -> ()
+        | Some next ->
+            tabs.[next].focus ()
+            // Only for a key the walk CLAIMED. Preventing unconditionally would swallow the
+            // strip's other keys — including the Delete/Backspace unpin below, whose own
+            // prevention belongs with it.
+            e.preventDefault ()
 
     /// Delete/Backspace on a focused tab — the keyboard's unpin (Plan 20, stage 1). Returns
     /// the tab's key, or `""` when this keypress is not that: the strip's other keys are the
     /// arrow walk above, and typing must not unpin anything.
-    [<Fable.Core.ImportDefault("./js/unpin-key-on.mjs")>]
-    let private unpinKeyOn (e: obj) : string = Fable.Core.Util.jsNative
+    let private unpinKeyOn (e: Browser.Types.KeyboardEvent) : string =
+        if e.key <> "Delete" && e.key <> "Backspace" then ""
+        else
+            match focusedWithin "[data-pane-tab]" with
+            | None -> ""
+            | Some tab ->
+                e.preventDefault ()
+                tab.getAttribute "data-pane-tab"
 
     /// Move focus to the tab that will take the released one's place — BEFORE the release,
     /// which is what makes it need no timing assumption at all.
@@ -2850,8 +2910,10 @@ module View =
     /// moved it to `body`; on `requestAnimationFrame`, a headless browser that paints no
     /// frames never ran the callback at all. Going first has neither problem: the neighbour
     /// exists right now, and a node that keeps focus keeps it across the patch.
-    [<Fable.Core.ImportDefault("./js/focus-neighbour-tab.mjs")>]
-    let private focusNeighbourTab (e: obj) : unit = Fable.Core.Util.jsNative
+    let private focusNeighbourTab (e: Browser.Types.KeyboardEvent) : unit =
+        let tabs = stripTabs e
+        TabStrip.neighbour (focusedTab tabs) tabs.Length
+        |> Option.iter (fun next -> tabs.[next].focus ())
 
     /// One block's read-only view, as a tab opened from its chip shows it: the command, and
     /// everything it printed, from the chunks this client already has.
@@ -3352,20 +3414,21 @@ module View =
             html $"""
                 <div class="{Style.terminalTabs}">
                   <div class="{Style.terminalTabList}" role="tablist" aria-label="Terminals and recordings"
-                       @keydown={Ev(fun e ->
-                                        moveTabFocus e
+                       @keydown={Ev(fun (e: Browser.Types.Event) ->
+                                        let pressed = e :?> Browser.Types.KeyboardEvent
+                                        moveTabFocus pressed
                                         // Delete/Backspace unpins what is focused. The index
                                         // is taken BEFORE the dispatch and the focus handed
                                         // back after it, because the tab being released may
                                         // be the one leaving the document.
-                                        match unpinKeyOn e with
+                                        match unpinKeyOn pressed with
                                         | "" -> ()
                                         | key ->
                                             tabs
                                             |> List.tryFind (fun tab -> PaneTab.key tab = key)
                                             |> Option.filter (fun tab -> ClientModel.isPinned tab model)
                                             |> Option.iter (fun tab ->
-                                                focusNeighbourTab e
+                                                focusNeighbourTab pressed
                                                 dispatch (TogglePinMsg tab)))}>
                     {tabs |> List.map tabButton}
                   </div>
