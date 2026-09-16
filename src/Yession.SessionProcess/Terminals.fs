@@ -832,8 +832,9 @@ module SessionTerminals =
     ///
     /// `openTerminals` seeds the set left open by a previous process (folded from the
     /// durable log at boot) so `ReconcileAtBoot` can close them; `onRecord` broadcasts a
-    /// record after it is durable; `actorFor` resolves a peer to its attribution, exactly
-    /// as the message scheduler does.
+    /// record after it is durable; `principalFor` resolves a peer to its attribution,
+    /// exactly as the message scheduler does — applied to a block's authority at the
+    /// durable append, the one place the Process knows the binding.
     let create
         (log: EventLog<SessionEvent>)
         // Which sandbox a terminal runs in, resolved per terminal (Plan 15, stage 2). A
@@ -842,6 +843,11 @@ module SessionTerminals =
         // session does not have resolves to an environment that refuses with the reason,
         // so there is no second way for a terminal to be told no.
         (environmentFor: SandboxRef -> SessionEnvironment.SessionEnvironment)
+        // Who a peer IS: the user their join was attributed to, or the peer itself when
+        // nobody verified them. A doc entry can only name the connection that wrote it,
+        // and the credential a block spends is resolved from what the log says — so a
+        // peer left unresolved here is a person whose own command runs on nobody's.
+        (principalFor: PeerId -> Principal)
         (openTranscript: OpenTranscript)
         // Reading one back (Plan 19). The manager holds the WRITER for every live terminal
         // and none of the readers, because the two have opposite shapes — see
@@ -1722,12 +1728,28 @@ module SessionTerminals =
                     appliedSize.[key] <- size
                 | _ -> ()
 
+        /// A queued act's authority as the log records it: each peer in it resolved to the
+        /// user their join was attributed to, by the rule the message scheduler stamps
+        /// `MessageSent.Author` with. The doc only ever knows connections, so an entry
+        /// arrives naming a peer — and `CredentialOwner.ofPrincipal` owns nothing for a
+        /// peer, so one left as-is would resolve a person's own command to the deployment's
+        /// scope. Idempotent: a user resolves to themselves.
+        let attributed (entry: PendingAct) : PendingAct =
+            { entry with
+                Authority =
+                    entry.Authority
+                    |> Authority.map (fun principal ->
+                        match principal with
+                        | Principal.Peer peer -> principalFor peer
+                        | Principal.User _ -> principal) }
+
         /// The refusal is the durable fact that consumes the entry — `consumedOf` reads
         /// `TerminalCommandRejected` exactly as it reads a start — attributed to the session,
         /// with the command snapshotted because the doc entry goes the moment this lands. Two
         /// callers: the classifier saying no inside a run, and the drain finding an entry
         /// whose terminal has closed.
         let refuse (terminalId: TerminalId) (entry: PendingAct) (command: string) (reason: string) : Async<unit> =
+            let entry = attributed entry
             appendAs
                 ActorRef.System
                 (SessionEvent.TerminalCommandRejected
@@ -1749,6 +1771,9 @@ module SessionTerminals =
                     // terminal shut and leave it alone.
                     return ()
                 | true, terminal ->
+                    // Resolved ONCE, up here, so the classifier, the flip policy, the block
+                    // event and a refusal all read the same parties.
+                    let entry = attributed entry
                     let transcript = terminal.Transcript
                     busy <- Set.add key busy
                     // A shell still starting is waited for, busy: the block is this

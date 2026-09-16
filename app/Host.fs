@@ -375,6 +375,7 @@ let startFull
             SessionTerminals.create
                 log
                 sandboxes.EnvironmentFor
+                principalFor
                 transcripts.Open
                 transcripts.ReadRange
                 Emulator.openEmulator
