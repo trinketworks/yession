@@ -9,7 +9,6 @@ open Yession.Domain.Collab
 open Yession.Domain.Tools
 open Yession.Domain.Chat
 open Yession.Domain.Prs
-open Fable.BrowserExtras
 open Lit
 
 /// The client shell as Fable.Lit templates. The view is a total function of the model
@@ -1218,6 +1217,15 @@ module View =
     /// `isComposing` guards the IME exactly as the command line's Enter does (`Browser`'s
     /// `bindTerminalInput`): mid-composition, Enter accepts a candidate word, and taking the
     /// field away from someone in the middle of typing one is not what they asked for.
+    /// Whether this key event arrived while an input method editor was composing.
+    /// `Fable.Browser.Dom`'s `KeyboardEvent` stops at the key and the modifiers, so the one
+    /// field that decides whether an Enter is a person committing a candidate word has to be
+    /// read directly. `Fable.BrowserExtras` declares the same binding for the browser client;
+    /// this project cannot reach it, and giving it that reference is not worth what it costs
+    /// the analyzer over `Yession.Host` and `Yession.Tests`, which both reference this.
+    [<Fable.Core.Emit("$0.isComposing")>]
+    let private isComposing (e: Browser.Types.KeyboardEvent) : bool = Fable.Core.Util.jsNative
+
     let private commitOnEnter (e: Browser.Types.KeyboardEvent) : unit =
         if e.key = "Enter" && not (isComposing e) then
             // Both halves, together: the browser told not to also act on the key, and the field
