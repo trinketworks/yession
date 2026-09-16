@@ -188,6 +188,16 @@ module Dom =
         /// by what reaching it does — `more` while the next page is what a scroll brings,
         /// `failed` while the last attempt at it is what a press would retry.
         let repoPickerFoot = "data-repo-picker-foot"
+        /// The card's two panes and the track they ride, and the branch pane's own rows, foot
+        /// and way back. Valued by which pane, so a test reads WHICH is on screen.
+        let repoPickerPane = "data-repo-picker-pane"
+        let repoPickerTrack = "data-repo-picker-track"
+        let repoPickerSubject = "data-repo-picker-subject"
+        let repoPickerBack = "data-repo-picker-back"
+        let repoBranch = "data-repo-branch"
+        let repoBranchName = "data-repo-branch-name"
+        let repoBranchSearch = "data-repo-branch-search"
+        let repoBranchFoot = "data-repo-branch-foot"
         let repoPickerAgain = "data-repo-picker-again"
         let repoPickerDismiss = "data-repo-picker-dismiss"
         /// What went wrong with the last launch, in the session's words.
@@ -530,7 +540,12 @@ module Dom =
         let readingHistory = "Reading this session's history"
         // The ask card, asking for the session's repo. The question carries the whole of it —
         // a caps `session asks` over it said the same thing in fewer words and one line more.
-        let repoPickerTitle = "Which repository is this session for?"
+        /// The head's two lines, on the repo pane. The subtitle is who is asking; the branch
+        /// pane fills the same slot with the repo it is a pane of, which is what makes the
+        /// title below it sit at the same height on both.
+        let repoPickerAsker = "session asks"
+        let repoPickerTitle = "Which repository?"
+        let repoPickerBranchTitle = "Which branch?"
         let repoPickerSearchLabel = "search repositories, or paste a link"
         let repoPickerSearchPlaceholder = "search github, or paste a link"
         let repoPickerLooking = "looking…"
@@ -538,7 +553,14 @@ module Dom =
         let repoPickerMoreComing = "more"
         let repoPickerAgain = "try again"
         let repoPickerNothing = "nothing by that name"
-        let repoPickerBranchLabel = "branch"
+        let repoPickerBranchOf = "branch:"
+        let repoPickerBranchDefault = "default"
+        /// What a name the provider does not have says about itself: `switch_branch` makes it.
+        let repoPickerBranchNew = "new"
+        let repoPickerNoBranch = "no branch by that name"
+        let repoPickerBranchSearchLabel = "search branches, or name a new one"
+        let repoPickerBranchSearchPlaceholder = "search branches, or name a new one"
+        let repoPickerBack = "back to the repositories"
         let repoPickerStart = "Start"
         let repoPickerDismiss = "dismiss"
         let repoPickerConnect = "Connect GitHub"

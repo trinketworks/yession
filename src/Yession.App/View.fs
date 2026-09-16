@@ -169,8 +169,11 @@ type ViewActions =
       /// Ask for the page a cursor names (`LaunchMoreArrived`). The cursor is the session's
       /// own and is carried back unread — see `Repos.RepoPage`.
       LaunchMore : string -> unit
-      /// Ask for one repo's branches (`LaunchBranchesArrived`).
+      /// Ask for one repo's branches (`LaunchBranchesArrived`), and for the page a branch
+      /// cursor names (`LaunchBranchMoreArrived`). The repo rides the second because a page
+      /// that landed after the pane moved on belongs to a question nobody is asking.
       LaunchBranches : RepoRef -> unit
+      LaunchBranchesMore : RepoRef -> string -> unit
       /// Send the choice: the `AddRepo` command, on the branch when one other than the
       /// default was picked. The request leaves as `LaunchSent`; its admission comes back as
       /// `CommandAnsweredMsg`, and its outcome as events.
@@ -202,6 +205,7 @@ module ViewActions =
           LaunchSearch = ignore
           LaunchMore = ignore
           LaunchBranches = ignore
+          LaunchBranchesMore = fun _ _ -> ()
           LaunchStart = ignore
           LaunchLink = ignore
           RetryNow = ignore
@@ -1646,40 +1650,34 @@ module View =
                 | None -> actions.LaunchSearch launch.Query
         let hold (candidate: Repos.RepoCandidate) =
             dispatch (LaunchMsg (LaunchSelected candidate))
-            // Branches are asked for on holding, so the field is full by the time it is
+            // Branches are asked for on holding, so the pane is full by the time it is
             // opened — and once per row, whatever is held and let go.
             if launch.Selected <> Some candidate.Repo && not (launch.Branches |> Map.containsKey candidate.Repo) then
                 actions.LaunchBranches candidate.Repo
-        // The held row's branch: a field with the provider's branches to choose from, that
-        // also takes a name the provider has not got. A hundred branches is a list nobody
-        // scrolls; typed, it is three letters and a pick — and a name past the first hundred,
-        // or one that does not exist yet, is typed the same way.
-        let branchField (candidate: Repos.RepoCandidate) =
+        // Going to the branch pane, from the link on a held row. The listing is asked for
+        // here as well as on holding, because a row can be held by a pasted link rather than
+        // a press and that path never went through `hold`.
+        let openBranches (repo: RepoRef) =
+            if not (launch.Branches |> Map.containsKey repo) then actions.LaunchBranches repo
+            dispatch (LaunchMsg (LaunchBranchPaneOpened repo))
+        // The held row's branch, at the row's trailing edge: the name it will launch on, and
+        // a way into the pane that changes it. A LINK rather than the field this used to be —
+        // a field inside a row is a second thing to operate in a surface whose whole grammar
+        // is "tap the thing you mean", and a repository with six hundred branches was a
+        // datalist nobody could reach the end of.
+        let branchLink (candidate: Repos.RepoCandidate) =
             let name = RepoRef.value candidate.Repo
-            let listId = "repo-branches-" + name.Replace ('/', '-')
-            let options =
-                match launch.Branches |> Map.tryFind candidate.Repo with
-                | Some (BranchesLoaded names) -> names |> List.map (fun branch -> html $"""<option value="{branch}"></option>""")
-                | Some (BranchesUnavailable _)
-                | Some BranchesUnknown
-                | None -> []
-            let note =
-                match launch.Branches |> Map.tryFind candidate.Repo with
-                | Some (BranchesUnavailable reason) -> html $"""<span class="{Style.small}">{reason}</span>"""
-                | _ -> Lit.nothing
             html $"""
-                <div class="{Style.askBranch}">
-                  <div class="{Style.askBranchLine}">
-                    <label class="{Style.label}" for="repo-branch">{Dom.Text.repoPickerBranchLabel}</label>
-                    <input id="repo-branch" type="text" class="{Style.askBranchField}" data-repo-candidate-branch="{name}"
-                           list="{listId}" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false"
-                           ?disabled={busy}
-                           .value={Launch.branchOf launch candidate}
-                           @input={EvVal(fun v -> dispatch (LaunchMsg (LaunchBranchNamed (candidate.Repo, v))))} />
-                    <datalist id="{listId}">{options}</datalist>
-                    {note}
-                  </div>
-                </div>"""
+                <button type="button" class="{Style.askRowBranch}" data-repo-candidate-branch="{name}" ?disabled={busy}
+                        aria-label="{Dom.Text.repoPickerBranchOf} {Launch.branchOf launch candidate}"
+                        @click={Ev(fun (e: Browser.Types.Event) ->
+                                       // The row under it holds this repo already; letting the
+                                       // press through would let it go again on the way past.
+                                       e.stopPropagation ()
+                                       openBranches candidate.Repo)}>
+                  <span class="{Style.askRowBranchName}">{Launch.branchOf launch candidate}</span>
+                  {Icon.right}
+                </button>"""
         let row (candidate: Repos.RepoCandidate) =
             let name = RepoRef.value candidate.Repo
             let heldNow = launch.Selected = Some candidate.Repo
@@ -1705,9 +1703,9 @@ module View =
                       {mark}
                       <span class="{Style.askRowName}" data-repo-candidate-name="{name}">{name}</span>
                       {description}
+                      {if heldNow then branchLink candidate else Lit.nothing}
                     </span>
                   </button>
-                  {if heldNow then branchField candidate else Lit.nothing}
                 </li>"""
         // A line the card says rather than one it offers stands where the first row would
         // have been (`askNote`), so an answer and the absence of one arrive in one place.
@@ -1773,28 +1771,165 @@ module View =
                 html $"""
                     <button type="button" class="{Style.askStart}" data-repo-picker-start ?disabled={target.IsNone}
                             @click={Ev(fun _ -> target |> Option.iter actions.LaunchStart)}>{Dom.Text.repoPickerStart}</button>"""
+        // The HEAD both panes fill: the same slot, the same line boxes, the same gutter — so
+        // the title never moves between them and the subtitle under it is the only thing that
+        // changes. The gutter carries the way OUT, which is what makes the two panes one
+        // shape: × leaves the card, ‹ leaves the pane.
+        let head (way: TemplateResult) (subtitle: TemplateResult) (title: string) =
+            html $"""
+                <div class="{Style.askHead}">
+                  <div class="{Style.askHeadLine}">
+                    {way}
+                    <div class="{Style.askHeadWords}">
+                      {subtitle}
+                      <h2 id="repo-picker-title" class="{Style.askQuestion}">{title}</h2>
+                    </div>
+                  </div>
+                </div>"""
+        let dismiss =
+            html $"""
+                <button type="button" class="{Style.askWayOut}" data-repo-picker-dismiss aria-label="{Dom.Text.repoPickerDismiss}"
+                        @click={Ev(fun _ -> dispatch (LaunchMsg LaunchDismissed))}>{Icon.close}</button>"""
+        let back =
+            html $"""
+                <button type="button" class="{Style.askWayBack}" data-repo-picker-back aria-label="{Dom.Text.repoPickerBack}"
+                        @click={Ev(fun _ -> dispatch (LaunchMsg LaunchBranchPaneClosed))}>{Icon.left}</button>"""
+        let onBranchPane =
+            match launch.Pane with
+            | ChoosingRepo -> false
+            | ChoosingBranch _ -> true
+        // The branch pane: the repo pane's shape with different words. It is DRAWN whether or
+        // not it is the one on screen, because the two ride a track that slides — a pane that
+        // appeared at the end of the slide would arrive on an empty stage. `inert` on the one
+        // behind is what keeps a keyboard out of it, since it is still in the document.
+        let branchPane =
+            let subject =
+                match launch.Pane with
+                | ChoosingBranch repo -> Some repo
+                | ChoosingRepo -> Launch.held launch |> Option.map (fun candidate -> candidate.Repo)
+            match subject with
+            | Some repo ->
+                let name = RepoRef.value repo
+                let chosen = launch.Named |> Map.tryFind repo
+                let pick (branch: string) =
+                    dispatch (LaunchMsg (LaunchBranchNamed (repo, branch)))
+                    dispatch (LaunchMsg LaunchBranchPaneClosed)
+                let branchRow (branch: string) (note: TemplateResult) =
+                    let heldNow = chosen = Some branch
+                    html $"""
+                        <li class="{if heldNow then Style.askRowHeld else Style.askRow}">
+                          <button type="button" class="{Style.askRowButton}" data-repo-branch="{branch}"
+                                  aria-pressed="{if heldNow then "true" else "false"}" ?disabled={busy}
+                                  @click={Ev(fun _ -> pick branch)}>
+                            <span class="{Style.askRowLine}">
+                              <span class="{Style.askRowMark}" aria-hidden="true">{if heldNow then Icon.check else Lit.nothing}</span>
+                              <span class="{Style.askRowName}" data-repo-branch-name="{branch}">{branch}</span>
+                              {note}
+                            </span>
+                          </button>
+                        </li>"""
+                let listed = Launch.branchesOn launch repo
+                // What was typed, when it is not a branch the provider has. Above the list,
+                // because it is the one answer a list can never carry: `switch_branch` makes
+                // a branch that does not exist yet.
+                let naming =
+                    match Launch.namingNew launch repo with
+                    | None -> Lit.nothing
+                    | Some typed ->
+                        branchRow typed (html $"""<span class="{Style.askRowNoteNew}">{Dom.Text.repoPickerBranchNew}</span>""")
+                let rows =
+                    listed
+                    |> List.map (fun branch ->
+                        let note =
+                            if branch = (Launch.held launch |> Option.map (fun c -> c.DefaultBranch) |> Option.defaultValue "") then
+                                html $"""<span class="{Style.askRowNote}">{Dom.Text.repoPickerBranchDefault}</span>"""
+                            else Lit.nothing
+                        branchRow branch note)
+                let branchBody =
+                    match launch.Branches |> Map.tryFind repo with
+                    | Some (BranchesUnavailable reason) ->
+                        note (html $"""<span class="{Style.statusErr}" role="status">{reason}</span>""")
+                    | Some BranchesUnknown
+                    | None ->
+                        note (html $"""<span class="{Style.statusRun}" role="status"><span class="{Style.statusDotPulse}"></span>{Dom.Text.repoPickerLooking}</span>""")
+                    | Some (BranchesLoaded page) ->
+                        let foot =
+                            match page.Next, launch.BranchMore, launch.BranchQuery.Trim () with
+                            | None, _, _ -> Lit.nothing
+                            // A search narrows what has arrived rather than asking the
+                            // provider (it has no branch search), so the foot stands down
+                            // while one is on: paging into a filter fetches what nobody sees.
+                            | Some _, _, typed when typed <> "" -> Lit.nothing
+                            | Some _, MoreFailed reason, _ ->
+                                html $"""
+                                    <div class="{Style.askFoot}" data-repo-branch-foot="failed">
+                                      <div class="{Style.askFootLine}">
+                                        <span class="{Style.statusErr}" role="status">{reason}</span>
+                                        <button type="button" class="{Style.askLink}" data-repo-branch-again
+                                                @click={Ev(fun _ ->
+                                                               Launch.wantingBranches { launch with BranchMore = MoreIdle }
+                                                               |> Option.iter (fun (repo, cursor) -> actions.LaunchBranchesMore repo cursor))}>{Dom.Text.repoPickerAgain}</button>
+                                      </div>
+                                    </div>"""
+                            | Some _, (MoreIdle | MoreFetching), _ ->
+                                html $"""
+                                    <div class="{Style.askFoot}" data-repo-branch-foot="more">
+                                      <div class="{Style.askFootLine}">
+                                        <span class="{Style.caretWorking}" aria-hidden="true"></span>
+                                        <span class="{Style.label}" role="status">{Dom.Text.repoPickerMoreComing}</span>
+                                      </div>
+                                    </div>"""
+                        if List.isEmpty listed && (Launch.namingNew launch repo).IsNone then
+                            note (html $"""<span class="{Style.small}">{Dom.Text.repoPickerNoBranch}</span>""")
+                        else html $"""<ul class="{Style.askRows}">{naming}{rows}</ul>{foot}"""
+                let subtitle =
+                    html $"""<span class="{Style.askSubject}" data-repo-picker-subject>{name}</span>"""
+                let branchHead = head back subtitle Dom.Text.repoPickerBranchTitle
+                html $"""
+                    <div class="{if onBranchPane then Style.askPaneHere else Style.askPaneRight}"
+                         data-repo-picker-pane="branch" ?inert={not onBranchPane}>
+                      {branchHead}
+                      <label class="{Style.srOnly}" for="repo-branch-search">{Dom.Text.repoPickerBranchSearchLabel}</label>
+                      <input id="repo-branch-search" type="search" class="{Style.askSearch}" data-repo-branch-search
+                             placeholder="{Dom.Text.repoPickerBranchSearchPlaceholder}"
+                             autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false"
+                             ?disabled={busy}
+                             .value={launch.BranchQuery}
+                             @input={EvVal(fun v -> dispatch (LaunchMsg (LaunchBranchQueryTyped v)))} />
+                      {branchBody}
+                      <div class="{Style.askActions}">{actionsRow}</div>
+                    </div>"""
+            // No row held: there is no repository to have branches of, so the pane is not
+            // drawn at all rather than drawn empty.
+            | None -> Lit.nothing
+        let repoHead =
+            let subtitle = html $"""<span class="{Style.askSubtitle}">{Dom.Text.repoPickerAsker}</span>"""
+            head dismiss subtitle Dom.Text.repoPickerTitle
+        let repoPane =
+            html $"""
+                <div class="{if onBranchPane then Style.askPaneLeft else Style.askPaneHere}"
+                     data-repo-picker-pane="repo" ?inert={onBranchPane}>
+                  {repoHead}
+                  <label class="{Style.srOnly}" for="repo-picker-search">{Dom.Text.repoPickerSearchLabel}</label>
+                  <input id="repo-picker-search" type="search" class="{Style.askSearch}" data-repo-picker-search
+                         placeholder="{Dom.Text.repoPickerSearchPlaceholder}"
+                         autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false"
+                         enterkeyhint="go" ?disabled={busy}
+                         .value={launch.Query}
+                         @input={EvVal(fun v -> dispatch (LaunchMsg (LaunchQueryTyped v)))}
+                         @keydown={Ev onFieldKey} />
+                  {listing}
+                  {problem}
+                  <div class="{Style.askActions}">{actionsRow}</div>
+                </div>"""
         html $"""
             <section class="{Style.ask}" data-repo-picker="{stage}" aria-labelledby="repo-picker-title">
               <div class="{Style.askLeadBar}" aria-hidden="true"></div>
               <div class="{Style.askBody}" data-repo-picker-body>
-              <div class="{Style.askHead}">
-                <div class="{Style.askHeadLine}">
-                  <h2 id="repo-picker-title" class="{Style.askQuestion}">{Dom.Text.repoPickerTitle}</h2>
-                  <button type="button" class="{Style.btnIconBare}" data-repo-picker-dismiss aria-label="{Dom.Text.repoPickerDismiss}"
-                          @click={Ev(fun _ -> dispatch (LaunchMsg LaunchDismissed))}>{Icon.close}</button>
+                <div class="{Style.askTrack}" data-repo-picker-track>
+                  {repoPane}
+                  {branchPane}
                 </div>
-              </div>
-              <label class="{Style.srOnly}" for="repo-picker-search">{Dom.Text.repoPickerSearchLabel}</label>
-              <input id="repo-picker-search" type="search" class="{Style.askSearch}" data-repo-picker-search
-                     placeholder="{Dom.Text.repoPickerSearchPlaceholder}"
-                     autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false"
-                     enterkeyhint="go" ?disabled={busy}
-                     .value={launch.Query}
-                     @input={EvVal(fun v -> dispatch (LaunchMsg (LaunchQueryTyped v)))}
-                     @keydown={Ev onFieldKey} />
-              {listing}
-              {problem}
-              <div class="{Style.askActions}">{actionsRow}</div>
               </div>
             </section>"""
 

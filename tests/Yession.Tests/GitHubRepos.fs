@@ -215,9 +215,9 @@ let private lookupTests =
         testCaseAsync "a dead credential, a missing repo and a spent allowance are told apart" <|
             async {
                 let! api = startStubApi ()
-                let! missing = GitHubRepos.branchesOver api.Url None (repo "octo/gone")
+                let! missing = GitHubRepos.branchesOver api.Url None (repo "octo/gone") 1
                 Expect.equal missing (Error GitHubRepos.NotFound) "404"
-                let! branches = GitHubRepos.branchesOver api.Url None (repo "octo/hello")
+                let! branches = GitHubRepos.branchesOver api.Url None (repo "octo/hello") 1
                 Expect.equal (expect branches) [ "main"; "next" ] "the branches of one that is there"
                 let! refused = GitHubRepos.recentOver api.Url (Some "dead") 1
                 Expect.equal refused (Error GitHubRepos.Refused) "a 401 is a refusal"
@@ -230,7 +230,7 @@ let private lookupTests =
         testCaseAsync "a 200 this session cannot read is not a provider that could not be reached" <|
             async {
                 let! api = startStubApi ()
-                let! unreadable = GitHubRepos.branchesOver api.Url None (repo "octo/nonsense")
+                let! unreadable = GitHubRepos.branchesOver api.Url None (repo "octo/nonsense") 1
                 let isUnreadable =
                     match unreadable with
                     | Error (GitHubRepos.Unreadable _) -> true
@@ -365,7 +365,7 @@ let private routeTests =
                 let! url = startRoutes api [ alice, "ghp_alice" ]
                 let! reply = get (url + "/github/repos/octo/hello/branches") "who=alice" |> Interop.awaitPromise
                 Expect.equal reply.status 200 "answered"
-                Expect.equal (Codec.fromString Codec.branchNames reply.body) (Ok [ "main"; "next" ]) "the names, in the codec the picker reads"
+                Expect.equal (Codec.fromString Codec.branchPage reply.body |> Result.map (fun page -> page.Names)) (Ok [ "main"; "next" ]) "the names, in the codec the picker reads"
                 let! gone = get (url + "/github/repos/octo/gone/branches") "who=alice" |> Interop.awaitPromise
                 Expect.equal gone.status 404 "and a repo the credential cannot see is a 404 with words"
             }
