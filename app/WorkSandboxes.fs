@@ -26,6 +26,7 @@ open Yession.Domain
 open Yession.Domain.Sandboxes
 open Yession.Domain.Agent
 open Yession.Domain.Tools
+open Yession.Domain.Terminals
 open Yession.SessionProcess
 
 /// What a forwarded credential puts in a sandbox. Three channels: git's config is one
@@ -69,7 +70,13 @@ type CredentialSource =
       Provision : CredentialFor -> SandboxRef -> Async<CredentialForwarding>
       /// Take back what `Provision` gave. Called when the sandbox stops, so that whatever a
       /// provision opened (a gateway route) lives exactly as long as the sandbox does.
-      Revoke : SandboxRef -> unit }
+      Revoke : SandboxRef -> unit
+      /// What one BLOCK in the sandbox is lent for the credential its act runs on — put at
+      /// the head of the block's line by the terminal manager. Per block where `Provision`
+      /// is per sandbox: the sandbox carries what every block shares (a route), a block
+      /// carries whose it is. Nothing, never a refusal: a block lent nothing runs on what
+      /// its shell has, and what its git is then told is the gateway's sentence to say.
+      Lend : CredentialFor -> SandboxRef -> Async<BlockEnv> }
 
 /// Who is asking. The two halves differ for the agent exactly as they do for the repo
 /// verbs: the AGENT is the acting party the event records, the CREDENTIAL owner is the
@@ -165,6 +172,11 @@ type WorkSandboxes =
       /// in the same shape it is told anything else — an unknown name resolves to an
       /// environment that refuses every spawn with the reason.
       EnvironmentFor : SandboxRef -> SessionEnvironment.SessionEnvironment
+      /// What a block in a sandbox is lent for its act: every source the sandbox forwards,
+      /// asked for the act's credential. Here beside `EnvironmentFor` because both are
+      /// answered off what the sandbox was STARTED with — and a terminal that could spawn
+      /// in a sandbox without asking would run its blocks on whoever started it.
+      Loans : SessionTerminals.BlockLoans
       /// Every sandbox the session has, `default` first.
       Listed : unit -> RunningSandbox list
       /// Stop all of them — session shutdown. Sandbox lifetime is session lifetime.
@@ -444,9 +456,30 @@ let create (config: WorkSandboxesConfig) : Result<WorkSandboxes, string> =
                 revoke name entry.Request.Forward
         }
 
+    /// What a block in `name` is lent for its act: each forwarded source's answer for the
+    /// act's credential, merged. Nothing for a sandbox that forwards nothing, and nothing
+    /// for a name this session does not have — its environment refuses the spawn anyway,
+    /// with the reason.
+    let lend (name: SandboxRef) (_: TerminalId) (_: BlockId) (authority: Authority) : Async<BlockEnv> =
+        async {
+            match resolve name with
+            | None -> return BlockEnv.none
+            | Some entry ->
+                let credential = Authority.credential authority
+                let mutable lent = BlockEnv.none
+                for forwarded in entry.Request.Forward do
+                    match config.Credentials |> List.tryFind (fun source -> source.Name = forwarded) with
+                    | None -> ()
+                    | Some source ->
+                        let! given = source.Lend credential name
+                        lent <- BlockEnv.merge lent given
+                return lent
+        }
+
     { Ensure = ensure
       Stop = stop
       EnvironmentFor = environmentFor
+      Loans = { Lend = lend }
       Listed = fun () -> entries |> List.map snd
       StopAll = stopAll })
 
@@ -486,6 +519,7 @@ let singleton (backend: string) (environment: SessionEnvironment.SessionEnvironm
                     return Ok ()
             }
       EnvironmentFor = fun _ -> environment
+      Loans = SessionTerminals.BlockLoans.none
       Listed = fun () -> [ entry ]
       StopAll = environment.Stop }
 
@@ -505,6 +539,7 @@ let unavailable : WorkSandboxes =
     { Ensure = fun _ _ _ -> async { return Error "this session has no environment" }
       Stop = fun _ _ -> async { return Error "this session has no environment" }
       EnvironmentFor = fun _ -> SessionEnvironment.unavailable
+      Loans = SessionTerminals.BlockLoans.none
       Listed = fun () -> [ entry ]
       StopAll = fun () -> async { return () } }
 

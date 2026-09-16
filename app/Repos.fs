@@ -103,6 +103,11 @@ let identityEnv (name: string) (email: string) : Map<string, string> =
           "GIT_COMMITTER_NAME", name
           "GIT_COMMITTER_EMAIL", email ]
 
+/// The four `identityEnv` sets — what a block takes away when nobody's are known, so an
+/// identity a shell was holding cannot outlive the act it was lent for.
+let identityNames : string list =
+    identityEnv "" "" |> Map.toList |> List.map fst
+
 /// The git a verb runs, NAMED rather than looked up on PATH. Every other binary a
 /// confined spawn execs is named for this reason — srt's bwrap, socat and ripgrep, the
 /// agent's claude — and git was the exception until the exception cost a session.

@@ -631,10 +631,12 @@ first's.
     Forwarding itself shipped as `start_work_sandbox`'s `forward` argument
     (`app/WorkSandboxes.fs`), so a sandbox the agent asked for can carry `github` — but
     `default` is the one nobody asks for, and it is created with `Forwarded = []`. Its
-    terminals do local git only until somebody starts a named sandbox. A sandbox that
-    forwards `github` is told who its commits are by — the GitHub account behind the
-    credential, read once at the start (`GitHubConnection.commitIdentity`) — but one that
-    forwards nothing has no author, and `Co-Authored-By` for the agent is absent everywhere.
+    terminals do local git only until somebody starts a named sandbox. In a sandbox that
+    forwards `github`, every BLOCK is told who its commits are by — the GitHub account behind
+    the credential the block's act runs on (`GitHubConnection.commitIdentity`), exported at
+    the head of the block's line by `__y_env` and taken away when nobody's is known — but a
+    sandbox that forwards nothing has no author, and `Co-Authored-By` for the agent is absent
+    everywhere.
   - **A forwarded `github` credential reaches every backend by the host address its
     sandbox can use.** Forwarding is a route through the session's git gateway
     (`app/GitGateway.fs`): the sandbox's git is told one `insteadOf` and the credential

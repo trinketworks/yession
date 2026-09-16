@@ -15,6 +15,7 @@ open Yession.Domain.Link
 open Yession.Domain.Tools
 open Yession.Domain.Access
 open Yession.Domain.Prs
+open Yession.Domain.Terminals
 open Yession.SessionProcess
 open Yession.Host
 
@@ -1107,6 +1108,40 @@ Async.StartImmediate (
         // each time, so a refresh reaches a sandbox already running and a sandbox's env
         // never holds a value worth printing.
         let! gitGateway = GitGateway.start "https://github.com"
+        // Who commits in a BLOCK are by: the account behind the credential the block's act
+        // spends, asked of GitHub once per person and kept — a profile does not change
+        // under a session. A miss is NOT kept: a person who connects github after their
+        // first block gets their name on the next one, not after a restart. Nobody's
+        // profile takes the four variables away, so a block cannot commit as whoever the
+        // shell was last lent to.
+        let identities = System.Collections.Generic.Dictionary<string, Map<string, string>> ()
+        let identityFor (owner: CredentialFor) : Async<BlockEnv> =
+            async {
+                let key = CredentialFor.token owner
+                let! identity =
+                    async {
+                        match identities.TryGetValue key with
+                        | true, known -> return Some known
+                        | _ ->
+                            match! resolveGitHubToken owner with
+                            | None -> return None
+                            | Some token ->
+                                match! GitHubConnection.profile token with
+                                | Ok profile ->
+                                    let name, email = GitHubConnection.commitIdentity profile
+                                    let identity = Repos.identityEnv name email
+                                    identities.[key] <- identity
+                                    return Some identity
+                                | Error reason ->
+                                    eprintfn "[session %s] no commit identity for %s: %s" (SessionId.value sessionId) key reason
+                                    return None
+                    }
+                return
+                    { BlockEnv.GitConfig = None
+                      BlockEnv.Vars =
+                        Repos.identityNames
+                        |> List.map (fun name -> name, identity |> Option.bind (Map.tryFind name)) }
+            }
         let forwardableCredentials : WorkSandboxes.CredentialSource list =
             [ { Name = "github"
                 Provision =
@@ -1160,7 +1195,8 @@ Async.StartImmediate (
                                               // would otherwise refuse it (srt).
                                               Domains = [ host ] }
                         }
-                Revoke = gitGateway.Revoke } ]
+                Revoke = gitGateway.Revoke
+                Lend = fun owner _ -> identityFor owner } ]
         let! host = Host.startFull clock runAgent summarize (Some (makeSandboxes forwardableCredentials)) (secretsCapabilitiesFor sessionId) (Some log) (Some docStore) (Some transcriptStore) reportName reportActivity telemetry.Emit subscribeNotifications mcpServers connectionRoutes sessionId auth sessionMount managerOrigin ephemeralStorage (resourceProfile |> Option.bind (fun file -> file.Guidance)) port
         // The Host built the sandbox registry (it owns the log), so the cell the turn
         // capabilities and the `work_sandboxes` query read is filled here — before the

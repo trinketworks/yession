@@ -376,6 +376,7 @@ let startFull
                 log
                 sandboxes.EnvironmentFor
                 principalFor
+                sandboxes.Loans
                 transcripts.Open
                 transcripts.ReadRange
                 Emulator.openEmulator

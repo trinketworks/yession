@@ -61,6 +61,32 @@ type ShellInstrumentation =
     { /// The rc lines, as text typed at the shell's prompt.
       Rc : string }
 
+/// What a block's line exports before its command runs: the environment the block's whole
+/// process tree carries, set for THIS block by whoever's act it is — a person's commit
+/// identity, the loan its git requests spend. Exported by `__y_env` (`Marks.envFunction`)
+/// in the shell that runs the block, so a process the block forks keeps what the block was
+/// lent whatever runs after it, and the next block on the same shell sets its own.
+type BlockEnv =
+    { /// One git config pair, appended after whatever the shell's env already tells git.
+      /// The slot is the shell's to compute (`__y_env`), against a count it captures once:
+      /// every block writes the same slot, so nothing accumulates.
+      GitConfig : (string * string) option
+      /// Plain variables: `Some` exports, `None` unsets — git refuses an empty ident, so an
+      /// unknown identity is taken away rather than exported blank.
+      Vars : (string * string option) list }
+
+module BlockEnv =
+
+    let none : BlockEnv = { GitConfig = None; Vars = [] }
+
+    let isNone (env: BlockEnv) : bool = env.GitConfig.IsNone && List.isEmpty env.Vars
+
+    /// Two loans for one block: the later git config wins (there is one slot), the
+    /// variables append.
+    let merge (a: BlockEnv) (b: BlockEnv) : BlockEnv =
+        { GitConfig = (match b.GitConfig with Some _ -> b.GitConfig | None -> a.GitConfig)
+          Vars = a.Vars @ b.Vars }
+
 /// One piece of a scanned chunk, in the order the shell printed it.
 ///
 /// Order is the point of this type. A chunk can carry a command's last line, the `D` that
@@ -239,6 +265,49 @@ module Marks =
     /// before it overwrites `$?`, and then every block reports the status of our own
     /// bookkeeping rather than of the command — which would be worse than no mark at all,
     /// because it looks like an answer.
+    /// One argv word as the shell reads it back: single-quoted, any quote inside closed,
+    /// escaped and reopened. A name with an apostrophe in it is a name.
+    let shellQuote (word: string) : string = "'" + word.Replace ("'", "'\\''") + "'"
+
+    /// The function every dialect's rc defines and every block's line calls first
+    /// (`envLine`): what the block is lent, exported into the shell that runs it. One
+    /// argument shape for the three things it does — `+key=value` appends a git config
+    /// pair, `NAME=VALUE` exports, `-NAME` unsets — so the line is short (a tty's canonical
+    /// input is capped near 4 KiB) and the definition is one copy.
+    ///
+    /// The git config slot is the shell's arithmetic, not this Process's: `__y_gc0` is
+    /// captured ONCE, from whatever `GIT_CONFIG_COUNT` the shell was spawned with (a
+    /// backend's own `safe.directory`, a sandbox's route), and every block writes that one
+    /// slot and sets the count past it — so the backend's entries stay, the block's is
+    /// after them, and a hundred blocks leave one. `$?` is handed through, for the same
+    /// reason `__y_c` hands it through: the command after this may be `echo $?`. POSIX
+    /// throughout, because this is typed at dash as readily as at zsh.
+    let envFunction : string =
+        "__y_env() { __y_r=$?; __y_gc0=${__y_gc0:-${GIT_CONFIG_COUNT:-0}}; "
+        + "for __y_a in \"$@\"; do case \"$__y_a\" in "
+        + "+*) __y_k=${__y_a#+}; export \"GIT_CONFIG_KEY_$__y_gc0=${__y_k%%=*}\" \"GIT_CONFIG_VALUE_$__y_gc0=${__y_k#*=}\" \"GIT_CONFIG_COUNT=$((__y_gc0+1))\";; "
+        + "-*) unset \"${__y_a#-}\";; "
+        + "*) export \"$__y_a\";; "
+        + "esac; done; return $__y_r; }"
+
+    /// The call that puts a block's loan into its shell, as the head of the block's line —
+    /// or nothing, for a block lent nothing, so a line with no loan is the command as
+    /// written.
+    let envLine (env: BlockEnv) : string =
+        if BlockEnv.isNone env then ""
+        else
+            let git =
+                env.GitConfig
+                |> Option.map (fun (key, value) -> [ shellQuote ("+" + key + "=" + value) ])
+                |> Option.defaultValue []
+            let vars =
+                env.Vars
+                |> List.map (fun (name, value) ->
+                    match value with
+                    | Some value -> shellQuote (name + "=" + value)
+                    | None -> shellQuote ("-" + name))
+            "__y_env " + String.concat " " (git @ vars) + "; "
+
     let rcFor (shell: string) (nonce: string) : ShellInstrumentation option =
         let promptStart = emit nonce "A"
         let commandStart = emit nonce "C"
@@ -266,7 +335,8 @@ module Marks =
                           " PROMPT_COMMAND='__y_post'"
                           " PS1='\\[" + promptStart + "\\]'\"$PS1\""
                           " __y_armed=1"
-                          " trap '__y_pre' DEBUG" ] }
+                          " trap '__y_pre' DEBUG"
+                          " " + envFunction ] }
         | "zsh" ->
             // zsh has real hooks. They are APPENDED to whatever the image's shell already
             // registered, never substituted: replacing a shell's existing hooks breaks the
@@ -279,7 +349,8 @@ module Marks =
                           " autoload -Uz add-zsh-hook"
                           " add-zsh-hook preexec __y_pre"
                           " add-zsh-hook precmd __y_post"
-                          " PS1='" + promptStart + "'\"$PS1\"" ] }
+                          " PS1='" + promptStart + "'\"$PS1\""
+                          " " + envFunction ] }
         | "sh"
         | "dash" ->
             // A bare POSIX shell has NO prompt hook, so the marks ride inside PS1, which the
@@ -319,7 +390,8 @@ module Marks =
                 { Rc =
                     String.concat "\n"
                         [ " __y_c() { __y_r=$?; command -p printf '" + commandStart + "'; return $__y_r; }"
-                          " PS1='$(command -p printf \"\\001" + commandDone + promptStart + "\\002\" $?)'" ] }
+                          " PS1='$(command -p printf \"\\001" + commandDone + promptStart + "\\002\" $?)'"
+                          " " + envFunction ] }
         | _ -> None
 
     /// The line typed at an instrumented shell to run `command` as a block, with its stdin
@@ -341,8 +413,20 @@ module Marks =
     /// so a trailing comment and a heredoc's body are untouched, which a suffix could not
     /// promise — and inside the brace group when stdin is closed, so the mark is printed
     /// with the command's redirection already in place.
-    let lineFor (shell: string) (stdin: BlockStdin) (command: string) : string =
+    ///
+    /// The loan goes first, before the start mark on the dialect that has one in the line:
+    /// both hand `$?` through and neither prints, so the order is the reader's — what the
+    /// block was lent, then that it started, then the command.
+    let lineFor (shell: string) (stdin: BlockStdin) (env: BlockEnv) (command: string) : string =
+        let lent = envLine env
         match shell with
         | "sh"
-        | "dash" -> BlockStdin.wrap stdin ("__y_c; " + command)
-        | _ -> BlockStdin.wrap stdin command
+        | "dash" -> BlockStdin.wrap stdin (lent + "__y_c; " + command)
+        | _ -> BlockStdin.wrap stdin (lent + command)
+
+    /// The same block as its own process, where there is no shell to have typed the rc at
+    /// (the degraded path): the function defined and called in the one line `sh -c` is
+    /// handed, and nothing else — no marks, because nothing there reads them.
+    let spawnLineFor (stdin: BlockStdin) (env: BlockEnv) (command: string) : string =
+        if BlockEnv.isNone env then BlockStdin.wrap stdin command
+        else BlockStdin.wrap stdin (envFunction + "; " + envLine env + command)
