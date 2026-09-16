@@ -22,6 +22,11 @@ namespace Fable.NodeExtras
 // and no events, and its `IncomingMessage` reaches its headers as `obj`. So the streaming
 // slice of both is declared at the end of this file, and nothing else of either is.
 //
+// `node:net` it covers but for the one member a probe wants: it types a server and its
+// `listen`, and then answers `address()` with `obj` — so the port the OS just chose is
+// exactly what cannot be read through it. `node:tty` it does not type at all. Both slices
+// are declared below, and in both cases only what a probe or a pty's far end does with one.
+//
 // Nothing in this file runs on .NET. `dotnet build` type-checks it and stops there; every
 // binding below is `jsNative`, an import, or — in `base64url`'s case — a cast that is only
 // meaningful once Fable has erased the type it casts to.
@@ -554,6 +559,71 @@ module HttpClient =
         : HttpRequest =
         let options = createObj [ "method" ==> ``method``; "headers" ==> createObj headers ]
         if url.StartsWith "https:" then overHttps url options onResponse else overHttp url options onResponse
+
+// --- A port nothing else is on -----------------------------------------------------------------
+
+/// A `node:net` server as a PROBE uses one: bound to port 0, asked what the OS chose, and
+/// handed straight back. What a caller wants out of it is that number — a port to give a
+/// child that refuses to pick its own.
+///
+/// `Fable.Node` types a `net.Server` and its `listen`, and then answers `address()` with
+/// `obj`, so the one fact this exists to read is the one fact it cannot say. The other two
+/// steps are declared beside `boundPort` rather than reached for through `Fable.Node` because
+/// the three are one act: `address()` answers `null` before `listen` has called back, and
+/// `null` again after `close`, so a port read outside that window is not a port.
+[<AllowNullLiteral>]
+type NetServer =
+
+    /// Bind, and call back once the OS has chosen. Port 0 is the whole point — asked for a
+    /// particular port, a probe would be racing whoever else wanted that one.
+    abstract listen : port: int * host: string * onListening: (unit -> unit) -> unit
+
+    /// Stop listening, and call back once the socket is released — before which the port is
+    /// still this process's, and a child told to bind it would be refused. Node hands this
+    /// callback an error when the server was not open, which is not a case a probe can be in:
+    /// it closes one server, once, having just watched it listen.
+    abstract close : onClosed: (unit -> unit) -> unit
+
+[<AutoOpen>]
+module NetServers =
+
+    /// A server with no connection handler, because nothing ever connects to a probe: what it
+    /// is for is holding a port long enough to be told which one it got.
+    [<Import("createServer", "node:net")>]
+    let createNetServer () : NetServer = jsNative
+
+    /// The port a LISTENING server was given.
+    [<Emit("$0.address().port")>]
+    let boundPort (server: NetServer) : int = jsNative
+
+// --- A terminal, by a descriptor something else opened -----------------------------------------
+
+[<AutoOpen>]
+module Ttys =
+
+    /// `node:tty`'s `ReadStream` class, imported as the value it is so that the construction
+    /// below is Node's own `new`.
+    [<Import("ReadStream", "node:tty")>]
+    let private readStreamClass : obj = jsNative
+
+    [<Emit("new $0($1)")>]
+    let private construct (cls: obj) (fd: int) : Readable = jsNative
+
+    /// Read a tty through a descriptor already open on it — a pty's far end, a terminal this
+    /// process was handed. `Fable.Node` types no `node:tty` at all, and the stream it does
+    /// type is the wrong one here in a way that costs a day to find.
+    ///
+    /// `fs.createReadStream` reads through the libuv THREADPOOL, and a blocking read on a pty
+    /// is not cancellable: `destroy()` returns while the read is still parked in a worker
+    /// thread, and closing the descriptor then frees the NUMBER for reuse. The next `spawn`
+    /// gets it back as a child's stderr pipe, and the stale read swallows what that child
+    /// says — which presents as a child that announced nothing in time, from a child that is
+    /// running perfectly.
+    ///
+    /// A tty handle is epoll-driven on the event loop, with nothing in flight to outlive it.
+    /// It does not own the descriptor either, so closing that stays the caller's to do — and
+    /// is safe to do once this has been destroyed.
+    let openTty (fd: int) : Readable = construct readStreamClass fd
 
 // --- Aborting ---------------------------------------------------------------------------------
 
