@@ -622,9 +622,12 @@ let private pathAndQuery (target: string) : string * string =
 /// The answer is relayed AS IT ARRIVES rather than collected: what git reads back from a push
 /// or a fetch is a stream, and a stand-in that held the whole of one would be standing in for
 /// a github.com nobody talks to.
-let private gitHttpBackend (root: string) (seen: ResizeArray<string>) : HttpServer =
+let private gitHttpBackend (root: string) (seen: ResizeArray<string option>) : HttpServer =
     createServer (fun req res ->
-        seen.Add (headerOf req "authorization" |> Option.defaultValue "")
+        // The option is kept rather than flattened to "": a request that carried NO credential
+        // and one that carried the wrong one are different failures, and a case that cannot
+        // tell them apart reports the second when it means the first.
+        seen.Add (headerOf req "authorization")
         let path, query = pathAndQuery req.url
 
         let env =
@@ -634,11 +637,11 @@ let private gitHttpBackend (root: string) (seen: ResizeArray<string>) : HttpServ
             |> Map.add "PATH_INFO" path
             |> Map.add "QUERY_STRING" query
             |> Map.add "REQUEST_METHOD" req.``method``
-            |> Map.add "CONTENT_TYPE" (headerOf req "content-type" |> Option.defaultValue "")
             |> Map.add "REMOTE_USER" "fixture"
             |> Map.add "REMOTE_ADDR" "127.0.0.1"
             |> Map.add "GIT_CONFIG_GLOBAL" "/dev/null"
             |> Map.add "GIT_CONFIG_SYSTEM" "/dev/null"
+            |> carrying "CONTENT_TYPE" (headerOf req "content-type")
             |> carrying "CONTENT_LENGTH" (headerOf req "content-length")
             |> carrying "HTTP_CONTENT_ENCODING" (headerOf req "content-encoding")
             |> carrying "HTTP_GIT_PROTOCOL" (headerOf req "git-protocol")
@@ -707,7 +710,7 @@ let private pushTests =
                 mkdir nodeFs (sprintf "%s/octo" served)
                 let bare = sprintf "%s/octo/hello.git" served
                 do! gitOk [ "init"; "--bare"; "-b"; "main"; bare ] root |> Async.Ignore
-                let seen = ResizeArray<string> ()
+                let seen = ResizeArray<string option> ()
                 let upstream = gitHttpBackend served seen
                 do! Async.FromContinuations (fun (cont, _, _) -> upstream.listen (0, "127.0.0.1", fun () -> cont ()) |> ignore)
                 try
@@ -733,7 +736,7 @@ let private pushTests =
                                 let landed = landed.Trim ()
                                 Expect.equal landed expected "the commit is on the other side"
                                 Expect.isTrue (seen.Count >= 2) "an advertisement and a receive-pack, at least"
-                                Expect.isTrue (seen |> Seq.forall ((=) (basic "ghu_lent"))) "every request carried the lent credential"
+                                Expect.isTrue (seen |> Seq.forall ((=) (Some (basic "ghu_lent")))) "every request carried the lent credential"
                                 // And the way back: a fetch through the same route.
                                 let! fetched = git [ "ls-remote"; "origin" ] work env
                                 Expect.equal fetched.Status 0 (sprintf "ls-remote succeeded: %s" fetched.Stderr)
