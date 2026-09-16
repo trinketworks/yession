@@ -310,6 +310,7 @@ module View =
         function
         | Complete -> Dom.Text.complete
         | Streaming -> Dom.Text.streaming
+        | ConversationItemStatus.Running -> Dom.Text.running
         | ConversationItemStatus.Failed -> Dom.Text.failed
         | ConversationItemStatus.Interrupted -> Dom.Text.interrupted
 
@@ -2007,10 +2008,21 @@ module View =
         // message does (both are `ConversationItem`s at an offset); `Kind` is what tells the
         // two apart at render time.
         let actNoteItem (facts: ActNoteFacts) (item: ConversationItem) =
+            // How the act is going, when that is news: a pulse while a slow act (a sandbox
+            // coming up) runs, a mark when one failed. A settled act says nothing here — its
+            // body is the whole account. `data-act-status` on the article is the stable hook a
+            // test counts running work by, whatever the design does with the chip.
+            let statusMark =
+                match item.Status with
+                | ConversationItemStatus.Running ->
+                    html $"""<span class="{Style.statusRun}"><span class="{Style.statusDotPulse}"></span><span class="{Style.srOnly}">{Dom.Text.running}</span></span>"""
+                | ConversationItemStatus.Failed ->
+                    html $"""<span class="{Style.statusErr}">{Icon.crossSm} {Dom.Text.failed}</span>"""
+                | Complete | Streaming | ConversationItemStatus.Interrupted -> Lit.nothing
             html $"""
-                <article class="{Style.actNote}" data-message-id="{MessageId.value item.MessageId}" tabindex="-1" data-act-note data-message-author="{authorLabel item.Author}">
+                <article class="{Style.actNote}" data-message-id="{MessageId.value item.MessageId}" tabindex="-1" data-act-note data-act-status="{messageStatusLabel item.Status}" data-message-author="{authorLabel item.Author}">
                   {itemActions item}
-                  <span class="{Style.actNoteText}"><span class="{Style.actNoteWho}">{authorName model item.Author}</span> {item.Body}</span>
+                  <span class="{Style.actNoteText}"><span class="{Style.actNoteWho}">{authorName model item.Author}</span> {item.Body} {statusMark}</span>
                   {actNoteDetail facts}
                 </article>"""
         let messageItem (item: ConversationItem) =
@@ -2040,7 +2052,10 @@ module View =
             // cannot: WHERE the next word lands. So the word goes and the mark stays.
             let statusInner =
                 match item.Status with
-                | Complete | Streaming -> Lit.nothing
+                // `Running` is an act's status, never a message's — a message arriving is
+                // `Streaming`. It cannot reach this renderer (acts draw through `actNoteItem`),
+                // but the match is total, so it reads with the other quiet cases.
+                | Complete | Streaming | ConversationItemStatus.Running -> Lit.nothing
                 | ConversationItemStatus.Failed -> html $"""<span class="{Style.statusErr}">failed</span>"""
                 | ConversationItemStatus.Interrupted -> html $"""<span class="{Style.statusFaint}">interrupted</span>"""
             let bodyClass, caret =
@@ -2057,7 +2072,7 @@ module View =
             // and then vanished would move the body under the reader mid-sentence.
             let hasStatusNews =
                 match item.Status with
-                | Complete | Streaming -> false
+                | Complete | Streaming | ConversationItemStatus.Running -> false
                 | ConversationItemStatus.Failed | ConversationItemStatus.Interrupted -> true
             let meta =
                 if item.Woke.IsSome || hasStatusNews then

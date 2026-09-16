@@ -1252,6 +1252,39 @@ module Codec =
                     get.Optional.Field "realisation" (Decode.list Decode.string) |> Option.defaultValue []
                   WorkSandboxStarted.Actor = get.Required.Field "actor" actor.Decode }) }
 
+    let private workSandboxStarting : Codec<WorkSandboxStarting> =
+        { Encode =
+            fun (p: WorkSandboxStarting) ->
+                Encode.object
+                    [ "messageId", messageId.Encode p.MessageId
+                      "sandbox", sandboxRef.Encode p.Sandbox
+                      "backend", Encode.string p.Backend
+                      "description", Encode.option Encode.string p.Description
+                      "actor", actor.Encode p.Actor ]
+          Decode =
+            Decode.object (fun get ->
+                { WorkSandboxStarting.MessageId = get.Required.Field "messageId" messageId.Decode
+                  WorkSandboxStarting.Sandbox = get.Required.Field "sandbox" sandboxRef.Decode
+                  WorkSandboxStarting.Backend = get.Required.Field "backend" Decode.string
+                  WorkSandboxStarting.Description =
+                    get.Optional.Field "description" (Decode.option Decode.string) |> Option.flatten
+                  WorkSandboxStarting.Actor = get.Required.Field "actor" actor.Decode }) }
+
+    let private workSandboxStartFailed : Codec<WorkSandboxStartFailed> =
+        { Encode =
+            fun (p: WorkSandboxStartFailed) ->
+                Encode.object
+                    [ "messageId", messageId.Encode p.MessageId
+                      "sandbox", sandboxRef.Encode p.Sandbox
+                      "reason", Encode.string p.Reason
+                      "actor", actor.Encode p.Actor ]
+          Decode =
+            Decode.object (fun get ->
+                { WorkSandboxStartFailed.MessageId = get.Required.Field "messageId" messageId.Decode
+                  WorkSandboxStartFailed.Sandbox = get.Required.Field "sandbox" sandboxRef.Decode
+                  WorkSandboxStartFailed.Reason = get.Required.Field "reason" Decode.string
+                  WorkSandboxStartFailed.Actor = get.Required.Field "actor" actor.Decode }) }
+
     let private repoCapabilitiesChanged : Codec<RepoCapabilitiesChanged> =
         { Encode =
             fun (p: RepoCapabilitiesChanged) ->
@@ -1516,8 +1549,12 @@ module Codec =
                     Encode.object [ "type", Encode.string "repoRemoved"; "payload", repoRemoved.Encode p ]
                 | RepoBranchSwitched p ->
                     Encode.object [ "type", Encode.string "repoBranchSwitched"; "payload", repoBranchSwitched.Encode p ]
+                | WorkSandboxStarting p ->
+                    Encode.object [ "type", Encode.string "workSandboxStarting"; "payload", workSandboxStarting.Encode p ]
                 | WorkSandboxStarted p ->
                     Encode.object [ "type", Encode.string "workSandboxStarted"; "payload", workSandboxStarted.Encode p ]
+                | WorkSandboxStartFailed p ->
+                    Encode.object [ "type", Encode.string "workSandboxStartFailed"; "payload", workSandboxStartFailed.Encode p ]
                 | SandboxSetupQueued p ->
                     Encode.object [ "type", Encode.string "sandboxSetupQueued"; "payload", sandboxSetupQueued.Encode p ]
                 | WorkSandboxStopped p ->
@@ -1595,7 +1632,10 @@ module Codec =
                 | "repoAdded" -> Decode.field "payload" repoAdded.Decode |> Decode.map RepoAdded
                 | "repoRemoved" -> Decode.field "payload" repoRemoved.Decode |> Decode.map RepoRemoved
                 | "repoBranchSwitched" -> Decode.field "payload" repoBranchSwitched.Decode |> Decode.map RepoBranchSwitched
+                | "workSandboxStarting" -> Decode.field "payload" workSandboxStarting.Decode |> Decode.map WorkSandboxStarting
                 | "workSandboxStarted" -> Decode.field "payload" workSandboxStarted.Decode |> Decode.map WorkSandboxStarted
+                | "workSandboxStartFailed" ->
+                    Decode.field "payload" workSandboxStartFailed.Decode |> Decode.map WorkSandboxStartFailed
                 | "sandboxSetupQueued" -> Decode.field "payload" sandboxSetupQueued.Decode |> Decode.map SandboxSetupQueued
                 | "repoConfigRefused" -> Decode.field "payload" repoConfigRefused.Decode |> Decode.map RepoConfigRefused
                 | "repoCapabilitiesChanged" ->

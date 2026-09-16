@@ -1679,9 +1679,125 @@ let private replyRefRenderTests =
             Expect.isTrue (html.Contains Dom.Text.replyRefMissing) "and says so, standing where the quote would be"
     ]
 
+// A sandbox coming up (Plan 15+): the act that used to appear only once it was already over
+// now opens RUNNING and resolves in place — the seam that makes an act a task.
+let private sandboxRef = SandboxRef.parse "octo/hello:dev" |> expect
+let private repoActor = ActorRef.Configured (RepoRef.create "octo/hello" |> expect)
+
+let private starting (n: string) =
+    SessionEvent.WorkSandboxStarting
+        { MessageId = message n; Sandbox = sandboxRef; Backend = "docker"; Description = Some "day-to-day work"; Actor = repoActor }
+
+let private startedSandbox (n: string) =
+    SessionEvent.WorkSandboxStarted
+        { MessageId = message n
+          Sandbox = sandboxRef
+          Backend = "docker"
+          Description = Some "day-to-day work"
+          Checkout = Some "/repos/octo/hello"
+          Forwarded = []
+          CredentialOwner = None
+          Realisation = []
+          Actor = repoActor }
+
+let private startFailed (n: string) (reason: string) =
+    SessionEvent.WorkSandboxStartFailed { MessageId = message n; Sandbox = sandboxRef; Reason = reason; Actor = repoActor }
+
+let private conversationOf events =
+    (ConversationProjection.applyEvents None events ConversationProjection.empty |> fst).Items
+
+let private noBlocks : BlockId -> BlockStatus option = fun _ -> None
+
+/// Every timeline item's live task state, in order — the shape a queue would read.
+let private liveTasks (blockStatus: BlockId -> BlockStatus option) events =
+    let conversation, _ = ConversationProjection.applyEvents None events ConversationProjection.empty
+    let timeline, _ = TimelineProjection.applyEvents None events TimelineProjection.empty
+    TimelineProjection.items conversation timeline
+    |> List.choose (TimelineProjection.taskState blockStatus timeline)
+
+let private sandboxTaskTests =
+    testList "a sandbox coming up is a running task" [
+        testCase "starting opens a running act" <| fun () ->
+            match conversationOf [ at 1L 0.0 (starting "1") ] with
+            | [ item ] ->
+                Expect.equal item.Status ConversationItemStatus.Running "the act is running while the sandbox comes up"
+                Expect.isTrue (item.Body.StartsWith "starting sandbox") "and says the sandbox is starting"
+                match item.Kind with
+                | ConversationItemKind.ActNote _ -> ()
+                | ConversationItemKind.Message -> failwith "a sandbox coming up is an act, not a message"
+            | other -> failwithf "expected one running act, got %d items" (List.length other)
+
+        testCase "the start resolves that same item in place, not a second" <| fun () ->
+            match conversationOf [ at 1L 0.0 (starting "1"); at 2L 1.0 (startedSandbox "1") ] with
+            | [ item ] ->
+                Expect.equal item.Status ConversationItemStatus.Complete "the running act became complete"
+                Expect.isTrue (item.Body.StartsWith "started sandbox") "and reads as started, not starting"
+            | other -> failwithf "the start must resolve the running act, not add a second — got %d items" (List.length other)
+
+        testCase "a failure resolves that same item to failed, carrying why" <| fun () ->
+            match conversationOf [ at 1L 0.0 (starting "1"); at 2L 1.0 (startFailed "1" "the docker daemon is not reachable") ] with
+            | [ item ] ->
+                Expect.equal item.Status ConversationItemStatus.Failed "the running act became failed"
+                match item.Kind with
+                | ConversationItemKind.ActNote facts ->
+                    Expect.equal facts.Detail (Some "the docker daemon is not reachable") "and carries why it could not start"
+                | ConversationItemKind.Message -> failwith "still an act"
+            | other -> failwithf "the failure must resolve the running act, not add a second — got %d items" (List.length other)
+
+        testCase "a start with no preceding starting still appears (a log written before starting existed)" <| fun () ->
+            match conversationOf [ at 1L 0.0 (startedSandbox "1") ] with
+            | [ item ] -> Expect.equal item.Status ConversationItemStatus.Complete "an unpaired start is a complete act, exactly as before"
+            | other -> failwithf "expected one complete act, got %d items" (List.length other)
+
+        testCase "a running sandbox act is a running task; once started it has left the queue" <| fun () ->
+            Expect.equal (liveTasks noBlocks [ at 1L 0.0 (starting "1") ]) [ TaskRunning ] "a sandbox coming up is one running task"
+            Expect.equal (liveTasks noBlocks [ at 1L 0.0 (starting "1"); at 2L 1.0 (startedSandbox "1") ]) [] "a started sandbox is done, not a queue member"
+            Expect.equal (liveTasks noBlocks [ at 1L 0.0 (starting "1"); at 2L 1.0 (startFailed "1" "nope") ]) [ TaskFailed ] "a failed start still wants attention"
+
+        testCase "what someone SAID is never a task" <| fun () ->
+            Expect.equal (liveTasks noBlocks [ at 1L 0.0 (sent "1" "hello") ]) [] "a message is not work the session is doing"
+
+        testCase "a running block is a running task; a finished one has left the queue" <| fun () ->
+            let stateOf events =
+                let blocks = events |> List.fold (fun p (e: EventEnvelope<SessionEvent>) -> Projection.applyEvent p e.Event) Projection.empty
+                let blockStatus id =
+                    Projection.tryFind terminalA blocks
+                    |> Option.bind (fun t -> t.Blocks |> List.tryFind (fun b -> b.BlockId = id))
+                    |> Option.map (fun b -> b.Status)
+                liveTasks blockStatus events
+            let running = [ at 1L 0.0 (opened terminalA "sh"); at 2L 1.0 (started terminalA "1" byAda "make" 0) ]
+            Expect.equal (stateOf running) [ TaskRunning ] "a running command is running work"
+            Expect.equal
+                (stateOf (running @ [ at 3L 2.0 (completed terminalA "1" (CommandSucceeded 0) 4) ]))
+                []
+                "a finished command has left the queue"
+
+        testCase "a running tool call is a running task; ok leaves, failed wants attention" <| fun () ->
+            Expect.equal (liveTasks noBlocks [ at 1L 0.0 (used "1" "a" "set_secret") ]) [ TaskRunning ] "a call still running is running work"
+            Expect.equal
+                (liveTasks noBlocks [ at 1L 0.0 (used "1" "a" "set_secret"); at 2L 1.0 (toolDone "1" ToolCallOk None) ])
+                []
+                "a call that succeeded has left the queue"
+            Expect.equal
+                (liveTasks noBlocks [ at 1L 0.0 (used "1" "a" "set_secret"); at 2L 1.0 (toolDone "1" (ToolCallFailed "denied") None) ])
+                [ TaskFailed ]
+                "a call that failed still wants attention"
+
+        // The visible half: a running act carries its state where a person (and a test) can
+        // see it. The hook is asserted, not the design — a redesign may move the pulse, but a
+        // running act must always SAY it is running, and a started one must stop saying so.
+        testCase "a running sandbox act renders as running; the start clears it" <| fun () ->
+            let running = Support.render (clientOf [ at 1L 0.0 (starting "1") ])
+            Expect.isTrue (running.Contains "data-act-status=\"running\"") "the running act says it is running"
+            let started = Support.render (clientOf [ at 1L 0.0 (starting "1"); at 2L 1.0 (startedSandbox "1") ])
+            Expect.isFalse (started.Contains "data-act-status=\"running\"") "once started, nothing still says running"
+            Expect.isTrue (started.Contains "data-act-status=\"complete\"") "the resolved act says it is complete"
+    ]
+
 let tests =
     testList "Timeline and the pane (Plan 14)" [
         listTests
+        sandboxTaskTests
         replyRefRenderTests
         pinTests
         orderTests

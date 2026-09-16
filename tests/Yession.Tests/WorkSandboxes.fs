@@ -75,6 +75,16 @@ let private fakeEnvironmentHolding (realisation: string list) =
 
 let private fakeEnvironment () = fakeEnvironmentHolding []
 
+/// An environment that refuses to come up — the container failed, or failed its own checks.
+let private fakeEnvironmentFailing (reason: string) : SessionEnvironment.SessionEnvironment =
+    { Ensure = fun _ _ -> async { return EnvironmentUnavailable reason }
+      Spawn = fun _ _ -> async { return Error reason }
+      SpawnPty = fun _ _ _ _ -> async { return Error reason }
+      Stop = fun () -> async { return () }
+      CurrentRef = fun () -> None
+      Shell = fun () -> None
+      Realisation = fun () -> [] }
+
 /// A registry over fake environments, plus the record of what each was BUILT with — which
 /// is where a forwarded credential would have to appear, and the only place it may.
 let private registryWithSpecs (log: EventLog<SessionEvent>) (credentials: WorkSandboxes.CredentialSource list) =
@@ -145,6 +155,17 @@ let private eventsOf (log: EventLog<SessionEvent>) =
 let private startedEvents (events: SessionEvent list) =
     events |> List.choose (function SessionEvent.WorkSandboxStarted s -> Some s | _ -> None)
 
+/// The sandbox-lifecycle events in the order the log holds them, each with its MessageId — so
+/// a test can assert the running act opens BEFORE the slow work and that the start or failure
+/// resolves that same id.
+let private lifecycleOf (events: SessionEvent list) =
+    events
+    |> List.choose (function
+        | SessionEvent.WorkSandboxStarting s -> Some ("starting", s.MessageId)
+        | SessionEvent.WorkSandboxStarted s -> Some ("started", s.MessageId)
+        | SessionEvent.WorkSandboxStartFailed s -> Some ("failed", s.MessageId)
+        | _ -> None)
+
 // --- names --------------------------------------------------------------------------------
 
 let private nameTests =
@@ -178,6 +199,47 @@ let private normaliseTests =
 
 let private ensureTests =
     testList "ensure semantics" [
+
+        // The whole point of the running act: it opens BEFORE the slow work — creating,
+        // starting and verifying the container — not after, so the timeline shows the sandbox
+        // coming up rather than dead air until it is already up. The start resolves that same
+        // item, which is why the two carry ONE MessageId.
+        testCaseAsync "a sandbox coming up records starting before started, under one id" <|
+            async {
+                let log = newLog ()
+                let sandboxes, _ = registry log []
+                let! _ = sandboxes.Ensure caller (sandbox "test") (forwarding [])
+                let! events = eventsOf log
+                match lifecycleOf events with
+                | [ ("starting", opened); ("started", resolved) ] ->
+                    Expect.equal opened resolved "the start resolves the very item the running act opened"
+                | other -> failwithf "expected starting then started under one id, got %A" other
+            }
+
+        // A start that fails resolves the running act to a failure — never leaves it spinning
+        // — and records no start.
+        testCaseAsync "a sandbox that cannot come up records starting then failed, and no start" <|
+            async {
+                let log = newLog ()
+                let sandboxes =
+                    WorkSandboxes.create
+                        { Backend = fun _ -> "fake"
+                          Describe = fun _ -> None
+                          Checkout = fun _ -> None
+                          Credentials = []
+                          Create = fun _ _ _ -> Ok (fakeEnvironmentFailing "the docker daemon is not reachable")
+                          Log = log
+                          Clock = fixedClock }
+                    |> expect
+                match! sandboxes.Ensure caller (sandbox "test") (forwarding []) with
+                | Error reason -> Expect.equal reason "the docker daemon is not reachable" "the ask fails with why"
+                | Ok _ -> failwith "a sandbox whose environment cannot come up must not report success"
+                let! events = eventsOf log
+                match lifecycleOf events with
+                | [ ("starting", opened); ("failed", resolved) ] ->
+                    Expect.equal opened resolved "the failure resolves the very item the running act opened"
+                | other -> failwithf "expected starting then failed under one id, got %A" other
+            }
 
         // What a sandbox is FOR reaches the record, so a reader choosing between two of them
         // chooses on the reason rather than the spelling.

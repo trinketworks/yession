@@ -472,3 +472,49 @@ module TimelineProjection =
                 | _, _, _ -> RowItem item :: rows)
             []
         |> List.rev
+
+    /// The one place that answers "is this timeline item a task the session is doing RIGHT
+    /// NOW, and how is it going" — so a task view (a live queue, a running count) is a FILTER
+    /// over this rather than a rule re-derived per surface. `Some TaskRunning` is work under
+    /// way; `Some TaskFailed` is work that stopped badly and still wants a person's eye;
+    /// `None` is everything that is not live work — a message, a thought, a lease stretch, and
+    /// a unit of work that finished cleanly. A finished task leaves the queue: counting done
+    /// work is the retrospective `TaskCard`'s job (`stateOf` keeps `TaskDone`), never this
+    /// one's, which is why `TaskDone` maps to `None` here.
+    ///
+    /// The three kinds of work carry their state in three places, and this is where they are
+    /// read as one: a terminal block through the caller's block resolver, a tool call through
+    /// this projection's `ToolUses`, and an ACT through its item's status — the last only
+    /// possible now that a slow act (a sandbox coming up) opens `Running` and resolves.
+    let taskState
+        (blockStatus: BlockId -> BlockStatus option)
+        (proj: TimelineProjection)
+        (item: TimelineItem)
+        : TaskState option =
+        let live =
+            function
+            | TaskRunning -> Some TaskRunning
+            | TaskFailed -> Some TaskFailed
+            | TaskDone -> None
+        match item with
+        | TimelineMessage item ->
+            match item.Kind with
+            | ConversationItemKind.ActNote _ ->
+                match item.Status with
+                | ConversationItemStatus.Running -> Some TaskRunning
+                | ConversationItemStatus.Failed -> Some TaskFailed
+                | ConversationItemStatus.Complete
+                | ConversationItemStatus.Streaming
+                | ConversationItemStatus.Interrupted -> None
+            | ConversationItemKind.Message -> None
+        | TimelineBlock (_, _, blockId) -> blockStatus blockId |> Option.map TaskCard.stateOf |> Option.bind live
+        | TimelineToolUse (_, id) ->
+            match toolUse id proj with
+            | Some use' ->
+                match use'.Outcome with
+                | None -> Some TaskRunning
+                | Some ToolCallOk -> None
+                | Some (ToolCallFailed _) -> Some TaskFailed
+            | None -> None
+        | TimelineStretch _
+        | TimelineThought _ -> None
