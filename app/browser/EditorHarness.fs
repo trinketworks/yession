@@ -172,6 +172,24 @@ let private exposeCaretPushes (n: int) : unit = jsNative
 [<Emit("requestAnimationFrame(() => $0())")>]
 let private onFrame (f: unit -> unit) : unit = jsNative
 
+/// Yjs hands an update observer the update AND the origin the transaction was tagged with,
+/// which is the whole question this instrument asks. `Doc.on` types its handler as taking one
+/// array of arguments, which is not the shape Yjs calls it with, so the observer is bound here.
+[<Emit("$0.on('update', $1)")>]
+let private onDocUpdate (doc: Y.Doc) (handler: JS.Uint8Array -> obj -> unit) : unit = jsNative
+
+/// The two counters are on `window` because that is this instrument's INTERFACE: the browser
+/// case reads them out of a Playwright `evaluate`, which can see a global and cannot see a
+/// module binding. They are the measurement's output, not a global something forgot to scope.
+[<Emit("window.__docUpdates = $0")>]
+let private exposeDocUpdates (n: int) : unit = jsNative
+
+[<Emit("window.__writebacks = $0")>]
+let private exposeWritebacks (n: int) : unit = jsNative
+
+[<Import("ySyncPluginKey", "y-prosemirror")>]
+let private ySyncPluginKey : obj = jsNative
+
 /// Count the Yjs updates a doc takes from `ySyncPlugin`'s OWN write-back — the ones whose
 /// origin is `ySyncPluginKey`, which is what `_prosemirrorChanged` tags its transaction with.
 ///
@@ -180,15 +198,22 @@ let private onFrame (f: unit -> unit) : unit = jsNative
 /// and it leaves no trace anywhere that a test could read. Counting from OUR side rather than
 /// patching the library keeps it honest — the number is real doc updates, not a hook we hoped
 /// was called.
+///
 /// Counts BOTH, and the second one is what makes the first believable: `__docUpdates` is every
 /// update this doc took, `__writebacks` only those the write-back produced. A write-back count
 /// of zero means "drawing a caret wrote nothing" only if the doc was moving at all — otherwise
 /// it means the observer was never wired up, and the two look identical from a test.
-[<ImportDefault("./js/count-writebacks.mjs")>]
-let private countWritebacks (doc: Y.Doc) (syncKey: obj) : unit = jsNative
-
-[<Import("ySyncPluginKey", "y-prosemirror")>]
-let private ySyncPluginKey : obj = jsNative
+let private countWritebacks (doc: Y.Doc) (syncKey: obj) : unit =
+    let mutable updates = 0
+    let mutable writebacks = 0
+    exposeDocUpdates updates
+    exposeWritebacks writebacks
+    onDocUpdate doc (fun _ origin ->
+        updates <- updates + 1
+        exposeDocUpdates updates
+        if System.Object.ReferenceEquals (origin, syncKey) then
+            writebacks <- writebacks + 1
+            exposeWritebacks writebacks)
 
 [<Emit("(function(f){ window.__convState = f; })($0)")>]
 let private exposeConvState (f: unit -> string) : unit = jsNative
@@ -215,6 +240,84 @@ let private now () : float = jsNative
 [<Emit("new Promise(r => requestAnimationFrame(() => r()))")>]
 let private nextFrame () : JS.Promise<unit> = jsNative
 
+/// The per-burst typing DIAGNOSTIC, which exists because the `type` series can only come up
+/// short two ways and a bare `collected 3 samples` says neither: a keydown that never reached
+/// the co-editor (focus elsewhere), or a sample frame that had not fired by the time the driver
+/// read the series. `docKeydowns` counts every keydown the page saw (a document-level capture,
+/// which fires even when focus left the editor); `hostKeydowns` counts only those that reached
+/// the listened-to host; `rafs` counts the sample frames that had fired at read time; and
+/// `focus` records where `activeElement` sat for each key, so a burst that started in the editor
+/// and drifted out says exactly when. This is the instrument the size-200 flake turned on: it
+/// showed the keystrokes always landed (`hostKeydowns` 32, focus never leaving) while `rafs`
+/// swung from 32 down to 0 — the frames were pending, not the keys missing.
+///
+/// The counters live here and are republished to `window.__benchDiagState` on every change, for
+/// the same reason the write-back counters are on `window`: a Playwright `evaluate` can read a
+/// global and cannot read a module binding. That global is this instrument's interface.
+module private TypingDiagnostic =
+
+    [<Emit("window.__benchDiagState = $0")>]
+    let private expose (state: obj) : unit = jsNative
+
+    /// How many keys' focus one burst records. A burst is a few dozen keystrokes and the
+    /// question the label answers is WHEN focus left, which the first few dozen settle; the cap
+    /// is what stops a page left typing into growing an array nobody reads.
+    [<Literal>]
+    let private FocusCap = 60
+
+    let mutable private hostKeydowns = 0
+    let mutable private docKeydowns = 0
+    let mutable private rafs = 0
+    let private focus = ResizeArray<string> ()
+
+    let private state () : obj =
+        Fable.Core.JsInterop.createObj
+            [ "hostKeydowns", box hostKeydowns
+              "docKeydowns", box docKeydowns
+              "rafs", box rafs
+              "focus", box (focus.ToArray ()) ]
+
+    let private publish () : unit = expose (state ())
+
+    /// Where focus sat when a key was pressed: the co-editor by name, anything else by its id
+    /// or, having none, by its tag — and `none` for a page whose focus is nowhere at all.
+    let private focusLabel () : string =
+        match Browser.Dom.document.activeElement with
+        | null -> "none"
+        | active when (active.closest "#peer-b").IsSome -> "peer-b"
+        | active when active.id <> "" -> "#" + active.id
+        | active -> active.tagName.ToLower ()
+
+    /// A keydown the PAGE saw, wherever focus was — counted with where that was, up to the cap.
+    /// One verb, because a count without its label is the half that cannot say why a burst
+    /// came up short.
+    let recordPageKey () : unit =
+        docKeydowns <- docKeydowns + 1
+        if focus.Count < FocusCap then focus.Add (focusLabel ())
+        publish ()
+
+    /// A keydown that reached the host being timed.
+    let recordHostKey () : unit =
+        hostKeydowns <- hostKeydowns + 1
+        publish ()
+
+    /// A sample frame that fired — one per timed keystroke, once the browser has painted.
+    let recordFrame () : unit =
+        rafs <- rafs + 1
+        publish ()
+
+    /// Clear for a fresh burst. Called by `__benchReset`, beside the sample arrays.
+    let reset () : unit =
+        hostKeydowns <- 0
+        docKeydowns <- 0
+        rafs <- 0
+        focus.Clear ()
+        publish ()
+
+    /// The diagnostic as JSON, for the driver to print each burst and to quote when a series
+    /// comes up short.
+    let asJson () : string = JS.JSON.stringify (state ())
+
 /// Every keystroke reaching `host`, timed from the browser's OWN event timestamp to the frame
 /// it paints on. `event.timeStamp` shares `performance.now()`'s time origin, so the difference
 /// is real input-to-paint including the browser's dispatch — which is what a person means by
@@ -224,33 +327,24 @@ let private nextFrame () : JS.Promise<unit> = jsNative
 /// for privacy. That is a fine threshold for judging one interaction and useless for watching
 /// a trend move, which is this suite's whole job.
 ///
-/// Capturing (`true`), so a keystroke is timed from before the editor sees it.
-///
-/// It also keeps a per-burst DIAGNOSTIC (`window.__benchDiagState`), because the `type` series
-/// can only come up short two ways and a bare `collected 3 samples` says neither: a keydown that
-/// never reached the co-editor (focus elsewhere), or a sample frame that had not fired by the
-/// time the driver read the series. `docKeydowns` counts every keydown the page saw (a
-/// document-level capture, which fires even when focus left the editor); `hostKeydowns` counts
-/// only those that reached this host; `rafs` counts the sample frames that had fired at read
-/// time; and `focus` records where `activeElement` sat for each key, so a burst that started in
-/// the editor and drifted out says exactly when. This is the instrument the size-200 flake
-/// turned on: it showed the keystrokes always landed (`hostKeydowns` 32, focus never leaving)
-/// while `rafs` swung from 32 down to 0 — the frames were pending, not the keys missing.
-[<ImportDefault("./js/on-keystroke-painted.mjs")>]
-let private onKeystrokePainted (host: obj) (take: float -> unit) : unit = jsNative
-
-/// Clear the typing diagnostic for a fresh burst — reset in place so the listeners above keep
-/// counting into the same object. Called by `__benchReset`, beside the sample arrays.
-[<Emit("""(function () {
-  var d = window.__benchDiagState
-  if (d) { d.hostKeydowns = 0; d.docKeydowns = 0; d.rafs = 0; d.focus = [] }
-})()""")>]
-let private resetTypingDiagnostics () : unit = jsNative
-
-/// The typing diagnostic as JSON, for the driver to print each burst and to quote when a series
-/// comes up short.
-[<Emit("JSON.stringify(window.__benchDiagState || null)")>]
-let private typingDiagnostics () : string = jsNative
+/// Two listeners, both capturing (`true`) so a keystroke is counted and timed from before the
+/// editor sees it, and they measure different things: the document-level one counts every
+/// keydown the page took and records where focus was, the host-level one counts the ones that
+/// arrived here and times each to the frame it paints on. `host` is `obj` because that is what
+/// the harness's mounts are — `Editor.mountEditor` takes one.
+let private onKeystrokePainted (host: obj) (take: float -> unit) : unit =
+    TypingDiagnostic.reset ()
+    Browser.Dom.document.addEventListener ("keydown", (fun _ -> TypingDiagnostic.recordPageKey ()), true)
+    let target : Browser.Types.EventTarget = unbox host
+    target.addEventListener (
+        "keydown",
+        (fun event ->
+            TypingDiagnostic.recordHostKey ()
+            let pressed = event.timeStamp
+            onFrame (fun () ->
+                TypingDiagnostic.recordFrame ()
+                take (now () - pressed))),
+        true)
 
 [<Emit("(function(f){ window.__benchDiag = f; })($0)")>]
 let private exposeTypingDiag (f: unit -> string) : unit = jsNative
@@ -474,11 +568,11 @@ do
     exposeBenchReset (fun () ->
         typeSamples.Clear ()
         receiveSamples.Clear ()
-        resetTypingDiagnostics ())
+        TypingDiagnostic.reset ())
 
     exposeTyping (fun () ->
         twoSeries "type" (typeSamples.ToArray ()) "receive" (receiveSamples.ToArray ()))
-    exposeTypingDiag typingDiagnostics
+    exposeTypingDiag TypingDiagnostic.asJson
 
     // Drain this burst's pending sample frames before the driver reads the series. Every `type`
     // and `receive` sample lands in a `requestAnimationFrame` callback, and the driver reads the
