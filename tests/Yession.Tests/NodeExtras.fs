@@ -7,12 +7,19 @@ module Yession.Tests.NodeExtras
 // declaration proves almost nothing: an `[<Emit>]` string, an `[<Import>]` name and an
 // anonymous record's field spelling are all opaque to the compiler and all wrong in exactly
 // the way that compiles. So every binding declared there is called here at least once, on
-// Node, in the cheapest tier that can host it — with one exception, which is called somewhere
+// Node, in the cheapest tier that can host it — with two exceptions, each called somewhere
 // better. The HTTP-client slice (`httpRequest`, `Readable`/`Writable`, `HttpMessage`) is what
 // `app/GitGateway.fs` is built from, and the gateway's [Ports] suite drives it with a REAL git:
 // gzipped posts, chunked answers, a push and a fetch streaming both ways. An echo server here
 // would exercise strictly less of it, so what stays here is the one part of that slice no wire
 // reaches — the sentence `StreamError.describe` makes of a failure.
+//
+// The second is the pair that only a real device can answer for. `createNetServer` /
+// `boundPort` exist to ask the OS for a free port, and `openTty` opens the far end of a pty:
+// the first is driven by the Jumpstarter tier, which spawns two processes onto the port it
+// answers, and the second by the Serial tier against a real socat. A case here could construct
+// either and learn nothing — a port nobody binds and a tty nobody reads are exactly the
+// declarations that are wrong in the way that compiles.
 //
 // What each case pins is the binding's PROMISE rather than the platform's behaviour: that
 // `base64url` reaches Buffer as an encoding, that a decoder held between chunks really holds
