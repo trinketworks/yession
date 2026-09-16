@@ -111,15 +111,10 @@ and WorkSandboxStarted =
       /// The credential NAMES forwarded into it — never a value, and never a token
       /// shape that could be mistaken for one. Forwarding is a fact about the sandbox
       /// that outlives the turn that asked for it, so the log has to carry it; what the
-      /// credential IS belongs only in the sandbox's env.
+      /// credential IS belongs only in the sandbox's env. WHOSE is not a fact about the
+      /// sandbox at all: a forward is a route, and each block's request spends the
+      /// credential of the act that made it (`GitCredentialSpent`).
       Forwarded : string list
-      /// Whose credentials were forwarded. Distinct from `Actor` on purpose: for an
-      /// agent-issued start the AGENT is the acting party while the credentials are the
-      /// turn human's (Plan 08 — no borrowing, and the agent has no scope of its own).
-      /// `None` when nothing was forwarded, because then nobody's were. The deployment's
-      /// own is what a file's boot fold forwards, with nobody named — and it is named as
-      /// that, not folded into "nothing".
-      CredentialOwner : CredentialFor option
       /// Where this host could not give exactly what the sandbox's resources named, one line
       /// each. Empty is the ordinary case and says nothing.
       ///

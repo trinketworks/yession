@@ -738,11 +738,20 @@ first's.
     longer enters the sandbox: `github` forwards as one `insteadOf` naming the session's git
     gateway under a per-sandbox capability, the gateway resolves the credential on every
     request (so a refresh under Plan 21 reaches a running sandbox, and a revocation at the
-    provider is felt on the next push), and `stop_work_sandbox` revokes the route. What the
-    sandbox holds is the cap: readable by everyone in the session and everything running in
-    it — the same shared trust boundary Plan 14 states — and worth exactly "act as this
-    sandbox's git at this session's gateway" for as long as the sandbox runs. Only `github`
-    is forwardable so far, and the gateway admits only git's three smart-HTTP requests to a
+    provider is felt on the next push), and `stop_work_sandbox` revokes the route. WHOSE
+    credential answers is the block's, not the sandbox's: every block's line exports a
+    per-block loan (`__y_env`, one `http.<gateway>.extraheader`) into its process tree, the
+    gateway answers a request from the loan it carries and from nothing else — no loan, no
+    credential, in words — and a loan is returned when the next block on that terminal
+    starts, so a `git push &` a block left running still spends its own act's credential.
+    A push writes `GitCredentialSpent` to the log, which is where the person whose
+    credential it was finds out. What the sandbox holds is the cap and, in each block's
+    environment, that block's loan: readable by everyone in the session and everything
+    running in it — a block can read another block's live loan out of `/proc`, the same
+    shared trust boundary Plan 14 states — and worth exactly "act as this sandbox's git at
+    this session's gateway" for as long as the sandbox runs. Keystrokes under a lease carry
+    no loan and are refused, until a lease lends the holder one. Only `github` is
+    forwardable so far, and the gateway admits only git's three smart-HTTP requests to a
     repository path, so a cap is not a token for the rest of github.com.
   - **An external MCP server's read-only tools are not queries yet.** `readOnlyHint` is
     declared, not inferred, precisely so a third-party server's queries could be listed into

@@ -294,12 +294,10 @@ let private frameSerializationTests =
                       Description = None
                       Checkout = None
                       Forwarded = [ "github" ]
-                      CredentialOwner = Some (CredentialFor.Person (Principal.User (UserId.create "alice" |> expect)))
                       Realisation = [ "the socket at /run/docker.sock — this host cannot scope that" ]
                       Actor = ActorRef.Agent }
                   // A repo-declared start, carrying both the things only a sandbox settles:
-                  // what it is for, and where it sees the checkout — forwarding the
-                  // deployment's own credential, which the boot fold does with nobody named.
+                  // what it is for, and where it sees the checkout.
                   WorkSandboxStarted
                     { MessageId = messageId
                       Sandbox = SandboxRef.parse "octo/hello:dev" |> expect
@@ -307,8 +305,25 @@ let private frameSerializationTests =
                       Description = Some "day-to-day work"
                       Checkout = Some "/repos/octo/hello"
                       Forwarded = [ "github" ]
-                      CredentialOwner = Some CredentialFor.Deployment
                       Realisation = []
+                      Actor = ActorRef.Configured (RepoRef.create "octo/hello" |> expect) }
+                  // A push spending somebody's credential: the person's own, and the
+                  // deployment's, which a repo's setup block at boot spends.
+                  GitCredentialSpent
+                    { MessageId = messageId
+                      Sandbox = SandboxRef.parse "octo/hello:dev" |> expect
+                      Terminal = TerminalId.create "term-1" |> expect
+                      Block = BlockId.create "b-1" |> expect
+                      Owner = CredentialFor.Person (Principal.User (UserId.create "alice" |> expect))
+                      Repo = "octo/hello"
+                      Actor = ActorRef.Agent }
+                  GitCredentialSpent
+                    { MessageId = messageId
+                      Sandbox = SandboxRef.parse "octo/hello:dev" |> expect
+                      Terminal = TerminalId.create "term-1" |> expect
+                      Block = BlockId.create "b-2" |> expect
+                      Owner = CredentialFor.Deployment
+                      Repo = "octo/hello"
                       Actor = ActorRef.Configured (RepoRef.create "octo/hello" |> expect) }
                   WorkSandboxStarted
                     { MessageId = messageId
@@ -317,7 +332,6 @@ let private frameSerializationTests =
                       Description = None
                       Checkout = None
                       Forwarded = []
-                      CredentialOwner = None
                       Realisation = []
                       Actor = PeerRef peerId }
                   // The two halves of a sandbox coming up, beside the start they resolve: a
@@ -487,8 +501,9 @@ let private frameSerializationTests =
                       Backend = "srt"
                       Description = None
                       Checkout = None
+                      // The `credentialOwner` the line carries is left unread: a start no
+                      // longer names one, and the decoder does not refuse a log that did.
                       Forwarded = []
-                      CredentialOwner = None
                       // A start recorded before the host became an author of a grant. Absent
                       // reads as "nothing was measured", which is the only honest answer for
                       // a sandbox nobody asked the question about.

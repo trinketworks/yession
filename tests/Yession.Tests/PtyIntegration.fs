@@ -203,7 +203,7 @@ let private withPosixTerminal (name: string) body =
 /// A terminal whose blocks are lent whatever `lent` holds when each is asked — a cell, so
 /// a case can lend one thing to the first block and another to the next.
 let private withLendingTerminal (shell: TerminalShell) (lent: BlockEnv ref) (name: string) body =
-    let loans : SessionTerminals.BlockLoans = { Lend = fun _ _ _ _ -> async { return lent.Value } }
+    let loans : SessionTerminals.BlockLoans = { Lend = (fun _ _ _ _ -> async { return lent.Value }); Retire = ignore }
     withShellTerminal shell loans (fun _ -> async { return () }) name body
 
 /// A queue entry for a terminal, as the drain would hand one over.

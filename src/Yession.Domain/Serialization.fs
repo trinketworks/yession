@@ -1225,7 +1225,6 @@ module Codec =
                       // credential VALUE, which is the point: the log is replicated to
                       // every peer, and a shape that could hold a token eventually does.
                       "forwarded", Encode.list (p.Forwarded |> List.map Encode.string)
-                      "credentialOwner", Encode.option credentialFor.Encode p.CredentialOwner
                       "realisation", Encode.list (p.Realisation |> List.map Encode.string)
                       "actor", actor.Encode p.Actor ]
           Decode =
@@ -1241,8 +1240,9 @@ module Codec =
                   // could say where its checkout was are still read.
                   WorkSandboxStarted.Checkout =
                     get.Optional.Field "checkout" (Decode.option Decode.string) |> Option.flatten
+                  // A `credentialOwner` beside it in an older log is left unread: a start
+                  // no longer has one, and what it said is not a fact this version can act on.
                   WorkSandboxStarted.Forwarded = get.Required.Field "forwarded" (Decode.list Decode.string)
-                  WorkSandboxStarted.CredentialOwner = get.Required.Field "credentialOwner" (Decode.option credentialFor.Decode)
                   // Optional on the way in, and this is the only backward-compatible reading
                   // available: a start written before this field existed has no answer, and
                   // absent is the right one — nothing was measured, so nothing is claimed.
@@ -1251,6 +1251,29 @@ module Codec =
                   WorkSandboxStarted.Realisation =
                     get.Optional.Field "realisation" (Decode.list Decode.string) |> Option.defaultValue []
                   WorkSandboxStarted.Actor = get.Required.Field "actor" actor.Decode }) }
+
+    let private gitCredentialSpent : Codec<GitCredentialSpent> =
+        { Encode =
+            fun (p: GitCredentialSpent) ->
+                Encode.object
+                    [ "messageId", messageId.Encode p.MessageId
+                      "sandbox", sandboxRef.Encode p.Sandbox
+                      "terminal", terminalId.Encode p.Terminal
+                      "block", blockId.Encode p.Block
+                      // Whose, by name — the same register the rest of the log names people
+                      // in, and never a value.
+                      "owner", credentialFor.Encode p.Owner
+                      "repo", Encode.string p.Repo
+                      "actor", actor.Encode p.Actor ]
+          Decode =
+            Decode.object (fun get ->
+                { GitCredentialSpent.MessageId = get.Required.Field "messageId" messageId.Decode
+                  GitCredentialSpent.Sandbox = get.Required.Field "sandbox" sandboxRef.Decode
+                  GitCredentialSpent.Terminal = get.Required.Field "terminal" terminalId.Decode
+                  GitCredentialSpent.Block = get.Required.Field "block" blockId.Decode
+                  GitCredentialSpent.Owner = get.Required.Field "owner" credentialFor.Decode
+                  GitCredentialSpent.Repo = get.Required.Field "repo" Decode.string
+                  GitCredentialSpent.Actor = get.Required.Field "actor" actor.Decode }) }
 
     let private workSandboxStarting : Codec<WorkSandboxStarting> =
         { Encode =
@@ -1557,6 +1580,8 @@ module Codec =
                     Encode.object [ "type", Encode.string "workSandboxStartFailed"; "payload", workSandboxStartFailed.Encode p ]
                 | SandboxSetupQueued p ->
                     Encode.object [ "type", Encode.string "sandboxSetupQueued"; "payload", sandboxSetupQueued.Encode p ]
+                | GitCredentialSpent p ->
+                    Encode.object [ "type", Encode.string "gitCredentialSpent"; "payload", gitCredentialSpent.Encode p ]
                 | WorkSandboxStopped p ->
                     Encode.object [ "type", Encode.string "workSandboxStopped"; "payload", workSandboxStopped.Encode p ]
                 | RepoConfigRefused p ->
@@ -1637,6 +1662,7 @@ module Codec =
                 | "workSandboxStartFailed" ->
                     Decode.field "payload" workSandboxStartFailed.Decode |> Decode.map WorkSandboxStartFailed
                 | "sandboxSetupQueued" -> Decode.field "payload" sandboxSetupQueued.Decode |> Decode.map SandboxSetupQueued
+                | "gitCredentialSpent" -> Decode.field "payload" gitCredentialSpent.Decode |> Decode.map GitCredentialSpent
                 | "repoConfigRefused" -> Decode.field "payload" repoConfigRefused.Decode |> Decode.map RepoConfigRefused
                 | "repoCapabilitiesChanged" ->
                     Decode.field "payload" repoCapabilitiesChanged.Decode |> Decode.map RepoCapabilitiesChanged

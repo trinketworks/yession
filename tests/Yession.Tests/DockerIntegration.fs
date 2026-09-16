@@ -387,15 +387,20 @@ let tests =
                 do! Async.FromContinuations (fun (cont, _, _) -> upstream.listen (0, "127.0.0.1", fun () -> cont ()) |> ignore)
                 let! gateway = GitGateway.start (sprintf "http://127.0.0.1:%d" (Interop.serverPort upstream))
                 try
-                    let cap =
-                        gateway.Grant
+                    let cap = gateway.Grant SandboxRef.defaultRef
+                    let secret =
+                        gateway.Lend
                             SandboxRef.defaultRef
+                            (TerminalId.create "term-docker" |> expect)
                             { Owner = CredentialFor.Deployment
                               Resolve = fun () -> async { return Some "tok" }
-                              Refused = fun () -> async { () } }
+                              Refused = fun () -> async { () }
+                              Spent = fun _ -> async { () } }
                     let! _, sandbox = startOrFail alpineSpec
                     let url = sprintf "http://%s:%d/git/%s/github.com/octo/hello.git/info/refs?service=git-upload-pack" host gateway.Port cap
-                    let! run, out, err = runInSandbox sandbox "wget" [ "-qO-"; "-T"; "10"; url ] Map.empty None
+                    // The loan, as a block's git would carry it.
+                    let! run, out, err =
+                        runInSandbox sandbox "wget" [ "-qO-"; "-T"; "10"; "--header"; sprintf "X-Yession-Loan: %s" secret; url ] Map.empty None
                     Expect.equal run (SandboxExited 0) (sprintf "the container reached the gateway: %s" err)
                     Expect.isTrue (out.Contains "answered by the upstream") "and through it, github.com's stand-in"
                     do! sandbox.Dispose ()

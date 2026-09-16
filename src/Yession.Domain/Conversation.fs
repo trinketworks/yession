@@ -660,12 +660,12 @@ module ConversationProjection =
                           Offset = envelope.Offset
                           Woke = None; Replying = None } ] }
         | SessionEvent.WorkSandboxStarted s ->
+            // Names only, and nobody's: a forward is a route, and whose credential goes
+            // down it is said per push (`GitCredentialSpent`), by the block that made it.
             let forwarded =
-                match s.Forwarded, s.CredentialOwner with
-                | [], _ -> None
-                | names, Some owner ->
-                    Some (sprintf "forwarding %s from %s" (String.concat ", " names) (CredentialFor.token owner))
-                | names, None -> Some (sprintf "forwarding %s" (String.concat ", " names))
+                match s.Forwarded with
+                | [] -> None
+                | names -> Some (sprintf "forwarding %s" (String.concat ", " names))
             // And where this host could not give what the sandbox's resources named. On the
             // start NOTE rather than a note of its own, because it is a property of THIS
             // sandbox coming up — a separate item would be a second thing to correlate, and
@@ -885,6 +885,20 @@ module ConversationProjection =
                                   // ran is a sandbox the next command pays for in full, and
                                   // that is the case somebody should be told loudly.
                                   Notable = q.Problem.IsSome }
+                          Offset = envelope.Offset
+                          Woke = None; Replying = None } ] }
+        // A push spent somebody's credential. The person whose it was finds out HERE, which
+        // is the reason the event exists: the block that pushed is on the timeline already,
+        // but a block says what ran, not whose key went out on it.
+        | SessionEvent.GitCredentialSpent g ->
+            { proj with
+                Items =
+                    proj.Items
+                    @ [ { MessageId = g.MessageId
+                          Author = g.Actor
+                          Body = sprintf "pushed to %s with %s's github credential" g.Repo (CredentialFor.token g.Owner)
+                          Status = Complete
+                          Kind = ConversationItemKind.ActNote { Detail = None; Notable = false }
                           Offset = envelope.Offset
                           Woke = None; Replying = None } ] }
         // Reasoning is recorded and shown to NOBODY, and this case exists to say that is a
