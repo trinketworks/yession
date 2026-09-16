@@ -320,6 +320,19 @@ let private frameSerializationTests =
                       CredentialOwner = None
                       Realisation = []
                       Actor = PeerRef peerId }
+                  // The two halves of a sandbox coming up, beside the start they resolve: a
+                  // running act opens on `Starting` and the start or failure below closes it.
+                  WorkSandboxStarting
+                    { MessageId = messageId
+                      Sandbox = SandboxRef.parse "octo/hello:dev" |> expect
+                      Backend = "docker"
+                      Description = Some "day-to-day work"
+                      Actor = ActorRef.Configured (RepoRef.create "octo/hello" |> expect) }
+                  WorkSandboxStartFailed
+                    { MessageId = messageId
+                      Sandbox = SandboxRef.parse "octo/hello:dev" |> expect
+                      Reason = "the docker daemon is not reachable"
+                      Actor = ActorRef.Configured (RepoRef.create "octo/hello" |> expect) }
                   WorkSandboxStopped { MessageId = messageId; Sandbox = SandboxRef.parse "test" |> expect; Actor = ActorRef.Agent }
                   // The shell profile (Plan 25): both cases, because a set and a clear are
                   // one event and the difference between them is the whole payload.

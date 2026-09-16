@@ -97,6 +97,13 @@ let private lastRefusal (events: SessionEvent list) (repo: RepoRef) (sandbox: Sa
         | SessionEvent.RepoConfigRefused r when
             RepoRef.value r.Repo = RepoRef.value repo
             && (r.Sandbox |> Option.map SandboxRef.render) = rendered -> Some (Some r.Reason)
+        // A start that ran and failed already accounts for itself — it opened a running act
+        // and resolved it to a failure a person reads on the timeline. Counting it here means
+        // the fold sees this reason as already told and does not ALSO file a
+        // `RepoConfigRefused` saying the same thing, which is the two-accounts-of-one-fault
+        // this dedup exists to prevent.
+        | SessionEvent.WorkSandboxStartFailed f when Some (SandboxRef.render f.Sandbox) = rendered ->
+            Some (Some f.Reason)
         | SessionEvent.WorkSandboxStarted started when Some (SandboxRef.render started.Sandbox) = rendered ->
             Some None
         | _ -> None)

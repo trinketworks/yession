@@ -344,8 +344,33 @@ let create (config: WorkSandboxesConfig) : Result<WorkSandboxes, string> =
                         revoke name wanted.Forward
                         return Error e
                     | Ok environment ->
+                        // One id for the whole coming-up: the RUNNING act this opens is the
+                        // same item `WorkSandboxStarted`/`WorkSandboxStartFailed` below resolve
+                        // in place. Emitted BEFORE `environment.Ensure` — creating, starting
+                        // and verifying the container — so the timeline shows the sandbox
+                        // coming up rather than dead air until it is already up. A provision or
+                        // create failure above never reached here, so it opens no running act.
+                        let messageId = mintMessageId ()
+                        do!
+                            append
+                                caller.Actor
+                                (SessionEvent.WorkSandboxStarting
+                                    { MessageId = messageId
+                                      Sandbox = name
+                                      Backend = config.Backend name
+                                      Description = config.Describe name
+                                      Actor = caller.Actor })
                         match! environment.Ensure None (sprintf "sandbox '%s' was started" (SandboxRef.render name)) with
-                        | EnvironmentUnavailable reason -> return Error reason
+                        | EnvironmentUnavailable reason ->
+                            do!
+                                append
+                                    caller.Actor
+                                    (SessionEvent.WorkSandboxStartFailed
+                                        { MessageId = messageId
+                                          Sandbox = name
+                                          Reason = reason
+                                          Actor = caller.Actor })
+                            return Error reason
                         | EnvironmentAvailable ->
                             let startedAt = config.Clock ()
                             let entry =
@@ -360,7 +385,7 @@ let create (config: WorkSandboxesConfig) : Result<WorkSandboxes, string> =
                                 append
                                     caller.Actor
                                     (SessionEvent.WorkSandboxStarted
-                                        { MessageId = mintMessageId ()
+                                        { MessageId = messageId
                                           Sandbox = name
                                           Backend = config.Backend name
                                           Description = config.Describe name

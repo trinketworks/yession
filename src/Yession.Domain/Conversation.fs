@@ -15,6 +15,13 @@ type ConversationItemStatus =
     | Failed
     /// The turn was explicitly interrupted; the partial body streamed so far is kept.
     | Interrupted
+    /// An ACT that is under way — work that takes time and has not finished, like a sandbox
+    /// coming up. It is to an act what `Streaming` is to a message: the item holds its place
+    /// while the work runs, and a later event with the same `MessageId` resolves it to
+    /// `Complete` or `Failed`. This is the status that makes an act a TASK — the one thing a
+    /// task view (a live queue, a count of what is happening now) reads it by
+    /// (`Timeline.taskState`).
+    | Running
 
 /// What an act has to say beyond its headline. The fold KNOWS which half of a sentence is
 /// the gist and which is the particulars — it built both from an event whose shape it
@@ -635,6 +642,23 @@ module ConversationProjection =
         // a command here does, and the timeline is where the person whose credential it is
         // finds out. The line names WHAT was forwarded and WHOSE — never a value; the
         // event cannot carry one.
+        // A sandbox COMING UP opens a running act — the same shape a streaming message has:
+        // it holds its place while the work runs, and the `Started`/`StartFailed` below,
+        // carrying this same MessageId, resolve it in place. This is the item that fills the
+        // dead air a person used to see between "asks for" and "started sandbox".
+        | SessionEvent.WorkSandboxStarting s ->
+            { proj with
+                Items =
+                    proj.Items
+                    @ [ { MessageId = s.MessageId
+                          Author = s.Actor
+                          // Short headline, like the start it resolves into: which sandbox, on
+                          // what backend. What it is for rides the detail, not the headline.
+                          Body = sprintf "starting sandbox %s (%s)" (SandboxRef.render s.Sandbox) s.Backend
+                          Status = Running
+                          Kind = ConversationItemKind.ActNote { Detail = s.Description; Notable = false }
+                          Offset = envelope.Offset
+                          Woke = None; Replying = None } ] }
         | SessionEvent.WorkSandboxStarted s ->
             let forwarded =
                 match s.Forwarded, s.CredentialOwner with
@@ -655,28 +679,59 @@ module ConversationProjection =
                             "where this host could not give exactly what was asked: %s"
                             (String.concat "; " lines))
             let checkout = s.Checkout |> Option.map (sprintf "the checkout is at %s in here")
-            { proj with
-                Items =
-                    proj.Items
-                    @ [ { MessageId = s.MessageId
-                          Author = s.Actor
-                          // The headline names the one thing worth deciding from at a
-                          // glance: which sandbox, on what backend. What it is for, where
-                          // its checkout sits, whose credential rode in, and what this host
-                          // could not give exactly are separate facts, not clauses chained
-                          // onto the headline (as this line once did) - they ride in the
-                          // detail instead, semicolon-joined, so each stays its own fact.
-                          Body = sprintf "started sandbox %s (%s)" (SandboxRef.render s.Sandbox) s.Backend
-                          Status = Complete
-                          Kind =
-                            ConversationItemKind.ActNote
-                                { Detail =
-                                    match List.choose id [ s.Description; checkout; forwarded; realisation ] with
-                                    | [] -> None
-                                    | parts -> Some (String.concat "; " parts)
-                                  Notable = false }
-                          Offset = envelope.Offset
-                          Woke = None; Replying = None } ] }
+            // The headline names the one thing worth deciding from at a glance: which
+            // sandbox, on what backend. What it is for, where its checkout sits, whose
+            // credential rode in, and what this host could not give exactly are separate
+            // facts, semicolon-joined in the detail, not clauses chained onto the headline.
+            let body = sprintf "started sandbox %s (%s)" (SandboxRef.render s.Sandbox) s.Backend
+            let detail =
+                match List.choose id [ s.Description; checkout; forwarded; realisation ] with
+                | [] -> None
+                | parts -> Some (String.concat "; " parts)
+            let resolve (item: ConversationItem) =
+                { item with
+                    Body = body
+                    Status = Complete
+                    Kind = ConversationItemKind.ActNote { Detail = detail; Notable = false } }
+            // Resolve the running item this start's `WorkSandboxStarting` opened, in place. A
+            // start from a log written before `Starting` existed has no such item — so it is
+            // appended, exactly as it was before, and the two readings never both fire because
+            // an id is either already there or not.
+            if proj.Items |> List.exists (fun i -> i.MessageId = s.MessageId) then
+                { proj with Items = proj.Items |> updateItem s.MessageId resolve }
+            else
+                { proj with
+                    Items =
+                        proj.Items
+                        @ [ { MessageId = s.MessageId
+                              Author = s.Actor
+                              Body = body
+                              Status = Complete
+                              Kind = ConversationItemKind.ActNote { Detail = detail; Notable = false }
+                              Offset = envelope.Offset
+                              Woke = None; Replying = None } ] }
+        // The sandbox could not come up: resolve its running item to a failure in place. Like
+        // the start above, an id already present is updated and an absent one appended, so a
+        // failure whose `Starting` predates this code still reads.
+        | SessionEvent.WorkSandboxStartFailed s ->
+            let resolve (item: ConversationItem) =
+                { item with
+                    Body = sprintf "sandbox %s could not start" (SandboxRef.render s.Sandbox)
+                    Status = Failed
+                    Kind = ConversationItemKind.ActNote { Detail = Some s.Reason; Notable = false } }
+            if proj.Items |> List.exists (fun i -> i.MessageId = s.MessageId) then
+                { proj with Items = proj.Items |> updateItem s.MessageId resolve }
+            else
+                { proj with
+                    Items =
+                        proj.Items
+                        @ [ { MessageId = s.MessageId
+                              Author = s.Actor
+                              Body = sprintf "sandbox %s could not start" (SandboxRef.render s.Sandbox)
+                              Status = Failed
+                              Kind = ConversationItemKind.ActNote { Detail = Some s.Reason; Notable = false }
+                              Offset = envelope.Offset
+                              Woke = None; Replying = None } ] }
         // The other outcome of a declaration, beside the start above. Said in the refusal's
         // own words rather than summarised: the `repo_config` query is showing that same
         // sentence, and two renderings of one refusal are two things free to disagree.
