@@ -341,7 +341,20 @@ let create
                                             | CommandRunning -> None
                                         return Some { Repo = repo; Sandbox = Some ref; Problem = problem }
                             })
-                        |> Async.Sequential
+                        // In PARALLEL, so a repo's sandboxes come up at once rather than one
+                        // waiting for the one before it to finish — the `dev` and `gate` of a
+                        // checkout no longer queue behind each other. Safe because each
+                        // declaration is a DISTINCT sandbox ref: `WorkSandboxes.ensure`'s
+                        // find-then-start cannot collide across two names, this host is
+                        // single-threaded (Fable/JS — asyncs interleave only at I/O awaits, so
+                        // the shared registry list is never torn), and `EventStore.append` is
+                        // synchronous, so concurrent starts cannot interleave a log line. The
+                        // one-fold-at-a-time guard is untouched: this parallelism is WITHIN a
+                        // fold, over refs a single fold owns. `Async.Parallel` preserves input
+                        // order in its result, so `outcomes` reads the same; only the starts'
+                        // own timeline events interleave by completion, which is the coming-up
+                        // happening at once made visible.
+                        |> Async.Parallel
                     outcomes <- fileProblems @ (declarations |> Array.toList |> List.choose id)
                     declaredRefs <- declared |> Map.toList |> List.map (fst >> SandboxRef.render) |> Set.ofList
                     // Say the refusals that are NEW. A start already announces itself, so
