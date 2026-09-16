@@ -10,7 +10,10 @@ module Yession.Tests.GitGateway
 open System
 open Fable.Core
 open Fable.Core.JsInterop
+open Fable.NodeExtras
 open Fable.Pyxpecto
+open Node.Api
+open Node.Buffer
 open Yession.Domain
 open Yession.Domain.Sandboxes
 open Yession.Host
@@ -177,8 +180,6 @@ let private carryTests =
 
 let private nodeFs : obj = importAll "node:fs"
 let private nodeOs : obj = importAll "node:os"
-let private nodeHttp : obj = importAll "node:http"
-let private childProcess : obj = importAll "node:child_process"
 
 [<Emit("$0.mkdtempSync($1.tmpdir() + '/yession-gateway-')")>]
 let private mkdtemp (fs: obj) (os: obj) : string = jsNative
@@ -199,6 +200,44 @@ type private GitRun =
       Stdout : string
       Stderr : string }
 
+/// What `execFile` reports of a child that did not exit 0. `code` is the exit STATUS where
+/// the child ran and chose it, a string (`ENOENT`) where it could never be started, and
+/// neither where a signal ended it — which is how a run killed at its deadline arrives.
+type [<AllowNullLiteral>] private ExecFileError =
+    abstract code : obj
+
+[<Import("execFile", "node:child_process")>]
+let private execFile
+    (file: string)
+    (arguments: string array)
+    (options: obj)
+    (completed: Action<ExecFileError, string, string>)
+    : obj =
+    jsNative
+
+/// The status a run ended on: the child's own, or `-1` for one that never got to choose.
+let private statusOf (error: ExecFileError) : int =
+    if isNull error then 0
+    elif jsTypeof error.code = "number" then unbox<int> error.code
+    else -1
+
+/// What keeps this box out of a fixture git: no configuration of the operator's, no identity
+/// of theirs, and no prompt for a credential nobody is there to type. Data rather than an
+/// object literal, so what the gateway told a sandbox goes on top of it by the same rule that
+/// put it there.
+let private fixtureGitEnv =
+    [ "GIT_CONFIG_GLOBAL", "/dev/null"
+      "GIT_CONFIG_SYSTEM", "/dev/null"
+      "GIT_TERMINAL_PROMPT", "0"
+      "GIT_AUTHOR_NAME", "fixture"
+      "GIT_AUTHOR_EMAIL", "f@x"
+      "GIT_COMMITTER_NAME", "fixture"
+      "GIT_COMMITTER_EMAIL", "f@x" ]
+
+let private gitEnvironment (told: Map<string, string>) : Map<string, string> =
+    let added env pairs = (env, pairs) ||> List.fold (fun env (name, value) -> Map.add name value env)
+    added (added (Sandboxes.ambientEnv ()) fixtureGitEnv) (Map.toList told)
+
 /// Run git as a sandbox would: no config of this box's, no prompt, a fixed identity, and
 /// whatever the gateway told it on top. Asynchronous of necessity: the gateway git is
 /// talking to runs on THIS event loop, and a synchronous spawn would hold it while git
@@ -209,11 +248,35 @@ type private GitRun =
 /// allowed to. Unbounded, the first such regression kills the whole run on its budget and
 /// names no case; bounded, git is killed and the case that was waiting fails as itself, on
 /// the assertion it was actually making.
-[<ImportDefault("./js/git-run.mjs")>]
-let private gitRun (cp: obj) (args: string array) (cwd: string) (extra: (string * string) array) : JS.Promise<GitRun> = jsNative
+let private git (args: string list) (cwd: string) (told: Map<string, string>) : Async<GitRun> =
+    let options : obj =
+        !!{| cwd = cwd
+             env = gitEnvironment told |> Map.toList |> List.map (fun (name, value) -> name ==> value) |> createObj
+             // Text back rather than buffers, which is what `GitRun` says it holds.
+             encoding = "utf8"
+             // Far past `execFile`'s 1MB default: what a fetch answers with is a packfile,
+             // and a run that outgrew the default would be killed and read as a gateway that
+             // stopped answering.
+             maxBuffer = 64 * 1024 * 1024
+             timeout = 20000
+             // The deadline has to END the run rather than ask it to stop: what is bounded
+             // here is a git waiting on an answer, and one that took the signal as a chance
+             // to tidy up would spend the budget anyway.
+             killSignal = "SIGKILL" |}
 
-let private git (args: string list) (cwd: string) (env: Map<string, string>) : Async<GitRun> =
-    gitRun childProcess (List.toArray args) cwd (Map.toArray env) |> awaitPromise
+    Async.FromContinuations (fun (cont, _, _) ->
+        execFile
+            "git"
+            (List.toArray args)
+            options
+            (Action<ExecFileError, string, string> (fun error out err ->
+                cont
+                    { Status = statusOf error
+                      // Strings under an `encoding`, and nothing at all where the child never
+                      // ran — which a case reads as a sentence git printed.
+                      Stdout = if isNull out then "" else out
+                      Stderr = if isNull err then "" else err }))
+        |> ignore)
 
 /// Fixture git: must succeed, or the case is not testing what it says.
 let private gitOk (args: string list) (cwd: string) : Async<string> =
@@ -433,6 +496,198 @@ let private portsTests =
         }
     ]
 
+// --- cheap: reading what a CGI backend wrote -------------------------------------------------
+//
+// Beside the fixture that reads it, because it is the half of that fixture a wire cannot ask
+// about: git only ever says whether the answer was good.
+
+[<Literal>]
+let private cgiHeadEnd = "\r\n\r\n"
+
+/// `parseInt`'s reading of a CGI `Status:` line, which carries a code and then a reason
+/// (`403 Forbidden`): the digits it starts with, and nothing when it starts with none.
+let private statusFrom (value: string) : int option =
+    let digits = value |> Seq.takeWhile Char.IsDigit |> Seq.map string |> String.concat ""
+    if digits = "" then None else Some (int digits)
+
+/// Split what a CGI program wrote: a header block, `\r\n\r\n`, then the answer itself.
+/// `None` until the terminator is in hand, because the block arrives in whatever pieces the
+/// pipe hands over and a header can be cut in half by a chunk boundary.
+///
+/// Three things a reader of this has to get right, and every one of them is here rather than
+/// inside a stream callback no test could reach:
+///
+///   * `Status:` is not a header. It is the status LINE, and relayed as a header it sends git
+///     a `Status: 403` on a 200. Absent, CGI's own default is 200.
+///   * A value may itself contain a colon (`WWW-Authenticate: Basic realm="x:y"`), so a line
+///     splits at its FIRST one — and a line carrying none is not a header at all.
+///   * What follows the terminator is already the body, and has to come back as the bytes it
+///     is.
+///
+/// The text is latin1, where one byte is one character and decoding is neither lossy nor
+/// stateful: `rest` re-encodes to exactly the bytes that followed, and two chunks decoded
+/// apart concatenate to what the two of them said together.
+let private splitCgiHead (written: string) : (int * (string * string) list * string) option =
+    match written.IndexOf cgiHeadEnd with
+    | -1 -> None
+    | terminator ->
+        let fields =
+            written.Substring(0, terminator).Split ([| "\r\n" |], StringSplitOptions.None)
+            |> Array.toList
+            |> List.choose (fun line ->
+                match line.IndexOf ':' with
+                | -1 -> None
+                | colon ->
+                    Some (line.Substring(0, colon).Trim().ToLowerInvariant (), line.Substring(colon + 1).Trim ()))
+
+        Some (
+            fields
+            |> List.tryPick (fun (name, value) -> if name = "status" then statusFrom value else None)
+            |> Option.defaultValue 200,
+            fields |> List.filter (fun (name, _) -> name <> "status"),
+            written.Substring (terminator + cgiHeadEnd.Length))
+
+let private cgiTests =
+    testList "the answer a CGI backend writes" [
+
+        testCase "nothing is read until the terminator has arrived" <| fun () ->
+            Expect.isNone
+                (splitCgiHead "Content-Type: application/x-git-upload-pack-advertisement\r\nExpires: Fri")
+                "a block the pipe has only half handed over"
+
+        testCase "a header cut in half by a chunk boundary is one header once both halves are in" <| fun () ->
+            Expect.equal
+                (splitCgiHead ("Content-Type: text/plain\r\nExpi" + "res: Fri\r\n\r\nbody"))
+                (Some (200, [ "content-type", "text/plain"; "expires", "Fri" ], "body"))
+                "what the two chunks said together"
+
+        testCase "a Status line is the status, and is not relayed as a header" <| fun () ->
+            Expect.equal
+                (splitCgiHead "Status: 403 Forbidden\r\nContent-Type: text/plain\r\n\r\n")
+                (Some (403, [ "content-type", "text/plain" ], ""))
+                "the code off the line, and nothing named status left behind"
+
+        testCase "a backend that named no status wrote a 200" <| fun () ->
+            Expect.equal
+                (splitCgiHead "Content-Type: text/plain\r\n\r\n" |> Option.map (fun (status, _, _) -> status))
+                (Some 200)
+                "CGI's own default"
+
+        testCase "a header's value may contain a colon" <| fun () ->
+            Expect.equal
+                (splitCgiHead "WWW-Authenticate: Basic realm=\"GitHub:git\"\r\n\r\n"
+                 |> Option.map (fun (_, headers, _) -> headers))
+                (Some [ "www-authenticate", "Basic realm=\"GitHub:git\"" ])
+                "split at the first colon, not at every one"
+
+        testCase "what followed the terminator comes back as the bytes it is" <| fun () ->
+            let body = "\u0000\u00ff\u0080PACK"
+            Expect.equal
+                (splitCgiHead ("Content-Type: application/x-git-receive-pack-result" + cgiHeadEnd + body)
+                 |> Option.map (fun (_, _, rest) -> rest))
+                (Some body)
+                "including the ones no text encoding would survive"
+    ]
+
+// --- [Ports]: github.com, played by `git http-backend` ---------------------------------------
+
+/// One byte, one character, both ways: how the header block above is read out of the bytes a
+/// backend wrote and how what followed it is put back, without any encoding getting an
+/// opinion about a packfile.
+let private latin1 = BufferEncoding.Latin1
+
+/// And utf8 for the one thing on these streams that is genuinely text.
+let private utf8 = BufferEncoding.Utf8
+
+/// One optional CGI variable: passed on where the request carried the header, and absent
+/// where it did not — which is not the same as empty, since `CONTENT_LENGTH=` is a length.
+let private carrying (name: string) (value: string option) (env: Map<string, string>) =
+    match value with
+    | Some value -> Map.add name value env
+    | None -> env
+
+/// What CGI calls `PATH_INFO` and `QUERY_STRING`: a request target split at its first `?`.
+/// Git writes neither a fragment nor a relative segment into one, and the gateway in front of
+/// this refuses a `..` before it could ever arrive here.
+let private pathAndQuery (target: string) : string * string =
+    match target.IndexOf '?' with
+    | -1 -> target, ""
+    | mark -> target.Substring (0, mark), target.Substring (mark + 1)
+
+/// github.com, played by `git http-backend`: CGI over a directory of bare repositories,
+/// which is exactly what github.com's git endpoint is to a client. Pushes are enabled the
+/// way a server enables them (`http.receivepack`), and the authorization header is recorded
+/// so the case can see the credential arrived.
+///
+/// The answer is relayed AS IT ARRIVES rather than collected: what git reads back from a push
+/// or a fetch is a stream, and a stand-in that held the whole of one would be standing in for
+/// a github.com nobody talks to.
+let private gitHttpBackend (root: string) (seen: ResizeArray<string>) : HttpServer =
+    createServer (fun req res ->
+        seen.Add (headerOf req "authorization" |> Option.defaultValue "")
+        let path, query = pathAndQuery req.url
+
+        let env =
+            Sandboxes.ambientEnv ()
+            |> Map.add "GIT_PROJECT_ROOT" root
+            |> Map.add "GIT_HTTP_EXPORT_ALL" "1"
+            |> Map.add "PATH_INFO" path
+            |> Map.add "QUERY_STRING" query
+            |> Map.add "REQUEST_METHOD" req.``method``
+            |> Map.add "CONTENT_TYPE" (headerOf req "content-type" |> Option.defaultValue "")
+            |> Map.add "REMOTE_USER" "fixture"
+            |> Map.add "REMOTE_ADDR" "127.0.0.1"
+            |> Map.add "GIT_CONFIG_GLOBAL" "/dev/null"
+            |> Map.add "GIT_CONFIG_SYSTEM" "/dev/null"
+            |> carrying "CONTENT_LENGTH" (headerOf req "content-length")
+            |> carrying "HTTP_CONTENT_ENCODING" (headerOf req "content-encoding")
+            |> carrying "HTTP_GIT_PROTOCOL" (headerOf req "git-protocol")
+            |> Sandboxes.withGitConfig [ "http.receivepack", "true" ]
+
+        let backend =
+            spawn
+                "git"
+                [ "http-backend" ]
+                { Cwd = None
+                  Env = env
+                  Stdio = Pipe
+                  Detached = false }
+
+        let answer : Readable = !!backend.stdout
+        req.pipe (!!backend.stdin)
+
+        // `stdio` is one setting for all three streams, so the backend's own account of
+        // itself arrives on a pipe rather than this process's stderr — and an unread pipe is
+        // one a child eventually blocks on. Said out loud instead, because what
+        // `http-backend` complains about is the only account a refused request ever gives.
+        (!!backend.stderr : Readable)
+            .onData (fun chunk -> eprintfn "git http-backend: %s" ((chunk.toString utf8).TrimEnd ()))
+
+        let mutable written = ""
+        let mutable headed = false
+
+        answer.onData (fun chunk ->
+            if headed then
+                res.writeBytes chunk |> ignore
+            else
+                written <- written + chunk.toString latin1
+
+                match splitCgiHead written with
+                | None -> ()
+                | Some (status, headers, rest) ->
+                    res.writeHead (status, createObj (headers |> List.map (fun (name, value) -> name ==> value)))
+                    |> ignore
+
+                    headed <- true
+                    written <- ""
+                    if rest <> "" then res.writeBytes (buffer.Buffer.from (rest, latin1)) |> ignore)
+
+        answer.onEnd (fun () ->
+            // A backend that said nothing at all is this fixture failing, not an answer git
+            // should be asked to read.
+            if not headed then res.writeHead (500, createObj []) |> ignore
+            res.``end`` ""))
+
 // --- [Ports]: the push, end to end ---------------------------------------------------------
 //
 // `ls-remote` is one GET. A push is the advertisement, then a POST whose body git streams
@@ -440,13 +695,6 @@ let private portsTests =
 // answer git streams back — every way a proxy that READS bodies rather than piping them
 // breaks. So the upstream here is git's own smart-HTTP server over a real bare repository,
 // and the assertion is that the commit landed.
-
-/// github.com, played by `git http-backend`: CGI over a directory of bare repositories,
-/// which is exactly what github.com's git endpoint is to a client. Pushes are enabled the
-/// way a server enables them (`http.receivepack`), and the authorization header is recorded
-/// so the case can see the credential arrived.
-[<ImportDefault("./js/git-http-backend.mjs")>]
-let private gitHttpBackend (cp: obj) (http: obj) (root: string) (seen: ResizeArray<string>) : HttpServer = jsNative
 
 let private pushTests =
     testList "a push through the gateway" [
@@ -460,7 +708,7 @@ let private pushTests =
                 let bare = sprintf "%s/octo/hello.git" served
                 do! gitOk [ "init"; "--bare"; "-b"; "main"; bare ] root |> Async.Ignore
                 let seen = ResizeArray<string> ()
-                let upstream = gitHttpBackend childProcess nodeHttp served seen
+                let upstream = gitHttpBackend served seen
                 do! Async.FromContinuations (fun (cont, _, _) -> upstream.listen (0, "127.0.0.1", fun () -> cont ()) |> ignore)
                 try
                     do!
@@ -567,6 +815,7 @@ let tests =
     testList "The git gateway" [
         routeTests
         carryTests
+        cgiTests
         Tag.needs "The git gateway, driven by git" [ Tag.Ports ] (fun () -> testList "with a real git" [ portsTests; pushTests ])
         Tag.needs "The git gateway, from srt" [ Tag.Srt ] (fun () -> srtTests)
     ]

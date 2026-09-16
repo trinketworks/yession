@@ -441,6 +441,16 @@ type Writable =
     /// it. What a proxy does to the half it can no longer answer for.
     abstract destroy : unit -> unit
 
+    /// Write BYTES, which is the only way a body that is not text can go out: `write` on a
+    /// string ENCODES it — utf8 unless told otherwise — so a byte above 0x7F leaves as two,
+    /// and a packfile relayed that way is a packfile git cannot read.
+    ///
+    /// The `false` it answers means the stream's buffer is full: what is written after it is
+    /// held in memory rather than on the wire until `drain`, which is what a writer that
+    /// minds backpressure waits for.
+    [<Emit("$0.write($1)")>]
+    abstract writeBytes : bytes: Buffer -> bool
+
     /// An `error` here is terminal: a stream that has errored never emits `finish`. Declared
     /// as its own member rather than a `on(name, handler)` taking a string for the reason the
     /// WebSocket bindings above are: the event's name and its handler's type are one fact,
@@ -462,6 +472,16 @@ type Readable =
     abstract resume : unit -> unit
 
     abstract destroy : unit -> unit
+
+    /// Every chunk, as it arrives — which starts the stream FLOWING, exactly as `pipe` and
+    /// `resume` do, and hands the bytes to F# instead of to another stream or to nothing.
+    /// What to attach when the bytes have to be READ on the way past.
+    ///
+    /// A chunk is a `Buffer`, whatever `Fable.Node` says about a child process's streams —
+    /// text is the caller's conversion to make, and a decoding that spans chunks is what
+    /// `TextDecoder` above is for.
+    [<Emit("$0.on('data', $1)")>]
+    abstract onData : handler: (Buffer -> unit) -> unit
 
     /// The stream ended: every byte it had has been handed on. Mutually exclusive with
     /// `onError`, which is why a caller that settles on either settles once.
