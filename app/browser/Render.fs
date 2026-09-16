@@ -664,7 +664,10 @@ let create (deps: Deps) : Renderer =
     // track slides rather than swapping.
     let mutable feetSeen : Map<string, obj> = Map.empty
     let mutable feetWatched : Map<string, {| stop: unit -> unit |}> = Map.empty
-    let watchFoot (hook: string) (wanted: unit -> unit) =
+    // Each foot is watched inside ITS OWN pane's scroller: the panes scroll independently, so
+    // a watch rooted in the other one would be asking whether the foot is visible in a box it
+    // is not in.
+    let watchFoot (rootHook: string) (hook: string) (wanted: unit -> unit) =
         let foot = Browser.Dom.document.querySelector ("[" + hook + "]")
         if not (obj.ReferenceEquals (box foot, feetSeen |> Map.tryFind hook |> Option.defaultValue null)) then
             feetWatched |> Map.tryFind hook |> Option.iter (fun watch -> watch.stop ())
@@ -676,13 +679,13 @@ let create (deps: Deps) : Renderer =
                     |> Map.add
                         hook
                         (watchListingFoot
-                            (box (Browser.Dom.document.querySelector ("[" + Dom.Hooks.repoPickerBody + "]")))
+                            (box (Browser.Dom.document.querySelector ("[" + rootHook + "]")))
                             (box foot)
                             wanted)
     let syncListingFoot () =
-        watchFoot Dom.Hooks.repoPickerFoot (fun () ->
+        watchFoot Dom.Hooks.repoPickerBody Dom.Hooks.repoPickerFoot (fun () ->
             latest |> Option.bind (fun model -> Launch.wanting model.Launch) |> Option.iter deps.Actions.LaunchMore)
-        watchFoot Dom.Hooks.repoBranchFoot (fun () ->
+        watchFoot Dom.Hooks.repoBranchBody Dom.Hooks.repoBranchFoot (fun () ->
             latest
             |> Option.bind (fun model -> Launch.wantingBranches model.Launch)
             |> Option.iter (fun (repo, cursor) -> deps.Actions.LaunchBranchesMore repo cursor))

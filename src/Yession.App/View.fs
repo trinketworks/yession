@@ -1788,11 +1788,11 @@ module View =
                 </div>"""
         let dismiss =
             html $"""
-                <button type="button" class="{Style.askWayOut}" data-repo-picker-dismiss aria-label="{Dom.Text.repoPickerDismiss}"
+                <button type="button" class="{Style.askWay}" data-repo-picker-dismiss aria-label="{Dom.Text.repoPickerDismiss}"
                         @click={Ev(fun _ -> dispatch (LaunchMsg LaunchDismissed))}>{Icon.close}</button>"""
         let back =
             html $"""
-                <button type="button" class="{Style.askWayBack}" data-repo-picker-back aria-label="{Dom.Text.repoPickerBack}"
+                <button type="button" class="{Style.askWay}" data-repo-picker-back aria-label="{Dom.Text.repoPickerBack}"
                         @click={Ev(fun _ -> dispatch (LaunchMsg LaunchBranchPaneClosed))}>{Icon.left}</button>"""
         let onBranchPane =
             match launch.Pane with
@@ -1896,7 +1896,7 @@ module View =
                              ?disabled={busy}
                              .value={launch.BranchQuery}
                              @input={EvVal(fun v -> dispatch (LaunchMsg (LaunchBranchQueryTyped v)))} />
-                      {branchBody}
+                      <div class="{Style.askScroll}" data-repo-branch-body>{branchBody}</div>
                       <div class="{Style.askActions}">{actionsRow}</div>
                     </div>"""
             // No row held: there is no repository to have branches of, so the pane is not
@@ -1918,14 +1918,16 @@ module View =
                          .value={launch.Query}
                          @input={EvVal(fun v -> dispatch (LaunchMsg (LaunchQueryTyped v)))}
                          @keydown={Ev onFieldKey} />
-                  {listing}
-                  {problem}
+                  <div class="{Style.askScroll}" data-repo-picker-body>
+                    {listing}
+                    {problem}
+                  </div>
                   <div class="{Style.askActions}">{actionsRow}</div>
                 </div>"""
         html $"""
             <section class="{Style.ask}" data-repo-picker="{stage}" aria-labelledby="repo-picker-title">
               <div class="{Style.askLeadBar}" aria-hidden="true"></div>
-              <div class="{Style.askBody}" data-repo-picker-body>
+              <div class="{Style.askBody}">
                 <div class="{Style.askTrack}" data-repo-picker-track>
                   {repoPane}
                   {branchPane}

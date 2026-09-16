@@ -174,9 +174,11 @@ module Dom =
         /// has begun.
         let repoPicker = "data-repo-picker"
         let repoPickerSearch = "data-repo-picker-search"
-        /// The card's own scroller — what the listing's foot is watched INSIDE, since the
-        /// card scrolls rather than the page.
+        /// Each pane's own scroller — the LIST, and nothing else in the pane: what it asks
+        /// stays legible above and the commit is anchored below. A foot is watched inside the
+        /// one its own pane owns.
         let repoPickerBody = "data-repo-picker-body"
+        let repoBranchBody = "data-repo-branch-body"
         /// One repo a person can hold, valued by its canonical name. `aria-pressed` says
         /// whether it is held.
         let repoCandidate = "data-repo-candidate"

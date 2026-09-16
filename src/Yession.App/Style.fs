@@ -1146,7 +1146,10 @@ module Style =
     /// off the reading edge the card exists to meet. Same device and the same reason as
     /// `bandRail`. It spans the band rather than the scrollport, which is why the card's
     /// scroll is `askBody`'s: on the band it would carry the lead up out of sight with it.
-    let askLeadBar = "absolute inset-y-0 left-0 w-0.5 bg-blue"
+    /// `z-10` because the rows beneath it run edge to edge: a ground that reached the card's
+    /// left edge painted over the lead, so the one mark that says this card is waiting on you
+    /// was broken into dashes by whichever rows happened to be lit.
+    let askLeadBar = "absolute inset-y-0 left-0 w-0.5 bg-blue z-10"
 
     /// The reading inset, spent by each BLOCK rather than once by the band. 64px is the
     /// timeline's `px-8` plus the avatar gutter `messageBody` carries, and 48 is that same sum
@@ -1169,7 +1172,7 @@ module Style =
     /// down this column is a RAMP, not a rhythm (the question stands alone at the top, the
     /// ways to answer stand apart from it, and the button apart from all of it), so each block
     /// states its own.
-    let askBody = "flex flex-col max-h-[60vh] overflow-y-auto overflow-x-hidden"
+    let askBody = "flex flex-col overflow-x-hidden"
 
     /// Two panes, one box. The card asks one thing at a time and the second thing is to the
     /// RIGHT of the first, because that is where a thing you went INTO is — the Zune move,
@@ -1185,8 +1188,16 @@ module Style =
     /// to, and the foot that pages is never reachable. The clip is for the pane that is off
     /// to the side, and only that.
     let askTrack = "relative shrink-0 overflow-hidden"
+    /// A pane is a COLUMN with three parts: what it asks, what there is to answer with, and
+    /// the commit. Only the middle scrolls — the question stays legible while a long list is
+    /// read, and START is where a thumb already is rather than a screenful below the last row
+    /// somebody scrolled past.
     let private askPaneBase =
-        "min-w-0 flex flex-col transition-transform duration-300 ease-out motion-reduce:transition-none"
+        "min-w-0 flex flex-col max-h-[60vh] transition-transform duration-300 ease-out motion-reduce:transition-none"
+    /// The list, and the only thing in a pane that scrolls. `min-h-0` is what lets it: a flex
+    /// child's floor is its content, so without it the column grows past its own `max-h` and
+    /// the pane scrolls instead of the list inside it.
+    let askScroll = "flex-1 min-h-0 overflow-y-auto"
     /// On screen. `min-w-0` so a long repo name in the subtitle truncates rather than widening
     /// the pane.
     let askPaneHere = askPaneBase + " translate-x-0"
@@ -1210,13 +1221,15 @@ module Style =
     /// is an identifier, on the same line box so the title under it does not move.
     let askSubject = cls [ askSubtitle; "font-terminal" ]
 
-    /// The way out, in the gutter. The mark column is the NAVIGATION column here: this
-    /// leaves the card, `askWayBack` leaves the pane, and a tick marks a row — one slot, one
-    /// meaning, which is what lets the two panes share a shape.
-    let private askWay =
-        cls [ "w-5 h-5 shrink-0 mt-1 grid place-items-center bg-transparent border-0 cursor-pointer transition-colors"; focusRing ]
-    let askWayOut = cls [ askWay; "text-ink-faint hover:text-ink" ]
-    let askWayBack = cls [ askWay; "text-blue hover:text-blue-bright" ]
+    /// The way out, in the gutter. The mark column is the NAVIGATION column here: × leaves the
+    /// card, ‹ leaves the pane, and a tick marks a row — one slot, one meaning, which is what
+    /// lets the two panes share a shape.
+    ///
+    /// ONE face for both, and grey: blue is what this card spends on the thing you are being
+    /// asked to do, and leaving is not it. A blue back chevron read as the answer.
+    let askWay =
+        cls [ "w-5 h-5 shrink-0 mt-1 grid place-items-center bg-transparent border-0 cursor-pointer transition-colors"
+              "text-ink-faint hover:text-ink"; focusRing ]
 
     /// The navigation voice: the wordmark's family, lowercased, at the heading step. Not
     /// `heading`, which truncates — a question is allowed to take the second line it needs.
@@ -1297,7 +1310,7 @@ module Style =
     /// height, because that is what it stands in for — the rows still to come.
     let askFoot = cls [ askInset; "h-12 flex items-center" ]
     let askFootLine = cls [ askMeasure; "flex items-center gap-3" ]
-    let askActions = cls [ askInset; "flex flex-wrap items-center gap-4 pt-6" ]
+    let askActions = cls [ askInset; "shrink-0 flex flex-wrap items-center gap-4 pt-6" ]
     /// Full width on a phone, where a thumb is the pointer and the band is the screen; on a
     /// desktop it takes the room its word needs.
     let askStartWidth = "w-full md:w-auto"
