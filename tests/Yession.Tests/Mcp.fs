@@ -643,8 +643,101 @@ let private streamOf (answer: Result<ToolAnswer, string>) =
         | Some offer -> offer
         | None -> failwithf "the answer offered no stream: %s" answer.Text
 
+/// Text through the same encoding the wire is defined in, so a case says what a client sent
+/// rather than which bytes it happened to send.
+let private utf8 (bytes: byte[]) = System.Text.Encoding.UTF8.GetString bytes
+
+/// One mask, as a client would mint it per frame. Any four bytes will do — what the cases turn
+/// on is that they are walked off again, not which ones they were.
+let private clientMask = [| 0x37uy; 0xfauy; 0x21uy; 0x3duy |]
+
+/// A frame as a CLIENT writes one: FIN set, masked (RFC 6455 §5.3 requires it of a client),
+/// and short enough for the 7-bit length. Masked with the provider's own `unmask`, because XOR
+/// is its own inverse — the fixture and the reader cannot drift apart about what a mask is.
+let private clientFrame (opcode: int) (text: string) =
+    let payload = System.Text.Encoding.UTF8.GetBytes text
+
+    Array.concat
+        [ [| byte (0x80 ||| opcode); byte (0x80 ||| payload.Length) |]
+          clientMask
+          Ws.unmask clientMask payload ]
+
 let serialTests =
     testList "The serial provider (Plan 16, part E)" [
+
+        // The wire, without a socket. Frame arithmetic is code somebody has to check line by
+        // line, and each case below is a line of RFC 6455 rather than anything about serial:
+        // the three length forms, the client's mask, a frame the network split in half, and
+        // the lengths this provider refuses. The E2E cases underneath can only show that two
+        // implementations agree — never which of them is reading the RFC correctly.
+
+        test "a frame's length is written in the smallest of the RFC's three forms" {
+            Expect.equal
+                (Ws.frame Ws.Opcode.Binary (Array.zeroCreate 125) |> Array.take 2)
+                [| 0x82uy; 125uy |]
+                "up to 125 the length is the second byte itself"
+            Expect.equal
+                (Ws.frame Ws.Opcode.Binary (Array.zeroCreate 126) |> Array.take 4)
+                [| 0x82uy; 126uy; 0uy; 126uy |]
+                "126 escapes to the 16-bit form"
+            Expect.equal
+                (Ws.frame Ws.Opcode.Binary (Array.zeroCreate 65536) |> Array.take 10)
+                [| 0x82uy; 127uy; 0uy; 0uy; 0uy; 0uy; 0uy; 1uy; 0uy; 0uy |]
+                "65536 escapes to the 64-bit form, whose high word a server always leaves zero"
+        }
+
+        test "a client's masked frame reads back as the text it sent" {
+            match Ws.read (clientFrame Ws.Opcode.Binary "hello") with
+            | Ws.Read.Frame (opcode, payload, rest) ->
+                Expect.equal opcode Ws.Opcode.Binary "the opcode is what the client chose"
+                Expect.equal (utf8 payload) "hello" "and the mask has been walked off the payload"
+                Expect.equal rest.Length 0 "with nothing left over"
+            | other -> failwithf "a whole frame should have read as one: %A" other
+        }
+
+        test "a frame the network split in half is read once the rest arrives" {
+            let whole = clientFrame Ws.Opcode.Binary "split me"
+            Expect.equal (Ws.read (Array.sub whole 0 (whole.Length - 3))) Ws.Read.Incomplete "part of a frame is not one"
+
+            match Ws.read whole with
+            | Ws.Read.Frame (_, payload, _) -> Expect.equal (utf8 payload) "split me" "the same frame, whole"
+            | other -> failwithf "the completed frame should have read as one: %A" other
+        }
+
+        test "two frames in one chunk are both read" {
+            let both = Array.append (clientFrame Ws.Opcode.Binary "first") (clientFrame Ws.Opcode.Text "second")
+
+            match Ws.read both with
+            | Ws.Read.Frame (_, payload, rest) ->
+                Expect.equal (utf8 payload) "first" "the frame at the front"
+                match Ws.read rest with
+                | Ws.Read.Frame (opcode, payload, rest) ->
+                    Expect.equal (utf8 payload) "second" "and the one behind it"
+                    Expect.equal opcode Ws.Opcode.Text "on its own opcode, which is what makes control control"
+                    Expect.equal rest.Length 0 "with nothing after"
+                | other -> failwithf "the second frame should have read as one: %A" other
+            | other -> failwithf "the first frame should have read as one: %A" other
+        }
+
+        test "a 64-bit length with a high word is refused, never truncated" {
+            // A client frame claiming 2^32 + 8 bytes. Truncating it would leave the reader
+            // hunting the next frame at an offset that is not a frame boundary.
+            let claimed = Array.append [| 0x82uy; 0xffuy; 0uy; 0uy; 0uy; 1uy; 0uy; 0uy; 0uy; 8uy |] (Array.zeroCreate 12)
+            Expect.equal (Ws.read claimed) Ws.Read.Oversized "four gigabytes is not a device"
+        }
+
+        test "a 64-bit length no buffer could hold is refused with it" {
+            // 2^31: the high word is zero, so nothing above catches it, and the length is
+            // still one this reader could not address.
+            let claimed = Array.append [| 0x82uy; 0xffuy; 0uy; 0uy; 0uy; 0uy; 0x80uy; 0uy; 0uy; 0uy |] (Array.zeroCreate 12)
+            Expect.equal (Ws.read claimed) Ws.Read.Oversized "two gigabytes is not a device either"
+        }
+
+        test "a route is chosen by the path, so a client may append a query" {
+            Expect.equal (Ws.pathOf "/attach/abc123") "/attach/abc123" "the plain form"
+            Expect.equal (Ws.pathOf "/attach/abc123?who=me") "/attach/abc123" "a query is not part of the route"
+            Expect.equal (Ws.pathOf "/attach/abc123#frag") "/attach/abc123" "and neither is a fragment"
+        }
 
         testCaseAsync "a session declares it, and gets four tools it can call" <|
             async {
