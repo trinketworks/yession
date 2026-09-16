@@ -53,40 +53,33 @@ module Provision =
 [<RequireQualifiedAccess>]
 type CredentialForwarding =
     | Forwarded of Provision
-    /// This actor has none to lend. The registry words the refusal, because the right
-    /// sentence depends on who asked (a person, or a repo's file asking for nobody).
-    | NotHeld
     /// This sandbox cannot be given it, and why — a backend the source has no route into.
     | Unforwardable of string
 
 /// A credential this session knows how to forward, by name. The registry holds the name;
-/// what lands in a sandbox, and for whom, is the composition's business, because who a
-/// credential belongs to is a Plan 08 question this module has no opinion on.
+/// what lands in a sandbox is the composition's business, and WHOSE is not a question a
+/// sandbox answers at all: a forward is a route every block in the sandbox shares, and each
+/// block is lent the credential of its own act (Plan 08 precedence, resolved per block).
+/// A start therefore needs nobody signed in — a repo's file asking at boot gets its route,
+/// and the first block somebody runs in there is the first thing that names a person.
 type CredentialSource =
     { Name : string
-      /// Provision for one actor into one sandbox. `NotHeld` is a legible refusal rather
+      /// Provision the route into one sandbox. `Unforwardable` is a legible refusal rather
       /// than a silent start without it: a sandbox that was asked to forward `github` and
       /// did not is a sandbox whose `git push` fails much later, somewhere less informative.
-      Provision : CredentialFor -> SandboxRef -> Async<CredentialForwarding>
+      Provision : SandboxRef -> Async<CredentialForwarding>
       /// Take back what `Provision` gave. Called when the sandbox stops, so that whatever a
-      /// provision opened (a gateway route) lives exactly as long as the sandbox does.
+      /// provision opened (a gateway route, the loans under it) lives exactly as long as
+      /// the sandbox does.
       Revoke : SandboxRef -> unit
-      /// What one BLOCK in the sandbox is lent for the credential its act runs on — put at
-      /// the head of the block's line by the terminal manager. Per block where `Provision`
-      /// is per sandbox: the sandbox carries what every block shares (a route), a block
-      /// carries whose it is. Nothing, never a refusal: a block lent nothing runs on what
-      /// its shell has, and what its git is then told is the gateway's sentence to say.
-      Lend : CredentialFor -> SandboxRef -> Async<BlockEnv> }
-
-/// Who is asking. The two halves differ for the agent exactly as they do for the repo
-/// verbs: the AGENT is the acting party the event records, the CREDENTIAL owner is the
-/// turn human, because the agent has no scope of its own. `None` is a start on nobody's
-/// credential — a repo file's boot fold — which reaches the session's own and the
-/// deployment's, and nothing else.
-[<RequireQualifiedAccess>]
-type SandboxCaller =
-    { Actor : ActorRef
-      Credential : CredentialFor }
+      /// What one BLOCK in the sandbox is lent for its act — put at the head of the block's
+      /// line by the terminal manager. Per block where `Provision` is per sandbox: the
+      /// sandbox carries what every block shares (a route), a block carries whose it is.
+      /// Nothing, never a refusal: a block lent nothing runs on what its shell has, and what
+      /// its git is then told is the gateway's sentence to say.
+      Lend : Authority -> SandboxRef -> TerminalId -> BlockId -> Async<BlockEnv>
+      /// Whatever a terminal's last block was lent is returned (`BlockLoans.Retire`).
+      Retire : TerminalId -> unit }
 
 /// One sandbox the session has. Present in the registry does NOT mean started — the
 /// environment underneath is lazy, and `default` exists from boot without a sandbox
@@ -166,8 +159,10 @@ module SandboxOutcome =
 type WorkSandboxes =
     { /// Get-or-create by name. Idempotent when the configuration matches; a legible
       /// error when it does not. The answer says which of those happened.
-      Ensure : SandboxCaller -> SandboxRef -> SandboxRequest -> Async<Result<SandboxOutcome, string>>
-      Stop : SandboxCaller -> SandboxRef -> Async<Result<unit, string>>
+      /// Started by an ACTOR — the agent, a person, a repo's file — and lent to nobody:
+      /// what a sandbox's blocks spend is each block's own act's credential (`Loans`).
+      Ensure : ActorRef -> SandboxRef -> SandboxRequest -> Async<Result<SandboxOutcome, string>>
+      Stop : ActorRef -> SandboxRef -> Async<Result<unit, string>>
       /// The environment a terminal runs in. Total, because a terminal has to be told no
       /// in the same shape it is told anything else — an unknown name resolves to an
       /// environment that refuses every spawn with the reason.
@@ -276,9 +271,9 @@ let create (config: WorkSandboxesConfig) : Result<WorkSandboxes, string> =
             |> List.tryFind (fun source -> source.Name = credential)
             |> Option.iter (fun source -> source.Revoke name)
 
-    /// Provision every named credential for one actor into one sandbox, or say which one
-    /// could not be — revoking whatever was provisioned before the one that refused.
-    let provisionForward (owner: CredentialFor) (name: SandboxRef) (names: string list) : Async<Result<Provision, string>> =
+    /// Provision every named credential's route into one sandbox, or say which one could
+    /// not be — revoking whatever was provisioned before the one that refused.
+    let provisionForward (name: SandboxRef) (names: string list) : Async<Result<Provision, string>> =
         async {
             let mutable provisioned = Provision.empty
             let mutable failure = None
@@ -294,28 +289,8 @@ let create (config: WorkSandboxesConfig) : Result<WorkSandboxes, string> =
                             | available -> "this session knows: " + String.concat ", " available
                         failure <- Some (sprintf "there is no credential called '%s' (%s)" credential known)
                     | Some source ->
-                        match! source.Provision owner name with
+                        match! source.Provision name with
                         | CredentialForwarding.Unforwardable reason -> failure <- Some reason
-                        | CredentialForwarding.NotHeld ->
-                            // Said for the person who reads it, not the actor it resolved
-                            // against. A repo's file asking at boot is asking for nobody,
-                            // and "sign in first" to somebody who is signed in sends them
-                            // to a panel that will not help — the sandbox starts on its
-                            // own when they arrive, and the sentence has to say so.
-                            let reason =
-                                match owner with
-                                | CredentialFor.Deployment ->
-                                    sprintf
-                                        "nobody was signed in to lend a '%s' credential — it starts on its own \
-                                         the moment someone who has connected %s opens this session"
-                                        credential
-                                        credential
-                                | CredentialFor.Person owner ->
-                                    sprintf
-                                        "%s has not connected %s — connect it on the settings panel and ask again"
-                                        (Principal.token owner)
-                                        credential
-                            failure <- Some reason
                         | CredentialForwarding.Forwarded provision ->
                             provisioned <- Provision.merge provisioned provision
             match failure with
@@ -325,7 +300,7 @@ let create (config: WorkSandboxesConfig) : Result<WorkSandboxes, string> =
             | None -> return Ok provisioned
         }
 
-    let ensure (caller: SandboxCaller) (name: SandboxRef) (request: SandboxRequest) : Async<Result<SandboxOutcome, string>> =
+    let ensure (actor: ActorRef) (name: SandboxRef) (request: SandboxRequest) : Async<Result<SandboxOutcome, string>> =
         async {
             let wanted = normalise request
             match find name with
@@ -348,7 +323,7 @@ let create (config: WorkSandboxesConfig) : Result<WorkSandboxes, string> =
                             (SandboxRef.render name)
                             (SandboxRequest.differences existing.Request wanted |> String.concat "; "))
             | None ->
-                match! provisionForward caller.Credential name wanted.Forward with
+                match! provisionForward name wanted.Forward with
                 | Error e -> return Error e
                 | Ok provision ->
                     match config.Create name wanted.Spec provision with
@@ -365,23 +340,23 @@ let create (config: WorkSandboxesConfig) : Result<WorkSandboxes, string> =
                         let messageId = mintMessageId ()
                         do!
                             append
-                                caller.Actor
+                                actor
                                 (SessionEvent.WorkSandboxStarting
                                     { MessageId = messageId
                                       Sandbox = name
                                       Backend = config.Backend name
                                       Description = config.Describe name
-                                      Actor = caller.Actor })
+                                      Actor = actor })
                         match! environment.Ensure None (sprintf "sandbox '%s' was started" (SandboxRef.render name)) with
                         | EnvironmentUnavailable reason ->
                             do!
                                 append
-                                    caller.Actor
+                                    actor
                                     (SessionEvent.WorkSandboxStartFailed
                                         { MessageId = messageId
                                           Sandbox = name
                                           Reason = reason
-                                          Actor = caller.Actor })
+                                          Actor = actor })
                             return Error reason
                         | EnvironmentAvailable ->
                             let startedAt = config.Clock ()
@@ -389,13 +364,13 @@ let create (config: WorkSandboxesConfig) : Result<WorkSandboxes, string> =
                                 { Ref = name
                                   Backend = config.Backend name
                                   Request = wanted
-                                  StartedBy = Some caller.Actor
+                                  StartedBy = Some actor
                                   StartedAt = Some startedAt
                                   Environment = environment }
                             entries <- entries @ [ name, entry ]
                             do!
                                 append
-                                    caller.Actor
+                                    actor
                                     (SessionEvent.WorkSandboxStarted
                                         { MessageId = messageId
                                           Sandbox = name
@@ -403,18 +378,16 @@ let create (config: WorkSandboxesConfig) : Result<WorkSandboxes, string> =
                                           Description = config.Describe name
                                           Checkout = config.Checkout name
                                           Forwarded = wanted.Forward
-                                          CredentialOwner =
-                                            (if List.isEmpty wanted.Forward then None else Some caller.Credential)
                                           // Asked of the environment that just came up, not
                                           // computed here: what a sandbox holds is settled by
                                           // the policy it was built from, and this manager
                                           // never sees one.
                                           Realisation = environment.Realisation ()
-                                          Actor = caller.Actor })
+                                          Actor = actor })
                             return Ok (SandboxStarted entry)
         }
 
-    let stop (caller: SandboxCaller) (name: SandboxRef) : Async<Result<unit, string>> =
+    let stop (actor: ActorRef) (name: SandboxRef) : Async<Result<unit, string>> =
         async {
             match resolve name with
             | None -> return Error (unknownSandbox name (entries |> List.map fst))
@@ -438,9 +411,9 @@ let create (config: WorkSandboxesConfig) : Result<WorkSandboxes, string> =
                     entries <- entries |> List.filter (fun (key, _) -> key <> name)
                 do!
                     append
-                        caller.Actor
+                        actor
                         (SessionEvent.WorkSandboxStopped
-                            { MessageId = mintMessageId (); Sandbox = name; Actor = caller.Actor })
+                            { MessageId = mintMessageId (); Sandbox = name; Actor = actor })
                 return Ok ()
         }
 
@@ -460,26 +433,31 @@ let create (config: WorkSandboxesConfig) : Result<WorkSandboxes, string> =
     /// act's credential, merged. Nothing for a sandbox that forwards nothing, and nothing
     /// for a name this session does not have — its environment refuses the spawn anyway,
     /// with the reason.
-    let lend (name: SandboxRef) (_: TerminalId) (_: BlockId) (authority: Authority) : Async<BlockEnv> =
+    let lend (name: SandboxRef) (terminal: TerminalId) (block: BlockId) (authority: Authority) : Async<BlockEnv> =
         async {
             match resolve name with
             | None -> return BlockEnv.none
             | Some entry ->
-                let credential = Authority.credential authority
                 let mutable lent = BlockEnv.none
                 for forwarded in entry.Request.Forward do
                     match config.Credentials |> List.tryFind (fun source -> source.Name = forwarded) with
                     | None -> ()
                     | Some source ->
-                        let! given = source.Lend credential name
+                        let! given = source.Lend authority entry.Ref terminal block
                         lent <- BlockEnv.merge lent given
                 return lent
         }
 
+    /// Every source, because a loan is a fact about a terminal and this manager does not
+    /// keep which sandbox a terminal is in — the sources do, by what they lent.
+    let retire (terminal: TerminalId) : unit =
+        for source in config.Credentials do
+            source.Retire terminal
+
     { Ensure = ensure
       Stop = stop
       EnvironmentFor = environmentFor
-      Loans = { Lend = lend }
+      Loans = { Lend = lend; Retire = retire }
       Listed = fun () -> entries |> List.map snd
       StopAll = stopAll })
 

@@ -21,6 +21,7 @@ module Bootstrap =
         | AgentMessageDelta _ -> "agent-message-delta"
         | AgentThought _ -> "agent-thought"
         | SandboxSetupQueued _ -> "sandbox-setup-queued"
+        | GitCredentialSpent _ -> "git-credential-spent"
         | AgentMessageCompleted _ -> "agent-message-completed"
         | AgentTurnFailed _ -> "agent-turn-failed"
         | AgentTurnInterrupted _ -> "agent-turn-interrupted"

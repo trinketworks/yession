@@ -1696,7 +1696,6 @@ let private startedSandbox (n: string) =
           Description = Some "day-to-day work"
           Checkout = Some "/repos/octo/hello"
           Forwarded = []
-          CredentialOwner = None
           Realisation = []
           Actor = repoActor }
 

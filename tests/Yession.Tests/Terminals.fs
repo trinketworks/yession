@@ -1960,7 +1960,8 @@ let private lending (env: BlockEnv) =
                 async {
                     asked.Add (sandbox, terminal, block, authority)
                     return env
-                } }
+                }
+          Retire = ignore }
     loans, asked
 
 /// No shell profile (Plan 25) — what a session that has never set one replays as, and what

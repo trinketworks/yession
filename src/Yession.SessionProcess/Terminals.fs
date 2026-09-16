@@ -655,12 +655,18 @@ module SessionTerminals =
     /// terminal. Who lends what is the composition's: this seam only knows that a block
     /// has an act and a sandbox, and that its shell needs telling.
     type BlockLoans =
-        { Lend : SandboxRef -> TerminalId -> BlockId -> Authority -> Async<BlockEnv> }
+        { Lend : SandboxRef -> TerminalId -> BlockId -> Authority -> Async<BlockEnv>
+          /// Whatever this terminal's last block was lent is returned: the terminal closed,
+          /// or a person took its keyboard — and what they type is nobody's act. Lending the
+          /// next block returns the last on its own; this is for the ends that lend nothing.
+          Retire : TerminalId -> unit }
 
     module BlockLoans =
 
         /// A session that lends nothing — every block runs on what its shell was spawned with.
-        let none : BlockLoans = { Lend = fun _ _ _ _ -> async { return BlockEnv.none } }
+        let none : BlockLoans =
+            { Lend = fun _ _ _ _ -> async { return BlockEnv.none }
+              Retire = ignore }
 
     type SessionTerminals =
         { /// Open a terminal over a SOURCE (Plan 16, part D). `SandboxShell name` ensures
@@ -1695,6 +1701,9 @@ module SessionTerminals =
                     runningAuthor.Remove (TerminalId.value id) |> ignore
                     appliedSize.Remove (TerminalId.value id) |> ignore
                     busy <- Set.remove (TerminalId.value id) busy
+                    // A loan lives as long as the block's process tree can use it, and the
+                    // pty just died under that tree.
+                    loans.Retire id
                     // The lease goes with the terminal, and WITHOUT an event: `TerminalClosed`
                     // already clears the holder in the projection, so appending a release
                     // beside it would be two mechanisms for one fact — free to disagree the
@@ -2070,6 +2079,10 @@ module SessionTerminals =
                     | None -> ()
                     if Option.isNone terminal.Shell then return Error "this terminal has no interactive shell"
                     else
+                        // What the holder types is nobody's act, and the shell still holds
+                        // the last block's loan: returned, so a `git push` typed here is
+                        // refused in words rather than answered with that block's credential.
+                        loans.Retire id
                         do! applyLease (TerminalLeases.take id by false (clock.Now ()) (markKeyframe id) leases)
                         return Ok ()
             }

@@ -32,7 +32,6 @@ let private expect result =
 let private sessionId = SessionId.create "sess-sandboxes" |> expect
 let private ada = UserRef (UserId.create "ada" |> expect)
 /// Ada as a credential is lent on: the same person, where the type asks for a principal.
-let private adasCredential = CredentialFor.Person (Principal.User (UserId.create "ada" |> expect))
 let private fixedClock () = DateTimeOffset (2026, 1, 1, 0, 0, 0, TimeSpan.Zero)
 let private newLog () : EventLog<SessionEvent> = InMemoryEventLog.create sessionId fixedClock
 
@@ -125,32 +124,34 @@ let private registry (log: EventLog<SessionEvent>) (credentials: WorkSandboxes.C
     let sandboxes, built, _ = registryWithSpecs log credentials
     sandboxes, built
 
-let private caller : WorkSandboxes.SandboxCaller = { Actor = ActorRef.Agent; Credential = adasCredential }
+let private caller : ActorRef = ActorRef.Agent
 
-/// A source that provisions the given env into any sandbox, for any actor, or holds nothing.
-/// Records what it gave and what it was asked to take back, which is the pair the revoke
-/// cases compare.
-let private githubSource (value: string option) : WorkSandboxes.CredentialSource * ResizeArray<string> =
+/// A source that provisions the given route into any sandbox. Records what it gave and what
+/// it was asked to take back, which is the pair the revoke cases compare.
+let private githubSource (route: string) : WorkSandboxes.CredentialSource * ResizeArray<string> =
     let revoked = ResizeArray<string> ()
     { Name = "github"
       Provision =
-        fun _ _ ->
+        fun _ ->
             async {
                 return
-                    match value with
-                    | None -> WorkSandboxes.CredentialForwarding.NotHeld
-                    | Some v ->
-                        WorkSandboxes.CredentialForwarding.Forwarded { Env = Map.ofList [ "GITHUB_ROUTE", v ]; GitConfig = []; Domains = [] }
+                    WorkSandboxes.CredentialForwarding.Forwarded
+                        { Env = Map.ofList [ "GITHUB_ROUTE", route ]; GitConfig = []; Domains = [] }
             }
       Revoke = fun ref -> revoked.Add (SandboxRef.render ref)
       // Lends by NAME: what a block gets says whose credential it was asked for, which
       // is the whole of what the loan cases compare.
       Lend =
-        fun credential _ ->
-            async { return { BlockEnv.GitConfig = None; BlockEnv.Vars = [ "LENT_TO", Some (CredentialFor.token credential) ] } } },
+        fun authority _ _ _ ->
+            async {
+                return
+                    { BlockEnv.GitConfig = None
+                      BlockEnv.Vars = [ "LENT_TO", Some (CredentialFor.token (Authority.credential authority)) ] }
+            }
+      Retire = ignore },
     revoked
 
-let private githubCredential (value: string option) : WorkSandboxes.CredentialSource = fst (githubSource value)
+let private githubCredential (route: string) : WorkSandboxes.CredentialSource = fst (githubSource route)
 
 let private eventsOf (log: EventLog<SessionEvent>) =
     async {
@@ -304,7 +305,6 @@ let private ensureTests =
                       Description = Some "day-to-day work"
                       Checkout = Some "/repos/owner/name"
                       Forwarded = []
-                      CredentialOwner = None
                       Realisation = []
                       Actor = ActorRef.Agent }
             let envelope : EventEnvelope<SessionEvent> =
@@ -381,7 +381,7 @@ let private ensureTests =
         testCaseAsync "an equivalent forwarding list is the same ask" <|
             async {
                 let log = newLog ()
-                let sandboxes, _ = registry log [ githubCredential (Some "tok") ]
+                let sandboxes, _ = registry log [ githubCredential "tok" ]
                 let! _ = sandboxes.Ensure caller (sandbox "test") (forwarding [ "github" ])
                 let! again = sandboxes.Ensure caller (sandbox "test") (forwarding [ " GitHub "; "github" ])
                 Expect.isTrue (Result.isOk again) "it is not a configuration change"
@@ -394,7 +394,7 @@ let private ensureTests =
         testCaseAsync "a different forwarding is refused, naming both sides" <|
             async {
                 let log = newLog ()
-                let sandboxes, built = registry log [ githubCredential (Some "tok") ]
+                let sandboxes, built = registry log [ githubCredential "tok" ]
                 let! _ = sandboxes.Ensure caller (sandbox "test") (forwarding [])
                 match! sandboxes.Ensure caller (sandbox "test") (forwarding [ "github" ]) with
                 | Ok _ -> failwith "expected a refusal"
@@ -445,7 +445,7 @@ let private ensureTests =
         testCaseAsync "stopping releases the name, and the next start may differ" <|
             async {
                 let log = newLog ()
-                let sandboxes, _ = registry log [ githubCredential (Some "tok") ]
+                let sandboxes, _ = registry log [ githubCredential "tok" ]
                 let! _ = sandboxes.Ensure caller (sandbox "test") (forwarding [])
                 let! stopped = sandboxes.Stop caller (sandbox "test")
                 Expect.isTrue (Result.isOk stopped) "it stops"
@@ -575,11 +575,12 @@ let private credentialTests =
     testList "named credential forwarding" [
 
         // The rule the shared trust boundary rests on: what a source provisions goes into
-        // the sandbox's environment and nowhere else; the EVENT carries the names and whose.
+        // the sandbox's environment and nowhere else; the EVENT carries the names — and
+        // nobody's, because a route is nobody's until a block spends its own act's on it.
         testCaseAsync "the provision reaches the sandbox env, and the event carries names only" <|
             async {
                 let log = newLog ()
-                let sandboxes, built = registry log [ githubCredential (Some "ghp_secret") ]
+                let sandboxes, built = registry log [ githubCredential "ghp_secret" ]
                 let! started = sandboxes.Ensure caller (sandbox "test") (forwarding [ "github" ])
                 Expect.equal
                     (WorkSandboxes.SandboxOutcome.sandbox (expect started)).Request.Forward
@@ -593,8 +594,7 @@ let private credentialTests =
                 match startedEvents events with
                 | [ e ] ->
                     Expect.equal e.Forwarded [ "github" ] "the event names the credential"
-                    Expect.equal e.CredentialOwner (Some adasCredential) "and whose it is — the turn human's, not the agent's"
-                    Expect.equal e.Actor ActorRef.Agent "while the acting party is the agent"
+                    Expect.equal e.Actor ActorRef.Agent "and the acting party"
                 | other -> failwithf "expected one start, got %A" other
 
                 // The load-bearing negative: nothing anywhere in the log is the token.
@@ -603,53 +603,26 @@ let private credentialTests =
                 Expect.isFalse (rendered.Contains "ghp_secret") "no rendering of the log contains the value"
             }
 
-        testCaseAsync "nothing forwarded means nobody's credentials are named" <|
+        // A repo's file asking at boot asks for nobody, and the agent asking on a turn
+        // asks for somebody who may have nothing connected. Neither is a reason not to
+        // come up: the route is the sandbox's, and whose credential goes down it is each
+        // block's — a person with nothing connected is refused at their push, in words.
+        testCaseAsync "a sandbox that forwards github starts with nobody's credential named" <|
             async {
                 let log = newLog ()
-                let sandboxes, _ = registry log [ githubCredential (Some "ghp_secret") ]
-                let! _ = sandboxes.Ensure caller (sandbox "test") (forwarding [])
+                let sandboxes, built = registry log [ githubCredential "route" ]
+                let repo = RepoRef.create "octo/hello" |> expect
+                let! started = sandboxes.Ensure (ActorRef.Configured repo) (sandbox "octo/hello:dev") (forwarding [ "github" ])
+                match started with
+                | Error e -> failwithf "expected the start, got: %s" e
+                | Ok _ -> ()
+                Expect.isTrue (built |> Seq.exists (fun (name, _) -> name = "octo/hello:dev")) "it was built"
                 let! events = eventsOf log
                 match startedEvents events with
                 | [ e ] ->
-                    Expect.equal e.Forwarded [] "nothing forwarded"
-                    Expect.equal e.CredentialOwner None "so there is no credential owner to name"
+                    Expect.equal e.Forwarded [ "github" ] "with the route"
+                    Expect.equal e.Actor (ActorRef.Configured repo) "by the file"
                 | other -> failwithf "expected one start, got %A" other
-            }
-
-        // A sandbox asked to forward `github` that quietly came up without it is a sandbox
-        // whose `git push` fails much later, somewhere far less informative.
-        testCaseAsync "a credential the caller does not have refuses the start" <|
-            async {
-                let log = newLog ()
-                let sandboxes, built = registry log [ githubCredential None ]
-                match! sandboxes.Ensure caller (sandbox "test") (forwarding [ "github" ]) with
-                | Ok _ -> failwith "expected a refusal"
-                | Error e ->
-                    Expect.isTrue (e.Contains "github") "it names the credential"
-                    Expect.isTrue (e.Contains "settings panel") "and where to get one"
-                Expect.isFalse (built |> Seq.exists (fun (name, _) -> name = "test")) "nothing was built"
-                let! events = eventsOf log
-                Expect.equal (startedEvents events) [] "and nothing was recorded"
-            }
-
-        // A repo's file folded at boot asks for nobody, and the person reading the refusal
-        // is usually signed in already — sending them to sign in sends them somewhere that
-        // will not help. What helps is knowing it starts on its own when they arrive.
-        testCaseAsync "a file asking with nobody signed in is told it starts when somebody is" <|
-            async {
-                let log = newLog ()
-                let sandboxes, built = registry log [ githubCredential None ]
-                let repo = RepoRef.create "octo/hello" |> expect
-                let file : WorkSandboxes.SandboxCaller =
-                    { Actor = ActorRef.Configured repo; Credential = CredentialFor.Deployment }
-                match! sandboxes.Ensure file (sandbox "octo/hello:dev") (forwarding [ "github" ]) with
-                | Ok _ -> failwith "expected a refusal"
-                | Error e ->
-                    Expect.isTrue (e.Contains "nobody was signed in") "it says why, in words"
-                    Expect.isTrue (e.Contains "starts on its own") "and that nothing needs doing"
-                    Expect.isFalse (e.Contains "sign in on") "not sent to sign in"
-                    Expect.isFalse (e.Contains "configured:") "and no token where a sentence goes"
-                Expect.isFalse (built |> Seq.exists (fun (name, _) -> name = "octo/hello:dev")) "nothing was built"
             }
 
         // The other half of forwarding: a provision is a thing the session OPENED (a gateway
@@ -657,7 +630,7 @@ let private credentialTests =
         testCaseAsync "stopping a sandbox takes back what was forwarded into it" <|
             async {
                 let log = newLog ()
-                let source, revoked = githubSource (Some "tok")
+                let source, revoked = githubSource "tok"
                 let sandboxes, _ = registry log [ source ]
                 let! _ = sandboxes.Ensure caller (sandbox "test") (forwarding [ "github" ])
                 Expect.equal (List.ofSeq revoked) [] "nothing taken back while it runs"
@@ -669,7 +642,7 @@ let private credentialTests =
         testCaseAsync "a sandbox that could not be built keeps nothing forwarded" <|
             async {
                 let log = newLog ()
-                let source, revoked = githubSource (Some "tok")
+                let source, revoked = githubSource "tok"
                 let sandboxes =
                     WorkSandboxes.create
                         { Backend = fun _ -> "fake"
@@ -693,9 +666,10 @@ let private credentialTests =
                 let log = newLog ()
                 let source : WorkSandboxes.CredentialSource =
                     { Name = "github"
-                      Provision = fun _ _ -> async { return WorkSandboxes.CredentialForwarding.Unforwardable "no route from here" }
+                      Provision = fun _ -> async { return WorkSandboxes.CredentialForwarding.Unforwardable "no route from here" }
                       Revoke = ignore
-                      Lend = fun _ _ -> async { return BlockEnv.none } }
+                      Lend = fun _ _ _ _ -> async { return BlockEnv.none }
+                      Retire = ignore }
                 let sandboxes, built = registry log [ source ]
                 match! sandboxes.Ensure caller (sandbox "test") (forwarding [ "github" ]) with
                 | Ok _ -> failwith "expected a refusal"
@@ -706,7 +680,7 @@ let private credentialTests =
         testCaseAsync "a credential this session does not know is refused, naming the ones it does" <|
             async {
                 let log = newLog ()
-                let sandboxes, _ = registry log [ githubCredential (Some "tok") ]
+                let sandboxes, _ = registry log [ githubCredential "tok" ]
                 match! sandboxes.Ensure caller (sandbox "test") (forwarding [ "gitlab" ]) with
                 | Ok _ -> failwith "expected a refusal"
                 | Error e ->
@@ -725,7 +699,7 @@ let private queryTests =
         testCaseAsync "reports process truth, and the forwarding by name" <|
             async {
                 let log = newLog ()
-                let sandboxes, _ = registry log [ githubCredential (Some "ghp_secret") ]
+                let sandboxes, _ = registry log [ githubCredential "ghp_secret" ]
                 let registration = WorkSandboxes.query (fun () -> sandboxes)
 
                 match! registration.Read () with
@@ -828,9 +802,9 @@ let private queryTests =
 let private timelineTests =
     testList "sandbox act-lines" [
 
-        // The person whose credential was forwarded finds out HERE. So the line has to say
-        // what was forwarded and whose, and it must never say what the value was.
-        testCase "a forwarding start reads as a sentence naming the credential and its owner" <| fun () ->
+        // The line says what was forwarded, never what the value was — and nobody's name,
+        // because a route is nobody's: whose credential went down it is said per push.
+        testCase "a forwarding start reads as a sentence naming the credential" <| fun () ->
             let messageId = MessageId.create "msg-1" |> expect
             let envelope : EventEnvelope<SessionEvent> =
                 { EventId = EventId.fresh ()
@@ -846,17 +820,42 @@ let private timelineTests =
                           Description = None
                           Checkout = None
                           Forwarded = [ "github" ]
-                          CredentialOwner = Some adasCredential
                           Realisation = []
                           Actor = ActorRef.Agent } }
             let proj, _ = ConversationProjection.applyEvents None [ envelope ] ConversationProjection.empty
             match proj.Items with
             | [ item ] ->
                 Expect.equal item.Body "started sandbox test (srt)" "it reads as a sentence"
-                Expect.equal (noteDetail item) (Some "forwarding github from user:ada") "whose credential went in is on the note"
+                Expect.equal (noteDetail item) (Some "forwarding github") "what went in is on the note, and nobody's name"
                 Expect.isTrue (match item.Kind with ConversationItemKind.ActNote _ -> true | _ -> false)
                     "and it is an act, not a message"
                 Expect.equal item.Author ActorRef.Agent "attributed to whoever acted"
+            | other -> failwithf "expected one note, got %A" other
+
+        // The person whose credential was spent finds out HERE: the block that pushed is on
+        // the timeline already, but a block says what ran, not whose key went out on it.
+        testCase "a push reads as a sentence naming the repository and whose credential it spent" <| fun () ->
+            let envelope : EventEnvelope<SessionEvent> =
+                { EventId = EventId.fresh ()
+                  SessionId = sessionId
+                  Offset = EventOffset.create 5L |> expect
+                  Actor = ActorRef.Agent
+                  Timestamp = fixedClock ()
+                  Event =
+                    SessionEvent.GitCredentialSpent
+                        { MessageId = MessageId.create "msg-5" |> expect
+                          Sandbox = sandbox "test"
+                          Terminal = TerminalId.create "term-1" |> expect
+                          Block = BlockId.create "b-1" |> expect
+                          Owner = CredentialFor.Person (Principal.User (UserId.create "ada" |> expect))
+                          Repo = "octo/hello"
+                          Actor = ActorRef.Agent } }
+            let proj, _ = ConversationProjection.applyEvents None [ envelope ] ConversationProjection.empty
+            match proj.Items with
+            | [ item ] ->
+                Expect.equal item.Body "pushed to octo/hello with user:ada's github credential" "whose, and where"
+                Expect.equal item.Author ActorRef.Agent "by whoever's act the block was"
+                Expect.isTrue (match item.Kind with ConversationItemKind.ActNote _ -> true | _ -> false) "an act"
             | other -> failwithf "expected one note, got %A" other
 
         testCase "a start with nothing forwarded says nothing about credentials" <| fun () ->
@@ -874,7 +873,6 @@ let private timelineTests =
                           Description = None
                           Checkout = None
                           Forwarded = []
-                          CredentialOwner = None
                           Realisation = []
                           Actor = ada } }
             let proj, _ = ConversationProjection.applyEvents None [ envelope ] ConversationProjection.empty
@@ -902,7 +900,6 @@ let private timelineTests =
                           Description = None
                           Checkout = None
                           Forwarded = []
-                          CredentialOwner = None
                           Realisation = [ "the socket at /run/docker.sock — this host cannot scope that, so the sandbox gets any unix socket on this host" ]
                           Actor = ada } }
             let proj, _ = ConversationProjection.applyEvents None [ envelope ] ConversationProjection.empty
@@ -1087,7 +1084,7 @@ let private lentTests =
         testCaseAsync "a block in a sandbox that forwards github is lent for its act's credential, not the starter's" <|
             async {
                 let log = newLog ()
-                let sandboxes, _ = registry log [ githubCredential (Some "route") ]
+                let sandboxes, _ = registry log [ githubCredential "route" ]
                 let! _ = sandboxes.Ensure caller (sandbox "test") (forwarding [ "github" ])
                 let! lent = sandboxes.Loans.Lend (sandbox "test") terminal block (Authority.agentFor bob)
                 Expect.equal
@@ -1099,7 +1096,7 @@ let private lentTests =
         testCaseAsync "a sandbox that forwards nothing lends nothing" <|
             async {
                 let log = newLog ()
-                let sandboxes, _ = registry log [ githubCredential (Some "route") ]
+                let sandboxes, _ = registry log [ githubCredential "route" ]
                 let! _ = sandboxes.Ensure caller (sandbox "test") SandboxRequest.defaults
                 let! lent = sandboxes.Loans.Lend (sandbox "test") terminal block (Authority.agentFor bob)
                 Expect.equal lent BlockEnv.none "a source the sandbox does not forward is not asked"
@@ -1108,7 +1105,7 @@ let private lentTests =
         testCaseAsync "a name the session does not have lends nothing" <|
             async {
                 let log = newLog ()
-                let sandboxes, _ = registry log [ githubCredential (Some "route") ]
+                let sandboxes, _ = registry log [ githubCredential "route" ]
                 let! lent = sandboxes.Loans.Lend (sandbox "nope") terminal block (Authority.agentFor bob)
                 Expect.equal lent BlockEnv.none "its environment refuses the spawn; the loan has nothing to add"
             }
