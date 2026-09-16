@@ -40,6 +40,8 @@
     <PackageReference Include="Fable.Browser.Dom" />
     <PackageReference Include="Fable.Fetch" />
     <PackageReference Include="Fable.Browser.WebStorage" />
+    <PackageReference Include="Fable.Browser.WebRTC" />
+    <PackageReference Include="Fable.Browser.Performance" />
     <PackageReference Include="Fable.Elmish" />
     <PackageReference Include="Fable.Lit" />
     <PackageReference Include="Ylmish" />

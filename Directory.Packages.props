@@ -23,8 +23,15 @@
     <!-- The DOM, typed. Already arrived transitively through Fable.Lit and was already being
          used that way; named here because the client now leans on it directly — a dependency
          you rely on and do not declare is one a transitive bump can take away. -->
-    <PackageVersion Include="Fable.Browser.Dom" Version="2.10.1" />
-    <PackageVersion Include="Fable.Browser.WebStorage" Version="1.1.0" />
+    <PackageVersion Include="Fable.Browser.Dom" Version="2.16.0" />
+    <PackageVersion Include="Fable.Browser.WebStorage" Version="1.2.0" />
+    <!-- The peer connection and its data channel, typed. The client's whole non-trickle
+         handshake used to be forty lines of JavaScript because there was nothing to write it
+         against; this is the maintained binding for the same API. -->
+    <PackageVersion Include="Fable.Browser.WebRTC" Version="1.6.0" />
+    <!-- `performance.now()`: the monotonic clock the handshake and the keystroke bench time
+         themselves against, which `Date.now()` is not. -->
+    <PackageVersion Include="Fable.Browser.Performance" Version="1.3.0" />
     <!-- Typed fetch() binding: the app's one place that talks to the host's network API
          (the /me probe) does it through this, not a hand-rolled Emit string. -->
     <PackageVersion Include="Fable.Fetch" Version="2.7.0" />
