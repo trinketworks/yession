@@ -30,6 +30,10 @@
     <!-- What a keydown means to a pty: pure, so the cheap tier can ask it without a
          browser. Below the view, which is the only thing that holds a key event. -->
     <Compile Include="Keystroke.fs" />
+    <!-- Where focus lands when the tablist is walked: arithmetic over an index and a count,
+         so the cheap tier settles the wrap-around without a strip to press keys on. Below
+         the view, which is the only thing that holds the elements. -->
+    <Compile Include="TabStrip.fs" />
     <Compile Include="View.fs" />
     <Compile Include="Client.fs" />
   </ItemGroup>
@@ -37,12 +41,21 @@
   <ItemGroup>
     <PackageReference Include="Fable.Elmish" />
     <PackageReference Include="Fable.Lit" />
+    <!-- The DOM, typed. It already arrived transitively through Fable.Lit and the view was
+         already using it (`Browser.Types.KeyboardEvent`); named here because the handlers now
+         read and move elements through it, and a dependency you rely on and do not declare is
+         one a transitive bump can take away. -->
+    <PackageReference Include="Fable.Browser.Dom" />
     <PackageReference Include="Ylmish" />
     <PackageReference Include="Fable.Yjs" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\Yession.Domain\Yession.Domain.fsproj" />
+    <!-- The one part of a key event `Fable.Browser.Dom` does not type: whether an IME was
+         mid-composition. Enter in a single-line field has to ask before it takes the field
+         away from somebody committing a candidate word. -->
+    <ProjectReference Include="..\Fable.BrowserExtras\Fable.BrowserExtras.fsproj" />
   </ItemGroup>
 
 </Project>

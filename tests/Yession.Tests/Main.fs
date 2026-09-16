@@ -84,6 +84,7 @@ let all =
         Tag.needs "TerminalPattern" [] (fun () -> TerminalPattern.tests)
         Tag.needs "Terminals" [] (fun () -> Terminals.tests)
         Tag.needs "Keystrokes" [] (fun () -> Keystrokes.tests)
+        Tag.needs "TabStrips" [] (fun () -> TabStrips.tests)
         Tag.needs "Timeline" [] (fun () -> Timeline.tests)
         // What the client makes of a frame needs no socket; carrying one does.
         Tag.needs "Foreign terminal attach, reading the wire" [] (fun () -> Attach.tests)
