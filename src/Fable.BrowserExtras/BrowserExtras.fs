@@ -50,6 +50,56 @@ module ResizeObserver =
     [<Emit("typeof ResizeObserver !== 'undefined'")>]
     let isSupported () : bool = jsNative
 
+/// Bindings for the browser's `IntersectionObserver`: told when an element crosses into or out
+/// of a scrollport, rather than a scroll handler asking after every frame whether it has.
+///
+/// It answers a question a scroll handler cannot, which is the reason to want one. A handler
+/// only ever hears about MOVEMENT, so a target that was on screen from the first paint and has
+/// never been scrolled past is a case it is structurally deaf to; an observer reports the state,
+/// and reports it once on `observe` whether or not anything has moved.
+///
+/// Only the slice used is declared. `IntersectionObserverEntry` carries `intersectionRatio`,
+/// `boundingClientRect`, `time` and friends, and the constructor takes `threshold`; none of that
+/// is here, because the one question asked of it is whether the target and the root overlap at
+/// all. What a caller does with several entries is a test over them, and a test is F# — not a
+/// clause smuggled into an emit string where no compiler and no analyzer can read it.
+[<AllowNullLiteral>]
+type IntersectionObserverEntry =
+    /// Whether this target and the root overlap as of this callback. A crossing back OUT is
+    /// reported as readily as a crossing in, so a caller that only wants arrivals has to say so.
+    abstract isIntersecting : bool
+
+[<AllowNullLiteral>]
+type IntersectionObserver =
+    /// Start reporting this element's crossings. Fires once immediately with where the element
+    /// stands, which is the whole point of the type rather than a quirk of it: something already
+    /// on screen is reported as being on screen.
+    abstract observe : element: Element -> unit
+    /// Stop reporting everything. An observer holds its root and its targets, so one left behind
+    /// for an element that has gone is a leak — with the callback still live to fire into
+    /// whatever closed over it.
+    abstract disconnect : unit -> unit
+
+[<AutoOpen>]
+module IntersectionObserver =
+
+    /// `new IntersectionObserver(callback, { root, rootMargin })`. The callback takes the entries
+    /// and the observer; this declares only the entries, for the same reason `ResizeObserver`
+    /// declares neither — the answer to "which observer" is "the one you made".
+    ///
+    /// `root` is the scrollport the overlap is measured against, which is the card's own scroller
+    /// whenever what scrolls is inside the page rather than the page itself. `rootMargin` grows
+    /// that box in CSS margin syntax (`"400px 0px"`), so a target counts as on screen while it is
+    /// still that far outside it — which is how a caller asks for what is coming rather than for
+    /// what has arrived.
+    [<Emit("new IntersectionObserver($0, { root: $1, rootMargin: $2 })")>]
+    let create
+        (onCrossed: IntersectionObserverEntry[] -> unit)
+        (root: Element)
+        (rootMargin: string)
+        : IntersectionObserver =
+        jsNative
+
 /// The slice of the CSSOM the shell writes its layout through, which `Fable.Browser.Dom` does
 /// not type: it stops at the DOM, and `element.style` belongs to the CSS bindings this
 /// repository does not otherwise need.
