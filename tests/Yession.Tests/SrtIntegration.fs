@@ -115,9 +115,14 @@ let private exitCode (run: SandboxRun) =
 
 // --- The agent CLI's spawner, driven directly ----------------------------------------------
 
-/// Write to the proxy's stdin, close it, and resolve with (stdout, exit code) — the exact
+module Sdk = Fable.ClaudeAgentSdk
+
+/// Write to the proxy's stdin, close it, and answer with (stdout, exit code) — the exact
 /// shape the SDK drives `spawnClaudeCodeProcess`'s result through.
-[<ImportDefault("./js/drive-spawner.mjs")>]
+///
+/// `exit` and `error` are alternatives, and on a spawn that never happened only `error`
+/// arrives — so the answer settles once, and a child that never ran says its message where
+/// its output would have been, with -1 where an exit code would have been.
 let private driveSpawner
     (spawner: obj)
     (command: string)
@@ -125,7 +130,45 @@ let private driveSpawner
     (cwd: string)
     (env: (string * string) array)
     (stdin: string)
-    : JS.Promise<string * int> = jsNative
+    : Async<string * int> =
+    Async.FromContinuations (fun (cont, _, _) ->
+        // The seam's own option shape, as the SDK hands it over. `signal` is null rather than
+        // missing: a spawner reads it as "nothing will abort this" either way, and Fable will
+        // not cast a record that is short of a field the interface declares.
+        let options : Sdk.SpawnOptions =
+            !!{| command = command
+                 args = args
+                 cwd = cwd
+                 env = createObj (env |> Array.map (fun (name, value) -> name ==> value) |> List.ofArray)
+                 signal = (null: obj) |}
+
+        let spawned = (unbox<System.Func<Sdk.SpawnOptions, Sdk.SpawnedProcess>> spawner).Invoke options
+
+        let out = System.Text.StringBuilder ()
+        let mutable settled = false
+
+        let settle (answer: string * int) =
+            if not settled then
+                settled <- true
+                cont answer
+
+        // `setEncoding` rather than converting each chunk: it puts a decoder in front of the
+        // stream, so a multi-byte character split across two reads still arrives whole.
+        let stdout : Node.Stream.Readable<string> = !!spawned.stdout
+        stdout.setEncoding Node.Buffer.BufferEncoding.Utf8
+        stdout.on ("data", fun (chunk: string) -> out.Append chunk |> ignore) |> ignore
+
+        spawned.on (
+            "exit",
+            box (
+                System.Func<obj, obj, unit> (fun code _ ->
+                    settle (out.ToString (), (if isNullOrUndefined code then -1 else unbox<int> code)))))
+
+        spawned.on ("error", box (System.Func<obj, unit> (fun error -> settle (Fable.NodeExtras.StreamError.describe !!error, -1))))
+
+        let stdin' : Node.Stream.Writable<string> = !!spawned.stdin
+        stdin'.write stdin |> ignore
+        stdin'.``end`` ())
 
 // --- The suite ------------------------------------------------------------------------------
 
@@ -356,9 +399,7 @@ let tests =
                 let policy = policyIn workspace []
                 let spawner =
                     Sandboxes.AgentSandbox.srtClaudeSpawner (Sandboxes.SrtSandbox.wrapperFor (srtTools ()) policy)
-                let! out, code =
-                    driveSpawner spawner "/bin/cat" [||] workspace (Map.toArray policy.Env) "round-trip"
-                    |> Interop.awaitPromise
+                let! out, code = driveSpawner spawner "/bin/cat" [||] workspace (Map.toArray policy.Env) "round-trip"
                 Expect.equal code 0 "the confined process exited cleanly"
                 Expect.equal out "round-trip" "stdin reached it and its stdout came back"
             })
