@@ -130,3 +130,57 @@ module Media =
     /// by the caller that shares a breakpoint with it.
     [<Emit("window.matchMedia($0).matches")>]
     let mediaMatches (query: string) : bool = jsNative
+
+/// The one write this repository makes to the system clipboard.
+///
+/// `Fable.Browser.Dom`'s `Navigator` stops at the navigator's older surface, and the async
+/// clipboard is not on it. Only the write is declared, because only the write is made: reading
+/// somebody's clipboard is a permission prompt this product has no reason to raise.
+///
+/// Asking whether there IS a clipboard is half the binding, and the half no caller may skip.
+/// The API is absent outside a secure context — most commonly a session reached over plain
+/// HTTP at a LAN address — and reaching through an absent `navigator.clipboard` throws where a
+/// refusal would have rejected, which is a fault no handler on the promise can see.
+[<AutoOpen>]
+module Clipboard =
+
+    /// Whether this context has a clipboard at all.
+    [<Emit("!!navigator.clipboard")>]
+    let hasClipboard () : bool = jsNative
+
+    /// `navigator.clipboard.writeText`: resolved once the write has happened, rejected when
+    /// the browser refused it — a denied permission, a page that was not the foreground one.
+    [<Emit("navigator.clipboard.writeText($0)")>]
+    let writeClipboardText (text: string) : JS.Promise<unit> = jsNative
+
+/// The slice of the Cache API that a READ goes through. `Fable.Browser.Dom` types none of it —
+/// it stops at the DOM, and a `Cache` belongs to the service-worker bindings this repository
+/// does not otherwise need.
+///
+/// Only `match` and what a hit is worth asking are here. Opening a cache, enumerating its
+/// addresses and writing to it are one-liners at their call site whose answers have no
+/// structure to read; a hit has two — the body, and the header it was stored with — and that
+/// is what earns a binding.
+[<AutoOpen>]
+module CacheStorage =
+
+    /// One kept `Response`, as much of one as this repository ever reads.
+    ///
+    /// Nullable because a MISS is exactly that: `cache.match` answers with nothing for an
+    /// address the store never held, and that is an answer rather than a fault.
+    [<AllowNullLiteral>]
+    type CachedResponse =
+        /// The stored body, decoded as text.
+        abstract text : unit -> JS.Promise<string>
+
+    /// `cache.match(url)` — the answer kept for one address, or null.
+    ///
+    /// The cache is `obj` rather than a type of its own: nothing here ever asks a `Cache`
+    /// anything except this, so a type would carry one member and a name for it.
+    [<Emit("$0.match($1)")>]
+    let cacheMatch (cache: obj) (url: string) : JS.Promise<CachedResponse> = jsNative
+
+    /// One header off a kept response, or null when the stored response carries none — which
+    /// is a store outliving the build that filled it, not an error.
+    [<Emit("$0.headers.get($1)")>]
+    let cachedHeader (response: CachedResponse) (name: string) : string = jsNative
