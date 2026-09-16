@@ -145,6 +145,8 @@ let private withShellTerminal
                 SessionTerminals.create
                     log
                     (fun _ -> environment)
+                    // Nobody here is attributed; this fixture is about the pty.
+                    Principal.Peer
                     (fun _ _ -> transcript)
                     // The reader over the same records the writer above appends to. This
                     // fixture is about the pty, so it is the smallest honest one: a half-open

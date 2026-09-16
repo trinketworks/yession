@@ -1857,7 +1857,7 @@ let private mintFrom (ids: string list) =
         if remaining.Count > 1 then remaining.RemoveAt 0
         next
 
-let private makeTerminalsOn (clock: Clock) attach classifier (log: EventLog<SessionEvent>) environment openTranscript readTranscript openAtBoot profilesAtBoot =
+let private makeTerminalsOn (clock: Clock) (principalFor: PeerId -> Principal) attach classifier (log: EventLog<SessionEvent>) environment openTranscript readTranscript openAtBoot profilesAtBoot =
     let mintTerminal = mintFrom [ "term-a"; "term-b"; "term-c"; "term-d"; "term-e"; "term-f" ]
     let mintBlock = mintFrom [ "b-1"; "b-2"; "b-3" ]
     let records = ResizeArray<TerminalId * int * TranscriptRecord> ()
@@ -1868,6 +1868,7 @@ let private makeTerminalsOn (clock: Clock) attach classifier (log: EventLog<Sess
             // One environment under every name: these tests are about the terminal
             // manager, not about which sandbox a terminal picked.
             (fun _ -> environment)
+            principalFor
             openTranscript
             readTranscript
             // The REAL emulator, not a stub: the whole point of the manager tests is that
@@ -1898,7 +1899,19 @@ let private makeTerminalsOn (clock: Clock) attach classifier (log: EventLog<Sess
 /// that hold a read open (`Tail` with a wait) look again in real time. A case about a
 /// window the manager keeps uses `makeTerminalsOn` with a clock it turns.
 let private makeTerminalsFrom attach classifier log environment openTranscript readTranscript openAtBoot profilesAtBoot =
-    makeTerminalsOn { Clock.system with Now = fixedClock } attach classifier log environment openTranscript readTranscript openAtBoot profilesAtBoot
+    // Nobody is attributed: a peer stays a peer, which is what every case but the
+    // attribution ones is written against.
+    makeTerminalsOn { Clock.system with Now = fixedClock } Principal.Peer attach classifier log environment openTranscript readTranscript openAtBoot profilesAtBoot
+
+/// A manager where SOME peers are bound to users — the Process's `Attribution` stand-in,
+/// for the cases about what a block's authority becomes at the durable append.
+let private makeTerminalsBound (bound: (PeerId * UserId) list) classifier log environment openTranscript readTranscript =
+    let users = Map.ofList bound
+    let principalFor (peer: PeerId) =
+        match Map.tryFind peer users with
+        | Some user -> Principal.User user
+        | None -> Principal.Peer peer
+    makeTerminalsOn { Clock.system with Now = fixedClock } principalFor AttachTerminal.unavailable classifier log environment openTranscript readTranscript [] ShellProfileProjection.empty
 
 /// No shell profile (Plan 25) — what a session that has never set one replays as, and what
 /// every case here but the profile ones is about.
@@ -2132,6 +2145,75 @@ let private managerTests =
     ]
 
 // --- The scheduler, over a real doc ---------------------------------------------------------
+
+/// What a block's authority becomes at the durable append. The doc only ever knows the
+/// connection that wrote an entry; the log records who that connection IS, by the same
+/// attribution the message scheduler stamps `MessageSent.Author` with — and the credential a
+/// block spends is resolved from the log, so this is where a person's own command becomes
+/// theirs rather than the deployment's.
+let private attributionTests =
+    let adaUser = UserId.create "ada-user" |> expect
+    let boundManager classifier =
+        let log = newLog ()
+        let environment, _ = scriptedEnvironment (fun _ -> [], 0)
+        let openTranscript, _, _, _, readTranscript = recordingTranscripts ()
+        let terminals, _, _ = makeTerminalsBound [ ada, adaUser ] classifier log environment openTranscript readTranscript
+        log, terminals
+    let started (events: SessionEvent list) =
+        events |> List.pick (function SessionEvent.TerminalBlockStarted e -> Some e | _ -> None)
+    testList "A block's authority at the durable append" [
+        testCaseAsync "a person's block is attributed to the user their peer is bound to, never the peer" <|
+            async {
+                let log, terminals = boundManager Classifier.approveAll
+                let! opened = terminals.Open (PeerRef ada) (SandboxShell SandboxRef.defaultRef) (TerminalTitle.fromProse "build")
+                let id = opened |> expect
+                do! terminals.RunBlock id (entry "a1" id byAda 1.0) "echo hello" ignore
+                let! events = eventsOf log
+                Expect.equal
+                    (started events).Authority
+                    (Authority.ofAuthor (Principal.User adaUser))
+                    "the log names the person, as the chat's author line would"
+            }
+
+        testCaseAsync "the agent's block on a bound peer's turn resolves its credential to that user" <|
+            async {
+                let log, terminals = boundManager Classifier.approveAll
+                let! opened = terminals.Open ActorRef.Agent (SandboxShell SandboxRef.defaultRef) (TerminalTitle.fromProse "build")
+                let id = opened |> expect
+                do! terminals.RunBlock id (entry "a1" id agentForAda 1.0) "echo hello" ignore
+                let! events = eventsOf log
+                Expect.equal
+                    (Authority.credential (started events).Authority)
+                    (CredentialFor.Person (Principal.User adaUser))
+                    "the turn human's credential, which a peer could not own"
+            }
+
+        testCaseAsync "a peer nobody verified stays a peer" <|
+            async {
+                let log, terminals = boundManager Classifier.approveAll
+                let! opened = terminals.Open (PeerRef bob) (SandboxShell SandboxRef.defaultRef) (TerminalTitle.fromProse "build")
+                let id = opened |> expect
+                do! terminals.RunBlock id (entry "b1" id byBob 1.0) "echo hello" ignore
+                let! events = eventsOf log
+                Expect.equal (started events).Authority byBob "nothing is invented for an unattributed connection"
+            }
+
+        testCaseAsync "a refused block is attributed the same way as one that ran" <|
+            async {
+                let refuseAll : Classifier = fun _ _ -> async { return Rejected "not in this session" }
+                let log, terminals = boundManager refuseAll
+                let! opened = terminals.Open (PeerRef ada) (SandboxShell SandboxRef.defaultRef) (TerminalTitle.fromProse "build")
+                let id = opened |> expect
+                do! terminals.RunBlock id (entry "a1" id byAda 1.0) "rm -rf /" ignore
+                let! events = eventsOf log
+                let refusal =
+                    events |> List.pick (function SessionEvent.TerminalCommandRejected e -> Some e | _ -> None)
+                Expect.equal
+                    refusal.Authority
+                    (Authority.ofAuthor (Principal.User adaUser))
+                    "the refusal names the person whose command it was"
+            }
+    ]
 
 let private schedulerTests =
     testList "Terminal scheduler" [
@@ -3665,7 +3747,7 @@ let private shellProfileTests =
                 let clock = virtualClock (fixedClock ())
                 let openTranscript, linesOf, _, _, readTranscript = recordingTranscripts ()
                 let terminals, _, _ =
-                    makeTerminalsOn clock.Clock AttachTerminal.unavailable Classifier.approveAll log mute openTranscript readTranscript [] ShellProfileProjection.empty
+                    makeTerminalsOn clock.Clock Principal.Peer AttachTerminal.unavailable Classifier.approveAll log mute openTranscript readTranscript [] ShellProfileProjection.empty
                 let! opened = terminals.Open (PeerRef ada) (SandboxShell SandboxRef.defaultRef) (TerminalTitle.fromProse "build")
                 let id = opened |> expect
                 let said () =
@@ -4282,6 +4364,7 @@ let tests =
         codecTests
         orderTests
         managerTests
+        attributionTests
         schedulerTests
         syncTests
         commandLineCaretTests
