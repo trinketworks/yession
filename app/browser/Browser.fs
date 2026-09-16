@@ -22,54 +22,162 @@ open Lit
 
 // --- Native WebRTC (non-trickle, mirroring app/WebRtc.fs) -----------------------------
 
-// Opening the data channel, as a TOTAL function: it settles with the channel, or with why it
-// could not be had. It used to resolve only on `dc.onopen`, so a signalling POST that failed
-// — or a session that simply was not there — left this promise pending forever and the shell
-// stuck on "connecting" with nothing to say and nothing to do.
-//
-// `timeoutMs` bounds the whole handshake (offer, gathering, answer, channel open); it is the
-// difference between "not connected, the session did not answer" and an eternal wait.
-[<ImportDefault("./js/open-data-channel.mjs")>]
-let private openDataChannel (signalUrl: string) (timeoutMs: int) : JS.Promise<{| ok: bool; channel: obj; connection: obj; timedOut: bool; detail: string; tookMs: int |}> = jsNative
+/// The transport one handshake settles with: the channel frames ride on, and the peer
+/// connection that carries it.
+///
+/// The connection is kept because this client has to be able to READ it. The handshake used to
+/// settle with the data channel ALONE, so nothing could observe either state machine, nothing
+/// could close a dead connection, and the only way a client learned its transport had died was
+/// `dc.onclose` — an event a half-open channel never fires.
+type private Transport =
+    { Channel : Browser.Types.RTCDataChannel
+      Peer : Browser.Types.RTCPeerConnection }
+
+/// What one attempt at the handshake settled as. Three outcomes, three remedies: a transport to
+/// use, a session that answered with a refusal, and a session that did not answer at all.
+type private Handshake =
+    | Opened of Transport
+    | Refused of detail: string
+    | TimedOut
 
 /// How long a whole handshake gets before it counts as "the session did not answer". Long
 /// enough for ICE gathering on a slow machine, short enough that a dead session is reported
 /// rather than waited on.
 let private channelOpenTimeoutMs = 10000
 
-[<Emit("$0.onmessage = (e) => $1(String(e.data))")>]
-let private onMessage (dc: obj) (handler: string -> unit) : unit = jsNative
-
-[<Emit("$0.onclose = $1")>]
-let private onClose (dc: obj) (handler: unit -> unit) : unit = jsNative
-
-[<Emit("(function (dc, text) { return dc.readyState === 'open' && (dc.send(text), true) })($0, $1)")>]
-let private sendMessage (dc: obj) (text: string) : bool = jsNative
-
-/// Both of the peer connection's state machines, as one "this transport is finished" signal.
-///
-/// This is why the connection is kept at all. The promise above used to resolve with the data
-/// channel ALONE, so nothing could observe either state, nothing could close a dead connection,
-/// and the only way a client learned its transport had died was `dc.onclose` — an event a
-/// half-open channel never fires.
+/// Both of the peer connection's state machines, read as the one signal that matters: this
+/// transport is finished. BOTH, because either can reach a terminal state without the other
+/// following it there, and a client watching only `connectionState` goes on waiting for a
+/// connection whose ICE agent has already given up.
 ///
 /// `disconnected` is deliberately NOT here. It is a maybe, not a verdict, and the honest answer
 /// to a maybe already exists: the heartbeat asks, and gets an answer or does not, inside about
 /// three seconds. A grace timer here would be a second clock measuring the same doubt.
-[<ImportDefault("./js/on-peer-finished.mjs")>]
-let private onPeerFinished (pc: obj) (handler: unit -> unit) : unit = jsNative
+let private peerFinished (peer: Browser.Types.RTCPeerConnection) : bool =
+    peer.connectionState = Browser.Types.RTCPeerConnectionState.Failed
+    || peer.connectionState = Browser.Types.RTCPeerConnectionState.Closed
+    || peer.iceConnectionState = Browser.Types.RTCIceConnectionState.Failed
+    || peer.iceConnectionState = Browser.Types.RTCIceConnectionState.Closed
+
+/// Register a listener and hand back the ONE way to unregister it. The target, the event name
+/// and the handler are said once, so a teardown cannot drift from what it undoes — which is the
+/// only thing three listeners and three removals can get wrong.
+let private listening (target: #Browser.Types.EventTarget) (event: string) (handler: Browser.Types.Event -> unit) : unit -> unit =
+    target.addEventListener (event, handler)
+    fun () -> target.removeEventListener (event, handler)
+
+/// Opening the data channel, as a TOTAL function: it settles with the transport, or with why it
+/// could not be had. It used to resolve only on `dc.onopen`, so a signalling POST that failed
+/// — or a session that simply was not there — left this promise pending forever and the shell
+/// stuck on "connecting" with nothing to say and nothing to do.
+///
+/// Non-trickle, the way the Session Process's own side does it: gather first, then send ONE
+/// complete SDP, so there are no candidate-timing races and nothing depends on a sleep. Two
+/// events say gathering is done (`iceGatheringState` reaching `complete`, and the null
+/// candidate) and a browser may fire either — but some browsers and sandboxes fire NEITHER,
+/// because mDNS candidate obfuscation can leave gathering stalled indefinitely. So the offer
+/// also goes at 1500ms regardless: without it, a handshake waits on an event that is never
+/// coming and can only ever time out.
+///
+/// `timeoutMs` bounds the whole thing (offer, gathering, answer, channel open); it is the
+/// difference between "not connected, the session did not answer" and an eternal wait.
+let private openDataChannel (signalUrl: string) (timeoutMs: int) : JS.Promise<Handshake> =
+    Promise.create (fun resolve _ ->
+        let peer = Browser.WebRTC.RTCPeerConnection.Create (Browser.WebRTC.RTCConfiguration.Create [||])
+        let channel = peer.createDataChannel "session"
+        // Five things try to end this handshake and exactly one of them is heard. The flag and
+        // the closing live INSIDE the one function that can end it, rather than beside each
+        // caller: the timeout comes due whether or not the channel opened, and closing a live
+        // connection because a timer fired is the fault a once-only settle exists to prevent.
+        let mutable settled = false
+        let settle (outcome: Handshake) =
+            if not settled then
+                settled <- true
+                match outcome with
+                | Opened _ -> ()
+                | Refused _ | TimedOut -> try peer.close () with _ -> ()
+                resolve outcome
+        // The offer goes once. `sent` is what makes three triggers for one send idempotent;
+        // `settled` is what keeps the 1500ms fallback from posting an offer for a handshake
+        // that is already over.
+        let mutable sent = false
+        let send () =
+            if not sent && not settled then
+                sent <- true
+                promise {
+                    match peer.localDescription with
+                    | None ->
+                        // Nothing gathered yet, and nothing to offer. Only the fallback timer
+                        // can arrive here — the two gathering events cannot fire before the
+                        // description is local.
+                        settle (Refused "no local description to offer")
+                    | Some local ->
+                        let offer =
+                            JS.JSON.stringify (
+                                Browser.WebRTC.RTCSessionDescriptionInit.Create (local.``type``, local.sdp))
+                        let! reply =
+                            Fetch.fetchUnsafe
+                                signalUrl
+                                [ Fetch.Types.RequestProperties.Method Fetch.Types.HttpMethod.POST
+                                  Fetch.requestHeaders [ Fetch.Types.HttpRequestHeaders.ContentType "application/json" ]
+                                  Fetch.Types.RequestProperties.Body (U3.Case3 offer) ]
+                        if reply.Ok then
+                            let! answer = reply.json<Browser.Types.RTCSessionDescriptionInit> ()
+                            do! peer.setRemoteDescription answer
+                        else
+                            settle (Refused (sprintf "signalling refused: %d" reply.Status))
+                }
+                |> Promise.catchEnd (fun error -> settle (Refused error.Message))
+        peer.onicegatheringstatechange <-
+            fun _ -> if peer.iceGatheringState = Browser.Types.RTCIceGatheringState.Complete then send ()
+        peer.onicecandidate <-
+            fun ice ->
+                match ice.candidate with
+                | None -> send ()
+                | Some _ -> ()
+        JS.setTimeout send 1500 |> ignore
+        JS.setTimeout (fun () -> settle TimedOut) timeoutMs |> ignore
+        channel.onopen <- fun _ -> settle (Opened { Channel = channel; Peer = peer })
+        // One catch for both steps: a rejected `setLocalDescription` used to fall outside the
+        // handler `createOffer` carried, and reached the page as an unhandled rejection with
+        // the handshake still pending behind it.
+        promise {
+            let! offer = peer.createOffer ()
+            do! peer.setLocalDescription offer
+        }
+        |> Promise.catchEnd (fun error -> settle (Refused error.Message)))
 
 /// Look again the moment the page comes back — a phone returning from the background, a
 /// network coming back, a tab being switched to. Returns the way to stop looking.
 ///
-/// Not a second mechanism: it asks exactly the question `onPeerFinished` answers, at the one
+/// Not a second mechanism: it asks exactly the question `peerFinished` answers, at the one
 /// moment a browser is most likely to have torn the transport down while no script was running
-/// to hear about it. That moment is where the reported bug lived.
-[<ImportDefault("./js/on-resume.mjs")>]
-let private onResume (pc: obj) (dc: obj) (handler: unit -> unit) : (unit -> unit) = jsNative
+/// to hear about it. That moment is where the reported bug lived. It reads the CHANNEL too: a
+/// channel can be closed under a connection that still reports itself connected, which is the
+/// half-open case `onclose` never fires for.
+///
+/// A hidden page is not back yet — `visibilitychange` fires on the way out as well as the way
+/// in, and answering while hidden reports a teardown the person cannot see and has not
+/// returned to.
+let private onResume (transport: Transport) (onFinished: unit -> unit) : unit -> unit =
+    let look (_: Browser.Types.Event) =
+        if Browser.Dom.document.visibilityState <> "hidden" then
+            if peerFinished transport.Peer
+               || transport.Channel.readyState <> Browser.Types.RTCDataChannelState.Open then
+                onFinished ()
+    let stops =
+        [ listening Browser.Dom.window "pageshow" look
+          listening Browser.Dom.window "online" look
+          listening Browser.Dom.document "visibilitychange" look ]
+    fun () -> for stop in stops do stop ()
 
-[<Emit("$0.close()")>]
-let private closePeer (pc: obj) : unit = jsNative
+/// The same question, asked by the connection itself whenever either state machine moves — and
+/// once up front, because a connection can already be finished by the time anybody subscribes.
+let private onPeerFinished (peer: Browser.Types.RTCPeerConnection) (onFinished: unit -> unit) : unit =
+    let check (_: Browser.Types.Event) = if peerFinished peer then onFinished ()
+    peer.addEventListener ("connectionstatechange", check)
+    peer.addEventListener ("iceconnectionstatechange", check)
+    if peerFinished peer then onFinished ()
 
 let private frameCodec : Codec<SessionFrame<string>> = Codec.sessionFrame Codec.string
 
@@ -83,7 +191,9 @@ let private frameCodec : Codec<SessionFrame<string>> = Codec.sessionFrame Codec.
 ///
 /// Closing closes the CONNECTION too. It used to close only the channel, which left a peer
 /// connection (and its ICE agent) alive behind every reconnect for the life of the page.
-let private frameChannel (dc: obj) (pc: obj) : FrameChannel<string> =
+let private frameChannel (transport: Transport) : FrameChannel<string> =
+    let channel = transport.Channel
+    let peer = transport.Peer
     let queue = System.Collections.Generic.Queue<SessionFrame<string> option> ()
     let mutable pending : (SessionFrame<string> option -> unit) option = None
     let mutable closed = false
@@ -97,14 +207,22 @@ let private frameChannel (dc: obj) (pc: obj) : FrameChannel<string> =
             closed <- true
             stopLooking ()
             deliver None
-    onMessage dc (fun text ->
-        match Codec.fromString frameCodec text with
-        | Ok frame -> deliver (Some frame)
-        | Error e -> JS.console.error ("frame decode failed: " + e))
-    onClose dc finish
-    onPeerFinished pc finish
-    stopLooking <- onResume pc dc finish
-    { Send = fun frame -> async { sendMessage dc (Codec.toString frameCodec frame) |> ignore }
+    channel.onmessage <-
+        fun message ->
+            match Codec.fromString frameCodec (string message.data) with
+            | Ok frame -> deliver (Some frame)
+            | Error detail -> JS.console.error ("frame decode failed: " + detail)
+    channel.onclose <- fun _ -> finish ()
+    onPeerFinished peer finish
+    stopLooking <- onResume transport finish
+    { Send =
+        fun frame ->
+            async {
+                // A peer can vanish between frames; sending into a channel that is no longer
+                // open is a no-op, not a throw.
+                if channel.readyState = Browser.Types.RTCDataChannelState.Open then
+                    channel.send (U4.Case1 (Codec.toString frameCodec frame))
+            }
       Receive =
         fun () ->
             Async.FromContinuations (fun (cont, _, _) ->
@@ -115,8 +233,8 @@ let private frameChannel (dc: obj) (pc: obj) : FrameChannel<string> =
         fun () ->
             async {
                 finish ()
-                emitJsExpr dc "$0.close()"
-                closePeer pc
+                channel.close ()
+                peer.close ()
             } }
 
 /// One attempt at the transport, shaped as the resilience policy consumes it. What settles is
@@ -124,17 +242,22 @@ let private frameChannel (dc: obj) (pc: obj) : FrameChannel<string> =
 /// which is what lets everything above hold one idea of a transport.
 let private connectChannel (signalUrl: string) : Async<Result<FrameChannel<string>, Client.ChannelFault>> =
     async {
-        let! reply = openDataChannel signalUrl channelOpenTimeoutMs |> Async.AwaitPromise
+        let startedAt = Browser.Performance.performance.now ()
+        let! outcome = openDataChannel signalUrl channelOpenTimeoutMs |> Async.AwaitPromise
         // How long the handshake took, said out loud. Open latency is a property this repo has
         // already traded a whole ICE backend to protect (docs/decisions/2026-07-26), and it is
         // invisible from the outside: a slow session and a slow handshake look identical from
         // the shell. Free on success, and the one number worth having when they do not.
         JS.console.debug (
-            sprintf "yession/link: handshake %s in %dms" (if reply.ok then "opened" else "failed") reply.tookMs)
+            sprintf
+                "yession/link: handshake %s in %dms"
+                (match outcome with Opened _ -> "opened" | Refused _ | TimedOut -> "failed")
+                (int (Math.Round (Browser.Performance.performance.now () - startedAt))))
         return
-            if reply.ok then Ok (frameChannel reply.channel reply.connection)
-            elif reply.timedOut then Error Client.ChannelTimedOut
-            else Error (Client.ChannelUnreachable reply.detail)
+            match outcome with
+            | Opened transport -> Ok (frameChannel transport)
+            | TimedOut -> Error Client.ChannelTimedOut
+            | Refused detail -> Error (Client.ChannelUnreachable detail)
     }
 
 // --- DOM shell -------------------------------------------------------------------------
