@@ -2022,21 +2022,27 @@ module View =
         // message does (both are `ConversationItem`s at an offset); `Kind` is what tells the
         // two apart at render time.
         let actNoteItem (facts: ActNoteFacts) (item: ConversationItem) =
-            // How the act is going, when that is news: a pulse while a slow act (a sandbox
-            // coming up) runs, a mark when one failed. A settled act says nothing here — its
-            // body is the whole account. `data-act-status` on the article is the stable hook a
-            // test counts running work by, whatever the design does with the chip.
-            let statusMark =
+            // A slow act coming up pulses in the LEFT gutter — a quiet dot on the margin
+            // rather than a mark trailing the line, so the running ones read as a column down
+            // the edge. A failed act still says so inline, where its reason sits: a terminal
+            // state wants a word, not a dot. A settled act says nothing here — its body is the
+            // whole account. `data-act-status` on the article is the stable hook a test counts
+            // running work by, wherever the design puts the cue.
+            let running =
                 match item.Status with
                 | ConversationItemStatus.Running ->
-                    html $"""<span class="{Style.statusRun}"><span class="{Style.statusDotPulse}"></span><span class="{Style.srOnly}">{Dom.Text.running}</span></span>"""
+                    html $"""<span class="{Style.actNoteRunning}"><span class="{Style.actNoteRunningDot}"></span><span class="{Style.srOnly}">{Dom.Text.running}</span></span>"""
+                | Complete | Streaming | ConversationItemStatus.Failed | ConversationItemStatus.Interrupted -> Lit.nothing
+            let failedMark =
+                match item.Status with
                 | ConversationItemStatus.Failed ->
                     html $"""<span class="{Style.statusErr}">{Icon.crossSm} {Dom.Text.failed}</span>"""
-                | Complete | Streaming | ConversationItemStatus.Interrupted -> Lit.nothing
+                | Complete | Streaming | ConversationItemStatus.Running | ConversationItemStatus.Interrupted -> Lit.nothing
             html $"""
                 <article class="{Style.actNote}" data-message-id="{MessageId.value item.MessageId}" tabindex="-1" data-act-note data-act-status="{messageStatusLabel item.Status}" data-message-author="{authorLabel item.Author}">
                   {itemActions item}
-                  <span class="{Style.actNoteText}"><span class="{Style.actNoteWho}">{authorName model item.Author}</span> {item.Body} {statusMark}</span>
+                  {running}
+                  <span class="{Style.actNoteText}"><span class="{Style.actNoteWho}">{authorName model item.Author}</span> {item.Body} {failedMark}</span>
                   {actNoteDetail facts}
                 </article>"""
         let messageItem (item: ConversationItem) =
