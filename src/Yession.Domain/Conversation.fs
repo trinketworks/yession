@@ -660,34 +660,12 @@ module ConversationProjection =
                           Offset = envelope.Offset
                           Woke = None; Replying = None } ] }
         | SessionEvent.WorkSandboxStarted s ->
-            // Names only, and nobody's: a forward is a route, and whose credential goes
-            // down it is said per push (`GitCredentialSpent`), by the block that made it.
-            let forwarded =
-                match s.Forwarded with
-                | [] -> None
-                | names -> Some (sprintf "forwarding %s" (String.concat ", " names))
-            // And where this host could not give what the sandbox's resources named. On the
-            // start NOTE rather than a note of its own, because it is a property of THIS
-            // sandbox coming up — a separate item would be a second thing to correlate, and
-            // the correlation is the whole content of it.
-            let realisation =
-                match s.Realisation with
-                | [] -> None
-                | lines ->
-                    Some (
-                        sprintf
-                            "where this host could not give exactly what was asked: %s"
-                            (String.concat "; " lines))
-            let checkout = s.Checkout |> Option.map (sprintf "the checkout is at %s in here")
-            // The headline names the one thing worth deciding from at a glance: which
-            // sandbox, on what backend. What it is for, where its checkout sits, whose
-            // credential rode in, and what this host could not give exactly are separate
-            // facts, semicolon-joined in the detail, not clauses chained onto the headline.
-            let body = sprintf "started sandbox %s (%s)" (SandboxRef.render s.Sandbox) s.Backend
-            let detail =
-                match List.choose id [ s.Description; checkout; forwarded; realisation ] with
-                | [] -> None
-                | parts -> Some (String.concat "; " parts)
+            // The prose - headline and particulars both - is the sandbox event's own to
+            // give, and lives beside it in `SandboxesFacts.WorkSandboxStarted`. The fold no
+            // longer reaches across the event's typed fields to compose a sentence here; it
+            // asks the event what it says. See that module for why the split is drawn there.
+            let body = Yession.Domain.Sandboxes.WorkSandboxStarted.headline s
+            let detail = Yession.Domain.Sandboxes.WorkSandboxStarted.detail s
             let resolve (item: ConversationItem) =
                 { item with
                     Body = body

@@ -144,3 +144,50 @@ and ShellProfileSet =
       /// sandbox's own default, which is what every terminal did before this plan.
       WorkingDirectory : string option
       Actor : ActorRef }
+
+/// The prose a start writes into the timeline - the headline a screen lands on, and the
+/// particulars beneath it. It lives HERE, beside the event, for the same reason
+/// `PrTransition.describe` sits beside `PrTransitioned`: what this event's leaves MEAN is
+/// knowledge that belongs with the event, not assembled by whatever folds it. The fold in
+/// `Conversation.fs` calls these; it no longer composes the sentence itself.
+///
+/// A screen wants the two halves apart - a gist to land on, particulars beneath - so they
+/// are two functions rather than one. Every other reader (the agent's prompt above all)
+/// joins them, which `ConversationItem.said` does with an em-dash; neither reader parses the
+/// other's prose, because both build from these same fields.
+[<RequireQualifiedAccess>]
+module WorkSandboxStarted =
+
+    /// The one thing worth deciding from at a glance: which sandbox, on what backend.
+    let headline (s: WorkSandboxStarted) : string =
+        sprintf "started sandbox %s (%s)" (SandboxRef.render s.Sandbox) s.Backend
+
+    /// Everything the headline holds back, each fact its own semicolon-joined clause: what
+    /// the sandbox is FOR, where its checkout sits, whose credential rode in, and where this
+    /// host could not give exactly what was asked. `None` when the start is already one
+    /// clause - nothing declared, nothing forwarded, nothing rescoped - because a seam
+    /// printed over a single clause stands for content that is not there.
+    let detail (s: WorkSandboxStarted) : string option =
+        let forwarded =
+            match s.Forwarded with
+            | [] -> None
+            | names -> Some (sprintf "forwarding %s" (String.concat ", " names))
+        // Where this host could not give what the sandbox's resources named. On the start
+        // NOTE rather than a note of its own, because it is a property of THIS sandbox coming
+        // up - a separate item would be a second thing to correlate, and the correlation is
+        // the whole content of it.
+        let realisation =
+            match s.Realisation with
+            | [] -> None
+            | lines ->
+                Some (
+                    sprintf
+                        "where this host could not give exactly what was asked: %s"
+                        (String.concat "; " lines))
+        let checkout = s.Checkout |> Option.map (sprintf "the checkout is at %s in here")
+        // What it is for, where its checkout sits, whose credential rode in, and what this
+        // host could not give exactly are separate facts, not clauses chained onto the
+        // headline - they ride here, semicolon-joined, so each stays its own fact.
+        match List.choose id [ s.Description; checkout; forwarded; realisation ] with
+        | [] -> None
+        | parts -> Some (String.concat "; " parts)
