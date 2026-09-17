@@ -1514,6 +1514,20 @@ module Style =
     /// avatar gutter so the reading edge lines up with message bodies.
     let actNote =
         cls [ itemGround; readingColumn; "pl-[32px] max-md:pl-12"; "flex flex-col gap-0.5" ]
+    /// The pulse for an act in flight, sat in the LEFT gutter rather than trailing the line.
+    /// The box spans exactly the margin the text clears (`pl-[32px]`, `pl-12` on a phone) and
+    /// the first line's own height, so `justify-center`/`items-center` put the dot on the dead
+    /// centre of both — the gutter across, the headline down — however wide the platform's
+    /// gutter is. `top-2` matches `itemGround`'s `py-2`, so it sits on the first line even when
+    /// a detail wraps below. Out of the text flow and unclickable; the reader's cue is the dot,
+    /// the screen-reader's is the `sr-only` word it wraps.
+    let actNoteRunning =
+        cls [ "absolute left-0 top-2 h-5 w-8 max-md:w-12"
+              "flex items-center justify-center text-blue pointer-events-none" ]
+    /// The dot itself: the same size and pulse as elsewhere, but no inline margin or baseline
+    /// nudge — those are for a dot that rides text, and this one is centred by its box.
+    let actNoteRunningDot =
+        "inline-block w-1.5 h-1.5 rounded-full bg-current animate-pulse2 motion-reduce:animate-none"
     /// Sentence case, deliberately. This wore the caps LABEL voice, and a label voice is for
     /// two or three words: `STARTED SANDBOX WORK (DOCKER), FORWARDING ANTHROPIC_API_KEY FROM
     /// ADA` is a line nobody reads, because uppercase flattens the word shapes a reader scans
