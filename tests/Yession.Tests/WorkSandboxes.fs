@@ -846,7 +846,7 @@ let private timelineTests =
                         { MessageId = MessageId.create "msg-5" |> expect
                           Sandbox = sandbox "test"
                           Terminal = TerminalId.create "term-1" |> expect
-                          Block = BlockId.create "b-1" |> expect
+                          Block = Some (BlockId.create "b-1" |> expect)
                           Owner = CredentialFor.Person (Principal.User (UserId.create "ada" |> expect))
                           Repo = "octo/hello"
                           Actor = ActorRef.Agent } }
@@ -856,6 +856,33 @@ let private timelineTests =
                 Expect.equal item.Body "pushed to octo/hello with user:ada's github credential" "whose, and where"
                 Expect.equal item.Author ActorRef.Agent "by whoever's act the block was"
                 Expect.isTrue (match item.Kind with ConversationItemKind.ActNote _ -> true | _ -> false) "an act"
+            | other -> failwithf "expected one note, got %A" other
+
+        // No block says what ran when the push was typed under a lease, so the line says
+        // where it was typed instead.
+        testCase "a push typed under a lease says so, since no block will" <| fun () ->
+            let envelope : EventEnvelope<SessionEvent> =
+                { EventId = EventId.fresh ()
+                  SessionId = sessionId
+                  Offset = EventOffset.create 6L |> expect
+                  Actor = ada
+                  Timestamp = fixedClock ()
+                  Event =
+                    SessionEvent.GitCredentialSpent
+                        { MessageId = MessageId.create "msg-6" |> expect
+                          Sandbox = sandbox "test"
+                          Terminal = TerminalId.create "term-1" |> expect
+                          Block = None
+                          Owner = CredentialFor.Person (Principal.User (UserId.create "ada" |> expect))
+                          Repo = "octo/hello"
+                          Actor = ada } }
+            let proj, _ = ConversationProjection.applyEvents None [ envelope ] ConversationProjection.empty
+            match proj.Items with
+            | [ item ] ->
+                Expect.equal
+                    item.Body
+                    "pushed to octo/hello with user:ada's github credential, holding the terminal"
+                    "whose, where, and that it was typed rather than queued"
             | other -> failwithf "expected one note, got %A" other
 
         testCase "a start with nothing forwarded says nothing about credentials" <| fun () ->
@@ -1086,7 +1113,7 @@ let private lentTests =
                 let log = newLog ()
                 let sandboxes, _ = registry log [ githubCredential "route" ]
                 let! _ = sandboxes.Ensure caller (sandbox "test") (forwarding [ "github" ])
-                let! lent = sandboxes.Loans.Lend (sandbox "test") terminal block (Authority.agentFor bob)
+                let! lent = sandboxes.Loans.Lend (sandbox "test") terminal (Some block) (Authority.agentFor bob)
                 Expect.equal
                     lent.Vars
                     [ "LENT_TO", Some (Principal.token bob) ]
@@ -1098,7 +1125,7 @@ let private lentTests =
                 let log = newLog ()
                 let sandboxes, _ = registry log [ githubCredential "route" ]
                 let! _ = sandboxes.Ensure caller (sandbox "test") SandboxRequest.defaults
-                let! lent = sandboxes.Loans.Lend (sandbox "test") terminal block (Authority.agentFor bob)
+                let! lent = sandboxes.Loans.Lend (sandbox "test") terminal (Some block) (Authority.agentFor bob)
                 Expect.equal lent BlockEnv.none "a source the sandbox does not forward is not asked"
             }
 
@@ -1106,7 +1133,7 @@ let private lentTests =
             async {
                 let log = newLog ()
                 let sandboxes, _ = registry log [ githubCredential "route" ]
-                let! lent = sandboxes.Loans.Lend (sandbox "nope") terminal block (Authority.agentFor bob)
+                let! lent = sandboxes.Loans.Lend (sandbox "nope") terminal (Some block) (Authority.agentFor bob)
                 Expect.equal lent BlockEnv.none "its environment refuses the spawn; the loan has nothing to add"
             }
     ]

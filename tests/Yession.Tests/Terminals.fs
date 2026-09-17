@@ -1953,7 +1953,7 @@ let private makeTerminalsBound (bound: (PeerId * UserId) list) (loans: SessionTe
 /// A lender that records what it was asked and answers with what it was given — the
 /// `BlockLoans` a case about the block's line, or about who a loan is asked for, hands in.
 let private lending (env: BlockEnv) =
-    let asked = ResizeArray<SandboxRef * TerminalId * BlockId * Authority> ()
+    let asked = ResizeArray<SandboxRef * TerminalId * BlockId option * Authority> ()
     let loans : SessionTerminals.BlockLoans =
         { Lend =
             fun sandbox terminal block authority ->

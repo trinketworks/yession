@@ -896,7 +896,13 @@ module ConversationProjection =
                     proj.Items
                     @ [ { MessageId = g.MessageId
                           Author = g.Actor
-                          Body = sprintf "pushed to %s with %s's github credential" g.Repo (CredentialFor.token g.Owner)
+                          Body =
+                            match g.Block with
+                            | Some _ -> sprintf "pushed to %s with %s's github credential" g.Repo (CredentialFor.token g.Owner)
+                            // Typed under a lease: no block on the timeline says what ran,
+                            // so this line says where it was typed.
+                            | None ->
+                                sprintf "pushed to %s with %s's github credential, holding the terminal" g.Repo (CredentialFor.token g.Owner)
                           Status = Complete
                           Kind = ConversationItemKind.ActNote { Detail = None; Notable = false }
                           Offset = envelope.Offset

@@ -749,8 +749,10 @@ first's.
     environment, that block's loan: readable by everyone in the session and everything
     running in it — a block can read another block's live loan out of `/proc`, the same
     shared trust boundary Plan 14 states — and worth exactly "act as this sandbox's git at
-    this session's gateway" for as long as the sandbox runs. Keystrokes under a lease carry
-    no loan and are refused, until a lease lends the holder one. Only `github` is
+    this session's gateway" for as long as the sandbox runs. A lease taken at an idle prompt
+    lends its holder their own loan, typed in where the transcript cannot see it and returned
+    when the lease ends; taken over somebody else's running block or inside a program, it
+    lends nothing and a push typed there is refused in words. Only `github` is
     forwardable so far, and the gateway admits only git's three smart-HTTP requests to a
     repository path, so a cap is not a token for the rest of github.com.
   - **An external MCP server's read-only tools are not queries yet.** `readOnlyHint` is
