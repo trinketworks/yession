@@ -26,6 +26,7 @@
     <Compile Include="Emits.fs" />
     <Compile Include="EmitMacro.fs" />
     <Compile Include="EmitBody.fs" />
+    <Compile Include="Kept.fs" />
     <Compile Include="Population.fs" />
     <Compile Include="Expressions.fs" />
     <Compile Include="Environs.fs" />
