@@ -469,6 +469,19 @@ module Authority =
         | Authority.AgentFor owner -> CredentialFor.Person owner
         | Authority.ConfiguredBy (_, credential) -> credential
 
+    /// The same act with every party re-read through `f` — how an authority written by a
+    /// peer (the doc knows connections, nothing more) becomes the one the log records, with
+    /// the peer resolved to the user their join was attributed to. Every case, including the
+    /// credential a file's fold ran on: a rule that upgraded the author and left the
+    /// borrowed party alone would resolve an agent's command to nobody.
+    let map (f: Principal -> Principal) (authority: Authority) : Authority =
+        match authority with
+        | Authority.Own principal -> Authority.Own (f principal)
+        | Authority.AgentFor owner -> Authority.AgentFor (f owner)
+        | Authority.ConfiguredBy (repo, CredentialFor.Person principal) ->
+            Authority.ConfiguredBy (repo, CredentialFor.Person (f principal))
+        | Authority.ConfiguredBy (_, CredentialFor.Deployment) -> authority
+
 /// The name of one of the session's WorkSandboxes (Plan 15, stage 2). A session used to
 /// have exactly one, so it needed no name; now the agent can ask for a `test` sandbox
 /// beside the `default` one and get the SAME sandbox back on the second ask — which is

@@ -99,8 +99,17 @@ type SessionEvent =
     // stay the record of what the SANDBOX did. These record what a PARTY asked for: an
     // act, attributed, with its own MessageId so it reads in the timeline beside the repo
     // notes it is a sibling of.
+    // A sandbox coming up, and the two ways that ends. `Starting` opens a RUNNING act the
+    // moment the work begins; `Started` / `StartFailed` resolve that same act in place, keyed
+    // by a shared MessageId — which is what makes a slow act (a sandbox coming up) a task with
+    // a running state, rather than a fact that only appears once it is already over.
+    | WorkSandboxStarting of WorkSandboxStarting
     | WorkSandboxStarted of WorkSandboxStarted
+    | WorkSandboxStartFailed of WorkSandboxStartFailed
     | SandboxSetupQueued of SandboxSetupQueued
+    // A push from a block spent somebody's credential: the end of the chain from a person's
+    // message to a request at github.com, and the one hop nothing above records.
+    | GitCredentialSpent of GitCredentialSpent
     | WorkSandboxStopped of WorkSandboxStopped
     // A declaration that did NOT become a sandbox (Plan 27). The sibling above announces the
     // starts; until this, only the starts were announced — so a file with a typo in it read

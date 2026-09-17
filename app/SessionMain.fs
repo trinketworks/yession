@@ -15,6 +15,7 @@ open Yession.Domain.Link
 open Yession.Domain.Tools
 open Yession.Domain.Access
 open Yession.Domain.Prs
+open Yession.Domain.Terminals
 open Yession.SessionProcess
 open Yession.Host
 
@@ -577,13 +578,6 @@ let private ambientGitHubToken () : string option =
     | "" -> None
     | token -> Some token
 
-/// Whether this actor has a GitHub credential to lend at all — connected, or ambient. Asked
-/// at a sandbox's start so the refusal is said then, in words; the VALUE is resolved later,
-/// per request, by `resolveGitHubToken`, and a connected credential that will not resolve is
-/// reported there as the fault it is.
-let private holdsGitHubToken (credentialActor: CredentialFor) : bool =
-    (githubTargetFor credentialActor).IsSome || (ambientGitHubToken ()).IsSome
-
 let private resolveGitHubToken (credentialActor: CredentialFor) : Async<string option> =
     async {
         let targets = githubTargetFor credentialActor |> Option.toList
@@ -1107,60 +1101,114 @@ Async.StartImmediate (
         // each time, so a refresh reaches a sandbox already running and a sandbox's env
         // never holds a value worth printing.
         let! gitGateway = GitGateway.start "https://github.com"
+        // Who commits in a BLOCK are by: the account behind the credential the block's act
+        // spends, asked of GitHub once per person and kept — a profile does not change
+        // under a session. A miss is NOT kept: a person who connects github after their
+        // first block gets their name on the next one, not after a restart. Nobody's
+        // profile takes the four variables away, so a block cannot commit as whoever the
+        // shell was last lent to.
+        let identities = System.Collections.Generic.Dictionary<string, Map<string, string>> ()
+        let identityFor (owner: CredentialFor) : Async<BlockEnv> =
+            async {
+                let key = CredentialFor.token owner
+                let! identity =
+                    async {
+                        match identities.TryGetValue key with
+                        | true, known -> return Some known
+                        | _ ->
+                            match! resolveGitHubToken owner with
+                            | None -> return None
+                            | Some token ->
+                                match! GitHubConnection.profile token with
+                                | Ok profile ->
+                                    let name, email = GitHubConnection.commitIdentity profile
+                                    let identity = Repos.identityEnv name email
+                                    identities.[key] <- identity
+                                    return Some identity
+                                | Error reason ->
+                                    eprintfn "[session %s] no commit identity for %s: %s" (SessionId.value sessionId) key reason
+                                    return None
+                    }
+                return
+                    { BlockEnv.GitConfig = None
+                      BlockEnv.Vars =
+                        Repos.identityNames
+                        |> List.map (fun name -> name, identity |> Option.bind (Map.tryFind name)) }
+            }
+        // The route's host, as THIS sandbox's git reaches it — or none, for a backend with
+        // no way to the gateway, which is the one thing a start refuses over.
+        let gatewayHostFor (sandbox: SandboxRef) : string option =
+            SandboxRuntime.scopedBackend workBackend (SandboxRef.scope sandbox)
+            |> Sandboxes.hostAddressHere (Interop.hostname ())
         let forwardableCredentials : WorkSandboxes.CredentialSource list =
             [ { Name = "github"
+                // The route, and only the route: nobody's credential is named at a start.
+                // Each block is lent its own act's below, and a sandbox whose blocks are
+                // all somebody with no github connected is a sandbox where every push is
+                // refused in words — not one that never came up.
                 Provision =
-                    fun owner sandbox ->
+                    fun sandbox ->
                         async {
-                            if not (holdsGitHubToken owner) then return WorkSandboxes.CredentialForwarding.NotHeld
-                            else
+                            match gatewayHostFor sandbox with
+                            | None ->
                                 let backend = SandboxRuntime.scopedBackend workBackend (SandboxRef.scope sandbox)
-                                match Sandboxes.hostAddressHere (Interop.hostname ()) backend with
-                                | None ->
-                                    return
-                                        WorkSandboxes.CredentialForwarding.Unforwardable (
-                                            sprintf
-                                                "github cannot be forwarded into a %s sandbox: its git would have no route to this session's gateway"
-                                                (SandboxBackend.describe backend))
-                                | Some host ->
-                                    let cap =
-                                        gitGateway.Grant
-                                            sandbox
-                                            { Owner = owner
-                                              Resolve = fun () -> resolveGitHubToken owner
-                                              Refused = fun () -> reportGitHubNetworkFailure owner "the git gateway was answered 401" }
-                                    // Who commits made in there are BY: the account behind
-                                    // the credential that will push them, asked of GitHub
-                                    // once, at the start. Not a condition of the start — a
-                                    // sandbox whose author could not be read still has its
-                                    // route, and git's own "please tell me who you are" is
-                                    // the legible answer to the one thing missing.
-                                    let! identity =
-                                        async {
-                                            match! resolveGitHubToken owner with
-                                            | None -> return Map.empty
-                                            | Some token ->
-                                                match! GitHubConnection.profile token with
-                                                | Ok profile ->
-                                                    let name, email = GitHubConnection.commitIdentity profile
-                                                    return Repos.identityEnv name email
-                                                | Error reason ->
-                                                    eprintfn
-                                                        "[session %s] no commit identity for sandbox '%s': %s"
-                                                        (SessionId.value sessionId)
-                                                        (SandboxRef.render sandbox)
-                                                        reason
-                                                    return Map.empty
-                                        }
-                                    return
-                                        WorkSandboxes.CredentialForwarding.Forwarded
-                                            { Env = identity
-                                              GitConfig = GitGateway.gitConfig host gitGateway.Port cap
-                                              // The route's host, for a backend whose egress
-                                              // would otherwise refuse it (srt).
-                                              Domains = [ host ] }
+                                return
+                                    WorkSandboxes.CredentialForwarding.Unforwardable (
+                                        sprintf
+                                            "github cannot be forwarded into a %s sandbox: its git would have no route to this session's gateway"
+                                            (SandboxBackend.describe backend))
+                            | Some host ->
+                                let cap = gitGateway.Grant sandbox
+                                return
+                                    WorkSandboxes.CredentialForwarding.Forwarded
+                                        { Env = Map.empty
+                                          GitConfig = GitGateway.gitConfig host gitGateway.Port cap
+                                          // The route's host, for a backend whose egress
+                                          // would otherwise refuse it (srt).
+                                          Domains = [ host ] }
                         }
-                Revoke = gitGateway.Revoke } ]
+                Revoke = gitGateway.Revoke
+                // What a block is lent: the loan its git carries on every request to the
+                // gateway, answered there with the credential of the block's act — and the
+                // commit identity behind that same credential. The push a loan is spent on
+                // is written to the log by the block's author, which is how the person
+                // whose credential it was finds out.
+                Lend =
+                    fun authority sandbox terminal block ->
+                        async {
+                            let owner = Authority.credential authority
+                            let! identity = identityFor owner
+                            match gatewayHostFor sandbox with
+                            | None -> return identity
+                            | Some host ->
+                                let secret =
+                                    gitGateway.Lend
+                                        sandbox
+                                        terminal
+                                        { Owner = owner
+                                          Resolve = fun () -> resolveGitHubToken owner
+                                          Refused = fun () -> reportGitHubNetworkFailure owner "the git gateway was answered 401"
+                                          Spent =
+                                            fun repo ->
+                                                async {
+                                                    let! _ =
+                                                        log.Append
+                                                            (Authority.author authority)
+                                                            (SessionEvent.GitCredentialSpent
+                                                                { GitCredentialSpent.MessageId =
+                                                                    MessageId.create (string (System.Guid.NewGuid ()))
+                                                                    |> Result.defaultWith failwith
+                                                                  Sandbox = sandbox
+                                                                  Terminal = terminal
+                                                                  Block = block
+                                                                  Owner = owner
+                                                                  Repo = repo
+                                                                  Actor = Authority.author authority })
+                                                    return ()
+                                                } }
+                                return { identity with GitConfig = Some (GitGateway.loanConfig host gitGateway.Port secret) }
+                        }
+                Retire = gitGateway.Retire } ]
         let! host = Host.startFull clock runAgent summarize (Some (makeSandboxes forwardableCredentials)) (secretsCapabilitiesFor sessionId) (Some log) (Some docStore) (Some transcriptStore) reportName reportActivity telemetry.Emit subscribeNotifications mcpServers connectionRoutes sessionId auth sessionMount managerOrigin ephemeralStorage (resourceProfile |> Option.bind (fun file -> file.Guidance)) port
         // The Host built the sandbox registry (it owns the log), so the cell the turn
         // capabilities and the `work_sandboxes` query read is filled here — before the

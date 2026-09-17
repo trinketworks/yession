@@ -1,6 +1,5 @@
 module Yession.Analyzers.Expressions
 
-open System.Collections.Concurrent
 open System.IO
 open FSharp.Analyzers.SDK
 open FSharp.Compiler.CodeAnalysis
@@ -18,7 +17,8 @@ open FSharp.Compiler.Text
 /// always here.
 ///
 /// Read once per project and kept, for the same reason the population is: the walk is over
-/// every expression in every file, and the answer is the same for each of them.
+/// every expression in every file, and the answer is the same for each of them. Kept for as
+/// long as that project is the one being analyzed, and no longer — see `Kept`.
 
 /// One call, as the caller wrote it.
 type Call =
@@ -71,10 +71,10 @@ let private walk (results: FSharpCheckProjectResults) =
     [ for file in results.AssemblyContents.ImplementationFiles do
           yield! declared file.Declarations ]
 
-let private cache = ConcurrentDictionary<string, Binding list> ()
+let private kept = Kept.Answer<Binding list> ()
 
 let of' (ctx: CliContext) =
-    cache.GetOrAdd (ctx.ProjectOptions.ProjectFileName, fun _ -> walk ctx.CheckProjectResults)
+    kept.For (ctx.ProjectOptions.ProjectFileName, fun () -> walk ctx.CheckProjectResults)
 
 /// The file something is written in, spelled the way a person here would say it: relative to
 /// the repository, so a message can name two of them and be read at a glance.

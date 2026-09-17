@@ -97,6 +97,13 @@ let private lastRefusal (events: SessionEvent list) (repo: RepoRef) (sandbox: Sa
         | SessionEvent.RepoConfigRefused r when
             RepoRef.value r.Repo = RepoRef.value repo
             && (r.Sandbox |> Option.map SandboxRef.render) = rendered -> Some (Some r.Reason)
+        // A start that ran and failed already accounts for itself — it opened a running act
+        // and resolved it to a failure a person reads on the timeline. Counting it here means
+        // the fold sees this reason as already told and does not ALSO file a
+        // `RepoConfigRefused` saying the same thing, which is the two-accounts-of-one-fault
+        // this dedup exists to prevent.
+        | SessionEvent.WorkSandboxStartFailed f when Some (SandboxRef.render f.Sandbox) = rendered ->
+            Some (Some f.Reason)
         | SessionEvent.WorkSandboxStarted started when Some (SandboxRef.render started.Sandbox) = rendered ->
             Some None
         | _ -> None)
@@ -334,7 +341,20 @@ let create
                                             | CommandRunning -> None
                                         return Some { Repo = repo; Sandbox = Some ref; Problem = problem }
                             })
-                        |> Async.Sequential
+                        // In PARALLEL, so a repo's sandboxes come up at once rather than one
+                        // waiting for the one before it to finish — the `dev` and `gate` of a
+                        // checkout no longer queue behind each other. Safe because each
+                        // declaration is a DISTINCT sandbox ref: `WorkSandboxes.ensure`'s
+                        // find-then-start cannot collide across two names, this host is
+                        // single-threaded (Fable/JS — asyncs interleave only at I/O awaits, so
+                        // the shared registry list is never torn), and `EventStore.append` is
+                        // synchronous, so concurrent starts cannot interleave a log line. The
+                        // one-fold-at-a-time guard is untouched: this parallelism is WITHIN a
+                        // fold, over refs a single fold owns. `Async.Parallel` preserves input
+                        // order in its result, so `outcomes` reads the same; only the starts'
+                        // own timeline events interleave by completion, which is the coming-up
+                        // happening at once made visible.
+                        |> Async.Parallel
                     outcomes <- fileProblems @ (declarations |> Array.toList |> List.choose id)
                     declaredRefs <- declared |> Map.toList |> List.map (fst >> SandboxRef.render) |> Set.ofList
                     // Say the refusals that are NEW. A start already announces itself, so

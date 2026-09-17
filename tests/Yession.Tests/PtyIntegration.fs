@@ -87,6 +87,7 @@ let private runOnPty (executable: string) (arguments: string list) : Async<Resul
 /// prompt mark went unnoticed through every green run.
 let private withShellTerminal
     (shell: TerminalShell)
+    (loans: SessionTerminals.BlockLoans)
     (prepare: SessionTerminals.SessionTerminals -> Async<unit>)
     (name: string)
     (body: SessionTerminals.SessionTerminals
@@ -145,6 +146,9 @@ let private withShellTerminal
                 SessionTerminals.create
                     log
                     (fun _ -> environment)
+                    // Nobody here is attributed; this fixture is about the pty.
+                    Principal.Peer
+                    loans
                     (fun _ _ -> transcript)
                     // The reader over the same records the writer above appends to. This
                     // fixture is about the pty, so it is the smallest honest one: a half-open
@@ -184,7 +188,7 @@ let private withShellTerminal
     }
 
 let private withPreparedTerminal prepare name body =
-    withShellTerminal TerminalShell.bash prepare name body
+    withShellTerminal TerminalShell.bash SessionTerminals.BlockLoans.none prepare name body
 
 let private withLiveTerminal (name: string) body =
     withPreparedTerminal (fun _ -> async { return () }) name body
@@ -194,7 +198,13 @@ let private withLiveTerminal (name: string) body =
 /// under bash, which is the right fixture for the bash dialect's own hooks and the wrong one
 /// for asking whether what ships works.
 let private withPosixTerminal (name: string) body =
-    withShellTerminal TerminalShell.posix (fun _ -> async { return () }) name body
+    withShellTerminal TerminalShell.posix SessionTerminals.BlockLoans.none (fun _ -> async { return () }) name body
+
+/// A terminal whose blocks are lent whatever `lent` holds when each is asked — a cell, so
+/// a case can lend one thing to the first block and another to the next.
+let private withLendingTerminal (shell: TerminalShell) (lent: BlockEnv ref) (name: string) body =
+    let loans : SessionTerminals.BlockLoans = { Lend = (fun _ _ _ _ -> async { return lent.Value }); Retire = ignore }
+    withShellTerminal shell loans (fun _ -> async { return () }) name body
 
 /// A queue entry for a terminal, as the drain would hand one over.
 let private queueEntry (terminal: TerminalId) (author: Principal) (n: string) : PendingAct =
@@ -840,9 +850,67 @@ let private throughTheHostTests =
             }
     ]
 
+/// What a block is lent reaches the shell that runs it — under bash, whose dialect has a
+/// hook, and under the POSIX sh production composes, whose start mark rides in the line
+/// beside the loan.
+let private lentTests =
+    let ada = Principal.Peer (PeerId.create "ada" |> expect)
+    let identity (name: string option) =
+        { BlockEnv.GitConfig = None; BlockEnv.Vars = [ "GIT_AUTHOR_NAME", name ] }
+    let printed (records: ResizeArray<TranscriptRecord>) =
+        records
+        |> Seq.filter (fun r -> r.Kind = TranscriptOutput)
+        |> Seq.map (fun r -> r.Data)
+        |> String.concat ""
+    testList "What a block is lent, on a real pty" [
+        for shell, label in [ TerminalShell.bash, "bash"; TerminalShell.posix, "sh" ] do
+            testCaseAsync (sprintf "%s: a block sees what it was lent, and one lent none has it taken away" label) <|
+                (let lent = ref (identity (Some "Ada O'Lovelace"))
+                 withLendingTerminal shell lent (label + "-lent-identity") (fun terminals id records _ _ _ ->
+                    async {
+                        do! terminals.RunBlock id (queueEntry id ada "1") "echo \"author=$GIT_AUTHOR_NAME\"" ignore
+                        let! first = printedOutput records "author=Ada O'Lovelace"
+                        Expect.isTrue first (sprintf "the first block was lent a name; transcript: %s" (printed records))
+                        lent.Value <- identity None
+                        do! terminals.RunBlock id (queueEntry id ada "2") "echo \"author=${GIT_AUTHOR_NAME-unset}\"" ignore
+                        let! second = printedOutput records "author=unset"
+                        Expect.isTrue second (sprintf "the second was lent none, so the shell no longer holds one; transcript: %s" (printed records))
+                    }))
+
+            testCaseAsync (sprintf "%s: the loan hands $? through, for a block that asks" label) <|
+                withLendingTerminal shell (ref (identity (Some "Ada"))) (label + "-lent-status") (fun terminals id records _ _ _ ->
+                    async {
+                        do! terminals.RunBlock id (queueEntry id ada "1") "false; __y_env 'GIT_AUTHOR_NAME=x'; echo \"code=$?\"" ignore
+                        let! seen = printedOutput records "code=1"
+                        Expect.isTrue seen (sprintf "exporting is not a command that ran; transcript: %s" (printed records))
+                    })
+
+            testCaseAsync (sprintf "%s: every block writes the one git-config slot after what the shell was spawned with" label) <|
+                (let loan =
+                    { BlockEnv.GitConfig = Some ("http.http://gw:1/.extraheader", "X-Yession-Loan: t1")
+                      BlockEnv.Vars = [] }
+                 withLendingTerminal shell (ref loan) (label + "-lent-slot") (fun terminals id records _ _ _ ->
+                    async {
+                        do! terminals.RunBlock id (queueEntry id ada "1") "echo \"count=$GIT_CONFIG_COUNT\"" ignore
+                        do! terminals.RunBlock id (queueEntry id ada "2") "echo \"count=$GIT_CONFIG_COUNT\"" ignore
+                        do! terminals.RunBlock id (queueEntry id ada "3") "eval echo \"value=\\$GIT_CONFIG_VALUE_$((GIT_CONFIG_COUNT-1))\"" ignore
+                        let counts =
+                            (printed records).Split '\n'
+                            |> Array.map (fun line -> line.Trim ())
+                            |> Array.filter (fun line -> line.StartsWith "count=")
+                            |> List.ofArray
+                        match counts with
+                        | [ first; second ] -> Expect.equal first second "the second block did not push the count past the first's"
+                        | other -> failwithf "expected two counts, got %A in: %s" other (printed records)
+                        let! value = printedOutput records "value=X-Yession-Loan: t1"
+                        Expect.isTrue value (sprintf "and the slot below the count holds the loan; transcript: %s" (printed records))
+                    }))
+    ]
+
 let tests =
     testList "Pty (Plan 13)" [
         throughTheHostTests
+        lentTests
 
         testCaseAsync "the host backend offers a pty at all" <|
             async {

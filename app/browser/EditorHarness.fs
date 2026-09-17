@@ -1049,7 +1049,7 @@ let private launchModel : ClientModel =
                 (ListingLoaded
                     // Long enough that the foot starts outside the watch's own reach — the
                     // page is asked for while the foot is still a screenful below (see
-                    // `watch-listing-foot.mjs`), which is the whole point of it and also what
+                    // `Render.watchListingFoot`), which is the whole point of it and also what
                     // makes a short fixture unable to tell reaching the foot apart from the
                     // foot having been within reach all along.
                     { Repos.RepoPage.Candidates =

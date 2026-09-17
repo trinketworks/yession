@@ -51,6 +51,37 @@ and SandboxSetupQueued =
       Problem : string option
       Actor : ActorRef }
 
+/// A sandbox is COMING UP: emitted the moment the work to start it begins, before the
+/// container exists and the checkout is in place — the half of the story `WorkSandboxStarted`
+/// used to leave untold. It carries the SAME `MessageId` the matching start (or failure)
+/// will, so the timeline opens one running item here and resolves that same item when the
+/// sandbox is up or could not come up, rather than a second line appearing beside it. That
+/// is the same in-place lifecycle an agent message has (`AgentMessageStarted` → `Completed`),
+/// and the reason an act can now be a task with a running state at all.
+and WorkSandboxStarting =
+    { MessageId : MessageId
+      Sandbox : SandboxRef
+      /// The backend it is coming up on, so the running line already says what confinement it
+      /// will get rather than waiting for the start to say it.
+      Backend : string
+      /// What the declaration said this sandbox is FOR, when it said anything — carried for
+      /// parity with the start it resolves into, so the running line and the started line read
+      /// the same.
+      Description : string option
+      Actor : ActorRef }
+
+/// A sandbox that began coming up (`WorkSandboxStarting`) could NOT — the container failed to
+/// come up, or failed its own checks. Carries the starting item's `MessageId`, so the running
+/// line it opened resolves to a failure in place rather than spinning forever. The fold that
+/// re-reads a repo's declarations (`RepoSandboxes`) recognises this as the account of the
+/// failure, so it does not also file a `RepoConfigRefused` saying the same thing twice.
+and WorkSandboxStartFailed =
+    { MessageId : MessageId
+      Sandbox : SandboxRef
+      /// Why it could not come up — the same sentence the start attempt returned.
+      Reason : string
+      Actor : ActorRef }
+
 and WorkSandboxStarted =
     { MessageId : MessageId
       /// Which sandbox, scope included. The wire form is `SandboxRef.render`, and it is
@@ -80,15 +111,10 @@ and WorkSandboxStarted =
       /// The credential NAMES forwarded into it — never a value, and never a token
       /// shape that could be mistaken for one. Forwarding is a fact about the sandbox
       /// that outlives the turn that asked for it, so the log has to carry it; what the
-      /// credential IS belongs only in the sandbox's env.
+      /// credential IS belongs only in the sandbox's env. WHOSE is not a fact about the
+      /// sandbox at all: a forward is a route, and each block's request spends the
+      /// credential of the act that made it (`GitCredentialSpent`).
       Forwarded : string list
-      /// Whose credentials were forwarded. Distinct from `Actor` on purpose: for an
-      /// agent-issued start the AGENT is the acting party while the credentials are the
-      /// turn human's (Plan 08 — no borrowing, and the agent has no scope of its own).
-      /// `None` when nothing was forwarded, because then nobody's were. The deployment's
-      /// own is what a file's boot fold forwards, with nobody named — and it is named as
-      /// that, not folded into "nothing".
-      CredentialOwner : CredentialFor option
       /// Where this host could not give exactly what the sandbox's resources named, one line
       /// each. Empty is the ordinary case and says nothing.
       ///

@@ -345,6 +345,42 @@ let foldTests =
                 Expect.equal (seen.Count) 3 "every declaration in every file, and nothing else"
             }
 
+        // A repo's sandboxes come up AT ONCE, not one waiting on the one before it — the
+        // `dev` and `gate` of a checkout no longer queue behind each other. Pinned by a gate
+        // whose calls each block until TWO have arrived: a parallel fold starts both, so both
+        // arrive and proceed; a sequential fold starts the second only once the first has
+        // finished, so it parks at one and never reaches two. Reverting the fold to
+        // `Async.Sequential` turns this red.
+        testCaseAsync "a repo's sandboxes come up in parallel, not one waiting on the next" <|
+            async {
+                let r = repo "octo/hello"
+                let dir = checkout r (Some "version: 2\nsandboxes:\n  dev: {}\n  gate: {}\n")
+                let mutable arrived = 0
+                let waiters = ResizeArray<unit -> unit> ()
+                let barrier : RunGatedCommand =
+                    fun call ->
+                        async {
+                            do!
+                                Async.FromContinuations (fun (cont, _, _) ->
+                                    arrived <- arrived + 1
+                                    if arrived >= 2 then
+                                        cont ()
+                                        for w in waiters do w ()
+                                        waiters.Clear ()
+                                    else
+                                        waiters.Add cont)
+                            return Ok { Handle = None; Tool = call.Tool; Summary = call.Summary; Status = CommandRan "ok" }
+                        }
+                let folded =
+                    RepoSandboxes.create dir (cell (Some (reposOver dir [ r ]))) (cell WorkSandboxes.unavailable) barrier (foldLog ()) noCapabilities
+                // Started as a child: a sequential fold would deadlock here (the first call
+                // waits on a second the fold has not started), so we do NOT await it to a
+                // finish — we check that both declarations reached the gate.
+                let! _ = Async.StartChild (folded.Fold CredentialFor.Deployment)
+                do! Async.Sleep 200
+                Expect.equal arrived 2 "both sandboxes reached the gate before either finished; a sequential fold parks at one"
+            }
+
         // Attribution is the point of `ActorRef.Configured`: freshly-cloned code is less
         // trusted than the agent, so the timeline has to say which file asked.
         testCaseAsync "each ask is authored by the file that made it" <|

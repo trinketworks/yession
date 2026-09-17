@@ -631,10 +631,12 @@ first's.
     Forwarding itself shipped as `start_work_sandbox`'s `forward` argument
     (`app/WorkSandboxes.fs`), so a sandbox the agent asked for can carry `github` — but
     `default` is the one nobody asks for, and it is created with `Forwarded = []`. Its
-    terminals do local git only until somebody starts a named sandbox. A sandbox that
-    forwards `github` is told who its commits are by — the GitHub account behind the
-    credential, read once at the start (`GitHubConnection.commitIdentity`) — but one that
-    forwards nothing has no author, and `Co-Authored-By` for the agent is absent everywhere.
+    terminals do local git only until somebody starts a named sandbox. In a sandbox that
+    forwards `github`, every BLOCK is told who its commits are by — the GitHub account behind
+    the credential the block's act runs on (`GitHubConnection.commitIdentity`), exported at
+    the head of the block's line by `__y_env` and taken away when nobody's is known — but a
+    sandbox that forwards nothing has no author, and `Co-Authored-By` for the agent is absent
+    everywhere.
   - **A forwarded `github` credential reaches every backend by the host address its
     sandbox can use.** Forwarding is a route through the session's git gateway
     (`app/GitGateway.fs`): the sandbox's git is told one `insteadOf` and the credential
@@ -736,11 +738,20 @@ first's.
     longer enters the sandbox: `github` forwards as one `insteadOf` naming the session's git
     gateway under a per-sandbox capability, the gateway resolves the credential on every
     request (so a refresh under Plan 21 reaches a running sandbox, and a revocation at the
-    provider is felt on the next push), and `stop_work_sandbox` revokes the route. What the
-    sandbox holds is the cap: readable by everyone in the session and everything running in
-    it — the same shared trust boundary Plan 14 states — and worth exactly "act as this
-    sandbox's git at this session's gateway" for as long as the sandbox runs. Only `github`
-    is forwardable so far, and the gateway admits only git's three smart-HTTP requests to a
+    provider is felt on the next push), and `stop_work_sandbox` revokes the route. WHOSE
+    credential answers is the block's, not the sandbox's: every block's line exports a
+    per-block loan (`__y_env`, one `http.<gateway>.extraheader`) into its process tree, the
+    gateway answers a request from the loan it carries and from nothing else — no loan, no
+    credential, in words — and a loan is returned when the next block on that terminal
+    starts, so a `git push &` a block left running still spends its own act's credential.
+    A push writes `GitCredentialSpent` to the log, which is where the person whose
+    credential it was finds out. What the sandbox holds is the cap and, in each block's
+    environment, that block's loan: readable by everyone in the session and everything
+    running in it — a block can read another block's live loan out of `/proc`, the same
+    shared trust boundary Plan 14 states — and worth exactly "act as this sandbox's git at
+    this session's gateway" for as long as the sandbox runs. Keystrokes under a lease carry
+    no loan and are refused, until a lease lends the holder one. Only `github` is
+    forwardable so far, and the gateway admits only git's three smart-HTTP requests to a
     repository path, so a cap is not a token for the rest of github.com.
   - **An external MCP server's read-only tools are not queries yet.** `readOnlyHint` is
     declared, not inferred, precisely so a third-party server's queries could be listed into

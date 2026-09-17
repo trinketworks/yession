@@ -1,6 +1,5 @@
 module Yession.Analyzers.Population
 
-open System.Collections.Concurrent
 open System.IO
 open FSharp.Analyzers.SDK
 open FSharp.Compiler.CodeAnalysis
@@ -12,7 +11,8 @@ open FSharp.Compiler.Text
 ///
 /// Two rules want this and a third is likely, so it is one module rather than a copy each. The
 /// walk is not cheap — it reads every referenced assembly — and the answer is the same for
-/// every file in a project, so it is done once per project and kept.
+/// every file in a project, so it is done once per project and kept for as long as that
+/// project is the one being analyzed (`Kept`, which says why the lifetime is the point).
 
 /// Where a declaration's name can be brought into scope. Not where it is USED: where a file
 /// could `open` its way to it, which is the question these rules ask and the one accessibility
@@ -165,7 +165,7 @@ let private walk (name: string) (root: string) (results: FSharpCheckProjectResul
     |> Seq.distinctBy (fun d -> d.Owner, d.Where)
     |> List.ofSeq
 
-let private cache = ConcurrentDictionary<string, Declaration list> ()
+let private kept = Kept.Answer<Declaration list> ()
 
 let of' (ctx: CliContext) =
     let project = ctx.ProjectOptions.ProjectFileName
@@ -173,7 +173,7 @@ let of' (ctx: CliContext) =
     match repositoryOf (Path.GetDirectoryName project) with
     | None -> []
     | Some root ->
-        cache.GetOrAdd (project, fun _ -> walk (Path.GetFileNameWithoutExtension project) root ctx.CheckProjectResults)
+        kept.For (project, fun () -> walk (Path.GetFileNameWithoutExtension project) root ctx.CheckProjectResults)
 
 /// Where a project's one verdict is reported: its last hand-written source file. A
 /// whole-population answer is the same for every file in the project, so emitting it from each

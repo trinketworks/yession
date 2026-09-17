@@ -648,6 +648,26 @@ module SessionTerminals =
             |> System.String
         "\u0015" + kept + "\r" 
 
+    /// What a block is lent for its act, in the sandbox its terminal runs in. The manager
+    /// asks once per block, after the classifier has approved it and before the line is
+    /// typed, and puts the answer at the head of the line (`Marks.envLine`) — so a loan is
+    /// a fact about a BLOCK, carried by its process tree, never about a moment on the
+    /// terminal. Who lends what is the composition's: this seam only knows that a block
+    /// has an act and a sandbox, and that its shell needs telling.
+    type BlockLoans =
+        { Lend : SandboxRef -> TerminalId -> BlockId -> Authority -> Async<BlockEnv>
+          /// Whatever this terminal's last block was lent is returned: the terminal closed,
+          /// or a person took its keyboard — and what they type is nobody's act. Lending the
+          /// next block returns the last on its own; this is for the ends that lend nothing.
+          Retire : TerminalId -> unit }
+
+    module BlockLoans =
+
+        /// A session that lends nothing — every block runs on what its shell was spawned with.
+        let none : BlockLoans =
+            { Lend = fun _ _ _ _ -> async { return BlockEnv.none }
+              Retire = ignore }
+
     type SessionTerminals =
         { /// Open a terminal over a SOURCE (Plan 16, part D). `SandboxShell name` ensures
           /// THAT WorkSandbox exists first — opening one IS a need, so a session where
@@ -832,8 +852,9 @@ module SessionTerminals =
     ///
     /// `openTerminals` seeds the set left open by a previous process (folded from the
     /// durable log at boot) so `ReconcileAtBoot` can close them; `onRecord` broadcasts a
-    /// record after it is durable; `actorFor` resolves a peer to its attribution, exactly
-    /// as the message scheduler does.
+    /// record after it is durable; `principalFor` resolves a peer to its attribution,
+    /// exactly as the message scheduler does — applied to a block's authority at the
+    /// durable append, the one place the Process knows the binding.
     let create
         (log: EventLog<SessionEvent>)
         // Which sandbox a terminal runs in, resolved per terminal (Plan 15, stage 2). A
@@ -842,6 +863,16 @@ module SessionTerminals =
         // session does not have resolves to an environment that refuses with the reason,
         // so there is no second way for a terminal to be told no.
         (environmentFor: SandboxRef -> SessionEnvironment.SessionEnvironment)
+        // Who a peer IS: the user their join was attributed to, or the peer itself when
+        // nobody verified them. A doc entry can only name the connection that wrote it,
+        // and the credential a block spends is resolved from what the log says — so a
+        // peer left unresolved here is a person whose own command runs on nobody's.
+        (principalFor: PeerId -> Principal)
+        // What each block is lent for its act (`BlockLoans`): asked after the classifier
+        // and before the line is typed, put at the head of the line. Injected like the
+        // classifier is, and for the same reason — an actor that could start a block
+        // without asking would be a block running on whatever the shell happened to hold.
+        (loans: BlockLoans)
         (openTranscript: OpenTranscript)
         // Reading one back (Plan 19). The manager holds the WRITER for every live terminal
         // and none of the readers, because the two have opposite shapes — see
@@ -1670,6 +1701,9 @@ module SessionTerminals =
                     runningAuthor.Remove (TerminalId.value id) |> ignore
                     appliedSize.Remove (TerminalId.value id) |> ignore
                     busy <- Set.remove (TerminalId.value id) busy
+                    // A loan lives as long as the block's process tree can use it, and the
+                    // pty just died under that tree.
+                    loans.Retire id
                     // The lease goes with the terminal, and WITHOUT an event: `TerminalClosed`
                     // already clears the holder in the projection, so appending a release
                     // beside it would be two mechanisms for one fact — free to disagree the
@@ -1722,12 +1756,28 @@ module SessionTerminals =
                     appliedSize.[key] <- size
                 | _ -> ()
 
+        /// A queued act's authority as the log records it: each peer in it resolved to the
+        /// user their join was attributed to, by the rule the message scheduler stamps
+        /// `MessageSent.Author` with. The doc only ever knows connections, so an entry
+        /// arrives naming a peer — and `CredentialOwner.ofPrincipal` owns nothing for a
+        /// peer, so one left as-is would resolve a person's own command to the deployment's
+        /// scope. Idempotent: a user resolves to themselves.
+        let attributed (entry: PendingAct) : PendingAct =
+            { entry with
+                Authority =
+                    entry.Authority
+                    |> Authority.map (fun principal ->
+                        match principal with
+                        | Principal.Peer peer -> principalFor peer
+                        | Principal.User _ -> principal) }
+
         /// The refusal is the durable fact that consumes the entry — `consumedOf` reads
         /// `TerminalCommandRejected` exactly as it reads a start — attributed to the session,
         /// with the command snapshotted because the doc entry goes the moment this lands. Two
         /// callers: the classifier saying no inside a run, and the drain finding an entry
         /// whose terminal has closed.
         let refuse (terminalId: TerminalId) (entry: PendingAct) (command: string) (reason: string) : Async<unit> =
+            let entry = attributed entry
             appendAs
                 ActorRef.System
                 (SessionEvent.TerminalCommandRejected
@@ -1749,6 +1799,9 @@ module SessionTerminals =
                     // terminal shut and leave it alone.
                     return ()
                 | true, terminal ->
+                    // Resolved ONCE, up here, so the classifier, the flip policy, the block
+                    // event and a refusal all read the same parties.
+                    let entry = attributed entry
                     let transcript = terminal.Transcript
                     busy <- Set.add key busy
                     // A shell still starting is waited for, busy: the block is this
@@ -1785,6 +1838,14 @@ module SessionTerminals =
                         // keeps whatever width the last one to ask for a width left it.
                         entry.Size |> Option.iter (applySize terminalId)
                         let blockId = mintBlockId ()
+                        // What this block is lent for its act, asked BEFORE the block is on
+                        // the record: a block that never started is a block that borrowed
+                        // nothing. A terminal in no sandbox has no shell to export into and
+                        // no blocks either (`Attached` sources are live-only).
+                        let! lent =
+                            match terminal.Sandbox with
+                            | Some sandbox -> loans.Lend sandbox terminalId blockId entry.Authority
+                            | None -> async { return BlockEnv.none }
                         // Taken BEFORE the command is written, which is forced by the anchor
                         // ordering below and is the honest reading anyway: on a pty the shell
                         // echoes the command itself, and that echo is part of what this block put
@@ -1876,7 +1937,7 @@ module SessionTerminals =
                                             // Nothing the shell prints from here to the start
                                             // mark is the block's (`Marks.lineFor`).
                                             awaitingStart.Add key |> ignore
-                                            pty.Write (writeFor (Marks.lineFor terminal.Spec.Name stdin command))
+                                            pty.Write (writeFor (Marks.lineFor terminal.Spec.Name stdin lent command))
                                             // The integration detector (Plan 13, stage 2f), armed
                                             // beside the block rather than awaited: a lost shell
                                             // must not make this block wait, because the block is
@@ -1923,9 +1984,9 @@ module SessionTerminals =
                                         (environmentOf terminalId).Spawn
                                             { Executable = terminal.Spec.Executable
                                               // No shell to render a line and nothing to mark
-                                              // its start: the wrapper alone, and every byte
-                                              // the process prints is the block's.
-                                              Arguments = terminal.Spec.Arguments @ [ BlockStdin.wrap stdin command ]
+                                              // its start: the loan, the wrapper, and every
+                                              // byte the process prints is the block's.
+                                              Arguments = terminal.Spec.Arguments @ [ Marks.spawnLineFor stdin lent command ]
                                               Env = Map.empty
                                               // A block is work, entrypoint or no shell.
                                               Via = Entrypoint
@@ -2018,6 +2079,10 @@ module SessionTerminals =
                     | None -> ()
                     if Option.isNone terminal.Shell then return Error "this terminal has no interactive shell"
                     else
+                        // What the holder types is nobody's act, and the shell still holds
+                        // the last block's loan: returned, so a `git push` typed here is
+                        // refused in words rather than answered with that block's credential.
+                        loans.Retire id
                         do! applyLease (TerminalLeases.take id by false (clock.Now ()) (markKeyframe id) leases)
                         return Ok ()
             }

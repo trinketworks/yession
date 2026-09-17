@@ -35,6 +35,21 @@ module Yession.Host.GitGateway
 // would answer on one and not the other. The route is a 128-bit capability minted per
 // sandbox, so what is exposed is "this session's gateway, to whoever holds a cap for it" —
 // the same trust a sandbox already has.
+//
+// WHOSE credential answers is not the sandbox's to say. A sandbox is shared — the agent's
+// terminal, a person's, a repo's own setup block all run in one — so a route that named one
+// lender spent that person's credential on everybody's push. The route names a sandbox; a
+// LOAN names an act. Every block's line exports a per-block secret into its process tree
+// (`loanConfig`: one `http.<here>.extraheader`, so git sends it on every request to this
+// gateway and to nowhere else), and a request is answered from the loan it carries and from
+// nothing else — no loan, no credential, said in words. A loan is returned when the next
+// block on that terminal starts, so a `git push &` a block left running still spends its own
+// act's credential, and a request arriving after that is refused in words rather than
+// answered with somebody else's.
+//
+// What this does NOT do: every process in a sandbox is one uid, and a block can read another
+// block's live loan out of `/proc`. That is the trust boundary a sandbox already is
+// (docs/GAPS.md), stated rather than solved.
 
 open System
 open Fable.Core
@@ -57,7 +72,10 @@ type Lender =
       /// The credential now. `None` = the owner has none (any more).
       Resolve : unit -> Async<string option>
       /// github.com refused it: tell whoever tracks the credential's health.
-      Refused : unit -> Async<unit> }
+      Refused : unit -> Async<unit>
+      /// A push went out on it, to `owner/repo` — whether github.com then took the push is
+      /// git's to print. Told so the log can say whose credential a push spent.
+      Spent : string -> Async<unit> }
 
 /// One request the gateway will carry, parsed off a path. Only the three requests git's
 /// smart HTTP transport makes are requests here; everything else 404s, so a cap admits git to
@@ -67,8 +85,13 @@ type GitRequest =
     { Cap : string
       /// `owner/repo.git/info/refs` and the like — the path under the upstream origin.
       Path : string
+      /// `owner/repo`, as a sentence names it — the `.git` a URL carries taken off.
+      Repo : string
       /// `git-upload-pack` (fetch) or `git-receive-pack` (push).
       Service : string }
+
+let private repoOf (owner: string) (repo: string) : string =
+    owner + "/" + (if repo.EndsWith ".git" then repo.Substring (0, repo.Length - 4) else repo)
 
 let private segmentOk (segment: string) =
     let ok (c: char) =
@@ -88,12 +111,14 @@ let route (method: string) (path: string) (service: string option) : GitRequest 
         ->
         service
         |> Option.bind service'
-        |> Option.map (fun s -> { GitRequest.Cap = cap; Path = sprintf "%s/%s/info/refs" owner repo; Service = s })
+        |> Option.map (fun s ->
+            { GitRequest.Cap = cap; Path = sprintf "%s/%s/info/refs" owner repo; Repo = repoOf owner repo; Service = s })
     | [ p; cap; host; owner; repo; posted ] when
         p = prefix && method = "POST" && host = remoteHost && segmentOk cap && segmentOk owner && segmentOk repo
         ->
         service' posted
-        |> Option.map (fun s -> { GitRequest.Cap = cap; Path = sprintf "%s/%s/%s" owner repo s; Service = s })
+        |> Option.map (fun s ->
+            { GitRequest.Cap = cap; Path = sprintf "%s/%s/%s" owner repo s; Repo = repoOf owner repo; Service = s })
     | _ -> None
 
 /// The git config a sandbox is given so that its git reaches github.com through the gateway
@@ -101,6 +126,18 @@ let route (method: string) (path: string) (service: string option) : GitRequest 
 /// transport operation rewrites its URL through this, and nothing else about git changes.
 let gitConfig (host: string) (port: int) (cap: string) : (string * string) list =
     [ sprintf "url.http://%s:%d/%s/%s/%s/.insteadOf" host port prefix cap remoteHost, sprintf "https://%s/" remoteHost ]
+
+/// The header a block's git carries its loan in. Dropped on the way up with the rest of what
+/// described this hop (`droppedUpstream`): it names a loan at THIS gateway and means nothing
+/// at github.com.
+let loanHeader = "x-yession-loan"
+
+/// The git config a block's line exports so that its git carries `secret` to this gateway on
+/// every request — scoped to the gateway's origin (git matches `http.<url>.*` against the URL
+/// it connects to, which after the `insteadOf` above is this one), so it goes to no other
+/// host. One pair, which is what `__y_env` has a slot for.
+let loanConfig (host: string) (port: int) (secret: string) : string * string =
+    sprintf "http.http://%s:%d/.extraheader" host port, sprintf "X-Yession-Loan: %s" secret
 
 // --- the wire ------------------------------------------------------------------------------
 
@@ -139,11 +176,13 @@ let private queryOf (url: string) (name: string) : string option = jsNative
 /// the request as it arrived HERE — the upstream's host is its own, and Node's server has
 /// already answered the `100 Continue` that `expect` asked for; `authorization` because the
 /// one that goes out is the lender's, not whatever came in; and the rest because they are
-/// hop-by-hop, which is to say they describe a connection this process is not forwarding.
+/// hop-by-hop, which is to say they describe a connection this process is not forwarding;
+/// and the loan, which named a lender here and is spent here.
 let private droppedUpstream =
     set
         [ "host"
           "authorization"
+          loanHeader
           "connection"
           "expect"
           "keep-alive"
@@ -264,23 +303,53 @@ let private basicAuthorization (token: string) : string =
 type Gateway =
     { /// The bound port, on every interface.
       Port : int
-      /// Mint the route for one sandbox, replacing any it had: the cap its git will name.
-      Grant : SandboxRef -> Lender -> string
-      /// Take a sandbox's route away — what makes the cap die with the sandbox.
+      /// Mint the route for one sandbox, replacing any it had: the cap its git will name. A
+      /// route answers nothing by itself — what answers on it is the loan a request carries.
+      Grant : SandboxRef -> string
+      /// Lend a block's requests a credential: the secret the block's line exports, live
+      /// until the terminal's next loan or `Retire`. One live loan per terminal, because a
+      /// terminal runs one block at a time — lending the next returns the last.
+      Lend : SandboxRef -> TerminalId -> Lender -> string
+      /// The loan on a terminal is returned. A request still carrying it is refused in
+      /// words; the last returned loan per terminal is kept for that sentence, and no more.
+      Retire : TerminalId -> unit
+      /// Take a sandbox's route, and every loan under it, away — what makes the cap die
+      /// with the sandbox.
       Revoke : SandboxRef -> unit
       Close : unit -> Async<unit> }
+
+/// One block's loan: where it was lent, and who answers on it.
+type private Loan =
+    { Sandbox : SandboxRef
+      Terminal : TerminalId
+      Lender : Lender }
 
 /// Start the gateway. `upstream` is the origin github.com's git endpoints live under — a
 /// parameter for the reason every provider endpoint here is: a suite needs somewhere to
 /// point it that is not the live provider.
 let start (upstream: string) : Async<Gateway> =
-    let mutable grants : Map<string, SandboxRef * Lender> = Map.empty
+    let mutable grants : Map<string, SandboxRef> = Map.empty
+    /// Live loans, by secret.
+    let mutable live : Map<string, Loan> = Map.empty
+    /// The last loan each terminal returned, by terminal — so a request still carrying it
+    /// is told so, rather than 404'd like a secret nobody ever minted.
+    let mutable returned : Map<string, string * Loan> = Map.empty
+
+    let retire (terminal: TerminalId) =
+        for KeyValue (secret, loan) in live do
+            if loan.Terminal = terminal then returned <- Map.add (TerminalId.value terminal) (secret, loan) returned
+        live <- live |> Map.filter (fun _ loan -> loan.Terminal <> terminal)
 
     let answer (res: ServerResponse) (status: int) (contentType: string) (body: string) =
         res.writeHead (status, createObj [ "content-type", box contentType; "cache-control", box "no-store" ]) |> ignore
         res.``end`` body
 
     let notFound (res: ServerResponse) = answer res 404 "text/plain" "not found"
+
+    /// The loan a request carries, if git sent one.
+    let loanOf (req: IncomingMessage) : string option =
+        req.headerEntries ()
+        |> Array.tryPick (fun (name, value) -> if name = loanHeader then Some (unbox<string> value) else None)
 
     let handler (req: IncomingMessage) (res: ServerResponse) =
         let url = req.url
@@ -289,36 +358,56 @@ let start (upstream: string) : Async<Gateway> =
         | Some request ->
             match Map.tryFind request.Cap grants with
             | None -> notFound res
-            | Some (_, lender) ->
+            | Some _ ->
                 let isAdvertisement = req.``method`` = "GET"
                 let contentType =
                     sprintf "application/x-%s-%s" request.Service (if isAdvertisement then "advertisement" else "result")
                 let refuse (message: string) =
                     answer res 200 contentType (errorBody request isAdvertisement message)
-                Async.StartImmediate (
-                    async {
-                        try
-                            match! lender.Resolve () with
-                            | None ->
-                                refuse (
-                                    sprintf
-                                        "the github credential this sandbox was lent (%s's) is gone — connect one on the settings panel and start the sandbox again"
-                                        (ownerLabel lender.Owner))
-                            | Some token ->
-                                let target = upstream.TrimEnd '/' + "/" + request.Path + searchOf url
-                                match! forward req res target (basicAuthorization token) with
-                                | Forwarded.Unauthorized ->
-                                    do! lender.Refused ()
-                                    refuse (
-                                        sprintf
-                                            "github rejected %s's credential — sign in again on the settings panel"
-                                            (ownerLabel lender.Owner))
-                                | Forwarded.Unreachable error ->
-                                    refuse (sprintf "%s could not be reached from this session: %s" remoteHost error)
-                                | Forwarded.Answered -> ()
-                        with e ->
-                            if not (res.headersSent) then refuse (sprintf "the git gateway failed: %s" e.Message)
-                    })
+                match loanOf req with
+                | None ->
+                    refuse
+                        "nothing is lending a github credential to this request — git here spends the credential of the command it runs in; run it as a command in this terminal"
+                | Some secret ->
+                    match Map.tryFind secret live with
+                    | None ->
+                        match returned |> Map.tryPick (fun _ (held, loan) -> if held = secret then Some loan else None) with
+                        | Some loan ->
+                            refuse (
+                                sprintf
+                                    "the github credential lent to %s for that command has been returned — run the push as its own command"
+                                    (ownerLabel loan.Lender.Owner))
+                        | None -> notFound res
+                    | Some loan ->
+                        let lender = loan.Lender
+                        Async.StartImmediate (
+                            async {
+                                try
+                                    match! lender.Resolve () with
+                                    | None ->
+                                        refuse (
+                                            sprintf
+                                                "%s has not connected github — connect it on the settings panel and run the command again"
+                                                (ownerLabel lender.Owner))
+                                    | Some token ->
+                                        let target = upstream.TrimEnd '/' + "/" + request.Path + searchOf url
+                                        match! forward req res target (basicAuthorization token) with
+                                        | Forwarded.Unauthorized ->
+                                            do! lender.Refused ()
+                                            refuse (
+                                                sprintf
+                                                    "github rejected %s's credential — sign in again on the settings panel"
+                                                    (ownerLabel lender.Owner))
+                                        | Forwarded.Unreachable error ->
+                                            refuse (sprintf "%s could not be reached from this session: %s" remoteHost error)
+                                        | Forwarded.Answered ->
+                                            // The push itself, not its advertisement: one
+                                            // sentence per push, however many requests it took.
+                                            if request.Service = "git-receive-pack" && not isAdvertisement then
+                                                do! lender.Spent request.Repo
+                                with e ->
+                                    if not (res.headersSent) then refuse (sprintf "the git gateway failed: %s" e.Message)
+                            })
 
     let server = createServer handler
     async {
@@ -328,14 +417,22 @@ let start (upstream: string) : Async<Gateway> =
         return
             { Port = serverPort server
               Grant =
-                fun sandbox lender ->
+                fun sandbox ->
                     let cap = randomSecret ()
-                    grants <-
-                        grants
-                        |> Map.filter (fun _ (held, _) -> held <> sandbox)
-                        |> Map.add cap (sandbox, lender)
+                    grants <- grants |> Map.filter (fun _ held -> held <> sandbox) |> Map.add cap sandbox
                     cap
-              Revoke = fun sandbox -> grants <- grants |> Map.filter (fun _ (held, _) -> held <> sandbox)
+              Lend =
+                fun sandbox terminal lender ->
+                    retire terminal
+                    let secret = randomSecret ()
+                    live <- Map.add secret { Sandbox = sandbox; Terminal = terminal; Lender = lender } live
+                    secret
+              Retire = retire
+              Revoke =
+                fun sandbox ->
+                    grants <- grants |> Map.filter (fun _ held -> held <> sandbox)
+                    live <- live |> Map.filter (fun _ loan -> loan.Sandbox <> sandbox)
+                    returned <- returned |> Map.filter (fun _ (_, loan) -> loan.Sandbox <> sandbox)
               Close =
                 fun () ->
                     Async.FromContinuations (fun (cont, _, _) -> server.close (fun _ -> cont ())) }

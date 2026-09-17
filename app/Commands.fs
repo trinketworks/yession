@@ -164,9 +164,9 @@ let dispatch (services: CommandServices) : CommandDispatch =
     let repoCaller (invocation: GatedInvocation) : Repos.RepoCaller =
         { Actor = Authority.author invocation.Authority
           Credential = Authority.credential invocation.Authority }
-    let sandboxCaller (invocation: GatedInvocation) : WorkSandboxes.SandboxCaller =
-        { Actor = Authority.author invocation.Authority
-          Credential = Authority.credential invocation.Authority }
+    // A sandbox is started by an ACTOR and lent to nobody: what its blocks spend is each
+    // block's own act's credential, so a start carries none.
+    let sandboxCaller (invocation: GatedInvocation) : ActorRef = Authority.author invocation.Authority
     Map.ofList
         [ addRepoTool,
           fun (invocation: GatedInvocation) ->

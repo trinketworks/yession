@@ -50,6 +50,56 @@ module ResizeObserver =
     [<Emit("typeof ResizeObserver !== 'undefined'")>]
     let isSupported () : bool = jsNative
 
+/// Bindings for the browser's `IntersectionObserver`: told when an element crosses into or out
+/// of a scrollport, rather than a scroll handler asking after every frame whether it has.
+///
+/// It answers a question a scroll handler cannot, which is the reason to want one. A handler
+/// only ever hears about MOVEMENT, so a target that was on screen from the first paint and has
+/// never been scrolled past is a case it is structurally deaf to; an observer reports the state,
+/// and reports it once on `observe` whether or not anything has moved.
+///
+/// Only the slice used is declared. `IntersectionObserverEntry` carries `intersectionRatio`,
+/// `boundingClientRect`, `time` and friends, and the constructor takes `threshold`; none of that
+/// is here, because the one question asked of it is whether the target and the root overlap at
+/// all. What a caller does with several entries is a test over them, and a test is F# — not a
+/// clause smuggled into an emit string where no compiler and no analyzer can read it.
+[<AllowNullLiteral>]
+type IntersectionObserverEntry =
+    /// Whether this target and the root overlap as of this callback. A crossing back OUT is
+    /// reported as readily as a crossing in, so a caller that only wants arrivals has to say so.
+    abstract isIntersecting : bool
+
+[<AllowNullLiteral>]
+type IntersectionObserver =
+    /// Start reporting this element's crossings. Fires once immediately with where the element
+    /// stands, which is the whole point of the type rather than a quirk of it: something already
+    /// on screen is reported as being on screen.
+    abstract observe : element: Element -> unit
+    /// Stop reporting everything. An observer holds its root and its targets, so one left behind
+    /// for an element that has gone is a leak — with the callback still live to fire into
+    /// whatever closed over it.
+    abstract disconnect : unit -> unit
+
+[<AutoOpen>]
+module IntersectionObserver =
+
+    /// `new IntersectionObserver(callback, { root, rootMargin })`. The callback takes the entries
+    /// and the observer; this declares only the entries, for the same reason `ResizeObserver`
+    /// declares neither — the answer to "which observer" is "the one you made".
+    ///
+    /// `root` is the scrollport the overlap is measured against, which is the card's own scroller
+    /// whenever what scrolls is inside the page rather than the page itself. `rootMargin` grows
+    /// that box in CSS margin syntax (`"400px 0px"`), so a target counts as on screen while it is
+    /// still that far outside it — which is how a caller asks for what is coming rather than for
+    /// what has arrived.
+    [<Emit("new IntersectionObserver($0, { root: $1, rootMargin: $2 })")>]
+    let create
+        (onCrossed: IntersectionObserverEntry[] -> unit)
+        (root: Element)
+        (rootMargin: string)
+        : IntersectionObserver =
+        jsNative
+
 /// The slice of the CSSOM the shell writes its layout through, which `Fable.Browser.Dom` does
 /// not type: it stops at the DOM, and `element.style` belongs to the CSS bindings this
 /// repository does not otherwise need.
@@ -130,3 +180,57 @@ module Media =
     /// by the caller that shares a breakpoint with it.
     [<Emit("window.matchMedia($0).matches")>]
     let mediaMatches (query: string) : bool = jsNative
+
+/// The one write this repository makes to the system clipboard.
+///
+/// `Fable.Browser.Dom`'s `Navigator` stops at the navigator's older surface, and the async
+/// clipboard is not on it. Only the write is declared, because only the write is made: reading
+/// somebody's clipboard is a permission prompt this product has no reason to raise.
+///
+/// Asking whether there IS a clipboard is half the binding, and the half no caller may skip.
+/// The API is absent outside a secure context — most commonly a session reached over plain
+/// HTTP at a LAN address — and reaching through an absent `navigator.clipboard` throws where a
+/// refusal would have rejected, which is a fault no handler on the promise can see.
+[<AutoOpen>]
+module Clipboard =
+
+    /// Whether this context has a clipboard at all.
+    [<Emit("!!navigator.clipboard")>]
+    let hasClipboard () : bool = jsNative
+
+    /// `navigator.clipboard.writeText`: resolved once the write has happened, rejected when
+    /// the browser refused it — a denied permission, a page that was not the foreground one.
+    [<Emit("navigator.clipboard.writeText($0)")>]
+    let writeClipboardText (text: string) : JS.Promise<unit> = jsNative
+
+/// The slice of the Cache API that a READ goes through. `Fable.Browser.Dom` types none of it —
+/// it stops at the DOM, and a `Cache` belongs to the service-worker bindings this repository
+/// does not otherwise need.
+///
+/// Only `match` and what a hit is worth asking are here. Opening a cache, enumerating its
+/// addresses and writing to it are one-liners at their call site whose answers have no
+/// structure to read; a hit has two — the body, and the header it was stored with — and that
+/// is what earns a binding.
+[<AutoOpen>]
+module CacheStorage =
+
+    /// One kept `Response`, as much of one as this repository ever reads.
+    ///
+    /// Nullable because a MISS is exactly that: `cache.match` answers with nothing for an
+    /// address the store never held, and that is an answer rather than a fault.
+    [<AllowNullLiteral>]
+    type CachedResponse =
+        /// The stored body, decoded as text.
+        abstract text : unit -> JS.Promise<string>
+
+    /// `cache.match(url)` — the answer kept for one address, or null.
+    ///
+    /// The cache is `obj` rather than a type of its own: nothing here ever asks a `Cache`
+    /// anything except this, so a type would carry one member and a name for it.
+    [<Emit("$0.match($1)")>]
+    let cacheMatch (cache: obj) (url: string) : JS.Promise<CachedResponse> = jsNative
+
+    /// One header off a kept response, or null when the stored response carries none — which
+    /// is a store outliving the build that filled it, not an error.
+    [<Emit("$0.headers.get($1)")>]
+    let cachedHeader (response: CachedResponse) (name: string) : string = jsNative

@@ -651,6 +651,9 @@ module Dom =
         // Conversation item status.
         let complete = "complete"
         let streaming = "streaming"
+        /// An act that is under way — a sandbox coming up. Both the screen-reader name for its
+        /// pulse and the `data-act-status` value a test counts running work by.
+        let running = "running"
         let failed = "failed"
         let interrupted = "interrupted"
         // Environment lifecycle.

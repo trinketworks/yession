@@ -11,6 +11,7 @@ open System
 open Elmish
 open Fable.Core
 open Fable.Core.JsInterop
+open Fable.BrowserExtras
 open Yjs
 open Yession.Domain
 open Yession.Domain.Link
@@ -20,56 +21,170 @@ open Yession.Domain.Collab
 open Yession.App
 open Lit
 
+#if FABLE_COMPILER
+open Thoth.Json
+#else
+open Thoth.Json.Net
+#endif
+
 // --- Native WebRTC (non-trickle, mirroring app/WebRtc.fs) -----------------------------
 
-// Opening the data channel, as a TOTAL function: it settles with the channel, or with why it
-// could not be had. It used to resolve only on `dc.onopen`, so a signalling POST that failed
-// — or a session that simply was not there — left this promise pending forever and the shell
-// stuck on "connecting" with nothing to say and nothing to do.
-//
-// `timeoutMs` bounds the whole handshake (offer, gathering, answer, channel open); it is the
-// difference between "not connected, the session did not answer" and an eternal wait.
-[<ImportDefault("./js/open-data-channel.mjs")>]
-let private openDataChannel (signalUrl: string) (timeoutMs: int) : JS.Promise<{| ok: bool; channel: obj; connection: obj; timedOut: bool; detail: string; tookMs: int |}> = jsNative
+/// The transport one handshake settles with: the channel frames ride on, and the peer
+/// connection that carries it.
+///
+/// The connection is kept because this client has to be able to READ it. The handshake used to
+/// settle with the data channel ALONE, so nothing could observe either state machine, nothing
+/// could close a dead connection, and the only way a client learned its transport had died was
+/// `dc.onclose` — an event a half-open channel never fires.
+type private Transport =
+    { Channel : Browser.Types.RTCDataChannel
+      Peer : Browser.Types.RTCPeerConnection }
+
+/// What one attempt at the handshake settled as. Three outcomes, three remedies: a transport to
+/// use, a session that answered with a refusal, and a session that did not answer at all.
+type private Handshake =
+    | Opened of Transport
+    | Refused of detail: string
+    | TimedOut
 
 /// How long a whole handshake gets before it counts as "the session did not answer". Long
 /// enough for ICE gathering on a slow machine, short enough that a dead session is reported
 /// rather than waited on.
 let private channelOpenTimeoutMs = 10000
 
-[<Emit("$0.onmessage = (e) => $1(String(e.data))")>]
-let private onMessage (dc: obj) (handler: string -> unit) : unit = jsNative
-
-[<Emit("$0.onclose = $1")>]
-let private onClose (dc: obj) (handler: unit -> unit) : unit = jsNative
-
-[<Emit("(function (dc, text) { return dc.readyState === 'open' && (dc.send(text), true) })($0, $1)")>]
-let private sendMessage (dc: obj) (text: string) : bool = jsNative
-
-/// Both of the peer connection's state machines, as one "this transport is finished" signal.
-///
-/// This is why the connection is kept at all. The promise above used to resolve with the data
-/// channel ALONE, so nothing could observe either state, nothing could close a dead connection,
-/// and the only way a client learned its transport had died was `dc.onclose` — an event a
-/// half-open channel never fires.
+/// Both of the peer connection's state machines, read as the one signal that matters: this
+/// transport is finished. BOTH, because either can reach a terminal state without the other
+/// following it there, and a client watching only `connectionState` goes on waiting for a
+/// connection whose ICE agent has already given up.
 ///
 /// `disconnected` is deliberately NOT here. It is a maybe, not a verdict, and the honest answer
 /// to a maybe already exists: the heartbeat asks, and gets an answer or does not, inside about
 /// three seconds. A grace timer here would be a second clock measuring the same doubt.
-[<ImportDefault("./js/on-peer-finished.mjs")>]
-let private onPeerFinished (pc: obj) (handler: unit -> unit) : unit = jsNative
+let private peerFinished (peer: Browser.Types.RTCPeerConnection) : bool =
+    peer.connectionState = Browser.Types.RTCPeerConnectionState.Failed
+    || peer.connectionState = Browser.Types.RTCPeerConnectionState.Closed
+    || peer.iceConnectionState = Browser.Types.RTCIceConnectionState.Failed
+    || peer.iceConnectionState = Browser.Types.RTCIceConnectionState.Closed
+
+/// Register a listener and hand back the ONE way to unregister it. The target, the event name
+/// and the handler are said once, so a teardown cannot drift from what it undoes — which is the
+/// only thing three listeners and three removals can get wrong.
+let private listening (target: #Browser.Types.EventTarget) (event: string) (handler: Browser.Types.Event -> unit) : unit -> unit =
+    target.addEventListener (event, handler)
+    fun () -> target.removeEventListener (event, handler)
+
+/// Opening the data channel, as a TOTAL function: it settles with the transport, or with why it
+/// could not be had. It used to resolve only on `dc.onopen`, so a signalling POST that failed
+/// — or a session that simply was not there — left this promise pending forever and the shell
+/// stuck on "connecting" with nothing to say and nothing to do.
+///
+/// Non-trickle, the way the Session Process's own side does it: gather first, then send ONE
+/// complete SDP, so there are no candidate-timing races and nothing depends on a sleep. Two
+/// events say gathering is done (`iceGatheringState` reaching `complete`, and the null
+/// candidate) and a browser may fire either — but some browsers and sandboxes fire NEITHER,
+/// because mDNS candidate obfuscation can leave gathering stalled indefinitely. So the offer
+/// also goes at 1500ms regardless: without it, a handshake waits on an event that is never
+/// coming and can only ever time out.
+///
+/// `timeoutMs` bounds the whole thing (offer, gathering, answer, channel open); it is the
+/// difference between "not connected, the session did not answer" and an eternal wait.
+let private openDataChannel (signalUrl: string) (timeoutMs: int) : JS.Promise<Handshake> =
+    Promise.create (fun resolve _ ->
+        let peer = Browser.WebRTC.RTCPeerConnection.Create (Browser.WebRTC.RTCConfiguration.Create [||])
+        let channel = peer.createDataChannel "session"
+        // Five things try to end this handshake and exactly one of them is heard. The flag and
+        // the closing live INSIDE the one function that can end it, rather than beside each
+        // caller: the timeout comes due whether or not the channel opened, and closing a live
+        // connection because a timer fired is the fault a once-only settle exists to prevent.
+        let mutable settled = false
+        let settle (outcome: Handshake) =
+            if not settled then
+                settled <- true
+                match outcome with
+                | Opened _ -> ()
+                | Refused _ | TimedOut -> try peer.close () with _ -> ()
+                resolve outcome
+        // The offer goes once. `sent` is what makes three triggers for one send idempotent;
+        // `settled` is what keeps the 1500ms fallback from posting an offer for a handshake
+        // that is already over.
+        let mutable sent = false
+        let send () =
+            if not sent && not settled then
+                sent <- true
+                promise {
+                    match peer.localDescription with
+                    | None ->
+                        // Nothing gathered yet, and nothing to offer. Only the fallback timer
+                        // can arrive here — the two gathering events cannot fire before the
+                        // description is local.
+                        settle (Refused "no local description to offer")
+                    | Some local ->
+                        let offer =
+                            JS.JSON.stringify (
+                                Browser.WebRTC.RTCSessionDescriptionInit.Create (local.``type``, local.sdp))
+                        let! reply =
+                            Fetch.fetchUnsafe
+                                signalUrl
+                                [ Fetch.Types.RequestProperties.Method Fetch.Types.HttpMethod.POST
+                                  Fetch.requestHeaders [ Fetch.Types.HttpRequestHeaders.ContentType "application/json" ]
+                                  Fetch.Types.RequestProperties.Body (U3.Case3 offer) ]
+                        if reply.Ok then
+                            let! answer = reply.json<Browser.Types.RTCSessionDescriptionInit> ()
+                            do! peer.setRemoteDescription answer
+                        else
+                            settle (Refused (sprintf "signalling refused: %d" reply.Status))
+                }
+                |> Promise.catchEnd (fun error -> settle (Refused error.Message))
+        peer.onicegatheringstatechange <-
+            fun _ -> if peer.iceGatheringState = Browser.Types.RTCIceGatheringState.Complete then send ()
+        peer.onicecandidate <-
+            fun ice ->
+                match ice.candidate with
+                | None -> send ()
+                | Some _ -> ()
+        JS.setTimeout send 1500 |> ignore
+        JS.setTimeout (fun () -> settle TimedOut) timeoutMs |> ignore
+        channel.onopen <- fun _ -> settle (Opened { Channel = channel; Peer = peer })
+        // One catch for both steps: a rejected `setLocalDescription` used to fall outside the
+        // handler `createOffer` carried, and reached the page as an unhandled rejection with
+        // the handshake still pending behind it.
+        promise {
+            let! offer = peer.createOffer ()
+            do! peer.setLocalDescription offer
+        }
+        |> Promise.catchEnd (fun error -> settle (Refused error.Message)))
 
 /// Look again the moment the page comes back — a phone returning from the background, a
 /// network coming back, a tab being switched to. Returns the way to stop looking.
 ///
-/// Not a second mechanism: it asks exactly the question `onPeerFinished` answers, at the one
+/// Not a second mechanism: it asks exactly the question `peerFinished` answers, at the one
 /// moment a browser is most likely to have torn the transport down while no script was running
-/// to hear about it. That moment is where the reported bug lived.
-[<ImportDefault("./js/on-resume.mjs")>]
-let private onResume (pc: obj) (dc: obj) (handler: unit -> unit) : (unit -> unit) = jsNative
+/// to hear about it. That moment is where the reported bug lived. It reads the CHANNEL too: a
+/// channel can be closed under a connection that still reports itself connected, which is the
+/// half-open case `onclose` never fires for.
+///
+/// A hidden page is not back yet — `visibilitychange` fires on the way out as well as the way
+/// in, and answering while hidden reports a teardown the person cannot see and has not
+/// returned to.
+let private onResume (transport: Transport) (onFinished: unit -> unit) : unit -> unit =
+    let look (_: Browser.Types.Event) =
+        if Browser.Dom.document.visibilityState <> "hidden" then
+            if peerFinished transport.Peer
+               || transport.Channel.readyState <> Browser.Types.RTCDataChannelState.Open then
+                onFinished ()
+    let stops =
+        [ listening Browser.Dom.window "pageshow" look
+          listening Browser.Dom.window "online" look
+          listening Browser.Dom.document "visibilitychange" look ]
+    fun () -> for stop in stops do stop ()
 
-[<Emit("$0.close()")>]
-let private closePeer (pc: obj) : unit = jsNative
+/// The same question, asked by the connection itself whenever either state machine moves — and
+/// once up front, because a connection can already be finished by the time anybody subscribes.
+let private onPeerFinished (peer: Browser.Types.RTCPeerConnection) (onFinished: unit -> unit) : unit =
+    let check (_: Browser.Types.Event) = if peerFinished peer then onFinished ()
+    peer.addEventListener ("connectionstatechange", check)
+    peer.addEventListener ("iceconnectionstatechange", check)
+    if peerFinished peer then onFinished ()
 
 let private frameCodec : Codec<SessionFrame<string>> = Codec.sessionFrame Codec.string
 
@@ -83,7 +198,9 @@ let private frameCodec : Codec<SessionFrame<string>> = Codec.sessionFrame Codec.
 ///
 /// Closing closes the CONNECTION too. It used to close only the channel, which left a peer
 /// connection (and its ICE agent) alive behind every reconnect for the life of the page.
-let private frameChannel (dc: obj) (pc: obj) : FrameChannel<string> =
+let private frameChannel (transport: Transport) : FrameChannel<string> =
+    let channel = transport.Channel
+    let peer = transport.Peer
     let queue = System.Collections.Generic.Queue<SessionFrame<string> option> ()
     let mutable pending : (SessionFrame<string> option -> unit) option = None
     let mutable closed = false
@@ -97,14 +214,22 @@ let private frameChannel (dc: obj) (pc: obj) : FrameChannel<string> =
             closed <- true
             stopLooking ()
             deliver None
-    onMessage dc (fun text ->
-        match Codec.fromString frameCodec text with
-        | Ok frame -> deliver (Some frame)
-        | Error e -> JS.console.error ("frame decode failed: " + e))
-    onClose dc finish
-    onPeerFinished pc finish
-    stopLooking <- onResume pc dc finish
-    { Send = fun frame -> async { sendMessage dc (Codec.toString frameCodec frame) |> ignore }
+    channel.onmessage <-
+        fun message ->
+            match Codec.fromString frameCodec (string message.data) with
+            | Ok frame -> deliver (Some frame)
+            | Error detail -> JS.console.error ("frame decode failed: " + detail)
+    channel.onclose <- fun _ -> finish ()
+    onPeerFinished peer finish
+    stopLooking <- onResume transport finish
+    { Send =
+        fun frame ->
+            async {
+                // A peer can vanish between frames; sending into a channel that is no longer
+                // open is a no-op, not a throw.
+                if channel.readyState = Browser.Types.RTCDataChannelState.Open then
+                    channel.send (U4.Case1 (Codec.toString frameCodec frame))
+            }
       Receive =
         fun () ->
             Async.FromContinuations (fun (cont, _, _) ->
@@ -115,8 +240,8 @@ let private frameChannel (dc: obj) (pc: obj) : FrameChannel<string> =
         fun () ->
             async {
                 finish ()
-                emitJsExpr dc "$0.close()"
-                closePeer pc
+                channel.close ()
+                peer.close ()
             } }
 
 /// One attempt at the transport, shaped as the resilience policy consumes it. What settles is
@@ -124,17 +249,22 @@ let private frameChannel (dc: obj) (pc: obj) : FrameChannel<string> =
 /// which is what lets everything above hold one idea of a transport.
 let private connectChannel (signalUrl: string) : Async<Result<FrameChannel<string>, Client.ChannelFault>> =
     async {
-        let! reply = openDataChannel signalUrl channelOpenTimeoutMs |> Async.AwaitPromise
+        let startedAt = Browser.Performance.performance.now ()
+        let! outcome = openDataChannel signalUrl channelOpenTimeoutMs |> Async.AwaitPromise
         // How long the handshake took, said out loud. Open latency is a property this repo has
         // already traded a whole ICE backend to protect (docs/decisions/2026-07-26), and it is
         // invisible from the outside: a slow session and a slow handshake look identical from
         // the shell. Free on success, and the one number worth having when they do not.
         JS.console.debug (
-            sprintf "yession/link: handshake %s in %dms" (if reply.ok then "opened" else "failed") reply.tookMs)
+            sprintf
+                "yession/link: handshake %s in %dms"
+                (match outcome with Opened _ -> "opened" | Refused _ | TimedOut -> "failed")
+                (int (Math.Round (Browser.Performance.performance.now () - startedAt))))
         return
-            if reply.ok then Ok (frameChannel reply.channel reply.connection)
-            elif reply.timedOut then Error Client.ChannelTimedOut
-            else Error (Client.ChannelUnreachable reply.detail)
+            match outcome with
+            | Opened transport -> Ok (frameChannel transport)
+            | TimedOut -> Error Client.ChannelTimedOut
+            | Refused detail -> Error (Client.ChannelUnreachable detail)
     }
 
 // --- DOM shell -------------------------------------------------------------------------
@@ -156,12 +286,54 @@ let private clearChildren (el: obj) : unit = jsNative
 /// The refusal is written to the console rather than swallowed, because the only symptom
 /// it has otherwise is a button that appears to do nothing — the same shape as a broken
 /// binding, and nothing on the page tells the two apart.
-[<ImportDefault("./js/write-clipboard.mjs")>]
-let private writeClipboard (text: string) (settled: bool -> unit) : unit = jsNative
+let private writeClipboard (text: string) (settled: bool -> unit) : unit =
+    if not (hasClipboard ()) then
+        JS.console.debug "yession/copy: no clipboard in this context"
+        settled false
+    else
+        Async.StartImmediate (
+            async {
+                match! writeClipboardText text |> Async.AwaitPromise |> Async.Catch with
+                | Choice1Of2 () -> settled true
+                | Choice2Of2 refusal ->
+                    JS.console.debug (sprintf "yession/copy: refused %s" refusal.Message)
+                    settled false
+            })
 
 /// How long a copy says so for. Long enough to be read as an answer to the press, short
 /// enough that the code it stands in front of comes back before anybody needs it again.
 let private copiedShownMs = 1500
+
+/// A frame later — which is when the render that had to happen, has, and when a class just
+/// written has reached the style flush that acts on it.
+let private nextFrame (act: unit -> unit) : unit =
+    Browser.Dom.window.requestAnimationFrame (fun _ -> act ()) |> ignore
+
+/// The first control matching, focused. Nothing to do when there is none: every selector here
+/// names the control the view mounts OPPOSITE the one that just went, so a miss is a face that
+/// has not arrived rather than a state to repair.
+let private focusFirst (selector: string) : unit =
+    match Browser.Dom.document.querySelector selector with
+    | null -> ()
+    | control -> (control :?> Browser.Types.HTMLElement).focus ()
+
+/// The shell's layout bits, which live on the ROOT element — outside `#app`, which is what
+/// makes them survive every re-render.
+let private rootClasses () = Browser.Dom.document.documentElement.classList
+
+/// Whether the stylesheet's own desktop breakpoint matches right now — ASKED, never decided
+/// again here. `mediaMatches` carries the reason: a script comparing `innerWidth` to a number
+/// of its own is a second definition of the breakpoint, and it disagrees with the first
+/// whenever a scrollbar, a zoom or a rounded viewport gets between them.
+let private onDesktop () : bool = mediaMatches "(min-width: 768px)"
+
+/// Move focus onto the settings face's counterpart control, TWO frames on.
+///
+/// Two, because the face that is arriving is `visibility: hidden` until the transition it just
+/// started reaches its first style flush, and `focus()` on a hidden element is a no-op — which
+/// was measured: one frame left focus on `<body>`.
+let private focusSettingsFace (selector: string) : unit =
+    nextFrame (fun () -> nextFrame (fun () -> focusFirst selector))
 
 // The sidebar/drawer state is one bit on the root element, outside `#app`, so it survives
 // every re-render: default = sidebar visible on desktop, off-canvas on mobile; `nav-alt`
@@ -175,15 +347,45 @@ let private copiedShownMs = 1500
 // Focus is moved deliberately: the control that was pressed is the one about to disappear, so
 // it hands focus to whichever control replaces it (the header's reopen chevron, or the nav
 // head's collapse button). Skipping that strands focus on a hidden element.
-[<ImportDefault("./js/toggle-nav.mjs")>]
-let private toggleNav () : unit = jsNative
+let private toggleNav () : unit =
+    let classes = rootClasses ()
+    let desktop = onDesktop ()
+    let alt = not (classes.contains "nav-alt")
+    if alt then classes.add "nav-alt" else classes.remove "nav-alt"
+    // The nav control always returns the column to its workspace face — a column that
+    // reopened on settings would be a surprise, and `settings-open` is what chooses the face.
+    classes.remove "settings-open"
+    // What that bit says about the column being SHOWN is the one read against the other,
+    // because `nav-alt` means the opposite thing on each side of the breakpoint.
+    let shown = desktop <> alt
+    if desktop then
+        // Storage is denied in a private window, and a collapse that cannot be remembered is
+        // still a collapse that works.
+        try
+            Browser.WebStorage.localStorage.setItem ("yession.nav", (if shown then "open" else "collapsed"))
+        with _ ->
+            ()
+    nextFrame (fun () ->
+        focusFirst (if shown then "button[data-nav-toggle=\"hide\"]" else "[data-nav-toggle=\"show\"]"))
 
 // Settings is the sidebar column's other FACE (Style.settingsPane), not a drawer over the
 // conversation — so opening it has to bring that column on screen, and `nav-alt` means the
 // opposite thing on each side of the breakpoint: uncollapse on desktop, slide the drawer in on
 // mobile. Focus follows the same rule as the nav toggle.
-[<ImportDefault("./js/toggle-settings.mjs")>]
-let private toggleSettings () : unit = jsNative
+let private toggleSettings () : unit =
+    let classes = rootClasses ()
+    let opening = not (classes.contains "settings-open")
+    if opening then classes.add "settings-open" else classes.remove "settings-open"
+    if opening then
+        // Bringing the column on screen is the opposite instruction on each side of the
+        // breakpoint.
+        if onDesktop () then classes.remove "nav-alt" else classes.add "nav-alt"
+    elif not (onDesktop ()) then
+        // Closing the face on a phone closes the drawer with it. On a desktop the column
+        // stays exactly where it was: what changed is which face it shows, not whether it
+        // is there.
+        classes.remove "nav-alt"
+    focusSettingsFace (if opening then "[data-settings-toggle=\"close\"]" else "[data-settings-toggle=\"open\"]")
 
 // The same move, in one direction only.
 //
@@ -195,8 +397,17 @@ let private toggleSettings () : unit = jsNative
 //
 // Idempotent by construction rather than by the caller checking first — `settings-open` is
 // SET, not flipped, so pressing it twice is pressing it once.
-[<ImportDefault("./js/reveal-settings.mjs")>]
-let private revealSettings () : unit = jsNative
+let private revealSettings () : unit =
+    let classes = rootClasses ()
+    let wasOpen = classes.contains "settings-open"
+    classes.add "settings-open"
+    // Bring the column on screen: `nav-alt` means the opposite thing on each side of the
+    // breakpoint — collapsed on desktop, drawer-open on mobile.
+    if onDesktop () then classes.remove "nav-alt" else classes.add "nav-alt"
+    // Focus moves only when the face actually ARRIVED. Stealing it from whatever the reader
+    // was doing, to a control that was already on screen, would be the prompt reaching into a
+    // panel they are already reading.
+    if not wasOpen then focusSettingsFace "[data-settings-toggle=\"close\"]"
 
 // The auth probe: `me` answers with a peer token when the browser's cookie (or an
 // auth-less session) allows it — total in BOTH axes it can fail on, because the two need
@@ -434,10 +645,30 @@ let private cacheNames () : JS.Promise<string array> = jsNative
 [<Emit("""$0.put($1, new Response($3, { headers: { 'content-type': 'application/x-ndjson; charset=utf-8', 'x-yession-first-seq': String($2) } })).catch(() => undefined)""")>]
 let private transcriptWrite (cache: obj) (url: string) (firstSeq: int) (body: string) : JS.Promise<unit> = jsNative
 
-// `null` for an entry that is gone, and for one written without the header — which no build
-// that shipped this ever wrote, but a store outlives the build that filled it.
-[<ImportDefault("./js/transcript-read.mjs")>]
-let private transcriptRead (cache: obj) (url: string) : JS.Promise<(int * string) option> = jsNative
+/// One cached transcript window: the sequence its first line carries, and the lines
+/// themselves.
+///
+/// Nothing for an entry that is gone, and nothing for one written without the header — which
+/// no build that shipped this ever wrote, but a store outlives the build that filled it, and
+/// lines whose first sequence is unknown cannot be folded into anything. A header that is
+/// present and not a number is that same store, read by a build that cannot understand what
+/// wrote it.
+let private transcriptRead (cache: obj) (url: string) : Async<(int * string) option> =
+    async {
+        let! kept = cacheMatch cache url |> Async.AwaitPromise
+        if isNullOrUndefined kept then
+            return None
+        else
+            let first = cachedHeader kept "x-yession-first-seq"
+            if isNullOrUndefined first then
+                return None
+            else
+                match Int32.TryParse first with
+                | false, _ -> return None
+                | true, firstSeq ->
+                    let! body = kept.text () |> Async.AwaitPromise
+                    return Some (firstSeq, body)
+    }
 
 /// Every terminal's store for this session, or the one that keeps nothing.
 let private openTranscriptCaches () : Async<Client.TranscriptCaches> =
@@ -459,7 +690,7 @@ let private openTranscriptCaches () : Async<Client.TranscriptCaches> =
                                             let! keys = cacheKeys cache |> Async.AwaitPromise
                                             return List.ofArray keys
                                         }
-                                  Read = fun url -> transcriptRead cache url |> Async.AwaitPromise
+                                  Read = fun url -> transcriptRead cache url
                                   Write =
                                     fun url first body -> transcriptWrite cache url first body |> Async.AwaitPromise }
                         }
@@ -495,19 +726,32 @@ let private openTranscriptCaches () : Async<Client.TranscriptCaches> =
 /// Cut the current wait short, if one is running. Replaced each time a wait begins.
 let mutable private pokeRetry : unit -> unit = ignore
 
-[<ImportDefault("./js/wait-or-poke.mjs")>]
-let private waitOrPoke (ms: float) (register: (unit -> unit) -> unit) : JS.Promise<bool> = jsNative
+/// One wait, ended by whichever comes first — the timer, the network returning, or the poke
+/// the caller is handed. `ms < 0` is the park a refused peer gets: no timer at all.
+///
+/// Settling once is structural rather than a flag each path remembers: the clean-up IS the
+/// token. Whoever reaches the cell takes what is in it and leaves `ignore` behind, so the two
+/// paths that did not win run something that does nothing, and there is no state to read
+/// before acting on.
+let private waitOrPoke (ms: float) (register: (unit -> unit) -> unit) : Async<bool> =
+    Async.FromContinuations (fun (resume, _, _) ->
+        let ending = ref ignore
+        let stopListening = listening Browser.Dom.window "online" (fun _ -> ending.Value ())
+        let timer = if ms >= 0.0 then Some (Render.setTimeoutJs (fun () -> ending.Value ()) (int ms)) else None
+        ending.Value <-
+            fun () ->
+                ending.Value <- ignore
+                stopListening ()
+                timer |> Option.iter Render.clearTimeoutJs
+                resume true
+        register (fun () -> ending.Value ()))
 
 let private waitBeforeRetry (delay: System.TimeSpan option) : Async<bool> =
-    async {
-        let ms =
-            match delay with
-            | Some d -> d.TotalMilliseconds
-            | None -> -1.0
-        return!
-            waitOrPoke ms (fun finish -> pokeRetry <- finish)
-            |> Async.AwaitPromise
-    }
+    let ms =
+        match delay with
+        | Some d -> d.TotalMilliseconds
+        | None -> -1.0
+    waitOrPoke ms (fun finish -> pokeRetry <- finish)
 
 [<Emit("Math.random()")>]
 let private jsRandom () : float = jsNative
@@ -520,8 +764,18 @@ let private mintId (prefix: string) =
 // same human across sessions), so colours and draft slots survive reloads. Storage
 // denied (private mode) falls back to the per-load mint.
 //
-[<ImportDefault("./js/persistent-peer-id.mjs")>]
-let private persistentPeerId (minted: string) : string = jsNative
+// `minted` is a VALUE, evaluated once by whoever called this, so the fresh id stored and the
+// one answered are the same id however many branches read it.
+let private persistentPeerId (minted: string) : string =
+    let key = "yession/peer-id"
+    try
+        match Browser.WebStorage.localStorage.getItem key with
+        | null | "" ->
+            Browser.WebStorage.localStorage.setItem (key, minted)
+            minted
+        | existing -> existing
+    with _ ->
+        minted
 
 [<Emit("encodeURIComponent($0)")>]
 let private urlEncode (value: string) : string = jsNative
@@ -529,31 +783,79 @@ let private urlEncode (value: string) : string = jsNative
 // --- Claude connection panel round-trips (Plan 08) --------------------------------------
 // Thin fetches against the session's /claude* routes; the same-origin auth cookie rides
 // each one, and IS the whole identity — the browser asserts nothing about who it is.
-// Failures land as `ok: false` with the response text — the panel shows it.
+// An ACTION that fails lands as `ok: false` with the response text, and the panel shows it;
+// a status probe that could not answer says nothing at all (`fetchStatusAt`).
 //
 // These used to carry the peer id, and the credential was owned by it. A peer id lives in
 // origin-partitioned localStorage, so it changed under the person holding it and stranded
 // the credential behind every new one; ownership now comes off the cookie, Manager-side.
 
-// A connection arrives as `{kind, signInRequired}` or null, and is flattened to primitives
-// HERE rather than carried across as an object. Fable's mapping of an option-of-record onto
-// a JS value is the kind of thing that misbehaves quietly, and a status that silently
-// decodes to "nothing connected" is indistinguishable on screen from the truth. Two nullable
-// strings per scope cannot go wrong, and `ConnectionView` is assembled in F#.
-//
-// The catalogue on the same reply crosses as the JSON TEXT of the list, for the same
-// reason and one more: it is decoded by the codec the server encoded it with, so the
-// browser reads one wire shape rather than two, and a row it could not decode is a
-// reason to show rather than a silently shorter menu.
-[<ImportDefault("./js/fetch-claude-status-at.mjs")>]
-let private fetchClaudeStatusAt (url: string) : JS.Promise<{| ok: bool; sessionKind: string option; sessionSignIn: string option; mineKind: string option; mineSignIn: string option; owner: string option; agent: bool; models: string option; modelsUnavailable: string option |}> = jsNative
+/// One scope's connection as the session states it, and as the panel's row reads it. A scope
+/// with nothing connected is `null` on the wire, which is the absent FIELD's answer here —
+/// `Optional.Field` reads a null as nothing, so the row is an `option` for the one reason it
+/// has always been one.
+let private connectionRow : Decoder<ConnectionView> =
+    Decode.object (fun get ->
+        { Kind = get.Required.Field "kind" Decode.string
+          SignInRequired = get.Optional.Field "signInRequired" Decode.string })
 
-/// One scope's pair of nullable strings, as the panel's row reads it.
-let private viewOf (kind: string option) (signInRequired: string option) : ConnectionView option =
-    kind |> Option.map (fun kind -> { Kind = kind; SignInRequired = signInRequired })
+/// What one `/claude` status reply says: the panel's two rows, and the picker's supply.
+///
+/// The supply rides the same reply rather than a route of its own, so it can never be a
+/// statement about a credential the panel beside it has moved on from — and the decoder is
+/// where that reply becomes the two things the shell dispatches.
+type private ClaudeReply =
+    { Status : ClaudeStatus
+      Models : ModelCatalogueState }
+
+/// The `/claude` status reply, read by the same codec the session encoded it with.
+///
+/// `models` is decoded as a value and handed to `Codec.modelCatalogue` SEPARATELY, rather than
+/// inline where its failure would fail the whole reply: a catalogue this build cannot read is
+/// a reason to show in the picker, and it must not also take the connection rows down with it.
+let private claudeReply : Decoder<ClaudeReply> =
+    Decode.object (fun get ->
+        { Status =
+            { SessionCredential = get.Optional.Field "session" connectionRow
+              MineCredential = get.Optional.Field "mine" connectionRow
+              Owner = get.Optional.Field "owner" Decode.string
+              // Carried as the `option` the field is, rather than read as "no agent" when a
+              // reply does not mention one: the "no agent" prompt must never flash at a
+              // client that has not been told either way.
+              AgentAvailable = get.Optional.Field "agent" Decode.bool }
+          Models =
+            match get.Optional.Field "models" Decode.value with
+            | Some raw ->
+                match Decode.fromValue "$.models" Codec.modelCatalogue.Decode raw with
+                | Ok models -> ModelsLoaded models
+                | Error reason -> ModelsUnavailable reason
+            | None ->
+                match get.Optional.Field "modelsUnavailable" Decode.string with
+                | Some reason -> ModelsUnavailable reason
+                // Neither: an older session process, answering the status alone.
+                | None -> ModelsUnknown })
+
+/// A status round-trip that answers only when it HAS an answer. A fetch that never arrived, a
+/// session that refused, and a reply this build cannot read are one outcome with one remedy:
+/// say nothing, so the panel keeps showing what it last knew rather than blanking on a blip.
+let private fetchStatusAt (decoder: Decoder<'reply>) (url: string) : Async<'reply option> =
+    async {
+        let init = [ Fetch.Types.RequestProperties.Cache Fetch.Types.RequestCache.Nostore ]
+        // `fetchUnsafe`, not `fetch`: a refusal is a response to read the status off, not an
+        // exception to catch (`fetchMe` above carries the rest of why).
+        let! attempt = Fetch.fetchUnsafe url init |> Async.AwaitPromise |> Async.Catch
+        match attempt with
+        | Choice2Of2 _ -> return None
+        | Choice1Of2 response when not response.Ok -> return None
+        | Choice1Of2 response ->
+            let! body = response.text () |> Async.AwaitPromise
+            match Decode.fromString decoder body with
+            | Ok reply -> return Some reply
+            | Error _ -> return None
+    }
 
 let private fetchClaudeStatus () =
-    fetchClaudeStatusAt (Page.href ClaudeStatus)
+    fetchStatusAt claudeReply (Page.href ClaudeStatus)
 
 /// `status` rides beside `ok` because a panel that only knows THAT a post failed cannot tell
 /// a refusal from a session it could not reach, and those end a sign-in flow differently
@@ -576,11 +878,15 @@ let private panelInput (selector: string) : string = jsNative
 // Same fetch shapes as the Claude panel's; the flow differs (device code) so the two
 // extra parsers below read the begin/poll replies.
 
-[<ImportDefault("./js/fetch-github-status-at.mjs")>]
-let private fetchGitHubStatusAt (url: string) : JS.Promise<{| ok: bool; sessionKind: string option; sessionSignIn: string option; mineKind: string option; mineSignIn: string option |}> = jsNative
+/// The `/github` status reply: the same two rows the Claude panel reads, off the route that
+/// answers for the other credential.
+let private githubStatus : Decoder<GitHubStatus> =
+    Decode.object (fun get ->
+        { SessionCredential = get.Optional.Field "session" connectionRow
+          MineCredential = get.Optional.Field "mine" connectionRow })
 
 let private fetchGitHubStatus () =
-    fetchGitHubStatusAt (Page.href GitHubStatus)
+    fetchStatusAt githubStatus (Page.href GitHubStatus)
 
 [<Emit("JSON.stringify({ scope: $0, token: $1 || undefined })")>]
 let private githubBody (scope: string) (token: string) : string = jsNative
@@ -745,28 +1051,20 @@ let private start () =
         let refreshClaude () =
             Async.StartImmediate (
                 async {
-                    let! status = fetchClaudeStatus () |> Async.AwaitPromise
-                    if status.ok then
-                        dispatchRef (
-                            ClaudeStatusMsg
-                                { SessionCredential = viewOf status.sessionKind status.sessionSignIn
-                                  MineCredential = viewOf status.mineKind status.mineSignIn
-                                  Owner = status.owner
-                                  AgentAvailable = Some status.agent })
+                    match! fetchClaudeStatus () with
+                    | None -> ()
+                    | Some reply ->
+                        dispatchRef (ClaudeStatusMsg reply.Status)
                         // The picker's supply, off the same reply — so it can never be a
                         // statement about a credential the panel beside it has moved on
                         // from. It had a probe of its own with one trigger against this
                         // one's four, and the sign-in flow (which runs with the drawer
                         // already open) fired the four.
-                        match status.models, status.modelsUnavailable with
-                        | Some raw, _ ->
-                            match Codec.fromString Codec.modelCatalogue raw with
-                            | Ok models -> dispatchRef (ModelCatalogueMsg (ModelsLoaded models))
-                            | Error reason -> dispatchRef (ModelCatalogueMsg (ModelsUnavailable reason))
-                        | None, Some reason -> dispatchRef (ModelCatalogueMsg (ModelsUnavailable reason))
-                        // Neither: an older session process, answering the status alone.
-                        // What the picker already knows is better than blanking it.
-                        | None, None -> ()
+                        match reply.Models with
+                        // The reply said nothing about models. What the picker already knows
+                        // is better than blanking it.
+                        | ModelsUnknown -> ()
+                        | said -> dispatchRef (ModelCatalogueMsg said)
                 })
         let rec pollClaudeWhileAwaiting () =
             Async.StartImmediate (
@@ -814,12 +1112,9 @@ let private start () =
         let refreshGitHub () =
             Async.StartImmediate (
                 async {
-                    let! status = fetchGitHubStatus () |> Async.AwaitPromise
-                    if status.ok then
-                        dispatchRef (
-                            GitHubStatusMsg
-                                { SessionCredential = viewOf status.sessionKind status.sessionSignIn
-                                  MineCredential = viewOf status.mineKind status.mineSignIn })
+                    match! fetchGitHubStatus () with
+                    | None -> ()
+                    | Some status -> dispatchRef (GitHubStatusMsg status)
                 })
         let rec pollGitHubWhileAwaiting () =
             Async.StartImmediate (

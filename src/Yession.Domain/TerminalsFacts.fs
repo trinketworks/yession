@@ -237,3 +237,23 @@ and TerminalTranscriptTruncated =
       /// Output this terminal produced and the transcript did NOT keep. Recorded so a
       /// gap in an audit trail is a stated fact, never a silent one.
       DroppedBytes : int }
+
+/// A push from a block went out on somebody's github credential — the last hop of the chain
+/// from a person's message to a request at github.com, and the one hop nothing above it
+/// records: `TerminalBlockStarted` says whose act a block was, but a block that pushes in
+/// the background pushes after it completed, and a block says what ran, not whose key went
+/// out on it. One per push, on the request that carried the pack; whether github.com then
+/// took it is git's to print. Never a value: the same register the log names people in.
+and GitCredentialSpent =
+    { MessageId : MessageId
+      Sandbox : SandboxRef
+      Terminal : TerminalId
+      Block : BlockId
+      /// Whose credential — the block's act resolved by Plan 08 precedence, which is a
+      /// person's or the deployment's own.
+      Owner : CredentialFor
+      /// `owner/repo`, as the push named it.
+      Repo : string
+      /// Who acted: the block's author, so an agent's push on Ada's turn reads as the
+      /// agent's act spending Ada's credential, which is what happened.
+      Actor : ActorRef }

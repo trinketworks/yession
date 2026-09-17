@@ -201,8 +201,8 @@ type PrWatched =
           PwAuthority : Authority
           /// Whose watch it is: the credential every later poll resolves on behalf of, and the
           /// principal any wake this watch causes runs as. The turn human's when the agent
-          /// asked — the same split `RepoCaller` and `SandboxCaller` make, and for the same
-          /// reason: the agent acts, and has no credential of its own.
+          /// asked — the same split `RepoCaller` makes, and for the same reason: the agent
+          /// acts, and has no credential of its own.
           PwWatcher : Principal }
 
 module PrWatched =
