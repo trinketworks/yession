@@ -636,44 +636,20 @@ module ConversationProjection =
         // finds out. The line names WHAT was forwarded and WHOSE — never a value; the
         // event cannot carry one.
         | SessionEvent.WorkSandboxStarted s ->
-            let forwarded =
-                match s.Forwarded, s.CredentialOwner with
-                | [], _ -> None
-                | names, Some owner ->
-                    Some (sprintf "forwarding %s from %s" (String.concat ", " names) (CredentialFor.token owner))
-                | names, None -> Some (sprintf "forwarding %s" (String.concat ", " names))
-            // And where this host could not give what the sandbox's resources named. On the
-            // start NOTE rather than a note of its own, because it is a property of THIS
-            // sandbox coming up — a separate item would be a second thing to correlate, and
-            // the correlation is the whole content of it.
-            let realisation =
-                match s.Realisation with
-                | [] -> None
-                | lines ->
-                    Some (
-                        sprintf
-                            "where this host could not give exactly what was asked: %s"
-                            (String.concat "; " lines))
-            let checkout = s.Checkout |> Option.map (sprintf "the checkout is at %s in here")
+            // The prose - headline and particulars both - is the sandbox event's own to
+            // give, and lives beside it in `SandboxesFacts.WorkSandboxStarted`. The fold no
+            // longer reaches across the event's typed fields to compose a sentence here; it
+            // asks the event what it says. See that module for why the split is drawn there.
             { proj with
                 Items =
                     proj.Items
                     @ [ { MessageId = s.MessageId
                           Author = s.Actor
-                          // The headline names the one thing worth deciding from at a
-                          // glance: which sandbox, on what backend. What it is for, where
-                          // its checkout sits, whose credential rode in, and what this host
-                          // could not give exactly are separate facts, not clauses chained
-                          // onto the headline (as this line once did) - they ride in the
-                          // detail instead, semicolon-joined, so each stays its own fact.
-                          Body = sprintf "started sandbox %s (%s)" (SandboxRef.render s.Sandbox) s.Backend
+                          Body = Yession.Domain.Sandboxes.WorkSandboxStarted.headline s
                           Status = Complete
                           Kind =
                             ConversationItemKind.ActNote
-                                { Detail =
-                                    match List.choose id [ s.Description; checkout; forwarded; realisation ] with
-                                    | [] -> None
-                                    | parts -> Some (String.concat "; " parts)
+                                { Detail = Yession.Domain.Sandboxes.WorkSandboxStarted.detail s
                                   Notable = false }
                           Offset = envelope.Offset
                           Woke = None; Replying = None } ] }
