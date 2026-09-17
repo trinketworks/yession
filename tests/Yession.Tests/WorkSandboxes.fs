@@ -784,9 +784,16 @@ let private timelineTests =
             match proj.Items with
             | [ item ] ->
                 Expect.equal item.Body "started sandbox test (srt)" "it reads as a sentence"
-                Expect.equal (noteDetail item) (Some "forwarding github from user:ada") "whose credential went in is on the note"
-                Expect.isTrue (match item.Kind with ConversationItemKind.ActNote _ -> true | _ -> false)
-                    "and it is an act, not a message"
+                // The sentence every reader that is not a screen gets still names the
+                // credential and its owner - the durable contract, whatever a screen does with
+                // the fields. `Detail` is empty precisely because the facts are carried typed.
+                Expect.stringContains (ConversationItem.said item) "forwarding github from user:ada"
+                    "whose credential went in is on the note"
+                match item.Kind with
+                | ConversationItemKind.ActNote facts ->
+                    Expect.isSome facts.SandboxStarted "the note carries the sandbox's typed facts, for a screen to arrange"
+                    Expect.isNone facts.Detail "and no pre-baked detail string beside them"
+                | _ -> failwith "a sandbox start is an act, not a message"
                 Expect.equal item.Author ActorRef.Agent "attributed to whoever acted"
             | other -> failwithf "expected one note, got %A" other
 
@@ -839,13 +846,16 @@ let private timelineTests =
             let proj, _ = ConversationProjection.applyEvents None [ envelope ] ConversationProjection.empty
             match proj.Items with
             | [ item ] ->
-                let said =
-                    match noteDetail item with
-                    | Some detail -> detail
-                    | None -> failwith "the note carried no detail to name the grant"
+                // The grant a person did not get exactly is on the sentence they read, and in
+                // the typed realisation the screen shows as its own line.
+                let said = ConversationItem.said item
                 Expect.equal item.Body "started sandbox test (srt)" "still says what started"
                 Expect.isTrue (said.Contains "/run/docker.sock") (sprintf "the grant is named, said: %s" said)
                 Expect.isTrue (said.Contains "any unix socket") (sprintf "and what it became, said: %s" said)
+                match item.Kind with
+                | ConversationItemKind.ActNote { SandboxStarted = Some s } ->
+                    Expect.equal (List.length s.Realisation) 1 "and the note carries the realisation as a fact, not only as prose"
+                | _ -> failwith "a sandbox start is an act carrying its facts"
             | other -> failwithf "expected one note, got %A" other
 
         // The start above and this are the two outcomes of one declaration. Until this note

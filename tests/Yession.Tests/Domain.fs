@@ -727,7 +727,7 @@ let private repoTests =
                   Author = ActorRef.Agent
                   Body = "started sandbox work (srt)"
                   Status = Complete
-                  Kind = ConversationItemKind.ActNote { Detail = Some "forwarding github from user:ada"; Notable = false }
+                  Kind = ConversationItemKind.ActNote { Detail = Some "forwarding github from user:ada"; Notable = false; SandboxStarted = None }
                   Offset = EventOffset.create 1L |> expect
                   Woke = None; Replying = None }
             Expect.equal
@@ -747,7 +747,7 @@ let private repoTests =
                   Offset = EventOffset.create 1L |> expect
                   Woke = None; Replying = None }
             Expect.equal
-                (ConversationItem.said (item (ConversationItemKind.ActNote { Detail = None; Notable = false })))
+                (ConversationItem.said (item (ConversationItemKind.ActNote { Detail = None; Notable = false; SandboxStarted = None })))
                 "removed repo octo/hello"
                 "an act with one clause"
             Expect.equal
@@ -819,8 +819,8 @@ let private chapterTests =
           Offset = EventOffset.create 1L |> expect
           Woke = None; Replying = None }
     let item id kind = itemSaying id "something happened" kind
-    let notable = item "n" (ConversationItemKind.ActNote { Detail = None; Notable = true })
-    let ordinary = item "o" (ConversationItemKind.ActNote { Detail = None; Notable = false })
+    let notable = item "n" (ConversationItemKind.ActNote { Detail = None; Notable = true; SandboxStarted = None })
+    let ordinary = item "o" (ConversationItemKind.ActNote { Detail = None; Notable = false; SandboxStarted = None })
     let said = item "s" ConversationItemKind.Message
     /// What somebody's verdict alone looks like, without a name over it — the shape a doc
     /// written before chapters had names decodes to, and the one an auto-chapter keeps.
@@ -885,7 +885,7 @@ let private chapterTests =
         // taking a headline and making a worse headline.
         testCase "a short act headline is its whole name" <| fun () ->
             let act =
-                itemSaying "a" "PR octo/hello#12 merged" (ConversationItemKind.ActNote { Detail = None; Notable = true })
+                itemSaying "a" "PR octo/hello#12 merged" (ConversationItemKind.ActNote { Detail = None; Notable = true; SandboxStarted = None })
             Expect.equal (Chapters.defaultName act) "PR octo/hello#12 merged" "nothing to cut"
 
         // The guess reads the line's WORDS. A line that opens with markdown opens with
@@ -2704,7 +2704,7 @@ let private namingTests =
         testCase "a chapter no doc entry opens is not a subject" <| fun () ->
             let act =
                 { saying "n" "PR octo/hello#12 merged" with
-                    Kind = ConversationItemKind.ActNote { Detail = None; Notable = true } }
+                    Kind = ConversationItemKind.ActNote { Detail = None; Notable = true; SandboxStarted = None } }
             Expect.isTrue (Chapters.opens Map.empty act) "it does open a chapter"
             Expect.equal (chaptersOwed Map.empty Map.empty [ act ]) [] "and it is still not named"
 
@@ -2824,7 +2824,7 @@ let private namingTests =
             let noted =
                 { saying "b" "repo octo/hello added" with
                     Author = ActorRef.SessionProcess
-                    Kind = ConversationItemKind.ActNote { Detail = None; Notable = true } }
+                    Kind = ConversationItemKind.ActNote { Detail = None; Notable = true; SandboxStarted = None } }
             Expect.equal
                 (Naming.owed Map.empty "" Map.empty [ asked; noted ] |> List.collect (fun job -> job.Ask.Lines))
                 [ "fix the refresh token" ]
