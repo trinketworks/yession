@@ -1259,7 +1259,7 @@ module Codec =
                     [ "messageId", messageId.Encode p.MessageId
                       "sandbox", sandboxRef.Encode p.Sandbox
                       "terminal", terminalId.Encode p.Terminal
-                      "block", blockId.Encode p.Block
+                      "block", Encode.option blockId.Encode p.Block
                       // Whose, by name — the same register the rest of the log names people
                       // in, and never a value.
                       "owner", credentialFor.Encode p.Owner
@@ -1270,7 +1270,7 @@ module Codec =
                 { GitCredentialSpent.MessageId = get.Required.Field "messageId" messageId.Decode
                   GitCredentialSpent.Sandbox = get.Required.Field "sandbox" sandboxRef.Decode
                   GitCredentialSpent.Terminal = get.Required.Field "terminal" terminalId.Decode
-                  GitCredentialSpent.Block = get.Required.Field "block" blockId.Decode
+                  GitCredentialSpent.Block = get.Required.Field "block" (Decode.option blockId.Decode)
                   GitCredentialSpent.Owner = get.Required.Field "owner" credentialFor.Decode
                   GitCredentialSpent.Repo = get.Required.Field "repo" Decode.string
                   GitCredentialSpent.Actor = get.Required.Field "actor" actor.Decode }) }

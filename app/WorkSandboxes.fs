@@ -77,7 +77,7 @@ type CredentialSource =
       /// sandbox carries what every block shares (a route), a block carries whose it is.
       /// Nothing, never a refusal: a block lent nothing runs on what its shell has, and what
       /// its git is then told is the gateway's sentence to say.
-      Lend : Authority -> SandboxRef -> TerminalId -> BlockId -> Async<BlockEnv>
+      Lend : Authority -> SandboxRef -> TerminalId -> BlockId option -> Async<BlockEnv>
       /// Whatever a terminal's last block was lent is returned (`BlockLoans.Retire`).
       Retire : TerminalId -> unit }
 
@@ -433,7 +433,7 @@ let create (config: WorkSandboxesConfig) : Result<WorkSandboxes, string> =
     /// act's credential, merged. Nothing for a sandbox that forwards nothing, and nothing
     /// for a name this session does not have — its environment refuses the spawn anyway,
     /// with the reason.
-    let lend (name: SandboxRef) (terminal: TerminalId) (block: BlockId) (authority: Authority) : Async<BlockEnv> =
+    let lend (name: SandboxRef) (terminal: TerminalId) (block: BlockId option) (authority: Authority) : Async<BlockEnv> =
         async {
             match resolve name with
             | None -> return BlockEnv.none

@@ -332,11 +332,13 @@ module Marks =
                     String.concat "\n"
                         [ " __y_pre() { case \"$BASH_COMMAND\" in __y_post) return;; esac; [ -n \"$__y_armed\" ] && { command -p printf '" + commandStart + "'; unset __y_armed; }; }"
                           " __y_post() { __y_code=$?; command -p printf '" + commandDone + "' \"$__y_code\"; __y_armed=1; }"
+                          // Before `PS1` is armed: nothing typed before the first prompt
+                          // mark is recorded, and this is the longest line of the lot.
+                          " " + envFunction
                           " PROMPT_COMMAND='__y_post'"
                           " PS1='\\[" + promptStart + "\\]'\"$PS1\""
                           " __y_armed=1"
-                          " trap '__y_pre' DEBUG"
-                          " " + envFunction ] }
+                          " trap '__y_pre' DEBUG" ] }
         | "zsh" ->
             // zsh has real hooks. They are APPENDED to whatever the image's shell already
             // registered, never substituted: replacing a shell's existing hooks breaks the
@@ -349,8 +351,8 @@ module Marks =
                           " autoload -Uz add-zsh-hook"
                           " add-zsh-hook preexec __y_pre"
                           " add-zsh-hook precmd __y_post"
-                          " PS1='" + promptStart + "'\"$PS1\""
-                          " " + envFunction ] }
+                          " " + envFunction
+                          " PS1='" + promptStart + "'\"$PS1\"" ] }
         | "sh"
         | "dash" ->
             // A bare POSIX shell has NO prompt hook, so the marks ride inside PS1, which the
@@ -390,8 +392,8 @@ module Marks =
                 { Rc =
                     String.concat "\n"
                         [ " __y_c() { __y_r=$?; command -p printf '" + commandStart + "'; return $__y_r; }"
-                          " PS1='$(command -p printf \"\\001" + commandDone + promptStart + "\\002\" $?)'"
-                          " " + envFunction ] }
+                          " " + envFunction
+                          " PS1='$(command -p printf \"\\001" + commandDone + promptStart + "\\002\" $?)'" ] }
         | _ -> None
 
     /// The line typed at an instrumented shell to run `command` as a block, with its stdin

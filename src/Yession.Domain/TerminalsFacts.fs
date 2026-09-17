@@ -248,7 +248,9 @@ and GitCredentialSpent =
     { MessageId : MessageId
       Sandbox : SandboxRef
       Terminal : TerminalId
-      Block : BlockId
+      /// The block whose loan it was — or none, for a push a lease holder typed: their
+      /// keystrokes are no block, and the loan was lent to the lease itself.
+      Block : BlockId option
       /// Whose credential — the block's act resolved by Plan 08 precedence, which is a
       /// person's or the deployment's own.
       Owner : CredentialFor

@@ -313,7 +313,7 @@ let private frameSerializationTests =
                     { MessageId = messageId
                       Sandbox = SandboxRef.parse "octo/hello:dev" |> expect
                       Terminal = TerminalId.create "term-1" |> expect
-                      Block = BlockId.create "b-1" |> expect
+                      Block = Some (BlockId.create "b-1" |> expect)
                       Owner = CredentialFor.Person (Principal.User (UserId.create "alice" |> expect))
                       Repo = "octo/hello"
                       Actor = ActorRef.Agent }
@@ -321,10 +321,19 @@ let private frameSerializationTests =
                     { MessageId = messageId
                       Sandbox = SandboxRef.parse "octo/hello:dev" |> expect
                       Terminal = TerminalId.create "term-1" |> expect
-                      Block = BlockId.create "b-2" |> expect
+                      Block = Some (BlockId.create "b-2" |> expect)
                       Owner = CredentialFor.Deployment
                       Repo = "octo/hello"
                       Actor = ActorRef.Configured (RepoRef.create "octo/hello" |> expect) }
+                  // Typed under a lease: no block, the holder's own.
+                  GitCredentialSpent
+                    { MessageId = messageId
+                      Sandbox = SandboxRef.parse "octo/hello:dev" |> expect
+                      Terminal = TerminalId.create "term-1" |> expect
+                      Block = None
+                      Owner = CredentialFor.Person (Principal.User (UserId.create "alice" |> expect))
+                      Repo = "octo/hello"
+                      Actor = UserRef (UserId.create "alice" |> expect) }
                   WorkSandboxStarted
                     { MessageId = messageId
                       Sandbox = SandboxRef.defaultRef

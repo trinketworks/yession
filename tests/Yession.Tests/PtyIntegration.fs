@@ -206,6 +206,30 @@ let private withLendingTerminal (shell: TerminalShell) (lent: BlockEnv ref) (nam
     let loans : SessionTerminals.BlockLoans = { Lend = (fun _ _ _ _ -> async { return lent.Value }); Retire = ignore }
     withShellTerminal shell loans (fun _ -> async { return () }) name body
 
+/// A lender that lends `lent` and records every ask and every return — what the lease cases
+/// read, since a lease's loan is asked for no block and returned when the lease ends.
+type private RecordedLoans =
+    { Loans : SessionTerminals.BlockLoans
+      Asked : ResizeArray<BlockId option * Authority>
+      Retired : ResizeArray<TerminalId> }
+
+let private recordedLoans (lent: BlockEnv) : RecordedLoans =
+    let asked = ResizeArray ()
+    let retired = ResizeArray ()
+    { Loans =
+        { Lend =
+            fun _ _ block authority ->
+                async {
+                    asked.Add (block, authority)
+                    return lent
+                }
+          Retire = fun terminal -> retired.Add terminal }
+      Asked = asked
+      Retired = retired }
+
+let private withLoansTerminal (shell: TerminalShell) (loans: SessionTerminals.BlockLoans) (name: string) body =
+    withShellTerminal shell loans (fun _ -> async { return () }) name body
+
 /// A queue entry for a terminal, as the drain would hand one over.
 let private queueEntry (terminal: TerminalId) (author: Principal) (n: string) : PendingAct =
     { QueueId = QueueId.create n |> expect
@@ -907,10 +931,81 @@ let private lentTests =
                     }))
     ]
 
+/// What a lease is lent. The holder's keystrokes are no block, so the loan is the lease's
+/// own: asked for no block, typed in where the transcript cannot see it, returned when the
+/// lease ends — and not lent at all over a program the shell is running.
+let private leaseLoanTests =
+    let ada = Principal.Peer (PeerId.create "ada" |> expect)
+    let adasLoan =
+        { BlockEnv.GitConfig = Some ("http.http://gw:1/.extraheader", "X-Yession-Loan: s3cret-loan")
+          BlockEnv.Vars = [ "GIT_AUTHOR_NAME", Some "Ada Lovelace" ] }
+    let printed (records: ResizeArray<TranscriptRecord>) =
+        records
+        |> Seq.filter (fun r -> r.Kind = TranscriptOutput)
+        |> Seq.map (fun r -> r.Data)
+        |> String.concat ""
+    testList "What a lease is lent, on a real pty" [
+        for shell, label in [ TerminalShell.bash, "bash"; TerminalShell.posix, "sh" ] do
+            testCaseAsync (sprintf "%s: a lease holder's keystrokes carry their own loan, and the transcript never sees it go in" label) <|
+                (let recorded = recordedLoans adasLoan
+                 withLoansTerminal shell recorded.Loans (label + "-lease-loan") (fun terminals id records _ _ _ ->
+                    async {
+                        match! terminals.Take id (Principal.toActor ada) with
+                        | Error e -> failwith e
+                        | Ok () ->
+                            Expect.equal
+                                (List.ofSeq recorded.Asked)
+                                [ None, Authority.ofAuthor ada ]
+                                "asked once, for no block, on the holder's own authority"
+                            Expect.isTrue (terminals.Input id (Principal.toActor ada) "echo \"author=$GIT_AUTHOR_NAME\"\r") "the holder types"
+                            let! seen = printedOutput records "author=Ada Lovelace"
+                            Expect.isTrue seen (sprintf "what they typed ran with the loan's identity; transcript: %s" (printed records))
+                            let everything =
+                                records |> Seq.map (fun r -> sprintf "[%A] %s" r.Kind r.Data) |> String.concat "\n"
+                            Expect.isFalse ((printed records).Contains "s3cret-loan") (sprintf "the loan's secret is nowhere in the transcript:\n%s" everything)
+                            Expect.isFalse ((printed records).Contains "__y_env") (sprintf "nor the line that carried it:\n%s" everything)
+                    }))
+
+        testCaseAsync "ending the lease returns the holder's loan" <|
+            (let recorded = recordedLoans adasLoan
+             withLoansTerminal TerminalShell.bash recorded.Loans "lease-returned" (fun terminals id _ _ _ _ ->
+                async {
+                    match! terminals.Take id (Principal.toActor ada) with
+                    | Error e -> failwith e
+                    | Ok () ->
+                        let before = recorded.Retired.Count
+                        match! terminals.Release id (Principal.toActor ada) with
+                        | Error e -> failwith e
+                        | Ok () -> Expect.equal (List.ofSeq recorded.Retired |> List.skip before) [ id ] "returned on the release, once"
+                }))
+
+        testCaseAsync "a lease taken over a running block lends nothing" <|
+            (let recorded = recordedLoans adasLoan
+             withLoansTerminal TerminalShell.bash recorded.Loans "lease-mid-block" (fun terminals id records _ _ _ ->
+                async {
+                    let bob = Principal.Peer (PeerId.create "bob" |> expect)
+                    // Ada's block holds the shell; Bob takes the keyboard while it runs.
+                    let running = terminals.RunBlock id (queueEntry id ada "1") "sleep 1; echo done" ignore
+                    Async.StartImmediate running
+                    let! started = until 5000 (fun () -> recorded.Asked.Count = 1)
+                    Expect.isTrue started "the block was lent"
+                    match! terminals.Take id (Principal.toActor bob) with
+                    | Error e -> failwith e
+                    | Ok () ->
+                        Expect.equal
+                            (recorded.Asked |> Seq.map fst |> List.ofSeq)
+                            [ Some (BlockId.create "b-1" |> expect) ]
+                            "nothing was asked for the lease: the shell is inside a program"
+                        let! finished = printedOutput records "done"
+                        Expect.isTrue finished (sprintf "and the block was left to finish; transcript: %s" (printed records))
+                }))
+    ]
+
 let tests =
     testList "Pty (Plan 13)" [
         throughTheHostTests
         lentTests
+        leaseLoanTests
 
         testCaseAsync "the host backend offers a pty at all" <|
             async {
