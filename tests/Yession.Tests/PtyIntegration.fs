@@ -352,6 +352,60 @@ let private integrationLostTests =
                                          | _ -> false))
                                     "and every client is told, by the same route it was told it was lost"
                 })
+
+        testCaseAsync "a shell wedged at its continuation prompt is cleared by re-arming, and runs again" <|
+            withLiveTerminal "wedged" (fun terminals id _ log _ advance ->
+                async {
+                    let ada = Principal.Peer (PeerId.create "ada" |> expect)
+                    // Wedge the instrumented shell the way a mis-wrapped long line does: an
+                    // unbalanced quote leaves bash at its PS2 continuation, and from there
+                    // every line — a re-arm's rc included — is swallowed as more of the same
+                    // command. This is the state the rejected-by-system investigation found a
+                    // real terminal stuck in for a day.
+                    match! terminals.Take id (Principal.toActor ada) with
+                    | Error e -> failwith e
+                    | Ok () ->
+                        terminals.Input id (Principal.toActor ada) "echo 'wedged\r" |> ignore
+                        do! Async.Sleep 800
+                        match! terminals.Release id (Principal.toActor ada) with
+                        | Error e -> failwith e
+                        | Ok () ->
+                            // A block typed into the continuation never starts, so no `C`
+                            // comes and the detector fires — the same gap a replaced shell
+                            // leaves, reached a different way.
+                            Async.StartImmediate (terminals.RunBlock id (queueEntry id ada "1") "echo after" ignore)
+                            let! detected =
+                                until 8000 (fun () ->
+                                    advance (System.TimeSpan.FromSeconds 3.0)
+                                    not (Set.isEmpty (terminals.Lost ())))
+                            Expect.isTrue detected "the continuation ate the block's line, so no `C` came"
+                            // Re-arm must ABANDON the continuation before it types the rc, or
+                            // the rc is swallowed too and the shell never answers — which is
+                            // exactly what wedged it. `unwedge` is what makes this pass. A
+                            // shell that never answers leaves `Rearm` waiting on its own
+                            // window (turned by the fake clock this test does not advance
+                            // here), so run it beside a real-time deadline: without the fix
+                            // this fails as a sentence rather than hanging the whole suite.
+                            let rearmOutcome : Result<unit, string> option ref = ref None
+                            Async.StartImmediate (
+                                async {
+                                    let! r = terminals.Rearm id
+                                    rearmOutcome.Value <- Some r })
+                            let! returned = until 10000 (fun () -> rearmOutcome.Value.IsSome)
+                            Expect.isTrue returned "re-arm returned rather than hanging: the wedge was cleared"
+                            match rearmOutcome.Value with
+                            | Some (Error e) -> failwithf "re-arm did not clear the wedge: %s" e
+                            | None -> failwith "unreachable: the wait would have failed first"
+                            | Some (Ok ()) ->
+                                Expect.isEmpty (terminals.Lost ()) "the shell answers again"
+                                // Recovered means USABLE, not just marked: a fresh block runs
+                                // to completion on the reclaimed shell.
+                                do! terminals.RunBlock id (queueEntry id ada "2") "echo recovered" ignore
+                                let! results = blockResults log
+                                Expect.isTrue
+                                    (results |> List.exists (function CommandSucceeded _ -> true | _ -> false))
+                                    "a block runs to a clean exit on the reclaimed shell"
+                })
     ]
 
 let private liveModeTests =
