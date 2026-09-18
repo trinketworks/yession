@@ -398,7 +398,7 @@ let tests =
                         res.writeHead (200, createObj [ "content-type", box "text/plain" ]) |> ignore
                         res.``end`` "answered by the upstream")
                 do! Async.FromContinuations (fun (cont, _, _) -> upstream.listen (0, "127.0.0.1", fun () -> cont ()) |> ignore)
-                let! gateway = GitGateway.start (sprintf "http://127.0.0.1:%d" (Interop.serverPort upstream))
+                let! gateway = GitGateway.start (sprintf "http://127.0.0.1:%d" (Interop.serverPort upstream)) ignore
                 try
                     let cap = gateway.Grant SandboxRef.defaultRef
                     let secret =

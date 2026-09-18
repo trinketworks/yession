@@ -385,14 +385,19 @@ let private routeWith (gateway: GitGateway.Gateway) (name: string) (lend: Lend) 
     let secret = gateway.Lend (sandbox name) terminal (lenderOf lend)
     lentEnv gateway cap secret
 
-let private withGateway (upstream: string) (body: GitGateway.Gateway -> Async<unit>) : Async<unit> =
+/// A gateway whose faults-after-answering go to `report` — the seam a case reads when
+/// what it asserts is that a fault git could not be told about was still said somewhere.
+let private withGatewayReporting (upstream: string) (report: string -> unit) (body: GitGateway.Gateway -> Async<unit>) : Async<unit> =
     async {
-        let! gateway = GitGateway.start upstream
+        let! gateway = GitGateway.start upstream report
         try
             do! body gateway
         finally
             gateway.Close () |> Async.StartImmediate
     }
+
+let private withGateway (upstream: string) (body: GitGateway.Gateway -> Async<unit>) : Async<unit> =
+    withGatewayReporting upstream ignore body
 
 let private portsTests =
     testList "a real git at the gateway" [
@@ -828,35 +833,60 @@ let private gitHttpBackend (root: string) (seen: ResizeArray<string option>) : H
 // breaks. So the upstream here is git's own smart-HTTP server over a real bare repository,
 // and the assertion is that the commit landed.
 
+/// Both sides of a push: github.com's — `octo/hello.git`, bare, on `main`, empty, behind
+/// git's own smart-HTTP server recording each request's credential into `seen` — and the
+/// sandbox's, a checkout with one commit whose remote is written the way a person writes
+/// it. Handed to `body` as (bare, work, seen, upstream origin).
+let private withPushSides (body: string -> string -> ResizeArray<string option> -> string -> Async<unit>) : Async<unit> =
+    async {
+        let root = mkdtemp nodeFs nodeOs
+        try
+            let served = sprintf "%s/served" root
+            mkdir nodeFs (sprintf "%s/octo" served)
+            let bare = sprintf "%s/octo/hello.git" served
+            do! gitOk [ "init"; "--bare"; "-b"; "main"; bare ] root |> Async.Ignore
+            let seen = ResizeArray<string option> ()
+            let upstream = gitHttpBackend served seen
+            do! Async.FromContinuations (fun (cont, _, _) -> upstream.listen (0, "127.0.0.1", fun () -> cont ()) |> ignore)
+            try
+                let work = sprintf "%s/work" root
+                mkdir nodeFs work
+                do! gitOk [ "init"; "-b"; "main" ] work |> Async.Ignore
+                writeFile nodeFs (sprintf "%s/README.md" work) "pushed through the gateway\n"
+                do! gitOk [ "add"; "." ] work |> Async.Ignore
+                do! gitOk [ "commit"; "-m"; "seed" ] work |> Async.Ignore
+                do! gitOk [ "remote"; "add"; "origin"; "https://github.com/octo/hello.git" ] work |> Async.Ignore
+                do! body bare work seen (sprintf "http://127.0.0.1:%d" (serverPort upstream))
+            finally
+                upstream.close ignore
+        finally
+            rmrf nodeFs root
+    }
+
+/// The record is written after the answer has gone back to git, so a report of its loss can
+/// land after `git push` has already exited. Bounded rather than slept.
+let private untilReported (reported: ResizeArray<string>) : Async<bool> =
+    let rec go remaining =
+        async {
+            if reported.Count > 0 then return true
+            elif remaining <= 0 then return false
+            else
+                do! Async.Sleep 50
+                return! go (remaining - 50)
+        }
+    go 5000
+
 let private pushTests =
     testList "a push through the gateway" [
 
-        testCaseAsync "lands in the repository on the other side, with the credential on every request" <| async {
-            let root = mkdtemp nodeFs nodeOs
-            try
-                // github.com's side: `octo/hello.git`, bare, on `main`, empty.
-                let served = sprintf "%s/served" root
-                mkdir nodeFs (sprintf "%s/octo" served)
-                let bare = sprintf "%s/octo/hello.git" served
-                do! gitOk [ "init"; "--bare"; "-b"; "main"; bare ] root |> Async.Ignore
-                let seen = ResizeArray<string option> ()
-                let upstream = gitHttpBackend served seen
-                do! Async.FromContinuations (fun (cont, _, _) -> upstream.listen (0, "127.0.0.1", fun () -> cont ()) |> ignore)
-                try
+        testCaseAsync "lands in the repository on the other side, with the credential on every request" <|
+            withPushSides (fun bare work seen origin ->
+                async {
                     do!
-                        withGateway (sprintf "http://127.0.0.1:%d" (serverPort upstream)) (fun gateway ->
+                        withGateway origin (fun gateway ->
                             async {
                                 let lend = lending (Some "ghu_lent")
                                 let env = routeWith gateway "octo/hello:dev" lend
-                                // The sandbox's side: a checkout with one commit, whose remote
-                                // is written the way a person writes it.
-                                let work = sprintf "%s/work" root
-                                mkdir nodeFs work
-                                do! gitOk [ "init"; "-b"; "main" ] work |> Async.Ignore
-                                writeFile nodeFs (sprintf "%s/README.md" work) "pushed through the gateway\n"
-                                do! gitOk [ "add"; "." ] work |> Async.Ignore
-                                do! gitOk [ "commit"; "-m"; "seed" ] work |> Async.Ignore
-                                do! gitOk [ "remote"; "add"; "origin"; "https://github.com/octo/hello.git" ] work |> Async.Ignore
                                 let! pushed = git [ "push"; "origin"; "main" ] work env
                                 Expect.equal pushed.Status 0 (sprintf "the push succeeded: %s" pushed.Stderr)
                                 let! expected = gitOk [ "rev-parse"; "main" ] work
@@ -873,11 +903,36 @@ let private pushTests =
                                 // The push, once — not its advertisement, and not the fetch.
                                 Expect.equal lend.Spent [ "octo/hello" ] "whoever lent it is told what it was spent on"
                             })
-                finally
-                    upstream.close ignore
-            finally
-                rmrf nodeFs root
-        }
+                })
+
+        // The record is written after the push has gone out, on an answer whose headers are
+        // already sent: there is no channel left to git. A record that cannot be written is
+        // not a gateway fault — the push landed — and not nothing either: a push went out on
+        // somebody's credential with no line saying so, which is the one thing the record
+        // exists to prevent.
+        testCaseAsync "a push whose record cannot be written still lands, and the loss is reported naming whose credential it was" <|
+            withPushSides (fun bare work _ origin ->
+                async {
+                    let reported = ResizeArray<string> ()
+                    do!
+                        withGatewayReporting origin reported.Add (fun gateway ->
+                            async {
+                                let lend = lending (Some "ghu_lent")
+                                let lender = { lenderOf lend with Spent = fun _ -> async { failwith "the log is closed" } }
+                                let cap = gateway.Grant (sandbox "octo/hello:dev")
+                                let secret = gateway.Lend (sandbox "octo/hello:dev") terminal lender
+                                let! pushed = git [ "push"; "origin"; "main" ] work (lentEnv gateway cap secret)
+                                Expect.equal pushed.Status 0 (sprintf "the push succeeded: %s" pushed.Stderr)
+                                let! expected = gitOk [ "rev-parse"; "main" ] work
+                                let! landed = gitOk [ "rev-parse"; "main" ] bare
+                                Expect.equal (landed.Trim ()) (expected.Trim ()) "the commit is on the other side"
+                                let! said = untilReported reported
+                                Expect.isTrue said "the loss was reported"
+                                Expect.isTrue
+                                    (reported |> Seq.exists (fun line -> line.Contains "octo/hello" && line.Contains "user:ada" && line.Contains "the log is closed"))
+                                    (sprintf "naming the repository, whose credential, and why: %A" (List.ofSeq reported))
+                            })
+                })
     ]
 
 // --- [Srt]: from inside a confined sandbox -------------------------------------------------
