@@ -671,8 +671,10 @@ module Dom =
         let sessions = "data-sessions"
         let session = "data-session"
         let status = "data-status"
-        let launch = "data-launch"
         let stop = "data-stop"
+        /// The name, in every state a session can be opened from — it links to the stable
+        /// `/open` route, which launches a stopped session on the way in. There is no launch
+        /// hook: opening is launching.
         let openLink = "data-open"
         let createSession = "data-create-session"
         /// The row's archive verb, and the archived row's way back. Both carry the session id.
