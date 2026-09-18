@@ -1432,7 +1432,23 @@ module DockerSandbox =
                                                 // no-new-privileges stays.
                                                 "CapDrop", box [| "ALL" |]
                                                 "CapAdd", box [| "CHOWN"; "FOWNER"; "DAC_OVERRIDE" |]
-                                                "SecurityOpt", box [| "no-new-privileges" |] ]) ])
+                                                "SecurityOpt", box [| "no-new-privileges" |]
+                                                // /dev/shm, above docker's 64MB default.
+                                                // Chromium composites through shared memory
+                                                // and starves the moment more than one page
+                                                // paints at once: measured under this exact
+                                                // HostConfig, six concurrent headless pages
+                                                // leave two standing at 64MB and all six at
+                                                // 1GB, that being the only thing changed. A
+                                                // repo cannot reach this from its yession.yaml
+                                                // — the container block is image/build/volumes/
+                                                // cmd/entrypoint and nothing else — so a browser
+                                                // suite run in here (Playwright, Cypress) could
+                                                // not fix a too-small /dev/shm from the outside.
+                                                // tmpfs is a ceiling, not a reservation: a
+                                                // container that never opens a browser writes
+                                                // nothing here and pays nothing for the headroom.
+                                                "ShmSize", box 1073741824 ]) ])
                             |> Interop.awaitPromise
                         do! container.start () |> Interop.awaitPromise |> Async.Ignore
                         match! awaitStarted client container with
