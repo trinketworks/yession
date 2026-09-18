@@ -120,6 +120,19 @@ let tests =
                 Expect.equal remaining 0 "the sandbox's container is removed on dispose"
             })
 
+            // /dev/shm, raised above docker's 64MB default so Chromium's compositor does not
+            // starve when more than one page paints (the ShmSize note in Sandboxes.fs). A
+            // repo cannot set this from its yession.yaml, so a browser suite run in a work
+            // sandbox depends on this default being right. Written into shm rather than read
+            // off `df`, whose column layout is the daemon's to change: a 128MB write fits only
+            // because the ceiling is past the 64MB default, and that is the property under test.
+            testCaseAsync "the container's /dev/shm is larger than docker's 64MB default, so a browser can render under load" (async {
+                let! _, sandbox = startOrFail alpineSpec
+                let! run, _, _ = runInSandbox sandbox "sh" [ "-c"; "dd if=/dev/zero of=/dev/shm/probe bs=1M count=128 2>/dev/null" ] Map.empty None
+                Expect.equal run (SandboxExited 0) "a 128MB write into /dev/shm fits, so it is larger than the 64MB default"
+                do! sandbox.Dispose ()
+            })
+
             // compose's `entrypoint`, as the rule `ProcessEntry` adopts: work runs behind
             // it, housekeeping runs bare. `env VAR=…` is an entrypoint whose effect a
             // command can report, which is what makes the two sides observable.
