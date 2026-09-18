@@ -1003,7 +1003,34 @@ let private runCheckOnce (requested: string list) =
         // there — a phone viewport most of all — is a layout nobody will ever get.
         buildAssets "tests/browser/out" false
         progress "running the browser suite (.NET CLR)"
-        exec "dotnet" [ "run"; "--project"; "tests/Yession.Tests/Yession.Tests.fsproj" ]
+        // Build first, then repoint the Playwright driver's node before the run. The
+        // Microsoft.Playwright .NET package ships `node` as a stock glibc binary under
+        // `.playwright/node/<rid>/`, and in a nixos/nix work sandbox — where an agent runs
+        // this suite against its checkout — that binary's ELF loader (`/lib/ld-linux-*.so`)
+        // does not exist, so `dotnet run` errors EVERY browser test with "No such file or
+        // directory" on the driver's node before Chromium is ever reached (seen in a real
+        // session: 46 browser tests, all errored). PLAYWRIGHT_BROWSERS_PATH does not help —
+        // that is the browser, this is the driver's own node. The dev shell's `node` runs
+        // wherever this task does (the sandbox, CI, a laptop), so point the driver at it;
+        // a box with no `node` on PATH keeps the shipped binary and behaves as before.
+        exec "dotnet" [ "build"; "tests/Yession.Tests/Yession.Tests.fsproj" ]
+        let driverNodeRoot =
+            Path.Combine (repoRoot, "tests/Yession.Tests/bin/Debug/net10.0/.playwright/node")
+        let nodeOnPath =
+            match Environment.GetEnvironmentVariable "PATH" with
+            | null -> None
+            | path ->
+                path.Split (Path.PathSeparator)
+                |> Array.map (fun dir -> Path.Combine (dir, "node"))
+                |> Array.tryFind File.Exists
+        match nodeOnPath with
+        | Some node when Directory.Exists driverNodeRoot ->
+            for ridDir in Directory.GetDirectories driverNodeRoot do
+                let shipped = Path.Combine (ridDir, "node")
+                try File.Delete shipped with _ -> ()
+                File.CreateSymbolicLink (shipped, node) |> ignore
+        | _ -> ()
+        exec "dotnet" [ "run"; "--no-build"; "--project"; "tests/Yession.Tests/Yession.Tests.fsproj" ]
 
     // Last, because it is the long pole (a cold NuGet FOD fetch plus the whole compile again,
     // offline, inside the sandbox) and because the suites are the sharper signal. The Node run
