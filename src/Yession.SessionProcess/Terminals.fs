@@ -648,6 +648,18 @@ module SessionTerminals =
             |> System.String
         "\u0015" + kept + "\r" 
 
+
+    /// What clears a shell's line editor before the rc is retyped into it on a re-arm. A
+    /// long command line that readline mis-wraps can leave a quote unbalanced, and the
+    /// shell then sits at its PS2 continuation waiting for a close that never comes —
+    /// swallowing every line typed after as more of that command, the rc a re-arm sends
+    /// included, so the re-arm's own instrumentation never runs and the terminal stays
+    /// wedged until it is closed. `^C` abandons the continuation; `^U` clears any partial
+    /// line the editor still holds. Both are controls a shell reads as INPUT — which is
+    /// why the alternate screen and bracketed-paste modes a dead TUI leaves behind are
+    /// NOT reset here: those are the emulator's to clear, and the sequences that do are
+    /// output the shell would only echo back as the next command's first characters.
+    let internal unwedge : string = "\u0003\u0015"
     /// What a block is lent for its act, in the sandbox its terminal runs in. The manager
     /// asks once per block, after the classifier has approved it and before the line is
     /// typed, and puts the answer at the head of the line (`Marks.envLine`) — so a loan is
@@ -1479,6 +1491,10 @@ module SessionTerminals =
                                                 ready.Value <- false
                                                 carry.Value <- ""
                                                 let armed = awaitStart true pty.Exited said
+                                                // Clear the line editor before the rc goes in: a wedged shell (a PS2
+                                                // continuation left by a mis-wrapped line) swallows the rc otherwise, and
+                                                // the re-arm meant to reclaim the terminal never answers. See `unwedge`.
+                                                pty.Write unwedge
                                                 for line in rc.Split '\n' do
                                                     pty.Write (line + "\r")
                                                 match! armed with
