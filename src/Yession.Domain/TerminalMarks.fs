@@ -352,7 +352,12 @@ module Marks =
                           " add-zsh-hook preexec __y_pre"
                           " add-zsh-hook precmd __y_post"
                           " " + envFunction
-                          " PS1='" + promptStart + "'\"$PS1\"" ] }
+                          // `$'…'`, because zsh's prompt does not expand `\033` the way
+                          // bash's does: single-quoted, the mark reached the screen as
+                          // eleven characters of backslash text, no `A` ever arrived, and a
+                          // zsh terminal never became ready — every block on it hung. `%{…%}`
+                          // is zsh's own "zero width" bracket, bash's `\[…\]`.
+                          " PS1=$'%{" + promptStart + "%}'\"$PS1\"" ] }
         | "sh"
         | "dash" ->
             // A bare POSIX shell has NO prompt hook, so the marks ride inside PS1, which the

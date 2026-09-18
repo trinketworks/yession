@@ -228,6 +228,15 @@ module TerminalShell =
           Name = "bash"
           InteractiveArguments = [ "--noprofile"; "--norc"; "-i" ] }
 
+    /// The zsh on PATH — what the pty cases open to exercise the zsh dialect. On PATH
+    /// rather than at a path because no host puts one at `/bin/zsh` the way every host
+    /// puts `sh` and most put bash; the dev shell (devenv.nix) provides it.
+    let zsh : TerminalShell =
+        { Executable = "zsh"
+          Arguments = [ "-c" ]
+          Name = "zsh"
+          InteractiveArguments = [ "-f"; "-i" ] }
+
 /// The path vocabulary everything OUTSIDE a sandbox speaks: a directory as a terminal in
 /// that sandbox reaches it — relative to where a shell there starts when it is under
 /// there, absolute when it is not.
