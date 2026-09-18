@@ -501,6 +501,12 @@ let private newPersistence (ctor: obj) (name: string) (doc: Y.Doc) : obj = jsNat
 [<Emit("new Promise((resolve) => $0.once('synced', resolve))")>]
 let private whenSynced (persistence: obj) : JS.Promise<unit> = jsNative
 
+/// A `<meta name>`'s content, or None when the tag is absent. `|| null` so a missing tag, a
+/// missing attribute and a blank one all arrive as `None` rather than as `undefined`
+/// masquerading as a string.
+[<Emit("document.querySelector('meta[name=\"' + $0 + '\"]')?.getAttribute('content') || null")>]
+let private metaContent (name: string) : string option = jsNative
+
 // The store is keyed by SESSION: the serving Session Process embeds its session id in the
 // bootstrap page (a synchronous, pre-connection identity), so two sessions served from one
 // address never share a store. The KEY is stable wherever the session is served from; the
@@ -508,18 +514,13 @@ let private whenSynced (persistence: obj) : JS.Promise<unit> = jsNative
 // addressing sessions as `127.0.0.1:{port}` returns to an empty database after every relaunch
 // — which is what `PublicAccess.sessionAddressIsStable` marks on the shell, and why the
 // client's local-first copy is qualified there rather than promised.
-[<Emit("""(() => {
-  const meta = document.querySelector('meta[name="yession-session"]')
-  const session = meta && meta.getAttribute('content')
-  return session ? 'yession/session/' + session : 'yession/' + window.location.host + window.location.pathname
-})()""")>]
-let private persistenceKey () : string = jsNative
-
-/// A `<meta name>`'s content, or None when the tag is absent. `|| null` so a missing tag
-/// and a missing attribute both arrive as `None` rather than as `undefined` masquerading
-/// as a string.
-[<Emit("document.querySelector('meta[name=\"' + $0 + '\"]')?.getAttribute('content') || null")>]
-let private metaContent (name: string) : string option = jsNative
+//
+// A page carrying no session meta — or one carrying it blank, which `metaContent` answers None
+// for, and which names no session either — falls back to the address it was served from.
+let private persistenceKey () : string =
+    match metaContent Dom.sessionMetaName with
+    | Some session -> "yession/session/" + session
+    | None -> "yession/" + Browser.Dom.window.location.host + Browser.Dom.window.location.pathname
 
 // Resolved against the shell's `<base href>`, so a session mounted under a path signals
 // to its own prefix rather than the origin root.
@@ -868,8 +869,22 @@ let private postClaude (url: string) (body: string) : JS.Promise<{| ok: bool; st
 [<Emit("JSON.stringify({ scope: $0, code: $1 || undefined, token: $2 || undefined })")>]
 let private claudeBody (scope: string) (code: string) (token: string) : string = jsNative
 
-[<Emit("(() => { try { return JSON.parse($0).authorizeUrl || '' } catch { return '' } })()")>]
-let private parseAuthorizeUrl (body: string) : string = jsNative
+/// A field off an already-parsed JSON value, or None wherever JavaScript's `||` default fell
+/// through — absent, `null`, `''` and `0` alike. That falsiness is not incidental: a poll reply
+/// stating `interval: 0` has to take the default rather than ask this tab to poll flat out, so
+/// the one expression that can say it stays, and F# reads the answer as an option.
+[<Emit("($0[$1] || undefined)")>]
+let private jsonText (parsed: obj) (field: string) : string option = jsNative
+
+[<Emit("($0[$1] || undefined)")>]
+let private jsonNumber (parsed: obj) (field: string) : int option = jsNative
+
+/// The authorize url the session answered with, or None for a body that is not JSON, carries
+/// no url, or carries a blank one — all three of which the caller ends the flow on. The parse
+/// and the field read share one `try`, because a body that parses to `null` throws on the read
+/// and is that same nothing.
+let private parseAuthorizeUrl (body: string) : string option =
+    try jsonText (JS.JSON.parse body) "authorizeUrl" with _ -> None
 
 [<Emit("(document.querySelector($0)?.value || '')")>]
 let private panelInput (selector: string) : string = jsNative
@@ -891,11 +906,37 @@ let private fetchGitHubStatus () =
 [<Emit("JSON.stringify({ scope: $0, token: $1 || undefined })")>]
 let private githubBody (scope: string) (token: string) : string = jsNative
 
-[<Emit("(function (body) { try { const o = JSON.parse(body); return { userCode: o.userCode || '', verificationUri: o.verificationUri || '', interval: o.interval || 5 } } catch { return { userCode: '', verificationUri: '', interval: 5 } } })($0)")>]
-let private parseDeviceBegin (body: string) : {| userCode: string; verificationUri: string; interval: int |} = jsNative
+/// Where the person goes to type the code. A string, because `GitHubAwaitingApproval` holds
+/// one — and that is the whole reason this field's absence is answered here rather than in F#:
+/// an option defaulted to `""` would mint a link to nowhere and hand it over as a value, which
+/// is the fault YES009 names and one this reader cannot honestly answer while the flow state
+/// has no way to say "no uri". Closing it is that model's change, not this parser's. Until
+/// then: one field, one `||`, said once.
+[<Emit("($0.verificationUri || '')")>]
+let private deviceVerificationUri (parsed: obj) : string = jsNative
 
-[<Emit("(function (body) { try { const o = JSON.parse(body); return { status: o.status || '', interval: o.interval || 0 } } catch { return { status: '', interval: 0 } } })($0)")>]
-let private parseDevicePoll (body: string) : {| status: string; interval: int |} = jsNative
+/// The begin reply: the code to type, where to type it, and the seconds GitHub asks this tab to
+/// leave between polls. A reply that states no interval — or states `0` — gets 5, which is the
+/// device flow's own floor. No code is the whole flow's answer, so it is an option: a body that
+/// is not JSON, and one that carries no code, are the same nothing to the caller.
+let private parseDeviceBegin (body: string) : {| userCode: string option; verificationUri: string; interval: int |} =
+    try
+        let reply = JS.JSON.parse body
+        {| userCode = jsonText reply "userCode"
+           verificationUri = deviceVerificationUri reply
+           interval = jsonNumber reply "interval" |> Option.defaultValue 5 |}
+    with _ -> {| userCode = None; verificationUri = ""; interval = 5 |}
+
+/// The poll reply: where the grant has got to, and a revised interval when GitHub asks to be
+/// asked less often. No status is not a status — the caller reads anything that is not
+/// `connected` as "still waiting", and an unreadable reply is still waiting too. `0` is no
+/// revision, which is what the caller compares against the interval it is already leaving.
+let private parseDevicePoll (body: string) : {| status: string option; interval: int |} =
+    try
+        let reply = JS.JSON.parse body
+        {| status = jsonText reply "status"
+           interval = jsonNumber reply "interval" |> Option.defaultValue 0 |}
+    with _ -> {| status = None; interval = 0 |}
 
 // --- The launch surface's reads ---------------------------------------------------------------
 // Three GETs, answered on this person's own credential by the session, read in the codec the
@@ -978,8 +1019,19 @@ let private fetchPullHead (repo: RepoRef) (number: int) : Async<Result<PullHead,
 // is nothing to re-probe on, because a value arrives when it changes rather than when
 // somebody looks.
 
-[<Emit("(function (url, onFrame) { const es = new EventSource(url); es.onmessage = e => onFrame(e.data); return es })($0, $1)")>]
-let private openQueryStream (url: string) (onFrame: string -> unit) : obj = jsNative
+[<Emit("new EventSource($0)")>]
+let private newEventSource (url: string) : obj = jsNative
+
+[<Emit("$0.onmessage = $1")>]
+let private onEventSourceMessage (source: obj) (handler: Browser.Types.MessageEvent -> unit) : unit = jsNative
+
+/// The stream, with the handler already on it: opened, subscribed, handed back. The caller
+/// keeps nothing — it never closes this — so what comes back is the source itself rather than
+/// anything this client would have to remember how to undo.
+let private openQueryStream (url: string) (onFrame: string -> unit) : obj =
+    let source = newEventSource url
+    onEventSourceMessage source (fun message -> onFrame (string message.data))
+    source
 
 // --- Entry -----------------------------------------------------------------------------
 
@@ -1099,8 +1151,8 @@ let private start () =
                         if not reply.ok then return Error reply.body
                         elif expectUrl then
                             match parseAuthorizeUrl reply.body with
-                            | "" -> return Error "no authorize url in the reply"
-                            | url -> return Ok (Some url)
+                            | None -> return Error "no authorize url in the reply"
+                            | Some url -> return Ok (Some url)
                         else return Ok None
                     })
                 scope
@@ -1142,7 +1194,7 @@ let private start () =
                         else
                             let outcome = parseDevicePoll reply.body
                             match outcome.status with
-                            | "connected" -> refreshGitHub ()
+                            | Some "connected" -> refreshGitHub ()
                             | _ ->
                                 if outcome.interval > interval then
                                     dispatchRef (GitHubFlowMsg (GitHubAwaitingApproval (userCode, verificationUri, scope, outcome.interval)))
@@ -1267,8 +1319,9 @@ let private start () =
                             else
                                 let began = parseDeviceBegin reply.body
                                 match began.userCode with
-                                | "" -> return Error "no device code in the reply"
-                                | _ -> return Ok (Some (GitHubAwaitingApproval (began.userCode, began.verificationUri, scope, began.interval)))
+                                | None -> return Error "no device code in the reply"
+                                | Some userCode ->
+                                    return Ok (Some (GitHubAwaitingApproval (userCode, began.verificationUri, scope, began.interval)))
                         })
               GitHubPasteToken =
                 fun () ->
