@@ -28,10 +28,19 @@ let private statusOf (response: obj) : int = jsNative
 [<Emit("$0.text()")>]
 let private textOf (response: obj) : JS.Promise<string> = jsNative
 
-// A real function, so the response is evaluated once — the macro read `$0` twice and would
-// have re-evaluated whatever expression the caller passed.
-[<Emit("(function (response) { return response.headers.getSetCookie ? response.headers.getSetCookie() : [] })($0)")>]
-let private setCookies (response: obj) : string array = jsNative
+[<Emit("!!$0.headers.getSetCookie")>]
+let private hasGetSetCookie (response: obj) : bool = jsNative
+
+[<Emit("$0.headers.getSetCookie()")>]
+let private getSetCookie (response: obj) : string array = jsNative
+
+/// Every `set-cookie` the response carried, kept apart. `Headers.getSetCookie` is the only
+/// thing that can tell several of them apart, and a runtime old enough not to have it has
+/// nothing to offer instead — so the jar stays empty rather than half-filled from a joined
+/// header. A real function, so the response is read once: the macro this replaced named
+/// `$0` twice and would have re-evaluated whatever expression the caller passed.
+let private setCookies (response: obj) : string array =
+    if hasGetSetCookie response then getSetCookie response else [||]
 
 [<Emit("$0.headers.get('location')")>]
 let private locationOf (response: obj) : string = jsNative
@@ -39,20 +48,43 @@ let private locationOf (response: obj) : string = jsNative
 [<Emit("new URL($1, $0).toString()")>]
 let private resolveUrl (baseUrl: string) (relative: string) : string = jsNative
 
-[<Emit("(function (cookie, redirect) { return { redirect: redirect, headers: cookie === '' ? {} : { cookie: cookie } } })($0, $1)")>]
-let private request (cookie: string) (redirect: string) : obj = jsNative
+[<Emit("({ redirect: $1, headers: $0 })")>]
+let private getInit (headers: obj) (redirect: string) : obj = jsNative
 
-[<Emit("(function (cookie, body) { return { method: 'POST', redirect: 'manual', headers: cookie === '' ? {} : { cookie: cookie }, body: new URLSearchParams(body) } })($0, $1)")>]
-let private post (cookie: string) (body: obj) : obj = jsNative
+[<Emit("({ method: 'POST', redirect: 'manual', headers: $0, body: new URLSearchParams($1) })")>]
+let private postInit (headers: obj) (body: obj) : obj = jsNative
+
+/// The headers a hop carries. WHICH headers there are is the decision here: a jar with
+/// nothing in it sends no `cookie:` at all, the way a browser's first request does, rather
+/// than a header whose value is blank.
+let private headersFor (cookie: string option) : obj =
+    cookie |> Option.map (fun jar -> "cookie", box jar) |> Option.toList |> JsInterop.createObj
+
+let private request (cookie: string option) (redirect: string) : obj = getInit (headersFor cookie) redirect
+
+let private post (cookie: string option) (body: obj) : obj = postInit (headersFor cookie) body
 
 [<Emit("({ id: $0 })")>]
 let private idBody (id: string) : obj = jsNative
 
-[<Emit("(function (text) { try { return JSON.parse(text).peerToken } catch { return '' } })($0)")>]
-let private peerTokenIn (json: string) : string = jsNative
+[<Emit("(JSON.parse($0).peerToken || undefined)")>]
+let private parsedPeerToken (json: string) : string option = jsNative
 
-[<Emit("(function (text, pattern) { const m = text.match(new RegExp(pattern)); return m ? m[0] : '' })($0, $1)")>]
-let private firstMatch (text: string) (pattern: string) : string = jsNative
+/// The token in a `/me` body, if there is one. That route answers JSON once the session is
+/// reachable and an error page while it is not, so a body that will not parse is a session
+/// still coming up rather than a failure — and so is one that parsed with no token in it.
+/// Absent all the way to the caller: the retry loop is what decides what no token means.
+let private peerTokenIn (json: string) : string option =
+    try parsedPeerToken json with _ -> None
+
+[<Emit("$0.match(new RegExp($1))")>]
+let private matchesOf (text: string) (pattern: string) : string array option = jsNative
+
+/// The first thing in `text` the pattern matches. `String.match` answers null when nothing
+/// did, which is an absence rather than an empty match, and it stays one all the way to the
+/// caller for the same reason `peerTokenIn` does.
+let private firstMatch (text: string) (pattern: string) : string option =
+    matchesOf text pattern |> Option.bind Array.tryHead
 
 [<Emit("new Promise(resolve => setTimeout(resolve, $0))")>]
 let private delay (ms: int) : JS.Promise<unit> = jsNative
@@ -85,8 +117,12 @@ let spec =
 /// each hop has to carry what the last one set.
 let private jar = System.Collections.Generic.Dictionary<string, string> ()
 
-let private cookie () =
-    jar |> Seq.map (fun kv -> sprintf "%s=%s" kv.Key kv.Value) |> String.concat "; "
+/// Nothing rather than a blank line when the jar is empty: before anything has been set
+/// there is no cookie header to send, which is a different thing from sending an empty one.
+let private cookie () : string option =
+    match jar.Count with
+    | 0 -> None
+    | _ -> jar |> Seq.map (fun kv -> sprintf "%s=%s" kv.Key kv.Value) |> String.concat "; " |> Some
 
 let private keep (response: obj) =
     for raw in setCookies response do
@@ -167,17 +203,20 @@ let private run () =
         // Retried, because a Manager restarted under a promotion is the ordinary case for
         // anything measuring one build against the next, and the address is the first thing
         // that proves it is back.
-        let mutable session = ""
+        let mutable session = None
         let mutable attempts = 0
-        while session = "" && attempts < 30 do
+        while session.IsNone && attempts < 30 do
             attempts <- attempts + 1
             try
                 let! _ = fetch (ManagerRoute.at manager ManagerRoute.CreateSession) (post (cookie ()) (idBody id))
                 let! opened = get (ManagerRoute.at manager (ManagerRoute.OpenSession sessionId)) 10
                 session <- firstMatch opened "https?://[^\"'<>\\s]*/s/[0-9A-Z]+/"
             with _ -> ()
-            if session = "" then do! delay 2000
-        if session = "" then failwith "the Manager never answered with a session address"
+            if session.IsNone then do! delay 2000
+        let session =
+            match session with
+            | Some address -> address
+            | None -> failwith "the Manager never answered with a session address"
 
         // The front door routes a session only once it has registered its port, so the
         // sign-in bounce is retried rather than assumed.
@@ -189,7 +228,7 @@ let private run () =
             signIns <- signIns + 1
             let! _ = get (sprintf "%slogin" session) 10
             let! me = get (sprintf "%sme" session) 10
-            token <- match peerTokenIn me with | "" -> None | minted -> Some minted
+            token <- peerTokenIn me
             if token.IsNone then do! delay 1000
         let token =
             match token with

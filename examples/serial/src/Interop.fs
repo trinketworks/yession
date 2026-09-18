@@ -65,9 +65,17 @@ let createServer (handler: IncomingMessage -> ServerResponse -> unit) : HttpServ
 [<Emit("$0.address().port")>]
 let serverPort (server: HttpServer) : int = jsNative
 
-/// Decode a Node Buffer (or string) chunk to a UTF-8 string.
-[<Emit("(function (chunk) { return typeof chunk === 'string' ? chunk : chunk.toString('utf8') })($0)")>]
-let bufferToString (chunk: obj) : string = jsNative
+[<Emit("typeof $0 === 'string'")>]
+let private isJsString (chunk: obj) : bool = jsNative
+
+[<Emit("$0.toString('utf8')")>]
+let private decodeUtf8 (chunk: obj) : string = jsNative
+
+/// Decode a Node Buffer (or string) chunk to a UTF-8 string. A stream hands over whichever
+/// of the two its encoding was set to, and only the Buffer has a decode to do — which is a
+/// question about the chunk and an answer in F#, not a ternary inside a binding.
+let bufferToString (chunk: obj) : string =
+    if isJsString chunk then unbox<string> chunk else decodeUtf8 chunk
 
 /// Read a request header. Node lowercases header names; None when absent.
 [<Emit("($0.headers[$1] ?? null)")>]
