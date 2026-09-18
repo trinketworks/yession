@@ -48,8 +48,10 @@ module Yession.Host.GitGateway
 // answered with somebody else's.
 //
 // What this does NOT do: every process in a sandbox is one uid, and a block can read another
-// block's live loan out of `/proc`. That is the trust boundary a sandbox already is
-// (docs/GAPS.md), stated rather than solved.
+// block's live loan out of `/proc` — or the block's own can print it, since it sits in the
+// environment `env` dumps. That is the trust boundary a sandbox already is (docs/GAPS.md),
+// stated rather than solved; what IS held is that a loan answers only on the route of the
+// sandbox it was lent in, so a loan that leaks travels no further than that sandbox.
 
 open System
 open Fable.Core
@@ -358,7 +360,7 @@ let start (upstream: string) : Async<Gateway> =
         | Some request ->
             match Map.tryFind request.Cap grants with
             | None -> notFound res
-            | Some _ ->
+            | Some routed ->
                 let isAdvertisement = req.``method`` = "GET"
                 let contentType =
                     sprintf "application/x-%s-%s" request.Service (if isAdvertisement then "advertisement" else "result")
@@ -369,9 +371,18 @@ let start (upstream: string) : Async<Gateway> =
                     refuse
                         "nothing is lending a github credential to this request — git here spends the credential of the command it runs in; run it as a command in this terminal"
                 | Some secret ->
-                    match Map.tryFind secret live with
+                    // A loan answers on the route of the sandbox it was lent in, and on no
+                    // other. Carried down another sandbox's route it is a secret THAT route
+                    // never minted, and is answered like one: every process in a sandbox
+                    // shares one uid, so what this bounds is how far a loan read out of a
+                    // neighbour's environment can travel — one sandbox, not the session.
+                    let onThisRoute (loan: Loan) = loan.Sandbox = routed
+                    match Map.tryFind secret live |> Option.filter onThisRoute with
                     | None ->
-                        match returned |> Map.tryPick (fun _ (held, loan) -> if held = secret then Some loan else None) with
+                        match
+                            returned
+                            |> Map.tryPick (fun _ (held, loan) -> if held = secret && onThisRoute loan then Some loan else None)
+                        with
                         | Some loan ->
                             refuse (
                                 sprintf
