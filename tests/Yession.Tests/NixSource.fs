@@ -40,8 +40,13 @@ let private readDir (fs: obj) (dir: string) : (string * bool * bool) array = jsN
 [<Emit("$0.spawnSync($1, $2, { encoding: 'utf8', input: $3, maxBuffer: 33554432 })")>]
 let private spawnSync (cp: obj) (command: string) (args: string array) (input: string) : obj = jsNative
 
-[<Emit("(function (result) { return (result.status === null ? -1 : result.status) })($0)")>]
-let private exitCode (result: obj) : int = jsNative
+/// `spawnSync` reports no status at all for a child that a signal killed rather than one that
+/// exited. `-1` says that, and says it where the alternative — reading `null` as `0` — would
+/// have a killed `nix eval` report success.
+[<Emit("$0.status")>]
+let private statusOf (result: obj) : int option = jsNative
+
+let private exitCode (result: obj) : int = statusOf result |> Option.defaultValue -1
 
 [<Emit("($0.stdout || '')")>]
 let private stdoutOf (result: obj) : string = jsNative

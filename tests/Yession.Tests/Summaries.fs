@@ -29,8 +29,13 @@ let private json (res: Interop.ServerResponse) (status: int) (body: string) =
     res.writeHead (status, JsInterop.createObj [ "content-type", box "application/json" ]) |> ignore
     res.``end`` body
 
-[<Emit("(function (req, f) { let body = ''; req.on('data', c => body += c); req.on('end', () => f(body)) })($0, $1)")>]
-let private onBody (req: Interop.IncomingMessage) (f: string -> unit) : unit = Util.jsNative
+/// The request body, accumulated across `data` and handed over on `end` — a Node stream read
+/// the way `OtlpStub` reads the same one, with the accumulator in F# rather than in a string
+/// no compiler looks at.
+let private onBody (req: Interop.IncomingMessage) (f: string -> unit) : unit =
+    let mutable body = ""
+    req.on ("data", fun chunk -> body <- body + Interop.bufferToString chunk) |> ignore
+    req.on ("end", fun _ -> f body) |> ignore
 
 /// A provider that answers every ask with `said`, and records what it was asked.
 let private answering (said: string) (seen: ResizeArray<string>) =
