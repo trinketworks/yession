@@ -41,11 +41,18 @@ let private repo (name: string) = RepoRef.create name |> expect
 
 type private HttpReply = { status: int; body: string }
 
-[<Emit("""(function (url, cookie) { return (
-fetch(url, { headers: cookie ? { cookie: cookie } : {}, cache: 'no-store' })
-  .then(async r => ({ status: r.status, body: await r.text() }))
-) })($0, $1)""")>]
-let private get (url: string) (cookie: string) : JS.Promise<HttpReply> = Util.jsNative
+[<Emit("fetch($0, { headers: $1, cache: 'no-store' }).then(async r => ({ status: r.status, body: await r.text() }))")>]
+let private fetchReply (url: string) (headers: obj) : JS.Promise<HttpReply> = Util.jsNative
+
+/// A GET, with the cookie header only when there is a cookie — which is what the `cookie ? ..
+/// : {}` this used to carry inside the macro decided. `IsNullOrEmpty` rather than `= ""`
+/// because that ternary was JS truthiness, and an absent cookie reaches here as either.
+let private get (url: string) (cookie: string) : JS.Promise<HttpReply> =
+    let headers =
+        if System.String.IsNullOrEmpty cookie then JsInterop.createObj []
+        else JsInterop.createObj [ "cookie", box cookie ]
+
+    fetchReply url headers
 
 let private serving (handler: Interop.IncomingMessage -> Interop.ServerResponse -> unit) =
     async {

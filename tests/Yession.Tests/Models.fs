@@ -34,11 +34,18 @@ let private expect result =
 
 type private HttpReply = { status: int; body: string }
 
-[<Emit("""(function (url, cookie) { return (
-fetch(url, { headers: cookie ? { cookie: cookie } : {}, cache: 'no-store' })
-  .then(async r => ({ status: r.status, body: await r.text() }))
-) })($0, $1)""")>]
-let private get (url: string) (cookie: string) : JS.Promise<HttpReply> = Util.jsNative
+[<Emit("fetch($0, { headers: $1, cache: 'no-store' }).then(async r => ({ status: r.status, body: await r.text() }))")>]
+let private fetchReply (url: string) (headers: obj) : JS.Promise<HttpReply> = Util.jsNative
+
+/// A GET, with the cookie header only when there is a cookie — which is what the `cookie ? ..
+/// : {}` this used to carry inside the macro decided. `IsNullOrEmpty` rather than `= ""`
+/// because that ternary was JS truthiness, and an absent cookie reaches here as either.
+let private get (url: string) (cookie: string) : JS.Promise<HttpReply> =
+    let headers =
+        if System.String.IsNullOrEmpty cookie then JsInterop.createObj []
+        else JsInterop.createObj [ "cookie", box cookie ]
+
+    fetchReply url headers
 
 /// Start a server on a free port and answer with `reply`, which sees the request.
 let private serving (handler: Interop.IncomingMessage -> Interop.ServerResponse -> unit) =
@@ -212,12 +219,29 @@ let private startClaudeRoutes (list: ListModels) =
         return SessionRoute.at url SessionRoute.ClaudeStatus, server
     }
 
+[<Emit("JSON.parse($0)")>]
+let private parseJson (body: string) : obj = Util.jsNative
+
+[<Emit("JSON.stringify($0)")>]
+let private stringifyJson (value: obj) : string = Util.jsNative
+
+/// The catalogue field, and nothing when the reply carries none. `||` rather than `??`
+/// because that is what this said as JavaScript: a `models` spelled `null` and one left off
+/// are both "no catalogue here", and so is the empty one a decoder could not read.
+[<Emit("($0.models || null)")>]
+let private modelsField (status: obj) : obj option = Util.jsNative
+
+/// The reason there is no catalogue, on the same falsiness and for the same reason.
+[<Emit("($0.modelsUnavailable || null)")>]
+let private unavailableField (status: obj) : string option = Util.jsNative
+
 /// The models off a status reply, as the browser reads them: the list, or the reason there
 /// is none.
-[<Emit("""(function (body) { const s = JSON.parse(body); return {
-  models: s.models ? JSON.stringify(s.models) : null,
-  unavailable: s.modelsUnavailable || null } })($0)""")>]
-let private catalogueOf (body: string) : {| models: string option; unavailable: string option |} = Util.jsNative
+let private catalogueOf (body: string) : {| models: string option; unavailable: string option |} =
+    let status = parseJson body
+
+    {| models = modelsField status |> Option.map stringifyJson
+       unavailable = unavailableField status |}
 
 let private routeTests =
     testList "the catalogue on the status reply" [
