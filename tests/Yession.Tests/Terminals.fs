@@ -65,24 +65,28 @@ let private eventsOf (log: EventLog<SessionEvent>) =
 // --- Writing the doc as a remote peer would -------------------------------------------------
 // A test driving the Session Process's own doc makes writes the way a peer's merged update
 // would arrive. These are the only Yjs calls in this file, and they exist so no production
-// API has to grow a setter that only a test would call.
+// API has to grow a setter that only a test would call. They go through the same typed
+// binding the production writers use (`Sync.fs`), and deliberately without `doc.transact`
+// under the process origin: what a peer's update arrives as is a write nothing here owns.
 
-[<Fable.Core.Emit("(function (doc, id, field, value) { const e = doc.getMap('pending').get(id); if (e) e.set(field, value) })($0, $1, $2, $3)")>]
-let private setQueuedField (doc: Y.Doc) (id: string) (field: string) (value: obj) : unit = Fable.Core.Util.jsNative
+let private pendingMap (doc: Y.Doc) : Y.Map<obj> = doc.getMap "pending"
 
 /// A queue entry field, set to whatever a peer we do not control might have written.
 let private setQueuedFieldInDoc (doc: Y.Doc) (id: QueueId) (field: string) (value: string) : unit =
-    setQueuedField doc (QueueId.value id) field (box value)
+    (pendingMap doc).get (QueueId.value id)
+    |> Option.filter (isNull >> not)
+    |> Option.iter (fun entry -> (unbox<Y.Map<obj>> entry).set (field, box value) |> ignore)
 
 /// A raw pending entry, written the way a build we no longer ship would have written one.
 /// No production writer has this shape any more — that is the point — so the only way to
 /// test tolerance of it is to write it as that build did.
-[<Fable.Core.Emit("(function (doc, yjs, id, subject, author) { const q = doc.getMap('pending'); const e = new yjs.Map(); q.set(id, e); e.set('subject', subject); e.set('author', author); e.set('order', 1) })($0, $1, $2, $3, $4)")>]
-let private legacyPendingInDoc (doc: Y.Doc) (yjs: obj) (id: string) (subject: string) (author: string) : unit =
-    Fable.Core.Util.jsNative
-
-[<Fable.Core.Import("*", "yjs")>]
-let private yjsModule : obj = Fable.Core.Util.jsNative
+let private legacyPendingInDoc (doc: Y.Doc) (id: string) (subject: string) (author: string) : unit =
+    let queue = pendingMap doc
+    let entry : Y.Map<obj> = Y.Map.Create ()
+    queue.set (id, box entry) |> ignore
+    entry.set ("subject", box subject) |> ignore
+    entry.set ("author", box author) |> ignore
+    entry.set ("order", box 1) |> ignore
 
 
 // --- The drain's decision ------------------------------------------------------------------
@@ -2619,7 +2623,7 @@ let private syncTests =
             // direction, and the terminal entry beside it is untouched.
             let doc = Y.Doc.Create ()
             SyncedStateSync.enqueueTerminalCommand doc (queue "a1") terminalA (Authority.agentFor (Principal.Peer ada)) 1.0 "ls" false false
-            legacyPendingInDoc doc yjsModule "q-cmd" "command:add_repo" "agent"
+            legacyPendingInDoc doc "q-cmd" "command:add_repo" "agent"
             let synced = syncedOf doc
             Expect.isTrue (Map.containsKey (queue "a1") synced.Pending) "the terminal entry survives"
             Expect.equal (Map.count synced.Pending) 1 "and the parked command act does not"

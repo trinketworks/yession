@@ -178,22 +178,27 @@ let private rejectedPromise (message: string) : JS.Promise<unit> = Fable.Core.Ut
 [<Fable.Core.Emit("Promise.reject()")>]
 let private rejectedWithNothing () : JS.Promise<unit> = Fable.Core.Util.jsNative
 
-// Count Node's unhandled-rejection reports. Registering a listener is also what stops
-// Node from killing the process over one, so the count is observable rather than fatal.
-[<Fable.Core.Emit("(() => { const w = { count: 0 }; const on = () => { w.count++ }; process.on('unhandledRejection', on); w.stop = () => process.off('unhandledRejection', on); return w })()")>]
-let private watchUnhandledRejections () : obj = Fable.Core.Util.jsNative
+[<Fable.Core.Emit("process.on('unhandledRejection', $0)")>]
+let private onUnhandledRejection (listener: unit -> unit) : unit = Fable.Core.Util.jsNative
 
-[<Fable.Core.Emit("$0.count")>]
-let private unhandledCount (watch: obj) : int = Fable.Core.Util.jsNative
+[<Fable.Core.Emit("process.off('unhandledRejection', $0)")>]
+let private offUnhandledRejection (listener: unit -> unit) : unit = Fable.Core.Util.jsNative
 
-[<Fable.Core.Emit("$0.stop()")>]
-let private stopWatching (watch: obj) : unit = Fable.Core.Util.jsNative
+/// Count Node's unhandled-rejection reports, until the returned stop is called. Registering
+/// a listener is also what stops Node from killing the process over one, so the count is
+/// observable rather than fatal. The count is per-watch rather than a module-level tally:
+/// the cases below are two, and Expecto is free to run them at once.
+let private watchUnhandledRejections () : (unit -> int) * (unit -> unit) =
+    let mutable reported = 0
+    let listener () = reported <- reported + 1
+    onUnhandledRejection listener
+    (fun () -> reported), (fun () -> offUnhandledRejection listener)
 
 let private promiseAwaitTests =
     testList "Awaiting a promise (Node interop)" [
         testCaseAsync "a rejection is handled at the call, so reaching it late is caught, not fatal" <|
             async {
-                let watch = watchUnhandledRejections ()
+                let unhandledSoFar, stopWatching = watchUnhandledRejections ()
                 // Build the await now and run it later. Fable's async trampoline hijacks a
                 // workflow onto a `setTimeout` every 2000 steps, so a real await lands here:
                 // after Node has already decided whether the rejection was handled. Nothing
@@ -209,8 +214,8 @@ let private promiseAwaitTests =
                         with ex -> return ex.Message
                     }
                 do! Async.Sleep 10
-                let unhandled = unhandledCount watch
-                stopWatching watch
+                let unhandled = unhandledSoFar ()
+                stopWatching ()
                 Expect.equal caught "boom" "the rejection arrives as a catchable exception"
                 Expect.equal unhandled 0 "and Node never reports it unhandled — which would kill the process"
             }
@@ -222,7 +227,7 @@ let private promiseAwaitTests =
         // This is the one thing `Promise.result` does not say on its own.
         testCaseAsync "a rejection with no reason still arrives as something raisable" <|
             async {
-                let watch = watchUnhandledRejections ()
+                let unhandledSoFar, stopWatching = watchUnhandledRejections ()
                 let awaiting = Interop.awaitPromise (rejectedWithNothing ())
                 do! Async.Sleep 10
                 let! caught =
@@ -233,8 +238,8 @@ let private promiseAwaitTests =
                         with ex -> return ex.Message
                     }
                 do! Async.Sleep 10
-                let unhandled = unhandledCount watch
-                stopWatching watch
+                let unhandled = unhandledSoFar ()
+                stopWatching ()
                 Expect.equal caught "promise rejected" "the reason it could not carry is named instead"
                 Expect.equal unhandled 0 "and it is still handled at the call"
             }

@@ -847,8 +847,22 @@ let private runAgent () : RunAgent option =
     | _ ->
         if envCreds || connectedSomewhere () then Some (dispatching (Agent.runWith dataDir agentBackend)) else None
 
-[<Fable.Core.Emit("(function (handler) { return (process.stdin.on('close', handler), process.stdin.on('end', handler), process.stdin.resume()) })($0)")>]
-let private onStdinClosed (handler: unit -> unit) : unit = Fable.Core.Util.jsNative
+[<Fable.Core.Emit("process.stdin.on('close', $0)")>]
+let private onStdinClose (handler: unit -> unit) : unit = Fable.Core.Util.jsNative
+
+[<Fable.Core.Emit("process.stdin.on('end', $0)")>]
+let private onStdinEnd (handler: unit -> unit) : unit = Fable.Core.Util.jsNative
+
+/// Start the stream flowing. A paused stdin never reaches either end, so the handlers above
+/// are only ever called because of this.
+[<Fable.Core.Emit("process.stdin.resume()")>]
+let private resumeStdin () : unit = Fable.Core.Util.jsNative
+
+/// Both ways stdin can end, and the resume that makes either happen.
+let private onStdinClosed (handler: unit -> unit) : unit =
+    onStdinClose handler
+    onStdinEnd handler
+    resumeStdin ()
 
 Async.StartImmediate (
     async {

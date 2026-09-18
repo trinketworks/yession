@@ -1203,11 +1203,22 @@ module View =
                   {action}
                 </section>"""
 
+    /// Whether the event has a target that carries a caret at all. A `@focus` on something
+    /// that is not a text input, and an event with no target, both answer no.
+    [<Fable.Core.Emit("typeof $0?.target?.selectionStart === 'number'")>]
+    let private hasSelection (e: obj) : bool = Fable.Core.Util.jsNative
+
+    [<Fable.Core.Emit("$0.target.selectionStart")>]
+    let private selectionStart (e: obj) : int = Fable.Core.Util.jsNative
+
+    [<Fable.Core.Emit("$0.target.selectionEnd")>]
+    let private selectionEnd (e: obj) : int = Fable.Core.Util.jsNative
+
     /// The `(selectionStart, selectionEnd)` of the event's target input, or `None`. Read live
     /// from the DOM; only ever invoked in the browser (SSR drops event bindings), so the `.NET`
-    /// type-check sees a signature it never runs. (A Fable tuple is a 2-array at runtime.)
-    [<Fable.Core.Emit("(function (e) { return (e && e.target && typeof e.target.selectionStart === 'number') ? [e.target.selectionStart, e.target.selectionEnd] : null })($0)")>]
-    let private selectionOf (e: obj) : (int * int) option = Fable.Core.Util.jsNative
+    /// type-check sees a signature it never runs.
+    let private selectionOf (e: obj) : (int * int) option =
+        if hasSelection e then Some (selectionStart e, selectionEnd e) else None
 
     /// Enter, in a one-line field that has nothing to submit: let go of it.
     ///
