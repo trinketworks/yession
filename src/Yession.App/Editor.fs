@@ -34,9 +34,15 @@ module Editor =
     let private orderedListJoin : obj = jsNative
     [<Emit("(m => ({ level: m[1].length }))")>]
     let private headingAttrs : obj = jsNative
-    /// `event.clipboardData.getData(fmt)` (empty when absent).
-    [<Emit("(function (event, fmt) { return event.clipboardData ? event.clipboardData.getData(fmt) : '' })($0, $1)")>]
-    let private clipboard (event: obj) (fmt: string) : string = jsNative
+    /// `event.clipboardData.getData(fmt)`, or `None` when the event carries no clipboard at
+    /// all. ProseMirror hands `handlePaste` an untyped event; `Browser.Types` already says what
+    /// one is, so the absence is answered in F# rather than by a ternary in a string — and it is
+    /// answered as an absence: an event with no clipboard and a clipboard holding nothing for
+    /// this format are two different facts, and an empty string would be the last place they
+    /// could still be told apart.
+    let private clipboard (event: obj) (fmt: string) : string option =
+        let data = (unbox<Browser.Types.ClipboardEvent> event).clipboardData
+        if isNullOrUndefined data then None else Some (data.getData fmt)
 
     /// Inline mark rule: when `**b**` / `*i*` / `` `c` `` is completed at the cursor, replace
     /// the delimited text with the marked text (deleting the delimiters). Later positions are
@@ -232,11 +238,11 @@ module Editor =
     /// ProseMirror's normal clipboard handling.
     let private handlePaste =
         System.Func<EditorView, obj, bool>(fun view event ->
-            if clipboard event "text/html" <> "" then false
+            if clipboard event "text/html" |> Option.exists (fun html -> html <> "") then false
             else
-                let text = clipboard event "text/plain"
-                if text = "" then false
-                else
+                match clipboard event "text/plain" with
+                | None | Some "" -> false
+                | Some text ->
                     let doc = mdParser.parse text
                     if isNull (box doc) then false
                     else

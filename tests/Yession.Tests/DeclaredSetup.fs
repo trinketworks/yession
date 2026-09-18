@@ -35,24 +35,76 @@ let private yaml : obj = importAll "yaml"
 
 /// Anchored at the repository root rather than at the runner's working directory, which is
 /// not this repository's business and has moved before.
-[<Emit("(() => { try { return $0.execSync('git rev-parse --show-toplevel', { encoding: 'utf8', stdio: ['ignore','pipe','ignore'] }).trim() } catch { return '' } })()")>]
-let private repoRoot (cp: obj) : string = jsNative
+[<Emit("$0.execSync('git rev-parse --show-toplevel', { encoding: 'utf8', stdio: ['ignore','pipe','ignore'] })")>]
+let private gitToplevel (cp: obj) : string = jsNative
 
-[<Emit("(() => { try { return $0.readFileSync($1, 'utf8') } catch { return '' } })()")>]
-let private readText (fs: obj) (path: string) : string = jsNative
+[<Emit("$0.readFileSync($1, 'utf8')")>]
+let private readFileSync (fs: obj) (path: string) : string = jsNative
+
+/// `yaml.parse`, and the handful of questions this file asks of what it returns. Each one is a
+/// JavaScript expression naming a platform API; the walk over the document is below, in F#.
+[<Emit("$0.parse($1)")>]
+let private parseYaml (y: obj) (text: string) : obj = jsNative
+
+/// A property, or `undefined` — off an absent holder too, so a file with no `sandboxes:` and a
+/// sandbox with no `container:` are the same nothing rather than a throw.
+[<Emit("$0?.[$1]")>]
+let private prop (o: obj) (key: string) : obj = jsNative
+
+[<Emit("Object.keys($0 ?? {})")>]
+let private keysOf (o: obj) : string array = jsNative
+
+/// JS truthiness, kept because that is what the document is read with: a `setup:` written
+/// empty declares no command, and always did.
+[<Emit("!!$0")>]
+let private isDeclared (o: obj) : bool = jsNative
+
+[<Emit("Array.isArray($0)")>]
+let private isArray (o: obj) : bool = jsNative
+
+[<Emit("$0.join(' ')")>]
+let private joinedWithSpaces (o: obj) : string = jsNative
+
+[<Emit("String($0)")>]
+let private asText (o: obj) : string = jsNative
+
+/// Nothing for a working directory git will not answer about — this file's subject is a
+/// committed document, and a box that cannot find one has not read it rather than read an
+/// empty one.
+let private repoRoot () : string option =
+    try
+        match (gitToplevel childProcess).Trim () with
+        | "" -> None
+        | root -> Some root
+    with _ -> None
+
+let private readText (path: string) : string option =
+    try Some (readFileSync nodeFs path) with _ -> None
 
 /// Every command line the file declares a sandbox runs — its `setup:`, and its container's
 /// `entrypoint` (a string, or a list joined back into one) — as (where, command). Read
 /// straight out of the YAML the way `LockSource` reads straight out of the lock's JSON: this
 /// is a question about what a committed file SAYS, and routing it through the domain's
 /// decoder would put a second thing between the assertion and the text it is about.
-[<Emit("(function (y, text) { const parsed = y.parse(text) ?? {}; const declared = parsed.sandboxes ?? {}; const out = []; for (const k of Object.keys(declared)) { const s = declared[k] ?? {}; if (s.setup) out.push([k + ' setup', String(s.setup)]); const e = s.container && s.container.entrypoint; if (e) out.push([k + ' entrypoint', Array.isArray(e) ? e.join(' ') : String(e)]) } return out })($0, $1)")>]
-let private commandsWith (y: obj) (text: string) : (string * string) array = jsNative
+let private commandsIn (text: string) : (string * string) list =
+    let declared = prop (parseYaml yaml text) "sandboxes"
+    [ for name in keysOf declared do
+        let sandbox = prop declared name
+
+        let setup = prop sandbox "setup"
+        if isDeclared setup then
+            // `String`, never the join: a `setup:` that is a list is not a command line this
+            // file has an opinion about, and rendering it as one would invent the opinion.
+            yield name + " setup", asText setup
+
+        let entrypoint = prop (prop sandbox "container") "entrypoint"
+        if isDeclared entrypoint then
+            yield name + " entrypoint", (if isArray entrypoint then joinedWithSpaces entrypoint else asText entrypoint) ]
 
 let private declaredCommands () : (string * string) list =
-    match repoRoot childProcess with
-    | "" -> []
-    | root -> readText nodeFs (root + "/yession.yaml") |> commandsWith yaml |> List.ofArray
+    match repoRoot () |> Option.bind (fun root -> readText (root + "/yession.yaml")) with
+    | Some text -> commandsIn text
+    | None -> []
 
 let tests =
     testList "Declared setup" [

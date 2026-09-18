@@ -58,18 +58,29 @@ let private platform () : string = jsNative
 [<Emit("Date.now()")>]
 let private nowMs () : float = jsNative
 
+[<Emit("$0.createServer($1)")>]
+let private createServer (net: obj) (onConnection: obj -> unit) : obj = jsNative
+
+[<Emit("$0.end($1)")>]
+let private endWith (connection: obj) (said: string) : unit = jsNative
+
+[<Emit("$0.listen($1)")>]
+let private listenAt (server: obj) (path: string) : unit = jsNative
+
+[<Emit("$0.close()")>]
+let private closeServer (server: obj) : unit = jsNative
+
 /// A unix socket with something listening on it, and a thunk that closes it.
 ///
 /// A LISTENER, rather than probing an empty path: a refused connect and a denied connect are
 /// both failures, and only a successful one says the grant reached the kernel.
-[<Emit("""(function (net, path) {
-  const server = net.createServer((c) => { c.end('ok') })
-  server.listen(path)
-  return () => { try { server.close() } catch {} }
-})($0, $1)""")>]
-let private listenOnImpl (net: obj) (path: string) : (unit -> unit) = jsNative
-
-let private listenOn (path: string) : (unit -> unit) = listenOnImpl nodeNet path
+let private listenOn (path: string) : (unit -> unit) =
+    let server = createServer nodeNet (fun connection -> endWith connection "ok")
+    listenAt server path
+    // Closing twice, or closing one that never bound, throws — and this runs at the end of a
+    // case whose verdict was already reached, so a throw here would replace it with a fault
+    // about the fixture.
+    fun () -> try closeServer server with _ -> ()
 
 // --- The sandbox under test ---------------------------------------------------------------
 
