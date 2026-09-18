@@ -660,9 +660,6 @@ let private uiRenderTests =
                       Summary = Some "3 PRs · 1 stalled" }
             Expect.isTrue (running.Contains Dom.Manager.summary) "the row carries the hook that marks it"
             Expect.isTrue (running.Contains "3 PRs · 1 stalled") "wearing the line the session reported"
-            // The status column is 100px below `xl`, which is the word and nothing else, so
-            // a summary there would be three characters and an ellipsis.
-            Expect.isTrue (running.Contains "max-xl:hidden") "and it yields where the column has no room for it"
 
         // A summary describes work in FLIGHT. A row that went on showing one after its
         // session stopped would be claiming something no process is doing.

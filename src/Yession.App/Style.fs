@@ -134,7 +134,17 @@ module Style =
     let wordmark = "font-extralight text-wordmark tracking-[-0.02em] text-ink"
     let heading = "font-extralight text-heading tracking-[-0.01em] lowercase text-ink truncate"
     let body = "font-light text-body text-ink"
+    /// The body voice one step back: worn by a record that is not live — a stopped, exited or
+    /// archived session's name in the Manager's list — so a scan of the column finds what is
+    /// running by weight of ink alone. A TOKEN rather than opacity: opacity would dim the
+    /// mark and the focus ring riding the same element, and a token is what the contrast
+    /// suite can pin.
+    let bodyDim = "font-light text-body text-ink-dim"
     let small = "font-light text-small text-ink-faint"
+    /// `small` in the err tone: a status line whose word is a fault. The one status on the
+    /// Manager's list that keeps a colour — running and stopped are plain text, and what tells
+    /// them apart is the name above them.
+    let smallErr = "font-light text-small text-err"
     /// The caps voice — one size, one tracking, semibold — worn by every label, status,
     /// button, and author line. Colour composes at the use site.
     let private caps = "font-semibold text-label tracking-caps uppercase"
@@ -230,6 +240,11 @@ module Style =
     let recordLink =
         cls [ body; "no-underline hover:text-blue hover:underline decoration-1 underline-offset-4"; focusRing ]
 
+    /// The same link on a record that is not live (`bodyDim`): still the way in — opening a
+    /// stopped session is what starts it — but a step back from the ones already running.
+    let recordLinkQuiet =
+        cls [ bodyDim; "no-underline hover:text-blue hover:underline decoration-1 underline-offset-4"; focusRing ]
+
     /// The mark that says a record link LEAVES (the session serves its own origin). Faint
     /// and small: it is a signpost, not a second status.
     let recordLinkMark = "text-code text-ink-faint ml-1 align-[1px]"
@@ -298,6 +313,15 @@ module Style =
               "transition-colors"; focusRing ]
     let btnIconBare = cls [ btnIconBareBase; "text-ink-faint hover:text-ink" ]
     let btnIconBareDanger = cls [ btnIconBareBase; "text-ink-faint hover:text-err" ]
+
+    /// The borderless verb as a WORD rather than an icon, for a row whose verb has no glyph
+    /// that says it (stop, unarchive). Same rule, same box height, same rest and hover tones
+    /// as the icon form; the caps voice because that is what every button here speaks.
+    let private btnBareBase =
+        cls [ "h-6 px-1 shrink-0 inline-flex items-center bg-transparent border-0 cursor-pointer font-ui"; caps
+              "transition-colors"; focusRing ]
+    let btnBare = cls [ btnBareBase; "text-ink-faint hover:text-ink" ]
+    let btnBareDanger = cls [ btnBareBase; "text-ink-faint hover:text-err" ]
 
     /// 32px square and BORDERLESS: the verb at the trailing edge of a field.
     ///

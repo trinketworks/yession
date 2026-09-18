@@ -24,8 +24,8 @@ open Lit
 
 /// Both registries are FIXED-layout tables: the columns are declared once in the header
 /// and every row obeys them, so what a row contains can never move a column — a launch
-/// that widens `status` cannot squeeze `name` into a second line, and the two tables hang
-/// their controls on the same right rail. The name column takes whatever is left.
+/// cannot squeeze `name` into a second line, and the two tables hang their controls on the
+/// same right rail. The name column takes whatever is left.
 module private Col =
     let table = "w-full text-left border-collapse table-fixed"
     /// Wide enough for a whole Crockford id — a half id identifies nothing, so this column is
@@ -34,78 +34,67 @@ module private Col =
     /// ids were set in whatever monospace a box happened to have, and the switch to a shipped
     /// face made them 6px too wide for it. The first thing to go on a phone.
     let id = "w-[210px] max-md:hidden"
-    /// Holds the status word plus the line the session says about itself; below `xl`, just
-    /// the word.
-    ///
-    /// MEASURED like its neighbours, and it SHRANK when `port · pid · build` came out: the
-    /// word is 78px and a summary long enough to be worth reading ("12 PRs · 3 unreachable")
-    /// is 134px, so 256px carries both with 44px to spare, where the plumbing had needed
-    /// 384px and still could not fit a summary beside it. The name column is what gains — it
-    /// is the only elastic one, and at the 1152px this table is capped to it goes from 190px
-    /// to 318px, which is most of a name rather than the start of one.
-    ///
-    /// A longer summary is CLIPPED by the cell rather than wrapping, because a row that
-    /// changes height when a session picks up a third pull request is a list you cannot keep
-    /// your place in. The clipping is the `<td>`'s (`truncate` there, and nowhere on the span
-    /// — `overflow` does nothing to an inline element, so a span wearing it would be a class
-    /// that reads like a promise and keeps none). The worst it can lose is the tail of a
-    /// count; the word it exists to say is first and always whole.
-    let status = "w-[256px] max-xl:w-[100px]"
+    /// The MCP table's audience column. It was the session table's status column too, until
+    /// status moved under the name (`stateLine`) — where it has the name's whole width instead
+    /// of a 100px cell on a phone, which was the word and nothing else.
+    let reaches = "w-[256px] max-xl:w-[100px]"
     /// `2026-08-18 09:12Z` in the 12px mono face, plus the cell's gutter. MEASURED like the
     /// id beside it: 17 characters of 12px Monaspace Neon is 123px, and the caps header over
     /// it is narrower than that. Goes with the id on a phone — it is the sort KEY, and a sort
     /// you cannot see is still one you can read off the order of the rows.
     let created = "w-[144px] max-md:hidden"
-    /// One `h-8` control, full-bleed in its column, plus the cell's left gutter. The
-    /// session rail can be tighter on a phone — Launch and Stop are short words, and
-    /// what the rail spares there the name gets — where Withdraw is not.
+    /// One `h-8` control, full-bleed in its column, plus the cell's left gutter (the MCP
+    /// table's Withdraw).
     let actions = "w-[128px]"
-    /// The session rail carries the lifecycle verb AND the archive icon beside it: the
-    /// 128px text button, a 24px borderless icon, and the 8px between them.
-    let actionsNarrow = "w-[160px] max-md:w-[136px]"
+    /// The session rail carries two BORDERLESS verbs at most: a word (`stop`, or `unarchive`,
+    /// the longer of the two at 83px in the caps voice) and the 24px archive icon, 8px apart,
+    /// plus the cell's left gutter. Everything the rail gave up when its verbs lost their
+    /// rectangles, the name gained: on a 390px phone the name has 238px where it had 160.
+    let rail = "w-[128px]"
 
-// The status word carries the colour (text, never boxed — the affordance rule), and beside
-// it the one line the session says about ITSELF. It stays on ONE line at every width its
-// column is given: a status that wraps when a session starts is a row that changes height
-// when a session starts.
-//
-// `port · pid · build` used to sit here and no longer does. It was plumbing — the answer to
-// "which process, running what" — and the summary is the answer to the question the page
-// exists for: which of six sessions wants me. Both do not fit (measured: the word, a
-// summary and a build want 460px of a 384px cell), and a diagnostic does not outrank the
-// reason a reader is scanning the column. The build is still on the wire the registry
-// stream carries, so nothing that consumed it has lost it; what is gone is its place on
-// this page. `docs/GAPS.md` names the way back if one is ever wanted.
-let private statusView (view: ProcessManager.SessionView) : TemplateResult =
+/// The row's second line: the session's state, and beside it the one line the session says
+/// about ITSELF. Plain small text, at every width — this is the answer to the question the
+/// page exists for (which of six sessions wants me), and it used to yield below `xl`, which
+/// is to say on the phone the page is most often opened from.
+///
+/// UNCOLOURED, but for a fault. `running` and `stopped` were green and faint caps; that spent
+/// the palette on the commonest fact in the list, and the name above already carries it — a
+/// running session's name is full ink, any other's is a step back (`nameView`). `exited (n)`
+/// keeps the err tone because it is the one state that is not an operator's doing. The word
+/// is always there beside the colour, so nothing rests on colour alone.
+///
+/// Absent from the list, and deliberately: `port · pid · build`. That was plumbing — the
+/// answer to "which process, running what" — and a diagnostic does not outrank the reason a
+/// reader is scanning the column. The build is still on the wire the registry stream carries.
+///
+/// A longer line is CLIPPED rather than wrapped, because a row that changes height when a
+/// session picks up a third pull request is a list you cannot keep your place in. The
+/// clipping is the line's own (`truncate` on the block; `overflow` does nothing to an inline
+/// span). The worst it can lose is the tail of a count; the state is first and always whole.
+let private stateLine (view: ProcessManager.SessionView) : TemplateResult =
     match view.Record.ArchivedAt, view.Status with
-    // An operator's decision, not a process state — but it belongs in this cell, because
+    // An operator's decision, not a process state — but it belongs on this line, because
     // "archived" is the answer a reader wants here and "stopped" for a session that can no
     // longer start is true and useless.
     | Some _, _ ->
-        html $"""<span class="{Style.statusFaint}" data-status="{Dom.Manager.statusArchived}">archived</span>"""
+        html $"""<div class="{Style.small} truncate"><span data-status="{Dom.Manager.statusArchived}">archived</span></div>"""
     | None, ProcessManager.NotRunning ->
-        html $"""<span class="{Style.statusFaint}" data-status="{Dom.Manager.statusStopped}">stopped</span>"""
+        html $"""<div class="{Style.small} truncate"><span data-status="{Dom.Manager.statusStopped}">stopped</span></div>"""
     | None, ProcessManager.Running _ ->
         // Rendered opaquely and NOT toned. The Manager stores a line it was told and never
         // learns what it is made of, so any colour it chose would be a colour it guessed;
         // only the session knows whether its own sentence is good news. It exists in this
         // arm alone because a summary is launch-scoped — a session that is not running has
         // no work in flight to describe.
-        //
-        // It yields below `xl` where the plumbing used to, and for the same reason rather
-        // than by inheritance: the column is 100px there (`Col.status`), which is the status
-        // word and nothing else, so a summary would arrive as three characters and an
-        // ellipsis. A phone gets this answer from the tab title instead.
         let summary =
             match view.Summary with
-            | Some line ->
-                html $"""<span class="{Style.small} text-ink ml-2.5 max-xl:hidden" data-session-summary>{line}</span>"""
+            | Some line -> html $"""<span data-session-summary> · {line}</span>"""
             | None -> html $""""""
         html
-            $"""<span class="{Style.statusOk}" data-status="{Dom.Manager.statusRunning}"><span class="{Style.statusDotPulse}"></span>running</span>{summary}"""
+            $"""<div class="{Style.small} truncate"><span data-status="{Dom.Manager.statusRunning}">running</span>{summary}</div>"""
     | None, ProcessManager.Exited code ->
         let reason = code |> Option.map string |> Option.defaultValue "signal"
-        html $"""<span class="{Style.statusErr}" data-status="{Dom.Manager.statusExited}">exited ({reason})</span>"""
+        html $"""<div class="{Style.smallErr} truncate"><span data-status="{Dom.Manager.statusExited}">exited ({reason})</span></div>"""
 
 /// The name cell. Opening a session is THE act on it, and it is carried by the name — content
 /// is the interface — rather than by a second bordered rectangle in the right rail: with five
@@ -123,27 +112,39 @@ let private statusView (view: ProcessManager.SessionView) : TemplateResult =
 ///
 /// An ARCHIVED session has no way in — `/open` refuses it — so its name is plain text: a link
 /// whose only outcome is a refusal is worse than no link.
+///
+/// The name carries the STATE, by weight of ink: full ink while the session runs, a step back
+/// (`bodyDim`) when it is stopped, exited or archived. That is what lets the state line below
+/// it be plain text — a scan down the column finds what is live without a colour saying so —
+/// and it is a token rather than an opacity so the mark and the focus ring keep theirs.
 let private nameView (view: ProcessManager.SessionView) : TemplateResult =
-    match view.Record.ArchivedAt with
-    | Some _ -> html $"""<span class="{Style.body}">{view.Record.DisplayName}</span>"""
-    | None ->
+    match view.Record.ArchivedAt, view.Status with
+    | Some _, _ -> html $"""<span class="{Style.bodyDim}">{view.Record.DisplayName}</span>"""
+    | None, status ->
         let openUrl = ManagerRoute.path (ManagerRoute.OpenSession view.Record.SessionId)
+        let face =
+            match status with
+            | ProcessManager.Running _ -> Style.recordLink
+            | ProcessManager.NotRunning
+            | ProcessManager.Exited _ -> Style.recordLinkQuiet
         html
-            $"""<a class="{Style.recordLink}" href="{openUrl}" target="_blank" data-open>{view.Record.DisplayName}<span class="{Style.recordLinkMark}" aria-hidden="true">↗</span></a>"""
+            $"""<a class="{face}" href="{openUrl}" target="_blank" data-open>{view.Record.DisplayName}<span class="{Style.recordLinkMark}" aria-hidden="true">↗</span></a>"""
 
 /// The row's controls: Stop, while the session runs, and — where the session is not already
 /// archived — the quiet way to retire it. There is no Launch: opening IS launching, and the name
-/// carries it (`nameView`). Stop rests on the quiet rim and answers to the pointer in err, so a
-/// column of them reads as a rail of outlines rather than a column of CTAs.
+/// carries it (`nameView`).
 ///
-/// The archive verb is a `btnIconBare`, whose rule describes exactly this case: borderless and
-/// faint at rest, because the ROW is the subject. That is what lets a second control onto the
-/// rail without breaking the one-CTA-per-row reading above — a second OUTLINED button would
-/// have made a five-session list ten competing rectangles, which is the trade `nameView`
-/// already refused once.
+/// Both are BORDERLESS. `Style`'s rule for a verb riding a listed row is exactly this case —
+/// the row already carries the structure, so the verb borrows it, faint at rest and ink (or
+/// err, for the one that ends something) under the hand. Stop used to be exempted as "the
+/// lifecycle verb" and wore a rectangle; that put the loudest chrome on the rarest act, and on
+/// a phone it cost the name 40px. With both verbs quiet, the page has ONE bordered rectangle,
+/// and it is Create.
 ///
 /// An ARCHIVED row offers Unarchive and nothing else: no archive icon, because the word it
-/// wears is already the act.
+/// wears is already the act. Everything sits on the rail's right edge, so the icon does not
+/// move when a Stop appears or disappears beside it — a control that moves when a process
+/// stops is under a pointer that was aimed at its neighbour.
 let private actions (view: ProcessManager.SessionView) : TemplateResult =
     let id = SessionId.value view.Record.SessionId
     let name = view.Record.DisplayName
@@ -152,17 +153,17 @@ let private actions (view: ProcessManager.SessionView) : TemplateResult =
     let posts (verb: SessionVerb) = ManagerRoute.path (ManagerRoute.Session (view.Record.SessionId, verb))
     match view.Record.ArchivedAt with
     | Some _ ->
-        html $"""<button type="button" class="{Style.btn} w-full" data-unarchive="{id}" data-post="{posts SessionVerb.Unarchive}">Unarchive</button>"""
+        html $"""
+            <div class="flex items-center justify-end gap-2">
+              <button type="button" class="{Style.btnBare}" data-unarchive="{id}" data-post="{posts SessionVerb.Unarchive}">Unarchive</button>
+            </div>"""
     | None ->
         let verb =
             match view.Status with
             | ProcessManager.Running _ ->
-                html $"""<button type="button" class="{Style.btnDanger} flex-1 min-w-0" data-stop="{id}" data-post="{posts SessionVerb.Stop}">Stop</button>"""
+                html $"""<button type="button" class="{Style.btnBareDanger}" data-stop="{id}" data-post="{posts SessionVerb.Stop}">Stop</button>"""
             | ProcessManager.NotRunning
             | ProcessManager.Exited _ -> html $""""""
-        // Right-anchored, so the archive icon sits on the same edge whether or not a Stop
-        // stands beside it: a control that moves when a process stops is under a pointer
-        // that was aimed at its neighbour.
         html $"""
             <div class="flex items-center justify-end gap-2">
               {verb}
@@ -184,23 +185,26 @@ let private createdView (at: System.DateTimeOffset) : TemplateResult =
 
 /// One session row — an action's swap unit: a stop replaces it wholesale, so the markup is
 /// always a pure function of the Manager's current view. (Live status replaces the whole table
-/// instead; see the rows stream.) The human name leads (content is the interface); the minted
-/// id is plumbing, faint mono, and yields on narrow screens. Actions anchor the right edge so
-/// the row reads name → state → verb.
+/// instead; see the rows stream.) The human name leads (content is the interface), with the
+/// state under it; the minted id is plumbing, faint mono, and yields on narrow screens with
+/// the created column. Actions anchor the right edge so the row reads name → state → verb.
 ///
-/// A row is the same height whatever its state. The table is fixed-layout (`Col`), so
-/// launching cannot widen the status column and squeeze a name into a second line, and each
-/// cell holds ONE line — a single `h-8` control in the action column, ellipsis rather than
-/// wrap in the text ones. Rows that jump as processes start and stop make a list you cannot
-/// keep your place in, and put a control under a pointer that was aimed at its neighbour.
+/// A row is TWO lines and the same height whatever its state: 24px of name over 16px of state,
+/// and the state line is rendered in every arm, so a row with nothing to add still keeps its
+/// second line. The table is fixed-layout (`Col`), each text cell clips rather than wraps, and
+/// the rail holds nothing taller than its 24px verbs. Rows that jump as processes start and
+/// stop make a list you cannot keep your place in, and put a control under a pointer that was
+/// aimed at its neighbour.
 let private rowTemplate (view: ProcessManager.SessionView) : TemplateResult =
     let id = SessionId.value view.Record.SessionId
     html $"""
         <tr class="border-b border-hair hover:bg-surface transition-colors" data-session="{id}">
-          <td class="py-3 pr-4 align-middle truncate" title="{view.Record.DisplayName}">{nameView view}</td>
+          <td class="py-3 pr-4 align-middle" title="{view.Record.DisplayName}">
+            <div class="truncate">{nameView view}</div>
+            {stateLine view}
+          </td>
           <td class="py-3 pr-4 align-middle font-terminal text-code text-ink-faint truncate max-md:hidden">{id}</td>
           <td class="py-3 pr-4 align-middle font-terminal text-code text-ink-faint tabular-nums truncate max-md:hidden">{createdView view.Record.CreatedAt}</td>
-          <td class="py-3 pr-4 align-middle truncate">{statusView view}</td>
           <td class="py-3 pl-4 align-middle">{actions view}</td>
         </tr>"""
 
@@ -249,7 +253,7 @@ let private tableTemplate
         | [] ->
             [ html $"""
                 <tr>
-                  <td colspan="5" class="py-10 text-center {Style.small}">{emptyWord}</td>
+                  <td colspan="4" class="py-10 text-center {Style.small}">{emptyWord}</td>
                 </tr>""" ]
         | views -> views |> List.map rowTemplate
     // The `created` header IS the sort control — the canonical accessible table sort, and it
@@ -260,15 +264,30 @@ let private tableTemplate
         match query.Order with
         | NewestFirst -> "↓", "descending"
         | OldestFirst -> "↑", "ascending"
+    // Create sits on the section's own header line, at the right: the list and the one act
+    // that adds to it are one thing, and this is the page's one bordered rectangle, so it
+    // does not need a section of its own to be found. It takes nothing but the press — the
+    // id is minted server-side (a Docker-safe Crockford one) and a session is NAMED from
+    // inside itself, in the title field at the top of its own header, which reports back
+    // here over the control channel. Asking for the name here as well made two naming
+    // surfaces out of one fact: what was typed on this page never reached the session.
+    //
+    // A real form and a real POST, not intercepted by the script: the browser follows the
+    // answer's redirect into the new session. Swapping a table in instead would leave this
+    // page in charge of an act whose whole point is to leave it — and every other page learns
+    // about the new session from the rows stream anyway.
     html $"""
         <section class="flex flex-col gap-3" data-sessions data-stream="{ManagerRoute.path ManagerRoute.SessionRows}">
-          <div class="flex items-baseline gap-2.5 flex-wrap">
+          <div class="flex items-center gap-2.5 flex-wrap">
             <span class="{Style.label}">sessions</span>
             <span class="font-semibold text-[11px] leading-4 tracking-[0.18em] text-ink-faint tabular-nums">{List.length views}</span>
             <div class="flex items-center gap-1.5 ml-2" role="group" aria-label="Show sessions">
               {filterChip query Active}
               {filterChip query Archived}
             </div>
+            <form class="ml-auto" method="post" action="{ManagerRoute.path ManagerRoute.CreateSession}" data-create-session>
+              <button type="submit" class="{Style.btnPrimary}">Create</button>
+            </form>
           </div>
           <table class="{Col.table}">
             <thead>
@@ -278,8 +297,7 @@ let private tableTemplate
                 <th scope="col" class="py-2 pr-4 {Col.created}" aria-sort="{sortedBy}">
                   <a class="{Style.sortHeader}" href="{sortHref}" data-filter="sort">created <span aria-hidden="true">{sortMark}</span></a>
                 </th>
-                <th scope="col" class="py-2 pr-4 {Style.label} {Col.status}">status</th>
-                <th scope="col" class="py-2 pl-4 {Col.actionsNarrow}"><span class="sr-only">actions</span></th>
+                <th scope="col" class="py-2 pl-4 {Col.rail}"><span class="sr-only">actions</span></th>
               </tr>
             </thead>
             <tbody>{rows}</tbody>
@@ -315,12 +333,19 @@ let private script =
       // flipped, so the hand that pressed `archived` is left on `archived` rather than being
       // dropped onto the first row of the list it just asked for.
       const filter = active && active.closest('[data-filter]')
+      // Create rides the section's header line, so a frame arriving under a hand resting on
+      // it would otherwise drop that hand onto the first chip.
+      const wasCreate = !!active && !!active.closest('[data-create-session]')
       const wasAction = !!active && active.hasAttribute('data-stop')
       el.replaceWith(n)
       if (!active) return
       const find = (sel) => sel && (n.matches(sel) ? n : n.querySelector(sel))
       if (filter) {
         const back = find('[data-filter="' + CSS.escape(filter.getAttribute('data-filter')) + '"]')
+        if (back) { back.focus(); return }
+      }
+      if (wasCreate) {
+        const back = find('[data-create-session] button')
         if (back) { back.focus(); return }
       }
       const sel = row && '[data-session="' + CSS.escape(row.getAttribute('data-session')) + '"]'
@@ -356,10 +381,7 @@ let private script =
       history.replaceState(null, '', a.getAttribute('href'))
       openRows()
     })
-    // Creating is deliberately NOT intercepted here: the form is a real POST, and the browser
-    // follows its redirect into the new session. Swapping a table in instead would leave this
-    // page in charge of an act whose whole point is to leave it — and every other page learns
-    // about the new session from the rows stream anyway.
+    // Creating is deliberately NOT intercepted here (the reasoning is on the form itself).
     // Declaring an MCP server (Plan 17): the only place a url is written, and the only
     // management action that can be REFUSED for a reason a human needs to read — a name
     // clash. So this one reports, where stop/archive only swap.
@@ -446,7 +468,7 @@ let private mcpTemplate (views: ProcessManager.SessionView list) (declarations: 
               <tr class="border-b border-hair">
                 <th scope="col" class="py-2 pr-4 {Style.label}">name</th>
                 <th scope="col" class="py-2 pr-4 {Style.label} {Col.id}">address</th>
-                <th scope="col" class="py-2 pr-4 {Style.label} {Col.status}">reaches</th>
+                <th scope="col" class="py-2 pr-4 {Style.label} {Col.reaches}">reaches</th>
                 <th scope="col" class="py-2 pl-4 {Col.actions}"><span class="sr-only">actions</span></th>
               </tr>
             </thead>
@@ -533,7 +555,7 @@ let private hooksTemplate (access: PublicAccess) (endpoints: WebhookRelay.HookEn
               <tr class="border-b border-hair">
                 <th scope="col" class="py-2 pr-4 {Style.label}">name</th>
                 <th scope="col" class="py-2 pr-4 {Style.label}">deliver to</th>
-                <th scope="col" class="py-2 pr-4 {Style.label} {Col.status}">declared as</th>
+                <th scope="col" class="py-2 pr-4 {Style.label} {Col.reaches}">declared as</th>
                 <th scope="col" class="py-2 pl-4 {Style.label}">secret</th>
               </tr>
             </thead>
@@ -581,20 +603,7 @@ let private bodyTemplate
                    which is the thing that was already there to be misread. -->
               <span class="font-terminal text-code-sm text-ink-faint tabular-nums ml-3 pb-0.5 max-xl:hidden" data-manager-build>{Version.current}</span>
             </header>
-            <!-- Creating takes nothing but the press. The id is minted server-side (a
-                 Docker-safe Crockford one) and a session is NAMED from inside itself, in the
-                 title field at the top of its own header, which reports back here over the
-                 control channel. Asking for the name here as well made two naming surfaces
-                 out of one fact: what was typed on this page never reached the session, so a
-                 session created as "design review" opened as its raw id with an empty title
-                 field, and the name had to be typed a second time to have any effect. -->
-            <form class="flex flex-col gap-3 pt-6 pb-8" method="post" action="{ManagerRoute.path ManagerRoute.CreateSession}" data-create-session>
-              <span class="{Style.label}">new session</span>
-              <div class="flex flex-wrap items-center gap-3">
-                <button type="submit" class="{Style.btnPrimary}">Create</button>
-              </div>
-            </form>
-            <div class="pb-10">{tableTemplate query views}</div>
+            <div class="pt-6 pb-10">{tableTemplate query views}</div>
             <div class="pb-10">{mcpTemplate views declarations}</div>
             <!-- Only when there are any: a deployment that declared no hook endpoints has
                  nothing to say here, and an empty table would imply a thing to fill in. -->
