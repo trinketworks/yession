@@ -84,17 +84,25 @@ module ProseMirror =
     /// A text node's marks (`em`/`strong`/`code`/`link`), innermost-last.
     [<Emit("$0.marks")>]
     let nodeMarks (node: Node) : obj[] = jsNative
+    /// JavaScript's `value || fallback`, which is what the attribute reads below mean by
+    /// "absent": EVERY falsy value takes the fallback, `0` and `""` among them. A heading
+    /// whose level is 0 is not a heading at level 0, and never was.
+    let private orElse (fallback: 'a) (value: 'a) : 'a = if present (box value) then value else fallback
+
     /// A heading's level (1–6), defaulting to 1.
-    [<Emit("(function (node) { return (node.attrs && node.attrs.level) || 1 })($0)")>]
-    let headingLevel (node: Node) : int = jsNative
+    let headingLevel (node: Node) : int =
+        let attrs : obj = node?attrs
+        if present attrs then orElse 1 (unbox<int> attrs?level) else 1
     /// An ordered list's first number, defaulting to 1.
-    [<Emit("(function (node) { return (node.attrs && node.attrs.order) || 1 })($0)")>]
-    let listStart (node: Node) : int = jsNative
+    let listStart (node: Node) : int =
+        let attrs : obj = node?attrs
+        if present attrs then orElse 1 (unbox<int> attrs?order) else 1
     [<Emit("$0.type.name")>]
     let markTypeName (mark: obj) : string = jsNative
     /// A link mark's target (empty when absent).
-    [<Emit("(function (mark) { return (mark.attrs && mark.attrs.href) || '' })($0)")>]
-    let markHref (mark: obj) : string = jsNative
+    let markHref (mark: obj) : string =
+        let attrs : obj = mark?attrs
+        if present attrs then orElse "" (unbox<string> attrs?href) else ""
 
     // --- prosemirror-state / -view ---------------------------------------------------------
 
@@ -221,16 +229,24 @@ module ProseMirror =
     let selection (state: EditorState) : obj = jsNative
     [<Emit("$0.doc")>]
     let stateDoc (state: EditorState) : obj = jsNative
+    [<Emit("$0.content.size")>]
+    let docContentSize (doc: obj) : int = jsNative
+    /// The first child of a doc, read only once the count says there is one to read.
+    [<Emit("$0.firstChild")>]
+    let private docFirstChild (doc: obj) : obj = jsNative
+    /// Whether a node is a textblock — a block node holding inline content.
+    [<Emit("$0.isTextblock")>]
+    let private nodeIsTextblock (node: obj) : bool = jsNative
     /// A doc nobody has typed in: ProseMirror's empty document is ONE empty textblock, not an
     /// absence, so "is there anything here" is this question and not `size = 0`.
     ///
-    /// A real function taking the doc as a parameter, because the body asks about it three
-    /// times: a bare `$0.childCount === 1 && $0.firstChild...` would re-evaluate whatever
-    /// expression the caller passed, once per mention.
-    [<Emit("(function (doc) { return doc.childCount === 1 && doc.firstChild.isTextblock && doc.firstChild.content.size === 0 })($0)")>]
-    let docIsEmpty (doc: obj) : bool = jsNative
-    [<Emit("$0.content.size")>]
-    let docContentSize (doc: obj) : int = jsNative
+    /// The count is asked first and `firstChild` only after it, because a doc with no children
+    /// has none to read — the short circuit is the guard, not an optimisation.
+    let docIsEmpty (doc: obj) : bool =
+        if nodeChildCount doc <> 1 then false
+        else
+            let first = docFirstChild doc
+            nodeIsTextblock first && docContentSize first = 0
     [<Emit("$0.hasFocus()")>]
     let viewHasFocus (view: EditorView) : bool = jsNative
     [<Emit("$0.anchor")>]
@@ -291,14 +307,28 @@ module ProseMirror =
     [<Emit("$0.map($1, $2)")>]
     let decoSetMap (set: obj) (mapping: obj) (doc: obj) : obj = jsNative
 
-    // The DOM for one caret + name label (a widget decoration). Authored via `[<Emit>]` interop,
-    // never a `.js` file — the repo's no-authored-JS invariant is about source files, not interop.
-    [<Emit("""(function(color, name){
-      var c = document.createElement('span'); c.className = 'pm-caret'; c.style.borderColor = color;
-      var l = document.createElement('span'); l.className = 'pm-caret-label'; l.textContent = name; l.style.background = color;
-      c.appendChild(l); return c;
-    })($0, $1)""")>]
-    let caretDom (color: string) (name: string) : obj = jsNative
+    /// The two inline colours the caret carries. `Fable.Browser.Dom` stops at the DOM —
+    /// `element.style` is the CSSOM, which it does not type — so these are the one-line
+    /// bindings that assignment is, sitting beside their use rather than reached for through a
+    /// reference this project does not carry.
+    [<Emit("$0.style.borderColor = $1")>]
+    let private setBorderColour (element: Browser.Types.HTMLElement) (colour: string) : unit = jsNative
+    [<Emit("$0.style.background = $1")>]
+    let private setBackground (element: Browser.Types.HTMLElement) (colour: string) : unit = jsNative
+
+    /// The DOM for one caret + name label (a widget decoration). Built through the typed DOM
+    /// binding rather than a JavaScript program in a string: an emit binds a platform API, and
+    /// assembling elements is logic, which belongs where the compiler reads it.
+    let caretDom (color: string) (name: string) : obj =
+        let caret = Browser.Dom.document.createElement "span"
+        caret.className <- "pm-caret"
+        setBorderColour caret color
+        let label = Browser.Dom.document.createElement "span"
+        label.className <- "pm-caret-label"
+        label.textContent <- name
+        setBackground label color
+        caret.appendChild label |> ignore
+        box caret
 
     // --- Yjs relative positions (survive concurrent edits) + lib0 base64 for the wire --------
 
