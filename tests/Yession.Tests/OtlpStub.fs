@@ -30,18 +30,39 @@ type ReceivedLog =
 [<Emit("$0[$1]")>]
 let private prop (o: obj) (key: string) : obj = jsNative
 
-[<Emit("(function (o) { return Array.isArray(o) ? o : [] })($0)")>]
-let private asArray (o: obj) : obj array = jsNative
+[<Emit("Array.isArray($0)")>]
+let private isArray (o: obj) : bool = jsNative
 
 [<Emit("$0 == null")>]
 let private isNullish (o: obj) : bool = jsNative
 
-// OTLP JSON encodes int64 as a string; the JS exporter emits a bare number for small ints.
-[<Emit("(function (o) { return typeof o === 'number' ? (o | 0) : (parseInt(o, 10) || 0) })($0)")>]
-let private asInt (o: obj) : int = jsNative
+[<Emit("typeof $0 === 'number'")>]
+let private isNumber (o: obj) : bool = jsNative
 
-[<Emit("(() => { try { return JSON.parse($0) } catch (e) { return null } })()")>]
-let private tryParse (json: string) : obj = jsNative
+/// Truncated toward zero, which is what `| 0` says about a number that is already whole.
+[<Emit("$0 | 0")>]
+let private truncated (o: obj) : int = jsNative
+
+/// `parseInt` on something that is not a number reads `NaN`, which is falsy — so is a parsed
+/// `0`, and the two answered alike before this was F#; they still do.
+[<Emit("(parseInt($0, 10) || undefined)")>]
+let private parsedInt (o: obj) : int option = jsNative
+
+[<Emit("JSON.parse($0)")>]
+let private parseJson (json: string) : obj = jsNative
+
+/// A field that is a JSON array, or nothing at all — an absent `scopeLogs` is no scopes, not
+/// a throw partway through decoding somebody else's payload.
+let private asArray (o: obj) : obj array = if isArray o then unbox o else [||]
+
+// OTLP JSON encodes int64 as a string; the JS exporter emits a bare number for small ints.
+let private asInt (o: obj) : int =
+    if isNumber o then truncated o else parsedInt o |> Option.defaultValue 0
+
+/// Nothing for a body that is not JSON: the stub answers a malformed POST with no records
+/// rather than throwing inside a request handler nobody is awaiting.
+let private tryParse (json: string) : obj option =
+    try Some (parseJson json) with _ -> None
 
 let private valueOf (value: obj) : LogValue option =
     if isNullish value then None
@@ -75,9 +96,8 @@ let private logRecordOf (resource: Map<string, LogValue>) (lr: obj) : ReceivedLo
 /// Decode an OTLP/HTTP JSON logs payload into the flat list of records it carries, each carrying
 /// the attributes of the resource it was emitted under.
 let decode (json: string) : ReceivedLog list =
-    let root = tryParse json
-    if isNullish root then []
-    else
+    match tryParse json with
+    | Some root when not (isNullish root) ->
         asArray (prop root "resourceLogs")
         |> Array.collect (fun rl ->
             // A payload need not carry a resource block; that decodes to no attributes, not a throw.
@@ -87,6 +107,7 @@ let decode (json: string) : ReceivedLog list =
             |> Array.collect (fun sl -> asArray (prop sl "logRecords"))
             |> Array.map (logRecordOf resource))
         |> List.ofArray
+    | _ -> []
 
 // --- Accessors ---------------------------------------------------------------------------
 

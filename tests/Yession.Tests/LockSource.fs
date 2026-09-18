@@ -42,24 +42,33 @@ let private rootInputs (json: string) : string array = jsNative
 /// on any machine that has run devenv — that is the normal state and not what this is about.
 /// Read through `git show` so this asks the question that matters: what would a laptop or a CI
 /// runner get when it checks this out.
-[<Emit("(() => { try { return $0.execSync('git show HEAD:devenv.lock', { encoding: 'utf8', stdio: ['ignore','pipe','ignore'] }) } catch { return '' } })()")>]
-let private committedLockWith (cp: obj) : string = jsNative
+[<Emit("$0.execSync('git show HEAD:devenv.lock', { encoding: 'utf8', stdio: ['ignore','pipe','ignore'] })")>]
+let private gitShow (cp: obj) : string = jsNative
 
+/// Nothing, rather than empty text, for a checkout that cannot answer — every case below
+/// fails on it out loud, because a run that could not read the tracked lock has checked
+/// nothing, and a guard that says otherwise is a decoration.
+///
 /// This module is compiled to an ES module, where `require` is not defined — a `require` in
 /// an emit body throws, and the `catch` around it turns that into "the lock is missing"
 /// rather than "this check cannot run". It read as the former for one whole run.
-let private committedLock () : string = committedLockWith childProcess
+let private committedLock () : string option =
+    try
+        match gitShow childProcess with
+        | "" -> None
+        | json -> Some json
+    with _ -> None
 
 let tests =
     testList "the committed devenv.lock" [
 
         testCase "carries nixpkgs, and nothing that belongs to one machine" <| fun () ->
             match committedLock () with
-            | "" ->
+            | None ->
                 // Not a pass. A run that cannot read the tracked lock has not checked
                 // anything, and saying so is the difference between a guard and a decoration.
                 failwith "could not read HEAD:devenv.lock — this check needs a git checkout, and proves nothing without one"
-            | json ->
+            | Some json ->
                 Expect.equal
                     (nodeNames json |> Array.sort |> List.ofArray)
                     [ "nixpkgs"; "root" ]
@@ -71,16 +80,16 @@ let tests =
         // fire if devenv started writing it somewhere else in the file.
         testCase "names no /nix/store path at all" <| fun () ->
             match committedLock () with
-            | "" -> failwith "could not read HEAD:devenv.lock"
-            | json ->
+            | None -> failwith "could not read HEAD:devenv.lock"
+            | Some json ->
                 Expect.isFalse
                     (json.Contains "/nix/store/")
                     "a store path is valid on exactly one machine, and this file is read by every checkout"
 
         testCase "the root still takes its inputs from the lock" <| fun () ->
             match committedLock () with
-            | "" -> failwith "could not read HEAD:devenv.lock"
-            | json ->
+            | None -> failwith "could not read HEAD:devenv.lock"
+            | Some json ->
                 Expect.equal
                     (rootInputs json |> Array.sort |> List.ofArray)
                     [ "nixpkgs" ]
