@@ -36,8 +36,26 @@ type private Reply =
       mutable Headers: obj
       mutable Body: string }
 
-[<Emit("(function (reply) { return ({ writeHead: (status, headers) => { reply.Status = status; reply.Headers = headers; return null }, write: () => true, end: (body) => { reply.Body = body == null ? '' : String(body) } }) })($0)")>]
-let private responseInto (reply: Reply) : Interop.ServerResponse = jsNative
+/// What `String(x)` does: a Buffer or a string, said as a string. `end` takes whatever the
+/// caller had — the service passes bytes for a file and a sentence for a miss — so the double
+/// records it the way Node's own writable would read it.
+[<Emit("String($0)")>]
+let private asString (value: obj) : string = jsNative
+
+/// The double itself: three members, each a real F# function, so what a call to it DOES is
+/// F# the compiler reads rather than statements inside a string. `Func` rather than a curried
+/// lambda because Node's members take their arguments at once, which is what `serve` emits.
+let private responseInto (reply: Reply) : Interop.ServerResponse =
+    unbox (
+        createObj
+            [ "writeHead"
+              ==> System.Func<int, obj, obj>(fun status headers ->
+                  reply.Status <- status
+                  reply.Headers <- headers
+                  null)
+              "write" ==> System.Func<string, bool>(fun _ -> true)
+              "end"
+              ==> System.Func<obj, unit>(fun body -> reply.Body <- if isNull body then "" else asString body) ])
 
 [<Emit("($0 ?? {})[$1] ?? ''")>]
 let private headerOf (headers: obj) (name: string) : string = jsNative

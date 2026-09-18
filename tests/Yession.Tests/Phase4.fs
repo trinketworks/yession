@@ -1589,8 +1589,15 @@ let private spawnBundle (spawn: obj) (managerJs: string) (args: string array) (e
 [<Emit("$0.stdout.on('data', $1)")>]
 let private onStdout (child: obj) (handler: obj -> unit) : unit = Fable.Core.Util.jsNative
 
-[<Emit("(function (chunk) { return typeof chunk === 'string' ? chunk : chunk.toString('utf8') })($0)")>]
-let private chunkToString (chunk: obj) : string = Fable.Core.Util.jsNative
+[<Emit("typeof $0 === 'string'")>]
+let private isJsString (chunk: obj) : bool = Fable.Core.Util.jsNative
+
+[<Emit("$0.toString('utf8')")>]
+let private decodeUtf8 (chunk: obj) : string = Fable.Core.Util.jsNative
+
+/// A stdout chunk as text: Node hands over a Buffer unless an encoding was set on the stream.
+let private chunkToString (chunk: obj) : string =
+    if isJsString chunk then unbox<string> chunk else decodeUtf8 chunk
 
 [<Emit("$0.kill('SIGKILL')")>]
 let private killBinary (child: obj) : unit = Fable.Core.Util.jsNative
@@ -2412,14 +2419,20 @@ let private notificationStreamTests =
             }
     ]
 
+[<Emit("fetch($0, { method: 'POST', headers: $1, body: $2 }).then(r => r.status)")>]
+let private postTo (url: string) (headers: obj) (body: string) : JS.Promise<int> = jsNative
+
 /// POST a delivery the way a provider would: our own headers, our own body, no control
 /// secret. Local to the suite because the product has no reason to make this request.
-[<Emit("""(function (url, headers, body) {
-  const h = { 'content-type': 'application/json' }
-  for (const [k, v] of headers) h[k] = v
-  return fetch(url, { method: 'POST', headers: h, body }).then(r => r.status)
-})($0, $1, $2)""")>]
-let private postDelivery (url: string) (headers: (string * string) list) (body: string) : JS.Promise<int> = jsNative
+let private postDelivery (url: string) (headers: (string * string) list) (body: string) : JS.Promise<int> =
+    // JSON unless the caller says otherwise: a repeated name takes the later value, which is
+    // what assigning over the starting object did.
+    let sent =
+        Fable.Core.JsInterop.createObj
+            [ yield "content-type", box "application/json"
+              for name, value in headers -> name, box value ]
+
+    postTo url sent body
 
 let private hookDeliveryStreamTests =
     testList "A hook delivery across the control channel (the relay end to end)" [

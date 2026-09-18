@@ -320,11 +320,21 @@ let private wireTests =
 // jose's `exportJWK` rejects a non-extractable key by THROWING SYNCHRONOUSLY, and a synchronous
 // throw while a Fable async computation is being built escapes the surrounding `try/with` — the
 // trampoline only re-enters the protected continuation at bind boundaries, so whether it is caught
-// depends on how many binds ran before, i.e. on which other tests exist. Deciding it in JS instead
-// makes the assertion deterministic: the thunk is invoked inside the promise, so a sync throw and a
-// rejection are the same observable outcome.
-[<Emit("(async () => { try { await $0(); return false } catch { return true } })()")>]
-let private refuses (attempt: unit -> JS.Promise<'a>) : JS.Promise<bool> = Fable.Core.Util.jsNative
+// depends on how many binds ran before, i.e. on which other tests exist. What makes the assertion
+// deterministic is WHERE the thunk is invoked: `Promise.try` invokes it inside the promise, so a
+// synchronous throw is a rejection and nothing but a settled promise ever reaches F#.
+[<Emit("Promise.try($0)")>]
+let private attempted (attempt: unit -> JS.Promise<'a>) : JS.Promise<'a> = Fable.Core.Util.jsNative
+
+/// Whether the attempt refused — a rejection and a synchronous throw being one outcome by the
+/// time this reads it. `Interop.awaitPromise` settles the promise in the tick that created it,
+/// so the verdict is a value the workflow may take as long as it likes to read.
+let private refuses (attempt: unit -> JS.Promise<'a>) : Async<bool> =
+    async {
+        match! attempted attempt |> Interop.awaitPromise |> Async.Catch with
+        | Choice1Of2 _ -> return false
+        | Choice2Of2 _ -> return true
+    }
 
 let private keyTests =
     testList "Signing key non-extractability" [
@@ -332,9 +342,9 @@ let private keyTests =
             async {
                 let! keys = Fable.Jose.generateKeyPair "EdDSA" (createObj [ "extractable" ==> false ]) |> Interop.awaitPromise
                 Expect.isFalse keys.privateKey.extractable "the private key is non-extractable"
-                let! publicRefused = refuses (fun () -> Fable.Jose.exportJWK keys.publicKey) |> Interop.awaitPromise
+                let! publicRefused = refuses (fun () -> Fable.Jose.exportJWK keys.publicKey)
                 Expect.isFalse publicRefused "the public half exports (JWKS depends on it)"
-                let! privateRefused = refuses (fun () -> Fable.Jose.exportJWK keys.privateKey) |> Interop.awaitPromise
+                let! privateRefused = refuses (fun () -> Fable.Jose.exportJWK keys.privateKey)
                 Expect.isTrue privateRefused "exporting the private key must throw"
             }
     ]
