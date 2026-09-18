@@ -874,6 +874,28 @@ let private throughTheHostTests =
             }
     ]
 
+/// Each dialect's rc, typed at the shell it is for. The cheap tier reads the rc as text;
+/// only the shell can say whether that text means what it was meant to — zsh's prompt
+/// took `\033` as eleven characters for as long as nothing here opened one.
+let private dialectTests =
+    let ada = Principal.Peer (PeerId.create "ada" |> expect)
+    testList "Each dialect, on a real pty" [
+        for shell, label in [ TerminalShell.bash, "bash"; TerminalShell.zsh, "zsh"; TerminalShell.posix, "sh" ] do
+            testCaseAsync (sprintf "%s: the prompt mark is an escape the scanner takes, never the spelling of one" label) <|
+                withShellTerminal shell SessionTerminals.BlockLoans.none (fun _ -> async { return () }) (label + "-prompt-mark") (fun terminals id records _ _ _ ->
+                    async {
+                        // Bounded: a shell whose prompt never marks is a terminal that never
+                        // becomes ready, and this block would wait on it for the run's whole
+                        // budget rather than say so.
+                        let! block = Async.StartChild (terminals.RunBlock id (queueEntry id ada "1") "echo marked" ignore, 10000)
+                        do! block
+                        let printed =
+                            records |> Seq.filter (fun r -> r.Kind = TranscriptOutput) |> Seq.map (fun r -> r.Data) |> String.concat ""
+                        Expect.isTrue (printed.Contains "marked") (sprintf "the block ran; transcript: %s" printed)
+                        Expect.isFalse (printed.Contains "]133;") (sprintf "no mark reached the record as text: %s" printed)
+                    })
+    ]
+
 /// What a block is lent reaches the shell that runs it — under bash, whose dialect has a
 /// hook, and under the POSIX sh production composes, whose start mark rides in the line
 /// beside the loan.
@@ -887,7 +909,7 @@ let private lentTests =
         |> Seq.map (fun r -> r.Data)
         |> String.concat ""
     testList "What a block is lent, on a real pty" [
-        for shell, label in [ TerminalShell.bash, "bash"; TerminalShell.posix, "sh" ] do
+        for shell, label in [ TerminalShell.bash, "bash"; TerminalShell.zsh, "zsh"; TerminalShell.posix, "sh" ] do
             testCaseAsync (sprintf "%s: a block sees what it was lent, and one lent none has it taken away" label) <|
                 (let lent = ref (identity (Some "Ada O'Lovelace"))
                  withLendingTerminal shell lent (label + "-lent-identity") (fun terminals id records _ _ _ ->
@@ -918,8 +940,11 @@ let private lentTests =
                         do! terminals.RunBlock id (queueEntry id ada "1") "echo \"count=$GIT_CONFIG_COUNT\"" ignore
                         do! terminals.RunBlock id (queueEntry id ada "2") "echo \"count=$GIT_CONFIG_COUNT\"" ignore
                         do! terminals.RunBlock id (queueEntry id ada "3") "eval echo \"value=\\$GIT_CONFIG_VALUE_$((GIT_CONFIG_COUNT-1))\"" ignore
+                        // Split on either line ending: zsh guards a partial line with a
+                        // `%`, a row of spaces and a bare `\r`, so the next block's output
+                        // begins after a `\r` on what a `\n` split reads as the same line.
                         let counts =
-                            (printed records).Split '\n'
+                            (printed records).Split ([| '\n'; '\r' |])
                             |> Array.map (fun line -> line.Trim ())
                             |> Array.filter (fun line -> line.StartsWith "count=")
                             |> List.ofArray
@@ -945,7 +970,7 @@ let private leaseLoanTests =
         |> Seq.map (fun r -> r.Data)
         |> String.concat ""
     testList "What a lease is lent, on a real pty" [
-        for shell, label in [ TerminalShell.bash, "bash"; TerminalShell.posix, "sh" ] do
+        for shell, label in [ TerminalShell.bash, "bash"; TerminalShell.zsh, "zsh"; TerminalShell.posix, "sh" ] do
             testCaseAsync (sprintf "%s: a lease holder's keystrokes carry their own loan, and the transcript never sees it go in" label) <|
                 (let recorded = recordedLoans adasLoan
                  withLoansTerminal shell recorded.Loans (label + "-lease-loan") (fun terminals id records _ _ _ ->
@@ -1089,6 +1114,7 @@ let private leaseLoanTests =
 let tests =
     testList "Pty (Plan 13)" [
         throughTheHostTests
+        dialectTests
         lentTests
         leaseLoanTests
 

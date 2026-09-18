@@ -50,8 +50,11 @@ in
   # caddy backs the `Caddy` capability: the fronted-deployment E2E runs the proxy example's
   # own Caddyfile (examples/proxy/caddy) in front of a real Manager, so the file the README
   # tells an operator to deploy is the file the suite drives.
+  #
+  # zsh is the one dialect the terminal instruments that no host is guaranteed to have at a
+  # path: the `Pty` cases open it from PATH to run the zsh rc for real beside bash and sh.
   packages =
-    [ pkgs.git pkgs.actionlint pkgs.uv pkgs.python312 pkgs.caddy ]
+    [ pkgs.git pkgs.actionlint pkgs.uv pkgs.python312 pkgs.caddy pkgs.zsh ]
     ++ lib.optionals pkgs.stdenv.hostPlatform.isLinux
          [ pkgs.dbus pkgs.gnome-keyring pkgs.bubblewrap pkgs.socat pkgs.ripgrep pkgs.eudev ];
 
