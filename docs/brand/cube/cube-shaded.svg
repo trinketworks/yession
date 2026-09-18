@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Shaded">
+  <defs><mask id="shaded-m"><rect width="64" height="64" fill="#fff"/><g stroke="#000" stroke-width="3.6" stroke-linecap="butt"><path d="M32 32 L61.44 15"/><path d="M32 32 L32 66"/><path d="M32 32 L2.56 15"/></g></mask></defs>
+  <g mask="url(#shaded-m)">
+  <path d="M32 32 L7.75 18 L32 4 L56.25 18 Z" fill="#a8dd00"/>
+  <path d="M32 32 L56.25 18 L56.25 46 L32 60 Z" fill="#1ba1e2"/>
+  <path d="M32 32 L32 60 L7.75 46 L7.75 18 Z" fill="#799f00"/>
+  </g>
+</svg>

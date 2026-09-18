@@ -33,3 +33,36 @@ and `bloom` join them and lose the count); green outweighs blue at equal area, s
 stroke wants slightly more of it; only `letter`, `stencil`, `lowercase` and `index` survive
 16px; and green on a light ground is 1.9:1, so any mark leaving the black app needs a plate
 under it or a dark variant.
+
+## Second pass: the cube and its projection
+
+`cube/` narrows to the one direction worth pursuing. An isometric cube shows three faces
+meeting at one interior vertex, and the three edges radiating from that vertex sit at exactly
+120° — so the cube and the counterform disc are the same drawing with different silhouettes,
+and neither draws the Y: it is the cut left between the fields.
+
+| File | Variation |
+| --- | --- |
+| `cube.svg` | Baseline: blue top face, two green walls, 3.6px cut. |
+| `cube-swap.svg` | Agent moved off the top plane onto a wall. |
+| `cube-shaded.svg` | Two greens at two values — a lit solid instead of a flat one. |
+| `cube-seam.svg` | Interior cut stops short of the silhouette; the outline stays whole. |
+| `cube-round.svg` | Every corner taken off the same amount. |
+| `cube-open.svg` | Faces pushed apart along their own normals. |
+| `cube-inset.svg` | Faces inset on all edges — three panels holding a cube's shape. |
+| `cube-wire.svg` | Hairline silhouette, colour spent only on the Y. |
+| `cube-hollow.svg` | The agent's face drawn, not filled. |
+| `cube-plate.svg` | App-icon build on its own dark ground. |
+| `disc.svg` | The projection: same fields, circular silhouette. |
+| `disc-hair.svg` / `disc-wide.svg` | The cut at 1.6px and at 7px. |
+| `disc-weighted.svg` | Agent's field widened to 135° to balance green's luminance. |
+| `square.svg` | Tile field; the Y travels three different distances. |
+| `ring.svg` | Disc hollowed — one band divided three ways. |
+| `partial.svg` | Cuts stop short of the rim; the fields stay one disc at the edge. |
+| `lockup-cube.svg` | The solid against `yession` in Noto Sans 200. |
+
+What this pass established: the agent belongs on the **top** face — with blue on a wall the two
+greens become one L-shaped mass and the count goes, which is the failure `letter` and `bloom`
+had; the hexagon holds at 16px where the circle becomes a dot; 3.6px on the 64px grid is where
+the cut is both legible and quiet; and unlike the first pass's stroke marks, a field mark
+survives a light ground, because the cut takes whatever is behind it.
