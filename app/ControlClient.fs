@@ -16,9 +16,21 @@ open Yession.Manager
 open Yession.Oidc
 open Yession.App
 
-[<Emit("""fetch($0, { method: 'POST', headers: { 'x-yession-control': $1, 'content-type': 'application/json' }, body: $2 })
-  .then(r => { if (!r.ok) throw new Error('control rpc failed: ' + r.status); return r.text() })""")>]
-let private postJson (url: string) (secret: string) (body: string) : JS.Promise<string> = jsNative
+[<Emit("fetch($0, { method: 'POST', headers: { 'x-yession-control': $1, 'content-type': 'application/json' }, body: $2 })")>]
+let private post (url: string) (secret: string) (body: string) : JS.Promise<Fetch.Types.Response> = jsNative
+
+/// One control call's body, or a rejection naming the status that refused it.
+///
+/// A status is a REFUSAL here rather than an answer — every caller below either swallows the
+/// failure or turns it into an `Error`, and none of them reads a body the Manager sent with a
+/// non-200 — so the promise carries the body and nothing else. The rejection stays a
+/// rejection, in the tick the response arrives, because every caller is already written
+/// around one.
+let private postJson (url: string) (secret: string) (body: string) : JS.Promise<string> =
+    post url secret body
+    |> Promise.bind (fun response ->
+        if response.Ok then response.text ()
+        else failwithf "control rpc failed: %d" response.Status)
 
 /// The control-leg case of `Sse.subscribe`: the per-launch secret is the whole authentication.
 let private openEventStream (url: string) (secret: string) (onData: Sink<string>) : Subscription =

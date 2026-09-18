@@ -50,6 +50,9 @@ let private blobUrl (text: string) : string = jsNative
 [<Emit("URL.revokeObjectURL($0)")>]
 let private revoke (url: string) : unit = jsNative
 
+[<Emit("$0.media = $1")>]
+let private setMedia (link: Browser.Types.Element) (media: string) : unit = jsNative
+
 /// Turn on the player's stylesheet, which the shell links inert (`Style.deferredHeadTags`):
 /// most sessions never open a recording, and a second render-blocking sheet in the head would
 /// make all of them pay for the ones that do. Flipped at the first mount, when the sheet has
@@ -57,8 +60,10 @@ let private revoke (url: string) : unit = jsNative
 ///
 /// Idempotent, and a no-op where no such link exists: a page may mount a replay without being
 /// the shell (the editor harness does).
-[<Emit("(function (hook) { const link = document.querySelector('[' + hook + ']'); if (link) link.media = 'all' })($0)")>]
-let private enableStylesheet (hook: string) : unit = jsNative
+let private enableStylesheet (hook: string) : unit =
+    match Browser.Dom.document.querySelector ("[" + hook + "]") with
+    | null -> ()
+    | link -> setMedia link "all"
 
 /// One mounted replay, and how to take it down.
 type Mounted =

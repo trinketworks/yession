@@ -262,8 +262,15 @@ type ReposService =
 [<ImportAll("node:fs")>]
 let private fs : obj = jsNative
 
-[<Emit("(() => { try { return $0.readdirSync($1) } catch { return [] } })()")>]
-let private readdirSafe (fs: obj) (dir: string) : string array = jsNative
+[<Emit("$0.readdirSync($1)")>]
+let private readdirSync (fs: obj) (dir: string) : string array = jsNative
+
+/// A directory's entries, and nothing for a directory that cannot be read at all — an absent
+/// repos directory, a permission, a mount that went away. The scan that reads it is asking
+/// what is THERE, and no entries is what "nothing is there" looks like whichever way it
+/// happened.
+let private readdirSafe (fs: obj) (dir: string) : string array =
+    try readdirSync fs dir with _ -> [||]
 
 [<Emit("$0.rmSync($1, { recursive: true, force: true })")>]
 let private rmRecursive (fs: obj) (path: string) : unit = jsNative

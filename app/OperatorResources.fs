@@ -26,8 +26,17 @@ open Yession.SessionProcess
 [<Import("parseDocument", "yaml")>]
 let private parseDocument (text: string) (options: obj) : obj = jsNative
 
-[<Emit("(function (doc) { return doc.errors.concat(doc.warnings).map(p => p.message) })($0)")>]
-let private complaints (doc: obj) : string array = jsNative
+[<Emit("$0.errors")>]
+let private errors (doc: obj) : obj array = jsNative
+
+[<Emit("$0.warnings")>]
+let private warnings (doc: obj) : obj array = jsNative
+
+[<Emit("$0.message")>]
+let private problemMessage (problem: obj) : string = jsNative
+
+let private complaints (doc: obj) : string array =
+    Array.append (errors doc) (warnings doc) |> Array.map problemMessage
 
 [<Emit("JSON.stringify($0.toJS())")>]
 let private toJson (doc: obj) : string = jsNative
