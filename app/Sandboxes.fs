@@ -884,14 +884,36 @@ module private Children =
     [<Emit("$0.on('close', (c) => $1(c == null ? -1 : c))")>]
     let private onClose (child: obj) (handler: int -> unit) : unit = jsNative
 
-    [<Emit("(() => { try { $0.stdin.write($1) } catch {} })()")>]
-    let private writeStdin (child: obj) (text: string) : unit = jsNative
+    [<Emit("$0.stdin.write($1)")>]
+    let private stdinWrite (child: obj) (text: string) : unit = jsNative
 
-    [<Emit("(() => { try { $0.stdin.end() } catch {} })()")>]
-    let private endStdin (child: obj) : unit = jsNative
+    [<Emit("$0.stdin.end()")>]
+    let private stdinEnd (child: obj) : unit = jsNative
 
-    [<Emit("(function (child) { try { process.kill(-child.pid, 'SIGKILL') } catch { try { child.kill('SIGKILL') } catch {} } })($0)")>]
-    let private killTree (child: obj) : unit = jsNative
+    // Writing to — or closing — the stdin of a child that has already gone throws, and a
+    // keystroke that arrived after the process exited is not something a caller can act on.
+    // Swallowed here rather than in the binding, so what is ignored is F# anyone can read.
+    let private writeStdin (child: obj) (text: string) : unit =
+        try stdinWrite child text with _ -> ()
+
+    let private endStdin (child: obj) : unit =
+        try stdinEnd child with _ -> ()
+
+    [<Emit("process.kill(-$0.pid, 'SIGKILL')")>]
+    let private killGroup (child: obj) : unit = jsNative
+
+    [<Emit("$0.kill('SIGKILL')")>]
+    let private killChild (child: obj) : unit = jsNative
+
+    /// The group first — `detached: true` made the child its own leader, so one signal to
+    /// `-pid` takes the whole tree. A child that never became a leader (a spawn that failed
+    /// before exec) has no group to signal, so the process itself is the fallback, and a
+    /// child that is already gone is what the outer ignore is for.
+    let private killTree (child: obj) : unit =
+        try
+            killGroup child
+        with _ ->
+            try killChild child with _ -> ()
 
     /// A live registry of the children a sandbox spawned, so `Dispose` can take down
     /// whatever is still running when the session's environment stops.
@@ -950,10 +972,13 @@ let private createRequire : obj = jsNative
 // reports `SpawnPty = None` instead of throwing when someone runs `vim`.
 module private Pty =
 
-    [<Emit("(() => { try { return $0(import.meta.url)('node-pty') } catch { return null } })()")>]
-    let private tryRequireWith (mk: obj) : obj = jsNative
+    [<Emit("$0(import.meta.url)('node-pty')")>]
+    let private requireWith (mk: obj) : obj = jsNative
 
-    let private tryRequire () : obj = tryRequireWith createRequire
+    /// Absent is an ANSWER here, not a failure: `null` is what `available` reads, and a
+    /// throw — no addon, or a require that is not defined at all — is the same answer.
+    let private tryRequire () : obj =
+        try requireWith createRequire with _ -> null
 
     /// Resolved once. `require` is not free and the answer cannot change within a process.
     let private modul = lazy (tryRequire ())
@@ -1071,8 +1096,15 @@ module DockerSandbox =
     [<Emit("$0.toString('utf8')")>]
     let private bufToStr (b: obj) : string = jsNative
 
-    [<Emit("(function (inspect) { return (inspect.ExitCode == null ? -1 : inspect.ExitCode) })($0)")>]
-    let private exitCodeOf (inspect: obj) : int = jsNative
+    [<Emit("$0.ExitCode")>]
+    let private inspectedExitCode (inspect: obj) : obj = jsNative
+
+    /// Docker reports no exit code for a container that was killed rather than exiting, and
+    /// that reads the way it reads everywhere else in this module: -1, "the OS gave us none".
+    let private exitCodeOf (inspect: obj) : int =
+        match inspectedExitCode inspect with
+        | code when isNil code -> -1
+        | code -> unbox<int> code
 
     let private nodeFs : obj = importAll "node:fs"
 
@@ -1860,10 +1892,13 @@ module SrtSandbox =
     /// Where srt itself is installed. The wrapped argv execs a vendored helper
     /// (`vendor/seccomp/<arch>/apply-seccomp`) from INSIDE the sandbox, so a profile that
     /// hides srt's own files fails every command with exit 127 before the command runs.
+    [<Emit("$0(import.meta.url).resolve('@anthropic-ai/sandbox-runtime/package.json')")>]
+    let private resolveSrtPackage (mk: obj) : string = jsNative
+
     /// Empty when it cannot be resolved, which `toolsFrom` turns into a refused boot: a
     /// session that cannot find it would confine nothing, because nothing would run.
-    [<Emit("(() => { try { return $0(import.meta.url).resolve('@anthropic-ai/sandbox-runtime/package.json') } catch { return '' } })()")>]
-    let private resolveSrtWith (mk: obj) : string = jsNative
+    let private resolveSrtWith (mk: obj) : string =
+        try resolveSrtPackage mk with _ -> ""
 
     /// How this host confines, as configured. A blank tool path is an absent one: the dev
     /// shell and the installable set these per platform, and on macOS they are empty.
@@ -1912,36 +1947,44 @@ module SrtSandbox =
                              @ ([ "YESSION_BIN_CLAUDE"; "YESSION_BIN_GIT" ] |> List.choose named))
                             ambient })
 
-    [<Emit("(function (allowedDomains, denyRead, allowRead, allowWrite, bwrap, socat, ripgrep, weakNesting, allowGitConfig, filesystemDisabled, allowUnixSockets, allowAllUnixSockets) { return ({ network: { allowedDomains: allowedDomains, deniedDomains: [], strictAllowlist: true, allowUnixSockets: allowUnixSockets, ...(allowAllUnixSockets ? { allowAllUnixSockets: true } : {}) }, filesystem: { denyRead: denyRead, allowRead: allowRead, allowWrite: allowWrite, denyWrite: [], allowGitConfig: allowGitConfig, disabled: filesystemDisabled }, ...(bwrap ? { bwrapPath: bwrap } : {}), ...(socat ? { socatPath: socat } : {}), ...(ripgrep ? { ripgrep: { command: ripgrep } } : {}), ...(weakNesting ? { enableWeakerNestedSandbox: true } : {}) }) })($0, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)")>]
-    let private configObject
-        (allowedDomains: string array)
-        (denyRead: string array)
-        (allowRead: string array)
-        (allowWrite: string array)
-        (bwrap: string)
-        (socat: string)
-        (ripgrep: string)
-        (weakNesting: bool)
-        (allowGitConfig: bool)
-        (filesystemDisabled: bool)
-        (allowUnixSockets: string array)
-        (allowAllUnixSockets: bool)
-        : obj = jsNative
-
+    /// The config object srt itself reads.
+    ///
+    /// Built here rather than in a macro, because which FIELDS it has is a decision: every
+    /// optional one is omitted when this policy has nothing to say about it, and omitted is
+    /// what srt reads as "you decide" — `bwrapPath ?? 'bwrap'`, a ripgrep default parameter,
+    /// `if (!enableWeakerNestedSandbox)`. A blank tool path is an absent one, as the
+    /// ternaries this replaced read it: `toolsFrom` already refuses to make one, and a
+    /// config that slipped one through would fail srt's own schema instead of falling back.
     let private toJs (config: SrtConfig) : obj =
-        configObject
-            (List.toArray config.AllowedDomains)
-            (List.toArray config.DenyRead)
-            (List.toArray config.AllowRead)
-            (List.toArray config.AllowWrite)
-            (config.Bwrap |> Option.toObj)
-            (config.Socat |> Option.toObj)
-            (config.Ripgrep |> Option.toObj)
-            config.WeakNesting
-            config.AllowGitConfig
-            config.FilesystemDisabled
-            (List.toArray config.AllowUnixSockets)
-            config.AllowAllUnixSockets
+        let strings (values: string list) : obj = box (List.toArray values)
+        let entry (key: string) (encode: string -> obj) (value: string option) : (string * obj) list =
+            value
+            |> Option.filter (fun named -> named <> "")
+            |> Option.map (fun named -> key, encode named)
+            |> Option.toList
+        let flag (key: string) (asked: bool) : (string * obj) list = if asked then [ key, box true ] else []
+        createObj
+            [ yield
+                ("network",
+                 createObj
+                     [ yield ("allowedDomains", strings config.AllowedDomains)
+                       yield ("deniedDomains", strings [])
+                       yield ("strictAllowlist", box true)
+                       yield ("allowUnixSockets", strings config.AllowUnixSockets)
+                       yield! flag "allowAllUnixSockets" config.AllowAllUnixSockets ])
+              yield
+                ("filesystem",
+                 createObj
+                     [ "denyRead", strings config.DenyRead
+                       "allowRead", strings config.AllowRead
+                       "allowWrite", strings config.AllowWrite
+                       "denyWrite", strings []
+                       "allowGitConfig", box config.AllowGitConfig
+                       "disabled", box config.FilesystemDisabled ])
+              yield! entry "bwrapPath" box config.Bwrap
+              yield! entry "socatPath" box config.Socat
+              yield! entry "ripgrep" (fun command -> createObj [ "command", box command ]) config.Ripgrep
+              yield! flag "enableWeakerNestedSandbox" config.WeakNesting ]
 
     // The package is loaded on demand: it pulls a proxy stack and a TLS library, and a
     // session on the host backend must not pay for either. Dynamic `import` (not
@@ -1982,8 +2025,27 @@ module SrtSandbox =
     [<Emit("$0.SandboxManager.getLinuxSocksSocketPath()")>]
     let private linuxSocksSocketPath (srt: obj) : string = jsNative
 
-    [<Emit("(function (srt, allowedDomains, allowUnixSockets) { return srt.SandboxManager.updateConfig({ ...srt.SandboxManager.getConfig(), network: { ...srt.SandboxManager.getConfig().network, allowedDomains: allowedDomains, allowUnixSockets: allowUnixSockets } }) })($0, $1, $2)")>]
-    let private widenAllowlist (srt: obj) (allowedDomains: string array) (allowUnixSockets: string array) : unit = jsNative
+    [<Emit("$0.SandboxManager.getConfig()")>]
+    let private managerConfig (srt: obj) : obj = jsNative
+
+    [<Emit("$0.network")>]
+    let private networkOf (config: obj) : obj = jsNative
+
+    /// A copy carrying the two network fields this session widens. The rest of the config —
+    /// the filesystem rules, the credential scrubbing, srt's own proxy state — is copied
+    /// through rather than restated, because `updateConfig` REPLACES what it is given.
+    [<Emit("({ ...$0, network: { ...$1, allowedDomains: $2, allowUnixSockets: $3 } })")>]
+    let private withAllowlist (config: obj) (network: obj) (allowedDomains: string array) (allowUnixSockets: string array) : obj = jsNative
+
+    [<Emit("$0.SandboxManager.updateConfig($1)")>]
+    let private updateManagerConfig (srt: obj) (config: obj) : unit = jsNative
+
+    /// Read once: `getConfig` hands back the manager's own config object, so the config and
+    /// the network it carries are two views of one read rather than two reads that could
+    /// have disagreed.
+    let private widenAllowlist (srt: obj) (allowedDomains: string array) (allowUnixSockets: string array) : unit =
+        let config = managerConfig srt
+        updateManagerConfig srt (withAllowlist config (networkOf config) allowedDomains allowUnixSockets)
 
     // srt's manager is a PROCESS-WIDE singleton: one filtering proxy pair, one egress
     // allowlist, initialized once. Filesystem policy is per-spawn (it rides `customConfig`
