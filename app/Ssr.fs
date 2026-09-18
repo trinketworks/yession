@@ -17,8 +17,15 @@ open Lit
 
 // --- lit-html TemplateResult shape (read-only) ------------------------------------------
 
-[<Emit("(function (v) { return v != null && v._$litType$ !== undefined })($0)")>]
-let private isTemplateResult (v: obj) : bool = jsNative
+[<Emit("$0 != null")>]
+let private isPresent (v: obj) : bool = jsNative
+
+[<Emit("$0._$litType$ !== undefined")>]
+let private hasLitType (v: obj) : bool = jsNative
+
+/// A lit-html `TemplateResult`, told apart by the brand lit-html puts on one. The presence
+/// check comes first because the brand cannot be read off `null` or `undefined`.
+let private isTemplateResult (v: obj) : bool = isPresent v && hasLitType v
 
 [<Emit("$0.strings")>]
 let private trStrings (v: obj) : string[] = jsNative
@@ -26,16 +33,21 @@ let private trStrings (v: obj) : string[] = jsNative
 [<Emit("$0.values")>]
 let private trValues (v: obj) : obj[] = jsNative
 
-/// Any iterable that isn't a string (JS arrays AND Fable's F# lists, which lit-html renders
-/// as a sequence of child parts). Excludes strings, which are handled as text.
-[<Emit("(function (v) { return v != null && typeof v !== 'string' && typeof v[Symbol.iterator] === 'function' })($0)")>]
-let private isIterable (v: obj) : bool = jsNative
+[<Emit("typeof $0[Symbol.iterator] === 'function'")>]
+let private hasIterator (v: obj) : bool = jsNative
 
 [<Emit("Array.from($0)")>]
 let private toArray (v: obj) : obj[] = jsNative
 
 [<Emit("typeof $0")>]
 let private jsTypeof (v: obj) : string = jsNative
+
+/// Any iterable that isn't a string (JS arrays AND Fable's F# lists, which lit-html renders
+/// as a sequence of child parts). Excludes strings, which are handled as text — and the
+/// order is the guard: neither the string test nor the iterator probe can be asked of
+/// `null` or `undefined`.
+let private isIterable (v: obj) : bool =
+    isPresent v && jsTypeof v <> "string" && hasIterator v
 
 [<Emit("String($0)")>]
 let private jsString (v: obj) : string = jsNative

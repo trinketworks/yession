@@ -982,6 +982,14 @@ module SessionTerminals =
         /// returns it — and only then, because a lease taken over the holder's own running
         /// block keeps that block's loan, which is not the lease's to return.
         let leaseLoans = Collections.Generic.HashSet<string> ()
+        /// How many lines have been typed at each terminal's shell behind `awaitingStart` —
+        /// what lets a bound on one line's gate tell that line from the next: a lease's
+        /// line whose `C` never came must not shut the gate a block typed after it.
+        let linesTyped = Collections.Generic.Dictionary<string, int> ()
+        let typedSoFar (key: string) =
+            match linesTyped.TryGetValue key with
+            | true, n -> n
+            | _ -> 0
         /// What each open terminal's source declared it can do (Plan 16, part D). Consulted
         /// where a capability is actually USED — before running a block, before resizing —
         /// rather than being re-derived from whether a rearmer happens to exist.
@@ -1737,6 +1745,7 @@ module SessionTerminals =
                     lost <- Set.remove (TerminalId.value id) lost
                     sawCommandStart.Remove (TerminalId.value id) |> ignore
                     awaitingStart.Remove (TerminalId.value id) |> ignore
+                    linesTyped.Remove (TerminalId.value id) |> ignore
                     rearmers.Remove (TerminalId.value id) |> ignore
                     // The SOURCE stays. Everything else here is about a terminal that is
                     // running and this is not: "did its output resolve into blocks" is asked
@@ -1962,6 +1971,7 @@ module SessionTerminals =
                                             sawCommandStart.Remove key |> ignore
                                             // Nothing the shell prints from here to the start
                                             // mark is the block's (`Marks.lineFor`).
+                                            linesTyped.[key] <- typedSoFar key + 1
                                             awaitingStart.Add key |> ignore
                                             pty.Write (writeFor (Marks.lineFor terminal.Spec.Name stdin lent command))
                                             // The integration detector (Plan 13, stage 2f), armed
@@ -2106,37 +2116,62 @@ module SessionTerminals =
                     if Option.isNone terminal.Shell then return Error "this terminal has no interactive shell"
                     else
                         let key = TerminalId.value id
-                        // A lease taken over one's OWN running block keeps that block's loan:
-                        // the program the holder is about to drive is their act, and its
-                        // git spends their credential. Anybody else's block, or an idle
-                        // shell still holding the last block's loan, is returned first — a
-                        // `git push` typed here must never ride somebody else's.
-                        let ownBlock =
-                            match runningAuthor.TryGetValue key with
-                            | true, author -> author = by
-                            | _ -> false
-                        if not ownBlock then loans.Retire id
-                        do! applyLease (TerminalLeases.take id by false (clock.Now ()) (markKeyframe id) leases)
-                        // Then the holder's own, typed the way a block's line is typed: the
-                        // shell's rendering of it is not recorded (`awaitingStart`, until the
-                        // `C` mark) — which matters here more than for a block, since this
-                        // line carries the loan's secret and a transcript replays to every
-                        // peer. Only when the shell is idle at a prompt: typed into a
-                        // running program it is keystrokes for that program, and the `C`
-                        // that would end the unrecorded window is not one that program
-                        // prints. Taken mid-program, the lease lends nothing, and a push
-                        // typed there is refused in words.
-                        match terminal.Sandbox, terminal.Shell, Principal.ofActor by with
-                        | Some sandbox, Some pty, Some holder when
-                            not ownBlock && not (Set.contains key busy) && not (Set.contains key lost) && atPrompt.Contains key
-                            ->
-                            let! lent = loans.Lend sandbox id None (resolved (Authority.ofAuthor holder))
-                            if not (BlockEnv.isNone lent) then
-                                awaitingStart.Add key |> ignore
-                                pty.Write (writeFor (Marks.lineFor terminal.Spec.Name BlockStdin.Terminal lent ""))
-                                leaseLoans.Add key |> ignore
-                        | _ -> ()
-                        return Ok ()
+                        // Already theirs: nothing to lend and, more to the point, nothing to
+                        // type — the line below begins with a line-kill, and the holder may
+                        // be halfway through a command of their own.
+                        if TerminalLeases.holderOf id leases = Some by then return Ok ()
+                        else
+                            // A lease taken over one's OWN running block keeps that block's loan:
+                            // the program the holder is about to drive is their act, and its
+                            // git spends their credential. Anybody else's block, or an idle
+                            // shell still holding the last block's loan, is returned first — a
+                            // `git push` typed here must never ride somebody else's.
+                            let ownBlock =
+                                match runningAuthor.TryGetValue key with
+                                | true, author -> author = by
+                                | _ -> false
+                            if not ownBlock then loans.Retire id
+                            // The holder's own, typed the way a block's line is typed: the
+                            // shell's rendering of it is not recorded (`awaitingStart`, until the
+                            // `C` mark) — which matters here more than for a block, since this
+                            // line carries the loan's secret and a transcript replays to every
+                            // peer. Only when the shell is idle at a prompt: typed into a
+                            // running program it is keystrokes for that program, and the `C`
+                            // that would end the unrecorded window is not one that program
+                            // prints. Taken mid-program, the lease lends nothing, and a push
+                            // typed there is refused in words.
+                            //
+                            // Lent and typed BEFORE the lease is granted. The holder can write
+                            // the moment the lease exists, and a keystroke that beat this line in
+                            // would have it typed into whatever they started — the line lost to
+                            // that program, and the unrecorded window it opened never closed by
+                            // a `C` that program does not print. Nobody can type until the lease
+                            // is theirs, so ahead of it there is no race to lose.
+                            match terminal.Sandbox, terminal.Shell, Principal.ofActor by with
+                            | Some sandbox, Some pty, Some holder when
+                                not ownBlock && not (Set.contains key busy) && not (Set.contains key lost) && atPrompt.Contains key
+                                ->
+                                let! lent = loans.Lend sandbox id None (resolved (Authority.ofAuthor holder))
+                                if not (BlockEnv.isNone lent) then
+                                    let typed = typedSoFar key + 1
+                                    linesTyped.[key] <- typed
+                                    awaitingStart.Add key |> ignore
+                                    pty.Write (writeFor (Marks.lineFor terminal.Spec.Name BlockStdin.Terminal lent ""))
+                                    leaseLoans.Add key |> ignore
+                                    // The same bound a block's start mark is under: a shell that
+                                    // does not answer this line with a `C` inside the window has
+                                    // its output recorded again from here, wrapper and all, rather
+                                    // than swallowed until the next block. Only THIS line's gate —
+                                    // a later lease's line has a count of its own.
+                                    Async.StartImmediate (
+                                        async {
+                                            do! clock.After integrationWindow
+                                            if typedSoFar key = typed then
+                                                awaitingStart.Remove key |> ignore
+                                        })
+                            | _ -> ()
+                            do! applyLease (TerminalLeases.take id by false (clock.Now ()) (markKeyframe id) leases)
+                            return Ok ()
             }
 
         let release (id: TerminalId) (by: ActorRef) : Async<Result<unit, string>> =

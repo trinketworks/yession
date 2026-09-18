@@ -749,7 +749,14 @@ first's.
     environment, that block's loan: readable by everyone in the session and everything
     running in it — a block can read another block's live loan out of `/proc`, the same
     shared trust boundary Plan 14 states — and worth exactly "act as this sandbox's git at
-    this session's gateway" for as long as the sandbox runs. A lease taken at an idle prompt
+    this session's gateway" for as long as the loan is live. The gateway holds that bound:
+    a loan answers only on the route of the sandbox it was lent in, so one carried down
+    another sandbox's route is a secret that route never minted. What is NOT held is the
+    transcript: the loan is in the block's environment, so `env`, `printenv`, or a program
+    that dumps its environment on the way down prints it into a durable record that replays
+    to every peer, present and future. A printed loan is a live credential only until the
+    terminal's next block returns it, and only from inside that sandbox — but the person it
+    names is in the transcript for good. A lease taken at an idle prompt
     lends its holder their own loan, typed in where the transcript cannot see it and returned
     when the lease ends; taken over somebody else's running block or inside a program, it
     lends nothing and a push typed there is refused in words. Only `github` is
