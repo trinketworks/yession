@@ -651,6 +651,18 @@ let policyFor
               // sandbox sets `$TMPDIR`, and an image that leaves it unset would make that
               // sentence false in the one backend where `/tmp` was fine all along.
               "TMPDIR", "/tmp"
+              // A UTF-8 locale, because the image ships none: `nixos/nix` leaves LANG and
+              // every LC_* empty, and the docker env is built from this baseline alone (the
+              // host's inherited locale reaches the host/srt backends, not this one). In the
+              // resulting C locale readline is not multibyte-aware, so it counts a UTF-8
+              // character's BYTES as columns when it wraps a long line at the terminal edge —
+              // and mis-wraps it, duplicating and displacing characters in the buffer the
+              // shell then parses. An em-dash near the wrap column of a long command once
+              // unbalanced a quote that way and dropped the shell into a PS2 continuation it
+              // never came out of; the terminal wedged for a day. C.UTF-8 is built into
+              // glibc (no locale archive to generate) and is what makes readline count that
+              // character as the one column it occupies. Baseline, so a spec still wins.
+              "LANG", "C.UTF-8"
               "GIT_CONFIG_COUNT", "1"
               "GIT_CONFIG_KEY_0", "safe.directory"
               "GIT_CONFIG_VALUE_0", "*" ]

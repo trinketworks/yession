@@ -254,6 +254,22 @@ let tests =
                 do! sandbox.Dispose ()
             })
 
+            // The image ships no locale (`nixos/nix` leaves LANG and every LC_* empty), and
+            // the docker env is the baseline alone — so without this the container ran in C.
+            // There readline is not multibyte-aware and counts a UTF-8 character's bytes as
+            // columns when it wraps a long command line, mis-wrapping it: an em-dash near the
+            // wrap column once duplicated and displaced characters, unbalanced a quote, and
+            // dropped the shell into a PS2 continuation that wedged the terminal for a day.
+            // The promise is that the sandbox edits multibyte input as text, and a UTF-8
+            // locale is what a shell reads that off — asserted by charset, not by name, so
+            // C.UTF-8 and en_US.UTF-8 both satisfy it.
+            testCaseAsync "a docker sandbox runs in a UTF-8 locale, so its shell counts multibyte input by the column" (async {
+                let! _, sandbox = startOrFail alpineSpec
+                let! _, lang, _ = runInSandbox sandbox "printenv" [ "LANG" ] Map.empty None
+                Expect.isTrue (lang.ToUpperInvariant().Contains "UTF-8") (sprintf "the sandbox declares a UTF-8 locale, got: %s" (lang.Trim ()))
+                do! sandbox.Dispose ()
+            })
+
             testCaseAsync "working directory: spec default and per-command override" (async {
                 let spec = { alpineSpec with WorkingDirectory = Some "/tmp" }
                 let! _, sandbox = startOrFail spec
