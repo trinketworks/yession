@@ -966,6 +966,91 @@ let private leaseLoanTests =
                             Expect.isFalse ((printed records).Contains "__y_env") (sprintf "nor the line that carried it:\n%s" everything)
                     }))
 
+        testCaseAsync "the loan is in the shell before the lease is the holder's" <|
+            // The holder can type the moment the lease exists, so a loan lent after it
+            // races their first keystroke. Observed from outside: while the lender is still
+            // deciding, no lease has been taken.
+            (let mutable lend : (unit -> unit) option = None
+             let asked = ResizeArray<BlockId option> ()
+             let loans : SessionTerminals.BlockLoans =
+                { Lend =
+                    fun _ _ block _ ->
+                        asked.Add block
+                        Async.FromContinuations (fun (cont, _, _) -> lend <- Some (fun () -> cont adasLoan))
+                  Retire = ignore }
+             withLoansTerminal TerminalShell.bash loans "lease-loan-first" (fun terminals id _ log _ _ ->
+                async {
+                    let leaseTaken () =
+                        async {
+                            let! page = log.Read None 1000
+                            return
+                                page.Events
+                                |> List.exists (fun e ->
+                                    match e.Event with
+                                    | SessionEvent.TerminalLeaseTaken t -> t.TerminalId = id
+                                    | _ -> false)
+                        }
+                    let! taking = Async.StartChild (terminals.Take id (Principal.toActor ada), 10000)
+                    let! askedForLoan = until 5000 (fun () -> asked.Count = 1)
+                    Expect.isTrue askedForLoan "the lender was asked"
+                    let! before = leaseTaken ()
+                    Expect.isFalse before "and no lease exists while the loan is still being decided"
+                    lend.Value ()
+                    match! taking with
+                    | Error e -> failwith e
+                    | Ok () ->
+                        let! after = leaseTaken ()
+                        Expect.isTrue after "the lease follows the loan"
+                }))
+
+        testCaseAsync "taking a terminal one already holds types nothing into it" <|
+            // A typed line begins with a line-kill, and the holder may be halfway through a
+            // command of their own: a second take by the same holder must leave it alone.
+            (let recorded = recordedLoans adasLoan
+             withLoansTerminal TerminalShell.bash recorded.Loans "lease-retaken" (fun terminals id records _ _ _ ->
+                async {
+                    match! terminals.Take id (Principal.toActor ada) with
+                    | Error e -> failwith e
+                    | Ok () ->
+                        Expect.isTrue (terminals.Input id (Principal.toActor ada) "echo par") "half a command"
+                        match! terminals.Take id (Principal.toActor ada) with
+                        | Error e -> failwith e
+                        | Ok () ->
+                            Expect.equal recorded.Asked.Count 1 "nothing more was lent"
+                            Expect.isTrue (terminals.Input id (Principal.toActor ada) "tial\r") "and the other half"
+                            let! seen = printedOutput records "partial"
+                            Expect.isTrue seen (sprintf "the half-typed command survived the second take; transcript: %s" (printed records))
+                }))
+
+        testCaseAsync "a shell that never marks the lease's line has its output recorded again after the window" <|
+            // The line is typed behind the same gate a block's is, and a gate that only a
+            // `C` can open is a gate that a shell which has stopped marking shuts for good.
+            // Here the holder unhooks the start mark before handing over; the next holder's
+            // line then produces none, and their output would be swallowed until somebody
+            // ran a block.
+            (let recorded = recordedLoans adasLoan
+             withLoansTerminal TerminalShell.bash recorded.Loans "lease-gate-bounded" (fun terminals id records _ _ advance ->
+                async {
+                    let bob = Principal.Peer (PeerId.create "bob" |> expect)
+                    match! terminals.Take id (Principal.toActor ada) with
+                    | Error e -> failwith e
+                    | Ok () ->
+                        Expect.isTrue (terminals.Input id (Principal.toActor ada) "trap - DEBUG\r") "the start mark is unhooked"
+                        // Let the shell reach its prompt again before the next holder's line
+                        // goes in — the same barrier the lost-marks case above needs.
+                        do! Async.Sleep 1000
+                        match! terminals.Take id (Principal.toActor bob) with
+                        | Error e -> failwith e
+                        | Ok () ->
+                            Expect.equal recorded.Asked.Count 2 "bob was lent his own"
+                            do! Async.Sleep 500
+                            advance (System.TimeSpan.FromSeconds 3.0)
+                            Expect.isTrue (terminals.Input id (Principal.toActor bob) "echo after-the-window\r") "bob types"
+                            let! seen = printedOutput records "after-the-window"
+                            Expect.isTrue seen (sprintf "and is heard, the gate having been given up on; transcript: %s" (printed records))
+                            Expect.isFalse ((printed records).Contains "s3cret-loan") "the line that went in unmarked is still not in the transcript"
+                }))
+
         testCaseAsync "ending the lease returns the holder's loan" <|
             (let recorded = recordedLoans adasLoan
              withLoansTerminal TerminalShell.bash recorded.Loans "lease-returned" (fun terminals id _ _ _ _ ->
