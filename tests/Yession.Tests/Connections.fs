@@ -1339,6 +1339,49 @@ let private routeTests =
             for key in [ "GIT_AUTHOR_EMAIL"; "GIT_COMMITTER_EMAIL" ] do
                 Expect.equal (Map.tryFind key env) (Some "583231+octocat@users.noreply.github.com") key
 
+        // A block's line waits on this answer before it is typed, so what is asked of
+        // github per block is what every block of that person costs.
+        testCaseAsync "a credential's identity is asked for once and kept" <|
+            async {
+                let mutable asked = 0
+                let identity =
+                    Repos.identityMemo id (fun () -> DateTimeOffset (2026, 8, 7, 0, 0, 0, TimeSpan.Zero)) Repos.identityMissWindow (fun _ ->
+                        async {
+                            asked <- asked + 1
+                            return Some (Repos.identityEnv "Ada" "ada@example.com")
+                        })
+                let! first = identity "user:ada"
+                let! again = identity "user:ada"
+                Expect.equal again first "the same answer"
+                Expect.equal asked 1 "asked once"
+                let! _ = identity "user:bob"
+                Expect.equal asked 2 "another credential is another ask"
+            }
+
+        testCaseAsync "a credential with no identity behind it is not asked about again inside the window" <|
+            async {
+                let mutable now = DateTimeOffset (2026, 8, 7, 0, 0, 0, TimeSpan.Zero)
+                let mutable behind : Map<string, string> option = None
+                let mutable asked = 0
+                let identity =
+                    Repos.identityMemo id (fun () -> now) (TimeSpan.FromSeconds 30.0) (fun _ ->
+                        async {
+                            asked <- asked + 1
+                            return behind
+                        })
+                let! nothing = identity "user:ada"
+                Expect.isNone nothing "nobody yet"
+                now <- now.AddSeconds 10.0
+                behind <- Some (Repos.identityEnv "Ada" "ada@example.com")
+                let! still = identity "user:ada"
+                Expect.isNone still "the miss is kept for the window, whatever github would say now"
+                Expect.equal asked 1 "and github was not asked"
+                now <- now.AddSeconds 25.0
+                let! named = identity "user:ada"
+                Expect.isSome named "past the window, asked again — a person who connected github gets their name"
+                Expect.equal asked 2 "one more ask"
+            }
+
         testCaseAsync "the profile behind a token is read from github, and a non-answer says why" <|
             async {
                 let! endpoint = startProfileEndpoint ()

@@ -26,17 +26,50 @@ let private spawnWithEnv (spawn: obj) (command: string) (args: string array) (en
 [<Emit("$0.stdout.on('data', $1)")>]
 let private onStdout (child: Child) (handler: obj -> unit) : unit = jsNative
 
-[<Emit("(function (chunk) { return typeof chunk === 'string' ? chunk : chunk.toString('utf8') })($0)")>]
-let private chunkToString (chunk: obj) : string = jsNative
+[<Emit("typeof $0 === 'string'")>]
+let private isJsString (chunk: obj) : bool = jsNative
 
-[<Emit("(function (line) { try { const p = JSON.parse(line); return (p && p.yession === 'ready' && typeof p.port === 'number') ? p.port : null } catch { return null } })($0)")>]
-let private parseReadyLine (line: string) : int option = jsNative
+[<Emit("$0.toString('utf8')")>]
+let private decodeUtf8 (chunk: obj) : string = jsNative
+
+let private chunkToString (chunk: obj) : string =
+    if isJsString chunk then unbox<string> chunk else decodeUtf8 chunk
+
+// The readiness line is whatever the child printed, so every probe below has to survive a
+// parse that produced `null`, a number, or an object with none of these fields — which is
+// what the optional chaining is for, and why nothing here reads a field it has not typed.
+[<Emit("$0?.yession === 'ready'")>]
+let private saysReady (parsed: obj) : bool = jsNative
+
+[<Emit("typeof $0?.port === 'number'")>]
+let private hasNumericPort (parsed: obj) : bool = jsNative
+
+[<Emit("$0.port")>]
+let private portOf (parsed: obj) : int = jsNative
+
+[<Emit("typeof $0?.version === 'string'")>]
+let private hasVersionString (parsed: obj) : bool = jsNative
+
+[<Emit("$0.version")>]
+let private versionOf (parsed: obj) : string = jsNative
+
+/// The port off a readiness line; `None` for a log line, a half-line, or anything that is
+/// not this message — a line that cannot be parsed is not an error here, it is a line the
+/// child printed for a person to read.
+let private parseReadyLine (line: string) : int option =
+    try
+        let parsed = JS.JSON.parse line
+        if saysReady parsed && hasNumericPort parsed then Some (portOf parsed) else None
+    with _ -> None
 
 /// The child's build, off the same readiness line. Absent from a session bundle older than the
 /// field, which must still launch — so this is an option, never a launch precondition. Public
 /// only so that back-compat can be asserted directly.
-[<Emit("(function (line) { try { const p = JSON.parse(line); return (p && typeof p.version === 'string') ? p.version : null } catch { return null } })($0)")>]
-let parseReadyVersion (line: string) : string option = jsNative
+let parseReadyVersion (line: string) : string option =
+    try
+        let parsed = JS.JSON.parse line
+        if hasVersionString parsed then Some (versionOf parsed) else None
+    with _ -> None
 
 /// Refuse a session from a different MAJOR version — the one difference that says their
 /// control protocol may genuinely disagree.

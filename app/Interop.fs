@@ -162,9 +162,15 @@ let private createServerRaw : System.Func<IncomingMessage, ServerResponse, unit>
 let createServer (handler: IncomingMessage -> ServerResponse -> unit) : HttpServer =
     createServerRaw (System.Func<_, _, _>(handler))
 
+[<Emit("typeof $0 === 'string'")>]
+let private isJsString (chunk: obj) : bool = jsNative
+
+[<Emit("$0.toString('utf8')")>]
+let private decodeUtf8 (chunk: obj) : string = jsNative
+
 /// Decode a Node Buffer (or string) chunk to a UTF-8 string.
-[<Emit("(function (chunk) { return typeof chunk === 'string' ? chunk : chunk.toString('utf8') })($0)")>]
-let bufferToString (chunk: obj) : string = jsNative
+let bufferToString (chunk: obj) : string =
+    if isJsString chunk then unbox<string> chunk else decodeUtf8 chunk
 
 /// Read a request header (Node lowercases header names); None when absent.
 [<Emit("($0.headers[$1] ?? null)")>]
@@ -230,12 +236,23 @@ let contentDigest (content: string option) : string =
     | Some text -> (sha256Base64Url text).Substring (0, 12)
     | None -> ""
 
+[<Emit("Buffer.from($0, 'utf8')")>]
+let private utf8Buffer (text: string) : obj = jsNative
+
+[<Emit("$0.length")>]
+let private bufferLength (buffer: obj) : int = jsNative
+
+/// `timingSafeEqual` THROWS on operands of different lengths, which is why the guard below
+/// is not an optimisation and cannot be dropped.
+[<Emit("$0.timingSafeEqual($1, $2)")>]
+let private timingSafeEqualBuffers (cryptoModule: obj) (a: obj) (b: obj) : bool = jsNative
+
 /// Constant-time string equality (client secrets); length mismatch short-circuits,
 /// which leaks only the length.
-[<Emit("(function (cryptoModule, a, b) { const left = Buffer.from(a, 'utf8'), right = Buffer.from(b, 'utf8'); return left.length === right.length && cryptoModule.timingSafeEqual(left, right) })($0, $1, $2)")>]
-let private timingSafeEq (cryptoModule: obj) (a: string) (b: string) : bool = jsNative
-
-let timingSafeEqualStr (a: string) (b: string) : bool = timingSafeEq nodeCrypto a b
+let timingSafeEqualStr (a: string) (b: string) : bool =
+    let left = utf8Buffer a
+    let right = utf8Buffer b
+    bufferLength left = bufferLength right && timingSafeEqualBuffers nodeCrypto left right
 
 /// The TCP peer address of a request (`socket.remoteAddress`); None once disconnected.
 [<Emit("($0.socket?.remoteAddress ?? null)")>]

@@ -853,7 +853,7 @@ let private timelineTests =
             let proj, _ = ConversationProjection.applyEvents None [ envelope ] ConversationProjection.empty
             match proj.Items with
             | [ item ] ->
-                Expect.equal item.Body "pushed to octo/hello with user:ada's github credential" "whose, and where"
+                Expect.equal item.Body "spent user:ada's github credential pushing to octo/hello" "whose, and where — not that github took it, which is git's to print"
                 Expect.equal item.Author ActorRef.Agent "by whoever's act the block was"
                 Expect.isTrue (match item.Kind with ConversationItemKind.ActNote _ -> true | _ -> false) "an act"
             | other -> failwithf "expected one note, got %A" other
@@ -881,7 +881,7 @@ let private timelineTests =
             | [ item ] ->
                 Expect.equal
                     item.Body
-                    "pushed to octo/hello with user:ada's github credential, holding the terminal"
+                    "spent user:ada's github credential pushing to octo/hello, holding the terminal"
                     "whose, where, and that it was typed rather than queued"
             | other -> failwithf "expected one note, got %A" other
 

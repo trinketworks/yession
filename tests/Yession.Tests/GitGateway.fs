@@ -546,6 +546,24 @@ let private portsTests =
             do! upstream.Close ()
         }
 
+        // A loan answers on its own sandbox's route and nowhere else. Every process in a
+        // sandbox is one uid, so a loan CAN be read out of a neighbour's environment; what
+        // the gateway bounds is how far it travels — carried down another sandbox's route
+        // it is a secret that route never minted.
+        testCaseAsync "a loan lent in one sandbox is not answered on another sandbox's route" <| async {
+            let! upstream = startUpstream ()
+            do!
+                withGateway upstream.Origin (fun gateway ->
+                    async {
+                        let adas = gateway.Lend (sandbox "octo/hello:dev") terminal (lenderOf (lending (Some "adas")))
+                        let otherRoute = gateway.Grant (sandbox "octo/hello:gate")
+                        let! run = git [ "ls-remote"; "https://github.com/octo/hello.git" ] "." (lentEnv gateway otherRoute adas)
+                        Expect.isTrue (run.Status <> 0) "it fails"
+                        Expect.equal upstream.Authorizations.Count 0 "and github.com was not asked"
+                    })
+            do! upstream.Close ()
+        }
+
         // A loan belongs to a block. Returned, a request still carrying it — a `git push &`
         // the block left running past its terminal's next block — is told so, naming whose
         // credential it would have spent, rather than answered with the next block's.

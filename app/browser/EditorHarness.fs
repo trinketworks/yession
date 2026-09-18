@@ -38,17 +38,17 @@ let private replayHost : Browser.Types.Element = jsNative
 [<Emit("document.getElementById('replay-gappy')")>]
 let private gappyReplayHost : Browser.Types.Element = jsNative
 
-[<Emit("(function(f){ window.__md = f; })($0)")>]
+[<Emit("window.__md = $0")>]
 let private exposeMd (f: unit -> string) : unit = jsNative
 
-[<Emit("(function(f){ window.__pushRemote = f; })($0)")>]
+[<Emit("window.__pushRemote = $0")>]
 let private exposePush (f: string -> unit) : unit = jsNative
 
 /// How many times Enter has asked to send. The harness mounts the editor exactly as the
 /// COMPOSER does (`onSubmit` supplied), so the E2E drives the real binding: Enter sends and
 /// inserts nothing, Alt+Enter is the new line. A counter rather than a callback because what
 /// the test needs to know is "did it fire", and the send itself belongs to the app.
-[<Emit("(function(n){ window.__sends = n; })($0)")>]
+[<Emit("window.__sends = $0")>]
 let private exposeSends (n: int) : unit = jsNative
 
 let private doc = Y.Doc.Create ()
@@ -160,13 +160,13 @@ let private peerAHost : obj = jsNative
 let private peerBHost : obj = jsNative
 
 /// Start or stop pushing presence decorations into the MIRROR on every animation frame.
-[<Emit("(function(f){ window.__caretStorm = f; })($0)")>]
+[<Emit("window.__caretStorm = $0")>]
 let private exposeStorm (f: bool -> unit) : unit = jsNative
 
 /// How many frames the storm has actually pushed on. Anti-vacuity: a convergence assertion
 /// passes trivially if the storm never ran, and "never ran" and "ran and was harmless" look
 /// identical from the outside.
-[<Emit("(function(n){ window.__caretPushes = n; })($0)")>]
+[<Emit("window.__caretPushes = $0")>]
 let private exposeCaretPushes (n: int) : unit = jsNative
 
 [<Emit("requestAnimationFrame(() => $0())")>]
@@ -215,7 +215,7 @@ let private countWritebacks (doc: Y.Doc) (syncKey: obj) : unit =
             writebacks <- writebacks + 1
             exposeWritebacks writebacks)
 
-[<Emit("(function(f){ window.__convState = f; })($0)")>]
+[<Emit("window.__convState = $0")>]
 let private exposeConvState (f: unit -> string) : unit = jsNative
 
 /// The two docs' content and the two editors' rendered text, side by side. `docA`/`docB` are
@@ -346,33 +346,33 @@ let private onKeystrokePainted (host: obj) (take: float -> unit) : unit =
                 take (now () - pressed))),
         true)
 
-[<Emit("(function(f){ window.__benchDiag = f; })($0)")>]
+[<Emit("window.__benchDiag = $0")>]
 let private exposeTypingDiag (f: unit -> string) : unit = jsNative
 
 /// Two named number series as one JSON object — the shape every scenario returns.
 [<Emit("JSON.stringify({ [$0]: $1, [$2]: $3 })")>]
 let private twoSeries (a: string) (xs: float[]) (b: string) (ys: float[]) : string = jsNative
 
-[<Emit("(function(f){ window.__benchSeed = f; })($0)")>]
+[<Emit("window.__benchSeed = $0")>]
 let private exposeSeed (f: int -> JS.Promise<int>) : unit = jsNative
 
-[<Emit("(function(f){ window.__benchCarets = f; })($0)")>]
+[<Emit("window.__benchCarets = $0")>]
 let private exposeCarets (f: int -> JS.Promise<string>) : unit = jsNative
 
-[<Emit("(function(f){ window.__benchReset = f; })($0)")>]
+[<Emit("window.__benchReset = $0")>]
 let private exposeBenchReset (f: unit -> unit) : unit = jsNative
 
-[<Emit("(function(f){ window.__benchTyping = f; })($0)")>]
+[<Emit("window.__benchTyping = $0")>]
 let private exposeTyping (f: unit -> string) : unit = jsNative
 
 /// One named number series as JSON — `twoSeries` for a scenario that measures one thing.
 [<Emit("JSON.stringify({ [$0]: $1 })")>]
 let private oneSeries (a: string) (xs: float[]) : string = jsNative
 
-[<Emit("(function(f){ window.__benchTranscript = f; })($0)")>]
+[<Emit("window.__benchTranscript = $0")>]
 let private exposeTranscript (f: int -> int -> int -> string) : unit = jsNative
 
-[<Emit("(function(f){ window.__benchSettle = f; })($0)")>]
+[<Emit("window.__benchSettle = $0")>]
 let private exposeSettle (f: unit -> JS.Promise<unit>) : unit = jsNative
 
 /// Begin the scroll scenario: a conversation of `items`, `records` transcript records arriving
@@ -383,17 +383,17 @@ let private exposeSettle (f: unit -> JS.Promise<unit>) : unit = jsNative
 /// running its setup behind a shut pane — so every one of them is a render that leaves the
 /// conversation exactly as it was. Off, they land in the burst card's running block, and the
 /// conversation grows under the reader with each.
-[<Emit("(function(f){ window.__benchScrollBegin = f; })($0)")>]
+[<Emit("window.__benchScrollBegin = $0")>]
 let private exposeScrollBegin (f: int -> int -> int -> bool -> unit) : unit = jsNative
 
 /// How many records the stream has sent so far. The driver flings until the stream is spent,
 /// so every size is measured over the same records rather than over however long one fling
 /// through it happened to take.
-[<Emit("(function(f){ window.__benchScrollSent = f; })($0)")>]
+[<Emit("window.__benchScrollSent = $0")>]
 let private exposeScrollSent (f: unit -> int) : unit = jsNative
 
 /// End it: stop the stream and the clocks, and hand back what they recorded.
-[<Emit("(function(f){ window.__benchScrollEnd = f; })($0)")>]
+[<Emit("window.__benchScrollEnd = $0")>]
 let private exposeScrollEnd (f: unit -> string) : unit = jsNative
 
 /// What the scroll scenario recorded, in the series shape the driver reads everywhere else,
@@ -407,12 +407,12 @@ let private scrollReport
 /// Open a session the way the app opens one it has been to before — from what it kept — and
 /// say what the page did between its first paint and its connection: `items` conversation
 /// items' worth of events in the kept store, `perAnswer` events to each kept answer.
-[<Emit("(function(f){ window.__benchOpen = f; })($0)")>]
+[<Emit("window.__benchOpen = $0")>]
 let private exposeOpen (f: int -> int -> JS.Promise<string>) : unit = jsNative
 
 /// Open a session the way the app opens one it has never seen — everything over the
 /// network, `pageSize` events to a page, a page every `everyMs` — and say what the page did.
-[<Emit("(function(f){ window.__benchOpenCold = f; })($0)")>]
+[<Emit("window.__benchOpenCold = $0")>]
 let private exposeOpenCold (f: int -> int -> int -> JS.Promise<string>) : unit = jsNative
 
 /// How many times the app has rendered, ever — `Render.countRender`'s own count, read back so
@@ -440,14 +440,28 @@ type private Look =
       PageChars : int
       Anchor : Browser.Types.Element option }
 
+[<Emit("new MessageChannel()")>]
+let private messageChannel () : obj = jsNative
+
+/// The port that hears a posted task. A message handler takes the event, which nothing here
+/// reads: what this port carries is the TURN, not a value.
+[<Emit("$0.port1.onmessage = $1")>]
+let private onPortMessage (channel: obj) (handler: unit -> unit) : unit = jsNative
+
+[<Emit("$0.port2.postMessage(0)")>]
+let private postTask (channel: obj) : unit = jsNative
+
 /// A turn of the event loop — a task, not a microtask, so the page may paint in between.
 /// Fixture stores answer through this because the Cache API answers that way, and the
 /// asynchrony is not incidental: it is what separates the pictures a person sees on opening
 /// (the empty shell, then the conversation, then the transcripts) — a store that answered
 /// synchronously would fold everything into one frame and measure a page that never moved.
 /// A message port rather than `setTimeout`, which the browser clamps to 4ms once nested.
-[<Emit("new Promise(r => { const c = new MessageChannel(); c.port1.onmessage = () => r(); c.port2.postMessage(0) })")>]
-let private nextTask () : JS.Promise<unit> = jsNative
+let private nextTask () : JS.Promise<unit> =
+    JS.Constructors.Promise.Create (fun resolve _ ->
+        let channel = messageChannel ()
+        onPortMessage channel (fun () -> resolve ())
+        postTask channel)
 
 /// What the open scenario recorded. Counts and distances, mostly, because what a person sees
 /// on opening a session is not a latency: how many different pictures the page showed, how
@@ -1174,41 +1188,59 @@ let private openFixture (items: int) (perAnswer: int) : OpenFixture =
           Kept = fun () -> answered [ terminal ] }
     { OpenFixture.History = history; OpenFixture.Transcripts = transcripts; OpenFixture.Log = log }
 
+[<Emit("window.__typed = $0")>]
+let private exposeTyped (all: string) : unit = jsNative
+
+/// What has been typed so far. The bytes accumulate HERE rather than on the global, which is
+/// this instrument's output and not the place it keeps its count. A page that has typed
+/// nothing has never written the global, and the E2E reads it as `''`, exactly as before.
+let mutable private typed = ""
+
 /// Every byte the live screen decided to send, for the E2E to read back. The keystroke
 /// translation is the whole of what a terminal front end does with a keyboard event, and it
 /// is the one part of it that only a real browser can exercise: `KeyboardEvent` is not
 /// something a rendered string has.
-[<Emit("(function(d){ window.__typed = (window.__typed || '') + d })($1)")>]
-let private recordTyped (_terminal: TerminalId) (data: string) : unit = jsNative
+let private recordTyped (_terminal: TerminalId) (data: string) : unit =
+    typed <- typed + data
+    exposeTyped typed
 
 /// Hand the shell a terminal SCREEN, as the Session Process does over the data channel
 /// (Plan 14, stage 6). Exposed so the E2E can drive the one path that puts a real emulator
 /// in a real browser: without it this bundle contains no xterm at all, and the browser tier
 /// silently proved nothing about the client's live screen — which is how a browser-only
 /// module-resolution failure got past it and into a release job.
-[<Emit("(function(f){ window.__snapshot = (id, seq, screen, cols, rows) => f(id, seq, screen, cols ?? 80, rows ?? 24) })($0)")>]
-let private exposeSnapshot (f: string -> int -> string -> int -> int -> unit) : unit = jsNative
+///
+/// The size is the caller's to leave out — a case that only wants a screen on the page says
+/// nothing about how big it is, and the harness's own 80x24 is what it gets.
+[<Emit("window.__snapshot = $0")>]
+let private exposeSnapshot (f: string -> int -> string -> int option -> int option -> unit) : unit = jsNative
 
 /// Hand the shell one transcript record, as the Session Process does as a terminal speaks.
 /// The companion to the snapshot: a snapshot is where a screen STARTS and records are what
 /// move it, and composing the two — including a resize reshaping the emulator mid-stream —
 /// is the client's own fold.
-[<Emit("(function(f){ window.__record = f })($0)")>]
+[<Emit("window.__record = $0")>]
 let private exposeRecord (f: string -> int -> string -> string -> unit) : unit = jsNative
 
 /// The size this client last told the Session Process its screen is. Read back by the E2E,
 /// because the question there is whether a box that changed without the model changing — a
 /// splitter dragged, a window resized — reached the pty at all.
-[<Emit("(function(c, r){ window.__resized = c + 'x' + r })($1, $2)")>]
-let private recordResized (_terminal: TerminalId) (cols: int) (rows: int) : unit = jsNative
+[<Emit("window.__resized = $0")>]
+let private exposeResized (size: string) : unit = jsNative
+
+let private recordResized (_terminal: TerminalId) (cols: int) (rows: int) : unit =
+    exposeResized (sprintf "%dx%d" cols rows)
 
 /// The size this client last measured its OWN view of a terminal at — the width a command
 /// queued from that pane would claim (`PendingAct.Size`). A second hook rather than a reading
 /// of `window.__resized`, because the two are different facts: that one is what was sent to the
 /// pty for a lease this peer holds, and this one is measured in BLOCK mode, where nobody holds
 /// anything and nothing is sent at all.
-[<Emit("(function(c, r){ window.__viewport = c + 'x' + r })($1, $2)")>]
-let private recordViewport (_terminal: TerminalId) (cols: int) (rows: int) : unit = jsNative
+[<Emit("window.__viewport = $0")>]
+let private exposeViewport (size: string) : unit = jsNative
+
+let private recordViewport (_terminal: TerminalId) (cols: int) (rows: int) : unit =
+    exposeViewport (sprintf "%dx%d" cols rows)
 
 /// Start an agent turn in the shell, as the Session Process does when the model begins to
 /// answer: the turn, the message it opens, and the first words of it, folded through the same
@@ -1216,7 +1248,7 @@ let private recordViewport (_terminal: TerminalId) (cols: int) (rows: int) : uni
 /// model credential (deliberately — see `Browser.fs`), so a turn in flight is a state no
 /// amount of typing on this page can reach, and how many marks a person sees while one is
 /// running is a question only a laid-out page can answer.
-[<Emit("(function(f){ window.__agentTurn = f })($0)")>]
+[<Emit("window.__agentTurn = $0")>]
 let private exposeAgentTurn (f: unit -> unit) : unit = jsNative
 
 /// Hand a terminal's lease to this peer WITHOUT a press, as the alt-screen flip does: a block
@@ -1224,14 +1256,14 @@ let private exposeAgentTurn (f: unit -> unit) : unit = jsNative
 /// same reason the snapshot is — it is the arrival of a fact from elsewhere, and a test that
 /// could only reach live mode by pressing `take` could never exercise the route that has no
 /// press to make.
-[<Emit("(function(f){ window.__take = f })($0)")>]
+[<Emit("window.__take = $0")>]
 let private exposeTake (f: string -> unit) : unit = jsNative
 
 /// Swap the shell between the session's first screen and a conversation. Both, from one hook,
 /// because the question the card raises is about the two TOGETHER: the ask card stands only
 /// where nothing has been said and a message body only where something has, so the one column
 /// they are both supposed to start on can be measured no other way on one page.
-[<Emit("(function(f){ window.__launch = f })($0)")>]
+[<Emit("window.__launch = $0")>]
 let private exposeLaunch (f: bool -> unit) : unit = jsNative
 
 /// A collaborator's caret in a chapter's NAME, with no session to relay one from. The
@@ -1244,7 +1276,7 @@ let private exposeLaunch (f: bool -> unit) : unit = jsNative
 /// Where a name lives IN the doc is the codec's answer and is pinned where it can be tested
 /// for a penny (`SyncedStateSync.chapterNameText`), not restated here: a fixture that wrote
 /// the layout out by hand would be a second copy of it, and the wrong one the day it moved.
-[<Emit("(function(f){ window.__chapterCaret = f })($0)")>]
+[<Emit("window.__chapterCaret = $0")>]
 let private exposeChapterCaret (f: string -> int -> int -> unit) : unit = jsNative
 
 do
@@ -1332,7 +1364,10 @@ do
             render ()
     exposeSnapshot (fun id seq screen cols rows ->
         match TerminalId.create id with
-        | Ok terminal -> renderer.Screens.Snapshot terminal { Seq = seq; Cols = cols; Rows = rows; Screen = screen }
+        | Ok terminal ->
+            renderer.Screens.Snapshot
+                terminal
+                { Seq = seq; Cols = defaultArg cols 80; Rows = defaultArg rows 24; Screen = screen }
         | Error _ -> ())
     exposeAgentTurn (fun () ->
         let expect = function Ok v -> v | Error e -> failwith e
