@@ -328,8 +328,11 @@ type private Loan =
 
 /// Start the gateway. `upstream` is the origin github.com's git endpoints live under — a
 /// parameter for the reason every provider endpoint here is: a suite needs somewhere to
-/// point it that is not the live provider.
-let start (upstream: string) : Async<Gateway> =
+/// point it that is not the live provider. `report` is where a fault goes that git can no
+/// longer be told about: once the answer's headers are out there is no `ERR` channel left,
+/// and a fault swallowed there is a fault nobody hears — which for a push's audit record is
+/// a push that went out on somebody's credential with no line saying so.
+let start (upstream: string) (report: string -> unit) : Async<Gateway> =
     let mutable grants : Map<string, SandboxRef> = Map.empty
     /// Live loans, by secret.
     let mutable live : Map<string, Loan> = Map.empty
@@ -414,10 +417,22 @@ let start (upstream: string) : Async<Gateway> =
                                         | Forwarded.Answered ->
                                             // The push itself, not its advertisement: one
                                             // sentence per push, however many requests it took.
+                                            // The push has already gone out, so a record that
+                                            // cannot be written is reported rather than allowed
+                                            // to read as a gateway fault git never sees.
                                             if request.Service = "git-receive-pack" && not isAdvertisement then
-                                                do! lender.Spent request.Repo
+                                                try
+                                                    do! lender.Spent request.Repo
+                                                with e ->
+                                                    report (
+                                                        sprintf
+                                                            "a push to %s went out on %s's github credential and the record of it could not be written: %s"
+                                                            request.Repo
+                                                            (ownerLabel lender.Owner)
+                                                            e.Message)
                                 with e ->
                                     if not (res.headersSent) then refuse (sprintf "the git gateway failed: %s" e.Message)
+                                    else report (sprintf "the git gateway failed after answering a request for %s: %s" request.Repo e.Message)
                             })
 
     let server = createServer handler

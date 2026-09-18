@@ -1114,7 +1114,7 @@ Async.StartImmediate (
         // gateway lends the credential per request, resolved by the Plan 08 precedence
         // each time, so a refresh reaches a sandbox already running and a sandbox's env
         // never holds a value worth printing.
-        let! gitGateway = GitGateway.start "https://github.com"
+        let! gitGateway = GitGateway.start "https://github.com" (fun fault -> eprintfn "[session %s] git gateway: %s" (SessionId.value sessionId) fault)
         // Who commits in a BLOCK are by: the account behind the credential the block's act
         // spends, asked of GitHub and kept (`Repos.identityMemo`: hits for the session,
         // misses for a window). Nobody's profile takes the four variables away, so a block
