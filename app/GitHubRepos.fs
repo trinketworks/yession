@@ -162,11 +162,14 @@ type private Cursor = { Text : string option; Page : int }
 [<Emit("Buffer.from(JSON.stringify({ q: $0 ?? null, page: $1 })).toString('base64url')")>]
 let private mintCursor (text: string option) (page: int) : string = jsNative
 
-/// The token's JSON, or empty when it is not base64 at all. Total on purpose: the browser
+[<Emit("Buffer.from($0, 'base64url').toString('utf8')")>]
+let private fromBase64Url (token: string) : string = jsNative
+
+/// The token's JSON, or nothing when it is not base64 at all. Total on purpose: the browser
 /// can send anything, and a token this session did not mint is not an error — it is a
 /// request it will not honour.
-[<Emit("(() => { try { return Buffer.from($0, 'base64url').toString('utf8') } catch (e) { return '' } })()")>]
-let private cursorJson (token: string) : string = jsNative
+let private cursorJson (token: string) : string option =
+    try Some (fromBase64Url token) with _ -> None
 
 let private cursorDecoder : Decoder<Cursor> =
     Decode.object (fun get ->
@@ -178,8 +181,8 @@ let private cursorDecoder : Decoder<Cursor> =
 /// by cursor: it is what a request with no cursor answers.
 let readCursor (token: string) : (string option * int) option =
     match cursorJson token with
-    | "" -> None
-    | json ->
+    | None -> None
+    | Some json ->
         match Decode.fromString cursorDecoder json with
         | Ok cursor when cursor.Page >= 2 && cursor.Page <= pageLimit -> Some (cursor.Text, cursor.Page)
         | Ok _

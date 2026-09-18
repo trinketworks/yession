@@ -33,14 +33,21 @@ let private writeFileSync (path: string) (text: string) : unit = fs.writeFileSyn
 [<Emit("$0.openSync($1, 'a')")>]
 let private openSyncAppend (fs: obj) (path: string) : int = jsNative
 
-[<Emit("(function (fs, fd, text) { return (fs.writeSync(fd, text), fs.fsyncSync(fd)) })($0, $1, $2)")>]
-let private writeSyncFsync (fs: obj) (fd: int) (text: string) : unit = jsNative
+[<Emit("$0.writeSync($1, $2)")>]
+let private writeSync (fs: obj) (fd: int) (text: string) : unit = jsNative
+
+[<Emit("$0.fsyncSync($1)")>]
+let private fsyncSync (fs: obj) (fd: int) : unit = jsNative
 
 [<Emit("$0.mkdirSync($1, { recursive: true })")>]
 let private mkdirRecursive (fs: obj) (path: string) : unit = jsNative
 
 let private openAppend (path: string) : int = openSyncAppend (box fs) path
-let private writeAndSync (fd: int) (text: string) : unit = writeSyncFsync (box fs) fd text
+// Write, then flush, in that order: the flush is what makes the write durable, so the
+// sequence is the promise rather than an implementation detail of one call.
+let private writeAndSync (fd: int) (text: string) : unit =
+    writeSync (box fs) fd text
+    fsyncSync (box fs) fd
 let private mkdirSync (path: string) : unit = mkdirRecursive (box fs) path
 
 /// Everything the Session Process and its HTTP surface need from transcript storage.

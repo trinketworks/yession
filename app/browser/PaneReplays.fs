@@ -25,8 +25,12 @@ let private mountKey (el: obj) : string = jsNative
 [<Emit("$0.childElementCount > 0")>]
 let private isMounted (el: obj) : bool = jsNative
 
-[<Emit("(function (el) { while (el.firstChild) el.removeChild(el.firstChild) })($0)")>]
-let private clearChildren (el: obj) : unit = jsNative
+/// Everything a mount is holding, taken out of it — so what is put back is the whole of what
+/// the player mounts over, never a second player beside the first.
+let private clearChildren (el: obj) : unit =
+    let host = unbox<Browser.Types.Element> el
+    while not (isNull (box host.firstChild)) do
+        host.removeChild host.firstChild |> ignore
 
 /// Drive this from the render loop, after every render.
 type Syncer = { Sync : ClientModel -> unit }
