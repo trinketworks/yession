@@ -321,9 +321,14 @@ let private wireTests =
 // throw while a Fable async computation is being built escapes the surrounding `try/with` — the
 // trampoline only re-enters the protected continuation at bind boundaries, so whether it is caught
 // depends on how many binds ran before, i.e. on which other tests exist. What makes the assertion
-// deterministic is WHERE the thunk is invoked: `Promise.try` invokes it inside the promise, so a
-// synchronous throw is a rejection and nothing but a settled promise ever reaches F#.
-[<Emit("Promise.try($0)")>]
+// deterministic is WHERE the thunk is invoked: inside the promise, so a synchronous throw is a
+// rejection and nothing but a settled promise ever reaches F#.
+//
+// `Promise.resolve().then($0)` rather than `Promise.try($0)`, which says the same thing in one
+// word but is ES2025: it is present on the Node 24 `devenv.nix` pins and absent on 22, and a test
+// rig is the last place to raise a runtime floor quietly. The thunk runs a microtask later here
+// and nothing in this case can tell.
+[<Emit("Promise.resolve().then($0)")>]
 let private attempted (attempt: unit -> JS.Promise<'a>) : JS.Promise<'a> = Fable.Core.Util.jsNative
 
 /// Whether the attempt refused — a rejection and a synchronous throw being one outcome by the
