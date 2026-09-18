@@ -889,7 +889,10 @@ module ConversationProjection =
                           Woke = None; Replying = None } ] }
         // A push spent somebody's credential. The person whose it was finds out HERE, which
         // is the reason the event exists: the block that pushed is on the timeline already,
-        // but a block says what ran, not whose key went out on it.
+        // but a block says what ran, not whose key went out on it. The sentence says what
+        // the fact knows — the credential went out on a push to this repository — and not
+        // that the push landed: github.com's answer (a branch protection, a rejected ref)
+        // is git's to print, in the block, and "pushed to" here read as if it had.
         | SessionEvent.GitCredentialSpent g ->
             { proj with
                 Items =
@@ -898,11 +901,11 @@ module ConversationProjection =
                           Author = g.Actor
                           Body =
                             match g.Block with
-                            | Some _ -> sprintf "pushed to %s with %s's github credential" g.Repo (CredentialFor.token g.Owner)
+                            | Some _ -> sprintf "spent %s's github credential pushing to %s" (CredentialFor.token g.Owner) g.Repo
                             // Typed under a lease: no block on the timeline says what ran,
                             // so this line says where it was typed.
                             | None ->
-                                sprintf "pushed to %s with %s's github credential, holding the terminal" g.Repo (CredentialFor.token g.Owner)
+                                sprintf "spent %s's github credential pushing to %s, holding the terminal" (CredentialFor.token g.Owner) g.Repo
                           Status = Complete
                           Kind = ConversationItemKind.ActNote { Detail = None; Notable = false }
                           Offset = envelope.Offset
