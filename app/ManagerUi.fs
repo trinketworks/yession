@@ -1,10 +1,10 @@
 module Yession.Host.ManagerUi
 
 // The management UI (Phase 4, Step 25): a deliberately server-side-rendered admin surface
-// — list sessions with live status, create, launch/resume, stop, open. Pure F# render
+// — list sessions with live status, create, open (which launches), stop, archive. Pure F# render
 // functions produce full pages and FRAGMENTS from Fable.Lit templates (rendered to strings
 // by our own `Ssr` wrapper — no client bundle, no Elmish, no Yjs); a tiny inline vanilla
-// script swaps the fragments on create/launch/stop and takes live status from an SSE stream
+// script swaps the fragments on stop/archive and takes live status from an SSE stream
 // of rendered tables (`GET /sessions/rows`) — the server pushes, the page never polls. It
 // shares the session client's `Style` (the same locally served /app.css), and — being
 // online-only — is the natural home for server-side Lit SSR. This is not the collaborative
@@ -107,31 +107,34 @@ let private statusView (view: ProcessManager.SessionView) : TemplateResult =
         let reason = code |> Option.map string |> Option.defaultValue "signal"
         html $"""<span class="{Style.statusErr}" data-status="{Dom.Manager.statusExited}">exited ({reason})</span>"""
 
-/// The name cell. Opening a running session is THE act on it, and it is carried by the
-/// name — content is the interface — rather than by a second bordered rectangle in the
-/// right rail: with five sessions listed, a per-row Open plus a per-row lifecycle verb is
-/// ten buttons competing with the page's one real CTA (Create). A stopped session has
-/// nothing to open yet, so its name is plain text and its row's one control says Launch.
-let private nameView (access: PublicAccess) (view: ProcessManager.SessionView) : TemplateResult =
-    match view.Status with
-    | ProcessManager.Running (port, _, _) when view.Record.ArchivedAt.IsNone ->
-        // A plain URL: access is authorized by the OIDC bounce (session -> manager ->
-        // back), not by a token in the link. The origin is the configured public one
-        // so a remote browser gets a link it can follow; loopback when
-        // unset.
-        // The address comes from the deployment's session template, the
-        // same declaration the session itself used to register its redirect URI.
-        let openUrl = sprintf "%s/" (PublicAccess.sessionAddress view.Record.SessionId port access).Url
+/// The name cell. Opening a session is THE act on it, and it is carried by the name — content
+/// is the interface — rather than by a second bordered rectangle in the right rail: with five
+/// sessions listed, a per-row Open plus a per-row lifecycle verb is ten buttons competing with
+/// the page's one real CTA (Create).
+///
+/// The address is the session's STABLE open route in every state it can be opened from, not
+/// the port it happens to answer on. `/open` launches a stopped session and lands the browser
+/// on it, which is why there is no Launch button: launching without going was a verb nobody
+/// had a use for, and it left a stopped session's name as text and its way in as two acts
+/// (press Launch, then find the link that appeared). A session that exited on its own is
+/// opened the same way — `/open` is what relaunches it. A port, by contrast, is a launch-scoped
+/// fact: bookmark it and a relaunch under idle reaping breaks the bookmark, which is the fault
+/// `/open` exists to close, so this page never spells one.
+///
+/// An ARCHIVED session has no way in — `/open` refuses it — so its name is plain text: a link
+/// whose only outcome is a refusal is worse than no link.
+let private nameView (view: ProcessManager.SessionView) : TemplateResult =
+    match view.Record.ArchivedAt with
+    | Some _ -> html $"""<span class="{Style.body}">{view.Record.DisplayName}</span>"""
+    | None ->
+        let openUrl = ManagerRoute.path (ManagerRoute.OpenSession view.Record.SessionId)
         html
             $"""<a class="{Style.recordLink}" href="{openUrl}" target="_blank" data-open>{view.Record.DisplayName}<span class="{Style.recordLinkMark}" aria-hidden="true">↗</span></a>"""
-    | ProcessManager.Running _
-    | ProcessManager.NotRunning
-    | ProcessManager.Exited _ -> html $"""<span class="{Style.body}">{view.Record.DisplayName}</span>"""
 
-/// The row's controls: the lifecycle verb this session is currently capable of, and — where
-/// the session is not already archived — the quiet way to retire it. Both text faces rest on
-/// the quiet rim and answer to the pointer (Stop turns err, Launch turns ink), so a column of
-/// them reads as a rail of outlines rather than a column of CTAs.
+/// The row's controls: Stop, while the session runs, and — where the session is not already
+/// archived — the quiet way to retire it. There is no Launch: opening IS launching, and the name
+/// carries it (`nameView`). Stop rests on the quiet rim and answers to the pointer in err, so a
+/// column of them reads as a rail of outlines rather than a column of CTAs.
 ///
 /// The archive verb is a `btnIconBare`, whose rule describes exactly this case: borderless and
 /// faint at rest, because the ROW is the subject. That is what lets a second control onto the
@@ -139,8 +142,7 @@ let private nameView (access: PublicAccess) (view: ProcessManager.SessionView) :
 /// have made a five-session list ten competing rectangles, which is the trade `nameView`
 /// already refused once.
 ///
-/// An ARCHIVED row offers Unarchive and nothing else: no Launch, because a control whose only
-/// outcome is a refusal is worse than no control, and no archive icon, because the word it
+/// An ARCHIVED row offers Unarchive and nothing else: no archive icon, because the word it
 /// wears is already the act.
 let private actions (view: ProcessManager.SessionView) : TemplateResult =
     let id = SessionId.value view.Record.SessionId
@@ -157,10 +159,12 @@ let private actions (view: ProcessManager.SessionView) : TemplateResult =
             | ProcessManager.Running _ ->
                 html $"""<button type="button" class="{Style.btnDanger} flex-1 min-w-0" data-stop="{id}" data-post="{posts SessionVerb.Stop}">Stop</button>"""
             | ProcessManager.NotRunning
-            | ProcessManager.Exited _ ->
-                html $"""<button type="button" class="{Style.btn} flex-1 min-w-0" data-launch="{id}" data-post="{posts SessionVerb.Launch}">Launch</button>"""
+            | ProcessManager.Exited _ -> html $""""""
+        // Right-anchored, so the archive icon sits on the same edge whether or not a Stop
+        // stands beside it: a control that moves when a process stops is under a pointer
+        // that was aimed at its neighbour.
         html $"""
-            <div class="flex items-center gap-2">
+            <div class="flex items-center justify-end gap-2">
               {verb}
               <button type="button" class="{Style.btnIconBare}" data-archive="{id}" data-post="{posts SessionVerb.Archive}"
                       aria-label="Archive {name}" title="Archive {name}">{Icon.archive}</button>
@@ -178,7 +182,7 @@ let private createdView (at: System.DateTimeOffset) : TemplateResult =
     let iso = at.ToString "o"
     html $"""<time datetime="{iso}" title="{iso}">{shown}Z</time>"""
 
-/// One session row — an action's swap unit: launch/stop replace it wholesale, so the markup is
+/// One session row — an action's swap unit: a stop replaces it wholesale, so the markup is
 /// always a pure function of the Manager's current view. (Live status replaces the whole table
 /// instead; see the rows stream.) The human name leads (content is the interface); the minted
 /// id is plumbing, faint mono, and yields on narrow screens. Actions anchor the right edge so
@@ -189,11 +193,11 @@ let private createdView (at: System.DateTimeOffset) : TemplateResult =
 /// cell holds ONE line — a single `h-8` control in the action column, ellipsis rather than
 /// wrap in the text ones. Rows that jump as processes start and stop make a list you cannot
 /// keep your place in, and put a control under a pointer that was aimed at its neighbour.
-let private rowTemplate (access: PublicAccess) (view: ProcessManager.SessionView) : TemplateResult =
+let private rowTemplate (view: ProcessManager.SessionView) : TemplateResult =
     let id = SessionId.value view.Record.SessionId
     html $"""
         <tr class="border-b border-hair hover:bg-surface transition-colors" data-session="{id}">
-          <td class="py-3 pr-4 align-middle truncate" title="{view.Record.DisplayName}">{nameView access view}</td>
+          <td class="py-3 pr-4 align-middle truncate" title="{view.Record.DisplayName}">{nameView view}</td>
           <td class="py-3 pr-4 align-middle font-terminal text-code text-ink-faint truncate max-md:hidden">{id}</td>
           <td class="py-3 pr-4 align-middle font-terminal text-code text-ink-faint tabular-nums truncate max-md:hidden">{createdView view.Record.CreatedAt}</td>
           <td class="py-3 pr-4 align-middle truncate">{statusView view}</td>
@@ -226,7 +230,6 @@ let private filterChip (query: SessionQuery) (state: ArchiveState) : TemplateRes
 // also why this takes the QUERY and does the filtering itself: a caller that filtered on its
 // own could hand these chips a list they do not describe.
 let private tableTemplate
-    (access: PublicAccess)
     (query: SessionQuery)
     (all: ProcessManager.SessionView list)
     : TemplateResult =
@@ -248,7 +251,7 @@ let private tableTemplate
                 <tr>
                   <td colspan="5" class="py-10 text-center {Style.small}">{emptyWord}</td>
                 </tr>""" ]
-        | views -> views |> List.map (rowTemplate access)
+        | views -> views |> List.map rowTemplate
     // The `created` header IS the sort control — the canonical accessible table sort, and it
     // spends no chrome anywhere else on the page. When last-activity or a summary arrives, its
     // header becomes the second one of these and nothing here has to be redesigned.
@@ -284,17 +287,17 @@ let private tableTemplate
         </section>"""
 
 /// A rendered fragment (a single row), served as an action's answer.
-let sessionRow (access: PublicAccess) (view: ProcessManager.SessionView) : string =
-    Ssr.render (rowTemplate access view)
+let sessionRow (view: ProcessManager.SessionView) : string =
+    Ssr.render (rowTemplate view)
 
 /// A rendered fragment (the whole table), served after a create or an archive and pushed on
 /// the rows stream. Takes the reader's QUERY and filters with it, so the chips it draws and
 /// the rows under them are one render and cannot describe different lists.
-let sessionsTable (access: PublicAccess) (query: SessionQuery) (views: ProcessManager.SessionView list) : string =
-    Ssr.render (tableTemplate access query views)
+let sessionsTable (query: SessionQuery) (views: ProcessManager.SessionView list) : string =
+    Ssr.render (tableTemplate query views)
 
 // The interactivity, without htmx: a tiny vanilla script that swaps fragments on
-// create/launch/stop and takes live status from the rows stream. Inline (no external src) so
+// stop/archive and takes live status from the rows stream. Inline (no external src) so
 // the page is self-contained — local first, no CDN.
 let private script =
     """
@@ -312,7 +315,7 @@ let private script =
       // flipped, so the hand that pressed `archived` is left on `archived` rather than being
       // dropped onto the first row of the list it just asked for.
       const filter = active && active.closest('[data-filter]')
-      const wasAction = !!active && (active.hasAttribute('data-launch') || active.hasAttribute('data-stop'))
+      const wasAction = !!active && active.hasAttribute('data-stop')
       el.replaceWith(n)
       if (!active) return
       const find = (sel) => sel && (n.matches(sel) ? n : n.querySelector(sel))
@@ -322,14 +325,14 @@ let private script =
       }
       const sel = row && '[data-session="' + CSS.escape(row.getAttribute('data-session')) + '"]'
       const scope = find(sel) || n
-      // A row whose state just changed has swapped its verb (Launch <-> Stop): follow the
-      // ACT, not the word, so the hand that pressed Launch is left on Stop.
-      const f = (wasAction && scope.querySelector('[data-launch],[data-stop]')) || scope.querySelector('a[href], button, input')
+      // A Stop that landed has taken its own control away, and the row's first focusable is
+      // now the name — the stable open route, which is the way back in.
+      const f = (wasAction && scope.querySelector('[data-stop]')) || scope.querySelector('a[href], button, input')
       if (f) f.focus()
     }
     const sessionsEl = () => document.querySelector('[data-sessions]')
     document.addEventListener('click', async (e) => {
-      const b = e.target.closest('[data-launch],[data-stop]'); if (!b) return
+      const b = e.target.closest('[data-stop]'); if (!b) return
       const row = b.closest('tr')
       const r = await fetch(b.getAttribute('data-post'), { method: 'POST' })
       if (r.ok) swap(row, await r.text())
@@ -359,7 +362,7 @@ let private script =
     // about the new session from the rows stream anyway.
     // Declaring an MCP server (Plan 17): the only place a url is written, and the only
     // management action that can be REFUSED for a reason a human needs to read — a name
-    // clash. So this one reports, where create/launch/stop only swap.
+    // clash. So this one reports, where stop/archive only swap.
     const mcpSwap = (htmlText) => swap(document.querySelector('[data-mcp]'), htmlText)
     document.addEventListener('submit', async (e) => {
       const f = e.target.closest('[data-declare-mcp]'); if (!f) return
@@ -591,7 +594,7 @@ let private bodyTemplate
                 <button type="submit" class="{Style.btnPrimary}">Create</button>
               </div>
             </form>
-            <div class="pb-10">{tableTemplate access query views}</div>
+            <div class="pb-10">{tableTemplate query views}</div>
             <div class="pb-10">{mcpTemplate views declarations}</div>
             <!-- Only when there are any: a deployment that declared no hook endpoints has
                  nothing to say here, and an empty table would imply a thing to fill in. -->
@@ -814,10 +817,10 @@ let tryHandle
     // page, the stream and every action that answers with a table agree by construction —
     // and a bookmark renders correctly on first paint with no client state machine.
     let query = SessionQuery.ofQueryString req.url
-    let tableNow () = sessionsTable pm.Public query (pm.Sessions ())
+    let tableNow () = sessionsTable query (pm.Sessions ())
     let rowOf (sessionId: SessionId) =
         match pm.TryFind sessionId with
-        | Some view -> sessionRow pm.Public view
+        | Some view -> sessionRow view
         | None -> ""
     // A refusal over an ARCHIVED session is not a server fault — it is a conflict with
     // durable state the caller can resolve, which matters most for `/open`, the URL a session
@@ -942,7 +945,10 @@ let tryHandle
             // rendered by the same `tableTemplate` the page and the action swaps use, so the
             // browser keeps no reconciliation logic. Stopped and exited rows are in the
             // published views, which is why the page renders them and the registry does not.
-            Sse.stream req res (sessionsTable pm.Public query) pm.SubscribeSessions |> ignore
+            Sse.stream req res (sessionsTable query) pm.SubscribeSessions |> ignore
+        // No control on the page posts here any more — opening a session launches it
+        // (`OpenSession`, below) — but the verb is still the Manager's HTTP API for starting
+        // one WITHOUT a browser to hand over, which is what the composition suite drives.
         | ManagerRoute.Session (sessionId, SessionVerb.Launch) ->
             sessionAction sessionId (fun sessionId ->
                 async {

@@ -619,24 +619,42 @@ let private uiRecord : SessionRecord =
 
 let private uiRenderTests =
     testList "Management UI rendering (Step 25)" [
-        testCase "a stopped session's row offers Launch; a running one offers Stop and the open link" <| fun () ->
-            let stopped = ManagerUi.sessionRow PublicAccess.Loopback { Record = uiRecord; Status = ProcessManager.NotRunning; Summary = None }
-            Expect.isTrue (stopped.Contains (Dom.attr Dom.Manager.launch "ui-render")) "stopped rows can launch (button carries the session id)"
+        // Opening is launching: the name is the way in from every state a session can be
+        // opened from, and it points at the STABLE route rather than a port, so the link
+        // does not change when the session is relaunched under it.
+        testCase "a session's name links to its stable open route whether it is stopped, running or exited" <| fun () ->
+            let openRoute = ManagerRoute.path (ManagerRoute.OpenSession uiRecord.SessionId)
+            let stopped = ManagerUi.sessionRow { Record = uiRecord; Status = ProcessManager.NotRunning; Summary = None }
+            Expect.isTrue (stopped.Contains Dom.Manager.openLink) "a stopped session is opened by its name"
+            Expect.isTrue (stopped.Contains (sprintf "href=\"%s\"" openRoute)) "at the route that launches it on the way in"
             Expect.isTrue (stopped.Contains "UI &lt;Render&gt;") "display names are escaped"
-            let running = ManagerUi.sessionRow PublicAccess.Loopback { Record = uiRecord; Status = ProcessManager.Running (8199, 42, Some "1.2.3-beta.4"); Summary = None }
-            Expect.isTrue (running.Contains (Dom.attr Dom.Manager.stop "ui-render")) "running rows can stop"
-            Expect.isTrue (running.Contains "href=\"http://127.0.0.1:8199/\"") "the open link is a plain URL to the child's port (no token — access is the OIDC bounce)"
+            let running = ManagerUi.sessionRow { Record = uiRecord; Status = ProcessManager.Running (8199, 42, Some "1.2.3-beta.4"); Summary = None }
+            Expect.isTrue (running.Contains (sprintf "href=\"%s\"" openRoute)) "a running one at the same route"
+            Expect.isFalse (running.Contains "127.0.0.1:8199") "and never at the port it happens to answer on"
             Expect.isTrue (running.Contains (Dom.attr Dom.Manager.session "ui-render")) "the row is a poll unit keyed by session id"
-            let crashed = ManagerUi.sessionRow PublicAccess.Loopback { Record = uiRecord; Status = ProcessManager.Exited (Some 1); Summary = None }
+            let crashed = ManagerUi.sessionRow { Record = uiRecord; Status = ProcessManager.Exited (Some 1); Summary = None }
             Expect.isTrue (crashed.Contains (Dom.attr Dom.Manager.status Dom.Manager.statusExited)) "a crash is visible"
-            Expect.isTrue (crashed.Contains (Dom.attr Dom.Manager.launch "ui-render")) "a crashed session can relaunch"
+            Expect.isTrue (crashed.Contains (sprintf "href=\"%s\"" openRoute)) "and a crashed session is relaunched by its name"
+
+        // The lifecycle rail carries the one verb a state admits, and Launch is not one of
+        // them in any state: a control that duplicates the name link is a second way to do
+        // the row's one act, and a stopped row that offered it had its way in split across
+        // two acts (press Launch, then find the link that appeared).
+        testCase "a running row offers Stop; a stopped or exited row offers no lifecycle verb" <| fun () ->
+            let running = ManagerUi.sessionRow { Record = uiRecord; Status = ProcessManager.Running (8199, 42, None); Summary = None }
+            Expect.isTrue (running.Contains (Dom.attr Dom.Manager.stop "ui-render")) "running rows can stop"
+            let stopped = ManagerUi.sessionRow { Record = uiRecord; Status = ProcessManager.NotRunning; Summary = None }
+            Expect.isFalse (stopped.Contains Dom.Manager.stop) "a stopped row has nothing to stop"
+            Expect.isFalse (stopped.Contains "data-launch") "and no Launch — its name launches it"
+            let crashed = ManagerUi.sessionRow { Record = uiRecord; Status = ProcessManager.Exited (Some 1); Summary = None }
+            Expect.isFalse (crashed.Contains Dom.Manager.stop) "nor has an exited one"
+            Expect.isFalse (crashed.Contains "data-launch") "and it too relaunches by its name"
 
         // Which of six sessions wants me is the roster's whole job, and until a session could
         // say something about itself the answer was always "open them and see".
         testCase "a running session's row shows the line it said about itself" <| fun () ->
             let running =
                 ManagerUi.sessionRow
-                    PublicAccess.Loopback
                     { Record = uiRecord
                       Status = ProcessManager.Running (8199, 42, None)
                       Summary = Some "3 PRs · 1 stalled" }
@@ -651,12 +669,10 @@ let private uiRenderTests =
         testCase "a session with nothing to say carries no summary at all" <| fun () ->
             let quiet =
                 ManagerUi.sessionRow
-                    PublicAccess.Loopback
                     { Record = uiRecord; Status = ProcessManager.Running (8199, 42, None); Summary = None }
             Expect.isFalse (quiet.Contains Dom.Manager.summary) "no line, no element standing in for one"
             let stopped =
                 ManagerUi.sessionRow
-                    PublicAccess.Loopback
                     { Record = uiRecord; Status = ProcessManager.NotRunning; Summary = Some "3 PRs · 1 stalled" }
             Expect.isFalse (stopped.Contains Dom.Manager.summary) "and a stopped session claims nothing"
 
@@ -667,7 +683,6 @@ let private uiRenderTests =
         testCase "a running row says its state and what the session said, and no plumbing" <| fun () ->
             let running =
                 ManagerUi.sessionRow
-                    PublicAccess.Loopback
                     { Record = uiRecord
                       Status = ProcessManager.Running (8199, 42, Some "0.0.0-gf1ce52b")
                       Summary = Some "3 PRs · 1 stalled" }
@@ -766,7 +781,11 @@ let private uiRenderTests =
                 |> List.ofSeq
             let posted = emitted Dom.Manager.post @ emitted "action"
             let opened = emitted Dom.Manager.stream
-            Expect.isTrue (posted.Length >= 6) "launch, stop, archive, unarchive, withdraw, and the two forms all carry one"
+            Expect.isTrue (posted.Length >= 5) "stop, archive, unarchive, withdraw, and the two forms all carry one"
+            let opens = emitted "href" |> List.filter (fun href -> href.EndsWith "/open")
+            Expect.equal opens.Length 2 "the two openable sessions link to their open route, and the archived one does not"
+            for address in opens do
+                Expect.isOk (ManagerRoute.parse "GET" address) (sprintf "%s is a route the server claims for a GET" address)
             Expect.equal opened.Length 1 "the section the stream fills carries its address"
             for address in posted do
                 Expect.isOk (ManagerRoute.parse "POST" address) (sprintf "%s is a route the server claims for a POST" address)
@@ -776,20 +795,18 @@ let private uiRenderTests =
         // Archiving. What must hold however this table is redrawn: a session that cannot be
         // started is not offered a control that starts it, and the one act it CAN take is
         // reachable and named.
-        testCase "an archived session's row offers Unarchive and not Launch" <| fun () ->
+        testCase "an archived session's row offers Unarchive and no way to open it" <| fun () ->
             let archived =
                 ManagerUi.sessionRow
-                    PublicAccess.Loopback
                     { Record = { uiRecord with ArchivedAt = Some archivedAt }; Status = ProcessManager.NotRunning; Summary = None }
             Expect.isTrue (archived.Contains (Dom.attr Dom.Manager.unarchive "ui-render")) "the way back is offered"
             Expect.isFalse
-                (archived.Contains (Dom.attr Dom.Manager.launch "ui-render"))
-                "a control whose only outcome is a refusal is not offered"
+                (archived.Contains Dom.Manager.openLink)
+                "a link whose only outcome is a refusal is not offered"
 
         testCase "an archived session says archived rather than stopped" <| fun () ->
             let archived =
                 ManagerUi.sessionRow
-                    PublicAccess.Loopback
                     { Record = { uiRecord with ArchivedAt = Some archivedAt }; Status = ProcessManager.NotRunning; Summary = None }
             Expect.isTrue
                 (archived.Contains (Dom.attr Dom.Manager.status Dom.Manager.statusArchived))
@@ -802,16 +819,17 @@ let private uiRenderTests =
         testCase "an archived session is never offered as a link to open" <| fun () ->
             let both =
                 ManagerUi.sessionRow
-                    PublicAccess.Loopback
                     { Record = { uiRecord with ArchivedAt = Some archivedAt }
                       Status = ProcessManager.Running (8199, 42, Some "1.2.3-beta.4"); Summary = None }
             // The address is the discriminating assertion: the case above pins that a RUNNING
             // row carries exactly this href, so its absence here cannot pass vacuously.
-            Expect.isFalse (both.Contains "http://127.0.0.1:8199/") "no address to reach it at"
+            Expect.isFalse
+                (both.Contains (ManagerRoute.path (ManagerRoute.OpenSession uiRecord.SessionId)))
+                "no address to reach it at"
             Expect.isFalse (both.Contains Dom.Manager.openLink) "and nothing marked as the way in"
 
         testCase "an active session can be archived, by a control with a name" <| fun () ->
-            let active = ManagerUi.sessionRow PublicAccess.Loopback { Record = uiRecord; Status = ProcessManager.NotRunning; Summary = None }
+            let active = ManagerUi.sessionRow { Record = uiRecord; Status = ProcessManager.NotRunning; Summary = None }
             Expect.isTrue (active.Contains (Dom.attr Dom.Manager.archive "ui-render")) "the row can be archived"
             // WCAG: an icon-only control carries an accessible name, and it names WHICH
             // session — a column of "Archive" says nothing about which row you are on.
@@ -820,7 +838,6 @@ let private uiRenderTests =
         testCase "the filter says which states are shown and links to the ones that are not" <| fun () ->
             let table =
                 ManagerUi.sessionsTable
-                    PublicAccess.Loopback
                     SessionQuery.defaults
                     [ { Record = uiRecord; Status = ProcessManager.NotRunning; Summary = None } ]
             Expect.isTrue (table.Contains (Dom.attr Dom.Manager.filter "show-active")) "the active filter is a control"
@@ -833,14 +850,12 @@ let private uiRenderTests =
         testCase "the created column declares which way it is sorted, and links to the reverse" <| fun () ->
             let newest =
                 ManagerUi.sessionsTable
-                    PublicAccess.Loopback
                     SessionQuery.defaults
                     [ { Record = uiRecord; Status = ProcessManager.NotRunning; Summary = None } ]
             Expect.isTrue (newest.Contains "aria-sort=\"descending\"") "the header states the sort"
             Expect.isTrue (newest.Contains "sort=created-asc") "and links to the other direction"
             let oldest =
                 ManagerUi.sessionsTable
-                    PublicAccess.Loopback
                     { SessionQuery.defaults with Order = OldestFirst }
                     [ { Record = uiRecord; Status = ProcessManager.NotRunning; Summary = None } ]
             Expect.isTrue (oldest.Contains "aria-sort=\"ascending\"") "and the other way round"
@@ -850,12 +865,11 @@ let private uiRenderTests =
         testCase "a filter that hides everything says so, rather than that there is nothing" <| fun () ->
             let hidden =
                 ManagerUi.sessionsTable
-                    PublicAccess.Loopback
                     { SessionQuery.defaults with Show = Set.singleton Archived }
                     [ { Record = uiRecord; Status = ProcessManager.NotRunning; Summary = None } ]
             Expect.isFalse (hidden.Contains "no sessions yet") "the registry is not empty"
             Expect.isTrue (hidden.Contains "1 hidden") "it says what it is hiding"
-            let empty = ManagerUi.sessionsTable PublicAccess.Loopback SessionQuery.defaults []
+            let empty = ManagerUi.sessionsTable SessionQuery.defaults []
             Expect.isTrue (empty.Contains "no sessions yet") "an empty registry still says the plain thing"
 
         // Plan 17. Declaring is the ONE act that names a url, and the only management
@@ -1370,7 +1384,7 @@ let private uiFlowTests =
                     match (pm.TryFind (SessionId.create "ui-1" |> expect)).Value.Status with
                     | ProcessManager.Running (port, _, _) -> port
                     | other -> failwithf "expected Running, got %A" other
-                Expect.isTrue (row.Contains (sprintf "href=\"http://127.0.0.1:%d/\"" sessionPort)) "the open link is live (plain URL, no token)"
+                Expect.isTrue (row.Contains "href=\"/sessions/ui-1/open\"") "the row's way in is the stable open route, not the port"
                 let! shell = Interop.getText (sprintf "http://127.0.0.1:%d/" sessionPort) |> Interop.awaitPromise
                 Expect.isTrue (shell.Contains (Dom.sessionMetaName + "\" " + Dom.attr "content" "ui-1")) "the opened session serves its shell"
 
@@ -1658,9 +1672,16 @@ let private startPackagedManager (args: string list) (env: (string * string) lis
 /// (the summary has that column now). The link is the better source and always was: it is
 /// the row's actual promise — press it and you reach this session — so a row whose href
 /// named the wrong port would be broken for a person, not just for this test.
-let private portOfRow (row: string) : int =
-    let m = System.Text.RegularExpressions.Regex.Match (row, "href=\"http://127\\.0\\.0\\.1:(\\d+)/\"")
-    if m.Success then int m.Groups.[1].Value else failwithf "no open link in row: %s" row
+/// Which port a session answers on, read off its `/open` page — the one place the Manager
+/// spells a session's address to a browser. A row never does: its name links to `/open`
+/// itself, so that a relaunch cannot break the link.
+let private portOfOpen (openUrl: string) : Async<int> =
+    async {
+        let! reply = getReply openUrl |> Interop.awaitPromise
+        let page = bodyOfReply reply
+        let m = System.Text.RegularExpressions.Regex.Match (page, "href=\"http://127\\.0\\.0\\.1:(\\d+)/")
+        if m.Success then return int m.Groups.[1].Value else return failwithf "no session address on the open page: %s" page
+    }
 
 let private compositionTests =
     testList "Executable composition (Step 27/28)" [
@@ -1676,15 +1697,16 @@ let private compositionTests =
 
                 let! manager = startPackagedManager args env
 
-                // Create and launch a session from the management UI. The redirect is not
-                // followed: creating now launches and opens, and this case wants the launch
-                // to be its own act so the fragment it answers with names the port below.
+                // Create and launch a session over the Manager's HTTP API. The redirect is
+                // not followed: creating now launches and opens, and this case wants the
+                // launch to be its own act; the port is then read off `/open`, the one page
+                // that spells it.
                 let! created = postFormHere (manager.UiUrl + "sessions") "id=composed&name=Composed" |> Interop.awaitPromise
                 Expect.equal (statusOfReply created) 303 "created via the UI"
                 let! launched = postForm (manager.UiUrl + "sessions/composed/launch") "" |> Interop.awaitPromise
                 let row = bodyOfReply launched
                 Expect.isTrue (row.Contains (Dom.attr Dom.Manager.status Dom.Manager.statusRunning)) "launched via the UI"
-                let sessionPort = portOfRow row
+                let! sessionPort = portOfOpen (manager.UiUrl + "sessions/composed/open")
 
                 // A real client messages the packaged child; access rides the OIDC bounce
                 // through the packaged manager; the diagnostic agent runs a real command
@@ -1707,7 +1729,7 @@ let private compositionTests =
                 let! stopped = postForm (manager.UiUrl + "sessions/composed/stop") "" |> Interop.awaitPromise
                 Expect.isTrue ((bodyOfReply stopped).Contains (Dom.attr Dom.Manager.status Dom.Manager.statusStopped)) "stopped via the UI"
                 let! resumed = postForm (manager.UiUrl + "sessions/composed/launch") "" |> Interop.awaitPromise
-                let resumedPort = portOfRow (bodyOfReply resumed)
+                let! resumedPort = portOfOpen (manager.UiUrl + "sessions/composed/open")
                 let! openedB = OidcHttp.openSession (sprintf "http://127.0.0.1:%d" resumedPort)
                 let! b = connectClient (sprintf "http://127.0.0.1:%d/signal" resumedPort) openedB.PeerToken "grace" "Grace"
                 do! b.Runner.WaitFor (fun m ->
@@ -1722,7 +1744,8 @@ let private compositionTests =
                 let! page = Interop.getText manager2.UiUrl |> Interop.awaitPromise
                 Expect.isTrue (page.Contains (Dom.attr Dom.Manager.session "composed")) "the registry survived the manager restart"
                 let! relaunched = postForm (manager2.UiUrl + "sessions/composed/launch") "" |> Interop.awaitPromise
-                let relaunchedPort = portOfRow (bodyOfReply relaunched)
+                Expect.isTrue ((bodyOfReply relaunched).Contains (Dom.attr Dom.Manager.status Dom.Manager.statusRunning)) "relaunched via the UI"
+                let! relaunchedPort = portOfOpen (manager2.UiUrl + "sessions/composed/open")
                 let! openedC = OidcHttp.openSession (sprintf "http://127.0.0.1:%d" relaunchedPort)
                 let! c = connectClient (sprintf "http://127.0.0.1:%d/signal" relaunchedPort) openedC.PeerToken "carol" "Carol"
                 do! c.Runner.WaitFor (fun m ->
@@ -2741,11 +2764,6 @@ let private registryTests =
                     ControlWire.sessionRegistryFrame
                     { Sessions = [ { registryEntry "alpha" "Alpha work" 54321 4242 with Build = None } ] }
             Expect.isFalse (written.Contains "build") "nothing known, nothing said"
-
-        testCase "a running row's open link carries the configured public address" <| fun () ->
-            let access = PublicAccess.create "https://home.example.ts.net" "http://home.example.ts.net:{port}" |> expect
-            let running = ManagerUi.sessionRow access { Record = uiRecord; Status = ProcessManager.Running (8199, 42, Some "1.2.3-beta.4"); Summary = None }
-            Expect.isTrue (running.Contains "href=\"http://home.example.ts.net:8199/\"") "the open link is followable from a remote browser"
     ]
 
 // --- Public access: the deployment's two addresses as one value (Plan 09) ----------------
@@ -2948,13 +2966,19 @@ let private registryStreamTests =
                                 (second.Value.Sessions |> List.exists (fun e -> e.Port = port))
                                 "a fresh subscriber's first frame is the current snapshot"
 
-                            // The public address reaches both browser-facing URLs: the open link
-                            // and the session's registered OAuth redirect URI (via the env the
-                            // child inherited at spawn).
+                            // The public address reaches both browser-facing URLs: the address
+                            // `/open` hands the browser to (the row itself links to `/open`, a
+                            // path on the Manager's own origin, so it never spells a host) and
+                            // the session's registered OAuth redirect URI (via the env the child
+                            // inherited at spawn).
                             let! rendered = Interop.getText (baseUrl + "/") |> Interop.awaitPromise
                             Expect.isTrue
-                                (rendered.Contains (sprintf "href=\"http://home.example.ts.net:%d/\"" port))
-                                "the open link carries the public origin"
+                                (rendered.Contains "href=\"/sessions/reg-1/open\"")
+                                "the row links to the open route on the Manager's own origin"
+                            let! opening = getReply (baseUrl + "/sessions/reg-1/open") |> Interop.awaitPromise
+                            Expect.isTrue
+                                ((bodyOfReply opening).Contains (sprintf "href=\"http://home.example.ts.net:%d/" port))
+                                "and /open hands the browser to the public origin"
                             let! login = OidcHttp.getWithJar (OidcHttp.newJar ()) (sprintf "http://127.0.0.1:%d/login" port)
                             Expect.equal login.Status 302 "/login redirects into the authorize chain"
                             Expect.isTrue
