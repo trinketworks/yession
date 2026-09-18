@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Inward">
+  <g transform="translate(-3.12 -3.56) scale(1.1)">
+    <path d="M20.62 7.8 L25.53 25.75 L7.42 21.47" stroke="#a8dd00" stroke-width="6.5" fill="none" stroke-linejoin="miter" stroke-linecap="butt"/>
+    <path d="M56.58 21.47 L38.47 25.75 L43.38 7.8" stroke="#a8dd00" stroke-width="6.5" fill="none" stroke-linejoin="miter" stroke-linecap="butt"/>
+    <path d="M22.5 57 L32 41 L41.5 57" stroke="#1ba1e2" stroke-width="6.5" fill="none" stroke-linejoin="miter" stroke-linecap="butt"/>
+  </g>
+</svg>

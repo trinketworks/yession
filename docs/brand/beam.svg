@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Beam">
+  <defs><linearGradient id="beam-g" gradientUnits="userSpaceOnUse" x1="32" y1="26" x2="32" y2="60"><stop offset="0" stop-color="#a8dd00"/><stop offset="1" stop-color="#1ba1e2"/></linearGradient><filter id="beam-f" x="-60%" y="-60%" width="220%" height="220%"><feGaussianBlur stdDeviation="2.4" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs>
+  <g transform="translate(0.86 -5.54) scale(0.97)">
+    <g filter="url(#beam-f)">
+    <path d="M24.37 27.23 L8.25 17.16" stroke="#a8dd00" stroke-width="8" stroke-linecap="butt" fill="none"/>
+    <path d="M39.63 27.23 L55.75 17.16" stroke="#a8dd00" stroke-width="8" stroke-linecap="butt" fill="none"/>
+    <path d="M32 34 L32 60" stroke="url(#beam-g)" stroke-width="8" stroke-linecap="butt" fill="none"/>
+    </g>
+  </g>
+</svg>

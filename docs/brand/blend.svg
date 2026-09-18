@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Blend">
+  <g transform="translate(3.74 -0.17) scale(0.88)">
+    <path d="M43.51 43.11 L11.14 11.85" stroke="#a8dd00" stroke-width="12" stroke-linecap="butt" fill="none" opacity="0.85" style="mix-blend-mode:screen"/>
+    <path d="M20.49 43.11 L52.86 11.85" stroke="#a8dd00" stroke-width="12" stroke-linecap="butt" fill="none" opacity="0.85" style="mix-blend-mode:screen"/>
+    <path d="M32 16 L32 61" stroke="#1ba1e2" stroke-width="12" stroke-linecap="butt" fill="none" opacity="0.85" style="mix-blend-mode:screen"/>
+  </g>
+</svg>

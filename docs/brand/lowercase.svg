@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Lowercase">
+  <g transform="translate(-11.85 -17.59) scale(1.33)">
+    <path d="M17 17 L33 41" stroke="#a8dd00" stroke-width="8" fill="none" stroke-linecap="butt"/>
+    <path d="M49 17 L33 41" stroke="#a8dd00" stroke-width="8" fill="none" stroke-linecap="butt"/>
+    <path d="M33 41 L21.91 57.64" stroke="#1ba1e2" stroke-width="8" fill="none" stroke-linecap="butt"/>
+  </g>
+</svg>

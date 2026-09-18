@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Tile">
+  <defs><linearGradient id="tile-g" gradientUnits="userSpaceOnUse" x1="20" y1="20" x2="40" y2="66"><stop offset="0" stop-color="#a8dd00"/><stop offset="1" stop-color="#1ba1e2"/></linearGradient><clipPath id="tile-c"><rect x="0" y="0" width="64" height="64"/></clipPath></defs>
+  <rect width="64" height="64" fill="#000"/>
+    <g clip-path="url(#tile-c)">
+    <path d="M2.37 -5.52 L27 26 L51.63 -5.52" stroke="#a8dd00" stroke-width="13" fill="none" stroke-linejoin="miter"/>
+    <path d="M27 26 L27 66" stroke="url(#tile-g)" stroke-width="13" fill="none"/>
+    </g>
+</svg>

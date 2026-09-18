@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Letter">
+  <g transform="translate(2.37 -0.5) scale(0.93)">
+    <path d="M14.76 9.94 L32 32 L49.24 9.94" stroke="#a8dd00" stroke-width="8.5" fill="none" stroke-linejoin="miter" stroke-linecap="square"/>
+    <path d="M32 32 L32 60" stroke="#1ba1e2" stroke-width="8.5" stroke-linecap="square" fill="none"/>
+  </g>
+</svg>
