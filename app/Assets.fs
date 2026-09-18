@@ -46,9 +46,20 @@ type private Missing =
     /// went away. No later root answers for this, because nothing about it is about absence.
     | Unreadable of path: string * reason: string
 
-/// The errno a Node filesystem error carries, or `""` for a failure that is not one of Node's.
-[<Emit("(function (error) { return (error && error.code) || '' })($0)")>]
-let private errnoOf (error: exn) : string = jsNative
+/// The `code` a Node filesystem error carries, and nothing for one that carries none. `||`
+/// rather than `??` because that is what this said as JavaScript: an errno spelled `''` names
+/// no more of a fault than a missing one does.
+[<Emit("($0.code || null)")>]
+let private errnoField (error: exn) : string option = jsNative
+
+/// The errno a Node filesystem error carries, or nothing for a failure that is not one of
+/// Node's.
+///
+/// An option rather than `""`, because the two absences here — a throw with no error at all,
+/// and an error naming no errno — are both "this fault has no errno", and a reader that has to
+/// tell an errno from a hole must be given one it cannot mistake.
+let private errnoOf (error: exn) : string option =
+    if isNullOrUndefined (box error) then None else errnoField error
 
 /// One declared file's bytes from ONE root, or why that root did not have them.
 ///
@@ -57,8 +68,9 @@ let private readFrom (root: string) (path: string) : Result<Buffer, Missing> =
     let full = root + "/" + path
     try Ok (fs.readFileSync full)
     with error ->
-        if errnoOf error = "ENOENT" then Error Missing.Absent
-        else Error (Missing.Unreadable (full, error.Message))
+        match errnoOf error with
+        | Some "ENOENT" -> Error Missing.Absent
+        | _ -> Error (Missing.Unreadable (full, error.Message))
 
 /// One declared file's bytes, from the package's `assets/` when installed and the build output
 /// when developing.
