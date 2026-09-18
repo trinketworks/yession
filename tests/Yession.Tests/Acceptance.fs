@@ -1059,7 +1059,7 @@ let private uiChecklistTests =
                   Author = PeerRef ada
                   Body = "added repo octo/hello (branch main)"
                   Status = Complete
-                  Kind = ConversationItemKind.ActNote { Detail = None; Notable = false }
+                  Kind = ConversationItemKind.ActNote { Detail = None; Notable = false; SandboxStarted = None }
                   Offset = EventOffset.create 1L |> expect
                   Woke = None; Replying = None }
             let model =
@@ -1084,7 +1084,7 @@ let private uiChecklistTests =
                   Author = PeerRef ada
                   Body = "started sandbox work (srt)"
                   Status = Complete
-                  Kind = ConversationItemKind.ActNote { Detail = Some "forwarding github from user:ada"; Notable = false }
+                  Kind = ConversationItemKind.ActNote { Detail = Some "forwarding github from user:ada"; Notable = false; SandboxStarted = None }
                   Offset = EventOffset.create 1L |> expect
                   Woke = None; Replying = None }
             let model =
@@ -1111,7 +1111,7 @@ let private uiChecklistTests =
                   Author = PeerRef ada
                   Body = "removed repo octo/hello"
                   Status = Complete
-                  Kind = ConversationItemKind.ActNote { Detail = None; Notable = false }
+                  Kind = ConversationItemKind.ActNote { Detail = None; Notable = false; SandboxStarted = None }
                   Offset = EventOffset.create 1L |> expect
                   Woke = None; Replying = None }
             let model =
@@ -1324,7 +1324,7 @@ let private uiChecklistTests =
                         { representativeModel.Conversation with
                             Items =
                                 [ item "said" ConversationItemKind.Message
-                                  item "done" (ConversationItemKind.ActNote { Detail = None; Notable = false }) ] } }
+                                  item "done" (ConversationItemKind.ActNote { Detail = None; Notable = false; SandboxStarted = None }) ] } }
             let html = Support.render model
             Expect.equal (occurrences "data-message-id=" html) 2 "a message and an act"
             Expect.equal (occurrences "data-item-actions=" html) 2 "one control per item, none left out"
