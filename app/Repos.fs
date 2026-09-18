@@ -108,6 +108,44 @@ let identityEnv (name: string) (email: string) : Map<string, string> =
 let identityNames : string list =
     identityEnv "" "" |> Map.toList |> List.map fst
 
+/// How long a credential with no identity behind it is not asked about again.
+let identityMissWindow : TimeSpan = TimeSpan.FromSeconds 30.0
+
+/// Who each credential commits as, asked of `lookup` once and kept for the session — a
+/// profile does not change under one. A MISS is kept too, for `missFor`: a block's line
+/// waits on this answer before it is typed, so a miss asked afresh for every block put
+/// every block of a person with nothing connected — or with a profile github would not
+/// give that minute — behind a round trip, and a github having a bad hour made their
+/// blocks slow rather than nameless. Kept for a window rather than for good so a person
+/// who connects github after their first block gets their name on the first block after
+/// it, not after a restart.
+let identityMemo
+    (keyOf: 'credential -> string)
+    (now: unit -> DateTimeOffset)
+    (missFor: TimeSpan)
+    (lookup: 'credential -> Async<Map<string, string> option>)
+    : 'credential -> Async<Map<string, string> option> =
+    let known = Collections.Generic.Dictionary<string, Map<string, string>> ()
+    let missed = Collections.Generic.Dictionary<string, DateTimeOffset> ()
+    fun credential ->
+        async {
+            let key = keyOf credential
+            match known.TryGetValue key with
+            | true, identity -> return Some identity
+            | _ ->
+                match missed.TryGetValue key with
+                | true, at when now () - at < missFor -> return None
+                | _ ->
+                    match! lookup credential with
+                    | Some identity ->
+                        known.[key] <- identity
+                        missed.Remove key |> ignore
+                        return Some identity
+                    | None ->
+                        missed.[key] <- now ()
+                        return None
+        }
+
 /// The git a verb runs, NAMED rather than looked up on PATH. Every other binary a
 /// confined spawn execs is named for this reason — srt's bwrap, socat and ripgrep, the
 /// agent's claude — and git was the exception until the exception cost a session.
