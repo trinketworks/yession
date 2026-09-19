@@ -66,3 +66,42 @@ greens become one L-shaped mass and the count goes, which is the failure `letter
 had; the hexagon holds at 16px where the circle becomes a dot; 3.6px on the 64px grid is where
 the cut is both legible and quiet; and unlike the first pass's stroke marks, a field mark
 survives a light ground, because the cut takes whatever is behind it.
+
+## Third pass: the seam, expressed
+
+`form/` keeps the seam — three faces cut apart where they meet and continuous at the outline,
+so the Y is a gap the silhouette never opens — and treats it as the only fixed thing. Each face
+is a quad with two kinds of edge: the two running from the hub are the seam and stay straight in
+every study, because they are what the reader resolves the Y from; the two outer edges are the
+silhouette, and that is where the expression is spent.
+
+The levers are edge bow (perpendicular displacement of an edge's midpoint, positive outward),
+per-corner radius, cut taper, and whether the faces sit in one plane at all.
+
+| File | Register |
+| --- | --- |
+| `swell.svg` | generous — silhouette bowed out, seam straight |
+| `petal.svg` | alive — bow pushed until each face is a leaf |
+| `pebble.svg` | worn — no curves, corners taken off at increasing radii |
+| `lean.svg` | leaning in — human faces widened at the shoulder |
+| `draw.svg` | held — the bow inverted, mass pulled toward the hub |
+| `crest.svg` | load-bearing — convex top, concave walls |
+| `converge.svg` | closing in — the cut wide at the hub, closing at the rim |
+| `turn.svg` | working — faces rotated, leading and trailing edges |
+| `spiral.svg` | in motion — faces still, the cut bends |
+| `forward.svg` | momentum — the whole solid sheared |
+| `stack.svg` | layered — each face pushed a different distance out |
+| `lift.svg` | arriving — the agent's plane floated off the solid |
+| `breathe.svg` | opening — the cut hairline at the hub, wide at the rim |
+| `hold.svg` | protective — the agent's face shrunk inside the human ones |
+| `chamfer.svg` | machined — flats instead of radii |
+| `bevel.svg` | engineered — a hairline run inside every face |
+| `fold.svg` | made by hand — every plane creased, two values each |
+| `still.svg` | composed — the control: no bow, minimal radius, hairline seam |
+
+What this pass established: curvature is the loudest lever by a distance — four degrees of bow
+moves the mark from a rendering of a solid to something with a temperament. Keeping the seam
+straight is what keeps the set siblings. `stack`, `lift` and `breathe` still say
+three-parties-in-one-thing at 16px, where `petal` and `draw` collapse into a blob and a star.
+And `hold` changes the argument rather than the mood: a shrunken agent face says authority is
+scoped and the small thing is held, which is a claim, not a style.
