@@ -245,6 +245,19 @@ Register an App (not an OAuth App), and:
 - **Install it on the repositories it should reach** — a device-flow token sees the
   intersection of the user's access and the App's installations, and nothing in Yession
   re-checks that.
+- **Give it the repository permissions a session spends**, because a user-to-server token
+  can do no more than the App was registered to. What each verb needs:
+  - *Contents: read and write* — cloning, fetching and pushing through the git gateway, and
+    a merge, which lands commits on the base branch.
+  - *Pull requests: read and write* — watching one, opening one (`create_pr`), and merging
+    one (`merge_pr`: auto merge, the merge queue, and a direct merge alike).
+  - *Checks: read* — the check-runs rollup a watched pull request reports as its checks.
+  - *Metadata: read* — granted to every App; the repository listing the picker reads.
+  - *Email addresses: read* (an account permission), optionally — the commit identity a
+    block's git is given comes from the profile, and without this the email is the
+    account's `noreply` address rather than the one it publishes.
+  A missing permission is not a refusal at sign-in: the token is minted regardless, and the
+  verb that needed it is what fails, with GitHub's 403 or 404 passed through in words.
 - **Leave user-token expiration on** — the Manager holds the refresh token and rotates before
   each turn; off yields a permanent token, and nothing tells you which you registered.
 - **Point its webhook at `<YESSION_MANAGER_URL>/hooks/github`** if you declared a hook
