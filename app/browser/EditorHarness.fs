@@ -24,6 +24,7 @@ open Yession.Domain.Terminals
 open Yession.Domain.Collab
 open Yession.Domain.Chat
 open Fable.BrowserExtras
+open Fable.YjsExtras
 open Fable.ProseMirror
 open Yession.App
 open Thoth.Json
@@ -261,12 +262,6 @@ let private peerBHost : Browser.Types.HTMLElement = Browser.Dom.document.getElem
 let private onFrame (f: unit -> unit) : unit =
     Browser.Dom.window.requestAnimationFrame (fun _ -> f ()) |> ignore
 
-/// Yjs hands an update observer the update AND the origin the transaction was tagged with,
-/// which is the whole question this instrument asks. `Doc.on` types its handler as taking one
-/// array of arguments, which is not the shape Yjs calls it with, so the observer is bound here.
-[<Emit("$0.on('update', $1)")>]
-let private onDocUpdate (doc: Y.Doc) (handler: JS.Uint8Array -> obj -> unit) : unit = jsNative
-
 [<Import("ySyncPluginKey", "y-prosemirror")>]
 let private ySyncPluginKey : obj = jsNative
 
@@ -288,7 +283,7 @@ let private countWritebacks (doc: Y.Doc) (syncKey: obj) : unit =
     let mutable writebacks = 0
     (harness ()).__docUpdates <- updates
     (harness ()).__writebacks <- writebacks
-    onDocUpdate doc (fun _ origin ->
+    Updates.on doc (fun _ origin ->
         updates <- updates + 1
         (harness ()).__docUpdates <- updates
         if System.Object.ReferenceEquals (origin, syncKey) then

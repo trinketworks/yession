@@ -134,6 +134,7 @@
     <PackageReference Include="Fable.Core" />
     <PackageReference Include="FSharp.Data.Adaptive" />
     <PackageReference Include="Fable.Yjs" />
+    <ProjectReference Include="..\Fable.YjsExtras\Fable.YjsExtras.fsproj" />
     <PackageReference Include="Ylmish" />
   </ItemGroup>
 

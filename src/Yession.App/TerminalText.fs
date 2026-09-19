@@ -23,23 +23,8 @@ open Yession.Domain.Collab
 /// arithmetic, and arithmetic is cheap to re-check.
 module TerminalText =
 
-    [<Emit("$0.toString()")>]
-    let private textString (text: Y.Text) : string = jsNative
-
-    [<Emit("$0.length")>]
-    let private textLength (text: Y.Text) : int = jsNative
-
-    [<Emit("$0.insert($1, $2)")>]
-    let private textInsert (text: Y.Text) (index: int) (value: string) : unit = jsNative
-
-    [<Emit("$0.delete($1, $2)")>]
-    let private textDelete (text: Y.Text) (index: int) (length: int) : unit = jsNative
-
-    [<Emit("$0.transact($1, $2)")>]
-    let private transact (doc: Y.Doc) (body: unit -> unit) (origin: obj) : unit = jsNative
-
     /// The current value of a command line.
-    let read (registry: TextRegistry) (key: string) : string = textString (registry.Text key)
+    let read (registry: TextRegistry) (key: string) : string = (registry.Text key).toString ()
 
     /// What an input showing a command line must be TOLD, once the root says `value`: whether
     /// to write at all, and where the caret goes afterwards. One answer rather than two,
@@ -99,20 +84,20 @@ module TerminalText =
     /// the same text would be an update that echoes forever.
     let setTo (registry: TextRegistry) (key: string) (value: string) : unit =
         let text = registry.Text key
-        let current = textString text
+        let current = text.toString ()
         if current <> value then
             let prefix = commonPrefix current value
             let suffix = commonSuffix current value prefix
             let removed = current.Length - prefix - suffix
             let inserted = value.Substring (prefix, value.Length - prefix - suffix)
-            if removed > 0 then textDelete text prefix removed
-            if inserted <> "" then textInsert text prefix inserted
+            if removed > 0 then text.delete (prefix, removed)
+            if inserted <> "" then text.insert (prefix, inserted)
 
     /// Empty a command line.
     let clear (registry: TextRegistry) (key: string) : unit =
         let text = registry.Text key
-        let length = textLength text
-        if length > 0 then textDelete text 0 length
+        let length = text.length
+        if length > 0 then text.delete (0, length)
 
     /// Copy a command line into another root and clear the source, in ONE transaction.
     ///
@@ -122,10 +107,10 @@ module TerminalText =
     /// Copy-then-clear rather than a move because shared types cannot be re-parented.
     let moveInto (doc: Y.Doc) (registry: TextRegistry) (fromKey: string) (toKey: string) (alsoInTransaction: unit -> unit) : unit =
         let value = read registry fromKey
-        transact
-            doc
-            (fun () ->
+        doc.transact (
+            (fun _ ->
                 if value <> "" then setTo registry toKey value
                 alsoInTransaction ()
-                clear registry fromKey)
+                clear registry fromKey),
             null
+        )

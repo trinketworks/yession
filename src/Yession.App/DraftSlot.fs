@@ -76,11 +76,6 @@ module DraftSlot =
     // needs — `observeDeep` fires for a keystroke and for a merged remote edit, and for nothing
     // else. Watching the whole doc instead would re-run the rule (and a Markdown serialize) on
     // every title edit, queue edit, and peer's draft.
-    [<Emit("$0.observeDeep($1)")>]
-    let private observeDeep (fragment: Y.XmlFragment) (handler: unit -> unit) : unit = jsNative
-
-    [<Emit("$0.unobserveDeep($1)")>]
-    let private unobserveDeep (fragment: Y.XmlFragment) (handler: unit -> unit) : unit = jsNative
 
     /// Keep the local peer's slot in step with its own body: settle now, then on every change to
     /// that body. Only the local peer's slot — publication is the author's, exactly as sending is.
@@ -92,25 +87,19 @@ module DraftSlot =
     /// IndexedDB store has synced.
     let follow (doc: Y.Doc) (registry: BodyRegistry) (peer: PeerId) (dispatch: Sink<ClientMsg>) : Subscription =
         let fragment = registry.Fragment (BodyKey.draft peer)
-        let handler () = settle doc registry peer dispatch
+        // One observer value for both calls: `unobserveDeep` removes a listener only when
+        // handed the very reference `observeDeep` was given. The events and the transaction
+        // it carries are not read — the rule re-reads the doc.
+        let observer _ _ = settle doc registry peer dispatch
         settle doc registry peer dispatch
-        observeDeep fragment handler
-        Subscription.ofStop (fun () -> unobserveDeep fragment handler)
+        fragment.observeDeep observer
+        Subscription.ofStop (fun () -> fragment.unobserveDeep observer)
 
 /// The same publication rule for a terminal composer (Plan 13). Identical in shape and in
 /// reasoning — a slot exists exactly while its command line has content — over a plain
 /// `Y.Text` instead of a rich body, so emptiness is a string test rather than a Markdown
 /// serialize.
 module TerminalDraftSlot =
-
-    [<Emit("$0.observe($1)")>]
-    let private observe (text: Y.Text) (handler: unit -> unit) : unit = jsNative
-
-    [<Emit("$0.unobserve($1)")>]
-    let private unobserve (text: Y.Text) (handler: unit -> unit) : unit = jsNative
-
-    [<Emit("$0.toString()")>]
-    let private textString (text: Y.Text) : string = jsNative
 
     let private mintQueueId () : QueueId =
         match QueueId.create (string (System.Guid.NewGuid ())) with
@@ -128,7 +117,7 @@ module TerminalDraftSlot =
         (dispatch: Sink<ClientMsg>)
         : unit =
         let content =
-            if (textString (registry.Text (BodyKey.terminalDraft terminal peer))).Trim () = ""
+            if (registry.Text (BodyKey.terminalDraft terminal peer)).toString().Trim () = ""
             then DraftSlot.Empty
             else DraftSlot.HasContent
         let slot =
@@ -147,7 +136,8 @@ module TerminalDraftSlot =
         (dispatch: Sink<ClientMsg>)
         : Subscription =
         let text = registry.Text (BodyKey.terminalDraft terminal peer)
-        let handler () = settle doc registry terminal peer dispatch
+        // One observer value for both calls, as above.
+        let observer _ _ = settle doc registry terminal peer dispatch
         settle doc registry terminal peer dispatch
-        observe text handler
-        Subscription.ofStop (fun () -> unobserve text handler)
+        text.observe observer
+        Subscription.ofStop (fun () -> text.unobserve observer)
