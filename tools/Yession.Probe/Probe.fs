@@ -1,7 +1,7 @@
 module Yession.Probe
 
-// A headless peer with a command line: join a real session, say one thing, and report what
-// the agent did about it.
+// A headless peer with a command line: join a real session, say one or more things, and
+// report what the agent does about each — watching a whole TURN at a time.
 //
 // Everything here is the shipped path. The peer is the one the browser uses — the same
 // WebRTC channel, the same Yjs document, the same draft published by the same verb — because
@@ -9,8 +9,16 @@ module Yession.Probe
 // no HTTP route that accepts a message; a message IS a write to the shared document, so this
 // is not a convenience wrapper over an API, it is the only door.
 //
-// What it decides is what to SAY and when to stop watching. Everything else it reads back
-// out of the peer's own view of the log.
+// What it decides is what to SAY and when a turn is DONE — and done is `ActiveTurn` back to
+// `None`, the agent finished working and waiting for input again, NOT the first message it
+// completes. An agent narrates as it works ("on it…", "added the repo…"), and each of those
+// is a mid-turn message the next one closes; a probe that stopped at the first stopped
+// mid-turn, and then took the session down before the work it had asked for ran. So the loop
+// waits for the turn. Everything else it reads back out of the peer's own view of the log.
+//
+// Give `--say` more than once to hold a conversation: each message goes after the last turn
+// settled. Only a session this probe MINTED is stopped on the way out — a named one belongs
+// to whoever lent it.
 
 open Fable.Core
 open Yession.Domain
@@ -101,19 +109,25 @@ let private say (line: string) : unit = JS.console.log line
 [<Emit("process.exit($0)")>]
 let private exitWith (code: int) : unit = jsNative
 
+// Wall-clock, for deadlines a caller sets in seconds rather than in polling ticks.
+[<Emit("Date.now()")>]
+let private now () : float = jsNative
+
 // --- what it accepts ----------------------------------------------------------------------
 
 let private managerOption = Cli.value "manager" "url" "the Manager to join a session on"
-let private sayOption = Cli.value "say" "text" "what to send, once connected"
-let private sessionOption = Cli.value "session" "id" "the session to use; a fresh one is made when absent"
-let private stopOption = Cli.value "stop-after" "n" "give up after this many tool calls (default 40)"
+let private sayOption = Cli.values "say" "text" "what to send; repeat to hold a conversation, one message per turn"
+let private sessionOption = Cli.value "session" "id" "the session to join; a fresh one is minted (and stopped on exit) when absent"
+let private timeoutOption = Cli.value "timeout" "seconds" "how long to wait for each turn to finish (default 900)"
+let private stopOption = Cli.value "stop-after" "n" "stop the probe after this many tool calls (default: no cap)"
+let private keepOption = Cli.flag "keep" None "leave the session running on exit, even one this probe minted"
 let private tokenOption =
     Cli.value "peer-token" "token" "join with this instead of signing in — for a front door a CLI cannot bounce through"
 
 let spec =
     Cli.spec
         "yession-probe"
-        [ managerOption; sayOption; sessionOption; stopOption; tokenOption ]
+        [ managerOption; sayOption; sessionOption; timeoutOption; stopOption; keepOption; tokenOption ]
 
 // --- the browser's own three steps ----------------------------------------------------------
 
@@ -182,16 +196,32 @@ let private run () =
         let args = Cli.parseOrExit spec (Yession.Host.Version.current)
         // Answered where they are absent rather than defaulted to a blank that reads like a
         // value: a probe with no Manager has nothing to do, and saying so beats connecting to
-        // the empty string.
-        let manager, message =
-            match Cli.valueOf managerOption args, Cli.valueOf sayOption args with
-            | Some manager, Some message -> manager.TrimEnd '/', message
+        // the empty string. `--say` is repeatable, so this is a list — an empty one is the
+        // same nothing as a missing Manager.
+        let manager, says =
+            match Cli.valueOf managerOption args, Cli.valuesOf sayOption args with
+            | Some manager, (_ :: _ as says) -> manager.TrimEnd '/', says
             | None, _ -> Cli.abort "yession-probe needs --manager: which Manager to join a session on"
-            | _, None -> Cli.abort "yession-probe needs --say: what to send once it is connected"
+            | _, [] -> Cli.abort "yession-probe needs --say: what to send once it is connected"
+        // Real seconds, not the tick count this once hid behind: a turn that builds a package
+        // or runs a suite is minutes of few or no tool calls, and a ceiling counted in ticks
+        // gave up on exactly the work worth watching.
+        let turnTimeoutMs =
+            Cli.valueOf timeoutOption args
+            |> Option.bind (fun raw -> match System.Int32.TryParse raw with | true, n when n > 0 -> Some n | _ -> None)
+            |> Option.defaultValue 900
+            |> fun seconds -> float seconds * 1000.0
+        // A cap on tool calls, off unless asked for — the safety valve for a run left alone,
+        // no longer the thing that decides a turn is over.
         let stopAfter =
             Cli.valueOf stopOption args
-            |> Option.bind (fun raw -> match System.Int32.TryParse raw with | true, n -> Some n | _ -> None)
-            |> Option.defaultValue 40
+            |> Option.bind (fun raw -> match System.Int32.TryParse raw with | true, n when n > 0 -> Some n | _ -> None)
+        // A named session is one the caller owns and the probe is only visiting; an absent one
+        // is minted here and is the probe's to clean up. That difference IS the stop policy at
+        // the end, and `--keep` holds even a minted one open — for a run whose point was to
+        // leave a live session to look at.
+        let minted = (Cli.valueOf sessionOption args).IsNone
+        let keep = Cli.isSet keepOption args
         // A session id is Crockford base32. Minted here when none was named, so two runs of
         // the same probe do not land in one another's session; a named one is checked here,
         // because the Manager answers a malformed id with 404 and no explanation.
@@ -242,44 +272,99 @@ let private run () =
         say (sprintf "# %s on %s" id session)
 
         let! client = connectClient (sprintf "%ssignal" session) token "probe" "probe" |> Async.StartAsPromise
-        do! compose client client.Hello.PeerId message |> Async.StartAsPromise
-        client.Connection.SendDraft client.Hello.PeerId
 
-        // Everything after this is read off the peer's own view of the log — no filesystem,
-        // no second fetch. That is what lets this run from anywhere the Manager is reachable.
+        // The cursor and the counter live across the whole conversation, so several messages
+        // read as one ordered trace and one tool-call cap counts them all. Everything is read
+        // off the peer's own view of the log — no filesystem, no second fetch — which is what
+        // lets this run from anywhere the Manager is reachable.
         let mutable shown = 0
         let mutable calls = 0
-        let mutable finished = false
-        let mutable ticks = 0
-        while not finished && calls < stopAfter && ticks < 800 do
-            ticks <- ticks + 1
-            do! delay 1500
-            let model = client.Runner.Model ()
-            let items = TimelineProjection.items model.Conversation model.Timeline |> List.toArray
-            // The cursor stops at the first item that cannot be said YET, rather than stepping
-            // over it. An agent's message arrives Streaming and only later completes, so a
-            // cursor that counted it as seen would consume it in silence and then wait for an
-            // ending that had already gone past — which is what this did, and why a turn that
-            // answered in four seconds ran until the tick ceiling.
-            let mutable at = shown
-            let mutable waiting = false
-            while not waiting && at < items.Length do
-                match lineFor model.Timeline items.[at] with
-                | Some line ->
-                    say line
-                    let counted =
-                        match items.[at] with
-                        | TimelineToolUse _ -> calls <- calls + 1
-                        | TimelineMessage said when said.Author = ActorRef.Agent -> finished <- true
-                        | _ -> ()
-                    ignore counted
-                    at <- at + 1
-                | None -> waiting <- true
-            shown <- at
+        let mutable stopped = false
+        let mutable failed = false
+        // Long enough that a cold session — its process and work sandbox still starting — has
+        // begun a turn; short enough that a message nothing answers fails in minutes, not the
+        // whole timeout. Never longer than the timeout itself, for a caller who set a small one.
+        let startGraceMs = min 180_000.0 turnTimeoutMs
+
+        // Let the shared log sync, then start the trace at its end: a session joined by name
+        // arrives with its past turns already on the log, and those are neither this run's to
+        // replay nor — the trap the first cut fell into — a false sign that THIS message's turn
+        // is already under way. A freshly minted session has none, so this costs one poll.
+        do! delay 1500
+        let existing = client.Runner.Model ()
+        shown <- TimelineProjection.items existing.Conversation existing.Timeline |> List.length
+
+        let mutable remaining = says
+        while not stopped && not (List.isEmpty remaining) do
+            let message = List.head remaining
+            remaining <- List.tail remaining
+            // The turn already running when we speak, if any — so a DIFFERENT id afterwards is
+            // how we tell our own turn from it. An idle session reads `None` here, and any
+            // `Some` that follows is ours.
+            let turnAtSend = (client.Runner.Model ()).Agent.ActiveTurn
+            do! compose client client.Hello.PeerId message |> Async.StartAsPromise
+            client.Connection.SendDraft client.Hello.PeerId
+            let sentAt = now ()
+            // A turn is watched by its state, not its messages: `ActiveTurn` rising to a new id
+            // is ours starting, and its fall back to `None` is that turn ending. A completed
+            // message is NOT the signal — most complete mid-turn, closed by the next message,
+            // and a probe that stopped at the first stopped the agent in the middle of the work.
+            let mutable sawOurTurn = false
+            let mutable settled = false
+            while not settled do
+                do! delay 1500
+                let model = client.Runner.Model ()
+                let items = TimelineProjection.items model.Conversation model.Timeline |> List.toArray
+                // The cursor stops at the first item that cannot be said YET rather than
+                // stepping over it. An agent's message arrives Streaming and only later
+                // completes, so a cursor that counted it as seen would consume it in silence
+                // and then wait for an ending that had already gone past.
+                let mutable at = shown
+                let mutable waiting = false
+                while not waiting && at < items.Length do
+                    match lineFor model.Timeline items.[at] with
+                    | Some line ->
+                        say line
+                        let counted =
+                            match items.[at] with
+                            | TimelineToolUse _ -> calls <- calls + 1
+                            | _ -> ()
+                        ignore counted
+                        at <- at + 1
+                    | None -> waiting <- true
+                shown <- at
+                let active = model.Agent.ActiveTurn
+                if Option.isSome active && active <> turnAtSend then sawOurTurn <- true
+                let elapsed = now () - sentAt
+                match stopAfter with
+                | Some cap when calls >= cap ->
+                    say (sprintf "# stop-after %d tool calls reached" cap)
+                    stopped <- true
+                    settled <- true
+                | _ ->
+                    if sawOurTurn && Option.isNone active then
+                        settled <- true
+                    elif not sawOurTurn && elapsed > startGraceMs then
+                        say "# the message reached the session but raised no turn"
+                        failed <- true
+                        stopped <- true
+                        settled <- true
+                    elif elapsed > turnTimeoutMs then
+                        say (sprintf "# gave up waiting %gs for the turn to finish" (turnTimeoutMs / 1000.0))
+                        failed <- true
+                        stopped <- true
+                        settled <- true
         say (sprintf "# %d tool calls" calls)
-        // Stopped rather than left running: a probe's session has nobody coming back to it.
-        let! _ = fetch (ManagerRoute.at manager (ManagerRoute.Session (sessionId, SessionVerb.Stop))) (post (cookie ()) (idBody id))
-        exitWith 0
+        // Only a session this probe MINTED is stopped here: a named one was borrowed and its
+        // owner may be coming back to it, and `--keep` holds even a minted one open.
+        let! _ =
+            if minted && not keep then
+                fetch (ManagerRoute.at manager (ManagerRoute.Session (sessionId, SessionVerb.Stop))) (post (cookie ()) (idBody id))
+            else
+                promise { return box () }
+        // Non-zero only when a turn did not finish in time, so a caller can tell "the agent
+        // answered" from "I stopped waiting"; a stop-after cap or a clean finish is a 0.
+        exitWith (if failed then 1 else 0)
     }
 
 run () |> Promise.start
