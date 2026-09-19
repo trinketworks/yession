@@ -174,12 +174,12 @@ type [<AllowNullLiteral>] ServerResponse =
     abstract headersSent : bool
 
 type [<AllowNullLiteral>] HttpServer =
+    inherit Listening
     abstract listen : int * string * (unit -> unit) -> HttpServer
     abstract close : (obj -> unit) -> unit
 
 /// The actual bound port (differs from the requested one when listening on 0).
-[<Emit("$0.address().port")>]
-let serverPort (server: HttpServer) : int = jsNative
+let serverPort (server: HttpServer) : int = boundPort server
 
 [<Import("createServer", "node:http")>]
 let private createServerRaw : System.Func<IncomingMessage, ServerResponse, unit> -> HttpServer = jsNative
@@ -202,19 +202,20 @@ let readBody (req: IncomingMessage) (cont: string -> unit) : unit =
     Readables.text req (fun chunk -> acc.Append chunk |> ignore)
     req.onEnd (fun () -> cont (acc.ToString ()))
 
-/// Read a request header (Node lowercases header names); None when absent.
-[<Emit("($0.headers[$1] ?? null)")>]
-let headerOf (req: IncomingMessage) (name: string) : string option = jsNative
-
-[<ImportAll("node:os")>]
-let private nodeOs : obj = jsNative
-
-[<Emit("$0.hostname()")>]
-let private hostnameOf (os: obj) : string = jsNative
+/// Read a request header (Node lowercases header names); None when absent — and none for a
+/// header that REPEATED, which Node carries as an array and nothing asking for one value can
+/// read as that value. (`set-cookie` is the one Node keeps apart; every other repeat arrives
+/// joined.)
+let headerOf (req: IncomingMessage) (name: string) : string option =
+    req.headerEntries ()
+    |> Array.tryPick (fun (header, value) ->
+        match value with
+        | :? string as text when header = name -> Some text
+        | _ -> None)
 
 /// This box's own name — what a confined sandbox's git names to reach a listener here
 /// through srt's proxy on macOS (`Sandboxes.hostAddressFrom`).
-let hostname () : string = hostnameOf nodeOs
+let hostname () : string = Node.Api.os.hostname ()
 
 /// A cryptographically random identifier (per-launch control secrets).
 let randomSecret () : string = WebCrypto.randomUUID ()
@@ -267,8 +268,8 @@ let timingSafeEqualStr (a: string) (b: string) : bool =
     left.length = right.length && timingSafeEqual left right
 
 /// The TCP peer address of a request (`socket.remoteAddress`); None once disconnected.
-[<Emit("($0.socket?.remoteAddress ?? null)")>]
-let remoteAddressOf (req: IncomingMessage) : string option = jsNative
+let remoteAddressOf (req: IncomingMessage) : string option =
+    req.socket |> Option.bind (fun socket -> socket.remoteAddress)
 
 /// A request's url, parsed. Node hands a server request its url as path and query only, so
 /// it is parsed against a placeholder origin that nothing reads back. Seven files used to
