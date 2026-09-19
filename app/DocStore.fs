@@ -10,6 +10,7 @@ module Yession.Host.DocStore
 
 open Fable.Core
 open Node.Api
+open Fable.NodeExtras
 open Yession.Domain
 open Yession.Domain.Collab
 
@@ -18,27 +19,14 @@ let private existsSync (path: string) : bool = fs.existsSync (U2.Case1 path)
 let private readFileSync (path: string) : string = fs.readFileSync (path, "utf8")
 let private writeFileSync (path: string) (text: string) : unit = fs.writeFileSync (path, box text)
 
-// Kept as custom interop over the same `fs` module: Fable.Node's binding has no string
-// `writeSync` overload, no append-flag `openSync` helper, and no recursive `mkdirSync`.
-[<Emit("$0.openSync($1, 'a')")>]
-let private openSyncAppend (fs: obj) (path: string) : int = jsNative
-
-[<Emit("$0.writeSync($1, $2)")>]
-let private writeSync (fs: obj) (fd: int) (text: string) : unit = jsNative
-
-[<Emit("$0.fsyncSync($1)")>]
-let private fsyncSync (fs: obj) (fd: int) : unit = jsNative
-
-[<Emit("$0.mkdirSync($1, { recursive: true })")>]
-let private mkdirRecursive (fs: obj) (path: string) : unit = jsNative
-
-let private openAppend (path: string) : int = openSyncAppend (box fs) path
+// The durability-critical writes go through `Fable.NodeExtras`' `Files`, which is where the
+// four members Fable.Node does not type are declared — once, rather than in each store that
+// needs them.
 // Write, then flush, in that order: the flush is what makes the write durable, so the
 // sequence is the promise rather than an implementation detail of one call.
 let private writeAndSync (fd: int) (text: string) : unit =
-    writeSync (box fs) fd text
-    fsyncSync (box fs) fd
-let private mkdirSync (path: string) : unit = mkdirRecursive (box fs) path
+    Files.writeText fd text |> ignore
+    Files.fsync fd
 let private splitLines (s: string) : string array = s.Split '\n'
 
 type DocStore =
@@ -54,7 +42,7 @@ let openStore (path: string) : DocStore =
     let directory =
         let idx = path.LastIndexOf '/'
         if idx > 0 then path.Substring (0, idx) else ""
-    if directory <> "" then mkdirSync directory
+    if directory <> "" then Files.mkdirp directory
 
     let lines, tornTail =
         if existsSync path then
@@ -85,7 +73,7 @@ let openStore (path: string) : DocStore =
             // (Yjs updates merge losslessly), so the file never grows unbounded and
             // the next open replays a single update.
             writeFileSync path (DocSync.fullState doc + "\n")
-            fd <- Some (openAppend path)
+            fd <- Some (Files.openAppend path)
 
     let append (payload: string) : unit =
         match fd with
