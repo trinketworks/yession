@@ -395,3 +395,30 @@ sizes where light is visible, flat where it is not.
 Two filter gotchas found the hard way, both the same bug: an `objectBoundingBox` region is
 degenerate for a zero-width shape. A vertical line takes neither a default `linearGradient` nor a
 default filter region — both need `userSpaceOnUse`.
+
+## Thirteenth pass: blue in the fork
+
+`bluefork/` returns to the narrow letter's fork (`narrow/`) and removes the green from it. Instead
+of a cube resting in a green V, the V itself is blue — a cube corner that does not have to be
+geometrically true, pointing out of the letter at you.
+
+- **The fork, filled** — `two` (the V split down the axis into two values), `three` (a point on the
+  axis and three facets meeting at it: a cube corner drawn without the geometry closing),
+  `three-low`, `three-high` (the corner at 40% and 74% of the way up).
+- **The letter's own counter** — `noto`, `noto-bold`, `noto-wide`: Noto's capital Y as the cut with
+  its actual inner V filled, apex and arm angle read off the glyph outline. `noto-seam` leaves the
+  glyph's arms uncut, so the counter is the only blue and the stem the only slot.
+- **A cube with its edges on the arms** — `emerge` (a sheared cube whose lower edges lie along the
+  arms, side vertices at the rim, top rising clear of the solid), `emerge-short` (arms cut only
+  to its side vertices), `emerge-both`, `flush` (sized so its top vertex lands on the big solid's).
+- **Seams** — `seam` (no slots for the arms: the upper strokes are where blue meets green, the stem
+  a hairline), `seam-two`, `seam-none` (nothing cut at all — the stem is the big solid's own fold),
+  `seam-lit` (the top face washed from the blue outward, painted).
+
+Findings: `seam` is the one — a green solid with a blue corner driven into its top, the Y simply
+the outline of the blue, and the first build in fourteen passes where nothing is cut away to make
+the letter. `seam-none` works, which was the surprise: with the arms as seams the stem is already
+the boundary between the two green walls. The letter's own counter is a gift — fill Noto's inner V
+and the blue is exactly the kite the type designer left there, and it holds at 16px better than
+any drawn wedge. `emerge` is the loud one: a crystal coming out of the fork, a splash screen
+rather than a favicon.

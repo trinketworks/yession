@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Noto 600">
+  <defs><mask id="noto-bold-m"><rect width="64" height="64" fill="#fff"/><g transform="translate(32 34) scale(0.07 -0.07) translate(-283 -277)"><path d="M302 396 464 714H603L366 278V0H237V273L0 714H141Z" fill="#000"/></g></mask></defs>
+  <g mask="url(#noto-bold-m)"><path d="M32 34 L55.38 20.5 L32 7 Z" fill="#a8dd00"/><path d="M32 34 L32 7 L8.62 20.5 Z" fill="#8dba00"/><path d="M32 34 L55.38 20.5 L55.38 47.5 Z" fill="#799f00"/><path d="M32 34 L55.38 47.5 L32 61 Z" fill="#668600"/><path d="M32 34 L8.62 20.5 L8.62 47.5 Z" fill="#cbeb66"/><path d="M32 34 L8.62 47.5 L32 61 Z" fill="#abc556"/><path d="M32 27.9 L23.55 11.88 L32 15.78 Z" fill="#126a95"/><path d="M32 27.9 L32 15.78 L40.45 11.88 Z" fill="#1ba1e2"/><path d="M23.55 11.88 L32 7 L40.45 11.88 L32 15.78 Z" fill="#82cbef"/></g>
+</svg>
