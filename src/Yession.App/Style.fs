@@ -1577,6 +1577,25 @@ module Style =
     /// as one act rather than as two lines about it.
     let actNoteDetail = "text-small leading-5 text-ink-faint"
 
+    /// A sandbox start's particulars, laid out as fields rather than one sentence
+    /// (`View.sandboxStartFacts`). The container stacks each fact on its own line at the
+    /// same faint voice `actNoteDetail` uses, so the group still reads as one act under the
+    /// headline - what changed is that a screen now arranges the parts, not that they shout.
+    let actNoteFacts = "flex flex-col gap-0.5"
+    /// A path inside a fact line - the checkout, when it is worth showing. Mono, because it
+    /// is an identifier and reads as one, and dim enough to sit inside the faint line around it.
+    let actNotePath = cls [ mono; "text-code-sm text-ink-dim" ]
+    /// A forwarded credential, as its own small badge naming what rode in and whose it is,
+    /// rather than a clause in a sentence. A recessed pill, not a filled one: it is a fact on
+    /// the record, not a control, and the busy timeline is no place for another CTA-coloured chip.
+    let actNoteCred =
+        cls [ "inline-flex items-center gap-1 self-start"; "px-1.5 rounded"; "bg-surface-2"; "text-code-sm text-ink-dim" ]
+    /// A line this host could not honour exactly. One step brighter than the other
+    /// particulars (`ink-dim`, not `ink-faint`), so the one fact that means "you did not get
+    /// quite what you asked for" is the one the eye catches - without the line having to grow
+    /// louder than the act it belongs to, which a red or a fill would.
+    let actNoteRealisation = "text-small leading-5 text-ink-dim"
+
     /// History this device does not hold, standing at the top of the timeline where it would
     /// have been. An act note's voice and column, because it is the same kind of line — a
     /// thing that happened to this conversation rather than a thing anyone said.
