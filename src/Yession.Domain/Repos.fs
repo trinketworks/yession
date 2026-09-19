@@ -13,8 +13,12 @@ type SessionRepo =
       /// is the truth (a terminal can move a branch without an event); this is the last
       /// state the repo manager recorded, which the manager itself reconciles on list.
       Branch : string
-      /// Who brought the repo in — what the shared-trust disclosure names.
-      AddedBy : ActorRef }
+      /// Who brought the repo in -- what the shared-trust disclosure names.
+      AddedBy : ActorRef
+      /// The checkout's root `AGENTS.md`, as read when this repo was added -- repo-
+      /// authored convention info, not something the projection or the operator wrote.
+      /// `None` when the checkout had none, or a re-add's read found none.
+      AgentsMd : string option }
 
 type ReposProjection =
     { Repos : SessionRepo list }
@@ -28,7 +32,7 @@ module ReposProjection =
     let applyEvent (proj: ReposProjection) (event: SessionEvent) : ReposProjection =
         match event with
         | RepoAdded r ->
-            let entry = { Repo = r.Repo; Branch = r.Branch; AddedBy = r.Actor }
+            let entry = { Repo = r.Repo; Branch = r.Branch; AddedBy = r.Actor; AgentsMd = r.AgentsMd }
             if proj.Repos |> List.exists (fun s -> s.Repo = r.Repo) then
                 { Repos = proj.Repos |> List.map (fun s -> if s.Repo = r.Repo then entry else s) }
             else

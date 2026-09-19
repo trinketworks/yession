@@ -462,6 +462,25 @@ let create (config: ReposConfig) : Result<ReposService, string> =
         let visiblePathOf (repo: RepoRef) = sprintf "%s/%s" config.VisibleAt (RepoRef.relativePath repo)
         let present (repo: RepoRef) = Fs.exists (sprintf "%s/.git" (pathOf repo))
 
+        /// The checkout's own root `AGENTS.md`, read once at the moment the clone lands
+        /// (repo AGENTS.md into per-turn context). Missing or unreadable is `None`, never a
+        /// reason to fail an otherwise-successful clone -- an optional file's absence is not
+        /// an error. Capped in characters, the same shape as Claude Code's own CLAUDE.md
+        /// size ceiling, so one repo cannot dominate every turn's context; a file over the
+        /// cap is truncated, not dropped, so a maintainer's opening lines still land.
+        let agentsMdCharCap = 20_000
+        let agentsMdOf (repo: RepoRef) : string option =
+            let path = sprintf "%s/AGENTS.md" (pathOf repo)
+            if not (Fs.exists path) then None
+            else
+                try
+                    let text = Fs.readText path
+                    if text.Length > agentsMdCharCap then
+                        Some (text.Substring (0, agentsMdCharCap) + "\n\n[truncated -- AGENTS.md is longer than this session reads]")
+                    else
+                        Some text
+                with _ -> None
+
         let listingOf (repo: RepoRef) : Async<Result<RepoListing, string>> =
             async {
                 match! runOk confined None [ "-C"; pathOf repo; "rev-parse"; "--abbrev-ref"; "HEAD" ] with
@@ -539,7 +558,7 @@ let create (config: ReposConfig) : Result<ReposService, string> =
                     match! listingOf repo with
                     | Error e -> return Error e
                     | Ok listing ->
-                        do! append caller.Actor (SessionEvent.RepoAdded { MessageId = mintMessageId (); Repo = repo; Branch = listing.Branch; Actor = caller.Actor })
+                        do! append caller.Actor (SessionEvent.RepoAdded { MessageId = mintMessageId (); Repo = repo; Branch = listing.Branch; Actor = caller.Actor; AgentsMd = agentsMdOf repo })
                         return Ok listing
             }
 

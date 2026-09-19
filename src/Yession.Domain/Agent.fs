@@ -8,6 +8,7 @@ open Yession.Domain.Chat
 open Yession.Domain.Terminals
 open Yession.Domain.Tools
 open Yession.Domain.Access
+open Yession.Domain.Repos
 
 /// The agent-turn capability vocabulary (Step 08). The Session Process runs an agent
 /// turn against the *projection-derived* conversation — never Yjs/draft state — and the
@@ -42,6 +43,11 @@ type AgentContextPack =
       /// where machine output accumulates. The agent needs both; the conversation stays
       /// a conversation.
       Terminals      : BlockDigest list
+      /// The session's repos, as of this turn's projection read -- carried alongside
+      /// `Terminals` for the same reason: this is repo-authored (or empty), not
+      /// something the operator or the product said, and `promptOf` treats it that way
+      /// (its own quarantined section, never folded into `SystemPrompt`).
+      Repos          : SessionRepo list
       /// Which model to run this turn on, when the session has picked one. `None` means
       /// "whatever the provider would have chosen", which is the honest default: no
       /// deployment here knows a provider's current pick, and inventing a fixed id would
