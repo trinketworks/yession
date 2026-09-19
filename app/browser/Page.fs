@@ -14,8 +14,12 @@ module Yession.Browser.Page
 open Fable.Core
 open Yession.App
 
-[<Emit("document.querySelector('base')?.getAttribute('href') ?? undefined")>]
-let private baseHref () : string option = jsNative
+/// The `<base href>` the shell was served with, or None where the document carries no base
+/// element or a base with no href.
+let private baseHref () : string option =
+    Browser.Dom.document.querySelector "base"
+    |> Option.ofObj
+    |> Option.bind (fun tag -> tag.getAttribute "href" |> Option.ofObj)
 
 let private documentBase : Lazy<DocumentBase> =
     lazy

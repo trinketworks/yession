@@ -25,18 +25,15 @@ open Yession.Domain.Collab
 open Yession.Domain.Chat
 open Yession.App
 
-[<Emit("document.getElementById('host')")>]
-let private host : obj = jsNative
+let private host : Browser.Types.HTMLElement = Browser.Dom.document.getElementById "host"
 
 /// The replay mount (Plan 13, stage 3e). It shares this page rather than getting one of its
 /// own because it is the same KIND of thing — a host-free surface that needs a real browser
 /// and nothing else — and a second harness would be a second bundle, a second page and a
 /// second static server for one `create` call.
-[<Emit("document.getElementById('replay')")>]
-let private replayHost : Browser.Types.Element = jsNative
+let private replayHost : Browser.Types.Element = Browser.Dom.document.getElementById "replay"
 
-[<Emit("document.getElementById('replay-gappy')")>]
-let private gappyReplayHost : Browser.Types.Element = jsNative
+let private gappyReplayHost : Browser.Types.Element = Browser.Dom.document.getElementById "replay-gappy"
 
 [<Emit("window.__md = $0")>]
 let private exposeMd (f: unit -> string) : unit = jsNative
@@ -153,11 +150,9 @@ do
 // wherever Chromium exists, in seconds. The two-peer WebRTC E2E can also see this bug, but
 // only under enough load to lose the race, which cost two runs of the gate to learn once.
 
-[<Emit("document.getElementById('peer-a')")>]
-let private peerAHost : obj = jsNative
+let private peerAHost : Browser.Types.HTMLElement = Browser.Dom.document.getElementById "peer-a"
 
-[<Emit("document.getElementById('peer-b')")>]
-let private peerBHost : obj = jsNative
+let private peerBHost : Browser.Types.HTMLElement = Browser.Dom.document.getElementById "peer-b"
 
 /// Start or stop pushing presence decorations into the MIRROR on every animation frame.
 [<Emit("window.__caretStorm = $0")>]
@@ -169,8 +164,8 @@ let private exposeStorm (f: bool -> unit) : unit = jsNative
 [<Emit("window.__caretPushes = $0")>]
 let private exposeCaretPushes (n: int) : unit = jsNative
 
-[<Emit("requestAnimationFrame(() => $0())")>]
-let private onFrame (f: unit -> unit) : unit = jsNative
+let private onFrame (f: unit -> unit) : unit =
+    Browser.Dom.window.requestAnimationFrame (fun _ -> f ()) |> ignore
 
 /// Yjs hands an update observer the update AND the origin the transaction was tagged with,
 /// which is the whole question this instrument asks. `Doc.on` types its handler as taking one
@@ -232,13 +227,13 @@ let private convStateJson (docA: string) (docB: string) (pushes: int) : string =
 
 // --- The performance surface's interop ---------------------------------------------------
 
-[<Emit("performance.now()")>]
-let private now () : float = jsNative
+let private now () : float = Browser.Performance.performance.now ()
 
 /// Resolve on the next animation frame — the browser saying "I have painted". Every latency
 /// here is measured against this and nothing else.
-[<Emit("new Promise(r => requestAnimationFrame(() => r()))")>]
-let private nextFrame () : JS.Promise<unit> = jsNative
+let private nextFrame () : JS.Promise<unit> =
+    JS.Constructors.Promise.Create (fun resolve _ ->
+        Browser.Dom.window.requestAnimationFrame (fun _ -> resolve ()) |> ignore)
 
 /// The per-burst typing DIAGNOSTIC, which exists because the `type` series can only come up
 /// short two ways and a bare `collected 3 samples` says neither: a keydown that never reached
@@ -727,14 +722,12 @@ do
 // only the loop is local, because Program would want a doc and a connection this page
 // deliberately does not have, and what the render would send to a session goes nowhere.
 
-[<Emit("document.getElementById('shell')")>]
-let private shellHost : obj = jsNative
+let private shellHost : Browser.Types.HTMLElement = Browser.Dom.document.getElementById "shell"
 
 /// The shell's own container class, taken from `Style.app` rather than written into the
 /// harness page — the served document sets exactly this on `<main id="app">`, and a second
 /// copy in HTML would be a layout free to drift from the one people get.
-[<Emit("document.getElementById('shell').className = $0")>]
-let private dressShell (className: string) : unit = jsNative
+let private dressShell (className: string) : unit = shellHost.className <- className
 
 let private expect = function Ok v -> v | Error e -> failwith e
 
@@ -1572,7 +1565,7 @@ do
             model <- ClientModel.init peer
             // The shell on screen, as the app's is: the harness page keeps other fixtures
             // above it, and a conversation below the fold has nothing under the eye.
-            (shellHost :?> Browser.Types.HTMLElement).scrollIntoView ()
+            shellHost.scrollIntoView ()
             let rendersBefore = appRenders ()
             let started = now ()
             let mutable paints = 0

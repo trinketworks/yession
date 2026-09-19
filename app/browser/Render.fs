@@ -291,14 +291,13 @@ let private placeInputCursor (field: string) (peer: string) (anchor: int) (head:
                 | null -> ()
                 | bar -> setStyleProperty (bar :?> Browser.Types.HTMLElement) "left" (px (xOf head - loX))
 
-[<Emit("requestAnimationFrame(() => $0())")>]
-let internal raf (f: unit -> unit) : unit = jsNative
+let internal raf (f: unit -> unit) : unit =
+    Browser.Dom.window.requestAnimationFrame (fun _ -> f ()) |> ignore
 
 // An armed deadline: something is true NOW and only worth saying if it is still true then
 // (see `syncCatchUpTimer`). Nothing debounces on it any more — what needs pacing is paced by
 // the frame (`raf`).
-[<Emit("performance.now()")>]
-let private now () : float = jsNative
+let private now () : float = Browser.Performance.performance.now ()
 
 /// How long catch-up must run before it is worth SAYING (see `EventConsumerState.CatchUpIsSlow`).
 /// Long enough that a send — which puts this client one event behind itself for a round trip —
@@ -311,14 +310,14 @@ let private catchUpQuietMs = 500
 // into each, bound to the body's live Y.XmlFragment (resolved from the BodyRegistry).
 // ProseMirror owns that DOM; Lit leaves the static host's children alone across re-renders
 // (as it preserved the textareas).
-[<Emit("Array.from(document.querySelectorAll('[data-rich-body]'))")>]
-let private richBodyHosts () : obj[] = jsNative
+let private richBodyHosts () : Browser.Types.Element list =
+    let found = Browser.Dom.document.querySelectorAll "[data-rich-body]"
+    [ for i in 0 .. found.length - 1 -> found.[i] ]
 
-[<Emit("$0.getAttribute('data-rich-body')")>]
-let private hostBodyKey (el: obj) : string = jsNative
+let private hostBodyKey (el: Browser.Types.Element) : string = el.getAttribute "data-rich-body"
 
-[<Emit("$0.getAttribute('data-rich-readonly') === 'true'")>]
-let private hostReadOnly (el: obj) : bool = jsNative
+let private hostReadOnly (el: Browser.Types.Element) : bool =
+    el.getAttribute "data-rich-readonly" = "true"
 
 // --- Terminal command lines (Plan 13) --------------------------------------------------
 // The view renders `<input data-terminal-input="<key>">` for each terminal composer slot and
