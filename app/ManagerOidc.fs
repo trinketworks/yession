@@ -23,12 +23,6 @@ open Yession.Domain.Access
 open Yession.Oidc
 open Yession.Host.Interop
 
-[<Emit("new URL($0, 'http://local').pathname")>]
-let private pathnameOf (url: string) : string = jsNative
-
-[<Emit("new URL($0, 'http://local').searchParams.get($1)")>]
-let private queryOf (url: string) (name: string) : string option = jsNative
-
 let private urlEncode (s: string) : string = JS.encodeURIComponent s
 
 /// The public JWK with the id and algorithm this Manager signs under written onto it.
@@ -89,7 +83,7 @@ let create
                   JwksUri = issuer + "/jwks" }
 
         let handleAuthorize (req: IncomingMessage) (res: ServerResponse) =
-            match Provider.authorize registry (queryOf req.url) with
+            match Provider.authorize registry (queryParamOf req.url) with
             | Error (ClientError message) -> respond res 400 "text/plain" message
             | Error (RedirectableError (redirectUri, error, state)) ->
                 let stateSuffix = state |> Option.map (fun s -> "&state=" + urlEncode s) |> Option.defaultValue ""
@@ -99,7 +93,7 @@ let create
                     async {
                         let context =
                             { RemoteAddress = remoteAddressOf req
-                              Query = queryOf req.url
+                              Query = queryParamOf req.url
                               Header = fun name -> headerOf req name }
                         let! outcome = strategy.Authenticate context
                         match GrantedIdentity.ofOutcome outcome with

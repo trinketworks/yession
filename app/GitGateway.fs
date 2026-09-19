@@ -164,15 +164,6 @@ let errorBody (request: GitRequest) (isAdvertisement: bool) (message: string) : 
     + pktLine (sprintf "ERR %s\n" message)
     + flush
 
-[<Emit("new URL($0, 'http://local').pathname")>]
-let private pathnameOf (url: string) : string = jsNative
-
-[<Emit("new URL($0, 'http://local').search")>]
-let private searchOf (url: string) : string = jsNative
-
-[<Emit("new URL($0, 'http://local').searchParams.get($1) ?? null")>]
-let private queryOf (url: string) (name: string) : string option = jsNative
-
 // --- carrying one request ---------------------------------------------------------------------
 
 /// What a request does NOT carry up to github.com. `host` and `expect` because they describe
@@ -359,7 +350,7 @@ let start (upstream: string) (report: string -> unit) : Async<Gateway> =
 
     let handler (req: IncomingMessage) (res: ServerResponse) =
         let url = req.url
-        match route req.``method`` (pathnameOf url) (queryOf url "service") with
+        match route req.``method`` (pathnameOf url) (queryParamOf url "service") with
         | None -> notFound res
         | Some request ->
             match Map.tryFind request.Cap grants with
@@ -405,7 +396,7 @@ let start (upstream: string) (report: string -> unit) : Async<Gateway> =
                                                 "%s has not connected github — connect it on the settings panel and run the command again"
                                                 (ownerLabel lender.Owner))
                                     | Some token ->
-                                        let target = upstream.TrimEnd '/' + "/" + request.Path + searchOf url
+                                        let target = upstream.TrimEnd '/' + "/" + request.Path + (requestUrl url).search
                                         match! forward req res target (basicAuthorization token) with
                                         | Forwarded.Unauthorized ->
                                             do! lender.Refused ()

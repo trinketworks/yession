@@ -217,8 +217,7 @@ let private hostnameOf (os: obj) : string = jsNative
 let hostname () : string = hostnameOf nodeOs
 
 /// A cryptographically random identifier (per-launch control secrets).
-[<Emit("crypto.randomUUID()")>]
-let randomSecret () : string = jsNative
+let randomSecret () : string = WebCrypto.randomUUID ()
 
 /// Uniform `[0, 1)` — what a jittered retry schedule spreads its delays with. Not
 /// cryptographic and not meant to be: the only thing it decides is which millisecond inside
@@ -229,25 +228,17 @@ let random () : float = JS.Math.random ()
 /// report). Returns the handle `JS.clearInterval` wants.
 let setInterval (ms: int) (callback: unit -> unit) : int = JS.setInterval callback ms
 
-[<ImportAll("node:crypto")>]
-let private nodeCrypto : obj = jsNative
-
 /// SHA-256 of the UTF-8 input, base64url-encoded — the PKCE S256 operation the provider
-/// applies to a `code_verifier` (RFC 7636 §4.2).
-[<Emit("$0.createHash('sha256').update($1, 'utf8').digest('base64url')")>]
-let private sha256B64u (cryptoModule: obj) (input: string) : string = jsNative
-
-let sha256Base64Url (input: string) : string = sha256B64u nodeCrypto input
+/// applies to a `code_verifier` (RFC 7636 §4.2). `Fable.Node` types a digest taken in an
+/// encoding as `obj` (a `Buffer` when none is named); Node answers text for a named one.
+let sha256Base64Url (input: string) : string =
+    unbox<string> (Node.Api.crypto.createHash("sha256").update(input, "utf8").digest "base64url")
 
 /// HMAC-SHA256 of the UTF-8 input under a secret, digested in `encoding` (`hex`,
-/// `base64`, `base64url`). Beside the hash above because it is the same kind of thing and
-/// the same imported module; the hook relay verifies signed deliveries with it, over the
-/// bytes exactly as they arrived.
-[<Emit("$0.createHmac('sha256', $1).update($2, 'utf8').digest($3)")>]
-let private hmacSha256In (cryptoModule: obj) (secret: string) (input: string) (encoding: string) : string = jsNative
-
+/// `base64`, `base64url`). Beside the hash above because it is the same kind of thing; the
+/// hook relay verifies signed deliveries with it, over the bytes exactly as they arrived.
 let hmacSha256 (secret: string) (input: string) (encoding: string) : string =
-    hmacSha256In nodeCrypto secret input encoding
+    unbox<string> (Node.Api.crypto.createHmac("sha256", secret).update(input, "utf8").digest encoding)
 
 /// A short content address: enough of the SHA-256 that a different build is a different
 /// string, which is what lets bytes be served under an immutable cache policy — and short
@@ -279,9 +270,16 @@ let timingSafeEqualStr (a: string) (b: string) : bool =
 [<Emit("($0.socket?.remoteAddress ?? null)")>]
 let remoteAddressOf (req: IncomingMessage) : string option = jsNative
 
+/// A request's url, parsed. Node hands a server request its url as path and query only, so
+/// it is parsed against a placeholder origin that nothing reads back. Seven files used to
+/// spell this parse in a macro apiece, and each read one member off it.
+let requestUrl (url: string) : Node.Url.URL = Node.Api.URL.Create (url, "http://local")
+
+/// The path of a request url, without its query.
+let pathnameOf (url: string) : string = (requestUrl url).pathname
+
 /// A query parameter of a request URL; None when absent.
-[<Emit("new URL($0, 'http://local').searchParams.get($1)")>]
-let queryParamOf (url: string) (name: string) : string option = jsNative
+let queryParamOf (url: string) (name: string) : string option = (requestUrl url).searchParams.get name
 
 /// POST a JSON body and resolve with the response text.
 ///

@@ -21,9 +21,6 @@ open Yession.SessionProcess
 open Fable.OpenIdClient
 open Yession.Host.Interop
 
-[<Fable.Core.Emit("new URL($0, 'http://local').searchParams.get($1)")>]
-let private queryOf (url: string) (name: string) : string option = Fable.Core.Util.jsNative
-
 type Auth =
     { /// Complete the RP configuration after dynamic client registration: run OIDC
       /// discovery against the issuer and bind the client credentials + redirect URI.
@@ -101,7 +98,7 @@ let create (sessionId: SessionId) (mount: string) : Auth =
                 match configuration with
                 | None -> return Error (503, "session is still registering with its manager")
                 | Some (config, redirectUri) ->
-                    match queryOf requestUrl "state" with
+                    match queryParamOf requestUrl "state" with
                     | None -> return Error (400, "unknown or expired login; reopen the session URL")
                     | Some state ->
                       match pendingLogins.Take state with
