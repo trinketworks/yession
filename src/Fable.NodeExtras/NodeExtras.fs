@@ -54,6 +54,47 @@ module Encodings =
     /// `Buffer.from(s, undefined)` silently reading utf8.
     let base64url : BufferEncoding = unbox "base64url"
 
+// --- The synchronous file calls a durable append is made of -------------------------------
+
+/// What `node:fs` offers a writer that must be durable before it answers, and `Fable.Node`
+/// does not type: a descriptor opened for APPEND rather than truncation, a `writeSync` that
+/// takes a string, the flush that makes a write durable, and `mkdirSync` with `recursive`.
+///
+/// Three stores and the Manager's shared file primitives had each written the same four
+/// macros, with the same comment above them saying which four members were missing — four
+/// copies of one binding, each invisible to the others. They are imports rather than emits,
+/// which is what the members allow once the flag and the options object are F# values.
+[<AutoOpen>]
+module Files =
+
+    [<Import("openSync", "node:fs")>]
+    let private openSyncWithFlag (path: string) (flag: string) : int = jsNative
+
+    [<Import("mkdirSync", "node:fs")>]
+    let private mkdirSyncWithOptions (path: string) (options: obj) : unit = jsNative
+
+    /// A descriptor on `path` for appending, creating the file when it is not there (`'a'`).
+    /// `Fable.Node`'s `openSync` takes the path alone, which is `'r'` — a reader.
+    let openAppend (path: string) : int = openSyncWithFlag path "a"
+
+    /// A descriptor on `path` for writing, truncating what is there (`'w'`). The half of an
+    /// atomic write that happens out of sight, before the rename.
+    let openTruncate (path: string) : int = openSyncWithFlag path "w"
+
+    /// Write text to a descriptor. `Fable.Node` types `writeSync` over a `Buffer` only, and
+    /// the answer — how many bytes went — is what a partial write is visible through.
+    [<Import("writeSync", "node:fs")>]
+    let writeText (fd: int) (text: string) : int = jsNative
+
+    /// Flush a descriptor to the device. This is the call that makes a write DURABLE rather
+    /// than merely issued, so it is what a store does before it answers.
+    [<Import("fsyncSync", "node:fs")>]
+    let fsync (fd: int) : unit = jsNative
+
+    /// Create a directory and any missing parents; a no-op when it is already there.
+    /// `Fable.Node`'s `mkdirSync` takes no options, so it cannot say `recursive`.
+    let mkdirp (path: string) : unit = mkdirSyncWithOptions path (createObj [ "recursive", box true ])
+
 // --- Decoding bytes to text ---------------------------------------------------------------
 
 /// The WHATWG `TextDecoder`, a Node global since v11. Absent from Fable.Node — which types
