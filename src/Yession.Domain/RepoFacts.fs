@@ -16,7 +16,16 @@ type RepoAdded =
       /// Who brought it in — the panel's human or the agent. Carried on the payload
       /// because the projection reads events, not envelopes, and "who added this repo"
       /// is the fact the shared-trust disclosure hangs off.
-      Actor : ActorRef }
+      Actor : ActorRef
+      /// The checkout's own root `AGENTS.md`, read once at the moment the clone landed
+      /// (the one moment its content is trustworthy -- `app/Repos.fs`, right after the
+      /// staging rename). `None` when the file is absent or unreadable; an unreadable
+      /// optional file is not a reason to fail an otherwise-successful clone. Carried on
+      /// the fact itself, the same way `Branch` is, so a repo's notes replay from the log
+      /// like everything else this system remembers -- read again only when the repo is
+      /// re-added, which is this system's cache-with-explicit-invalidation, never a
+      /// per-turn re-read.
+      AgentsMd : string option }
 
 and RepoRemoved =
     { MessageId : MessageId

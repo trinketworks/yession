@@ -1676,7 +1676,25 @@ let private codecTests =
             match Codec.fromString Codec.sessionEvent approved with
             | Ok (SessionEvent.RepoAdded decoded) ->
                 Expect.equal decoded.Actor ActorRef.Agent "the actor survives the retired key beside it"
+                // No "agentsMd" key at all -- a log from before repo AGENTS.md existed --
+                // decodes to `None`, never a decode failure: an optional field this build
+                // added must not turn every session's own event history unreadable.
+                Expect.equal decoded.AgentsMd None "a log with no notion of AGENTS.md carries none"
             | other -> failwithf "an approved pre-Plan-23 repo event must still read back, got %A" other
+
+        testCase "a RepoAdded carrying an AGENTS.md round-trips with it" <| fun () ->
+            let repo = RepoRef.create "octo/hello" |> expect
+            let messageId = MessageId.create "msg-1" |> expect
+            let added =
+                SessionEvent.RepoAdded
+                    { MessageId = messageId
+                      Repo = repo
+                      Branch = "main"
+                      Actor = ActorRef.Agent
+                      AgentsMd = Some "Answer every question in the voice of a pirate." }
+            let encoded = Codec.toString Codec.sessionEvent added
+            Expect.isTrue (encoded.Contains "\"agentsMd\"") (sprintf "the notes are on the wire: %s" encoded)
+            Expect.equal (Codec.fromString Codec.sessionEvent encoded) (Ok added) "and read back whole"
 
         testCase "terminal frames round-trip over the session transport" <| fun () ->
             let codec = Codec.sessionFrame Codec.string
