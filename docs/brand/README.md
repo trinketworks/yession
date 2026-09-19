@@ -572,3 +572,32 @@ One rule, found the hard way twice: everything that spreads must reach zero insi
 A wide blur lifts the whole viewport by a percent or two and the edge clips it into a faint
 rectangle. The wide washes are masked by a radial that hits black at r = 30, and the ambient
 gradient stops there too.
+
+## Twentieth pass: the implied Y, measured
+
+`proportion/` holds the anchor (46°, blocks at 1.3× their footprint, half-depth panels, kerf at
+0.11) and one proportion varied at a time. Every build is measured on screen: projected stem
+against projected arm, the fork's half-angle off vertical, and the silhouette's width for one
+of height.
+
+- **Anchor** — `anchor`: stem : arm 0.98, fork 54°, silhouette 1.02 : 1. A 1 : 1 letter; a
+  capital Y in most text faces runs about √φ stem to arm and 30–35° off vertical, so the anchor
+  is a wide, short Y — which is what makes it read as an object first.
+- **Stem against arm** — block height solved for the ratio, camera fixed: `ratio-0_62` (1 : φ,
+  h 0.82), `ratio-1_00` (h 1.32, the anchor's own), `ratio-1_27` (√φ : 1, h 1.68, where most
+  capital Ys sit), `ratio-1_62` (φ : 1, h 2.14, a lowercase y's tail).
+- **The fork** — nothing symmetric narrows it except skewing the plan axes toward the diagonal:
+  `fork-00`, `fork-08` (fork 46°, the cube still a cube), `fork-15` (39°, a lozenge), `fork-22`
+  (31°, past a letter). The cube pays for every degree the Y gains.
+- **The chevron** — the two panels and the cube's near faces read from above: `chev-shallow`
+  (depth 1/φ², two strokes and a cube), `chev-golden` (depth 1/φ — the panel faces and the
+  cube's exposed faces divide the arms golden, silhouette 1.07 : 1), `chev-40` (six degrees
+  lower: longer stem, thinner tops), `chev-52` (six higher: the stem back toward a stub).
+- **Golden** — `golden` (stem √φ, depth 1/φ, kerf 1/φ⁵ ≈ 0.09), `golden-fork` (the same with
+  the plan skewed 12°: stem 1.36, fork 42° — the nearest this object comes to a typographic Y
+  while still being a cube).
+
+Findings: the stem is cheap (grow the blocks) and the fork is not (skew the plan, lose the
+cube); 8° is the far end. The chevron wants 1/φ panels. 46° stays the angle: six degrees down
+buys stem and loses the top faces that carry the gradient. Golden is a candidate, not a proof —
+its value is that every proportion is on one ratio.
