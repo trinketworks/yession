@@ -43,12 +43,6 @@ let private bootstrapHtml (sessionId: SessionId) (mount: string) (managerOrigin:
 let private decodeBase64 (encoded: string) : string =
     unbox (buffer.Buffer.from (encoded, BufferEncoding.Base64))
 
-[<Fable.Core.Emit("new URL($0, 'http://local').pathname")>]
-let private pathnameOf (url: string) : string = Fable.Core.Util.jsNative
-
-[<Fable.Core.Emit("new URL($0, 'http://local').searchParams.get($1)")>]
-let private queryOf (url: string) (name: string) : string option = Fable.Core.Util.jsNative
-
 let private encodeUriComponent (value: string) : string = Fable.Core.JS.encodeURIComponent value
 
 /// The auth-gated event-log read surface: a cursor, and the ranges it resolves to.
@@ -159,7 +153,7 @@ let start
         (match auth with
          | Some a -> a.IsAuthenticated req
          | None -> false)
-        || (queryOf url "token" |> Option.map validateToken |> Option.defaultValue false)
+        || (queryParamOf url "token" |> Option.map validateToken |> Option.defaultValue false)
     let unauthorized (res: ServerResponse) =
         res.writeHead (401, createObj [ "content-type", box "text/plain"; "cache-control", box "no-store" ]) |> ignore
         res.``end`` "unauthorized"
@@ -198,7 +192,7 @@ let start
     let redirectTo (url: string) (route: SessionRoute) (res: ServerResponse) =
         let path = RelativeUrl.under mount (SessionRoute.relative route)
         let target =
-            match queryOf url "token" with
+            match queryParamOf url "token" with
             | Some token -> sprintf "%s?token=%s" path (encodeUriComponent token)
             | None -> path
         res.writeHead (307, createObj [ "location", box target; "cache-control", box "no-store" ]) |> ignore

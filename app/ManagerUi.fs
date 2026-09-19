@@ -702,11 +702,13 @@ let page
 
 // --- Routing ----------------------------------------------------------------------------
 
-[<Fable.Core.Emit("new URL($0, 'http://local').pathname")>]
-let private pathnameOf (url: string) : string = Fable.Core.Util.jsNative
-
-[<Fable.Core.Emit("Object.fromEntries(new URLSearchParams($0))[$1] ?? ''")>]
-let private formField (body: string) (name: string) : string = Fable.Core.Util.jsNative
+/// One field of a form-encoded body. Absent reads as empty, which is what every reader below
+/// tests for — a form that named the field and left it blank and a form that did not name it
+/// are the same submission.
+let private formField (body: string) (name: string) : string =
+    match (Node.Api.URLSearchParams.Create body).get name with
+    | Some value -> value
+    | None -> ""
 
 /// The same static asset service the Session Process runs, over this process's OWN set — read
 /// and addressed once at boot rather than per request, so every render of this page (it is
