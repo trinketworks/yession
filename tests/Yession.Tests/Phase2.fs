@@ -169,21 +169,17 @@ let private rejectedPromise (message: string) : JS.Promise<unit> = Fable.Core.Ut
 [<Fable.Core.Emit("Promise.reject()")>]
 let private rejectedWithNothing () : JS.Promise<unit> = Fable.Core.Util.jsNative
 
-[<Fable.Core.Emit("process.on('unhandledRejection', $0)")>]
-let private onUnhandledRejection (listener: unit -> unit) : unit = Fable.Core.Util.jsNative
-
-[<Fable.Core.Emit("process.off('unhandledRejection', $0)")>]
-let private offUnhandledRejection (listener: unit -> unit) : unit = Fable.Core.Util.jsNative
-
 /// Count Node's unhandled-rejection reports, until the returned stop is called. Registering
 /// a listener is also what stops Node from killing the process over one, so the count is
 /// observable rather than fatal. The count is per-watch rather than a module-level tally:
 /// the cases below are two, and Expecto is free to run them at once.
 let private watchUnhandledRejections () : (unit -> int) * (unit -> unit) =
     let mutable reported = 0
-    let listener () = reported <- reported + 1
-    onUnhandledRejection listener
-    (fun () -> reported), (fun () -> offUnhandledRejection listener)
+    // One closure, registered and removed by reference: `removeListener` only removes the
+    // very function `on` was given.
+    let listener = fun (_: obj) -> reported <- reported + 1
+    Node.Api.``process``.on ("unhandledRejection", listener) |> ignore
+    (fun () -> reported), (fun () -> Node.Api.``process``.removeListener ("unhandledRejection", listener) |> ignore)
 
 let private promiseAwaitTests =
     testList "Awaiting a promise (Node interop)" [
@@ -389,20 +385,20 @@ let private sandboxPolicyTests =
         // scoped grant on a Mac and, on Linux, either every unix socket or none.
         testCase "srt scopes a socket by path on macOS and cannot on Linux" <| fun () ->
             Expect.isTrue
-                (Sandboxes.limitsFor SrtBackend "darwin" |> HostLimits.can HostDistinction.SocketsByPath)
+                (Sandboxes.limitsFor SrtBackend Node.Base.Platform.Darwin |> HostLimits.can HostDistinction.SocketsByPath)
                 "Seatbelt takes a network-outbound rule on the path"
             Expect.isFalse
-                (Sandboxes.limitsFor SrtBackend "linux" |> HostLimits.can HostDistinction.SocketsByPath)
+                (Sandboxes.limitsFor SrtBackend Node.Base.Platform.Linux |> HostLimits.can HostDistinction.SocketsByPath)
                 "seccomp-bpf cannot read a socket path out of user-space memory"
-            for platform in [ "darwin"; "linux" ] do
+            for platform in [ Node.Base.Platform.Darwin; Node.Base.Platform.Linux ] do
                 Expect.isTrue
                     (Sandboxes.limitsFor SrtBackend platform |> HostLimits.can HostDistinction.EgressByHost)
-                    (sprintf "egress it scopes on both, through its own proxy (%s)" platform)
+                    (sprintf "egress it scopes on both, through its own proxy (%A)" platform)
 
         // docker's egress is unfiltered, which until now was `AllowedDomains = None` and
         // unsaid anywhere a person could read it.
         testCase "docker binds a socket by path and filters no egress" <| fun () ->
-            let docker = Sandboxes.limitsFor DockerBackend "linux"
+            let docker = Sandboxes.limitsFor DockerBackend Node.Base.Platform.Linux
             Expect.isTrue (HostLimits.can HostDistinction.SocketsByPath docker) "a bind mount is per path"
             Expect.isFalse (HostLimits.can HostDistinction.EgressByHost docker) "and it filters nothing"
 
@@ -413,7 +409,7 @@ let private sandboxPolicyTests =
         testCase "a docker policy trusts the bind-mounted checkouts by default" <| fun () ->
             let policy =
                 Sandboxes.policyFor
-                    DockerBackend (Sandboxes.limitsFor DockerBackend "linux") Map.empty Map.empty None None None
+                    DockerBackend (Sandboxes.limitsFor DockerBackend Node.Base.Platform.Linux) Map.empty Map.empty None None None
                     []
                     Set.empty
                     EnvironmentSpec.defaults
@@ -429,7 +425,7 @@ let private sandboxPolicyTests =
             for backend in [ SrtBackend; HostBackend ] do
                 let policy =
                     Sandboxes.policyFor
-                        backend (Sandboxes.limitsFor backend "darwin") ambient Map.empty None None None
+                        backend (Sandboxes.limitsFor backend Node.Base.Platform.Darwin) ambient Map.empty None None None
                         []
                         Set.empty
                         EnvironmentSpec.defaults
@@ -437,7 +433,7 @@ let private sandboxPolicyTests =
                 Expect.equal (policy.Env |> Map.tryFind "PATH") (Some "/nix/store/x-git/bin:/usr/bin:/bin") (sprintf "%s: named git first, the rest kept" (SandboxBackend.describe backend))
             let unnamed =
                 Sandboxes.policyFor
-                    SrtBackend (Sandboxes.limitsFor SrtBackend "darwin") (Map.ofList [ "PATH", "/usr/bin:/bin" ]) Map.empty None None None
+                    SrtBackend (Sandboxes.limitsFor SrtBackend Node.Base.Platform.Darwin) (Map.ofList [ "PATH", "/usr/bin:/bin" ]) Map.empty None None None
                     []
                     Set.empty
                     EnvironmentSpec.defaults
@@ -453,7 +449,7 @@ let private sandboxPolicyTests =
             let ambient = Map.ofList [ "PATH", "/usr/bin:/bin"; "YESSION_BIN_GIT", "/nix/store/x-git/bin/git" ]
             let policy =
                 Sandboxes.policyFor
-                    DockerBackend (Sandboxes.limitsFor DockerBackend "linux") ambient Map.empty None None None
+                    DockerBackend (Sandboxes.limitsFor DockerBackend Node.Base.Platform.Linux) ambient Map.empty None None None
                     []
                     Set.empty
                     EnvironmentSpec.defaults
@@ -465,7 +461,7 @@ let private sandboxPolicyTests =
         testCase "a spec that names the git trio still wins over the docker baseline" <| fun () ->
             let policy =
                 Sandboxes.policyFor
-                    DockerBackend (Sandboxes.limitsFor DockerBackend "linux") Map.empty
+                    DockerBackend (Sandboxes.limitsFor DockerBackend Node.Base.Platform.Linux) Map.empty
                     (Map.ofList [ "GIT_CONFIG_COUNT", "0" ])
                     None None None
                     []
@@ -481,7 +477,7 @@ let private sandboxPolicyTests =
         testCase "a docker sandbox names its private /tmp as TMPDIR" <| fun () ->
             let policy =
                 Sandboxes.policyFor
-                    DockerBackend (Sandboxes.limitsFor DockerBackend "linux") Map.empty Map.empty None None None
+                    DockerBackend (Sandboxes.limitsFor DockerBackend Node.Base.Platform.Linux) Map.empty Map.empty None None None
                     []
                     Set.empty
                     EnvironmentSpec.defaults
@@ -495,7 +491,7 @@ let private sandboxPolicyTests =
         testCase "a docker policy speaks the container's spelling of its grants" <| fun () ->
             let policy =
                 Sandboxes.policyFor
-                    DockerBackend (Sandboxes.limitsFor DockerBackend "linux") Map.empty Map.empty None None None
+                    DockerBackend (Sandboxes.limitsFor DockerBackend Node.Base.Platform.Linux) Map.empty Map.empty None None None
                     [ Mount { From = "/host/cache"; At = "/cache"; Mode = ResourceMountMode.Write }
                       Socket "/run/thing.sock"
                       Volume ("warm", "/nix") ]
@@ -537,7 +533,7 @@ let private sandboxPolicyTests =
         testCase "a volume granted to a host-family sandbox is withheld, not dropped" <| fun () ->
             match
                 Sandboxes.policyFor
-                    SrtBackend (Sandboxes.limitsFor SrtBackend "darwin") Map.empty Map.empty (Some "/ws") None (Some "/ws/home")
+                    SrtBackend (Sandboxes.limitsFor SrtBackend Node.Base.Platform.Darwin) Map.empty Map.empty (Some "/ws") None (Some "/ws/home")
                     [ Volume ("warm", "/nix") ]
                     Set.empty
                     EnvironmentSpec.defaults
@@ -552,7 +548,7 @@ let private sandboxPolicyTests =
         testCase "a want this host cannot realise degrades to absent instead of refusing" <| fun () ->
             let policy =
                 Sandboxes.policyFor
-                    SrtBackend (Sandboxes.limitsFor SrtBackend "darwin") Map.empty Map.empty (Some "/ws") None (Some "/ws/home")
+                    SrtBackend (Sandboxes.limitsFor SrtBackend Node.Base.Platform.Darwin) Map.empty Map.empty (Some "/ws") None (Some "/ws/home")
                     [ Volume ("warm", "/nix") ]
                     (Set.ofList [ Volume ("warm", "/nix") ])
                     EnvironmentSpec.defaults
@@ -604,7 +600,7 @@ let private sandboxPolicyTests =
                 Sandboxes.policyFor
                     // Linux: the host that cannot make this distinction, which is the whole
                     // case. On darwin there is nothing to coarsen and nothing to report.
-                    SrtBackend (Sandboxes.limitsFor SrtBackend "linux") Map.empty Map.empty (Some "/ws") None (Some "/ws/home")
+                    SrtBackend (Sandboxes.limitsFor SrtBackend Node.Base.Platform.Linux) Map.empty Map.empty (Some "/ws") None (Some "/ws/home")
                     [ Socket "/run/docker.sock" ]
                     Set.empty
                     EnvironmentSpec.defaults
@@ -622,7 +618,7 @@ let private sandboxPolicyTests =
         testCase "a host that can express the grant reports nothing" <| fun () ->
             let policy =
                 Sandboxes.policyFor
-                    SrtBackend (Sandboxes.limitsFor SrtBackend "darwin") Map.empty Map.empty (Some "/ws") None (Some "/ws/home")
+                    SrtBackend (Sandboxes.limitsFor SrtBackend Node.Base.Platform.Darwin) Map.empty Map.empty (Some "/ws") None (Some "/ws/home")
                     [ Mount { From = "/opt/tools"; At = "/opt/tools"; Mode = ResourceMountMode.Read }
                       Variable ("LANG", "C.UTF-8") ]
                     Set.empty
@@ -847,7 +843,7 @@ let private sandboxPolicyTests =
         testCase "a workdir in the outside vocabulary becomes an absolute directory" <| fun () ->
             let policy =
                 Sandboxes.policyFor
-                    SrtBackend (Sandboxes.limitsFor SrtBackend "darwin") Map.empty Map.empty
+                    SrtBackend (Sandboxes.limitsFor SrtBackend Node.Base.Platform.Darwin) Map.empty Map.empty
                     (Some "/data/workspace") None (Some "/data/home") []
                     Set.empty
                     { EnvironmentSpec.defaults with WorkingDirectory = Some "repos/octo/hello" }
@@ -863,7 +859,7 @@ let private sandboxPolicyTests =
         testCase "a workdir already absolute is left alone, and none at all is the workspace" <| fun () ->
             let workdir spec =
                 Sandboxes.policyFor
-                    SrtBackend (Sandboxes.limitsFor SrtBackend "darwin") Map.empty Map.empty
+                    SrtBackend (Sandboxes.limitsFor SrtBackend Node.Base.Platform.Darwin) Map.empty Map.empty
                     (Some "/data/workspace") None (Some "/data/home") [] Set.empty spec
                 |> expect
                 |> fun policy -> policy.WorkingDirectory
@@ -982,7 +978,7 @@ let private sandboxPolicyTests =
         // names — it used to fold the operator's `YESSION_SESSION_READ` in as well, which
         // made one variable a ceiling and an unconditional grant at once.
         testCase "the read scope is the platform's and what is running, and nothing an operator hands out" <| fun () ->
-            let paths = Sandboxes.SrtSandbox.runtimeReadPaths "linux" [ "/opt/node22/bin/node" ] Map.empty
+            let paths = Sandboxes.SrtSandbox.runtimeReadPaths Node.Base.Platform.Linux [ "/opt/node22/bin/node" ] Map.empty
             Expect.isTrue (List.contains "/usr" paths) "the platform's runtime is there"
             Expect.isTrue (List.contains "/opt/node22" paths) "so is what is already running"
 
@@ -1001,15 +997,15 @@ let private sandboxPolicyTests =
             Expect.isFalse
                 (List.contains
                     "/home/operator"
-                    (Sandboxes.SrtSandbox.runtimeReadPaths "linux" [ "/home/operator/node_modules/x/package.json" ] ambient))
+                    (Sandboxes.SrtSandbox.runtimeReadPaths Node.Base.Platform.Linux [ "/home/operator/node_modules/x/package.json" ] ambient))
                 "a discovered prefix that is the home is dropped"
 
         testCase "the read scope's platform list is the platform's, not this box's" <| fun () ->
             Expect.isTrue
-                (List.contains "/System" (Sandboxes.SrtSandbox.runtimeReadPaths "darwin" [] Map.empty))
+                (List.contains "/System" (Sandboxes.SrtSandbox.runtimeReadPaths Node.Base.Platform.Darwin [] Map.empty))
                 "a darwin host gets darwin's runtime locations"
             Expect.isFalse
-                (List.contains "/System" (Sandboxes.SrtSandbox.runtimeReadPaths "linux" [] Map.empty))
+                (List.contains "/System" (Sandboxes.SrtSandbox.runtimeReadPaths Node.Base.Platform.Linux [] Map.empty))
                 "and a Linux host does not"
 
         testCase "the srt config opens .git/config, which a clone cannot avoid writing" <| fun () ->
@@ -1071,7 +1067,7 @@ let private sandboxPolicyTests =
             let ambient = Map.ofList [ "PATH", "/usr/bin"; "HOME", "/home/u" ]
             let resolved = Map.ofList [ "HOME", "/workspace-home"; "TOKEN", "t" ]
             let host =
-                Sandboxes.policyFor HostBackend (Sandboxes.limitsFor HostBackend "linux") ambient resolved (Some "/ws") (Some "/repos") (Some "/ws/home") [] Set.empty EnvironmentSpec.defaults
+                Sandboxes.policyFor HostBackend (Sandboxes.limitsFor HostBackend Node.Base.Platform.Linux) ambient resolved (Some "/ws") (Some "/repos") (Some "/ws/home") [] Set.empty EnvironmentSpec.defaults
                 |> expect
             Expect.equal (Map.tryFind "HOME" host.Env) (Some "/workspace-home") "the spec's variable wins"
             Expect.equal (Map.tryFind "PATH" host.Env) (Some "/usr/bin") "the baseline fills the rest"
@@ -1079,7 +1075,7 @@ let private sandboxPolicyTests =
             Expect.isTrue
                 (List.contains "/repos" host.WritePaths)
                 "the repos dir is a write path of its own (Plan 14)"
-            let docker = Sandboxes.policyFor DockerBackend (Sandboxes.limitsFor DockerBackend "linux") ambient resolved None None None [] Set.empty EnvironmentSpec.defaults |> expect
+            let docker = Sandboxes.policyFor DockerBackend (Sandboxes.limitsFor DockerBackend Node.Base.Platform.Linux) ambient resolved None None None [] Set.empty EnvironmentSpec.defaults |> expect
             Expect.equal (Map.tryFind "PATH" docker.Env) None "a docker image supplies its own base env"
             Expect.equal (Map.tryFind "TOKEN" docker.Env) (Some "t") "only the spec's variables inject"
 
@@ -1091,7 +1087,7 @@ let private sandboxPolicyTests =
             let policy =
                 Sandboxes.policyFor
                     SrtBackend
-                    (Sandboxes.limitsFor SrtBackend "darwin")
+                    (Sandboxes.limitsFor SrtBackend Node.Base.Platform.Darwin)
                     (Map.ofList [ "HOME", "/Users/operator" ])
                     Map.empty
                     (Some "/data/s/workspace")
@@ -1200,7 +1196,7 @@ let private sandboxPolicyTests =
         testCase "what the operator granted reaches the sandbox without it asking" <| fun () ->
             let policy =
                 Sandboxes.policyFor
-                    SrtBackend (Sandboxes.limitsFor SrtBackend "darwin") Map.empty Map.empty (Some "/ws") None (Some "/ws/home")
+                    SrtBackend (Sandboxes.limitsFor SrtBackend Node.Base.Platform.Darwin) Map.empty Map.empty (Some "/ws") None (Some "/ws/home")
                     [ Mount { From = "/nix"; At = "/nix"; Mode = ResourceMountMode.Read }
                       Socket "/nix/var/nix/daemon-socket"
                       Endpoint "cache.nixos.org"
@@ -1222,7 +1218,7 @@ let private sandboxPolicyTests =
         testCase "a grant is not bounded by the ceiling a repo is held to" <| fun () ->
             let policy =
                 Sandboxes.policyFor
-                    SrtBackend (Sandboxes.limitsFor SrtBackend "darwin") Map.empty Map.empty (Some "/ws") None (Some "/ws/home")
+                    SrtBackend (Sandboxes.limitsFor SrtBackend Node.Base.Platform.Darwin) Map.empty Map.empty (Some "/ws") None (Some "/ws/home")
                     [ Endpoint "cache.nixos.org" ]
                     Set.empty
                     EnvironmentSpec.defaults
@@ -1237,7 +1233,7 @@ let private sandboxPolicyTests =
         testCase "an overlay is refused rather than quietly becoming a write" <| fun () ->
             match
                 Sandboxes.policyFor
-                    SrtBackend (Sandboxes.limitsFor SrtBackend "darwin") Map.empty Map.empty (Some "/ws") None (Some "/ws/home")
+                    SrtBackend (Sandboxes.limitsFor SrtBackend Node.Base.Platform.Darwin) Map.empty Map.empty (Some "/ws") None (Some "/ws/home")
                     [ Mount { From = "/h/.npm"; At = "/h/.npm"; Mode = ResourceMountMode.Overlay } ]
                     Set.empty
                     EnvironmentSpec.defaults
@@ -1256,7 +1252,7 @@ let private sandboxPolicyTests =
         testCase "the host backend withholds an overlay with the operator-facing refusal" <| fun () ->
             match
                 Sandboxes.policyFor
-                    HostBackend (Sandboxes.limitsFor HostBackend "darwin") Map.empty Map.empty (Some "/ws") None (Some "/ws/home")
+                    HostBackend (Sandboxes.limitsFor HostBackend Node.Base.Platform.Darwin) Map.empty Map.empty (Some "/ws") None (Some "/ws/home")
                     [ Mount { From = "/h/.npm"; At = "/h/.npm"; Mode = ResourceMountMode.Overlay } ]
                     Set.empty
                     EnvironmentSpec.defaults
@@ -1271,7 +1267,7 @@ let private sandboxPolicyTests =
         testCase "a granted executable's directory leads PATH" <| fun () ->
             let policy =
                 Sandboxes.policyFor
-                    SrtBackend (Sandboxes.limitsFor SrtBackend "darwin") (Map.ofList [ "PATH", "/usr/bin" ]) Map.empty (Some "/ws") None (Some "/ws/home")
+                    SrtBackend (Sandboxes.limitsFor SrtBackend Node.Base.Platform.Darwin) (Map.ofList [ "PATH", "/usr/bin" ]) Map.empty (Some "/ws") None (Some "/ws/home")
                     [ Exec "/nix/store/abc/bin/git" ]
                     Set.empty
                     EnvironmentSpec.defaults
@@ -1293,7 +1289,7 @@ let private sandboxPolicyTests =
             let policy =
                 Sandboxes.policyFor
                     SrtBackend
-                    (Sandboxes.limitsFor SrtBackend "darwin")
+                    (Sandboxes.limitsFor SrtBackend Node.Base.Platform.Darwin)
                     Map.empty
                     Map.empty
                     (Some "/data/s/workspace")
@@ -1319,7 +1315,7 @@ let private sandboxPolicyTests =
             let policy =
                 Sandboxes.policyFor
                     SrtBackend
-                    (Sandboxes.limitsFor SrtBackend "darwin")
+                    (Sandboxes.limitsFor SrtBackend Node.Base.Platform.Darwin)
                     Map.empty
                     Map.empty
                     (Some "/data/s/workspace")
@@ -2162,7 +2158,7 @@ let private acceptanceE2eTests =
                 let name = SessionId.value (SessionId.mint ())
                 let spec = { EnvironmentSpec.defaults with Runtime = Container { ContainerSpec.defaults with Image = Some { Name = "alpine"; Tag = Some "3" } } }
                 let createSandbox = Sandboxes.forBackend DockerBackend name spec |> expect
-                match! createSandbox ((Sandboxes.policyFor DockerBackend (Sandboxes.limitsFor DockerBackend "linux") Map.empty Map.empty None None None [] Set.empty EnvironmentSpec.defaults |> expect)) with
+                match! createSandbox ((Sandboxes.policyFor DockerBackend (Sandboxes.limitsFor DockerBackend Node.Base.Platform.Linux) Map.empty Map.empty None None None [] Set.empty EnvironmentSpec.defaults |> expect)) with
                 | Error reason -> failwithf "docker sandbox failed: %s" reason
                 | Ok sandbox ->
                     let! run, out, _ = runInSandbox sandbox "echo" [ "hello-from-docker" ] Map.empty None
@@ -2312,8 +2308,7 @@ let private agentSpawnerTests =
 
 // --- The same seam, driven --------------------------------------------------------------------
 
-[<Emit("process.execPath")>]
-let private nodePath () : string = jsNative
+let private nodePath () : string = Node.Api.``process``.execPath
 
 /// The FIRING end of an abort, which the product never holds: the signals it sees come from
 /// the agent SDK. Here because a spawner that listens to one needs something to listen to.

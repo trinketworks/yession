@@ -454,8 +454,7 @@ let private opTests =
 
 // --- The composed flow ([Ports]): real Manager + child Session Process --------------
 
-[<Emit("process.execPath")>]
-let private nodePath : string = Fable.Core.Util.jsNative
+let private nodePath : string = Node.Api.``process``.execPath
 
 let private flowTests =
     testList "Composed authorization flow" [

@@ -1471,8 +1471,7 @@ let private routeTests =
 open Yession.Oidc
 open Yession.Tests.Support
 
-[<Emit("process.execPath")>]
-let private nodePath : string = Util.jsNative
+let private nodePath : string = Node.Api.``process``.execPath
 
 /// A browser's POST: the same-origin cookie is the whole identity these routes read.
 let private postJsonWithCookie (url: string) (cookie: string) (body: string) : Async<TestHttp.Reply> =

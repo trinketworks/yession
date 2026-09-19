@@ -765,8 +765,7 @@ let private srtTests =
         }
     ]
 
-[<Emit("process.execPath")>]
-let private nodeExecutable : string = jsNative
+let private nodeExecutable : string = Node.Api.``process``.execPath
 
 // --- [Ports; Native; Srt]: the session's own composition, without a model -------------------
 //

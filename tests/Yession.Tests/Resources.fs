@@ -983,7 +983,7 @@ let tests =
                 ResourceProfile.resolve profile.Resources selection |> expect |> ResourceClosure.describe
             let asked =
                 RepoSandboxes.capabilitiesOn
-                    (Sandboxes.limitsFor SrtBackend "linux")
+                    (Sandboxes.limitsFor SrtBackend Node.Base.Platform.Linux)
                     (fun uses wants -> ResourceProfile.resolve profile.Resources (uses @ wants))
                     (selection, [])
                 |> expect
@@ -1006,7 +1006,7 @@ let tests =
             let selection = [ ResourceName.create "docker" |> expect ]
             let asked =
                 RepoSandboxes.capabilitiesOn
-                    (Sandboxes.limitsFor SrtBackend "darwin")
+                    (Sandboxes.limitsFor SrtBackend Node.Base.Platform.Darwin)
                     (fun uses wants -> ResourceProfile.resolve profile.Resources (uses @ wants))
                     (selection, [])
                 |> expect
@@ -1021,7 +1021,7 @@ let tests =
         testCase "a repo that selects nothing asks for nothing, without resolving anything" <| fun () ->
             let asked =
                 RepoSandboxes.capabilitiesOn
-                    (Sandboxes.limitsFor SrtBackend "linux")
+                    (Sandboxes.limitsFor SrtBackend Node.Base.Platform.Linux)
                     (fun _ _ -> failwith "nothing should have been resolved")
                     ([], [])
                 |> expect
@@ -1040,7 +1040,7 @@ let tests =
                 |> expect
             let asked =
                 RepoSandboxes.capabilitiesOn
-                    (Sandboxes.limitsFor SrtBackend "linux")
+                    (Sandboxes.limitsFor SrtBackend Node.Base.Platform.Linux)
                     (fun uses wants -> ResourceProfile.resolve profile.Resources (uses @ wants))
                     ([ ResourceName.create "docker" |> expect ], [])
                 |> expect

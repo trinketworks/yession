@@ -79,10 +79,10 @@ let private routeTests =
         // platform for a reason a test on either box can check: Linux loopback is 127/8 and
         // macOS configures `.1` alone, while srt's `NO_PROXY` covers `127.0.0.1` on both.
         testCase "each backend names the host by what its sandbox can reach" <| fun () ->
-            Expect.equal (Sandboxes.hostAddressFrom "box.local" "darwin" DockerBackend) (Some "host.docker.internal") "docker, by the daemon's alias"
-            Expect.equal (Sandboxes.hostAddressFrom "box.local" "linux" HostBackend) (Some "127.0.0.1") "host, loopback"
-            Expect.equal (Sandboxes.hostAddressFrom "box.local" "darwin" SrtBackend) (Some "box.local") "srt on macOS: the box's name"
-            Expect.equal (Sandboxes.hostAddressFrom "runner" "linux" SrtBackend) (Some "127.0.0.2") "srt on Linux: a loopback address NO_PROXY does not name"
+            Expect.equal (Sandboxes.hostAddressFrom "box.local" Node.Base.Platform.Darwin DockerBackend) (Some "host.docker.internal") "docker, by the daemon's alias"
+            Expect.equal (Sandboxes.hostAddressFrom "box.local" Node.Base.Platform.Linux HostBackend) (Some "127.0.0.1") "host, loopback"
+            Expect.equal (Sandboxes.hostAddressFrom "box.local" Node.Base.Platform.Darwin SrtBackend) (Some "box.local") "srt on macOS: the box's name"
+            Expect.equal (Sandboxes.hostAddressFrom "runner" Node.Base.Platform.Linux SrtBackend) (Some "127.0.0.2") "srt on Linux: a loopback address NO_PROXY does not name"
 
         // The pkt-line header counts BYTES. A message with an em dash in it, counted in
         // characters, arrived at git one byte short and printed with its last letter gone.

@@ -381,8 +381,7 @@ let withSessionRepos (reposDir: string) (backend: SandboxBackend) (requested: En
 ///
 /// Not a second policy engine: this only maps primitives onto fields a policy already has.
 /// What may be granted at all was settled by the algebra before anything reached here.
-[<Emit("process.platform")>]
-let private platform () : string = jsNative
+let private platform () : Node.Base.Platform = Node.Api.``process``.platform
 
 /// What each backend on this host can actually distinguish about a grant.
 ///
@@ -402,7 +401,7 @@ let private platform () : string = jsNative
 ///
 /// The host backend confines nothing, so nothing is scoped and nothing is coarsened: a policy
 /// it cannot enforce is not a degradation, it is the absence of a sandbox, said elsewhere.
-let limitsFor (backend: SandboxBackend) (platform: string) : HostLimits =
+let limitsFor (backend: SandboxBackend) (platform: Node.Base.Platform) : HostLimits =
     match backend with
     // Every CONFINEMENT distinction and not `unlimited`: allowing everything answers a
     // question about bounds. The PROVISIONS stay out — `NamedVolumes` because the host
@@ -413,7 +412,7 @@ let limitsFor (backend: SandboxBackend) (platform: string) : HostLimits =
     | HostBackend ->
         HostLimits.of' [ HostDistinction.SocketsByPath; HostDistinction.EgressByHost ]
     | SrtBackend ->
-        if platform = "darwin" then
+        if platform = Node.Base.Platform.Darwin then
             HostLimits.of' [ HostDistinction.SocketsByPath; HostDistinction.EgressByHost ]
         else HostLimits.of' [ HostDistinction.EgressByHost ]
     | DockerBackend -> HostLimits.of' [ HostDistinction.SocketsByPath; HostDistinction.NamedVolumes ]
@@ -447,11 +446,11 @@ let limitsHere (backend: SandboxBackend) : HostLimits = limitsFor backend (platf
 /// hostname, which macOS resolves for itself (mDNS) and reaches the every-interface listener.
 /// The macOS answer assumes the box resolves its own name; where it does not, a confined git
 /// gets a proxy error naming the host, not a route.
-let hostAddressFrom (hostname: string) (platform: string) (backend: SandboxBackend) : string option =
+let hostAddressFrom (hostname: string) (platform: Node.Base.Platform) (backend: SandboxBackend) : string option =
     match backend with
     | DockerBackend -> Some "host.docker.internal"
     | HostBackend -> Some "127.0.0.1"
-    | SrtBackend -> if platform = "darwin" then Some hostname else Some "127.0.0.2"
+    | SrtBackend -> if platform = Node.Base.Platform.Darwin then Some hostname else Some "127.0.0.2"
 
 /// `hostAddressFrom` on the host this process runs on — the same one-place reading of the
 /// platform `limitsHere` is, for the same reason.
@@ -884,6 +883,7 @@ module private Children =
     /// child a SIGNAL ended has no code and Node says so with `null`.
     [<AllowNullLiteral>]
     type Child =
+        abstract pid : int
         abstract stdout : Readable
         abstract stderr : Readable
 
@@ -920,8 +920,9 @@ module private Children =
     let private endStdin (child: Child) : unit =
         try stdinEnd child with _ -> ()
 
-    [<Emit("process.kill(-$0.pid, 'SIGKILL')")>]
-    let private killGroup (child: Child) : unit = jsNative
+    /// The whole tree at once: the child is a group leader (`detached`), so its NEGATED pid
+    /// names the group.
+    let private killGroup (child: Child) : unit = Processes.kill (-child.pid) "SIGKILL"
 
     [<Emit("$0.kill('SIGKILL')")>]
     let private killChild (child: Child) : unit = jsNative
@@ -965,26 +966,6 @@ module private Children =
             live |> List.iter (fun (_, kill) -> kill ())
             live <- []
 
-// --- Resolving packages by name at runtime -----------------------------------------------
-//
-// `createRequire`, not a bare `require`. Fable emits ESM and the test bundle runs as ESM,
-// where `require` is simply not defined — so a bare one throws ReferenceError, which the
-// tries below would swallow into "the thing is absent" on a box that has it. That is exactly
-// what happened: the standalone node-pty probe passed (`node -e` runs as CJS) while every pty
-// test reported no pty support.
-//
-// A static `import` is the other option and is worse here: node-pty is CJS-only and a missing
-// package would fail the whole module's load rather than this one lookup, which would turn "no
-// addon" from an answer into a crash.
-//
-// Typed `obj`, not `string -> (string -> obj)`: Fable sees a curried arrow and wraps the
-// import in `uncurry2`, which rewrites the call into `createRequire(url, name)` — one call
-// where two were meant. It fails, the try catches it, and the addon reports absent on a box
-// that has it. Opaque here, applied in the emits that use it — the pty's lookup below, and
-// srt's own installation further down.
-[<Import("createRequire", "node:module")>]
-let private createRequire : obj = jsNative
-
 // --- Pseudo-terminals: the one place this module opens a pty -----------------------------
 //
 // `node-pty`, built from source into the Nix `nodeModules` derivation (nix/node-pty.nix).
@@ -993,13 +974,12 @@ let private createRequire : obj = jsNative
 // reports `SpawnPty = None` instead of throwing when someone runs `vim`.
 module private Pty =
 
-    [<Emit("$0(import.meta.url)('node-pty')")>]
-    let private requireWith (mk: obj) : obj = jsNative
-
     /// Absent is an ANSWER here, not a failure: `null` is what `available` reads, and a
     /// throw — no addon, or a require that is not defined at all — is the same answer.
+    /// `Interop.require` rather than a static `import`: node-pty is CJS-only, and a missing
+    /// package would fail the whole module's load rather than this one lookup.
     let private tryRequire () : obj =
-        try requireWith createRequire with _ -> null
+        try Interop.require "node-pty" with _ -> null
 
     /// Resolved once. `require` is not free and the answer cannot change within a process.
     let private modul = lazy (tryRequire ())
@@ -1819,10 +1799,10 @@ module SrtSandbox =
     /// Refusing it fails the other way instead: that layout cannot start a command until an
     /// operator names a narrower path in `YESSION_SESSION_READ`. An explicitly
     /// configured path is never dropped — an operator naming their home means it.
-    let runtimeReadPaths (platform: string) (installed: string list) (ambient: Map<string, string>) : string list =
+    let runtimeReadPaths (platform: Node.Base.Platform) (installed: string list) (ambient: Map<string, string>) : string list =
         let platformPaths =
             match platform with
-            | "darwin" -> darwinRuntimePaths
+            | Node.Base.Platform.Darwin -> darwinRuntimePaths
             | _ -> linuxRuntimePaths
         let home =
             ambient
@@ -1916,19 +1896,15 @@ module SrtSandbox =
           AllowGitConfig = true
           FilesystemDisabled = (policy.Filesystem = Unconfined) }
 
-    [<Emit("process.execPath")>]
-    let private execPath () : string = jsNative
+    let private execPath () : string = Node.Api.``process``.execPath
 
     /// Where srt itself is installed. The wrapped argv execs a vendored helper
     /// (`vendor/seccomp/<arch>/apply-seccomp`) from INSIDE the sandbox, so a profile that
     /// hides srt's own files fails every command with exit 127 before the command runs.
-    [<Emit("$0(import.meta.url).resolve('@anthropic-ai/sandbox-runtime/package.json')")>]
-    let private resolveSrtPackage (mk: obj) : string = jsNative
-
     /// Empty when it cannot be resolved, which `toolsFrom` turns into a refused boot: a
     /// session that cannot find it would confine nothing, because nothing would run.
-    let private resolveSrtWith (mk: obj) : string =
-        try resolveSrtPackage mk with _ -> ""
+    let private resolveSrt () : string =
+        try Interop.resolveModule "@anthropic-ai/sandbox-runtime/package.json" with _ -> ""
 
     /// How this host confines, as configured. A blank tool path is an absent one: the dev
     /// shell and the installable set these per platform, and on macOS they are empty.
@@ -1957,7 +1933,7 @@ module SrtSandbox =
                     Error (sprintf "unknown sandbox nesting '%s' (expected strict, or weak for an unprivileged container)" other)
         nesting
         |> Result.bind (fun nesting ->
-            match resolveSrtWith createRequire with
+            match resolveSrt () with
             | "" ->
                 Error
                     "cannot locate @anthropic-ai/sandbox-runtime's own files, which every confined command execs"
