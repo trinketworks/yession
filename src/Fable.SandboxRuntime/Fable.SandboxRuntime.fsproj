@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Fable bindings to the `@anthropic-ai/sandbox-runtime` npm package (srt) — the OS-level
+    confinement a work sandbox runs its commands under. Fable-only, like
+    app/Yession.Host.fsproj: `dotnet build` only type-checks it; the runnable JS comes from
+    Fable. A standalone project so the bindings are a distinct layer, mirroring Fable.Jose
+    and Fable.Dockerode.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="SandboxRuntime.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Fable.Core" />
+  </ItemGroup>
+
+</Project>

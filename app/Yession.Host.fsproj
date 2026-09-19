@@ -137,6 +137,7 @@
     <ProjectReference Include="..\src\Fable.Yaml\Fable.Yaml.fsproj" />
     <ProjectReference Include="..\src\Fable.NodeDataChannel\Fable.NodeDataChannel.fsproj" />
     <ProjectReference Include="..\src\Fable.NodePty\Fable.NodePty.fsproj" />
+    <ProjectReference Include="..\src\Fable.SandboxRuntime\Fable.SandboxRuntime.fsproj" />
     <!-- The Node platform slice `Fable.Node` does not type: the WHATWG streams and decoder the
          SSE consumer reads, the node:http/https client the git gateway proxies over,
          WebCrypto, `base64url`, and the two byte types it takes to get from one to the

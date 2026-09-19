@@ -32,12 +32,21 @@ type [<AllowNullLiteral>] PassThrough =
 type [<AllowNullLiteral>] ExecInspect =
     abstract ExitCode: int option
 
+/// The size `exec.resize` takes: rows and columns, in the Engine API's own spelling.
+[<RequireQualifiedAccess>]
+type ExecSize =
+    { h: int
+      w: int }
+
 /// A running `docker exec` handle.
 type [<AllowNullLiteral>] Exec =
     /// Start the exec; resolves to the (multiplexed) output stream.
     abstract start: options: obj -> JS.Promise<Stream>
     /// Inspect after completion.
     abstract inspect: unit -> JS.Promise<ExecInspect>
+    /// The Engine API's exec-resize endpoint, which is what raises SIGWINCH in the program
+    /// on the other side. Rejects when the exec is already gone.
+    abstract resize: size: ExecSize -> JS.Promise<unit>
 
 /// A container handle (created, or looked up by name/id).
 type [<AllowNullLiteral>] Container =
