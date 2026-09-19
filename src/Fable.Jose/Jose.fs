@@ -62,7 +62,7 @@ type [<AllowNullLiteral>] SignJwt =
 [<Import("SignJWT", "jose")>]
 let private signJwtCtor : obj = jsNative
 
-[<Emit("new $0($1)")>]
+[<Emit("new ($0)($1)")>]
 let private construct (ctor: obj) (arg: obj) : 'a = jsNative
 
 /// Start a signing builder over the given payload claims (plain JS object).

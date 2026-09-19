@@ -23,7 +23,7 @@ module Entry =
     [<Import("Entry", "@napi-rs/keyring")>]
     let private entryCtor : obj = jsNative
 
-    [<Emit("new $0($1, $2)")>]
+    [<Emit("new ($0)($1, $2)")>]
     let private construct (ctor: obj) (service: string) (name: string) : Entry = jsNative
 
     /// Construct an entry handle. Constructing grants nothing and may itself throw on

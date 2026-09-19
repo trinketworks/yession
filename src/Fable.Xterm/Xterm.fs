@@ -53,7 +53,7 @@ type TerminalOptions =
 
 /// The `Terminal` class as the package exports it: `new Terminal(options)`.
 type [<AllowNullLiteral>] TerminalClass =
-    [<Emit("new $0($1)")>]
+    [<Emit("new ($0)($1)")>]
     abstract Create : options: TerminalOptions -> Terminal
 
 /// What `@xterm/headless` exports.
@@ -80,7 +80,7 @@ type [<AllowNullLiteral>] SerializeAddon =
 
 /// The `SerializeAddon` class as the package exports it: `new SerializeAddon()`.
 type [<AllowNullLiteral>] SerializeAddonClass =
-    [<Emit("new $0()")>]
+    [<Emit("new ($0)()")>]
     abstract Create : unit -> SerializeAddon
 
 // `@xterm/addon-serialize` is a NAMED import, and the difference cost a red release job.

@@ -44,10 +44,10 @@ type [<AllowNullLiteral>] InMemoryLogRecordExporter =
 type [<AllowNullLiteral>] ConsoleLogRecordExporter =
     inherit LogRecordExporter
 
-[<Emit("new $0($1)")>]
+[<Emit("new ($0)($1)")>]
 let private newWith (ctor: obj) (opts: obj) : 'a = jsNative
 
-[<Emit("new $0()")>]
+[<Emit("new ($0)()")>]
 let private newEmpty (ctor: obj) : 'a = jsNative
 
 let private loggerProviderCtor : obj = import "LoggerProvider" "@opentelemetry/sdk-logs"

@@ -56,6 +56,18 @@ let endsWithAssignment (html: string) : bool = jsNative
 [<Emit("$0.format($1...)")>]
 let format (fmt: obj) (args: obj) : string = jsNative
 
+// --- safe: a constructed placeholder is parenthesised, and a literal class over a placeholder
+// argument constructs nothing the caller wrote -------------------------------------------------
+
+[<Emit("new ($0)($1)")>]
+let construct (ctor: obj) (arg: obj) : obj = jsNative
+
+[<Emit("new ($0.Terminal)($1)")>]
+let constructMember (m: obj) (options: obj) : obj = jsNative
+
+[<Emit("new ResizeObserver($0)")>]
+let observer (callback: obj) : obj = jsNative
+
 // --- reported: a declaration that can collide with the caller's own variable ------------------
 
 [<Emit("(() => { const peer = $0; return peer.id })()")>] // YES003
@@ -70,6 +82,14 @@ let viaFunction (v: obj) : obj = jsNative
 
 [<Emit("$0.a && $0.b")>] // YES003
 let both (v: obj) : bool = jsNative
+
+// --- reported: `new` over a placeholder binds to the caller's first call, not its whole text --
+
+[<Emit("new $0($1)")>] // YES003
+let constructBare (ctor: obj) (arg: obj) : obj = jsNative
+
+[<Emit("new $0.Terminal($1)")>] // YES003
+let constructBareMember (m: obj) (options: obj) : obj = jsNative
 
 // --- reported: both faults at once, which is two diagnostics on one range --------------------
 
