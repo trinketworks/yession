@@ -877,20 +877,22 @@ let private claudeBody (scope: string) (code: string) (token: string) : string =
 
 /// A field off an already-parsed JSON value, or None wherever JavaScript's `||` default fell
 /// through — absent, `null`, `''` and `0` alike. That falsiness is not incidental: a poll reply
-/// stating `interval: 0` has to take the default rather than ask this tab to poll flat out, so
-/// the one expression that can say it stays, and F# reads the answer as an option.
-[<Emit("($0[$1] || undefined)")>]
-let private jsonText (parsed: obj) (field: string) : string option = jsNative
+/// A field that is present but EMPTY is absent here: a blank url ends the flow exactly as a
+/// missing one does, and a stated `interval: 0` has to take the default rather than ask this
+/// tab to poll flat out. `|| undefined` used to say both inside a macro; `Option.filter` says
+/// it in F#, where the rule can be read without reconstructing JavaScript truthiness.
+let private stated (value: string option) : string option =
+    value |> Option.filter (fun text -> text <> "")
 
-[<Emit("($0[$1] || undefined)")>]
-let private jsonNumber (parsed: obj) (field: string) : int option = jsNative
+let private statedSeconds (value: int option) : int option =
+    value |> Option.filter (fun seconds -> seconds <> 0)
 
 /// The authorize url the session answered with, or None for a body that is not JSON, carries
-/// no url, or carries a blank one — all three of which the caller ends the flow on. The parse
-/// and the field read share one `try`, because a body that parses to `null` throws on the read
-/// and is that same nothing.
+/// no url, or carries a blank one — all three of which the caller ends the flow on.
 let private parseAuthorizeUrl (body: string) : string option =
-    try jsonText (JS.JSON.parse body) "authorizeUrl" with _ -> None
+    Decode.fromString (Decode.field "authorizeUrl" Decode.string) body
+    |> Result.toOption
+    |> stated
 
 /// What a panel's field holds. A selector that matches nothing — a panel that is not on
 /// screen — reads as the empty string, which is what the caller acts on anyway.
@@ -916,37 +918,48 @@ let private fetchGitHubStatus () =
 let private githubBody (scope: string) (token: string) : string =
     JS.JSON.stringify {| scope = scope; token = sentIfGiven token |}
 
-/// Where the person goes to type the code. A string, because `GitHubAwaitingApproval` holds
-/// one — and that is the whole reason this field's absence is answered here rather than in F#:
-/// an option defaulted to `""` would mint a link to nowhere and hand it over as a value, which
-/// is the fault YES009 names and one this reader cannot honestly answer while the flow state
-/// has no way to say "no uri". Closing it is that model's change, not this parser's. Until
-/// then: one field, one `||`, said once.
-[<Emit("($0.verificationUri || '')")>]
-let private deviceVerificationUri (parsed: obj) : string = jsNative
-
 /// The begin reply: the code to type, where to type it, and the seconds GitHub asks this tab to
 /// leave between polls. A reply that states no interval — or states `0` — gets 5, which is the
-/// device flow's own floor. No code is the whole flow's answer, so it is an option: a body that
-/// is not JSON, and one that carries no code, are the same nothing to the caller.
-let private parseDeviceBegin (body: string) : {| userCode: string option; verificationUri: string; interval: int |} =
-    try
-        let reply = JS.JSON.parse body
-        {| userCode = jsonText reply "userCode"
-           verificationUri = deviceVerificationUri reply
-           interval = jsonNumber reply "interval" |> Option.defaultValue 5 |}
-    with _ -> {| userCode = None; verificationUri = ""; interval = 5 |}
+/// device flow's own floor and a number that means something.
+///
+/// The code and the uri are both REQUIRED, and that is a change this file used to say it could
+/// not make. `($0.verificationUri || '')` answered a missing uri with `""` inside a macro —
+/// the fault YES009 names, kept where the rule could not see it, and rendered as an Approve
+/// button linking to this very page. It does not need the model to learn a "no uri" case after
+/// all: a begin that says nowhere to approve is no more a flow than one that says no code, and
+/// the caller already had an answer for that. So the absence is unrepresentable here, and
+/// `GitHubAwaitingApproval` goes on holding two strings that mean what they say.
+type private DeviceBegin =
+    { UserCode : string
+      VerificationUri : string
+      Interval : int }
+
+let private deviceBegin : Decoder<DeviceBegin> =
+    Decode.object (fun get ->
+        { UserCode = get.Required.Field "userCode" Decode.string
+          VerificationUri = get.Required.Field "verificationUri" Decode.string
+          Interval = statedSeconds (get.Optional.Field "interval" Decode.int) |> Option.defaultValue 5 })
+
+/// A body that is not JSON, one carrying neither half, and one carrying a blank half are the
+/// same nothing to the caller.
+let private parseDeviceBegin (body: string) : DeviceBegin option =
+    Decode.fromString deviceBegin body
+    |> Result.toOption
+    |> Option.filter (fun began -> began.UserCode <> "" && began.VerificationUri <> "")
 
 /// The poll reply: where the grant has got to, and a revised interval when GitHub asks to be
 /// asked less often. No status is not a status — the caller reads anything that is not
 /// `connected` as "still waiting", and an unreadable reply is still waiting too. `0` is no
 /// revision, which is what the caller compares against the interval it is already leaving.
+let private devicePoll : Decoder<{| status: string option; interval: int |}> =
+    Decode.object (fun get ->
+        {| status = stated (get.Optional.Field "status" Decode.string)
+           interval = statedSeconds (get.Optional.Field "interval" Decode.int) |> Option.defaultValue 0 |})
+
 let private parseDevicePoll (body: string) : {| status: string option; interval: int |} =
-    try
-        let reply = JS.JSON.parse body
-        {| status = jsonText reply "status"
-           interval = jsonNumber reply "interval" |> Option.defaultValue 0 |}
-    with _ -> {| status = None; interval = 0 |}
+    Decode.fromString devicePoll body
+    |> Result.toOption
+    |> Option.defaultValue {| status = None; interval = 0 |}
 
 // --- The launch surface's reads ---------------------------------------------------------------
 // Three GETs, answered on this person's own credential by the session, read in the codec the
@@ -1327,11 +1340,11 @@ let private start () =
                                 |> Async.AwaitPromise
                             if not reply.ok then return Error reply.body
                             else
-                                let began = parseDeviceBegin reply.body
-                                match began.userCode with
-                                | None -> return Error "no device code in the reply"
-                                | Some userCode ->
-                                    return Ok (Some (GitHubAwaitingApproval (userCode, began.verificationUri, scope, began.interval)))
+                                match parseDeviceBegin reply.body with
+                                | None -> return Error "the reply began no device flow"
+                                | Some began ->
+                                    return
+                                        Ok (Some (GitHubAwaitingApproval (began.UserCode, began.VerificationUri, scope, began.Interval)))
                         })
               GitHubPasteToken =
                 fun () ->
