@@ -134,6 +134,7 @@
     <ProjectReference Include="..\src\Fable.Zod\Fable.Zod.fsproj" />
     <ProjectReference Include="..\src\Fable.Dockerode\Fable.Dockerode.fsproj" />
     <ProjectReference Include="..\src\Fable.Jose\Fable.Jose.fsproj" />
+    <ProjectReference Include="..\src\Fable.Yaml\Fable.Yaml.fsproj" />
     <!-- The Node platform slice `Fable.Node` does not type: the WHATWG streams and decoder the
          SSE consumer reads, the node:http/https client the git gateway proxies over,
          WebCrypto, `base64url`, and the two byte types it takes to get from one to the

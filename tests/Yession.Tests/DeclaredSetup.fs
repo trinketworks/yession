@@ -26,21 +26,15 @@ open Fable.Pyxpecto
 
 let private childProcess : obj = importAll "node:child_process"
 
-/// Imported, never `require`d. This module compiles to an ES module, where `require` is not
-/// defined — and the throw does not read as "this check cannot run", it reads as every case in
-/// the file erroring for a reason that looks like the file's own subject. `LockSource` carries
-/// the same warning for the same reason; this rule earned it on its first run.
-let private yaml : obj = importAll "yaml"
-
 /// Anchored at the repository root rather than at the runner's working directory, which is
 /// not this repository's business and has moved before.
 [<Emit("$0.execSync('git rev-parse --show-toplevel', { encoding: 'utf8', stdio: ['ignore','pipe','ignore'] })")>]
 let private gitToplevel (cp: obj) : string = jsNative
 
-/// `yaml.parse`, and the handful of questions this file asks of what it returns. Each one is a
-/// JavaScript expression naming a platform API; the walk over the document is below, in F#.
-[<Emit("$0.parse($1)")>]
-let private parseYaml (y: obj) (text: string) : obj = jsNative
+// `Fable.Yaml.parse`, imported rather than `require`d: this module compiles to an ES module,
+// where `require` is not defined — and the throw would not read as "this check cannot run",
+// it would read as every case in the file erroring for a reason that looks like the file's
+// own subject. `LockSource` carries the same warning for the same reason.
 
 /// A property, or `undefined` — off an absent holder too, so a file with no `sandboxes:` and a
 /// sandbox with no `container:` are the same nothing rather than a throw.
@@ -83,7 +77,7 @@ let private readText (path: string) : string option =
 /// is a question about what a committed file SAYS, and routing it through the domain's
 /// decoder would put a second thing between the assertion and the text it is about.
 let private commandsIn (text: string) : (string * string) list =
-    let declared = prop (parseYaml yaml text) "sandboxes"
+    let declared = prop (Fable.Yaml.parse text) "sandboxes"
     [ for name in keysOf declared do
         let sandbox = prop declared name
 
