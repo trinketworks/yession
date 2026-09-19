@@ -834,7 +834,7 @@ let private timelineTests =
 
         // The person whose credential was spent finds out HERE: the block that pushed is on
         // the timeline already, but a block says what ran, not whose key went out on it.
-        testCase "a push reads as a sentence naming the repository and whose credential it spent" <| fun () ->
+        testCase "a push reads as the act, naming the repository and who it was done for" <| fun () ->
             let envelope : EventEnvelope<SessionEvent> =
                 { EventId = EventId.fresh ()
                   SessionId = sessionId
@@ -853,7 +853,7 @@ let private timelineTests =
             let proj, _ = ConversationProjection.applyEvents None [ envelope ] ConversationProjection.empty
             match proj.Items with
             | [ item ] ->
-                Expect.equal item.Body "spent user:ada's github credential pushing to octo/hello" "whose, and where — not that github took it, which is git's to print"
+                Expect.equal item.Body "pushed to github:octo/hello on behalf of user:ada" "where, and for whom — the act first, the credential's owner after it"
                 Expect.equal item.Author ActorRef.Agent "by whoever's act the block was"
                 Expect.isTrue (match item.Kind with ConversationItemKind.ActNote _ -> true | _ -> false) "an act"
             | other -> failwithf "expected one note, got %A" other
@@ -881,7 +881,7 @@ let private timelineTests =
             | [ item ] ->
                 Expect.equal
                     item.Body
-                    "spent user:ada's github credential pushing to octo/hello, holding the terminal"
+                    "pushed to github:octo/hello on behalf of user:ada, holding the terminal"
                     "whose, where, and that it was typed rather than queued"
             | other -> failwithf "expected one note, got %A" other
 

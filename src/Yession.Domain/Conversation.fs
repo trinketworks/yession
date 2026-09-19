@@ -889,10 +889,12 @@ module ConversationProjection =
                           Woke = None; Replying = None } ] }
         // A push spent somebody's credential. The person whose it was finds out HERE, which
         // is the reason the event exists: the block that pushed is on the timeline already,
-        // but a block says what ran, not whose key went out on it. The sentence says what
-        // the fact knows — the credential went out on a push to this repository — and not
-        // that the push landed: github.com's answer (a branch protection, a rejected ref)
-        // is git's to print, in the block, and "pushed to" here read as if it had.
+        // but a block says what ran, not whose key went out on it. The sentence leads with
+        // the act and names the person it was done for, the way the actor column reads —
+        // "agent pushed … on behalf of user:ada" — rather than with the credential, which
+        // is the mechanism. "Pushed to" is the request that went out, not github.com's
+        // answer to it: a branch protection or a rejected ref is git's to print, in the
+        // block.
         | SessionEvent.GitCredentialSpent g ->
             { proj with
                 Items =
@@ -901,11 +903,11 @@ module ConversationProjection =
                           Author = g.Actor
                           Body =
                             match g.Block with
-                            | Some _ -> sprintf "spent %s's github credential pushing to %s" (CredentialFor.token g.Owner) g.Repo
+                            | Some _ -> sprintf "pushed to github:%s on behalf of %s" g.Repo (CredentialFor.token g.Owner)
                             // Typed under a lease: no block on the timeline says what ran,
                             // so this line says where it was typed.
                             | None ->
-                                sprintf "spent %s's github credential pushing to %s, holding the terminal" (CredentialFor.token g.Owner) g.Repo
+                                sprintf "pushed to github:%s on behalf of %s, holding the terminal" g.Repo (CredentialFor.token g.Owner)
                           Status = Complete
                           Kind = ConversationItemKind.ActNote { Detail = None; Notable = false }
                           Offset = envelope.Offset
