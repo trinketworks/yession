@@ -632,3 +632,32 @@ kerfs rather than the plan keeps the square silhouette and charges the whole cos
 top's near corner. 42° is the balance: the top still reads as a square seen from a corner, the
 fork still reads as a letter's. A 24-cell grid (fork × elevation × height × mode) was judged
 on a sheet; only these cells said something.
+
+## Twenty-second pass: a lens instead of a skew
+
+`lens/` narrows the fork by the camera rather than by the object, the letter laid over each
+build at the fork it actually produces (`-y` twins).
+
+- **A real lens** — `wide`: a pinhole camera two block-widths away, aimed above the block so the
+  junction sits well below the optical axis. At the picture centre every camera is orthographic;
+  off it the arms run to the horizon's vanishing points and the fork closes to 41° with every line
+  straight — and the same lens sends the verticals to the nadir, so the stem is a quarter of the
+  arm and the block a plate.
+- **The anamorphic** — every parallel projection of the block is the orthographic one followed
+  by an affine map of the picture, and the symmetric ones are vertical stretches: every angle off
+  vertical tightens by its tangent, lines stay lines, the block gets taller by the same factor.
+  `stretch-13` (1.3×, fork 47°, silhouette 0.79 : 1), `stretch-13-low` (the same on blocks a
+  footprint tall, so the stem is the anchor's and only the tops carry the stretch — the one lens
+  build that keeps the block a block), `stretch-145` (44°; already a stretched picture).
+- **The bent lenses** — a radial term about a centre on the stem's axis bends whatever misses
+  that centre. `bowed` (pincushion 0.08 about the stem's foot over 1.15×: the arms leave the
+  junction at 44° and bow outward toward the block's own angle, the tops pinch into a gem),
+  `cushioned` (barrel 0.10 about the junction over 1.3×: all three kerfs are radial so they stay
+  straight; the outline swells — a flourish, not a fix).
+
+Findings: the only lens that narrows the fork and keeps the lines is the anamorphic, and it is
+the same thing as an oblique parallel projection; its cost is the block's proportion. Against
+the turned kerfs of the pass before: the turn gets 42° with the plan square and the cube's
+corner at 66°, the lens gets 47° with a cube that is a tall box. Two honest routes; the lens
+costs the block's proportion, the turn costs the cube's corner. A 24-cell pinhole/fisheye grid
+and a 15-cell picture-space grid were judged on sheets.
