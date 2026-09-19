@@ -18,6 +18,7 @@ open Thoth.Json
 #else
 open Thoth.Json.Net
 #endif
+open Fable.NodeDataChannel
 
 /// One side's session description, as the wire carries it: `{ type, sdp }`.
 type SdpMessage = { Type : string; Sdp : string }
