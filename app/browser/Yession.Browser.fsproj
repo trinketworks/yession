@@ -46,6 +46,11 @@
     <PackageReference Include="Fable.Lit" />
     <PackageReference Include="Ylmish" />
     <PackageReference Include="Fable.Yjs" />
+    <!-- The decoders this client reads every session reply with: Thoth.Json under Fable,
+         Thoth.Json.Net for the .NET type-check, the split `Yession.Domain` declares for its
+         codecs. Named here because this project names it. -->
+    <PackageReference Include="Thoth.Json" />
+    <PackageReference Include="Thoth.Json.Net" />
   </ItemGroup>
 
   <ItemGroup>
