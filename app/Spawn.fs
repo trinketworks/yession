@@ -39,17 +39,6 @@ let private spawnWithEnv (spawn: obj) (command: string) (args: string array) (en
 /// may leave out and still be a readiness line.
 type ReadyLine = { Port : int; Version : string option }
 
-/// A port as a JSON NUMBER, refusing the text of one. Thoth's `int` accepts `"1234"`, and
-/// the macro this replaced (`typeof $0?.port === 'number'`) did not — a child that states
-/// its port as text is not speaking this contract, and reading it anyway would hide that
-/// from the one process in a position to notice.
-let private numericPort : Decoder<int> =
-    Decode.value
-    |> Decode.andThen (fun raw ->
-        match Decode.fromValue "$" Decode.string raw with
-        | Ok _ -> Decode.fail "a port is a number, not the text of one"
-        | Error _ -> Decode.int)
-
 /// The line is whatever the child printed, so it is DECODED rather than probed: `null`, a
 /// number, and an object with none of these fields all have to arrive as "not this message".
 /// Three `typeof` macros used to ask that field by field, over two parses of the same line.
@@ -61,7 +50,7 @@ let private readyLine : Decoder<ReadyLine> =
         else
             Decode.map2
                 (fun port version -> { Port = port; Version = version })
-                (Decode.field "port" numericPort)
+                (Decode.field "port" Yession.Domain.Strict.int)
                 (Decode.optional "version" Decode.string))
 
 /// What a line the child printed says, or nothing. A log line, a half-line and anything that
