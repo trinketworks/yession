@@ -52,6 +52,19 @@ let tests =
                 host <- Some h
             }
 
+        // The signalling body is a peer's, so it is read rather than assumed. It used to be
+        // unboxed and its `sdp` handed straight to libdatachannel: a POST carrying none
+        // reached the native layer as `undefined`, inside a handler with nowhere to report
+        // the throw — and the PeerConnection it had already minted was never closed.
+        testCaseAsync "a signalling post carrying no session description is refused" <|
+            async {
+                let! refused = TestHttp.postJson """{"type":"offer"}""" signalUrl
+                Expect.equal refused.Status 400 "a body with no sdp is not an offer"
+
+                let! notJson = TestHttp.postJson "not json at all" signalUrl
+                Expect.equal notJson.Status 400 "and neither is a body that will not parse"
+            }
+
         testCaseAsync "client connects, reaches Connected, renders offset + catch-up indicators" <|
             async {
                 let mutable model = ClientModel.init { PeerId = peerId; DisplayName = "Grace" }

@@ -173,6 +173,13 @@ let start
         res.writeHead (404, createObj [ "content-type", box "text/plain"; "cache-control", box "no-store" ]) |> ignore
         res.``end`` "not found"
 
+    /// A request this route cannot act on, said in the answer rather than by failing inside
+    /// the handler. The signalling POST is the one route whose body is a peer's, so it is
+    /// the one that has to refuse.
+    let badRequest (why: string) (res: ServerResponse) =
+        res.writeHead (400, createObj [ "content-type", box "text/plain"; "cache-control", box "no-store" ]) |> ignore
+        res.``end`` why
+
     /// Write a JSONL range. Shared by the event log and the transcripts, because the argument
     /// is identical: bounds that never move over an append-only sequence make the answer the
     /// same bytes for ever, and the copy that matters is the client's own.
@@ -324,16 +331,18 @@ let start
         match routeOf req with
         | Some Signal ->
             readBody req (fun body ->
-                let offerSdp = sdpField body
-                let pc = createPeerConnection "yession-process"
-                connections.Add pc
-                pc.onDataChannel (fun dc -> onConnection (frameChannel dc))
-                Async.StartImmediate(
-                    async {
-                        let! answer = answerOffer pc offerSdp
-                        res.writeHead (200, createObj [ "content-type", box "application/json" ]) |> ignore
-                        res.``end`` answer
-                    }))
+                match parseSdp body with
+                | None -> badRequest "no session description" res
+                | Some offer ->
+                    let pc = createPeerConnection "yession-process"
+                    connections.Add pc
+                    pc.onDataChannel (fun dc -> onConnection (frameChannel dc))
+                    Async.StartImmediate(
+                        async {
+                            let! answer = answerOffer pc offer.Sdp
+                            res.writeHead (200, createObj [ "content-type", box "application/json" ]) |> ignore
+                            res.``end`` answer
+                        }))
         | Some Shell ->
             // The document that NAMES the fingerprinted assets, so it is the one thing that
             // must never be served stale — a cached shell pins the whole UI to the build it
