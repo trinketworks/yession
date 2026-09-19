@@ -411,28 +411,22 @@ module SyncedStateSync =
 
     open Fable.Core
 
-    [<Emit("$0.share.has($1)")>]
-    let private shareHas (doc: Yjs.Y.Doc) (name: string) : bool = jsNative
-
     /// The map's keys, drained from the iterator Yjs answers with.
     let private mapKeys (m: Yjs.Y.Map<obj>) : string[] =
         JS.Constructors.Array.from (unbox<string seq> (m.keys ()))
-
-    [<Emit("$0.toString()")>]
-    let private textString (t: Yjs.Y.Text) : string = jsNative
 
     /// Yjs materializes root types created by a *remote* update as untyped placeholders
     /// until they are first `get` locally; a structural read of such a doc would miss
     /// them. Type the codec's roots (and only those that exist) before reading.
     let private materializeRoots (doc: Yjs.Y.Doc) : unit =
-        if shareHas doc "drafts" then (doc.getMap "drafts" : Yjs.Y.Map<obj>) |> ignore
-        if shareHas doc "queue" then (doc.getMap "queue" : Yjs.Y.Map<obj>) |> ignore
+        if doc.share.has "drafts" then (doc.getMap "drafts" : Yjs.Y.Map<obj>) |> ignore
+        if doc.share.has "queue" then (doc.getMap "queue" : Yjs.Y.Map<obj>) |> ignore
         // The title is a named `Y.Text` root, not a map — type it as text before reading.
-        if shareHas doc "title" then (doc.getText "title" : Yjs.Y.Text) |> ignore
-        if shareHas doc "sharedBrief" then (doc.getMap "sharedBrief" : Yjs.Y.Map<obj>) |> ignore
-        if shareHas doc "terminalDrafts" then (doc.getMap "terminalDrafts" : Yjs.Y.Map<obj>) |> ignore
-        if shareHas doc "pending" then (doc.getMap "pending" : Yjs.Y.Map<obj>) |> ignore
-        if shareHas doc "chapters" then (doc.getMap "chapters" : Yjs.Y.Map<obj>) |> ignore
+        if doc.share.has "title" then (doc.getText "title" : Yjs.Y.Text) |> ignore
+        if doc.share.has "sharedBrief" then (doc.getMap "sharedBrief" : Yjs.Y.Map<obj>) |> ignore
+        if doc.share.has "terminalDrafts" then (doc.getMap "terminalDrafts" : Yjs.Y.Map<obj>) |> ignore
+        if doc.share.has "pending" then (doc.getMap "pending" : Yjs.Y.Map<obj>) |> ignore
+        if doc.share.has "chapters" then (doc.getMap "chapters" : Yjs.Y.Map<obj>) |> ignore
 
     /// Read one string field off a keyed-map entry, `""` when absent — the shape every
     /// structural read below repeats.
@@ -449,7 +443,7 @@ module SyncedStateSync =
     /// reads as.
     let private entryText (entry: Yjs.Y.Map<obj>) (field: string) : Text =
         entry.get field
-        |> Option.map (fun value -> Text.ofString (textString (unbox<Yjs.Y.Text> value)))
+        |> Option.map (fun value -> Text.ofString ((unbox<Yjs.Y.Text> value).toString ()))
         |> Option.defaultValue Text.empty
 
     /// The live `Y.Text` a chapter's name IS, found by the message its chapter opens at —
@@ -463,7 +457,7 @@ module SyncedStateSync =
     /// `None` until that chapter's entry has reached this doc carrying a name: presence is
     /// relayed live and doc updates are not, so a caret can arrive before the chapter does.
     let chapterNameText (doc: Yjs.Y.Doc) (messageId: string) : Yjs.Y.Text option =
-        if not (shareHas doc "chapters") then None
+        if not (doc.share.has "chapters") then None
         else
             (doc.getMap "chapters" : Yjs.Y.Map<obj>).get messageId
             |> Option.filter (isNull >> not)
@@ -473,7 +467,7 @@ module SyncedStateSync =
 
     /// Fold every entry of a named root map through `read`. Absent root = empty.
     let private foldRoot (doc: Yjs.Y.Doc) (root: string) (read: Yjs.Y.Map<obj> -> 'a) : HashMap<string, 'a> =
-        if not (shareHas doc root) then HashMap.empty
+        if not (doc.share.has root) then HashMap.empty
         else
             let m : Yjs.Y.Map<obj> = doc.getMap root
             (HashMap.empty, mapKeys m)
@@ -494,7 +488,7 @@ module SyncedStateSync =
     let ofDoc (doc: Yjs.Y.Doc) : Result<SyncedSessionState, Error list> =
         materializeRoots doc
         let draftsH =
-            if shareHas doc "drafts" then
+            if doc.share.has "drafts" then
                 let m : Yjs.Y.Map<obj> = doc.getMap "drafts"
                 (HashMap.empty, mapKeys m)
                 ||> Array.fold (fun acc k ->
@@ -505,7 +499,7 @@ module SyncedStateSync =
                     | _ -> acc)
             else HashMap.empty
         let queueH =
-            if shareHas doc "queue" then
+            if doc.share.has "queue" then
                 let m : Yjs.Y.Map<obj> = doc.getMap "queue"
                 (HashMap.empty, mapKeys m)
                 ||> Array.fold (fun acc k ->
@@ -518,9 +512,9 @@ module SyncedStateSync =
                     | _ -> acc)
             else HashMap.empty
         let title =
-            if shareHas doc "title" then Text.ofString (textString (doc.getText "title")) else Text.empty
+            if doc.share.has "title" then Text.ofString ((doc.getText "title").toString ()) else Text.empty
         let brief =
-            if shareHas doc "sharedBrief" then
+            if doc.share.has "sharedBrief" then
                 match (doc.getMap "sharedBrief" : Yjs.Y.Map<obj>).get "body" with
                 | Some b when not (isNull b) -> Some { SharedBrief.Body = unbox<string> b }
                 | _ -> None
@@ -593,7 +587,7 @@ module SyncedStateSync =
     /// What a subject's name reads now.
     let nameOf (doc: Yjs.Y.Doc) (subject: NamingSubject) : string =
         match nameTextOf doc subject with
-        | Some text -> textString text
+        | Some text -> text.toString ()
         | None -> ""
 
     /// Edit a subject's name — but only while it still reads `expected`.
@@ -619,11 +613,11 @@ module SyncedStateSync =
             (fun _ ->
                 match nameTextOf doc subject with
                 | Some text ->
-                    let held = textString text
+                    let held = text.toString ()
                     stands <- held
                     if held = expected then
                         edit text held
-                        stands <- textString text
+                        stands <- text.toString ()
                 | None -> ()),
             processOrigin)
         stands
@@ -667,13 +661,13 @@ module SyncedStateSync =
     /// the body at the same instant (the publication rule in `DraftSlot` needs both bits from
     /// one state, never one of them a model refresh behind).
     let hasDraft (doc: Yjs.Y.Doc) (author: PeerId) : bool =
-        shareHas doc "drafts" && (doc.getMap "drafts" : Yjs.Y.Map<obj>).has (PeerId.value author)
+        doc.share.has "drafts" && (doc.getMap "drafts" : Yjs.Y.Map<obj>).has (PeerId.value author)
 
     /// The queue key an author's draft will become when sent, read from the doc — the same value
     /// for every co-editor, which is what makes concurrent sends merge instead of duplicating.
     /// `None` when there is no slot (nothing published to send).
     let draftQueueId (doc: Yjs.Y.Doc) (author: PeerId) : QueueId option =
-        if not (shareHas doc "drafts") then None
+        if not (doc.share.has "drafts") then None
         else
             match (doc.getMap "drafts" : Yjs.Y.Map<obj>).get (PeerId.value author) with
             | Some entryObj when not (isNull entryObj) ->
@@ -695,21 +689,21 @@ module SyncedStateSync =
     /// The text of a queued terminal command, read straight from its root — what the drain
     /// snapshots into the durable `TerminalBlockStarted`. Never written = empty string.
     let terminalQueuedText (doc: Yjs.Y.Doc) (id: QueueId) : string =
-        textString (doc.getText (BodyKey.terminalQueued id))
+        (doc.getText (BodyKey.terminalQueued id)).toString ()
 
     /// The text of a terminal composer slot.
     let terminalDraftText (doc: Yjs.Y.Doc) (terminal: TerminalId) (author: PeerId) : string =
-        textString (doc.getText (BodyKey.terminalDraft terminal author))
+        (doc.getText (BodyKey.terminalDraft terminal author)).toString ()
 
     /// Whether the doc announces this author's composer slot in this terminal.
     let hasTerminalDraft (doc: Yjs.Y.Doc) (terminal: TerminalId) (author: PeerId) : bool =
-        shareHas doc "terminalDrafts"
+        doc.share.has "terminalDrafts"
         && (doc.getMap "terminalDrafts" : Yjs.Y.Map<obj>).has (TerminalDraftKey.make terminal author)
 
     /// The queue key an author's terminal draft becomes when sent — the same value for every
     /// co-editor, which is what makes concurrent sends merge into one entry.
     let terminalDraftQueueId (doc: Yjs.Y.Doc) (terminal: TerminalId) (author: PeerId) : QueueId option =
-        if not (shareHas doc "terminalDrafts") then None
+        if not (doc.share.has "terminalDrafts") then None
         else
             match (doc.getMap "terminalDrafts" : Yjs.Y.Map<obj>).get (TerminalDraftKey.make terminal author) with
             | Some entryObj when not (isNull entryObj) ->
@@ -786,7 +780,7 @@ module SyncedStateSync =
     /// an empty command cannot be one being typed.
     let removeEmptyTerminalDrafts (doc: Yjs.Y.Doc) : (TerminalId * PeerId) list =
         materializeRoots doc
-        if not (shareHas doc "terminalDrafts") then []
+        if not (doc.share.has "terminalDrafts") then []
         else
             let drafts : Yjs.Y.Map<obj> = doc.getMap "terminalDrafts"
             let empty =
@@ -811,7 +805,7 @@ module SyncedStateSync =
     /// already skips it, and it is not ours to interpret.
     let removeEmptyDrafts (doc: Yjs.Y.Doc) : PeerId list =
         materializeRoots doc
-        if not (shareHas doc "drafts") then []
+        if not (doc.share.has "drafts") then []
         else
             let drafts : Yjs.Y.Map<obj> = doc.getMap "drafts"
             let empty =
@@ -841,19 +835,13 @@ module DocSync =
     [<Import("fromBase64", "lib0/buffer")>]
     let private fromBase64 (s: string) : JS.Uint8Array = jsNative
 
-    [<Emit("$0.on('update', $1)")>]
-    let private addUpdateListener (doc: Y.Doc) (handler: JS.Uint8Array -> obj -> unit) : unit = jsNative
-
-    [<Emit("$0.off('update', $1)")>]
-    let private removeUpdateListener (doc: Y.Doc) (handler: JS.Uint8Array -> obj -> unit) : unit = jsNative
-
     /// Register a doc listener and get back the way to stop it. ONE verb, because `off`
     /// only removes a listener when handed the very function reference `on` was given —
     /// a caller who kept the handler and remembered to pass it again is a caller who can
     /// forget. The disposer closes over it, so there is nothing left to get wrong.
     let private onUpdate (doc: Y.Doc) (handler: JS.Uint8Array -> obj -> unit) : unit -> unit =
-        addUpdateListener doc handler
-        fun () -> removeUpdateListener doc handler
+        Fable.YjsExtras.Updates.on doc handler
+        fun () -> Fable.YjsExtras.Updates.off doc handler
 
     /// The origin tag under which remote payloads are applied, letting the local-update
     /// broadcast tell relayed changes from locally-originated ones. An IDENTITY, told apart

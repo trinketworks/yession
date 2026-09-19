@@ -45,6 +45,7 @@
     <PackageReference Include="Fable.Browser.Dom" />
     <ProjectReference Include="..\Fable.BrowserExtras\Fable.BrowserExtras.fsproj" />
     <ProjectReference Include="..\Fable.ProseMirror\Fable.ProseMirror.fsproj" />
+    <ProjectReference Include="..\Fable.YjsExtras\Fable.YjsExtras.fsproj" />
   </ItemGroup>
 
   <ItemGroup>
