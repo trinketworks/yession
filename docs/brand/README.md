@@ -661,3 +661,13 @@ the turned kerfs of the pass before: the turn gets 42° with the plan square and
 corner at 66°, the lens gets 47° with a cube that is a tall box. Two honest routes; the lens
 costs the block's proportion, the turn costs the cube's corner. A 24-cell pinhole/fisheye grid
 and a 15-cell picture-space grid were judged on sheets.
+
+The far corner, pressed. What `cushioned` has that the others do not is the blue far corner
+brought down; a radial lens cannot do that without bringing the greens' outer corners in too,
+because they sit at the same radius (`fisheye`, a stereographic mapping about the junction, is
+the cushion again). A lens with curvature in ONE axis can: `pressed` is the cushioned build's
+barrel with its horizontal term removed — a cylindrical lens, y' = y(1 − k y²) with x untouched —
+so vertical edges stay straight, the greens keep their sides, and the far corner, being the
+highest point, drops most; `pressed-soft` at six hundredths; `pressed-foot` centred on the stem's
+foot so nothing below moves, where the fork pays instead (vertical compression at the junction
+flattens the arms).
