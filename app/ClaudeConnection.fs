@@ -132,17 +132,20 @@ type private ModelsOutcome =
       /// refused, or this lookup merely failed.
       Status : int
       /// Each row as the provider gave it: its id, and the name it displays under.
-      Models : (string * string) list }
+      /// Each row as the provider gave it: its id, and the label it displays under when the
+      /// reply carried one. `None` is a row the provider named no label for, kept apart from
+      /// a blank one all the way to the stand-in that answers it.
+      Models : (string * string option) list }
 
-/// One page of the models endpoint's reply, and one row of it. Every field is optional
-/// because the reply is somebody else's: what this side does with a page that states none
-/// is the decoder's answer below, said once, rather than a guard at each read.
-type private ModelRow = { Id : string; DisplayName : string }
+/// One page of the models endpoint's reply, and one row of it. A row's id is the one thing
+/// required, because a row without one is nothing this side can name; everything else the
+/// reply may leave out stays an `option` rather than becoming a blank that reads as stated.
+type private ModelRow = { Id : string; DisplayName : string option }
 
 type private ModelsPage =
     { Rows : ModelRow list
       HasMore : bool
-      LastId : string }
+      LastId : string option }
 
 /// Why a catalogue lookup produced nothing, and the one distinction its caller acts on.
 ///
@@ -186,13 +189,14 @@ let private headerObject (headers: (string * string) []) : obj =
 /// that cannot finish IS a lookup that failed.
 let private pageDeadlineMs = 10000.0
 
-/// One row, with a field the provider left out read as the empty string — a half-filled row
-/// costs its own name rather than the whole lookup, and an empty id is refused later by the
-/// smart constructor, which is the one place that decides what an id may be.
+/// One row. The id is required — a row that names none is not a row this side can offer, and
+/// there is no stand-in for it — while a row that carries no label costs its label alone,
+/// which is the stand-in `modelsAt` answers with the id itself. What an id may BE is still
+/// the smart constructor's to say, so an empty one decodes here and is refused there.
 let private modelRow : Decoder<ModelRow> =
     Decode.object (fun get ->
-        { Id = get.Optional.Field "id" Decode.string |> Option.defaultValue ""
-          DisplayName = get.Optional.Field "display_name" Decode.string |> Option.defaultValue "" })
+        { Id = get.Required.Field "id" Decode.string
+          DisplayName = get.Optional.Field "display_name" Decode.string })
 
 /// One page. A reply with no `data` is a page with no rows, not a failure, and a row that is
 /// not an object at all costs that row alone — which is why the rows are decoded one at a
@@ -204,7 +208,7 @@ let private modelsPage : Decoder<ModelsPage> =
             |> Option.defaultValue []
             |> List.choose (fun row -> Decode.fromValue "$.data" modelRow row |> Result.toOption)
           HasMore = get.Optional.Field "has_more" Decode.bool |> Option.defaultValue false
-          LastId = get.Optional.Field "last_id" Decode.string |> Option.defaultValue "" })
+          LastId = get.Optional.Field "last_id" Decode.string })
 
 /// One page's JSON, or why it could not be read. A provider that answers 200 with
 /// something that is not JSON has failed this lookup without failing the request, which is
@@ -223,7 +227,7 @@ let private pageOf (body: string) : Result<ModelsPage, string> =
 let private fetchModels (credential: string * string) (url: string) : Async<ModelsOutcome> =
     async {
         let request = [ Http.headers (List.ofArray (headersFor credential)); Http.deadline pageDeadlineMs ]
-        let models = ResizeArray<string * string> ()
+        let models = ResizeArray<string * string option> ()
         let mutable next = url + "?limit=1000"
         let mutable page = 0
         let mutable settled : ModelsOutcome option = None
@@ -246,10 +250,12 @@ let private fetchModels (credential: string * string) (url: string) : Async<Mode
                 | Ok read ->
                     for row in read.Rows do
                         models.Add (row.Id, row.DisplayName)
-                    if not read.HasMore || System.String.IsNullOrEmpty read.LastId then
-                        settled <- Some { Ok = true; Reason = ""; Status = 200; Models = List.ofSeq models }
-                    else
-                        next <- url + "?limit=1000&after_id=" + Http.urlPart read.LastId
+                    // A page that says there is more, and says where: both, or this is the
+                    // last page. `after_id` with nothing to put in it would ask for the first
+                    // page again, for ever.
+                    match (if read.HasMore then read.LastId else None) with
+                    | Some last -> next <- url + "?limit=1000&after_id=" + Http.urlPart last
+                    | None -> settled <- Some { Ok = true; Reason = ""; Status = 200; Models = List.ofSeq models }
         return settled |> Option.defaultValue { Ok = true; Reason = ""; Status = 200; Models = List.ofSeq models }
     }
 
@@ -274,7 +280,9 @@ let modelsAt (url: string) (credential: string * string) : Async<Result<AgentMod
                 outcome.Models
                 |> List.choose (fun (id, name) ->
                     match ModelId.create id with
-                    | Ok created -> Some (AgentModel.create created name)
+                    // A row the provider gave no label stands under its own id, which is the
+                    // one thing about it that is certainly true.
+                    | Ok created -> Some (AgentModel.create created (name |> Option.defaultValue id))
                     | Error _ -> None)
                 |> Ok
     }

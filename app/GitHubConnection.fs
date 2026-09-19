@@ -389,71 +389,54 @@ type Profile =
       /// The PUBLIC email, when the account shows one. Most do not.
       Email : string option }
 
-/// What `GET /user` says about the account behind a token, as F# reads the JSON. Nullable
-/// throughout because the reply is somebody else's: an account with no display name simply
-/// does not carry the field.
-type private GitHubUser =
-    { Login : string
-      Id : float
-      Name : string option
-      Email : string option }
-
-/// The profile reply, read rather than asserted. Every field is optional because the reply
-/// is github's: an account with no name states `null`, and a body that is not this shape at
-/// all must reach the caller as "no profile" rather than as a record whose `string` fields
-/// are `undefined`.
-let private gitHubUser : Decoder<GitHubUser> =
+/// What `GET /user` says about the account behind a token, read straight into the type the
+/// caller wants. A second record carrying the same four labels is the same type twice, which
+/// is what YES004 says about `Profile` — and the intermediate one earned its keep only while
+/// the body was unboxed and read field by field.
+///
+/// `login` and `id` are REQUIRED: a reply carrying neither is not a profile whatever its
+/// status said, and there is no honest stand-in for either. The other two stay options all
+/// the way into the domain, which is what they already are there — an account with no display
+/// name states `null`, and that is the absence rather than a name of no characters.
+let private gitHubProfile : Decoder<Profile> =
     Decode.object (fun get ->
-        { Login = get.Optional.Field "login" Decode.string |> Option.defaultValue ""
-          Id = get.Optional.Field "id" Decode.float |> Option.defaultValue 0.0
+        { Profile.Login = get.Required.Field "login" Decode.string
+          Id = get.Required.Field "id" Decode.int64
           Name = get.Optional.Field "name" Decode.string
           Email = get.Optional.Field "email" Decode.string })
 
-/// The same endpoint, read for its body this time.
-///
-/// A body that will not parse is not a profile whatever the status said, so it lands in the
-/// same `ok = false, status = 0` as a request that never arrived — there is nothing else
-/// honest to report about a reply nobody can read.
-let private getProfile
-    (url: string)
-    (token: string)
-    : Async<{| ok: bool; status: int; login: string; id: float; name: string option; email: string option |}> =
-    let unread (status: int) =
-        {| ok = false; status = status; login = ""; id = 0.0; name = None; email = None |}
+/// The same endpoint, read for its body this time. Four outcomes, because the caller says
+/// something different about each — and the one that used to be missing is the third: a reply
+/// that arrived, with a status of its own, carrying no profile. That was reported as a host
+/// nobody could reach, which sends a person to look at their network over somebody else's
+/// answer.
+type private ProfileReply =
+    | Profiled of Profile
+    | Refused of status: int
+    | Unreachable
+    | Unreadable
+
+let private getProfile (url: string) (token: string) : Async<ProfileReply> =
     async {
         let! attempt = Http.text url [ Http.headers (userHeaders token) ]
         match attempt with
-        | Http.Unreachable _ -> return unread 0
-        | Http.Answered (response, _) when not response.Ok -> return unread response.Status
-        | Http.Answered (response, body) ->
-            match Decode.fromString gitHubUser body with
-            | Ok user ->
-                return
-                    {| ok = true
-                       status = response.Status
-                       login = user.Login
-                       id = user.Id
-                       name = user.Name
-                       email = user.Email |}
-            | Error _ -> return unread 0
+        | Http.Unreachable _ -> return Unreachable
+        | Http.Answered (response, _) when not response.Ok -> return Refused response.Status
+        | Http.Answered (_, body) ->
+            match Decode.fromString gitHubProfile body with
+            | Ok profile -> return Profiled profile
+            | Error _ -> return Unreadable
     }
 
 /// The profile behind a token, or why there is none — unreachable, refused, or an answer
-/// with no login in it, which is not a profile whatever the status said.
+/// with no profile in it, which is not a profile whatever the status said.
 let profileAt (url: string) (token: string) : Async<Result<Profile, string>> =
     async {
-        let! reply = getProfile url token
-        if not reply.ok then
-            return Error (if reply.status = 0 then "github could not be reached" else sprintf "github answered %d" reply.status)
-        elif reply.login = "" then
-            return Error "github answered with no login"
-        else
-            return
-                Ok
-                    { Profile.Login = reply.login
-                      Id = int64 reply.id
-                      Name = reply.name
-                      Email = reply.email }
+        match! getProfile url token with
+        | Profiled profile -> return Ok profile
+        | Refused status -> return Error (sprintf "github answered %d" status)
+        | Unreachable -> return Error "github could not be reached"
+        | Unreadable -> return Error "github answered with no profile in it"
     }
 
 /// As the session composes it.
