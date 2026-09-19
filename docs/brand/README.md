@@ -266,3 +266,33 @@ one object or two: `fit` and `clear` are the same geometry 1.3px apart. `fit-edg
 suggested build that still reads — nine lines, two cubes, nothing drawn that the cut did not
 already imply. And unlike `pair/`, it holds at 16px, because the held cube is a solid shape with
 its own colour rather than a gap between things.
+
+## Ninth pass: the narrow fork
+
+`fork/` used the isometric Y, whose fork is 120° — so the held cube seated in its corner.
+`narrow/` uses the letter's fork instead. Noto's capital Y opens at about 33° off vertical, and a
+hexagon's bottom corner is 120°, so it cannot descend into a V that tight: it is caught on the
+two inner edges and wedged high, held rather than seated.
+
+The seat is solved rather than nudged. Contact is linear in the cube's height, so one Newton step
+from the support function lands it exactly tangent to both inner edges — `seat()` in the
+generator. For the shipped glyph the inner V's apex and edge direction come from Noto's own
+outline (the inner apex is at (283, 363) in font units, the left inner terminal at (98, 714)).
+
+- **How narrow** — `a24`, `a30`, `a33`, `a42`: the fork angle as the single variable. The
+  narrower it is the higher the cube rests; by 42° it has started to descend toward the corner.
+- **The shipped letter** — `noto400`, `noto600` (heavier arms raise the inner V and lift the cube
+  with it), `noto200` (barely an arm to hold anything), `wide13`, `stretched` (155%, which opens
+  the fork enough to take a larger cube and still keep it inside the silhouette).
+- **How big it sits** — `flush` (the held cube's centre lands 1.83 edge lengths above the apex, so
+  its top vertex is 2.83 above: set the edge to 30% of the big solid's and the two silhouettes
+  share a top corner exactly), `contained` (wholly inside the outline — the favicon build),
+  `deep`, `proud`, `clear` (1.2px of ground around it).
+- **Finish** — `hole`, `tint`, `edges` (the held cube's own interior Y, inside the big one's).
+- `lockup.svg` — against the name it came from.
+
+Findings: weight moves the seat, so a cut that is going to hold something wants weight — 600
+holds, 200 does not. `flush` is decided by the construction rather than by taste. `contained` is
+the one for 16px, because anything larger breaks the outline and a broken outline at that size is
+two specks rather than one mark. And `stretched` is the compromise worth testing: a wider letter
+buys a bigger held cube without it leaving the silhouette.
