@@ -540,6 +540,12 @@ type UnwatchPr = RepoRef -> int -> Async<Result<CommandOutcome, string>>
 /// swapped a pair would compile and open somebody the wrong pull request.
 type CreatePr = PrDraft -> Async<Result<CommandOutcome, string>>
 
+/// Merge a pull request on a repo — armed to merge when its checks pass, put in the merge
+/// queue, or merged now, whichever the provider says the pull request's standing calls
+/// for. The second repo verb whose effect is outside this session, and the further-reaching
+/// one: what `CreatePr` makes can be closed, and what this makes lands on the base branch.
+type MergePr = RepoRef -> int -> PrMergeMethod -> Async<Result<CommandOutcome, string>>
+
 /// Fetch a repo's remote refs (prune, no submodules). The one network verb besides the
 /// clone itself; runs on the same per-invocation credential.
 type FetchRepo = RepoRef -> Async<Result<string, string>>
@@ -653,6 +659,9 @@ type RepoCapabilities =
       /// Opening one. Beside the watch verbs because it is the same kind of act on the same
       /// kind of thing — and the answer it gives is what `WatchPr` takes.
       CreatePr : CreatePr
+      /// Merging one — the act `WatchPr` then narrates the outcome of, as `queued` and
+      /// `merged`.
+      MergePr : MergePr
       /// Tools a provider adds beyond the generic verbs above -- GitHub's `create_pr`,
       /// `watch_pr`, `unwatch_pr` today, contributed by `app/GitHubPrs.fs` and nothing else
       /// in this list. The same seam `QueryCapabilities.Declared` already is for queries:
@@ -749,6 +758,7 @@ module AgentCapabilities =
               WatchPr = fun _ _ -> async { return Error "no repos capability" }
               UnwatchPr = fun _ _ -> async { return Error "no repos capability" }
               CreatePr = fun _ -> async { return Error "no repos capability" }
+              MergePr = fun _ _ _ -> async { return Error "no repos capability" }
               ProviderTools = [] }
           Sandboxes =
             { Start = fun _ _ -> async { return Error "no sandbox capability" }

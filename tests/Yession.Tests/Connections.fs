@@ -2704,6 +2704,13 @@ type private StubGitHubApi =
       /// What the CREATE endpoint answers: a status and a body, so a case can be the 201 that
       /// numbers a pull request or the 422 that says why there is not one.
       SetCreateReply : int -> string -> unit
+      /// What `POST /graphql` answers a QUERY — where a pull request stands. The default is
+      /// one GitHub would ARM: open, not merged, checks still running (`BLOCKED`), no queue on
+      /// its base, nothing armed.
+      SetStanding : string -> unit
+      /// What `POST /graphql` answers a MUTATION: a status and a body, so a case can be the
+      /// 200 that did it or the 200 carrying GitHub's reason it would not.
+      SetMutationReply : int -> string -> unit
       /// The rate-limit headers every reply carries: remaining, reset (epoch seconds) and
       /// the bucket they describe. `None` serves a reply with none at all.
       SetAllowance : (int * int64 * string) option -> unit
@@ -2722,6 +2729,10 @@ let private startStubGitHubApi () : Async<StubGitHubApi> =
         let mutable openList = "[]"
         let mutable createStatus = 201
         let mutable createBody = """{"number":7}"""
+        let mutable standing =
+            """{"data":{"repository":{"pullRequest":{"id":"PR_1","state":"OPEN","merged":false,"mergeStateStatus":"BLOCKED","isMergeQueueEnabled":false,"autoMergeRequest":null,"mergeQueueEntry":null}}}}"""
+        let mutable mutationStatus = 200
+        let mutable mutationBody = """{"data":{"clientMutationId":null}}"""
         let mutable allowance : (int * int64 * string) option = None
         let requests = ResizeArray<string * string option> ()
         let posted = ResizeArray<string * string> ()
@@ -2753,7 +2764,13 @@ let private startStubGitHubApi () : Async<StubGitHubApi> =
                     "end",
                     fun _ ->
                         posted.Add (path, acc)
-                        if status <> 200 then refuse () else answer createStatus createBody)
+                        if status <> 200 then refuse ()
+                        // GraphQL: a document that mutates is answered as a mutation, and
+                        // anything else is the standing query.
+                        elif path = "/graphql" then
+                            if acc.Contains "\"query\":\"mutation" then answer mutationStatus mutationBody
+                            else answer 200 standing
+                        else answer createStatus createBody)
                 |> ignore
             // The list endpoint, which a create asks before it posts: `/pulls`, where a look
             // asks `/pulls/{n}`. No ETag — nobody keeps one for a question asked once.
@@ -2780,6 +2797,8 @@ let private startStubGitHubApi () : Async<StubGitHubApi> =
               SetStatus = (fun s -> status <- s)
               SetOpenList = (fun body -> openList <- body)
               SetCreateReply = (fun code body -> createStatus <- code; createBody <- body)
+              SetStanding = (fun body -> standing <- body)
+              SetMutationReply = (fun code body -> mutationStatus <- code; mutationBody <- body)
               SetAllowance = (fun a -> allowance <- a)
               Requests = requests
               Posted = posted }
@@ -3039,6 +3058,117 @@ let private prCreateTests =
             }
     ]
 
+let private prMergeTests =
+    let merging (stub: StubGitHubApi) = GitHubPrs.mergeOver stub.Url GitHubPrs.Spending.unmetered
+    let mutations (stub: StubGitHubApi) =
+        stub.Posted |> Seq.map snd |> Seq.filter (fun body -> body.Contains "\"query\":\"mutation") |> List.ofSeq
+    let standingWhere (fields: string) =
+        sprintf
+            """{"data":{"repository":{"pullRequest":{"id":"PR_1",%s,"autoMergeRequest":null,"mergeQueueEntry":null}}}}"""
+            fields
+
+    testList "merging a pull request" [
+        testCaseAsync "one whose checks are still running is armed to merge when they pass" <|
+            async {
+                let! stub = startStubGitHubApi ()
+                match! merging stub (Some "token-abc") prOne Squash with
+                | PrWatches.PrMergeArmed pr -> Expect.equal (PrRef.render pr) "octo/hello#12" "the one asked about"
+                | other -> failwithf "expected it armed, got %A" other
+                match mutations stub with
+                | [ sent ] -> Expect.stringContains sent "enablePullRequestAutoMerge" "auto merge is what was asked for"
+                | sent -> failwithf "expected one mutation, got %A" sent
+            }
+
+        testCaseAsync "one mergeable now on a branch with a merge queue goes into the queue" <|
+            async {
+                let! stub = startStubGitHubApi ()
+                stub.SetStanding (standingWhere """"state":"OPEN","merged":false,"mergeStateStatus":"CLEAN","isMergeQueueEnabled":true""")
+                match! merging stub (Some "token-abc") prOne Squash with
+                | PrWatches.PrMergeQueued _ -> ()
+                | other -> failwithf "expected it queued, got %A" other
+                match mutations stub with
+                | [ sent ] -> Expect.stringContains sent "enqueuePullRequest" "the queue is what was asked for"
+                | sent -> failwithf "expected one mutation, got %A" sent
+            }
+
+        testCaseAsync "one mergeable now on a branch with no queue is merged at once" <|
+            async {
+                let! stub = startStubGitHubApi ()
+                stub.SetStanding (standingWhere """"state":"OPEN","merged":false,"mergeStateStatus":"CLEAN","isMergeQueueEnabled":false""")
+                match! merging stub (Some "token-abc") prOne Squash with
+                | PrWatches.PrMergedNow _ -> ()
+                | other -> failwithf "expected it merged, got %A" other
+                match mutations stub with
+                | [ sent ] -> Expect.stringContains sent "mergePullRequest" "a merge is what was asked for"
+                | sent -> failwithf "expected one mutation, got %A" sent
+            }
+
+        testCaseAsync "the method asked for is the method github is asked for" <|
+            async {
+                let! stub = startStubGitHubApi ()
+                let! _ = merging stub (Some "token-abc") prOne Rebase
+                match mutations stub with
+                | [ sent ] -> Expect.stringContains sent "\"method\":\"REBASE\"" "as GitHub's enum spells it"
+                | sent -> failwithf "expected one mutation, got %A" sent
+            }
+
+        // The reason this verb asks before it mutates: a mutation on a pull request that
+        // is already armed answers 200 with an error whose text is the only thing
+        // separating it from a real refusal. Asked first, a repeated ask is a question with
+        // the standing for an answer.
+        testCaseAsync "one already armed is reported, and nothing is mutated" <|
+            async {
+                let! stub = startStubGitHubApi ()
+                stub.SetStanding
+                    """{"data":{"repository":{"pullRequest":{"id":"PR_1","state":"OPEN","merged":false,"mergeStateStatus":"BLOCKED","isMergeQueueEnabled":false,"autoMergeRequest":{"mergeMethod":"SQUASH"},"mergeQueueEntry":null}}}}"""
+                match! merging stub (Some "token-abc") prOne Squash with
+                | PrWatches.PrMergeUnneeded (_, already) -> Expect.stringContains already "armed" "what already stands"
+                | other -> failwithf "expected nothing to do, got %A" other
+                Expect.isEmpty (mutations stub) "and github was never asked to do it again"
+            }
+
+        testCaseAsync "one already merged is reported, and nothing is mutated" <|
+            async {
+                let! stub = startStubGitHubApi ()
+                stub.SetStanding (standingWhere """"state":"MERGED","merged":true,"mergeStateStatus":"UNKNOWN","isMergeQueueEnabled":false""")
+                match! merging stub (Some "token-abc") prOne Squash with
+                | PrWatches.PrMergeUnneeded (_, "merged") -> ()
+                | other -> failwithf "expected nothing to do, got %A" other
+                Expect.isEmpty (mutations stub) "and github was never asked"
+            }
+
+        testCaseAsync "what github would not do comes back as what github said" <|
+            async {
+                let! stub = startStubGitHubApi ()
+                stub.SetMutationReply
+                    200
+                    """{"data":null,"errors":[{"type":"UNPROCESSABLE","message":"Auto merge is not allowed for this repository"}]}"""
+                match! merging stub (Some "token-abc") prOne Squash with
+                | PrWatches.PrMergeRefused said ->
+                    Expect.equal said "Auto merge is not allowed for this repository" "the diagnosis, passed through"
+                | other -> failwithf "expected a refusal, got %A" other
+            }
+
+        testCaseAsync "one the credential cannot see is not found, the way a look says it" <|
+            async {
+                let! stub = startStubGitHubApi ()
+                stub.SetStanding
+                    """{"data":{"repository":{"pullRequest":null}},"errors":[{"type":"NOT_FOUND","path":["repository","pullRequest"],"message":"Could not resolve to a PullRequest with the number of 12."}]}"""
+                match! merging stub (Some "token-abc") prOne Squash with
+                | PrWatches.PrMergeFailed PrWatches.PrNotFound -> ()
+                | other -> failwithf "expected not found, got %A" other
+            }
+
+        testCaseAsync "a 401 on the way to merging one is classified like a look" <|
+            async {
+                let! stub = startStubGitHubApi ()
+                stub.SetStatus 401
+                match! merging stub (Some "stale") prOne Squash with
+                | PrWatches.PrMergeFailed PrWatches.PrUnauthorized -> ()
+                | other -> failwithf "expected unauthorized, got %A" other
+            }
+    ]
+
 let private prWatchVerbTests =
     let ada = PeerRef (PeerId.create "ada" |> expect)
     /// Ada watching for herself, and the agent watching on her turn: two authorities, one
@@ -3068,6 +3198,7 @@ let private prWatchVerbTests =
                 watchesNow
                 (GitHubPrs.fetchOver stub.Url GitHubPrs.Spending.unmetered)
                 (GitHubPrs.openOver stub.Url GitHubPrs.Spending.unmetered)
+                (GitHubPrs.mergeOver stub.Url GitHubPrs.Spending.unmetered)
                 (fun _ -> async { return Some "token-abc" })
                 applied.Add
         service, log, applied
@@ -3204,6 +3335,36 @@ let private prWatchVerbTests =
                 | Ok said -> failwithf "expected a refusal, got %s" said
             }
 
+        // A merge nobody is watching lands, or is ejected from the queue, with nothing on
+        // the timeline to say so — so the verb that arms one is the verb that watches it.
+        testCaseAsync "merging one begins a watch on it, as whoever asked" <|
+            async {
+                let! stub = startStubGitHubApi ()
+                let service, log, _ = serviceOver stub
+                let! outcome = service.Merge agentForAda prOne Squash
+                match outcome with
+                | Ok said ->
+                    Expect.stringContains said "will merge when its checks pass" "what the merge did"
+                    Expect.stringContains said "watched" "and that it is being watched"
+                | Error e -> failwithf "expected the merge to be armed, got %s" e
+                match! eventsOf log with
+                | [ SessionEvent.PrWatched started ] ->
+                    Expect.equal (PrWatched.watcher started) (Principal.Peer (PeerId.create "ada" |> expect)) "hers to keep looking as"
+                | events -> failwithf "expected one watch, got %A" events
+            }
+
+        testCaseAsync "a merge done at once watches nothing" <|
+            async {
+                let! stub = startStubGitHubApi ()
+                stub.SetStanding
+                    """{"data":{"repository":{"pullRequest":{"id":"PR_1","state":"OPEN","merged":false,"mergeStateStatus":"CLEAN","isMergeQueueEnabled":false,"autoMergeRequest":null,"mergeQueueEntry":null}}}}"""
+                let service, log, _ = serviceOver stub
+                let! outcome = service.Merge agentForAda prOne Squash
+                Expect.equal outcome (Ok "octo/hello#12 merged") "done"
+                let! events = eventsOf log
+                Expect.isEmpty events "there is nothing left for a watch to see"
+            }
+
         testCaseAsync "unwatching records the stop; unwatching what is not watched refuses" <|
             async {
                 let! stub = startStubGitHubApi ()
@@ -3229,7 +3390,35 @@ let private invokeProviderTool (capabilities: AgentCapabilities) (name: string) 
     | None -> async { return Error (sprintf "no provider tool named %s" name) }
 
 let private prAgentToolTests =
-    testList "the create_pr/watch_pr/unwatch_pr agent tools" [
+    testList "the create_pr/merge_pr/watch_pr/unwatch_pr agent tools" [
+        // merge_pr. The method defaults on this side of the gate, so a call that names none
+        // reaches the capability as a squash rather than as an absence it has to fill.
+        let merging () =
+            let seen = ref None
+            let capabilities =
+                { AgentCapabilities.none with
+                    Repos =
+                      { AgentCapabilities.none.Repos with
+                          MergePr =
+                            fun repo number method ->
+                              async {
+                                  seen.Value <- Some (RepoRef.value repo, number, method)
+                                  return Ok { Status = CommandRan "armed"; Tool = "merge_pr"; Summary = "s"; Handle = None }
+                              } } }
+            capabilities, seen
+        testCaseAsync "merge_pr squashes unless told otherwise" <|
+            async {
+                let capabilities, seen = merging ()
+                let! _ = invokeProviderTool capabilities "merge_pr" """{"repo":"octo/hello","number":12}"""
+                Expect.equal seen.Value (Some ("octo/hello", 12, Squash)) "the pull request, squashed"
+            }
+        testCaseAsync "merge_pr hands the capability the method it was given" <|
+            async {
+                let capabilities, seen = merging ()
+                let! _ = invokeProviderTool capabilities "merge_pr" """{"repo":"octo/hello","number":12,"method":"rebase"}"""
+                Expect.equal seen.Value (Some ("octo/hello", 12, Rebase)) "as written"
+            }
+
         // create_pr. What matters at this seam is that six adjacent strings arrive as the
         // capability's own vocabulary — a draft, with the head in the head and the base in
         // the base — because a pair swapped here would open a real pull request the wrong
@@ -3363,6 +3552,7 @@ let tests =
         Tag.needs "Pull request endpoints" [ Tag.Ports ] (fun () -> prFetchTests)
         Tag.needs "What a look spends" [ Tag.Ports ] (fun () -> prBudgetTests)
         Tag.needs "Opening a pull request" [ Tag.Ports ] (fun () -> prCreateTests)
+        Tag.needs "Merging a pull request" [ Tag.Ports ] (fun () -> prMergeTests)
         Tag.needs "Watching a pull request" [ Tag.Ports ] (fun () -> prWatchVerbTests)
         Tag.needs "Per-actor credentials E2E" [ Tag.Ports; Tag.Native ] (fun () -> e2eTests)
     ]

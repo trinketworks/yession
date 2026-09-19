@@ -97,6 +97,32 @@ module PrDraft =
     let render (draft: PrDraft) : string =
         sprintf "%s %s -> %s" (RepoRef.value draft.Repo) draft.Head draft.Base
 
+/// How a pull request's commits land on its base. Every forge offers these three; which of
+/// them a repository ALLOWS is the provider's to say, and a method it does not allow comes
+/// back as its refusal rather than being guessed at here.
+type PrMergeMethod =
+    | Squash
+    | MergeCommit
+    | Rebase
+
+module PrMergeMethod =
+
+    /// The word a caller writes. `squash` is the default everywhere one is taken, because
+    /// a pull request whose description was written as the commit body it becomes
+    /// (`PrDraft.Body`) is a pull request meant to squash.
+    let create (raw: string) : Result<PrMergeMethod, string> =
+        match raw.Trim().ToLowerInvariant () with
+        | "squash" -> Ok Squash
+        | "merge" -> Ok MergeCommit
+        | "rebase" -> Ok Rebase
+        | other -> Error (sprintf "'%s' is not a merge method — squash, merge or rebase" other)
+
+    let render (method: PrMergeMethod) : string =
+        match method with
+        | Squash -> "squash"
+        | MergeCommit -> "merge"
+        | Rebase -> "rebase"
+
 type PrState =
     | PrOpen
     | PrMerged

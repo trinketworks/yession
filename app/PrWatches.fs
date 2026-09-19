@@ -5,12 +5,12 @@ module Yession.Host.PrWatches
 // how a session keeps looking: the cadence, the ETag bookkeeping, the in-flight guard, the
 // verbs that start and stop a watch, and the query all of it reads back through.
 //
-// The whole provider surface is two functions — `FetchPr`, one look, and `OpenPr`, one
-// pull request opened — plus a `provider` label the error copy is written around, because
-// "github rejected this credential" is a sentence a person has to read and "the provider
-// rejected this credential" is not. A second forge is a second `fetchOver`, a second
-// `openOver` and a second hook filter (`GitHubPrs.fs` is the first), and nothing in this
-// file changes to admit it.
+// The whole provider surface is three functions — `FetchPr`, one look; `OpenPr`, one
+// pull request opened; `MergePr`, one merged or set to merge — plus a `provider` label the
+// error copy is written around, because "github rejected this credential" is a sentence a
+// person has to read and "the provider rejected this credential" is not. A second forge is
+// a second `fetchOver`, a second `openOver`, a second `mergeOver` and a second hook filter
+// (`GitHubPrs.fs` is the first), and nothing in this file changes to admit it.
 //
 // Polling, not webhooks, and that is a decision rather than a stopgap: a repo webhook
 // needs admin on every repo somebody wants watched, and inbound delivery needs a
@@ -89,6 +89,32 @@ type PrOpenOutcome =
 /// THE SEAM for opening one, beside `FetchPr` and for the same reason: the credential the
 /// caller resolved, the draft, one answer, and no forge named anywhere above it.
 type OpenPr = string option -> PrDraft -> Async<PrOpenOutcome>
+
+/// What came of asking the provider to merge one. ONE verb, three ways it can go, because
+/// "merge this" is one intent whose mechanism the provider decides: a pull request whose
+/// checks are still running is ARMED to merge when they pass; one already mergeable goes
+/// straight in, or into the merge queue where the base branch has one.
+type PrMergeOutcome =
+    /// Auto merge is armed: the provider merges it when its checks pass and nothing else
+    /// stands in the way. What a watch reports as `queued`.
+    | PrMergeArmed of PrRef
+    /// Mergeable now and the base branch has a merge queue, so it went into the queue.
+    | PrMergeQueued of PrRef
+    /// Mergeable now on a branch with no queue, so it is merged.
+    | PrMergedNow of PrRef
+    /// Nothing was done because nothing needed doing: auto merge was already armed, or it
+    /// already sits in the queue, or it is already merged — the `add_repo` rule, so a
+    /// repeated ask is a question and its answer is the state.
+    | PrMergeUnneeded of PrRef * already: string
+    /// The provider read the request and would not do it — the branch does not allow auto
+    /// merge, the pull request is closed, a review is required. What it SAID, because
+    /// that sentence is the diagnosis.
+    | PrMergeRefused of string
+    | PrMergeFailed of PrFetchFailure
+
+/// THE SEAM for merging one, beside `OpenPr`: the credential the caller resolved, the pull
+/// request, one answer.
+type MergePr = string option -> PrRef -> PrMergeMethod -> Async<PrMergeOutcome>
 
 // --- the poller --------------------------------------------------------------------------
 
@@ -391,7 +417,14 @@ type PrService =
       ///
       /// Nothing is watched as a result. Watching is a decision about what this session will
       /// keep saying, and the number this hands back is what `Watch` takes.
-      Create : CredentialFor -> PrDraft -> Async<Result<string, string>> }
+      Create : CredentialFor -> PrDraft -> Async<Result<string, string>>
+      /// Merge one, on the credential of whoever's turn it is: armed to merge when its checks
+      /// pass, queued, or merged now — whichever the provider says applies. Records no event
+      /// of its own, for `Create`'s reason: the act line the gate writes says who asked, and
+      /// what it changed lives at the provider — where a WATCH reads it back, which is why
+      /// this takes the whole `Authority` and begins one: a merge nobody is watching lands
+      /// (or is ejected from the queue) with nothing on the timeline to say so.
+      Merge : Authority -> PrRef -> PrMergeMethod -> Async<Result<string, string>> }
 
 /// Build the watch verbs over the session's log and the poller they reconcile into.
 ///
@@ -404,6 +437,7 @@ let service
     (watchesNow: unit -> Async<PrWatch list>)
     (fetch: FetchPr)
     (openPr: OpenPr)
+    (mergePr: MergePr)
     (resolveToken: CredentialFor -> Async<string option>)
     (refold: PrWatch list -> unit)
     : PrService =
@@ -437,43 +471,44 @@ let service
             (PrState.describe snapshot.State)
             (ChecksRollup.describe snapshot.Checks)
 
-    { Watch =
-        fun authority pr ->
-            async {
-                let! watches = watchesNow ()
-                // Whose watch this would be is the event's own rule (`PrWatched.watcherOf`),
-                // asked here before the look because the look is made on that credential —
-                // and a refusal is said now, before a request is spent on it.
-                match watches |> List.tryFind (fun w -> w.Pr = pr), PrWatched.watcherOf pr authority with
-                // Already watched: a repeated ask is a question, not an act (the
-                // `add_repo` rule). Answer what is known and record nothing.
-                | Some existing, _ ->
-                    return
-                        Ok (
-                            sprintf
-                                "%s already watched (%s, %s)"
-                                (PrRef.render pr)
-                                (PrState.describe existing.Known.State)
-                                (ChecksRollup.describe existing.Known.Checks))
-                | None, Error reason -> return Error reason
-                | None, Ok watcher ->
-                    let! token = resolveToken (CredentialFor.Person watcher)
-                    let! outcome = fetch token pr PrEtags.none None
-                    match outcome with
-                    | PrFetchFailed failure -> return Error (cannotReach (PrRef.render pr) failure)
-                    // Unreachable in practice (nothing has an ETag yet), but total: a
-                    // provider that answers 304 to a first look has told us nothing to
-                    // start a baseline from.
-                    | PrUnchanged -> return Error (sprintf "%s answered nothing about that pull request" provider)
-                    | PrChanged (snapshot, _) ->
-                        match mintId () |> Result.bind (fun id -> PrWatched.create id authority pr snapshot) with
-                        | Error e -> return Error e
-                        | Ok watched ->
-                            do! append (PrWatched.actor watched) (SessionEvent.PrWatched watched)
-                            let! watches = watchesNow ()
-                            refold watches
-                            return Ok (describe pr snapshot)
-            }
+    let watch (authority: Authority) (pr: PrRef) : Async<Result<string, string>> =
+        async {
+            let! watches = watchesNow ()
+            // Whose watch this would be is the event's own rule (`PrWatched.watcherOf`),
+            // asked here before the look because the look is made on that credential —
+            // and a refusal is said now, before a request is spent on it.
+            match watches |> List.tryFind (fun w -> w.Pr = pr), PrWatched.watcherOf pr authority with
+            // Already watched: a repeated ask is a question, not an act (the
+            // `add_repo` rule). Answer what is known and record nothing.
+            | Some existing, _ ->
+                return
+                    Ok (
+                        sprintf
+                            "%s already watched (%s, %s)"
+                            (PrRef.render pr)
+                            (PrState.describe existing.Known.State)
+                            (ChecksRollup.describe existing.Known.Checks))
+            | None, Error reason -> return Error reason
+            | None, Ok watcher ->
+                let! token = resolveToken (CredentialFor.Person watcher)
+                let! outcome = fetch token pr PrEtags.none None
+                match outcome with
+                | PrFetchFailed failure -> return Error (cannotReach (PrRef.render pr) failure)
+                // Unreachable in practice (nothing has an ETag yet), but total: a
+                // provider that answers 304 to a first look has told us nothing to
+                // start a baseline from.
+                | PrUnchanged -> return Error (sprintf "%s answered nothing about that pull request" provider)
+                | PrChanged (snapshot, _) ->
+                    match mintId () |> Result.bind (fun id -> PrWatched.create id authority pr snapshot) with
+                    | Error e -> return Error e
+                    | Ok watched ->
+                        do! append (PrWatched.actor watched) (SessionEvent.PrWatched watched)
+                        let! watches = watchesNow ()
+                        refold watches
+                        return Ok (describe pr snapshot)
+        }
+
+    { Watch = watch
       Unwatch =
         fun actor pr ->
             async {
@@ -517,6 +552,32 @@ let service
                 // topic" is the whole diagnosis, and nothing on this side could invent it.
                 | PrOpenRefused said -> return Error (sprintf "%s would not open it: %s" provider said)
                 | PrOpenFailed failure -> return Error (cannotReach (RepoRef.value draft.Repo) failure)
+            }
+      Merge =
+        fun authority pr method ->
+            async {
+                let! token = resolveToken (Authority.credential authority)
+                // What the merge did, and then the watch that will say how it ends. The
+                // watch is not the act — a merge that landed and a watch that could not
+                // begin is still a merge that landed, so its failure is said beside the
+                // outcome rather than in place of it.
+                let watched (said: string) =
+                    async {
+                        match! watch authority pr with
+                        | Ok watching -> return Ok (sprintf "%s; %s" said watching)
+                        | Error reason -> return Ok (sprintf "%s; could not watch it: %s" said reason)
+                    }
+                match! mergePr token pr method with
+                | PrMergeArmed pr -> return! watched (sprintf "%s will merge when its checks pass" (PrRef.render pr))
+                | PrMergeQueued pr -> return! watched (sprintf "%s is in the merge queue" (PrRef.render pr))
+                // Done, so there is nothing left for a watch to see.
+                | PrMergedNow pr -> return Ok (sprintf "%s merged" (PrRef.render pr))
+                // Nothing was done, and the answer says what already stands — which is the
+                // point of asking again rather than an apology for it.
+                | PrMergeUnneeded (pr, already) ->
+                    return Ok (sprintf "%s is already %s — nothing was changed" (PrRef.render pr) already)
+                | PrMergeRefused said -> return Error (sprintf "%s would not merge it: %s" provider said)
+                | PrMergeFailed failure -> return Error (cannotReach (PrRef.render pr) failure)
             } }
 
 // --- the query -----------------------------------------------------------------------------

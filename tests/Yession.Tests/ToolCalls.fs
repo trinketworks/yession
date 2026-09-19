@@ -154,7 +154,8 @@ let private reposAnswering (add: RepoRef -> Async<Result<RepoListing, string>>) 
 let private prsOpening (create: PrDraft -> Async<Result<string, string>>) : PrWatches.PrService =
     { Watch = fun _ _ -> async { return Error "not part of this test" }
       Unwatch = fun _ _ -> async { return Error "not part of this test" }
-      Create = fun _ draft -> create draft }
+      Create = fun _ draft -> create draft
+      Merge = fun _ _ _ -> async { return Error "not part of this test" } }
 
 let private servicesOver (service: Repos.ReposService) : Commands.CommandServices =
     { Repos = fun () -> Some service
@@ -332,6 +333,30 @@ let private tests' =
                 Expect.equal (seen |> Option.map (fun d -> d.Body)) (Some (Some "why")) "the body is the body"
                 Expect.equal (seen |> Option.map (fun d -> d.Draft)) (Some true) "and the flag is the flag"
                 Expect.stringContains (answered answer) "opened octo/hello#7" "and the service's own words came back"
+            }
+
+        // merge_pr crosses the gate as THREE encoded strings, and the third — the method —
+        // is what decides the shape of the history the merge leaves behind.
+        testCaseAsync "every argument of a merge_pr survives the gate in the place it was written" <|
+            async {
+                let mutable seen : (PrRef * PrMergeMethod) option = None
+                let session =
+                    openToolSession (
+                        { servicesOver (reposAnswering (fun _ -> async { return Error "not part of this test" })) with
+                            Prs =
+                              fun () ->
+                                Some (
+                                    { prsOpening (fun _ -> async { return Error "not part of this test" }) with
+                                        Merge =
+                                          fun _ pr method ->
+                                            async {
+                                                seen <- Some (pr, method)
+                                                return Ok (sprintf "%s is in the merge queue" (PrRef.render pr))
+                                            } }) })
+                let! answer = session.Call "merge_pr" """{"repo":"octo/hello","number":12,"method":"rebase"}"""
+                Expect.equal (seen |> Option.map (fun (pr, _) -> PrRef.render pr)) (Some "octo/hello#12") "the pull request"
+                Expect.equal (seen |> Option.map snd) (Some Rebase) "and the method is the method"
+                Expect.stringContains (answered answer) "octo/hello#12 is in the merge queue" "and the service's own words came back"
             }
 
         // A repo name the domain refuses never reaches the gate, and the model is told what
