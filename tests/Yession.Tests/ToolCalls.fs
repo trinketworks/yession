@@ -155,7 +155,8 @@ let private prsOpening (create: PrDraft -> Async<Result<string, string>>) : PrWa
     { Watch = fun _ _ -> async { return Error "not part of this test" }
       Unwatch = fun _ _ -> async { return Error "not part of this test" }
       Create = fun _ draft -> create draft
-      Merge = fun _ _ _ -> async { return Error "not part of this test" } }
+      Merge = fun _ _ _ -> async { return Error "not part of this test" }
+      Unmerge = fun _ _ -> async { return Error "not part of this test" } }
 
 let private servicesOver (service: Repos.ReposService) : Commands.CommandServices =
     { Repos = fun () -> Some service
@@ -357,6 +358,27 @@ let private tests' =
                 Expect.equal (seen |> Option.map (fun (pr, _) -> PrRef.render pr)) (Some "octo/hello#12") "the pull request"
                 Expect.equal (seen |> Option.map snd) (Some Rebase) "and the method is the method"
                 Expect.stringContains (answered answer) "octo/hello#12 is in the merge queue" "and the service's own words came back"
+            }
+
+        testCaseAsync "an unmerge_pr reaches the service with the pull request it named" <|
+            async {
+                let mutable seen : PrRef option = None
+                let session =
+                    openToolSession (
+                        { servicesOver (reposAnswering (fun _ -> async { return Error "not part of this test" })) with
+                            Prs =
+                              fun () ->
+                                Some (
+                                    { prsOpening (fun _ -> async { return Error "not part of this test" }) with
+                                        Unmerge =
+                                          fun _ pr ->
+                                            async {
+                                                seen <- Some pr
+                                                return Ok (sprintf "%s will no longer merge on its own" (PrRef.render pr))
+                                            } }) })
+                let! answer = session.Call "unmerge_pr" """{"repo":"octo/hello","number":12}"""
+                Expect.equal (seen |> Option.map PrRef.render) (Some "octo/hello#12") "the pull request"
+                Expect.stringContains (answered answer) "will no longer merge on its own" "and the service's own words came back"
             }
 
         // A repo name the domain refuses never reaches the gate, and the model is told what

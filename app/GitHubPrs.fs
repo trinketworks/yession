@@ -6,8 +6,8 @@ module Yession.Host.GitHubPrs
 // this file. What is left here is the endpoints and their JSON — the two a look reads
 // (`fetchOver`, the whole of the `FetchPr` seam this side owns), the two that open one
 // (`openOver`: the list that keeps a repeated ask a question, then the create), the query
-// and three mutations that merge one (`mergeOver`) — and the one field path a delivery
-// names its repo at. The cadence, the ETag bookkeeping, the verbs and
+// and three mutations that merge one (`mergeOver`) and the two that take it back
+// (`unmergeOver`) — and the one field path a delivery names its repo at. The cadence, the ETag bookkeeping, the verbs and
 // the query are provider-neutral and live in `PrWatches.fs`; a second forge is a second copy
 // of this file, not a second poller.
 
@@ -491,6 +491,14 @@ let private graphqlErrors : Decoder<GraphqlError list> =
 /// classification a REST status carries is read off the body here. A `NOT_FOUND` is the same
 /// fact a REST 404 is (gone, or a credential that cannot see it); every other error is the
 /// provider having READ the request and declined, which is an answer in its own words.
+/// How a GraphQL request came to nothing: the provider read it and declined, in its words,
+/// or the same four facts a REST failure carries. Its own shape rather than either verb's
+/// outcome, because both the merge and its undoing ask the same way and each says no in its
+/// own vocabulary.
+type private GraphqlRefusal =
+    | Declined of string
+    | Failed of PrFetchFailure
+
 let private askGraphql
     (root: string)
     (spending: Spending)
@@ -498,7 +506,7 @@ let private askGraphql
     (document: string)
     (variables: (string * JsonValue) list)
     (decoder: Decoder<'a>)
-    : Async<Result<'a, PrMergeOutcome>> =
+    : Async<Result<'a, GraphqlRefusal>> =
     async {
         let payload =
             Encode.object [ "query", Encode.string document; "variables", Encode.object variables ]
@@ -512,18 +520,18 @@ let private askGraphql
         let reply = replyOf attempt (fun _ -> "")
         spending.Learned (allowanceIn reply)
         if not (reply.Reachable && reply.Status >= 200 && reply.Status < 300) then
-            return Error (PrMergeFailed (failureOf reply))
+            return Error (Failed (failureOf reply))
         else
             match Decode.fromString graphqlErrors reply.Body with
             | Ok errors when not (List.isEmpty errors) ->
                 if errors |> List.exists (fun e -> e.Type = Some "NOT_FOUND") then
-                    return Error (PrMergeFailed PrNotFound)
+                    return Error (Failed PrNotFound)
                 else
-                    return Error (PrMergeRefused (errors |> List.map (fun e -> e.Message) |> String.concat "; "))
+                    return Error (Declined (errors |> List.map (fun e -> e.Message) |> String.concat "; "))
             | _ ->
                 match Decode.fromString (Decode.field "data" decoder) reply.Body with
                 | Ok value -> return Ok value
-                | Error e -> return Error (PrMergeFailed (PrUnreadable (sprintf "unrecognised graphql reply: %s" e)))
+                | Error e -> return Error (Failed (PrUnreadable (sprintf "unrecognised graphql reply: %s" e)))
     }
 
 /// Where a pull request stands, as far as merging it is concerned.
@@ -556,6 +564,29 @@ let private standingDecoder : Decoder<MergeStanding option> =
                   QueueEnabled = get.Required.Field "isMergeQueueEnabled" Decode.bool
                   AutoMergeArmed = get.Optional.Field "autoMergeRequest" Decode.value |> Option.exists (fun v -> not (Decode.Helpers.isNullValue v))
                   InQueue = get.Optional.Field "mergeQueueEntry" Decode.value |> Option.exists (fun v -> not (Decode.Helpers.isNullValue v)) })))
+
+/// One pull request's standing, asked with `ask`: the query, and a null answer read as the
+/// not-found it is.
+let private standingOf
+    (ask: string -> (string * JsonValue) list -> Decoder<MergeStanding option> -> Async<Result<MergeStanding option, GraphqlRefusal>>)
+    (pr: PrRef)
+    : Async<Result<MergeStanding, GraphqlRefusal>> =
+    async {
+        match!
+            ask
+                standingQuery
+                [ "owner", Encode.string (RepoRef.owner pr.Repo)
+                  "name", Encode.string (RepoRef.repo pr.Repo)
+                  "number", Encode.int pr.Number ]
+                standingDecoder
+        with
+        | Error refusal -> return Error refusal
+        | Ok None -> return Error (Failed PrNotFound)
+        | Ok (Some standing) -> return Ok standing
+    }
+
+/// A mutation's reply carries nothing this side reads but the absence of errors.
+let private done' : Decoder<unit> = Decode.value |> Decode.map ignore
 
 /// Could it go in right now? The three statuses `gh pr merge` treats as mergeable: clean,
 /// clean but for hooks that have yet to run, and mergeable with a non-required status failing.
@@ -597,24 +628,19 @@ let mergeOver (apiBase: string) (spending: Spending) : MergePr =
                 let root = apiBase.TrimEnd '/'
                 let ask (document: string) (variables: (string * JsonValue) list) (decoder: Decoder<'a>) =
                     askGraphql root spending bearer document variables decoder
-                let! standing =
-                    ask
-                        standingQuery
-                        [ "owner", Encode.string (RepoRef.owner pr.Repo)
-                          "name", Encode.string (RepoRef.repo pr.Repo)
-                          "number", Encode.int pr.Number ]
-                        standingDecoder
-                match standing with
-                | Error outcome -> return outcome
-                | Ok None -> return PrMergeFailed PrNotFound
-                | Ok (Some standing) ->
+                let refused (refusal: GraphqlRefusal) =
+                    match refusal with
+                    | Declined said -> PrMergeRefused said
+                    | Failed failure -> PrMergeFailed failure
+                match! standingOf ask pr with
+                | Error refusal -> return refused refusal
+                | Ok standing ->
                     let withId = [ "id", Encode.string standing.Id ]
                     let withMethod = ("method", Encode.string (methodName method)) :: withId
-                    let done' = Decode.value |> Decode.map ignore
-                    let after (outcome: PrMergeOutcome) (mutated: Result<unit, PrMergeOutcome>) =
+                    let after (outcome: PrMergeOutcome) (mutated: Result<unit, GraphqlRefusal>) =
                         match mutated with
                         | Ok () -> outcome
-                        | Error failed -> failed
+                        | Error refusal -> refused refusal
                     if standing.Merged then return PrMergeUnneeded (pr, "merged")
                     // Closed is GitHub's own state, read a moment ago; asking it to merge one
                     // would cost a request to be told the same thing in its words.
@@ -630,6 +656,49 @@ let mergeOver (apiBase: string) (spending: Spending) : MergePr =
                     else
                         let! mutated = ask enableAutoMerge withMethod done'
                         return after (PrMergeArmed pr) mutated
+        }
+
+let private disableAutoMerge =
+    "mutation($id:ID!){disablePullRequestAutoMerge(input:{pullRequestId:$id}){clientMutationId}}"
+
+let private dequeue = "mutation($id:ID!){dequeuePullRequest(input:{pullRequestId:$id}){clientMutationId}}"
+
+/// Taking one back off its way in — the undoing of `mergeOver`, and it asks first for the
+/// same reason: the standing says whether there is auto merge to disarm, a queue entry to
+/// pull, or nothing to do. One in the queue AND armed (auto merge that has since enqueued)
+/// is dequeued; GitHub drops the arming with the entry.
+let unmergeOver (apiBase: string) (spending: Spending) : UnmergePr =
+    fun token pr ->
+        async {
+            match spending.Permit () with
+            | Resilience.Hold until -> return PrUnmergeFailed (PrRateLimited (Some (until.ToUnixTimeSeconds ())))
+            | Resilience.Go ->
+                let bearer = Option.toObj token
+                let root = apiBase.TrimEnd '/'
+                let ask (document: string) (variables: (string * JsonValue) list) (decoder: Decoder<'a>) =
+                    askGraphql root spending bearer document variables decoder
+                let refused (refusal: GraphqlRefusal) =
+                    match refusal with
+                    | Declined said -> PrUnmergeRefused said
+                    | Failed failure -> PrUnmergeFailed failure
+                match! standingOf ask pr with
+                | Error refusal -> return refused refusal
+                | Ok standing ->
+                    let withId = [ "id", Encode.string standing.Id ]
+                    let after (outcome: PrUnmergeOutcome) (mutated: Result<unit, GraphqlRefusal>) =
+                        match mutated with
+                        | Ok () -> outcome
+                        | Error refusal -> refused refusal
+                    // Merged is past undoing, and it is not a refusal: nothing was asked of
+                    // GitHub, and the answer is the state.
+                    if standing.Merged then return PrUnmergeUnneeded (pr, "merged")
+                    elif standing.InQueue then
+                        let! mutated = ask dequeue withId done'
+                        return after (PrMergeDequeued pr) mutated
+                    elif standing.AutoMergeArmed then
+                        let! mutated = ask disableAutoMerge withId done'
+                        return after (PrMergeDisarmed pr) mutated
+                    else return PrUnmergeUnneeded (pr, "not on its way in")
         }
 
 // --- the hook subscription -------------------------------------------------------------------
@@ -722,7 +791,7 @@ let hooks
             held
             |> List.tryPick (fun (repo, current) -> if current = Some id then Some repo else None) }
 
-// --- the agent tools: create_pr, merge_pr, watch_pr, unwatch_pr -------------------------
+// --- the agent tools: create_pr, merge_pr, unmerge_pr, watch_pr, unwatch_pr --------------
 //
 // The GitHub-flavoured entries `AgentTools.fs`'s registry used to declare directly,
 // moved here for the reason this file's own header states: everything GitHub-specific
@@ -803,6 +872,14 @@ let private mergePr (capabilities: AgentCapabilities) (raw: string) (number: int
                 match! capabilities.Repos.MergePr repo number method with
                 | Ok outcome -> return AgentTools.renderCommandOutcome outcome
                 | Error e -> return sprintf "could not merge the pull request: %s" e
+        })
+
+let private unmergePr (capabilities: AgentCapabilities) (raw: string) (number: int) : Async<string> =
+    withRepo raw (fun repo ->
+        async {
+            match! capabilities.Repos.UnmergePr repo number with
+            | Ok outcome -> return AgentTools.renderCommandOutcome outcome
+            | Error e -> return sprintf "could not take the pull request back: %s" e
         })
 
 /// Reading a call's arguments, the way `AgentTools.fs`'s own `ToolArgs` does for every other
@@ -890,6 +967,17 @@ let providerTools (capabilities: AgentCapabilities) : (ToolDescriptor * (string 
                   match mergeArgs args with
                   | Error e -> return Error e
                   | Ok (repo, number, method) -> return! ok (mergePr capabilities repo number method)
+              })
+      tool
+          "unmerge_pr"
+          "Take a pull request on GitHub back off its way in: if auto merge is armed it is disarmed, and if it sits in the merge queue it is pulled out. The undoing of merge_pr — and the only one there is, since what has merged has merged: one already merged, or never on its way in, is reported as such and nothing is changed. A watch on it then reports stalled, which is what it is. It spends the GitHub credential of whoever's turn this is, and everyone in the session sees the act in the timeline."
+          [ ToolField.required "repo" "string" "owner/name"
+            ToolField.required "number" "integer" "the pull request number" ]
+          (fun args ->
+              async {
+                  match repoNumberArgs args with
+                  | Error e -> return Error e
+                  | Ok (repo, number) -> return! ok (unmergePr capabilities repo number)
               })
       tool
           "watch_pr"

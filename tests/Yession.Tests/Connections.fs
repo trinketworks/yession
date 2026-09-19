@@ -3169,6 +3169,73 @@ let private prMergeTests =
             }
     ]
 
+let private prUnmergeTests =
+    let unmerging (stub: StubGitHubApi) = GitHubPrs.unmergeOver stub.Url GitHubPrs.Spending.unmetered
+    let mutations (stub: StubGitHubApi) =
+        stub.Posted |> Seq.map snd |> Seq.filter (fun body -> body.Contains "\"query\":\"mutation") |> List.ofSeq
+    let standingWhere (fields: string) =
+        sprintf
+            """{"data":{"repository":{"pullRequest":{"id":"PR_1","state":"OPEN","merged":false,"mergeStateStatus":"BLOCKED","isMergeQueueEnabled":false,%s}}}}"""
+            fields
+
+    testList "taking a pull request back" [
+        testCaseAsync "one armed to merge is disarmed" <|
+            async {
+                let! stub = startStubGitHubApi ()
+                stub.SetStanding (standingWhere """"autoMergeRequest":{"mergeMethod":"SQUASH"},"mergeQueueEntry":null""")
+                match! unmerging stub (Some "token-abc") prOne with
+                | PrWatches.PrMergeDisarmed _ -> ()
+                | other -> failwithf "expected it disarmed, got %A" other
+                match mutations stub with
+                | [ sent ] -> Expect.stringContains sent "disablePullRequestAutoMerge" "disarming is what was asked for"
+                | sent -> failwithf "expected one mutation, got %A" sent
+            }
+
+        testCaseAsync "one in the merge queue is pulled out" <|
+            async {
+                let! stub = startStubGitHubApi ()
+                stub.SetStanding (standingWhere """"autoMergeRequest":null,"mergeQueueEntry":{"id":"MQE_1"}""")
+                match! unmerging stub (Some "token-abc") prOne with
+                | PrWatches.PrMergeDequeued _ -> ()
+                | other -> failwithf "expected it dequeued, got %A" other
+                match mutations stub with
+                | [ sent ] -> Expect.stringContains sent "dequeuePullRequest" "leaving the queue is what was asked for"
+                | sent -> failwithf "expected one mutation, got %A" sent
+            }
+
+        testCaseAsync "one not on its way in is reported, and nothing is mutated" <|
+            async {
+                let! stub = startStubGitHubApi ()
+                match! unmerging stub (Some "token-abc") prOne with
+                | PrWatches.PrUnmergeUnneeded (_, already) -> Expect.stringContains already "not on its way in" "what stands"
+                | other -> failwithf "expected nothing to do, got %A" other
+                Expect.isEmpty (mutations stub) "and github was never asked"
+            }
+
+        testCaseAsync "one already merged is past taking back, and nothing is mutated" <|
+            async {
+                let! stub = startStubGitHubApi ()
+                stub.SetStanding
+                    """{"data":{"repository":{"pullRequest":{"id":"PR_1","state":"MERGED","merged":true,"mergeStateStatus":"UNKNOWN","isMergeQueueEnabled":false,"autoMergeRequest":null,"mergeQueueEntry":null}}}}"""
+                match! unmerging stub (Some "token-abc") prOne with
+                | PrWatches.PrUnmergeUnneeded (_, "merged") -> ()
+                | other -> failwithf "expected nothing to do, got %A" other
+                Expect.isEmpty (mutations stub) "and github was never asked"
+            }
+
+        testCaseAsync "what github would not take back comes back as what github said" <|
+            async {
+                let! stub = startStubGitHubApi ()
+                stub.SetStanding (standingWhere """"autoMergeRequest":{"mergeMethod":"SQUASH"},"mergeQueueEntry":null""")
+                stub.SetMutationReply
+                    200
+                    """{"data":null,"errors":[{"type":"FORBIDDEN","message":"Resource not accessible by integration"}]}"""
+                match! unmerging stub (Some "token-abc") prOne with
+                | PrWatches.PrUnmergeRefused said -> Expect.equal said "Resource not accessible by integration" "the diagnosis, passed through"
+                | other -> failwithf "expected a refusal, got %A" other
+            }
+    ]
+
 let private prWatchVerbTests =
     let ada = PeerRef (PeerId.create "ada" |> expect)
     /// Ada watching for herself, and the agent watching on her turn: two authorities, one
@@ -3199,6 +3266,7 @@ let private prWatchVerbTests =
                 (GitHubPrs.fetchOver stub.Url GitHubPrs.Spending.unmetered)
                 (GitHubPrs.openOver stub.Url GitHubPrs.Spending.unmetered)
                 (GitHubPrs.mergeOver stub.Url GitHubPrs.Spending.unmetered)
+                (GitHubPrs.unmergeOver stub.Url GitHubPrs.Spending.unmetered)
                 (fun _ -> async { return Some "token-abc" })
                 applied.Add
         service, log, applied
@@ -3390,7 +3458,7 @@ let private invokeProviderTool (capabilities: AgentCapabilities) (name: string) 
     | None -> async { return Error (sprintf "no provider tool named %s" name) }
 
 let private prAgentToolTests =
-    testList "the create_pr/merge_pr/watch_pr/unwatch_pr agent tools" [
+    testList "the create_pr/merge_pr/unmerge_pr/watch_pr/unwatch_pr agent tools" [
         // merge_pr. The method defaults on this side of the gate, so a call that names none
         // reaches the capability as a squash rather than as an absence it has to fill.
         let merging () =
@@ -3411,6 +3479,22 @@ let private prAgentToolTests =
                 let capabilities, seen = merging ()
                 let! _ = invokeProviderTool capabilities "merge_pr" """{"repo":"octo/hello","number":12}"""
                 Expect.equal seen.Value (Some ("octo/hello", 12, Squash)) "the pull request, squashed"
+            }
+        testCaseAsync "unmerge_pr reaches the capability with the repo and the number" <|
+            async {
+                let mutable seen : (string * int) option = None
+                let capabilities =
+                    { AgentCapabilities.none with
+                        Repos =
+                          { AgentCapabilities.none.Repos with
+                              UnmergePr =
+                                fun repo number ->
+                                  async {
+                                      seen <- Some (RepoRef.value repo, number)
+                                      return Ok { Status = CommandRan "disarmed"; Tool = "unmerge_pr"; Summary = "s"; Handle = None }
+                                  } } }
+                let! _ = invokeProviderTool capabilities "unmerge_pr" """{"repo":"octo/hello","number":12}"""
+                Expect.equal seen (Some ("octo/hello", 12)) "the repo and the number it named"
             }
         testCaseAsync "merge_pr hands the capability the method it was given" <|
             async {
@@ -3553,6 +3637,7 @@ let tests =
         Tag.needs "What a look spends" [ Tag.Ports ] (fun () -> prBudgetTests)
         Tag.needs "Opening a pull request" [ Tag.Ports ] (fun () -> prCreateTests)
         Tag.needs "Merging a pull request" [ Tag.Ports ] (fun () -> prMergeTests)
+        Tag.needs "Taking a pull request back" [ Tag.Ports ] (fun () -> prUnmergeTests)
         Tag.needs "Watching a pull request" [ Tag.Ports ] (fun () -> prWatchVerbTests)
         Tag.needs "Per-actor credentials E2E" [ Tag.Ports; Tag.Native ] (fun () -> e2eTests)
     ]
