@@ -290,9 +290,6 @@ let create
 
 // --- the route ---------------------------------------------------------------------------
 
-[<Emit("new URL($0, 'http://local').pathname")>]
-let private pathnameOf (url: string) : string = jsNative
-
 /// Every header, as pairs, names lowercased by Node on the way in.
 ///
 /// An ARRAY, converted at the boundary: a JS array is what `Object.entries` yields and what
@@ -317,7 +314,7 @@ let private respond (res: Interop.ServerResponse) (status: int) (text: string) =
 /// authenticates by signing the body. There is no session to have a cookie, and an unsigned
 /// delivery is refused here rather than let through to be judged later.
 let tryHandle (relay: Relay) (req: Interop.IncomingMessage) (res: Interop.ServerResponse) : bool =
-    let path = pathnameOf req.url
+    let path = Interop.pathnameOf req.url
     if not (path.StartsWith "/hooks/") then false
     elif req.``method`` <> "POST" then
         respond res 405 "a delivery is a POST"

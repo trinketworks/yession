@@ -100,9 +100,6 @@ type ConnectionsApi =
       Resolve : ControlCaller -> ControlWire.ConnectionResolveRequest -> Async<Result<ControlWire.ConnectionResolveResponse, SecretsError>>
       Status : ControlCaller -> Async<ConnectionStatusList> }
 
-[<Fable.Core.Emit("new URL($0, 'http://local').pathname")>]
-let private pathnameOf (url: string) : string = Fable.Core.Util.jsNative
-
 let private respondJson (res: ServerResponse) (json: string) =
     res.writeHead (200, createObj [ "content-type", box "application/json"; "cache-control", box "no-store" ]) |> ignore
     res.``end`` json

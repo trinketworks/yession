@@ -452,6 +452,11 @@ type Crypto =
 [<AutoOpen>]
 module WebCrypto =
 
+    /// `crypto.randomUUID()` — a v4 UUID from the platform's CSPRNG. On `crypto` the global,
+    /// which `Fable.Node`'s `node:crypto` typings predate.
+    [<Emit("crypto.randomUUID()")>]
+    let randomUUID () : string = jsNative
+
     /// The `crypto` global. A function rather than a value so that reaching for it emits
     /// nothing until somebody does.
     [<Emit("crypto")>]
