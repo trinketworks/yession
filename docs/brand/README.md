@@ -452,3 +452,32 @@ Height is the dial that matters for the blocks: as cubes it is a stair, at 1.8 i
 standing, at 2.6 it is pillars and the letter shrinks to a notch. The sketch's proportion is
 about right. And a camera is the honest instrument here — `turned` is the same object as
 `sketch`, which no drawn mark can claim.
+
+## Fifteenth pass: the chevron
+
+`chevron/` takes `blocks/` from above and thins the green blocks to half width. Same object,
+same camera — the generator imports `blocks`' camera and renderer — with two new dials: the
+slabs' width and which half of their quadrant they keep. From above the greens become two arms
+hanging off the blue cube and the whole thing is an upward chevron with the agent at its apex.
+
+- **From above, as cubes** — `cubes-48`, `cubes-62`, `cubes-plan` (straight down: three squares,
+  two hairlines, the third arm of the Y the corner they leave open), `tall-55`.
+- **Half width** — `chevron` (48°), `chevron-62`, `chevron-plan` (flat: two bars and a diamond,
+  stencil-cuttable), `chevron-30`, `chevron-turned` (θ = 32°).
+- **Where the slabs sit** — `inner` (inner halves: the concave stem survives, the chevron's
+  outline does not), `centred`, `slabs-tall` (walls with a cube tucked between them), `slabs-low`
+  (the cube stands proud), `thin` (quarter width).
+- **The kerf** — `nokerf`, `widekerf`.
+- **The Y in it** — it is the cube's two near top edges and its near vertical edge. `y-lit`
+  (those three edges given a hairline and a weak halo), `y-floor` (the third stroke as a thin
+  blue strip laid on the ground out through the empty quadrant), `y-shadow` (the cube casting
+  forward between the slabs — nothing added a light would not add), `y-plan`, `y-plan-thin`
+  (the flat chevron with a stroke down into the V).
+
+Findings: `chevron-62` is the mark — two bars meeting at a square, and the first silhouette in
+the whole exploration that is a symbol rather than a solid. Plan is a second mark for free, and
+provably the same object as the dimensional one. The stem wants to be on the floor: lighting the
+edges makes a Y but leaves the chevron as it was; the floor strip turns the chevron into the
+letter. Outer halves or inner halves is the fork in the road — a chevron without a stem, or a
+stem without a chevron. Slab height reads as a claim: taller than the cube says the agent is
+inside the humans' space, lower says it stands proud, level is neutral and the only clean one.
