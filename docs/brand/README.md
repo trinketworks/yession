@@ -105,3 +105,36 @@ straight is what keeps the set siblings. `stack`, `lift` and `breathe` still say
 three-parties-in-one-thing at 16px, where `petal` and `draw` collapse into a blob and a star.
 And `hold` changes the argument rather than the mood: a shrunken agent face says authority is
 scoped and the small thing is held, which is a claim, not a style.
+
+## Fourth pass: the folded Y
+
+`fold/` takes the crease from `form/fold.svg` and treats it as the construction. Creasing each
+face gives six triangles, so the hexagon's interior has six edges: three are the Y (60°, 180°,
+300°) and three are folds (0°, 120°, 240°). The Y is cut; the folds exist only as a step in
+value. Every study is a way of spending or saving that difference.
+
+**The Y as a letter.** The cut now stops inside the field — run it to the silhouette and a
+terminal has nowhere to exist, which is why the first attempt's variations were all the same
+drawing. `modul` (pen weight, thick at the junction), `sheared` (terminals cut on an angle),
+`flared` (glyphic, widening in the last tenth), `joint` (a fillet where the strokes pool),
+`penned` (arms bowed as a written Y's are), `stemmed` (short arms, long stem — a Y's actual
+proportion), `offaxis` (arms at 44° instead of the isometric 60°).
+
+**Quieter.** `whisper` (hairline), `tone` (no cut at all — the fold values arranged so the step
+across the Y beats the step across a crease), `emboss` (hairline with a light edge under it),
+`step` (half the hexagon 1.6px smaller, so the Y is a misalignment).
+
+**The triangles.** `gem` (every corner radiused), `hub` (radius only at the centre, so the
+junction softens and the rim stays sharp), `alternate` (colour by triangle, not by face),
+`pinwheel` (the lit half rotated one step, so shading circles instead of describing a solid),
+`deep` (fold contrast doubled on one face, halved on another).
+
+**Light and depth.** `lit` (one light source resolved per facet, six gradients), `sweep` (each
+face bleeding toward its neighbour's hue along the seam), `extrude` (a dark copy behind — the
+only build here that still works in one colour).
+
+Findings: `stemmed` and `offaxis` are the two that read as a letter rather than a construction,
+at the price of the cube being geometrically true. `tone` is the quietest and the only mark with
+no holes in it. Six flats survive 16px and six gradients do not — `lit` and `sweep` want a
+second, flatter build rather than a compromise. And radius at the hub buys more than radius at
+the rim, because the junction is the part a reader looks at.
