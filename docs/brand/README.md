@@ -504,3 +504,25 @@ the first where the Y sits exactly where a letter would put it. Plan inverts the
 works only because the edges bow: a radial scale alone swells the mark, and subdividing every
 edge before warping is what turns straight lines into arcs — the whole difference between plotted
 and photographed. The tighter the arrangement, the better it takes the bulge.
+
+## Seventeenth pass: convex, lit, glossed
+
+`convex/` corrects the lens and lights the object. The previous pass's barrel term had the sign
+reversed — magnification rising with radius is pincushion, and an off-centre straight line bows
+toward the centre. With magnification falling with radius the line bows away: outward, convex.
+
+- **Convex** — `hug-convex`, `chevron-convex`, `blocks-convex` (the sketch; its vertical edges
+  have the most to bow), `cubes-convex`, `hug-convex-strong` (k = 0.3, a fisheye, past the edge).
+- **Neon on the kerfs** — the three kerfs are the cube's two near top edges and its near vertical
+  edge, which is to say they are the Y. `hug-neon`, `chevron-neon`, `blocks-neon` (the stem a long
+  vertical tube seen down the slot between the front blocks), `hug-warm` (lit green — a blue tube
+  along a blue cube's edge loses the arm; green keeps all three strokes), `hug-spill` (the light
+  the junction would throw, painted), `hug-assembled` (tubes, spill, halo, each weak).
+- **Gradient flourishes** — `hug-graded` (a gradient per face: tops lighter toward their far end,
+  sides darker toward the ground), `hug-gloss` (plus a specular on the cube's far corner — a
+  moulded, polished solid), `chevron-gloss`, `hug-sheen` (one diagonal sheen over the whole
+  object), `hug-rim` (a hairline along the top edges plus a little spill — the only lit build
+  that still reads at 16px).
+
+The lens lines bow with the object: the neon strokes go through the same subdivided warp as
+the faces.
