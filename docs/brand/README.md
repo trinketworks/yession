@@ -358,3 +358,40 @@ mark that is about the product rather than the letter), `aperture` (the best dra
 only one with an honest animation in it), `keycap-lit` (answers the dice's discovery — the Y as a
 lit object rather than an absence), and `bars` (three separate objects meeting, so the two humans
 are finally plainly two). `overlap` and `chip` are recorded as failures: a face and a costume.
+
+## Twelfth pass: lighting whisper
+
+`neon/` returns to `fold/whisper.svg` and lights its cut. A lit tube is not one blur: the core is
+nearly white and thinner than expected, the falloff comes in stages rather than one, the hue
+shifts deeper as it spreads, and — the part usually missed — it lights whatever stands next to
+it. Each family below isolates one of those mechanisms; the last puts them back together.
+
+- **Painted light** (no filters at all) — `spill`, `spill-deep`, `spill-cold`. Every facet of this
+  mark is bounded by exactly one slot and one crease, so light from the cut is a linear gradient
+  running between them. Resolution-independent, free to render, and works in any pipeline that
+  can draw a gradient.
+- **The tube** — `tube` (three stages: near-white core, tight halo at the hue, wide dim wash),
+  `chroma` (outermost stage pushed to a deeper, more saturated blue), `faint`.
+- **A lighting model** — `pointlit` (feDiffuseLighting with a point source in the junction),
+  `twolight` (green source up the arms, blue down the stem), `specular` (feSpecularLighting, so
+  the facets read as having a finish).
+- **The room** — `ambient` (wash under the whole mark), `halo` (wash outside the silhouette only),
+  `grain` (feTurbulence in the bloom, because a perfectly smooth falloff bands on a real screen
+  and reads as a gradient rather than as light).
+- **State** — `unlit` (a recessed grey slot, no wash), `warm` (lit green), `pulse` (gradient along
+  the run, as an unevenly excited tube does).
+- **Assembled** — `assembled` (all of it, each layer weak), `dual` (arms green, stem blue, each
+  facet washed by whichever lights it), `slot` (the cut given thickness: dark inner edge, bright
+  lip), `edge` (no bloom at all — two bright hairlines on the lips plus painted spill).
+
+Findings: `spill` costs nothing and is the mechanism to build on. `dual` is the only lighting that
+keeps the mark's argument — lighting everything one colour throws away the two-humans-and-an-agent
+reading. `edge` is the one to trust: it reads as lit, survives print, and is the only assembled
+build still legible at 16px. Note that every tube, lighting and room build depends on SVG filters,
+which are slow at scale, render differently across engines and are dropped by several icon and
+email pipelines. And none of the glow builds survive 16px — which is the right answer: lit at the
+sizes where light is visible, flat where it is not.
+
+Two filter gotchas found the hard way, both the same bug: an `objectBoundingBox` region is
+degenerate for a zero-width shape. A vertical line takes neither a default `linearGradient` nor a
+default filter region — both need `userSpaceOnUse`.
