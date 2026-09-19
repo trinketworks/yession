@@ -104,7 +104,14 @@ type LaunchViewState =
       /// The card was dismissed: it steps aside for this client. The ordinary empty
       /// timeline and the composer are what is left, which is how a session that is not
       /// about a repository begins.
-      Dismissed : bool }
+      Dismissed : bool
+      /// Decided ONCE and held: the client was connected, caught up, and the session was
+      /// unstarted. `offered` reads this instead of asking the live connection on every
+      /// render (`Launch.anchor` sets it, `Launch.eligible` is the live question it asks) --
+      /// a reconnect catching up on what arrived while it was gone must not take the card
+      /// away and bring it back. What still retires it live is `begun`, `Dismissed`, or a
+      /// launch under way.
+      Anchored : bool }
 
 type LaunchMsg =
     | LaunchQueryTyped of string
@@ -157,7 +164,8 @@ module Launch =
           Named = Map.empty
           Stage = Choosing
           Problem = None
-          Dismissed = false }
+          Dismissed = false
+          Anchored = false }
 
     /// Whether the add has been SENT and the card is now waiting on events, not on the
     /// person. `Resolving` is still the person's step — a pasted link being turned into a
@@ -172,9 +180,10 @@ module Launch =
         | Choosing | Resolving _ -> false
         | Sent _ | Cloning _ -> true
 
-    /// Whether the card is OFFERED: this client is connected, has read the log through
-    /// to where the session says it ends, and the session has not BEGUN — no repo in it and
-    /// nothing said. A session that has begun is the agent's to add a repo to (Plan 15).
+    /// The live question `anchor` asks, once, on the way to deciding: this client is
+    /// connected, has read the log through to where the session says it ends, and the
+    /// session has not BEGUN - no repo in it and nothing said. A session that has begun is
+    /// the agent's to add a repo to (Plan 15).
     ///
     /// "Begun" is a repo or a message, deliberately not "anything on the timeline": a launch
     /// that failed leaves its failure on the timeline, and a person whose clone could not
@@ -182,19 +191,47 @@ module Launch =
     ///
     /// The catch-up conditions are what keep it honest: a client that has not looked yet, or
     /// is still reading, has an empty projection too, and a launch card that flashed over
-    /// every cold open of an old session would teach people it means nothing. Committed is
-    /// the other half of the same rule: once the add is under way the card is not offered,
-    /// so the switch to the timeline happens when the add STARTS, not when it lands.
-    let offered
+    /// every cold open of an old session would teach people it means nothing.
+    ///
+    /// NOT what a render reads (`offered` is): see `anchor`, below, for why a live signal
+    /// answers this question exactly once and is then retired.
+    let eligible
+        (connected: bool)
+        (historyRead: bool)
+        (latestKnown: EventOffset option)
+        (catchingUp: bool)
+        (begun: bool)
+        : bool =
+        connected && historyRead && latestKnown.IsSome && not catchingUp && not begun
+
+    /// The card's start, ANCHORED: once `eligible` has been true, once, it is decided - a
+    /// session that begins offered stays offered through whatever its OWN connection does
+    /// next. Without this, a phone backgrounding the tab drops the socket; reconnecting
+    /// spends a moment `catchingUp` on whatever arrived while it was gone; and a card
+    /// computed fresh from those live signals on every render winks out and back for no
+    /// reason a person watching it could name. `begun` alone still closes it, live, in
+    /// `offered` below - this only ever LATCHES true, never false, and never at all once the
+    /// session has already begun (a cold open of an old session must not anchor a card
+    /// nobody will see offered).
+    let anchor
         (connected: bool)
         (historyRead: bool)
         (latestKnown: EventOffset option)
         (catchingUp: bool)
         (begun: bool)
         (launch: LaunchViewState)
-        : bool =
-        connected && historyRead && latestKnown.IsSome && not catchingUp && not begun
-        && not launch.Dismissed && not (committed launch)
+        : LaunchViewState =
+        if launch.Anchored || begun then launch
+        elif eligible connected historyRead latestKnown catchingUp begun then
+            { launch with Anchored = true }
+        else launch
+
+    /// Whether the card is OFFERED. Reads the ANCHOR (`Launch.anchor`), not the live
+    /// connection - that is the point of anchoring it - alongside what is still read live:
+    /// `begun`, because a message or a repo landing while the card stands is what retires it
+    /// for real; `Dismissed`, this client's own way out; and `committed`, once under way.
+    let offered (begun: bool) (launch: LaunchViewState) : bool =
+        launch.Anchored && not begun && not launch.Dismissed && not (committed launch)
 
     /// Whether the card is busy with an attempt: rows are not for holding while one is
     /// under way, because two clones of two repos is not what anyone meant.
