@@ -304,11 +304,6 @@ let private headerPairsOf (req: Interop.IncomingMessage) : (string * string) arr
 let private headersOf (req: Interop.IncomingMessage) : (string * string) list =
     headerPairsOf req |> List.ofArray
 
-let private readBody (req: Interop.IncomingMessage) (cont: string -> unit) =
-    let mutable acc = ""
-    req.on ("data", fun chunk -> acc <- acc + Interop.bufferToString chunk) |> ignore
-    req.on ("end", fun _ -> cont acc) |> ignore
-
 let private respond (res: Interop.ServerResponse) (status: int) (text: string) =
     res.writeHead (status, JsInterop.createObj [ "content-type", box "text/plain"; "cache-control", box "no-store" ])
     |> ignore
@@ -328,7 +323,7 @@ let tryHandle (relay: Relay) (req: Interop.IncomingMessage) (res: Interop.Server
         respond res 405 "a delivery is a POST"
         true
     else
-        readBody req (fun body ->
+        Interop.readBody req (fun body ->
             // The status is all the caller learns. Whether anything was subscribed is not
             // in it, because a provider's delivery log would otherwise become a way to
             // probe what this deployment is watching.

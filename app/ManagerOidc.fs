@@ -40,11 +40,6 @@ let private annotatedJwk (publicJwk: obj) (kid: string) : obj = jsNative
 let private jwksJson (publicJwk: obj) (kid: string) : string =
     JS.JSON.stringify {| keys = [| annotatedJwk publicJwk kid |] |}
 
-let private readBody (req: IncomingMessage) (cont: string -> unit) =
-    let mutable acc = ""
-    req.on ("data", fun chunk -> acc <- acc + bufferToString chunk) |> ignore
-    req.on ("end", fun _ -> cont acc) |> ignore
-
 let private respond (res: ServerResponse) (status: int) (contentType: string) (body: string) =
     res.writeHead (status, createObj [ "content-type", box contentType; "cache-control", box "no-store" ]) |> ignore
     res.``end`` body

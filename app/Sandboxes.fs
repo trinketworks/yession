@@ -879,49 +879,58 @@ module private Children =
 
     let private childProcess : obj = importAll "node:child_process"
 
+    /// The spawned child, as much of it as this module reads. Its two output streams are
+    /// `Readable`s so they can be told to decode; what it exits with is an option, because a
+    /// child a SIGNAL ended has no code and Node says so with `null`.
+    [<AllowNullLiteral>]
+    type Child =
+        abstract stdout : Readable
+        abstract stderr : Readable
+
     // `detached: true` makes the child its own process group leader, so `Kill` can take
     // the whole tree with one signal to `-pid`.
     [<Emit("$0.spawn($1, $2, { cwd: $3 || undefined, env: Object.fromEntries($4), stdio: ['pipe', 'pipe', 'pipe'], detached: true })")>]
-    let private spawnChild (cp: obj) (executable: string) (args: string array) (cwd: string) (env: (string * string) array) : obj = jsNative
+    let private spawnChild (cp: obj) (executable: string) (args: string array) (cwd: string) (env: (string * string) array) : Child = jsNative
 
-    [<Emit("$0.stdout.on('data', (d) => $1(String(d)))")>]
-    let private onStdout (child: obj) (handler: string -> unit) : unit = jsNative
+    /// A spawn that failed before exec, or a child that could not be signalled: the platform's
+    /// own `Error`, read by `StreamError.describe` — which is the message when there is one and
+    /// JavaScript's rendering of the value when there is not, decided in F# rather than in an
+    /// `||` inside the macro.
+    [<Emit("$0.on('error', $1)")>]
+    let private onError (child: Child) (handler: StreamError -> unit) : unit = jsNative
 
-    [<Emit("$0.stderr.on('data', (d) => $1(String(d)))")>]
-    let private onStderr (child: obj) (handler: string -> unit) : unit = jsNative
-
-    [<Emit("$0.on('error', (e) => $1(String((e && e.message) || e)))")>]
-    let private onError (child: obj) (handler: string -> unit) : unit = jsNative
-
-    [<Emit("$0.on('close', (c) => $1(c == null ? -1 : c))")>]
-    let private onClose (child: obj) (handler: int -> unit) : unit = jsNative
+    /// The child ended. `None` is a child a signal took, which Node reports as a `null` code;
+    /// what this module says about that (-1, "the OS gave us none") is said at the call, not
+    /// inside the binding.
+    [<Emit("$0.on('close', $1)")>]
+    let private onClose (child: Child) (handler: int option -> unit) : unit = jsNative
 
     [<Emit("$0.stdin.write($1)")>]
-    let private stdinWrite (child: obj) (text: string) : unit = jsNative
+    let private stdinWrite (child: Child) (text: string) : unit = jsNative
 
     [<Emit("$0.stdin.end()")>]
-    let private stdinEnd (child: obj) : unit = jsNative
+    let private stdinEnd (child: Child) : unit = jsNative
 
     // Writing to — or closing — the stdin of a child that has already gone throws, and a
     // keystroke that arrived after the process exited is not something a caller can act on.
     // Swallowed here rather than in the binding, so what is ignored is F# anyone can read.
-    let private writeStdin (child: obj) (text: string) : unit =
+    let private writeStdin (child: Child) (text: string) : unit =
         try stdinWrite child text with _ -> ()
 
-    let private endStdin (child: obj) : unit =
+    let private endStdin (child: Child) : unit =
         try stdinEnd child with _ -> ()
 
     [<Emit("process.kill(-$0.pid, 'SIGKILL')")>]
-    let private killGroup (child: obj) : unit = jsNative
+    let private killGroup (child: Child) : unit = jsNative
 
     [<Emit("$0.kill('SIGKILL')")>]
-    let private killChild (child: obj) : unit = jsNative
+    let private killChild (child: Child) : unit = jsNative
 
     /// The group first — `detached: true` made the child its own leader, so one signal to
     /// `-pid` takes the whole tree. A child that never became a leader (a spawn that failed
     /// before exec) has no group to signal, so the process itself is the fallback, and a
     /// child that is already gone is what the outer ignore is for.
-    let private killTree (child: obj) : unit =
+    let private killTree (child: Child) : unit =
         try
             killGroup child
         with _ ->
@@ -943,10 +952,10 @@ module private Children =
             live <- (id, fun () -> killTree child) :: live
             let forget () = live <- live |> List.filter (fun (other, _) -> other <> id)
             let ended = OneShot<SandboxRun> ()
-            onStdout child (fun text -> onChunk (Stdout, text))
-            onStderr child (fun text -> onChunk (Stderr, text))
-            onError child (fun reason -> forget (); ended.Settle (SandboxRunFailed reason))
-            onClose child (fun code -> forget (); ended.Settle (SandboxExited code))
+            Readables.text child.stdout (fun text -> onChunk (Stdout, text))
+            Readables.text child.stderr (fun text -> onChunk (Stderr, text))
+            onError child (fun error -> forget (); ended.Settle (SandboxRunFailed (StreamError.describe error)))
+            onClose child (fun code -> forget (); ended.Settle (SandboxExited (code |> Option.defaultValue -1)))
             { WriteStdin = writeStdin child
               CloseStdin = fun () -> endStdin child
               Kill = fun () -> killTree child
