@@ -218,6 +218,33 @@ module ObjectUrls =
 
     [<Emit("URL.revokeObjectURL($0)")>]
     let revoke (url: string) : unit = jsNative
+/// What `Fable.Browser.Dom` leaves off `Node`.
+module Nodes =
+
+    /// Whether a node is still in the document. A node replaced by a render is detached, and
+    /// measuring a detached node's box says nothing.
+    [<Emit("$0.isConnected")>]
+    let isConnected (node: Node) : bool = jsNative
+
+/// One end of a `MessageChannel`.
+[<AllowNullLiteral>]
+type MessagePort =
+    abstract onmessage : (MessageEvent -> unit) with get, set
+    abstract postMessage : message: obj -> unit
+
+/// A `MessageChannel`: two ports, and a message posted on one arrives on the other as a
+/// TASK — a turn of the event loop the page may paint in, which is the one thing a
+/// microtask cannot give. `Fable.Browser.Dom` stops at the DOM; the channel is in the
+/// workers' bindings this repository does not otherwise need.
+[<AllowNullLiteral>]
+type MessageChannel =
+    abstract port1 : MessagePort
+    abstract port2 : MessagePort
+
+module MessageChannel =
+
+    [<Emit("new MessageChannel()")>]
+    let create () : MessageChannel = jsNative
 
 /// The slice of the Cache API that a READ goes through. `Fable.Browser.Dom` types none of it —
 /// it stops at the DOM, and a `Cache` belongs to the service-worker bindings this repository

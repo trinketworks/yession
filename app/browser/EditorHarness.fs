@@ -23,8 +23,10 @@ open Yession.Domain.Link
 open Yession.Domain.Terminals
 open Yession.Domain.Collab
 open Yession.Domain.Chat
+open Fable.BrowserExtras
 open Fable.ProseMirror
 open Yession.App
+open Thoth.Json
 
 let private host : Browser.Types.HTMLElement = Browser.Dom.document.getElementById "host"
 
@@ -36,18 +38,119 @@ let private replayHost : Browser.Types.Element = Browser.Dom.document.getElement
 
 let private gappyReplayHost : Browser.Types.Element = Browser.Dom.document.getElementById "replay-gappy"
 
-[<Emit("window.__md = $0")>]
-let private exposeMd (f: unit -> string) : unit = jsNative
+/// What this page publishes on `window`, which is the harness's INTERFACE: the browser cases
+/// and the bench scenarios read and call these out of a Playwright `evaluate`, which can see
+/// a global and cannot see a module binding. Each is the measurement's output or the
+/// scenario's entry, not a global something forgot to scope. A function of more than one
+/// argument is a delegate, because that is a JavaScript function of that many parameters
+/// and an F# function of that type is not.
+type private Harness =
+    abstract __md : (unit -> string) with get, set
+    abstract __pushRemote : (string -> unit) with get, set
+    /// How many times Enter has asked to send. The harness mounts the editor exactly as the
+    /// COMPOSER does (`onSubmit` supplied), so the E2E drives the real binding: Enter sends and
+    /// inserts nothing, Alt+Enter is the new line. A counter rather than a callback because what
+    /// the test needs to know is "did it fire", and the send itself belongs to the app.
+    abstract __sends : int with get, set
+    /// Start or stop pushing presence decorations into the MIRROR on every animation frame.
+    abstract __caretStorm : (bool -> unit) with get, set
+    /// How many frames the storm has actually pushed on. Anti-vacuity: a convergence assertion
+    /// passes trivially if the storm never ran, and "never ran" and "ran and was harmless" look
+    /// identical from the outside.
+    abstract __caretPushes : int with get, set
+    /// The two counters are on `window` because that is this instrument's INTERFACE: the browser
+    /// case reads them out of a Playwright `evaluate`, which can see a global and cannot see a
+    /// module binding. They are the measurement's output, not a global something forgot to scope.
+    abstract __docUpdates : int with get, set
+    abstract __writebacks : int with get, set
+    abstract __convState : (unit -> string) with get, set
+    abstract __benchDiagState : obj with get, set
+    abstract __benchDiag : (unit -> string) with get, set
+    abstract __benchSeed : (int -> JS.Promise<int>) with get, set
+    abstract __benchCarets : (int -> JS.Promise<string>) with get, set
+    abstract __benchReset : (unit -> unit) with get, set
+    abstract __benchTyping : (unit -> string) with get, set
+    abstract __benchTranscript : System.Func<int, int, int, string> with get, set
+    abstract __benchSettle : (unit -> JS.Promise<unit>) with get, set
+    /// Begin the scroll scenario: a conversation of `items`, `records` transcript records arriving
+    /// one every `everyMs`, and the frame clock and render clock running. The FLING is the driver's
+    /// to make, with real touch input, once this returns.
+    ///
+    /// `elsewhere` sends the records to a terminal the conversation does not draw — a sandbox
+    /// running its setup behind a shut pane — so every one of them is a render that leaves the
+    /// conversation exactly as it was. Off, they land in the burst card's running block, and the
+    /// conversation grows under the reader with each.
+    abstract __benchScrollBegin : System.Action<int, int, int, bool> with get, set
+    /// How many records the stream has sent so far. The driver flings until the stream is spent,
+    /// so every size is measured over the same records rather than over however long one fling
+    /// through it happened to take.
+    abstract __benchScrollSent : (unit -> int) with get, set
+    /// End it: stop the stream and the clocks, and hand back what they recorded.
+    abstract __benchScrollEnd : (unit -> string) with get, set
+    /// Open a session the way the app opens one it has been to before — from what it kept — and
+    /// say what the page did between its first paint and its connection: `items` conversation
+    /// items' worth of events in the kept store, `perAnswer` events to each kept answer.
+    abstract __benchOpen : System.Func<int, int, JS.Promise<string>> with get, set
+    /// Open a session the way the app opens one it has never seen — everything over the
+    /// network, `pageSize` events to a page, a page every `everyMs` — and say what the page did.
+    abstract __benchOpenCold : System.Func<int, int, int, JS.Promise<string>> with get, set
+    abstract __typed : string with get, set
+    /// Hand the shell a terminal SCREEN, as the Session Process does over the data channel
+    /// (Plan 14, stage 6). Exposed so the E2E can drive the one path that puts a real emulator
+    /// in a real browser: without it this bundle contains no xterm at all, and the browser tier
+    /// silently proved nothing about the client's live screen — which is how a browser-only
+    /// module-resolution failure got past it and into a release job.
+    ///
+    /// The size is the caller's to leave out — a case that only wants a screen on the page says
+    /// nothing about how big it is, and the harness's own 80x24 is what it gets.
+    abstract __snapshot : System.Action<string, int, string, int option, int option> with get, set
+    /// Hand the shell one transcript record, as the Session Process does as a terminal speaks.
+    /// The companion to the snapshot: a snapshot is where a screen STARTS and records are what
+    /// move it, and composing the two — including a resize reshaping the emulator mid-stream —
+    /// is the client's own fold.
+    abstract __record : System.Action<string, int, string, string> with get, set
+    /// The size this client last told the Session Process its screen is. Read back by the E2E,
+    /// because the question there is whether a box that changed without the model changing — a
+    /// splitter dragged, a window resized — reached the pty at all.
+    abstract __resized : string with get, set
+    /// The size this client last measured its OWN view of a terminal at — the width a command
+    /// queued from that pane would claim (`PendingAct.Size`). A second hook rather than a reading
+    /// of `window.__resized`, because the two are different facts: that one is what was sent to the
+    /// pty for a lease this peer holds, and this one is measured in BLOCK mode, where nobody holds
+    /// anything and nothing is sent at all.
+    abstract __viewport : string with get, set
+    /// Start an agent turn in the shell, as the Session Process does when the model begins to
+    /// answer: the turn, the message it opens, and the first words of it, folded through the same
+    /// page the real client reads. Exposed because the browser tier boots its session with NO
+    /// model credential (deliberately — see `Browser.fs`), so a turn in flight is a state no
+    /// amount of typing on this page can reach, and how many marks a person sees while one is
+    /// running is a question only a laid-out page can answer.
+    abstract __agentTurn : (unit -> unit) with get, set
+    /// Hand a terminal's lease to this peer WITHOUT a press, as the alt-screen flip does: a block
+    /// takes the screen and the Session Process gives its author the keyboard. Exposed for the
+    /// same reason the snapshot is — it is the arrival of a fact from elsewhere, and a test that
+    /// could only reach live mode by pressing `take` could never exercise the route that has no
+    /// press to make.
+    abstract __take : (string -> unit) with get, set
+    /// Swap the shell between the session's first screen and a conversation. Both, from one hook,
+    /// because the question the card raises is about the two TOGETHER: the ask card stands only
+    /// where nothing has been said and a message body only where something has, so the one column
+    /// they are both supposed to start on can be measured no other way on one page.
+    abstract __launch : (bool -> unit) with get, set
+    /// A collaborator's caret in a chapter's NAME, with no session to relay one from. The
+    /// positions handed over are real relative positions over a real `Y.Text` on this page's doc,
+    /// which is the whole of what the placement reads: it resolves them against the doc and
+    /// measures the input's own value and box. So the question the browser is asked here is
+    /// exactly the one the app asks it — given a caret that resolves, is the marker painted over
+    /// the field it is in, at the offset it claims.
+    ///
+    /// Where a name lives IN the doc is the codec's answer and is pinned where it can be tested
+    /// for a penny (`SyncedStateSync.chapterNameText`), not restated here: a fixture that wrote
+    /// the layout out by hand would be a second copy of it, and the wrong one the day it moved.
+    abstract __chapterCaret : System.Action<string, int, int> with get, set
 
-[<Emit("window.__pushRemote = $0")>]
-let private exposePush (f: string -> unit) : unit = jsNative
-
-/// How many times Enter has asked to send. The harness mounts the editor exactly as the
-/// COMPOSER does (`onSubmit` supplied), so the E2E drives the real binding: Enter sends and
-/// inserts nothing, Alt+Enter is the new line. A counter rather than a callback because what
-/// the test needs to know is "did it fire", and the send itself belongs to the app.
-[<Emit("window.__sends = $0")>]
-let private exposeSends (n: int) : unit = jsNative
+/// The page, as the interface above.
+let private harness () : Harness = unbox Browser.Dom.window
 
 let private doc = Y.Doc.Create ()
 let private fragment = doc.getXmlFragment "body"
@@ -57,7 +160,7 @@ do
     // as a remote peer's cursor on demand.
     let mutable lastSelection : (string * string) option = None
     let mutable sends = 0
-    exposeSends 0
+    (harness ()).__sends <- 0
     let handle =
         Editor.mountEditor
             host
@@ -66,12 +169,12 @@ do
             (fun sel -> lastSelection <- sel)
             (Some (fun () ->
                 sends <- sends + 1
-                exposeSends sends))
+                (harness ()).__sends <- sends))
             // The harness IS the composer, so it wears the composer's prompt: the browser
             // tier can then read the placeholder where the editor really draws it.
             Dom.Text.composerPlaceholder
-    exposeMd (fun () -> Markdown.ofFragment fragment)
-    exposePush (fun name ->
+    (harness ()).__md <- (fun () -> Markdown.ofFragment fragment)
+    (harness ()).__pushRemote <- (fun name ->
         match lastSelection with
         | Some (anchor, head) ->
             handle.PushPresences
@@ -155,16 +258,6 @@ let private peerAHost : Browser.Types.HTMLElement = Browser.Dom.document.getElem
 
 let private peerBHost : Browser.Types.HTMLElement = Browser.Dom.document.getElementById "peer-b"
 
-/// Start or stop pushing presence decorations into the MIRROR on every animation frame.
-[<Emit("window.__caretStorm = $0")>]
-let private exposeStorm (f: bool -> unit) : unit = jsNative
-
-/// How many frames the storm has actually pushed on. Anti-vacuity: a convergence assertion
-/// passes trivially if the storm never ran, and "never ran" and "ran and was harmless" look
-/// identical from the outside.
-[<Emit("window.__caretPushes = $0")>]
-let private exposeCaretPushes (n: int) : unit = jsNative
-
 let private onFrame (f: unit -> unit) : unit =
     Browser.Dom.window.requestAnimationFrame (fun _ -> f ()) |> ignore
 
@@ -173,15 +266,6 @@ let private onFrame (f: unit -> unit) : unit =
 /// array of arguments, which is not the shape Yjs calls it with, so the observer is bound here.
 [<Emit("$0.on('update', $1)")>]
 let private onDocUpdate (doc: Y.Doc) (handler: JS.Uint8Array -> obj -> unit) : unit = jsNative
-
-/// The two counters are on `window` because that is this instrument's INTERFACE: the browser
-/// case reads them out of a Playwright `evaluate`, which can see a global and cannot see a
-/// module binding. They are the measurement's output, not a global something forgot to scope.
-[<Emit("window.__docUpdates = $0")>]
-let private exposeDocUpdates (n: int) : unit = jsNative
-
-[<Emit("window.__writebacks = $0")>]
-let private exposeWritebacks (n: int) : unit = jsNative
 
 [<Import("ySyncPluginKey", "y-prosemirror")>]
 let private ySyncPluginKey : obj = jsNative
@@ -202,29 +286,34 @@ let private ySyncPluginKey : obj = jsNative
 let private countWritebacks (doc: Y.Doc) (syncKey: obj) : unit =
     let mutable updates = 0
     let mutable writebacks = 0
-    exposeDocUpdates updates
-    exposeWritebacks writebacks
+    (harness ()).__docUpdates <- updates
+    (harness ()).__writebacks <- writebacks
     onDocUpdate doc (fun _ origin ->
         updates <- updates + 1
-        exposeDocUpdates updates
+        (harness ()).__docUpdates <- updates
         if System.Object.ReferenceEquals (origin, syncKey) then
             writebacks <- writebacks + 1
-            exposeWritebacks writebacks)
-
-[<Emit("window.__convState = $0")>]
-let private exposeConvState (f: unit -> string) : unit = jsNative
+            (harness ()).__writebacks <- writebacks)
 
 /// The two docs' content and the two editors' rendered text, side by side. `docA`/`docB` are
 /// what the CRDT holds; `pmA`/`pmB` are what each editor actually put on screen. A gap between
 /// a doc and its own editor is a binding that stopped rendering; a gap between the two docs is
 /// a relay that stopped carrying.
-[<Emit("""JSON.stringify({
-  docA: $0, docB: $1, caretPushes: $2,
-  writebacks: window.__writebacks,
-  pmA: document.querySelector('#peer-a .ProseMirror')?.textContent ?? null,
-  pmB: document.querySelector('#peer-b .ProseMirror')?.textContent ?? null
-})""")>]
-let private convStateJson (docA: string) (docB: string) (pushes: int) : string = jsNative
+let private convStateJson (docA: string) (docB: string) (pushes: int) : string =
+    /// What an editor put on screen, or `null` for an editor that is not mounted.
+    let rendered (selector: string) : JsonValue =
+        match Browser.Dom.document.querySelector selector with
+        | null -> Encode.nil
+        | editor -> Encode.string editor.textContent
+
+    Encode.object
+        [ "docA", Encode.string docA
+          "docB", Encode.string docB
+          "caretPushes", Encode.int pushes
+          "writebacks", Encode.int (harness ()).__writebacks
+          "pmA", rendered "#peer-a .ProseMirror"
+          "pmB", rendered "#peer-b .ProseMirror" ]
+    |> Encode.toString 0
 
 // --- The performance surface's interop ---------------------------------------------------
 
@@ -252,9 +341,6 @@ let private nextFrame () : JS.Promise<unit> =
 /// global and cannot read a module binding. That global is this instrument's interface.
 module private TypingDiagnostic =
 
-    [<Emit("window.__benchDiagState = $0")>]
-    let private expose (state: obj) : unit = jsNative
-
     /// How many keys' focus one burst records. A burst is a few dozen keystrokes and the
     /// question the label answers is WHEN focus left, which the first few dozen settle; the cap
     /// is what stops a page left typing into growing an array nobody reads.
@@ -273,7 +359,7 @@ module private TypingDiagnostic =
               "rafs", box rafs
               "focus", box (focus.ToArray ()) ]
 
-    let private publish () : unit = expose (state ())
+    let private publish () : unit = (harness ()).__benchDiagState <- (state ())
 
     /// Where focus sat when a key was pressed: the co-editor by name, anything else by its id
     /// or, having none, by its tag — and `none` for a page whose focus is nowhere at all.
@@ -342,55 +428,13 @@ let private onKeystrokePainted (host: obj) (take: float -> unit) : unit =
                 take (now () - pressed))),
         true)
 
-[<Emit("window.__benchDiag = $0")>]
-let private exposeTypingDiag (f: unit -> string) : unit = jsNative
-
 /// Two named number series as one JSON object — the shape every scenario returns.
 let private twoSeries (a: string) (xs: float[]) (b: string) (ys: float[]) : string =
     JS.JSON.stringify (Fable.Core.JsInterop.createObj [ a, box xs; b, box ys ])
 
-[<Emit("window.__benchSeed = $0")>]
-let private exposeSeed (f: int -> JS.Promise<int>) : unit = jsNative
-
-[<Emit("window.__benchCarets = $0")>]
-let private exposeCarets (f: int -> JS.Promise<string>) : unit = jsNative
-
-[<Emit("window.__benchReset = $0")>]
-let private exposeBenchReset (f: unit -> unit) : unit = jsNative
-
-[<Emit("window.__benchTyping = $0")>]
-let private exposeTyping (f: unit -> string) : unit = jsNative
-
 /// One named number series as JSON — `twoSeries` for a scenario that measures one thing.
 let private oneSeries (a: string) (xs: float[]) : string =
     JS.JSON.stringify (Fable.Core.JsInterop.createObj [ a, box xs ])
-
-[<Emit("window.__benchTranscript = $0")>]
-let private exposeTranscript (f: int -> int -> int -> string) : unit = jsNative
-
-[<Emit("window.__benchSettle = $0")>]
-let private exposeSettle (f: unit -> JS.Promise<unit>) : unit = jsNative
-
-/// Begin the scroll scenario: a conversation of `items`, `records` transcript records arriving
-/// one every `everyMs`, and the frame clock and render clock running. The FLING is the driver's
-/// to make, with real touch input, once this returns.
-///
-/// `elsewhere` sends the records to a terminal the conversation does not draw — a sandbox
-/// running its setup behind a shut pane — so every one of them is a render that leaves the
-/// conversation exactly as it was. Off, they land in the burst card's running block, and the
-/// conversation grows under the reader with each.
-[<Emit("window.__benchScrollBegin = $0")>]
-let private exposeScrollBegin (f: int -> int -> int -> bool -> unit) : unit = jsNative
-
-/// How many records the stream has sent so far. The driver flings until the stream is spent,
-/// so every size is measured over the same records rather than over however long one fling
-/// through it happened to take.
-[<Emit("window.__benchScrollSent = $0")>]
-let private exposeScrollSent (f: unit -> int) : unit = jsNative
-
-/// End it: stop the stream and the clocks, and hand back what they recorded.
-[<Emit("window.__benchScrollEnd = $0")>]
-let private exposeScrollEnd (f: unit -> string) : unit = jsNative
 
 /// What the scroll scenario recorded, in the series shape the driver reads everywhere else,
 /// plus the counts that say whether it measured anything: renders against records sent, and
@@ -405,22 +449,6 @@ let private scrollReport
            records = recordsN
            scrolledFrom = scrolledFrom
            scrolledTo = scrolledTo |}
-
-/// Open a session the way the app opens one it has been to before — from what it kept — and
-/// say what the page did between its first paint and its connection: `items` conversation
-/// items' worth of events in the kept store, `perAnswer` events to each kept answer.
-[<Emit("window.__benchOpen = $0")>]
-let private exposeOpen (f: int -> int -> JS.Promise<string>) : unit = jsNative
-
-/// Open a session the way the app opens one it has never seen — everything over the
-/// network, `pageSize` events to a page, a page every `everyMs` — and say what the page did.
-[<Emit("window.__benchOpenCold = $0")>]
-let private exposeOpenCold (f: int -> int -> int -> JS.Promise<string>) : unit = jsNative
-
-/// Whether an element is still in the document — the item under the eye last frame may have
-/// been replaced by this one, and measuring a detached node's box says nothing.
-[<Emit("$0.isConnected")>]
-let private isConnected (el: Browser.Types.Element) : bool = jsNative
 
 /// One frame's look at the conversation, as far as an eye can tell two frames apart: where
 /// its box is, what is scrolled into it, how much is in it, and which item is under the
@@ -437,17 +465,6 @@ type private Look =
       PageChars : int
       Anchor : Browser.Types.Element option }
 
-[<Emit("new MessageChannel()")>]
-let private messageChannel () : obj = jsNative
-
-/// The port that hears a posted task. A message handler takes the event, which nothing here
-/// reads: what this port carries is the TURN, not a value.
-[<Emit("$0.port1.onmessage = $1")>]
-let private onPortMessage (channel: obj) (handler: unit -> unit) : unit = jsNative
-
-[<Emit("$0.port2.postMessage(0)")>]
-let private postTask (channel: obj) : unit = jsNative
-
 /// A turn of the event loop — a task, not a microtask, so the page may paint in between.
 /// Fixture stores answer through this because the Cache API answers that way, and the
 /// asynchrony is not incidental: it is what separates the pictures a person sees on opening
@@ -456,9 +473,11 @@ let private postTask (channel: obj) : unit = jsNative
 /// A message port rather than `setTimeout`, which the browser clamps to 4ms once nested.
 let private nextTask () : JS.Promise<unit> =
     JS.Constructors.Promise.Create (fun resolve _ ->
-        let channel = messageChannel ()
-        onPortMessage channel (fun () -> resolve ())
-        postTask channel)
+        // A message handler takes the event, which nothing here reads: what this port
+        // carries is the TURN, not a value.
+        let channel = MessageChannel.create ()
+        channel.port1.onmessage <- (fun _ -> resolve ())
+        channel.port2.postMessage 0)
 
 /// What the open scenario recorded. Counts and distances, mostly, because what a person sees
 /// on opening a session is not a latency: how many different pictures the page showed, how
@@ -522,7 +541,7 @@ do
 
     let mutable storming = false
     let mutable pushes = 0
-    exposeCaretPushes 0
+    (harness ()).__caretPushes <- 0
     // A's caret, drawn in B — decoded against B's own doc, so the positions are real rather
     // than replayed constants. Before A has reported a selection there is nothing to draw and
     // the frame still counts as a push: what is under test is the dispatch, not the geometry.
@@ -538,20 +557,20 @@ do
                           Head = head } : Editor.RemoteBodyCursor) ]
              | None -> mirror.PushPresences [])
             pushes <- pushes + 1
-            exposeCaretPushes pushes
+            (harness ()).__caretPushes <- pushes
             onFrame storm
     // What each side holds, as one JSON blob. A convergence failure has four candidate
     // stories — the author never wrote it, the relay never carried it, the co-editor's doc has
     // it but its editor never rendered it, or something wrote over it — and they are
     // indistinguishable from the DOM alone. This tells them apart in the failure message
     // instead of in a debugging session.
-    exposeConvState (fun () ->
+    (harness ()).__convState <- (fun () ->
         convStateJson
             (Markdown.ofFragment fragmentA)
             (Markdown.ofFragment fragmentB)
             pushes)
 
-    exposeStorm (fun on ->
+    (harness ()).__caretStorm <- (fun on ->
         if on && not storming then
             storming <- true
             onFrame storm
@@ -585,14 +604,14 @@ do
         let t0 = now ()
         onFrame (fun () -> receiveSamples.Add (now () - t0))
 
-    exposeBenchReset (fun () ->
+    (harness ()).__benchReset <- (fun () ->
         typeSamples.Clear ()
         receiveSamples.Clear ()
         TypingDiagnostic.reset ())
 
-    exposeTyping (fun () ->
+    (harness ()).__benchTyping <- (fun () ->
         twoSeries "type" (typeSamples.ToArray ()) "receive" (receiveSamples.ToArray ()))
-    exposeTypingDiag TypingDiagnostic.asJson
+    (harness ()).__benchDiag <- TypingDiagnostic.asJson
 
     // Drain this burst's pending sample frames before the driver reads the series. Every `type`
     // and `receive` sample lands in a `requestAnimationFrame` callback, and the driver reads the
@@ -603,7 +622,7 @@ do
     // frames — every scheduled frame has fired — and it also stops a size's late frames leaking
     // into the next size's reset window. Bounded so it can never hang: a genuinely empty series
     // settles at zero and the driver's `< 5` guard still refuses it.
-    exposeSettle (fun () ->
+    (harness ()).__benchSettle <- (fun () ->
         async {
             let mutable last = -1
             let mutable stable = 0
@@ -637,7 +656,7 @@ do
     //
     // Nothing is rendered — this is the read the render does, isolated, so a change in what the
     // pane draws cannot be mistaken for a change in what the transcript costs to read.
-    exposeTranscript (fun records blockSize samples ->
+    (harness ()).__benchTranscript <- System.Func<_, _, _, _> (fun records blockSize samples ->
         let feed =
             Seq.fold
                 (fun f seq ->
@@ -664,7 +683,7 @@ do
 
     // Fill BOTH docs to roughly `chars`, through the real relay, and settle. One write rather
     // than a keystroke drip: this is setup, and nothing here is timed.
-    exposeSeed (fun chars ->
+    (harness ()).__benchSeed <- (fun chars ->
         async {
             Markdown.intoFragment (filler chars) fragmentA
             do! nextFrame () |> Async.AwaitPromise
@@ -678,7 +697,7 @@ do
     //
     // A frame is yielded between samples so the browser can actually paint. A tight loop would
     // measure a hot cache and a starved compositor, which is nobody's experience.
-    exposeCarets (fun samples ->
+    (harness ()).__benchCarets <- (fun samples ->
         async {
             let push = ResizeArray<float> ()
             let paint = ResizeArray<float> ()
@@ -1192,9 +1211,6 @@ let private openFixture (items: int) (perAnswer: int) : OpenFixture =
           Kept = fun () -> answered [ terminal ] }
     { OpenFixture.History = history; OpenFixture.Transcripts = transcripts; OpenFixture.Log = log }
 
-[<Emit("window.__typed = $0")>]
-let private exposeTyped (all: string) : unit = jsNative
-
 /// What has been typed so far. The bytes accumulate HERE rather than on the global, which is
 /// this instrument's output and not the place it keeps its count. A page that has typed
 /// nothing has never written the global, and the E2E reads it as `''`, exactly as before.
@@ -1206,82 +1222,13 @@ let mutable private typed = ""
 /// something a rendered string has.
 let private recordTyped (_terminal: TerminalId) (data: string) : unit =
     typed <- typed + data
-    exposeTyped typed
-
-/// Hand the shell a terminal SCREEN, as the Session Process does over the data channel
-/// (Plan 14, stage 6). Exposed so the E2E can drive the one path that puts a real emulator
-/// in a real browser: without it this bundle contains no xterm at all, and the browser tier
-/// silently proved nothing about the client's live screen — which is how a browser-only
-/// module-resolution failure got past it and into a release job.
-///
-/// The size is the caller's to leave out — a case that only wants a screen on the page says
-/// nothing about how big it is, and the harness's own 80x24 is what it gets.
-[<Emit("window.__snapshot = $0")>]
-let private exposeSnapshot (f: string -> int -> string -> int option -> int option -> unit) : unit = jsNative
-
-/// Hand the shell one transcript record, as the Session Process does as a terminal speaks.
-/// The companion to the snapshot: a snapshot is where a screen STARTS and records are what
-/// move it, and composing the two — including a resize reshaping the emulator mid-stream —
-/// is the client's own fold.
-[<Emit("window.__record = $0")>]
-let private exposeRecord (f: string -> int -> string -> string -> unit) : unit = jsNative
-
-/// The size this client last told the Session Process its screen is. Read back by the E2E,
-/// because the question there is whether a box that changed without the model changing — a
-/// splitter dragged, a window resized — reached the pty at all.
-[<Emit("window.__resized = $0")>]
-let private exposeResized (size: string) : unit = jsNative
+    (harness ()).__typed <- typed
 
 let private recordResized (_terminal: TerminalId) (cols: int) (rows: int) : unit =
-    exposeResized (sprintf "%dx%d" cols rows)
-
-/// The size this client last measured its OWN view of a terminal at — the width a command
-/// queued from that pane would claim (`PendingAct.Size`). A second hook rather than a reading
-/// of `window.__resized`, because the two are different facts: that one is what was sent to the
-/// pty for a lease this peer holds, and this one is measured in BLOCK mode, where nobody holds
-/// anything and nothing is sent at all.
-[<Emit("window.__viewport = $0")>]
-let private exposeViewport (size: string) : unit = jsNative
+    (harness ()).__resized <- (sprintf "%dx%d" cols rows)
 
 let private recordViewport (_terminal: TerminalId) (cols: int) (rows: int) : unit =
-    exposeViewport (sprintf "%dx%d" cols rows)
-
-/// Start an agent turn in the shell, as the Session Process does when the model begins to
-/// answer: the turn, the message it opens, and the first words of it, folded through the same
-/// page the real client reads. Exposed because the browser tier boots its session with NO
-/// model credential (deliberately — see `Browser.fs`), so a turn in flight is a state no
-/// amount of typing on this page can reach, and how many marks a person sees while one is
-/// running is a question only a laid-out page can answer.
-[<Emit("window.__agentTurn = $0")>]
-let private exposeAgentTurn (f: unit -> unit) : unit = jsNative
-
-/// Hand a terminal's lease to this peer WITHOUT a press, as the alt-screen flip does: a block
-/// takes the screen and the Session Process gives its author the keyboard. Exposed for the
-/// same reason the snapshot is — it is the arrival of a fact from elsewhere, and a test that
-/// could only reach live mode by pressing `take` could never exercise the route that has no
-/// press to make.
-[<Emit("window.__take = $0")>]
-let private exposeTake (f: string -> unit) : unit = jsNative
-
-/// Swap the shell between the session's first screen and a conversation. Both, from one hook,
-/// because the question the card raises is about the two TOGETHER: the ask card stands only
-/// where nothing has been said and a message body only where something has, so the one column
-/// they are both supposed to start on can be measured no other way on one page.
-[<Emit("window.__launch = $0")>]
-let private exposeLaunch (f: bool -> unit) : unit = jsNative
-
-/// A collaborator's caret in a chapter's NAME, with no session to relay one from. The
-/// positions handed over are real relative positions over a real `Y.Text` on this page's doc,
-/// which is the whole of what the placement reads: it resolves them against the doc and
-/// measures the input's own value and box. So the question the browser is asked here is
-/// exactly the one the app asks it — given a caret that resolves, is the marker painted over
-/// the field it is in, at the offset it claims.
-///
-/// Where a name lives IN the doc is the codec's answer and is pinned where it can be tested
-/// for a penny (`SyncedStateSync.chapterNameText`), not restated here: a fixture that wrote
-/// the layout out by hand would be a second copy of it, and the wrong one the day it moved.
-[<Emit("window.__chapterCaret = $0")>]
-let private exposeChapterCaret (f: string -> int -> int -> unit) : unit = jsNative
+    (harness ()).__viewport <- (sprintf "%dx%d" cols rows)
 
 do
     dressShell Style.app
@@ -1366,14 +1313,14 @@ do
                     { TerminalId = id; By = ActorRef.PeerRef model.Peer.PeerId; FromSeq = 0 }
             model <- { model with Terminals = Projection.applyEvent model.Terminals taken }
             render ()
-    exposeSnapshot (fun id seq screen cols rows ->
+    (harness ()).__snapshot <- System.Action<_, _, _, _, _> (fun id seq screen cols rows ->
         match TerminalId.create id with
         | Ok terminal ->
             renderer.Screens.Snapshot
                 terminal
                 { Seq = seq; Cols = defaultArg cols 80; Rows = defaultArg rows 24; Screen = screen }
         | Error _ -> ())
-    exposeAgentTurn (fun () ->
+    (harness ()).__agentTurn <- (fun () ->
         let expect = function Ok v -> v | Error e -> failwith e
         let turn : AgentTurnId = AgentTurnId.create "turn-live" |> expect
         let messageId : MessageId = MessageId.create "msg-live" |> expect
@@ -1396,7 +1343,7 @@ do
                       envelope 42L (SessionEvent.AgentMessageDelta { AgentTurnId = turn; MessageId = messageId; Delta = "Looking at it" }) ]
                   LastOffset = EventOffset.create 42L |> expect |> Some
                   IsEnd = true }))
-    exposeTake (fun id ->
+    (harness ()).__take <- (fun id ->
         match TerminalId.create id with
         | Ok terminal -> takeRef terminal
         | Error _ -> ())
@@ -1408,10 +1355,10 @@ do
                     LaunchMoreArrived
                         { Repos.RepoPage.Candidates = [ candidateRow "octo/next-one"; candidateRow "octo/next-two" ]
                           Repos.RepoPage.Next = None }))
-    exposeLaunch (fun asking ->
+    (harness ()).__launch <- (fun asking ->
         model <- (if asking then launchModel else shellModel)
         render ())
-    exposeChapterCaret (fun id anchor head ->
+    (harness ()).__chapterCaret <- System.Action<_, _, _> (fun id anchor head ->
         match MessageId.create id, PeerId.create "brave-owl" with
         | Ok messageId, Ok peerId ->
             let text = shellDoc.getText ("harness-chapter-name-" + id)
@@ -1426,7 +1373,7 @@ do
                       DisplayName = "brave-owl"
                       Focus = Some { Field = ChapterName messageId; Pos = { Anchor = at anchor; Head = at head } } })
         | _ -> ())
-    exposeRecord (fun id seq kind data ->
+    (harness ()).__record <- System.Action<_, _, _, _> (fun id seq kind data ->
         match TerminalId.create id, TranscriptKind.parse kind with
         | Ok terminal, Some kind ->
             dispatch (TerminalRecordMsg (terminal, seq, { At = 0.0; Kind = kind; Data = data }))
@@ -1462,7 +1409,7 @@ do
     let mutable finish : (unit -> string) option = None
     let mutable sentSoFar : unit -> int = fun () -> 0
     let elsewhereTerminal : TerminalId = TerminalId.create "term-elsewhere" |> expect
-    exposeScrollBegin (fun items records everyMs elsewhere ->
+    (harness ()).__benchScrollBegin <- System.Action<_, _, _, _> (fun items records everyMs elsewhere ->
         model <- shellModelOf Replies items
         render ()
         let surface = conversation ()
@@ -1500,8 +1447,8 @@ do
                 Browser.Dom.window.clearInterval interval
                 renderTimes <- None
                 scrollReport (frames.ToArray ()) (times.ToArray ()) times.Count sent scrolledFrom (conversation ()).scrollTop))
-    exposeScrollSent (fun () -> sentSoFar ())
-    exposeScrollEnd (fun () ->
+    (harness ()).__benchScrollSent <- (fun () -> sentSoFar ())
+    (harness ()).__benchScrollEnd <- (fun () ->
         match finish with
         | Some report ->
             finish <- None
@@ -1589,7 +1536,7 @@ do
                         || not (sameElement before.Anchor seen.Anchor)
                 if changed then paints <- paints + 1
                 match lastAnchor with
-                | Some (el, top) when isConnected el ->
+                | Some (el, top) when Nodes.isConnected el ->
                     let moved = abs (anchorTop el - top)
                     if moved > 1.0 then
                         jumps <- jumps + 1
@@ -1630,7 +1577,7 @@ do
             { SessionId = SessionId.create "harness" |> expect
               AssignedDisplayName = "swift-heron"
               LatestOffset = fixture.Log |> List.tryLast |> Option.map (fun e -> e.Offset) }
-    exposeOpen (fun items perAnswer ->
+    (harness ()).__benchOpen <- System.Func<_, _, _> (fun items perAnswer ->
         let fixture = openFixture items perAnswer
         measureOpen (
             async {
@@ -1656,7 +1603,7 @@ do
     // accepted (which is what tells the model how far behind it is), then the pages. Pacing
     // a render while the client is catching up is the change this would show, and it lives
     // in `Render`, which this runs.
-    exposeOpenCold (fun items pageSize everyMs ->
+    (harness ()).__benchOpenCold <- System.Func<_, _, _, _> (fun items pageSize everyMs ->
         let fixture = openFixture items pageSize
         let pages = fixture.Log |> List.chunkBySize pageSize
         let last = List.length pages - 1
