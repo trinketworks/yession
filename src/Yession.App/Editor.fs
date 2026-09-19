@@ -71,15 +71,15 @@ module Editor =
         rules.AddRange smartQuotes
         rules.Add ellipsis
         rules.Add emDash
-        if present (n "blockquote") then rules.Add (wrappingInputRule (regex "^\\s*>\\s$") (n "blockquote"))
-        if present (n "ordered_list") then
-            rules.Add (wrappingInputRuleAttrs (regex "^(\\d+)\\.\\s$") (n "ordered_list") orderedListAttrs orderedListJoin)
-        if present (n "bullet_list") then rules.Add (wrappingInputRule (regex "^\\s*([-+*])\\s$") (n "bullet_list"))
-        if present (n "code_block") then rules.Add (textblockTypeInputRule (regex "^```$") (n "code_block"))
-        if present (n "heading") then rules.Add (textblockTypeInputRuleAttrs (regex "^(#{1,6})\\s$") (n "heading") headingAttrs)
-        if present (m "strong") then rules.Add (markRule "(?:\\*\\*|__)([^*_]+)(?:\\*\\*|__)$" (m "strong"))
-        if present (m "em") then rules.Add (markRule "(?:^|[^*_])(?:\\*|_)([^*_]+)(?:\\*|_)$" (m "em"))
-        if present (m "code") then rules.Add (markRule "`([^`]+)`$" (m "code"))
+        n "blockquote" |> Option.iter (fun t -> rules.Add (wrappingInputRule (regex "^\\s*>\\s$") t))
+        n "ordered_list"
+        |> Option.iter (fun t -> rules.Add (wrappingInputRuleAttrs (regex "^(\\d+)\\.\\s$") t orderedListAttrs orderedListJoin))
+        n "bullet_list" |> Option.iter (fun t -> rules.Add (wrappingInputRule (regex "^\\s*([-+*])\\s$") t))
+        n "code_block" |> Option.iter (fun t -> rules.Add (textblockTypeInputRule (regex "^```$") t))
+        n "heading" |> Option.iter (fun t -> rules.Add (textblockTypeInputRuleAttrs (regex "^(#{1,6})\\s$") t headingAttrs))
+        m "strong" |> Option.iter (fun t -> rules.Add (markRule "(?:\\*\\*|__)([^*_]+)(?:\\*\\*|__)$" t))
+        m "em" |> Option.iter (fun t -> rules.Add (markRule "(?:^|[^*_])(?:\\*|_)([^*_]+)(?:\\*|_)$" t))
+        m "code" |> Option.iter (fun t -> rules.Add (markRule "`([^`]+)`$" t))
         inputRules (createObj [ "rules" ==> rules.ToArray () ])
 
     /// A LINE BREAK inside the current block: a `hard_break`, which Markdown serializes as a
@@ -91,14 +91,12 @@ module Editor =
     /// Chained after `exitCode` so the same keystroke steps OUT of a code block, whose `text*`
     /// content cannot hold a break at all.
     let private lineBreak () : Command option =
-        let br = nodeType schema "hard_break"
-        if not (present br) then None
-        else
-            Some (
-                chain
-                    exitCode
-                    (editCommand (fun state ->
-                        trScrollIntoView ((state.tr).replaceSelectionWith (nodeCreate br, false)))))
+        nodeType schema "hard_break"
+        |> Option.map (fun br ->
+            chain
+                exitCode
+                (editCommand (fun state ->
+                    trScrollIntoView ((state.tr).replaceSelectionWith (nodeCreate br, false)))))
 
     /// Base editing keys + list handling + Yjs-aware undo/redo, and Enter's three jobs.
     ///
@@ -120,20 +118,23 @@ module Editor =
         keys?("Mod-z") <- yUndo
         keys?("Mod-y") <- yRedo
         keys?("Mod-Shift-z") <- yRedo
-        keys?("Mod-b") <- toggleMark (markType schema "strong")
-        keys?("Mod-i") <- toggleMark (markType schema "em")
+        // A mark the schema does not declare gets no key: an unbound key is honest, and one
+        // toggling a mark that is not there is not.
+        markType schema "strong" |> Option.iter (fun strong -> keys?("Mod-b") <- toggleMark strong)
+        markType schema "em" |> Option.iter (fun em -> keys?("Mod-i") <- toggleMark em)
         // What a plain Enter always meant in prose: split the list item when in one, else
         // whatever ProseMirror's own Enter does.
+        let listItem = nodeType schema "list_item"
         let newParagraph =
-            if present (nodeType schema "list_item") then
-                chain (splitListItem (nodeType schema "list_item")) (baseEnter baseKeymap)
-            else baseEnter baseKeymap
-        if present (nodeType schema "list_item") then
-            let li = nodeType schema "list_item"
+            match listItem with
+            | Some li -> chain (splitListItem li) (baseEnter baseKeymap)
+            | None -> baseEnter baseKeymap
+        listItem
+        |> Option.iter (fun li ->
             keys?("Tab") <- sinkListItem li
             keys?("Shift-Tab") <- liftListItem li
             keys?("Mod-[") <- liftListItem li
-            keys?("Mod-]") <- sinkListItem li
+            keys?("Mod-]") <- sinkListItem li)
         lineBreak () |> Option.iter (fun command -> keys?("Shift-Enter") <- command)
         match onSubmit with
         | Some submit ->

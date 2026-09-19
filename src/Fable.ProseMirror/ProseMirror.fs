@@ -55,13 +55,13 @@ module ProseMirror =
     [<Import("defaultMarkdownParser", "prosemirror-markdown")>]
     let mdParser : MarkdownParser = jsNative
 
-    /// `schema.nodes[name]` / `schema.marks[name]`, and a JS truthiness test for "present".
+    /// `schema.nodes[name]` / `schema.marks[name]`: the type under that name, and nothing when
+    /// the schema declares none — which the option says, where a JS truthiness test used to be
+    /// asked of the result afterwards.
     [<Emit("$0.nodes[$1]")>]
-    let nodeType (s: Schema) (name: string) : NodeType = jsNative
+    let nodeType (s: Schema) (name: string) : NodeType option = jsNative
     [<Emit("$0.marks[$1]")>]
-    let markType (s: Schema) (name: string) : MarkType = jsNative
-    [<Emit("!!$0")>]
-    let present (x: obj) : bool = jsNative
+    let markType (s: Schema) (name: string) : MarkType option = jsNative
     [<Emit("$0.create()")>]
     let markCreate (m: MarkType) : obj = jsNative
     /// A fresh JS RegExp from a pattern string (input-rule triggers).
@@ -90,25 +90,39 @@ module ProseMirror =
     /// A text node's marks (`em`/`strong`/`code`/`link`), innermost-last.
     [<Emit("$0.marks")>]
     let nodeMarks (node: Node) : obj[] = jsNative
-    /// JavaScript's `value || fallback`, which is what the attribute reads below mean by
-    /// "absent": EVERY falsy value takes the fallback, `0` and `""` among them. A heading
-    /// whose level is 0 is not a heading at level 0, and never was.
-    let private orElse (fallback: 'a) (value: 'a) : 'a = if present (box value) then value else fallback
+    /// The attributes the markdown schema puts on a node — a heading's `level`, an ordered
+    /// list's `order` — each an option because a node of another type carries neither.
+    [<AllowNullLiteral>]
+    type NodeAttrs =
+        abstract level : int option
+        abstract order : int option
 
-    /// A heading's level (1–6), defaulting to 1.
+    /// A mark's attributes: a link's `href`, and nothing on any other mark.
+    [<AllowNullLiteral>]
+    type MarkAttrs =
+        abstract href : string option
+
+    [<Emit("$0.attrs")>]
+    let private nodeAttrs (node: Node) : NodeAttrs = jsNative
+    [<Emit("$0.attrs")>]
+    let private markAttrs (mark: obj) : MarkAttrs = jsNative
+
+    /// A heading's level (1–6), defaulting to 1. This used to be `level || 1`, and the one
+    /// case that operator folds in is kept on purpose: a heading whose level is 0 is not a
+    /// heading at level 0, and never was.
     let headingLevel (node: Node) : int =
-        let attrs : obj = node?attrs
-        if present attrs then orElse 1 (unbox<int> attrs?level) else 1
-    /// An ordered list's first number, defaulting to 1.
+        match (nodeAttrs node).level with
+        | Some level when level > 0 -> level
+        | _ -> 1
+    /// An ordered list's first number, defaulting to 1 — `order || 1`, spelled out the same way.
     let listStart (node: Node) : int =
-        let attrs : obj = node?attrs
-        if present attrs then orElse 1 (unbox<int> attrs?order) else 1
+        match (nodeAttrs node).order with
+        | Some order when order > 0 -> order
+        | _ -> 1
     [<Emit("$0.type.name")>]
     let markTypeName (mark: obj) : string = jsNative
-    /// A link mark's target (empty when absent).
-    let markHref (mark: obj) : string =
-        let attrs : obj = mark?attrs
-        if present attrs then orElse "" (unbox<string> attrs?href) else ""
+    /// A link mark's target, and nothing for a mark that is not a link.
+    let markHref (mark: obj) : string option = (markAttrs mark).href
 
     // --- prosemirror-state / -view ---------------------------------------------------------
 
@@ -167,15 +181,13 @@ module ProseMirror =
     [<Emit("$0.scrollIntoView()")>]
     let trScrollIntoView (tr: Transaction) : Transaction = jsNative
 
-    [<Emit("$0($1)")>]
-    let private applyDispatch (dispatch: obj) (tr: Transaction) : unit = jsNative
-
     /// A command that EDITS the document, written the way ProseMirror expects: `dispatch` is
     /// absent when the editor is only asking whether the command applies, and a command that
-    /// edited anyway would change the document on a mere probe.
+    /// edited anyway would change the document on a mere probe. The option is that absence,
+    /// where a truthiness test used to be asked of an `obj`.
     let editCommand (edit: EditorState -> Transaction) : Command =
-        box (System.Func<EditorState, obj, obj, bool>(fun state dispatch _ ->
-            if present dispatch then applyDispatch dispatch (edit state)
+        box (System.Func<EditorState, (Transaction -> unit) option, obj, bool>(fun state dispatch _ ->
+            dispatch |> Option.iter (fun dispatch -> dispatch (edit state))
             true))
 
     // --- prosemirror-inputrules ------------------------------------------------------------

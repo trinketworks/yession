@@ -21,8 +21,11 @@ module RichText =
         | "em" -> html $"""<em>{inner}</em>"""
         | "code" -> html $"""<code class="{Style.proseCode}">{inner}</code>"""
         | "link" ->
-            let href = markHref mark
-            html $"""<a class="{Style.proseLink}" href="{href}" target="_blank" rel="noopener noreferrer">{inner}</a>"""
+            match markHref mark with
+            | Some href -> html $"""<a class="{Style.proseLink}" href="{href}" target="_blank" rel="noopener noreferrer">{inner}</a>"""
+            // A link naming no target is not one a person can follow — its words still read,
+            // where `href=""` used to point them at the page they were already on.
+            | None -> inner
         | "s" | "strike" | "strikethrough" | "del" -> html $"""<s>{inner}</s>"""
         | _ -> inner
 
