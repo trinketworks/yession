@@ -252,10 +252,10 @@ let private makeBareFixture (root: string) (name: string) : string =
 let private makeBareFixtureWithAgentsMd (root: string) (name: string) (agentsMd: string) : string =
     let fixtures = fixturesIn root
     let work = sprintf "%s/work-%s" fixtures name
-    mkdir nodeFs work
+    TestFiles.ensureDir work
     hostGit childProcess [| "init"; "-b"; "main" |] work
-    writeFile nodeFs (sprintf "%s/README.md" work) "fixture\n"
-    writeFile nodeFs (sprintf "%s/AGENTS.md" work) agentsMd
+    TestFiles.write (sprintf "%s/README.md" work) "fixture\n"
+    TestFiles.write (sprintf "%s/AGENTS.md" work) agentsMd
     hostGit childProcess [| "add"; "." |] work
     hostGit childProcess [| "commit"; "-m"; "seed" |] work
     let bare = sprintf "%s/%s.git" fixtures name
@@ -416,7 +416,7 @@ let private srtTests =
         }
 
         testCaseAsync "a repo's root AGENTS.md rides on the add" <| async {
-            let root = mkdtemp nodeFs nodeOs
+            let root = mkdtemp ()
             makeBareFixtureWithAgentsMd root "hello" "Reply to every message in iambic pentameter." |> ignore
             let log = freshLog ()
             let service = serviceIn root log
