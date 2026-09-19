@@ -16,14 +16,13 @@ open Fable.Core
 open Yession.Domain
 open Yession.App
 
-[<Emit("Array.from(document.querySelectorAll('[data-pane-replay]'))")>]
-let private mounts () : obj[] = jsNative
+let private mounts () : Browser.Types.Element list =
+    let found = Browser.Dom.document.querySelectorAll "[data-pane-replay]"
+    [ for i in 0 .. found.length - 1 -> found.[i] ]
 
-[<Emit("$0.getAttribute('data-pane-replay')")>]
-let private mountKey (el: obj) : string = jsNative
+let private mountKey (el: Browser.Types.Element) : string = el.getAttribute "data-pane-replay"
 
-[<Emit("$0.childElementCount > 0")>]
-let private isMounted (el: obj) : bool = jsNative
+let private isMounted (el: Browser.Types.Element) : bool = el.children.length > 0
 
 /// Everything a mount is holding, taken out of it — so what is put back is the whole of what
 /// the player mounts over, never a second player beside the first.
@@ -87,7 +86,7 @@ let create (dispatch: ClientMsg -> unit) : Syncer =
                 | Some tab ->
                     match ClientModel.paneReplay tab model with
                     | Some replay when replay.Cast <> cast ->
-                        match mounts () |> Array.tryFind (fun el -> mountKey el = key) with
+                        match mounts () |> List.tryFind (fun el -> mountKey el = key) with
                         | Some el ->
                             (fst players.[key]).Dispose ()
                             players.Remove key |> ignore

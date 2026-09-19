@@ -269,14 +269,14 @@ let private connectChannel (signalUrl: string) : Async<Result<FrameChannel<strin
 
 // --- DOM shell -------------------------------------------------------------------------
 
-[<Emit("document.getElementById('app')")>]
-let private appRoot () : obj = jsNative
+let private appRoot () : Browser.Types.HTMLElement = Browser.Dom.document.getElementById "app"
 
 // lit-html's `render` inserts its content AFTER a container's existing children rather
 // than replacing them, so the server-rendered shell (first paint) would linger beside the
 // live one. Clear it once before the client's first render so Lit owns `#app` outright.
+/// `replaceChildren()` with no arguments, which `Fable.Browser.Dom` does not type.
 [<Emit("$0.replaceChildren()")>]
-let private clearChildren (el: obj) : unit = jsNative
+let private clearChildren (el: Browser.Types.Element) : unit = jsNative
 
 /// Put text on the system clipboard, and say whether the browser let us. Asynchronous
 /// because the write may be a permission prompt, and refusable for reasons the page cannot
@@ -483,12 +483,6 @@ let private fetchMe (url: string) (deadlineMs: float) : Async<ProbeOutcome> =
 // session was opened from was a second press away. Replaced, the session is the one entry
 // after wherever it was opened from.
 //
-// `location.replace` resolves against the DOCUMENT's URL, not `<base href>` — the one
-// place relative resolution does not follow the base — so resolve explicitly against
-// `document.baseURI` here, once, rather than at each call site.
-[<Emit("window.location.replace(new URL($0, document.baseURI).href)")>]
-let private renavigateTo (url: string) : unit = jsNative
-
 
 // --- Client-side doc persistence (Step 20): IndexedDB via y-indexeddb ------------------
 
@@ -501,11 +495,14 @@ let private newPersistence (ctor: obj) (name: string) (doc: Y.Doc) : obj = jsNat
 [<Emit("new Promise((resolve) => $0.once('synced', resolve))")>]
 let private whenSynced (persistence: obj) : JS.Promise<unit> = jsNative
 
-/// A `<meta name>`'s content, or None when the tag is absent. `|| null` so a missing tag, a
-/// missing attribute and a blank one all arrive as `None` rather than as `undefined`
-/// masquerading as a string.
-[<Emit("document.querySelector('meta[name=\"' + $0 + '\"]')?.getAttribute('content') || null")>]
-let private metaContent (name: string) : string option = jsNative
+/// A `<meta name>`'s content, or None when the tag is absent. A missing tag, a missing
+/// attribute and a BLANK one are all None — the last one deliberately, because a meta that
+/// names nothing names nothing.
+let private metaContent (name: string) : string option =
+    Browser.Dom.document.querySelector (sprintf "meta[name=\"%s\"]" name)
+    |> Option.ofObj
+    |> Option.bind (fun tag -> tag.getAttribute "content" |> Option.ofObj)
+    |> Option.filter (String.IsNullOrEmpty >> not)
 
 // The store is keyed by SESSION: the serving Session Process embeds its session id in the
 // bootstrap page (a synchronous, pre-connection identity), so two sessions served from one
@@ -526,6 +523,11 @@ let private persistenceKey () : string =
 // to its own prefix rather than the origin root.
 [<Emit("new URL($0, document.baseURI).href")>]
 let private absolute (relative: string) : string = jsNative
+
+// `location.replace` resolves against the DOCUMENT's URL, not `<base href>` — the one place
+// relative resolution does not follow the base — so it is handed an address already resolved
+// against `document.baseURI`, once, rather than resolved again at each call site.
+let private renavigateTo (url: string) : unit = Browser.Dom.window.location.replace (absolute url)
 
 // The event-chunk GET as a TOTAL function: the body, the status it refused with, or the
 // transport error it never got past (`status: 0` — offline, refused, DNS, TLS). It never
@@ -890,8 +892,12 @@ let private jsonNumber (parsed: obj) (field: string) : int option = jsNative
 let private parseAuthorizeUrl (body: string) : string option =
     try jsonText (JS.JSON.parse body) "authorizeUrl" with _ -> None
 
-[<Emit("(document.querySelector($0)?.value || '')")>]
-let private panelInput (selector: string) : string = jsNative
+/// What a panel's field holds. A selector that matches nothing — a panel that is not on
+/// screen — reads as the empty string, which is what the caller acts on anyway.
+let private panelInput (selector: string) : string =
+    match Browser.Dom.document.querySelector selector with
+    | null -> ""
+    | field -> (field :?> Browser.Types.HTMLInputElement).value
 
 // --- GitHub connection panel round-trips (Plan 14) ---------------------------------------
 // Same fetch shapes as the Claude panel's; the flow differs (device code) so the two
