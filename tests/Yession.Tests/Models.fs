@@ -144,6 +144,22 @@ let private lookupTests =
                 | Error failure -> Expect.isFalse failure.Refused "a provider having a bad minute is not a verdict"
             }
 
+        // The same rule one step earlier: a row that is not an object at all cannot be read,
+        // and reading the rest of the page is still the right answer. The page used to be
+        // unboxed, so this row reached the id invariant as `undefined` and was refused there
+        // by accident; now the decoder drops it on purpose and says so here.
+        testCaseAsync "a row that is not a row at all costs that row, never the catalogue" <|
+            async {
+                let! url, server =
+                    serving (fun _ res ->
+                        json res 200 """{"data":[5,"model-b",{"id":"model-a"}],"has_more":false}""")
+                let! models = ClaudeConnection.modelsAt url ("ANTHROPIC_API_KEY", "sk-ant-test")
+                server.close ignore
+                match models |> expect with
+                | [ only ] -> Expect.equal (ModelId.value only.Id) "model-a" "the usable row survives its neighbours"
+                | other -> failwithf "expected one usable model, got %A" other
+            }
+
         testCaseAsync "a row the id invariant refuses costs that row, never the catalogue" <|
             async {
                 let! url, server =

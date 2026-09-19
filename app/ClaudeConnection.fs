@@ -25,6 +25,12 @@ open Thoth.Json
 open Thoth.Json.Net
 #endif
 
+#if FABLE_COMPILER
+open Thoth.Json
+#else
+open Thoth.Json.Net
+#endif
+
 /// The reserved storage name for the Claude credential, per scope. Opaque to the
 /// Manager — Claude-ness lives in this session-side choice.
 let secretName : SecretName =
@@ -128,16 +134,15 @@ type private ModelsOutcome =
       /// Each row as the provider gave it: its id, and the name it displays under.
       Models : (string * string) list }
 
-/// One page of the models endpoint's reply, and one row of it, as F# reads the JSON.
-/// Everything is nullable because everything is optional: the reply is somebody else's.
-type private ModelRow =
-    abstract id : string
-    abstract display_name : string
+/// One page of the models endpoint's reply, and one row of it. Every field is optional
+/// because the reply is somebody else's: what this side does with a page that states none
+/// is the decoder's answer below, said once, rather than a guard at each read.
+type private ModelRow = { Id : string; DisplayName : string }
 
 type private ModelsPage =
-    abstract data : ModelRow array
-    abstract has_more : bool
-    abstract last_id : string
+    { Rows : ModelRow list
+      HasMore : bool
+      LastId : string }
 
 /// Why a catalogue lookup produced nothing, and the one distinction its caller acts on.
 ///
@@ -181,21 +186,35 @@ let private headerObject (headers: (string * string) []) : obj =
 /// that cannot finish IS a lookup that failed.
 let private pageDeadlineMs = 10000.0
 
-/// The rows of one page. A reply with no `data` is a page with no rows, not a failure —
-/// the reply is somebody else's and this side reads what it can.
-let private rowsOf (page: ModelsPage) : ModelRow array =
-    if isNull (box page.data) then [||] else page.data
+/// One row, with a field the provider left out read as the empty string — a half-filled row
+/// costs its own name rather than the whole lookup, and an empty id is refused later by the
+/// smart constructor, which is the one place that decides what an id may be.
+let private modelRow : Decoder<ModelRow> =
+    Decode.object (fun get ->
+        { Id = get.Optional.Field "id" Decode.string |> Option.defaultValue ""
+          DisplayName = get.Optional.Field "display_name" Decode.string |> Option.defaultValue "" })
 
-/// A field the provider left out, as the empty string. Every row is read this way, so a
-/// half-filled one costs its own name rather than the whole lookup.
-let private textOf (value: string) : string = if isNull (box value) then "" else value
+/// One page. A reply with no `data` is a page with no rows, not a failure, and a row that is
+/// not an object at all costs that row alone — which is why the rows are decoded one at a
+/// time rather than as a list whose first bad element takes the page with it.
+let private modelsPage : Decoder<ModelsPage> =
+    Decode.object (fun get ->
+        { Rows =
+            get.Optional.Field "data" (Decode.list Decode.value)
+            |> Option.defaultValue []
+            |> List.choose (fun row -> Decode.fromValue "$.data" modelRow row |> Result.toOption)
+          HasMore = get.Optional.Field "has_more" Decode.bool |> Option.defaultValue false
+          LastId = get.Optional.Field "last_id" Decode.string |> Option.defaultValue "" })
 
 /// One page's JSON, or why it could not be read. A provider that answers 200 with
 /// something that is not JSON has failed this lookup without failing the request, which is
 /// why the reason comes back here rather than as a status.
+///
+/// DECODED rather than unboxed: the two guards that used to sit downstream of the assertion
+/// (`data` read as an empty array, a missing field read as the empty string) are the
+/// decoder's own answers now, where the reply is, rather than at each place that reads one.
 let private pageOf (body: string) : Result<ModelsPage, string> =
-    try Ok (unbox<ModelsPage> (JS.JSON.parse body))
-    with error -> Error (Http.reasonOf error)
+    Decode.fromString modelsPage body
 
 /// GET the catalogue on one credential, following the API's paging.
 ///
@@ -225,12 +244,12 @@ let private fetchModels (credential: string * string) (url: string) : Async<Mode
                 match pageOf body with
                 | Error reason -> settled <- Some { Ok = false; Reason = reason; Status = 0; Models = [] }
                 | Ok read ->
-                    for row in rowsOf read do
-                        models.Add (textOf row.id, textOf row.display_name)
-                    if not read.has_more || System.String.IsNullOrEmpty read.last_id then
+                    for row in read.Rows do
+                        models.Add (row.Id, row.DisplayName)
+                    if not read.HasMore || System.String.IsNullOrEmpty read.LastId then
                         settled <- Some { Ok = true; Reason = ""; Status = 200; Models = List.ofSeq models }
                     else
-                        next <- url + "?limit=1000&after_id=" + Http.urlPart read.last_id
+                        next <- url + "?limit=1000&after_id=" + Http.urlPart read.LastId
         return settled |> Option.defaultValue { Ok = true; Reason = ""; Status = 200; Models = List.ofSeq models }
     }
 

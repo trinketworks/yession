@@ -393,10 +393,21 @@ type Profile =
 /// throughout because the reply is somebody else's: an account with no display name simply
 /// does not carry the field.
 type private GitHubUser =
-    abstract login : string
-    abstract id : float
-    abstract name : string option
-    abstract email : string option
+    { Login : string
+      Id : float
+      Name : string option
+      Email : string option }
+
+/// The profile reply, read rather than asserted. Every field is optional because the reply
+/// is github's: an account with no name states `null`, and a body that is not this shape at
+/// all must reach the caller as "no profile" rather than as a record whose `string` fields
+/// are `undefined`.
+let private gitHubUser : Decoder<GitHubUser> =
+    Decode.object (fun get ->
+        { Login = get.Optional.Field "login" Decode.string |> Option.defaultValue ""
+          Id = get.Optional.Field "id" Decode.float |> Option.defaultValue 0.0
+          Name = get.Optional.Field "name" Decode.string
+          Email = get.Optional.Field "email" Decode.string })
 
 /// The same endpoint, read for its body this time.
 ///
@@ -415,17 +426,16 @@ let private getProfile
         | Http.Unreachable _ -> return unread 0
         | Http.Answered (response, _) when not response.Ok -> return unread response.Status
         | Http.Answered (response, body) ->
-            try
-                let user = unbox<GitHubUser> (JS.JSON.parse body)
+            match Decode.fromString gitHubUser body with
+            | Ok user ->
                 return
                     {| ok = true
                        status = response.Status
-                       login = (if isNull (box user.login) then "" else user.login)
-                       id = (if isNull (box user.id) then 0.0 else user.id)
-                       name = user.name
-                       email = user.email |}
-            with _ ->
-                return unread 0
+                       login = user.Login
+                       id = user.Id
+                       name = user.Name
+                       email = user.Email |}
+            | Error _ -> return unread 0
     }
 
 /// The profile behind a token, or why there is none — unreachable, refused, or an answer
