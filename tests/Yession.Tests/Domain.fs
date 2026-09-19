@@ -1274,11 +1274,25 @@ let private prWatchTests =
                 [] "a merged pull request's mergeability is not actionable from here"
 
         testCase "a status word is the last thing that happened, worst first" <| fun () ->
-            Expect.equal (PrStatus.word Queued PrOpen) "queued" "armed and waiting on machines"
-            Expect.equal (PrStatus.word Stalled PrOpen) "stalled" "nobody driving"
-            Expect.equal (PrStatus.word NotQueued PrOpen) "open" "the ordinary state"
-            Expect.equal (PrStatus.word Queued PrMerged) "merged" "a merged PR has stopped caring what a queue thought"
-            Expect.equal (PrStatus.word Queued PrClosed) "closed" "and so has a closed one"
+            Expect.equal (PrStatus.word None Queued PrOpen) "queued" "armed and waiting on machines"
+            Expect.equal (PrStatus.word None Stalled PrOpen) "stalled" "nobody driving"
+            Expect.equal (PrStatus.word None NotQueued PrOpen) "open" "the ordinary state"
+            Expect.equal (PrStatus.word None Queued PrMerged) "merged" "a merged PR has stopped caring what a queue thought"
+            Expect.equal (PrStatus.word None Queued PrClosed) "closed" "and so has a closed one"
+
+        testCase "a computed conflict is the status word, over queued or stalled" <| fun () ->
+            Expect.equal (PrStatus.word (Some false) NotQueued PrOpen) "conflicted" "open and unmergeable"
+            Expect.equal (PrStatus.word (Some false) Queued PrOpen) "conflicted" "a queued PR that went dirty is the conflict, not the queue"
+            Expect.equal (PrStatus.word (Some false) Stalled PrOpen) "conflicted" "ejected FOR the conflict — name the fixable cause"
+            Expect.equal (PrStatus.word (Some true) Queued PrOpen) "queued" "computed clean does not shout conflict"
+            Expect.equal (PrStatus.word None NotQueued PrOpen) "open" "not-yet-computed is not a conflict"
+            Expect.equal (PrStatus.word (Some false) Queued PrMerged) "merged" "a merged PR's mergeability is moot"
+
+        testCase "a conflict clause is added only to an open, computed-unmergeable description" <| fun () ->
+            Expect.equal (PrSnapshot.conflictClause PrOpen (Some false)) ", conflicted" "the one that reads it"
+            Expect.equal (PrSnapshot.conflictClause PrOpen (Some true)) "" "clean says nothing"
+            Expect.equal (PrSnapshot.conflictClause PrOpen None) "" "still computing says nothing"
+            Expect.equal (PrSnapshot.conflictClause PrMerged (Some false)) "" "and a merged one says nothing either"
             Expect.equal (PrStatus.worse "queued" "stalled") "stalled" "stalled wants a person more than queued"
             Expect.equal (PrStatus.worse "merged" "open") "open" "an open PR is still owed; a merged one is not"
             Expect.equal (PrStatus.worse "merged" "a word from the future") "merged" "an unknown word does not shout"
@@ -1305,6 +1319,15 @@ let private prWatchTests =
                 (PrStatus.summarize [ at 1 "stalled"; at 2 PrStatus.unreachable ])
                 "2 PRs · 1 unreachable"
                 "a watch that cannot be read is worse news than one that stalled"
+
+            Expect.equal
+                (PrStatus.summarize [ at 1 "conflicted"; at 2 "open"; at 3 "queued" ])
+                "3 PRs · 1 conflicted"
+                "a conflict is worse news than an open or queued one — it is blocked"
+            Expect.equal
+                (PrStatus.summarize [ at 1 "stalled"; at 2 "conflicted" ])
+                "2 PRs · 1 stalled"
+                "but ranks below a stall: the agent can rebase a conflict, a stall wants a person"
 
         // Both surfaces name a pull request the same way, from opposite ends: the session
         // holds the watch, the browser holds only what the query rendered.

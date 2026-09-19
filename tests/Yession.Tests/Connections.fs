@@ -2467,6 +2467,24 @@ let private prPollTests =
                 | other -> failwithf "expected one row, got %A" other
             }
 
+        testCaseAsync "the state cell says conflicted once the branch stops merging" <|
+            async {
+                // What flows to the Manager's roster: a queued pull request whose base moved
+                // out from under it reads "conflicted", not "queued", so the row a person or
+                // the agent scans for is the one that needs a rebase.
+                let script = scriptedFetch [ PrWatches.PrChanged ({ snapshotWith PrOpen ChecksGreen true with Mergeable = Some false }, PrWatches.PrEtags.none) ]
+                let poller = pollerOver fixedNow script.Fetch (RecordedTransitions ()) (ResizeArray ())
+                poller.Apply [ watching { State = PrOpen; Checks = ChecksGreen; Queue = Queued; Mergeable = None } ]
+                let! _ = poller.Poll ()
+                match! (PrWatches.query (fun () -> poller)).Read () with
+                | Ok (RowsOf [ row ]) ->
+                    Expect.equal
+                        (row |> List.tryFind (fun (key, _) -> key = "state") |> Option.map snd)
+                        (Some (CellStatus ("conflicted", ToneBad)))
+                        "blocked until a rebase, and the conflict wins over the queue"
+                | other -> failwithf "expected one row, got %A" other
+            }
+
         testCaseAsync "the line a session says about itself is made of the rows it can see" <|
             async {
                 let script = scriptedFetch [ PrWatches.PrChanged (snapshotWith PrOpen ChecksGreen true, PrWatches.PrEtags.none) ]
@@ -3332,6 +3350,21 @@ let private prWatchVerbTests =
                 Expect.equal again (Ok "octo/hello#12 already watched (open, checks green)") "a repeated ask is a question"
                 let! events = eventsOf log
                 Expect.equal (List.length events) 1 "and changes nothing"
+            }
+
+        testCaseAsync "a watch that opens on a conflicted pull request says so in its report" <|
+            async {
+                // The #688 fault: a watch begun on an already-conflicted pull request read
+                // back "(open, checks green)" and nothing said it could never merge, so the
+                // watcher armed auto-merge and waited. The report is what surfaces a conflict
+                // present at watch time — the transition only fires on one that develops after.
+                let! stub = startStubGitHubApi ()
+                stub.SetPr """{"state":"open","merged":false,"title":"Add feature","head":{"sha":"abc123"},"mergeable":false}"""
+                let service, _, _ = serviceOver stub
+                let! outcome = service.Watch adaHerself prOne
+                Expect.equal outcome (Ok "octo/hello#12 watched (open, checks green, conflicted)") "the report names the conflict"
+                let! again = service.Watch adaHerself prOne
+                Expect.equal again (Ok "octo/hello#12 already watched (open, checks green, conflicted)") "and so does a repeated ask"
             }
 
         testCaseAsync "a pull request github cannot see is refused, and nothing is recorded" <|

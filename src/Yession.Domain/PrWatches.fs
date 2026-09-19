@@ -41,17 +41,26 @@ type PrKnown =
 module PrStatus =
 
     /// The last thing that happened to this pull request, in a single past-tense word.
-    /// Queue first while it is open, because "queued" and "stalled" are the news; a
-    /// merged or closed pull request has stopped caring what any queue thought.
-    let word (queue: PrQueue) (state: PrState) : string =
+    /// On an open one a computed conflict wins, because it is the specific blocker and it
+    /// names its own fix (rebase) — a pull request ejected from the queue FOR a conflict is
+    /// both stalled and conflicted, and "conflicted" is the more useful of the two to show.
+    /// Otherwise queue first, because "queued" and "stalled" are the news; a merged or
+    /// closed pull request has stopped caring what any queue thought. `mergeable` is the
+    /// baseline's last COMPUTED value (`None` = never computed, never "clean"), so the word
+    /// does not flicker off "conflicted" during the window a push leaves it recomputing.
+    let word (mergeable: bool option) (queue: PrQueue) (state: PrState) : string =
         match state with
         | PrMerged -> "merged"
         | PrClosed -> "closed"
         | PrOpen ->
-            match queue with
-            | Queued -> "queued"
-            | Stalled -> "stalled"
-            | NotQueued -> "open"
+            match mergeable with
+            | Some false -> "conflicted"
+            | Some true
+            | None ->
+                match queue with
+                | Queued -> "queued"
+                | Stalled -> "stalled"
+                | NotQueued -> "open"
 
     /// What a watch says when the session cannot currently read it — a dead credential, a
     /// pull request it cannot see, a rate-limit window. The panel's status column says
@@ -60,10 +69,11 @@ module PrStatus =
     let unreachable : string = "unreachable"
 
     /// Worst first. What "worst" means here is how much it wants a person: an unreachable
-    /// watch is not being driven at all, a stalled pull request has nobody driving it, an
-    /// open one is waiting on somebody, a queued one is waiting on machines, and merged or
-    /// closed is over.
-    let order : string list = [ unreachable; "stalled"; "open"; "queued"; "merged"; "closed" ]
+    /// watch is not being driven at all, a stalled pull request has nobody driving it, a
+    /// conflicted one is blocked until somebody rebases — the agent can, so it ranks below a
+    /// stall — an open one is waiting on somebody, a queued one is waiting on machines, and
+    /// merged or closed is over.
+    let order : string list = [ unreachable; "stalled"; "conflicted"; "open"; "queued"; "merged"; "closed" ]
 
     /// A pull request that is still owed. Merged and closed ones are history: they are why
     /// a summary of six watches can honestly be silent.

@@ -487,10 +487,11 @@ let service
 
     let describe (pr: PrRef) (snapshot: PrSnapshot) =
         sprintf
-            "%s watched (%s, %s)"
+            "%s watched (%s, %s%s)"
             (PrRef.render pr)
             (PrState.describe snapshot.State)
             (ChecksRollup.describe snapshot.Checks)
+            (PrSnapshot.conflictClause snapshot.State snapshot.Mergeable)
 
     let watch (authority: Authority) (pr: PrRef) : Async<Result<string, string>> =
         async {
@@ -505,10 +506,11 @@ let service
                 return
                     Ok (
                         sprintf
-                            "%s already watched (%s, %s)"
+                            "%s already watched (%s, %s%s)"
                             (PrRef.render pr)
                             (PrState.describe existing.Known.State)
-                            (ChecksRollup.describe existing.Known.Checks))
+                            (ChecksRollup.describe existing.Known.Checks)
+                            (PrSnapshot.conflictClause existing.Known.State existing.Known.Mergeable))
             | None, Error reason -> return Error reason
             | None, Ok watcher ->
                 let! token = resolveToken (CredentialFor.Person watcher)
@@ -660,7 +662,7 @@ let private sinceView (at: DateTimeOffset) : string =
 let word (row: PrWatchRow) : string option =
     // State from the look just taken; queue from the BASELINE, because stalled is a fact
     // about history and a snapshot can only say what is true right now.
-    row.Snapshot |> Option.map (fun snapshot -> PrStatus.word row.Known.Queue snapshot.State)
+    row.Snapshot |> Option.map (fun snapshot -> PrStatus.word row.Known.Mergeable row.Known.Queue snapshot.State)
 
 /// The one line this session says about its pull requests — what the roster and the header
 /// strip both read, and the only place the mapping from rows to words lives.
@@ -706,6 +708,10 @@ let query (current: unit -> PrWatchers) : Queries.QueryRegistration =
                                        // states and earn no colour — colouring every row
                                        // would be colouring none.
                                        | "merged" -> ToneOk
+                                       // Blocked until a rebase — the agent's to do, the
+                                       // same attention a red suite earns, not a call for a
+                                       // person the way a stall is.
+                                       | "conflicted" -> ToneBad
                                        | "stalled" -> ToneBad
                                        | "queued" -> ToneBusy
                                        | _ -> ToneMuted)

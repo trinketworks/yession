@@ -966,9 +966,10 @@ module ConversationProjection =
                                 { Detail =
                                     Some (
                                         sprintf
-                                            "%s, %s"
+                                            "%s, %s%s"
                                             (PrState.describe initial.State)
-                                            (ChecksRollup.describe initial.Checks))
+                                            (ChecksRollup.describe initial.Checks)
+                                            (PrSnapshot.conflictClause initial.State initial.Mergeable))
                                   // Where the waiting began. A chapter by nature, like the
                                   // news that follows it — and unlike the unwatch below,
                                   // which is where the story stops being told rather than a

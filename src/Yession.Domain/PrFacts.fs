@@ -169,6 +169,21 @@ type PrSnapshot =
       Queued : bool
       Mergeable : bool option }
 
+module PrSnapshot =
+
+    /// What a computed conflict adds to a one-line DESCRIPTION of a pull request — the watch
+    /// report, the timeline note. ", conflicted" on an OPEN pull request the provider has
+    /// computed unmergeable, nothing otherwise: a merged one's mergeability is moot, and
+    /// `None` is not-yet-computed rather than clean, the same three-valued care the
+    /// transition takes. Taken as state + a mergeability, not a whole snapshot, so the folded
+    /// baseline (`PrKnown`) can say a conflict the same way a fresh snapshot does. Lives here,
+    /// below `SessionEvent` and above the projection, because `Conversation.fs` reads it too
+    /// and is compiled before `PrWatches.fs` where the status WORD lives.
+    let conflictClause (state: PrState) (mergeable: bool option) : string =
+        match state, mergeable with
+        | PrOpen, Some false -> ", conflicted"
+        | _ -> ""
+
 /// A watched pull request's state changes — the vocabulary grows HERE, not inside
 /// `SessionEvent`, which carries one `PrTransitioned` case whatever is announced.
 [<RequireQualifiedAccess>]
