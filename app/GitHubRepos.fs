@@ -15,6 +15,9 @@ module Yession.Host.GitHubRepos
 open System
 open Fable.Core
 open Fable.Core.JsInterop
+open Fable.NodeExtras
+open Node.Api
+open Node.Buffer
 open Yession.Domain
 open Yession.Domain.Repos
 open Yession.SessionProcess
@@ -159,11 +162,21 @@ let pageLimit = 33
 /// as `""` would be a cursor whose reader could not tell them apart.
 type private Cursor = { Text : string option; Page : int }
 
-[<Emit("Buffer.from(JSON.stringify({ q: $0 ?? null, page: $1 })).toString('base64url')")>]
-let private mintCursor (text: string option) (page: int) : string = jsNative
+/// A cursor as the browser carries it: this session's own JSON, base64url so it survives a
+/// query string. `q` is spelled `null` where there was no search text, which is what the
+/// reader tells apart from an empty one.
+let private mintCursor (text: string option) (page: int) : string =
+    // `null` rather than an absent key, which is what the JSON this replaced wrote and what
+    // every cursor already in a browser's hands carries.
+    let payload =
+        createObj
+            [ "q", (match text with Some searched -> box searched | None -> box null)
+              "page", box page ]
 
-[<Emit("Buffer.from($0, 'base64url').toString('utf8')")>]
-let private fromBase64Url (token: string) : string = jsNative
+    (buffer.Buffer.from (JS.JSON.stringify payload, BufferEncoding.Utf8)).toString base64url
+
+let private fromBase64Url (token: string) : string =
+    (buffer.Buffer.from (token, base64url)).toString BufferEncoding.Utf8
 
 /// The token's JSON, or nothing when it is not base64 at all. Total on purpose: the browser
 /// can send anything, and a token this session did not mint is not an error — it is a

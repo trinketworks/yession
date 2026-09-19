@@ -14,24 +14,21 @@ open System
 open System.Collections.Generic
 
 open Fable.Core
+open Fable.NodeExtras
+open Node.Api
+open Node.Buffer
 open Yession.Domain
 open Yession.Domain.Access
 open Yession.Manager
 
 /// 32 random bytes, base64url — a PKCE code verifier (RFC 7636 §4.1: 43 chars).
-[<Emit("Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString('base64url')")>]
-let private randomVerifier () : string = jsNative
+let private randomVerifier () : string =
+    (bufferOf ((webcrypto ()).getRandomValues (JS.Constructors.Uint8Array.Create 32))).toString base64url
 
 /// The S256 code challenge for a verifier: BASE64URL(SHA256(ASCII(verifier))).
-[<Emit("crypto.subtle.digest('SHA-256', Buffer.from($0, 'ascii')).then(d => Buffer.from(d).toString('base64url'))")>]
-let private s256Challenge (verifier: string) : JS.Promise<string> = jsNative
-
-/// POST a grant to a token endpoint in the dialect the flow declared (the content type
-/// travels with the body, so the two can never disagree). A non-2xx answer becomes an
-/// Error with the provider's body (OAuth error JSON is designed to be shown).
-[<Emit("""fetch($0, { method: 'POST', headers: { 'content-type': $1, 'accept': 'application/json' }, body: $2 })
-  .then(async r => ({ status: r.status, body: await r.text() }))""")>]
-let private postGrant (url: string) (contentType: string) (body: string) : JS.Promise<{| status: int; body: string |}> = jsNative
+let private s256Challenge (verifier: string) : JS.Promise<string> =
+    (webcrypto ()).subtle.digest ("SHA-256", buffer.Buffer.from (verifier, BufferEncoding.Ascii))
+    |> Promise.map (fun digest -> (bufferOverArrayBuffer digest).toString base64url)
 
 /// Why a token request produced no grant, and the two distinctions callers act on.
 ///
@@ -64,19 +61,28 @@ let private isFinalRefusal (status: int) (body: string) : bool =
 /// because that is the shape the resilience decorators compose over.
 let private askFor ((tokenUrl, request): string * TokenRequest) : Async<Result<string, GrantFailure>> =
     async {
-        try
-            let! reply = postGrant tokenUrl request.ContentType request.Body |> Interop.awaitPromise
-            if reply.status >= 200 && reply.status < 300 then return Ok reply.body
-            else
-                return
-                    Error
-                        { Message = sprintf "token endpoint refused (%d): %s" reply.status reply.body
-                          Final = isFinalRefusal reply.status reply.body
-                          Outcome = Resilience.Http.Answered (reply.status, None) }
-        with e ->
+        // The dialect the flow declared travels with the body, so the two can never
+        // disagree. A non-2xx answer becomes an Error carrying the provider's body, which
+        // OAuth error JSON is designed to be shown as.
+        let! attempt =
+            Http.text
+                tokenUrl
+                [ Fetch.Types.RequestProperties.Method Fetch.Types.HttpMethod.POST
+                  Http.headers [ "content-type", request.ContentType; "accept", "application/json" ]
+                  Fetch.Types.RequestProperties.Body (Fable.Core.U3.Case3 request.Body) ]
+
+        match attempt with
+        | Http.Answered (response, said) when response.Status >= 200 && response.Status < 300 -> return Ok said
+        | Http.Answered (response, said) ->
             return
                 Error
-                    { Message = sprintf "token endpoint unreachable: %s" e.Message
+                    { Message = sprintf "token endpoint refused (%d): %s" response.Status said
+                      Final = isFinalRefusal response.Status said
+                      Outcome = Resilience.Http.Answered (response.Status, None) }
+        | Http.Unreachable reason ->
+            return
+                Error
+                    { Message = sprintf "token endpoint unreachable: %s" reason
                       Final = false
                       Outcome = Resilience.Http.Unreached }
     }

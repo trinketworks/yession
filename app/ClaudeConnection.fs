@@ -312,11 +312,6 @@ let private summaryDecoder : Decoder<SummaryReply> =
             |> List.choose id
             |> String.concat "" })
 
-type private MessageReply =
-    abstract reachable : bool
-    abstract status : int
-    abstract body : string
-
 /// One POST, and nothing else: the headers and the body are composed above, and what the
 /// answer MEANS is decided below. A request that never landed is a reply like any other
 /// (`reachable = false`), because a name that did not get written is one outcome however it
@@ -324,10 +319,13 @@ type private MessageReply =
 ///
 /// Bounded like the catalogue's fetch, for a smaller reason: nothing waits on this, but a
 /// request nobody closes is a socket nobody closes, once per chapter.
-[<Emit("""fetch($0, { method: 'POST', headers: $1, body: $2, signal: AbortSignal.timeout(15000) })
-  .then(async r => ({ reachable: true, status: r.status, body: await r.text() }))
-  .catch(e => ({ reachable: false, status: 0, body: String((e && e.message) || e) }))""")>]
-let private postMessage (url: string) (headers: obj) (body: string) : JS.Promise<MessageReply> = jsNative
+let private postMessage (url: string) (credential: string * string) (body: string) : Async<Http.Attempt<string>> =
+    Http.text
+        url
+        [ Fetch.Types.RequestProperties.Method Fetch.Types.HttpMethod.POST
+          Http.headers (("content-type", "application/json") :: List.ofArray (headersFor credential))
+          Fetch.Types.RequestProperties.Body (Fable.Core.U3.Case3 body)
+          Http.deadline 15000.0 ]
 
 /// What one ask looks like on the wire: the task as the system prompt, the lines as quoted
 /// material inside the message, and a ceiling on the answer.
@@ -390,15 +388,15 @@ let summarizeAt (url: string) (credential: string * string) : Summarize =
             match ask.Lines with
             | [] -> return Error "nothing to summarize"
             | _ ->
-                let headers =
-                    headerObject (Array.append [| "content-type", "application/json" |] (headersFor credential))
-                let! reply = postMessage url headers (summaryBody ask) |> Interop.awaitPromise
-                if not reply.reachable then return Error reply.body
-                elif reply.status < 200 || reply.status >= 300 then
-                    let detail = reply.body.Substring (0, min 200 reply.body.Length)
-                    return Error (sprintf "the provider answered %d: %s" reply.status detail)
-                else
-                    match Decode.fromString summaryDecoder reply.body with
+                let! attempt = postMessage url credential (summaryBody ask)
+
+                match attempt with
+                | Http.Unreachable reason -> return Error reason
+                | Http.Answered (response, said) when response.Status < 200 || response.Status >= 300 ->
+                    let detail = said.Substring (0, min 200 said.Length)
+                    return Error (sprintf "the provider answered %d: %s" response.Status detail)
+                | Http.Answered (_, said) ->
+                    match Decode.fromString summaryDecoder said with
                     | Error e -> return Error (sprintf "unrecognised reply: %s" e)
                     | Ok answer ->
                         match answer.Stopped with

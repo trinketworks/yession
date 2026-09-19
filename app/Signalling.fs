@@ -11,6 +11,8 @@ module Yession.Host.Signalling
 // Session Process's answer; the established data channel becomes a session `FrameChannel`.
 
 open Fable.Core.JsInterop
+open Node.Api
+open Node.Buffer
 open Yession.Domain
 open Yession.Domain.Link
 open Yession.SessionProcess
@@ -38,8 +40,8 @@ let private bootstrapHtml (sessionId: SessionId) (mount: string) (managerOrigin:
 /// The app icon's bytes. The constant is base64 (`WebApp.iconPngBase64`) because it lives in
 /// source; the wire wants the PNG, and `res.end` is typed to the string case it is used with
 /// everywhere else — so the Buffer goes through `unbox`, which is what Node's `end` accepts.
-[<Fable.Core.Emit("Buffer.from($0, 'base64')")>]
-let private decodeBase64 (encoded: string) : string = Fable.Core.Util.jsNative
+let private decodeBase64 (encoded: string) : string =
+    unbox (buffer.Buffer.from (encoded, BufferEncoding.Base64))
 
 let private readBody (req: IncomingMessage) (cont: string -> unit) =
     let mutable acc = ""
