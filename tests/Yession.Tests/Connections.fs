@@ -532,12 +532,9 @@ let private grantRetries : Broker.GrantLeg =
 
 // --- [Ports]: the broker service against a fake token endpoint ------------------------------
 
-type private HttpReply =
-    abstract status : int
-    abstract body : string
-
-[<Emit("fetch($0, { method: 'POST', headers: { 'x-yession-control': $1, 'content-type': 'application/json' }, body: $2 }).then(async r => ({ status: r.status, body: await r.text() }))")>]
-let private postControl (url: string) (secret: string) (body: string) : JS.Promise<HttpReply> = Util.jsNative
+/// A POST on a control route, under the shared secret that gates them.
+let private postControl (url: string) (secret: string) (body: string) : Async<TestHttp.Reply> =
+    TestHttp.post [ "x-yession-control", secret ] "application/json" body url
 
 /// A scripted token endpoint: answers every POST with the current `response` (400 when
 /// it is not JSON-shaped) and records the raw bodies it saw, each with the content type
@@ -1253,8 +1250,8 @@ let private routeTests =
                 let clientB = ControlClient.connections url "secret-b"
 
                 // 401 at the door.
-                let! unknown = postControl (url + "/control/connections/resolve") "nope" (ControlWire.toString ControlWire.connectionResolveRequest { Target = target (UserScope alice) }) |> Interop.awaitPromise
-                Expect.equal unknown.status 401 "invalid control secret"
+                let! unknown = postControl (url + "/control/connections/resolve") "nope" (ControlWire.toString ControlWire.connectionResolveRequest { Target = target (UserScope alice) })
+                Expect.equal unknown.Status 401 "invalid control secret"
 
                 // A begins for its bound user; B cannot touch alice's scope.
                 let request = { beginRequest with TokenUrl = endpoint.Url }
@@ -1479,12 +1476,12 @@ open Yession.Tests.Support
 [<Emit("process.execPath")>]
 let private nodePath : string = Util.jsNative
 
-[<Emit("""fetch($0, { method: 'POST', headers: { 'content-type': 'application/json', cookie: $1 }, body: $2 })
-  .then(async r => ({ status: r.status, body: await r.text() }))""")>]
-let private postJsonWithCookie (url: string) (cookie: string) (body: string) : JS.Promise<HttpReply> = Util.jsNative
+/// A browser's POST: the same-origin cookie is the whole identity these routes read.
+let private postJsonWithCookie (url: string) (cookie: string) (body: string) : Async<TestHttp.Reply> =
+    TestHttp.post [ "cookie", cookie ] "application/json" body url
 
-[<Emit("""fetch($0, { headers: { cookie: $1 }, cache: 'no-store' }).then(async r => ({ status: r.status, body: await r.text() }))""")>]
-let private getWithCookie (url: string) (cookie: string) : JS.Promise<HttpReply> = Util.jsNative
+let private getWithCookie (url: string) (cookie: string) : Async<TestHttp.Reply> =
+    TestHttp.getNoStore [ "cookie", cookie ] url
 
 let private cookieOf (jar: OidcHttp.Jar) : string =
     jar.Cookies |> Map.toList |> List.map (fun (k, v) -> sprintf "%s=%s" k v) |> String.concat "; "
@@ -1506,9 +1503,9 @@ let private awaitClaudeStatus (sessionUrl: string) (cookie: string) (predicate: 
     let rec go attempts =
         async {
             // No peer id: the cookie is the whole identity this route reads.
-            let! reply = getWithCookie (sessionUrl + "/claude") cookie |> Interop.awaitPromise
-            if reply.status = 200 && predicate reply.body then return ()
-            elif attempts <= 0 then return failwithf "claude status never settled; last: %d %s" reply.status reply.body
+            let! reply = getWithCookie (sessionUrl + "/claude") cookie
+            if reply.Status = 200 && predicate reply.Body then return ()
+            elif attempts <= 0 then return failwithf "claude status never settled; last: %d %s" reply.Status reply.Body
             else
                 do! Async.Sleep 200
                 return! go (attempts - 1)
@@ -1563,8 +1560,8 @@ let private e2eTests =
                         (sessionUrl + "/claude/token")
                         cookieA
                         """{"scope":"mine","token":"sk-ant-oat01-fake"}"""
-                    |> Interop.awaitPromise
-                Expect.equal putMine.status 200 (sprintf "the paste stores: %s" putMine.body)
+                   
+                Expect.equal putMine.Status 200 (sprintf "the paste stores: %s" putMine.Body)
                 do! awaitClaudeStatus sessionUrl cookieA (fun body ->
                         connectedAt "mine" body && body.Contains "\"agent\":true")
 
@@ -1605,8 +1602,8 @@ let private e2eTests =
                         (sessionUrl + "/claude/token")
                         cookieA
                         """{"scope":"session","token":"sk-ant-api03-fake"}"""
-                    |> Interop.awaitPromise
-                Expect.equal putSession.status 200 (sprintf "the session-scoped paste stores: %s" putSession.body)
+                   
+                Expect.equal putSession.Status 200 (sprintf "the session-scoped paste stores: %s" putSession.Body)
                 do! awaitClaudeStatus sessionUrl cookieA (connectedAt "session")
                 do! compose b b.Hello.PeerId "bob under the session credential"
                 b.Connection.SendDraft b.Hello.PeerId
@@ -1618,10 +1615,10 @@ let private e2eTests =
                 // 5. Disconnect both; the status empties again.
                 let! _ =
                     postJsonWithCookie (sessionUrl + "/claude/disconnect") cookieA """{"scope":"session"}"""
-                    |> Interop.awaitPromise
+                   
                 let! _ =
                     postJsonWithCookie (sessionUrl + "/claude/disconnect") cookieA """{"scope":"mine"}"""
-                    |> Interop.awaitPromise
+                   
                 do! awaitClaudeStatus sessionUrl cookieA (fun body ->
                         notConnectedAt "session" body && notConnectedAt "mine" body)
 
@@ -1664,16 +1661,16 @@ let private e2eTests =
                 let! alice = connectClient (sessionUrl + "/signal") openedAlice.PeerToken "browser-alice" "Alice"
 
                 // The launch was attributed, so it holds no deployment credential at all.
-                let! aliceStatus = getWithCookie (sessionUrl + "/claude") cookieAlice |> Interop.awaitPromise
-                Expect.isTrue (aliceStatus.body.Contains "\"owner\":\"user\"") "an attributed deployment owns by user"
+                let! aliceStatus = getWithCookie (sessionUrl + "/claude") cookieAlice
+                Expect.isTrue (aliceStatus.Body.Contains "\"owner\":\"user\"") "an attributed deployment owns by user"
 
                 let! putMine =
                     postJsonWithCookie
                         (sessionUrl + "/claude/token")
                         cookieAlice
                         """{"scope":"mine","token":"sk-ant-oat01-alices"}"""
-                    |> Interop.awaitPromise
-                Expect.equal putMine.status 200 (sprintf "alice connects her own: %s" putMine.body)
+                   
+                Expect.equal putMine.Status 200 (sprintf "alice connects her own: %s" putMine.Body)
                 do! awaitClaudeStatus sessionUrl cookieAlice (connectedAt "mine")
 
                 do! compose alice alice.Hello.PeerId "alice on her own credential"
@@ -1688,8 +1685,8 @@ let private e2eTests =
                 let! openedBob = OidcHttp.openSessionVia (asUser "bob@example.com") "/login" sessionUrl
                 let cookieBob = cookieOf openedBob.Jar
                 let! bob = connectClient (sessionUrl + "/signal") openedBob.PeerToken "browser-bob" "Bob"
-                let! bobStatus = getWithCookie (sessionUrl + "/claude") cookieBob |> Interop.awaitPromise
-                Expect.isTrue (bobStatus.body.Contains "\"mine\":null") "bob does not inherit alice's"
+                let! bobStatus = getWithCookie (sessionUrl + "/claude") cookieBob
+                Expect.isTrue (bobStatus.Body.Contains "\"mine\":null") "bob does not inherit alice's"
 
                 do! compose bob bob.Hello.PeerId "bob without a credential"
                 bob.Connection.SendDraft bob.Hello.PeerId
@@ -1858,22 +1855,22 @@ let private githubRouteTests =
                         // No cookie: every route is 401 before it looks at anything else. The
                         // begin route reaches github.com, so an unauthenticated caller getting
                         // past this door would make the session an open device-flow proxy.
-                        let! status = getWithCookie (url + "/github") "" |> Interop.awaitPromise
-                        Expect.equal status.status 401 "status is gated"
-                        let! began = postJsonWithCookie (url + "/github/begin") "" """{"scope":"mine"}""" |> Interop.awaitPromise
-                        Expect.equal began.status 401 "begin is gated"
+                        let! status = getWithCookie (url + "/github") ""
+                        Expect.equal status.Status 401 "status is gated"
+                        let! began = postJsonWithCookie (url + "/github/begin") "" """{"scope":"mine"}"""
+                        Expect.equal began.Status 401 "begin is gated"
                         Expect.equal stub.TokenRequests.Count 0 "nothing reached github.com"
 
                         // A cookie the process did not mint is no better than none.
-                        let! forged = postJsonWithCookie (url + "/github/begin") "sid=forged" """{"scope":"mine"}""" |> Interop.awaitPromise
-                        Expect.equal forged.status 401 "an unrecognised cookie is not an identity"
+                        let! forged = postJsonWithCookie (url + "/github/begin") "sid=forged" """{"scope":"mine"}"""
+                        Expect.equal forged.Status 401 "an unrecognised cookie is not an identity"
 
                         // Signed in, but naming a scope that is not one of the two words: the
                         // body cannot address a scope, only choose between the caller's own and
                         // this session's.
-                        let! bogus = postJsonWithCookie (url + "/github/begin") "who=alice" """{"scope":"user:bob"}""" |> Interop.awaitPromise
-                        Expect.equal bogus.status 400 "a scope string is not a scope"
-                        Expect.isTrue (bogus.body.Contains "unknown scope choice") "and says so"
+                        let! bogus = postJsonWithCookie (url + "/github/begin") "who=alice" """{"scope":"user:bob"}"""
+                        Expect.equal bogus.Status 400 "a scope string is not a scope"
+                        Expect.isTrue (bogus.Body.Contains "unknown scope choice") "and says so"
 
                         Expect.equal recorder.Puts.Count 0 "nothing was stored by any of it"
                     })
@@ -1893,8 +1890,8 @@ let private githubRouteTests =
 
                 let! connected =
                     postJsonWithCookie (url + "/github/token") "who=anon" """{"scope":"mine","token":"ghp_abc"}"""
-                    |> Interop.awaitPromise
-                Expect.equal connected.status 200 "unattributed access can connect"
+                   
+                Expect.equal connected.Status 200 "unattributed access can connect"
                 Expect.equal recorder.Puts.Count 1 "one credential stored"
                 let target, _ = recorder.Puts.[0]
                 Expect.equal target.Scope LocalScope "owned by the deployment, not by any browser"
@@ -1903,16 +1900,16 @@ let private githubRouteTests =
                 // A DIFFERENT browser — no shared storage, no shared id, nothing carried over
                 // but the same deployment. Before this change it saw `"mine":null` and was
                 // shown a Connect button.
-                let! elsewhere = getWithCookie (url + "/github") "who=anon" |> Interop.awaitPromise
-                Expect.equal elsewhere.status 200 "readable"
-                Expect.isTrue (connectedAt "mine" elsewhere.body) "already connected, from a browser that never connected anything"
-                Expect.isTrue (elsewhere.body.Contains "\"owner\":\"local\"") "and says whose it is: the deployment's"
+                let! elsewhere = getWithCookie (url + "/github") "who=anon"
+                Expect.equal elsewhere.Status 200 "readable"
+                Expect.isTrue (connectedAt "mine" elsewhere.Body) "already connected, from a browser that never connected anything"
+                Expect.isTrue (elsewhere.Body.Contains "\"owner\":\"local\"") "and says whose it is: the deployment's"
 
                 // An attributed user is untouched by any of it — they own their own, and the
                 // deployment's credential is not theirs to see.
-                let! alicesView = getWithCookie (url + "/github") "who=alice" |> Interop.awaitPromise
-                Expect.isTrue (notConnectedAt "mine" alicesView.body) "an attributed user does not inherit it"
-                Expect.isTrue (alicesView.body.Contains "\"owner\":\"user\"") "and owns by user"
+                let! alicesView = getWithCookie (url + "/github") "who=alice"
+                Expect.isTrue (notConnectedAt "mine" alicesView.Body) "an attributed user does not inherit it"
+                Expect.isTrue (alicesView.Body.Contains "\"owner\":\"user\"") "and owns by user"
             }
 
         testCaseAsync "begin hands the browser the user code and keeps the device code; poll paces, then connects" <|
@@ -1922,20 +1919,20 @@ let private githubRouteTests =
                 let! url = startGitHubRoutes recorder.Client (fun _ -> None)
                 do! withStubGitHub stub (Some "Iv1.test") (fun () ->
                     async {
-                        let! began = postJsonWithCookie (url + "/github/begin") "who=alice" """{"scope":"mine"}""" |> Interop.awaitPromise
-                        Expect.equal began.status 200 "the flow began"
-                        Expect.isTrue (began.body.Contains "WDJB-MJHT") "the human is told what to type"
-                        Expect.isTrue (began.body.Contains "https://github.com/login/device") "and where to type it"
+                        let! began = postJsonWithCookie (url + "/github/begin") "who=alice" """{"scope":"mine"}"""
+                        Expect.equal began.Status 200 "the flow began"
+                        Expect.isTrue (began.Body.Contains "WDJB-MJHT") "the human is told what to type"
+                        Expect.isTrue (began.Body.Contains "https://github.com/login/device") "and where to type it"
                         // The device code is the half of the grant that redeems the token. It
                         // stays in the session: a browser that held it could finish the flow
                         // outside the session and keep the token for itself.
-                        Expect.isFalse (began.body.Contains deviceCode) "the device code never reaches the browser"
+                        Expect.isFalse (began.Body.Contains deviceCode) "the device code never reaches the browser"
 
                         // Pending: the panel is told to keep waiting, at the pace GitHub set.
-                        let! pending = postJsonWithCookie (url + "/github/poll") "who=alice" """{"scope":"mine"}""" |> Interop.awaitPromise
-                        Expect.equal pending.status 200 "still waiting"
-                        Expect.isTrue (pending.body.Contains "\"status\":\"pending\"") "pending"
-                        Expect.isTrue (pending.body.Contains "\"interval\":5") "at github's pace"
+                        let! pending = postJsonWithCookie (url + "/github/poll") "who=alice" """{"scope":"mine"}"""
+                        Expect.equal pending.Status 200 "still waiting"
+                        Expect.isTrue (pending.Body.Contains "\"status\":\"pending\"") "pending"
+                        Expect.isTrue (pending.Body.Contains "\"interval\":5") "at github's pace"
                         let request = stub.TokenRequests.[0]
                         Expect.isTrue (request.Contains "\"client_id\":\"Iv1.test\"") "the app identified itself"
                         Expect.isTrue (request.Contains deviceCode) "the session redeemed the device code it kept"
@@ -1944,20 +1941,20 @@ let private githubRouteTests =
                         // slow_down widens the pace, and the wider pace STICKS: a flow that
                         // forgot it would be told to slow down forever.
                         stub.SetTokenReply """{"error":"slow_down"}"""
-                        let! slowed = postJsonWithCookie (url + "/github/poll") "who=alice" """{"scope":"mine"}""" |> Interop.awaitPromise
-                        Expect.isTrue (slowed.body.Contains "\"interval\":10") "widened by the spec's 5s"
+                        let! slowed = postJsonWithCookie (url + "/github/poll") "who=alice" """{"scope":"mine"}"""
+                        Expect.isTrue (slowed.Body.Contains "\"interval\":10") "widened by the spec's 5s"
                         stub.SetTokenReply """{"error":"authorization_pending"}"""
-                        let! again = postJsonWithCookie (url + "/github/poll") "who=alice" """{"scope":"mine"}""" |> Interop.awaitPromise
-                        Expect.isTrue (again.body.Contains "\"interval\":10") "the widened pace survives the next poll"
+                        let! again = postJsonWithCookie (url + "/github/poll") "who=alice" """{"scope":"mine"}"""
+                        Expect.isTrue (again.Body.Contains "\"interval\":10") "the widened pace survives the next poll"
 
                         // The grant lands under the SIGNED-IN HUMAN's scope, never a scope the
                         // request named — and it lands as a GRANT, which is what lets the
                         // Manager refresh it later. Stored through `Put` it would be static
                         // by type, and the App would have to disable token expiration.
                         stub.SetTokenReply """{"access_token":"ghu_granted","token_type":"bearer","expires_in":28800,"refresh_token":"ghr_next","refresh_token_expires_in":15897600}"""
-                        let! connected = postJsonWithCookie (url + "/github/poll") "who=alice" """{"scope":"mine"}""" |> Interop.awaitPromise
-                        Expect.equal connected.status 200 "granted"
-                        Expect.isTrue (connected.body.Contains "\"status\":\"connected\"") "and says so"
+                        let! connected = postJsonWithCookie (url + "/github/poll") "who=alice" """{"scope":"mine"}"""
+                        Expect.equal connected.Status 200 "granted"
+                        Expect.isTrue (connected.Body.Contains "\"status\":\"connected\"") "and says so"
                         Expect.equal recorder.Puts.Count 0 "a device-flow grant is not a pasted token"
                         Expect.equal recorder.Grants.Count 1 "one grant handed to the Manager"
                         let stored = recorder.Grants.[0]
@@ -1971,8 +1968,8 @@ let private githubRouteTests =
                         Expect.equal stored.ClientId "Iv1.test" "the client it was minted for"
 
                         // The flow is spent. A replayed poll finds nothing to finish.
-                        let! replay = postJsonWithCookie (url + "/github/poll") "who=alice" """{"scope":"mine"}""" |> Interop.awaitPromise
-                        Expect.equal replay.status 400 "single-use"
+                        let! replay = postJsonWithCookie (url + "/github/poll") "who=alice" """{"scope":"mine"}"""
+                        Expect.equal replay.Status 400 "single-use"
                         Expect.equal recorder.Grants.Count 1 "and stored nothing twice"
                     })
             }
@@ -1998,18 +1995,18 @@ let private githubRouteTests =
                 let! url = startGitHubRoutesOver flaky recorder.Client (fun _ -> None)
                 do! withStubGitHub stub (Some "Iv1.test") (fun () ->
                     async {
-                        let! _ = postJsonWithCookie (url + "/github/begin") "who=alice" """{"scope":"mine"}""" |> Interop.awaitPromise
+                        let! _ = postJsonWithCookie (url + "/github/begin") "who=alice" """{"scope":"mine"}"""
                         stub.SetTokenReply """{"access_token":"ghu_granted","token_type":"bearer"}"""
 
-                        let! dropped = postJsonWithCookie (url + "/github/poll") "who=alice" """{"scope":"mine"}""" |> Interop.awaitPromise
-                        Expect.equal dropped.status 200 "the panel is told to keep waiting"
-                        Expect.isTrue (dropped.body.Contains "\"status\":\"pending\"") "pending, not failed"
+                        let! dropped = postJsonWithCookie (url + "/github/poll") "who=alice" """{"scope":"mine"}"""
+                        Expect.equal dropped.Status 200 "the panel is told to keep waiting"
+                        Expect.isTrue (dropped.Body.Contains "\"status\":\"pending\"") "pending, not failed"
                         Expect.equal stub.TokenRequests.Count 0 "and github was never asked"
 
                         // The very next poll finds the flow exactly where it was — same device
                         // code, same scope — and finishes it.
-                        let! recovered = postJsonWithCookie (url + "/github/poll") "who=alice" """{"scope":"mine"}""" |> Interop.awaitPromise
-                        Expect.isTrue (recovered.body.Contains "\"status\":\"connected\"") "the sign-in survived the blip"
+                        let! recovered = postJsonWithCookie (url + "/github/poll") "who=alice" """{"scope":"mine"}"""
+                        Expect.isTrue (recovered.Body.Contains "\"status\":\"connected\"") "the sign-in survived the blip"
                         Expect.isTrue ((stub.TokenRequests.[0]).Contains deviceCode) "redeeming the code it kept"
                         Expect.equal recorder.Grants.Count 1 "one grant, from a flow nobody had to start again"
                     })
@@ -2024,9 +2021,9 @@ let private githubRouteTests =
                 let! url = startGitHubRoutesOver unreachable recorder.Client (fun _ -> None)
                 do! withStubGitHub stub (Some "Iv1.test") (fun () ->
                     async {
-                        let! began = postJsonWithCookie (url + "/github/begin") "who=alice" """{"scope":"mine"}""" |> Interop.awaitPromise
-                        Expect.equal began.status 502 "the session could not do it"
-                        Expect.stringContains began.body "could not reach github.com" "and says which leg failed"
+                        let! began = postJsonWithCookie (url + "/github/begin") "who=alice" """{"scope":"mine"}"""
+                        Expect.equal began.Status 502 "the session could not do it"
+                        Expect.stringContains began.Body "could not reach github.com" "and says which leg failed"
                     })
             }
 
@@ -2039,25 +2036,25 @@ let private githubRouteTests =
                     async {
                         // Alice begins for herself. Bob is signed in too, and github.com is
                         // holding a grant that is about to be approved.
-                        let! _ = postJsonWithCookie (url + "/github/begin") "who=alice" """{"scope":"mine"}""" |> Interop.awaitPromise
+                        let! _ = postJsonWithCookie (url + "/github/begin") "who=alice" """{"scope":"mine"}"""
                         stub.SetTokenReply """{"access_token":"ghu_alices","token_type":"bearer"}"""
 
                         // Bob polls his own scope: there is no flow of his, so nothing happens.
                         // If pending flows were not keyed by target, Bob's poll would redeem
                         // Alice's device code and store HER token under HIS scope.
-                        let! bob = postJsonWithCookie (url + "/github/poll") "who=bob" """{"scope":"mine"}""" |> Interop.awaitPromise
-                        Expect.equal bob.status 400 "no flow of bob's to finish"
+                        let! bob = postJsonWithCookie (url + "/github/poll") "who=bob" """{"scope":"mine"}"""
+                        Expect.equal bob.Status 400 "no flow of bob's to finish"
                         Expect.equal stub.TokenRequests.Count 0 "and bob's poll never redeemed a code"
 
                         // The same human's OTHER scope is a different target, so it is a
                         // different flow — the session-wide credential is not a side effect of
                         // signing in for yourself.
-                        let! otherScope = postJsonWithCookie (url + "/github/poll") "who=alice" """{"scope":"session"}""" |> Interop.awaitPromise
-                        Expect.equal otherScope.status 400 "session scope has no flow of its own"
+                        let! otherScope = postJsonWithCookie (url + "/github/poll") "who=alice" """{"scope":"session"}"""
+                        Expect.equal otherScope.Status 400 "session scope has no flow of its own"
 
                         // Alice finishes hers, and it lands where it began.
-                        let! alice' = postJsonWithCookie (url + "/github/poll") "who=alice" """{"scope":"mine"}""" |> Interop.awaitPromise
-                        Expect.equal alice'.status 200 "alice's flow completes"
+                        let! alice' = postJsonWithCookie (url + "/github/poll") "who=alice" """{"scope":"mine"}"""
+                        Expect.equal alice'.Status 200 "alice's flow completes"
                         Expect.equal
                             (recorder.Grants |> Seq.map (fun g -> g.Target, g.AccessToken) |> List.ofSeq)
                             [ githubTarget (UserScope alice), "ghu_alices" ]
@@ -2074,21 +2071,21 @@ let private githubRouteTests =
                     async {
                         // No client id: the operator has registered no App. The route says so
                         // instead of posting a half-formed grant at github.com.
-                        let! began = postJsonWithCookie (url + "/github/begin") "who=alice" """{"scope":"mine"}""" |> Interop.awaitPromise
-                        Expect.equal began.status 400 "nothing to begin"
-                        Expect.isTrue (began.body.Contains "YESSION_GITHUB_CLIENT_ID") "names what is missing"
+                        let! began = postJsonWithCookie (url + "/github/begin") "who=alice" """{"scope":"mine"}"""
+                        Expect.equal began.Status 400 "nothing to begin"
+                        Expect.isTrue (began.Body.Contains "YESSION_GITHUB_CLIENT_ID") "names what is missing"
 
                         // The paste path is the day-one route, and it works with no App at all
                         // — but only for something that is actually a GitHub credential.
-                        let! wrong = postJsonWithCookie (url + "/github/token") "who=alice" """{"scope":"mine","token":"sk-ant-api03-x"}""" |> Interop.awaitPromise
-                        Expect.equal wrong.status 400 "a claude key is not a github one"
+                        let! wrong = postJsonWithCookie (url + "/github/token") "who=alice" """{"scope":"mine","token":"sk-ant-api03-x"}"""
+                        Expect.equal wrong.Status 400 "a claude key is not a github one"
                         Expect.equal recorder.Puts.Count 0 "and was not stored"
-                        let! pasted = postJsonWithCookie (url + "/github/token") "who=alice" """{"scope":"session","token":"ghp_pasted"}""" |> Interop.awaitPromise
-                        Expect.equal pasted.status 200 "stored"
+                        let! pasted = postJsonWithCookie (url + "/github/token") "who=alice" """{"scope":"session","token":"ghp_pasted"}"""
+                        Expect.equal pasted.Status 200 "stored"
                         Expect.equal (List.ofSeq recorder.Puts) [ githubTarget (SessionScope sessionA), "ghp_pasted" ] "under the scope the human chose"
 
-                        let! gone = postJsonWithCookie (url + "/github/disconnect") "who=alice" """{"scope":"session"}""" |> Interop.awaitPromise
-                        Expect.equal gone.status 200 "disconnected"
+                        let! gone = postJsonWithCookie (url + "/github/disconnect") "who=alice" """{"scope":"session"}"""
+                        Expect.equal gone.Status 200 "disconnected"
                         Expect.equal (List.ofSeq recorder.Disconnects) [ githubTarget (SessionScope sessionA) ] "the scope the human chose"
                     })
             }
@@ -2102,20 +2099,20 @@ let private githubRouteTests =
                 let! url = startGitHubRoutes recorder.Client (fun target -> Map.tryFind target connected)
                 do! withStubGitHub stub (Some "Iv1.test") (fun () ->
                     async {
-                        let! forAlice = getWithCookie (url + "/github") "who=alice" |> Interop.awaitPromise
-                        Expect.equal forAlice.status 200 "alice sees her own"
-                        Expect.isTrue (connectedAt "mine" forAlice.body) "alice is connected"
+                        let! forAlice = getWithCookie (url + "/github") "who=alice"
+                        Expect.equal forAlice.Status 200 "alice sees her own"
+                        Expect.isTrue (connectedAt "mine" forAlice.Body) "alice is connected"
                         Expect.isTrue
-                            (forAlice.body.Contains """"signInRequired":null""")
+                            (forAlice.Body.Contains """"signInRequired":null""")
                             "and nothing says otherwise"
-                        Expect.isTrue (notConnectedAt "session" forAlice.body) "the session is not"
-                        Expect.isTrue (forAlice.body.Contains "\"owner\":\"user\"") "as a user"
+                        Expect.isTrue (notConnectedAt "session" forAlice.Body) "the session is not"
+                        Expect.isTrue (forAlice.Body.Contains "\"owner\":\"user\"") "as a user"
 
                         // The same session, a different human: status is computed from the
                         // caller's identity, so bob does not learn he is signed in because
                         // alice is.
-                        let! forBob = getWithCookie (url + "/github") "who=bob" |> Interop.awaitPromise
-                        Expect.isTrue (notConnectedAt "mine" forBob.body) "bob is not connected"
+                        let! forBob = getWithCookie (url + "/github") "who=bob"
+                        Expect.isTrue (notConnectedAt "mine" forBob.Body) "bob is not connected"
                     })
             }
     ]

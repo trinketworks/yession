@@ -357,11 +357,6 @@ let private stubAuth () : SessionAuth.Auth =
       HandleCallback = fun _ -> async { return Error (500, "not under test") }
       CookieName = "who" }
 
-type private HttpReply = { status: int; body: string }
-
-[<Emit("""fetch($0, { headers: { cookie: $1 }, cache: 'no-store' }).then(async r => ({ status: r.status, body: await r.text() }))""")>]
-let private getWithCookie (url: string) (cookie: string) : JS.Promise<HttpReply> = Util.jsNative
-
 let private startQueryRoutes (registry: Queries.QueryRegistry) =
     async {
         let route = Queries.routes (stubAuth ()) registry ""
@@ -399,9 +394,9 @@ let private routeTests =
             async {
                 let registry = Queries.create [ constant "repos" Value (ValueOf (CellText "x")) ] |> expect
                 let! url = startQueryRoutes registry
-                let! reply = getWithCookie (url + "/queries") "" |> Interop.awaitPromise
-                Expect.equal reply.status 401 "the stream is gated"
-                Expect.isFalse (reply.body.Contains "repos") "and it leaked nothing on the way out"
+                let! reply = TestHttp.getNoStore [ "cookie", "" ] (url + "/queries")
+                Expect.equal reply.Status 401 "the stream is gated"
+                Expect.isFalse (reply.Body.Contains "repos") "and it leaked nothing on the way out"
             }
 
         // End to end over real HTTP: connect, receive the burst, then watch a command's

@@ -32,20 +32,14 @@ let private expect result =
     | Ok v -> v
     | Error e -> failwithf "invariant: %A" e
 
-type private HttpReply = { status: int; body: string }
-
-[<Emit("fetch($0, { headers: $1, cache: 'no-store' }).then(async r => ({ status: r.status, body: await r.text() }))")>]
-let private fetchReply (url: string) (headers: obj) : JS.Promise<HttpReply> = Util.jsNative
-
 /// A GET, with the cookie header only when there is a cookie — which is what the `cookie ? ..
-/// : {}` this used to carry inside the macro decided. `IsNullOrEmpty` rather than `= ""`
-/// because that ternary was JS truthiness, and an absent cookie reaches here as either.
-let private get (url: string) (cookie: string) : JS.Promise<HttpReply> =
+/// : {}` this used to carry inside a `fetch` macro decided. `IsNullOrEmpty` rather than
+/// `= ""` because that ternary was JS truthiness, and an absent cookie reaches here as either.
+let private get (url: string) (cookie: string) : Async<TestHttp.Reply> =
     let headers =
-        if System.String.IsNullOrEmpty cookie then JsInterop.createObj []
-        else JsInterop.createObj [ "cookie", box cookie ]
+        if System.String.IsNullOrEmpty cookie then [] else [ "cookie", cookie ]
 
-    fetchReply url headers
+    TestHttp.getNoStore headers url
 
 /// Start a server on a free port and answer with `reply`, which sees the request.
 let private serving (handler: Interop.IncomingMessage -> Interop.ServerResponse -> unit) =
@@ -249,9 +243,9 @@ let private routeTests =
                 // Which models this session can run on is a fact about the session, so it
                 // goes to the people in it and to nobody else.
                 let! url, server = startClaudeRoutes (fun _ -> async { return Ok [] })
-                let! reply = get url "" |> Interop.awaitPromise
+                let! reply = get url ""
                 server.close ignore
-                Expect.equal reply.status 401 "unauthenticated is refused"
+                Expect.equal reply.Status 401 "unauthenticated is refused"
             }
 
         testCaseAsync "the catalogue crosses as the shared codec, on the asking party's authority" <|
@@ -263,11 +257,11 @@ let private routeTests =
                             askedFor <- Some actor
                             return Ok [ AgentModel.create (ModelId.create "model-a" |> expect) "Model A" ]
                         })
-                let! reply = get url "who=ada" |> Interop.awaitPromise
+                let! reply = get url "who=ada"
                 server.close ignore
-                Expect.equal reply.status 200 "an identity gets an answer"
+                Expect.equal reply.Status 200 "an identity gets an answer"
                 Expect.equal
-                    (Codec.fromString Codec.modelCatalogue (catalogueOf reply.body).models.Value |> expect)
+                    (Codec.fromString Codec.modelCatalogue (catalogueOf reply.Body).models.Value |> expect)
                     [ AgentModel.create (ModelId.create "model-a" |> expect) "Model A" ]
                     "and it is the catalogue, decoded by the codec the browser uses"
                 Expect.equal
@@ -281,9 +275,9 @@ let private routeTests =
                 // An empty menu with no explanation is the state this whole shape exists to
                 // avoid: the remedy is one panel up, and nothing would have pointed at it.
                 let! url, server = startClaudeRoutes (fun _ -> async { return Error "no Claude account connected" })
-                let! reply = get url "who=ada" |> Interop.awaitPromise
+                let! reply = get url "who=ada"
                 server.close ignore
-                let catalogue = catalogueOf reply.body
+                let catalogue = catalogueOf reply.Body
                 Expect.isNone catalogue.models "a failed lookup is not a catalogue"
                 Expect.equal
                     catalogue.unavailable
@@ -297,10 +291,10 @@ let private routeTests =
                 // let the picker keep a refusal naming an account the panel beside it had
                 // already shown as connected; one reply cannot disagree with itself.
                 let! url, server = startClaudeRoutes (fun _ -> async { return Error "no Claude account connected" })
-                let! reply = get url "who=ada" |> Interop.awaitPromise
+                let! reply = get url "who=ada"
                 server.close ignore
-                Expect.isTrue (reply.body.Contains "\"owner\"") "the status is on the reply"
-                Expect.isTrue (reply.body.Contains "\"modelsUnavailable\"") "and so is what the picker can offer"
+                Expect.isTrue (reply.Body.Contains "\"owner\"") "the status is on the reply"
+                Expect.isTrue (reply.Body.Contains "\"modelsUnavailable\"") "and so is what the picker can offer"
             }
     ]
 

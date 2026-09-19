@@ -39,20 +39,14 @@ let private expect result =
 
 let private repo (name: string) = RepoRef.create name |> expect
 
-type private HttpReply = { status: int; body: string }
-
-[<Emit("fetch($0, { headers: $1, cache: 'no-store' }).then(async r => ({ status: r.status, body: await r.text() }))")>]
-let private fetchReply (url: string) (headers: obj) : JS.Promise<HttpReply> = Util.jsNative
-
 /// A GET, with the cookie header only when there is a cookie — which is what the `cookie ? ..
-/// : {}` this used to carry inside the macro decided. `IsNullOrEmpty` rather than `= ""`
-/// because that ternary was JS truthiness, and an absent cookie reaches here as either.
-let private get (url: string) (cookie: string) : JS.Promise<HttpReply> =
+/// : {}` this used to carry inside a `fetch` macro decided. `IsNullOrEmpty` rather than
+/// `= ""` because that ternary was JS truthiness, and an absent cookie reaches here as either.
+let private get (url: string) (cookie: string) : Async<TestHttp.Reply> =
     let headers =
-        if System.String.IsNullOrEmpty cookie then JsInterop.createObj []
-        else JsInterop.createObj [ "cookie", box cookie ]
+        if System.String.IsNullOrEmpty cookie then [] else [ "cookie", cookie ]
 
-    fetchReply url headers
+    TestHttp.getNoStore headers url
 
 let private serving (handler: Interop.IncomingMessage -> Interop.ServerResponse -> unit) =
     async {
@@ -293,10 +287,10 @@ let private routeTests =
             async {
                 let! api = startStubApi ()
                 let! url = startRoutes api [ alice, "ghp_alice" ]
-                let! repos = get (url + "/github/repos") "" |> Interop.awaitPromise
-                Expect.equal repos.status 401 "the listing is gated"
-                let! branches = get (url + "/github/repos/octo/hello/branches") "" |> Interop.awaitPromise
-                Expect.equal branches.status 401 "so are the branches"
+                let! repos = get (url + "/github/repos") ""
+                Expect.equal repos.Status 401 "the listing is gated"
+                let! branches = get (url + "/github/repos/octo/hello/branches") ""
+                Expect.equal branches.Status 401 "so are the branches"
                 Expect.equal api.Requests.Count 0 "nothing reached the provider"
             }
 
@@ -304,9 +298,9 @@ let private routeTests =
             async {
                 let! api = startStubApi ()
                 let! url = startRoutes api [ alice, "ghp_alice" ]
-                let! reply = get (url + "/github/repos") "who=alice" |> Interop.awaitPromise
-                Expect.equal reply.status 200 "answered"
-                let listing = Codec.fromString Codec.repoPage reply.body |> expect
+                let! reply = get (url + "/github/repos") "who=alice"
+                Expect.equal reply.Status 200 "answered"
+                let listing = Codec.fromString Codec.repoPage reply.Body |> expect
                 Expect.equal (listing.Candidates |> List.map (fun c -> c.Repo)) [ repo "mine/recent" ] "the provider's name for it, in the codec the picker reads"
                 Expect.equal (listing.Candidates |> List.map (fun c -> c.DefaultBranch)) [ "trunk" ] "and its default branch"
                 let _, bearer = api.Requests.[0]
@@ -317,9 +311,9 @@ let private routeTests =
             async {
                 let! api = startStubApi ()
                 let! url = startRoutes api []
-                let! reply = get (url + "/github/repos") "who=alice" |> Interop.awaitPromise
-                Expect.equal reply.status 401 "said as a sign-in"
-                Expect.isTrue (reply.body.Contains "connect GitHub") "in words that name the way out"
+                let! reply = get (url + "/github/repos") "who=alice"
+                Expect.equal reply.Status 401 "said as a sign-in"
+                Expect.isTrue (reply.Body.Contains "connect GitHub") "in words that name the way out"
                 Expect.equal api.Requests.Count 0 "without asking the provider what it cannot answer"
             }
 
@@ -327,9 +321,9 @@ let private routeTests =
             async {
                 let! api = startStubApi ()
                 let! url = startRoutes api []
-                let! reply = get (url + "/github/repos?q=hello") "who=alice" |> Interop.awaitPromise
-                Expect.equal reply.status 200 "answered anonymously"
-                let listing = Codec.fromString Codec.repoPage reply.body |> expect
+                let! reply = get (url + "/github/repos?q=hello") "who=alice"
+                Expect.equal reply.Status 200 "answered anonymously"
+                let listing = Codec.fromString Codec.repoPage reply.Body |> expect
                 Expect.equal (listing.Candidates |> List.map (fun c -> c.Repo)) [ repo "found/by-name" ] "from the search endpoint"
             }
 
@@ -343,8 +337,7 @@ let private routeTests =
                 let cursor = GitHubRepos.nextCursor (Some "hello") 1 ([ 1 .. GitHubRepos.pageSize ] |> List.map (fun n -> candidateOf (sprintf "octo/repo-%d" n)))
                 let! reply =
                     get (url + "/github/repos?q=something-else&page=" + Http.urlPart (Option.get cursor)) "who=alice"
-                    |> Interop.awaitPromise
-                Expect.equal reply.status 200 "answered"
+                Expect.equal reply.Status 200 "answered"
                 let asked, _ = api.Requests.[0]
                 Expect.isTrue (asked.StartsWith "/search/repositories") "the search endpoint, because the cursor's question was a search"
                 Expect.isTrue (asked.Contains "page=2") "for the page after the one it was minted from"
@@ -358,8 +351,7 @@ let private routeTests =
                 let! url = startRoutes api []
                 let! reply =
                     get (url + "/github/repos?q=hello&page=" + Http.urlPart "https://evil.example/drain") "who=alice"
-                    |> Interop.awaitPromise
-                Expect.equal reply.status 200 "answered"
+                Expect.equal reply.Status 200 "answered"
                 let asked, _ = api.Requests.[0]
                 Expect.isTrue (asked.StartsWith "/search/repositories") "against the provider this session was configured with"
                 Expect.isTrue (asked.Contains "page=1") "at the beginning"
@@ -370,27 +362,27 @@ let private routeTests =
             async {
                 let! api = startStubApi ()
                 let! url = startRoutes api [ alice, "ghp_alice" ]
-                let! reply = get (url + "/github/repos/octo/hello/branches") "who=alice" |> Interop.awaitPromise
-                Expect.equal reply.status 200 "answered"
-                Expect.equal (Codec.fromString Codec.branchPage reply.body |> Result.map (fun page -> page.Names)) (Ok [ "main"; "next" ]) "the names, in the codec the picker reads"
-                let! gone = get (url + "/github/repos/octo/gone/branches") "who=alice" |> Interop.awaitPromise
-                Expect.equal gone.status 404 "and a repo the credential cannot see is a 404 with words"
+                let! reply = get (url + "/github/repos/octo/hello/branches") "who=alice"
+                Expect.equal reply.Status 200 "answered"
+                Expect.equal (Codec.fromString Codec.branchPage reply.Body |> Result.map (fun page -> page.Names)) (Ok [ "main"; "next" ]) "the names, in the codec the picker reads"
+                let! gone = get (url + "/github/repos/octo/gone/branches") "who=alice"
+                Expect.equal gone.Status 404 "and a repo the credential cannot see is a 404 with words"
             }
 
         testCaseAsync "a pull request's head is read for the number the path names" <|
             async {
                 let! api = startStubApi ()
                 let! url = startRoutes api [ alice, "ghp_alice" ]
-                let! reply = get (url + "/github/repos/octo/hello/pulls/42") "who=alice" |> Interop.awaitPromise
-                Expect.equal reply.status 200 "answered"
+                let! reply = get (url + "/github/repos/octo/hello/pulls/42") "who=alice"
+                Expect.equal reply.Status 200 "answered"
                 Expect.equal
-                    (Codec.fromString Codec.pullHead reply.body)
+                    (Codec.fromString Codec.pullHead reply.Body)
                     (Ok { PullHead.Repo = repo "fork-owner/hello"; PullHead.Branch = "fix/thing" })
                     "the fork and its branch, in the codec the picker reads"
-                let! notNumber = get (url + "/github/repos/octo/hello/pulls/latest") "who=alice" |> Interop.awaitPromise
-                Expect.equal notNumber.status 400 "a number is what the path takes"
-                let! gone = get (url + "/github/repos/octo/hello/pulls/7") "who=alice" |> Interop.awaitPromise
-                Expect.equal gone.status 404 "and one the credential cannot see is a 404 with words"
+                let! notNumber = get (url + "/github/repos/octo/hello/pulls/latest") "who=alice"
+                Expect.equal notNumber.Status 400 "a number is what the path takes"
+                let! gone = get (url + "/github/repos/octo/hello/pulls/7") "who=alice"
+                Expect.equal gone.Status 404 "and one the credential cannot see is a 404 with words"
             }
     ]
 
