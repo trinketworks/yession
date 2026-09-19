@@ -548,3 +548,27 @@ Findings: `flat-gradient-glow` is the Zune tile and the same object as everythin
 sketch. The glow has to be per piece. `shallow-thin` is the build that belongs beside a Metro
 surface. `flat-drop` does most of what the shallow elevation does while staying a flat SVG with
 no projection in it.
+
+## Nineteenth pass: lower for the stem, then lit in stages
+
+`ladder/` drops the camera on the panels-on-a-cube and builds the glow back up one mechanism at
+a time.
+
+- **The angle** — the stem of the implied Y is the corner slot between the two panels, and its
+  length is the elevation. `a66` (a stub), `a54`, `a46` (the stem as long as the arms are wide —
+  the angle the rest uses), `a40` (the arms begin to foreshorten), `a46-tall` (blocks at 1.3×
+  their footprint, which lengthens the stem without dropping further).
+- **The glow, one mechanism at a time** — eight stages, each keeping every one before it:
+  `g0` base (graded faces), `g1` + bloom (each piece's own colour blurred behind it — where most
+  "add a glow" stops), `g2` + halo on the kerfs (the light gains a source), `g3` + core (a
+  near-white hairline down each kerf; without it the halo reads as paint), `g4` + spill (a radial
+  wash at the junction, clipped to the object), `g5` + chromatic wash (a wider bloom in a deeper,
+  more saturated colour — light shifts hue as it spreads), `g6` + grain (noise multiplied into the
+  wide wash at very low amplitude), `g7` + ambient.
+- **On the others** — `chevron-full`, `cubes-full`: the top of the ladder on the chevron and on
+  the sketch's own arrangement.
+
+One rule, found the hard way twice: everything that spreads must reach zero inside the canvas.
+A wide blur lifts the whole viewport by a percent or two and the edge clips it into a faint
+rectangle. The wide washes are masked by a radial that hits black at r = 30, and the ambient
+gradient stops there too.
