@@ -9,6 +9,7 @@ module Yession.Host.Ssr
 // dependencies it bundles trivially into the shipped single-file executable — no CDN, no
 // parse5. The browser renders the same templates live; this is the first paint.
 
+open System.Text.RegularExpressions
 open Fable.Core
 open Fable.Core.JsInterop
 open Yession.Domain
@@ -17,51 +18,32 @@ open Lit
 
 // --- lit-html TemplateResult shape (read-only) ------------------------------------------
 
-[<Emit("$0 != null")>]
-let private isPresent (v: obj) : bool = jsNative
+/// A lit-html `TemplateResult` as it is shaped at runtime: the static parts, the hole values
+/// between them, and the brand lit-html puts on one (`1` for `html`, `2` for `svg`). The brand
+/// is what tells a template from any other object in a hole, and it is an option because on
+/// anything that is not a template it is absent.
+[<AllowNullLiteral>]
+type private LitTemplate =
+    abstract strings : string[]
+    abstract values : obj[]
+    abstract ``_$litType$`` : int option
 
-[<Emit("$0._$litType$ !== undefined")>]
-let private hasLitType (v: obj) : bool = jsNative
+/// The binding syntax lit-html reads off the end of a static part — `@x=`, `.x=`, `?x=`, with
+/// or without the opening quote of the value. These carry a listener/property a string cannot.
+let private binding = Regex "[@.?][A-Za-z0-9_-]+=\"?$"
 
-/// A lit-html `TemplateResult`, told apart by the brand lit-html puts on one. The presence
-/// check comes first because the brand cannot be read off `null` or `undefined`.
-let private isTemplateResult (v: obj) : bool = isPresent v && hasLitType v
-
-[<Emit("$0.strings")>]
-let private trStrings (v: obj) : string[] = jsNative
-
-[<Emit("$0.values")>]
-let private trValues (v: obj) : obj[] = jsNative
-
-[<Emit("typeof $0[Symbol.iterator] === 'function'")>]
-let private hasIterator (v: obj) : bool = jsNative
-
-let private toArray (v: obj) : obj[] = JS.Constructors.Array.from (unbox<obj seq> v)
-
-[<Emit("typeof $0")>]
-let private jsTypeof (v: obj) : string = jsNative
-
-/// Any iterable that isn't a string (JS arrays AND Fable's F# lists, which lit-html renders
-/// as a sequence of child parts). Excludes strings, which are handled as text — and the
-/// order is the guard: neither the string test nor the iterator probe can be asked of
-/// `null` or `undefined`.
-let private isIterable (v: obj) : bool =
-    isPresent v && jsTypeof v <> "string" && hasIterator v
-
-[<Emit("String($0)")>]
-let private jsString (v: obj) : string = jsNative
-
-/// A static part ending in an event/property/boolean binding hole (`@x=`, `.x=`, `?x=`,
-/// with or without an opening quote). These carry a listener/property a string cannot.
-[<Emit("/[@.?][A-Za-z0-9_-]+=\"?$/.test($0)")>]
-let private endsWithBinding (s: string) : bool = jsNative
-
-[<Emit("$0.replace(/\\s*[@.?][A-Za-z0-9_-]+=\"?$/, '')")>]
-let private stripBinding (s: string) : string = jsNative
+/// The same, with the whitespace that set it off: what goes when the binding goes.
+let private bindingWithSpace = Regex "\\s*[@.?][A-Za-z0-9_-]+=\"?$"
 
 /// A static part ending in an attribute-value hole (`name=` or `name="`).
-[<Emit("/=\"?$/.test($0)")>]
-let private endsWithAttr (s: string) : bool = jsNative
+let private attributeHole = Regex "=\"?$"
+
+/// Whether a value is iterable — a JS array, a Fable list, a lazy `seq`. The one question
+/// here that stays a macro: Fable cannot type-test `seq<_>` (`:? seq<obj>` compiles to a
+/// constant false), and the template-hole rule admits any `IEnumerable`, so a lazy sequence
+/// can reach a hole and has to render as its parts.
+[<Emit("typeof $0[Symbol.iterator] === 'function'")>]
+let private isIterable (v: obj) : bool = jsNative
 
 /// Public for the same reason `escapeAttr` is: the Manager's own standalone pages (Plan 11's
 /// `/open` landing page and its refusals) are sprintf'd rather than Lit-rendered, and they put
@@ -74,33 +56,42 @@ let escapeText (s: string) =
 let escapeAttr (s: string) =
     s.Replace("&", "&amp;").Replace("\"", "&quot;")
 
+/// One hole's value, as text. The cases are the renderable types the template-hole rule
+/// admits (`TemplateHoles.fs`) — text, a template, a sequence of them, a number, a bool — and
+/// then what a string cannot carry: a listener, lit's `nothing`/`noChange` sentinels, any
+/// other object, all of which render as nothing. Each JavaScript kind but one is named by the
+/// F# type test that compiles to it, where this used to ask `typeof` in a macro and hand a
+/// number to `String()`. The order is the guard: `null` before anything a property is read
+/// off, text before the iterable test a string would also pass.
 let rec private renderValue (inAttr: bool) (v: obj) : string =
-    if isNull v then ""
-    elif isTemplateResult v then renderTemplate v
-    elif jsTypeof v = "string" then (let s = unbox<string> v in if inAttr then escapeAttr s else escapeText s)
-    elif jsTypeof v = "number" || jsTypeof v = "boolean" then jsString v
-    elif isIterable v then toArray v |> Array.map (renderValue false) |> String.concat ""
-    // Functions (event handlers), lit's `nothing`/`noChange` sentinels, and any other
-    // object have no string form — render nothing.
-    else ""
+    match v with
+    | null -> ""
+    | :? string as s -> if inAttr then escapeAttr s else escapeText s
+    | :? float as n -> string n
+    | :? bool as b -> if b then "true" else "false"
+    | candidate when (unbox<LitTemplate> candidate).``_$litType$``.IsSome ->
+        renderTemplate (unbox<LitTemplate> candidate)
+    // JS arrays AND Fable's F# lists, which lit-html renders as a sequence of child parts.
+    | items when isIterable items -> unbox<obj seq> items |> Seq.map (renderValue false) |> String.concat ""
+    | _ -> ""
 
-and private renderTemplate (tr: obj) : string =
-    let strings = trStrings tr
-    let values = trValues tr
+and private renderTemplate (template: LitTemplate) : string =
+    let strings = template.strings
+    let values = template.values
     let sb = System.Text.StringBuilder ()
     for i in 0 .. values.Length - 1 do
         let s = strings.[i]
-        if endsWithBinding s then
+        if binding.IsMatch s then
             // Drop the binding syntax and its value — a string can't carry a listener.
-            sb.Append (stripBinding s) |> ignore
+            sb.Append (bindingWithSpace.Replace (s, "")) |> ignore
         else
             sb.Append s |> ignore
-            sb.Append (renderValue (endsWithAttr s) values.[i]) |> ignore
+            sb.Append (renderValue (attributeHole.IsMatch s) values.[i]) |> ignore
     sb.Append strings.[strings.Length - 1] |> ignore
     sb.ToString ()
 
 /// Render a Fable.Lit template to an HTML string.
-let render (template: TemplateResult) : string = renderTemplate (box template)
+let render (template: TemplateResult) : string = renderTemplate (unbox<LitTemplate> template)
 
 /// Render the client shell for `model` to a string (the view's `ViewActions` are no-ops —
 /// the handlers never fire during rendering).

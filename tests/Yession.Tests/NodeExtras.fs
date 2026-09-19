@@ -225,7 +225,19 @@ let tests =
         // And the one the reader would otherwise see as `undefined` in the middle of a
         // sentence: `emit('error')` can carry anything, an absent value included.
         testCase "an error carrying no message still describes as something readable" <| fun () ->
-            Expect.equal (StreamError.describe null) "null" "what JavaScript makes of the value itself"
+            Expect.equal (StreamError.describe null) "nothing" "a value that is not there is said to be, in words"
+
+        // `Thrown.describe` is the general case, and what a `throw` can carry is anything.
+        // Each kind is pinned apart because each used to go through `String(x)`, whose answers
+        // for two of these were `[object Object]` and the bare word `Error`.
+        testCase "an object thrown describes as its JSON rather than as [object Object]" <| fun () ->
+            Expect.equal (Thrown.describe (box {| code = 7 |})) """{"code":7}""" "the value, not the kind of thing it is"
+
+        testCase "an error carrying no message describes as its name" <| fun () ->
+            Expect.equal (Thrown.describe (box (Thrown.errorWith ""))) "Error" "the one word an empty error has"
+
+        testCase "a number thrown describes as its digits" <| fun () ->
+            Expect.equal (Thrown.describe (box 7)) "7" "the digits a person reads"
     ]
 
 // --- Spawning, and the members of a child Fable.Node does not declare ------------------------
@@ -422,8 +434,10 @@ let eventTests =
             Expect.isFalse (isError (box (exn "boom"))) "Fable's Exception is its own class"
             Expect.isTrue (isError (box (errorWith "boom"))) "and `new Error` is not"
 
-        testCase "String() spells out what F#'s string leaves blank" <| fun () ->
-            Expect.equal (describe (box null)) "null" "the platform's own conversion"
+        // F#'s `string` answers "" for null, and `String()` answered the word `null`; a sentence
+        // needs a word there, and not the platform's.
+        testCase "nothing thrown describes as a word, not a blank" <| fun () ->
+            Expect.equal (describe (box null)) "nothing" "said in words, where a blank would read as nothing having happened"
 
         testCase "an Error carries the message it was made with" <| fun () ->
             Expect.equal (errorWith "boom").Message "boom" "which is what a handler reads"
