@@ -422,3 +422,33 @@ the boundary between the two green walls. The letter's own counter is a gift —
 and the blue is exactly the kite the type designer left there, and it holds at 16px better than
 any drawn wedge. `emerge` is the loud one: a crystal coming out of the fork, a splash screen
 rather than a favicon.
+
+## Fourteenth pass: seam lit, and the sketch as an object
+
+Two threads.
+
+`seamlit/` takes `bluefork/seam-two.svg` — the blue wedge driven into the green solid, one
+crease up its middle, arms as seams, stem a hairline — and lights it with the mechanisms from
+`neon/`. The only slot in the mark is the stem, so that is where a tube can go; the seams and
+the crease are edges, and take light the way edges do. `parent` (unlit), painted (`spill`,
+`spill-deep`, `source` — the wedge lit from its own crease), tube (`stem-tube`, `crease-tube`,
+`both-tubes` — one bright axis from the top corner to the bottom vertex), assembled (`assembled`,
+`dual`, `edge`, `unlit`). `crease-tube` is the find: the wedge's near edge lit and the stem
+dark, so the cube in the fork finally looks like a cube because its nearest edge catches light.
+`edge` still wins on cost.
+
+`blocks/` reads a pen sketch as a thing rather than a drawing: four tall blocks in a two-by-two,
+the near one missing, hairline kerfs between the three that remain. Rendered through an actual
+orthographic camera in the generator — azimuth, elevation, back-face culling, painter's sort —
+so every view is the same object and the Y is what it looks like from there: two kerfs on top
+and the concave corner the far block shows through. `sketch` (as drawn: h = 1.8× footprint,
+θ = 45°, φ = 35.26°), `cubes`, `tall`, `nogap` (the arms vanish into the top surface and only the
+concave stem survives as shading), `wide`; `blue-right`, `blue-left`, `stepped`, `low-far`;
+`above`, `low`, `turned` (θ = 32°), `turned-more` (θ = 20°); `ghost` (the missing near block's
+top drawn as a faint plate — three stand around a space shaped exactly like one of them) and
+`plinth`.
+
+Height is the dial that matters for the blocks: as cubes it is a stair, at 1.8 it is three things
+standing, at 2.6 it is pillars and the letter shrinks to a notch. The sketch's proportion is
+about right. And a camera is the honest instrument here — `turned` is the same object as
+`sketch`, which no drawn mark can claim.
