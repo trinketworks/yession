@@ -951,32 +951,10 @@ let private themeContrastTests =
                 Expect.isTrue (ratio >= 4.5) (sprintf "text-bg on bg-%s is %.2f:1 — the AA floor is 4.5:1" fill ratio)
     ]
 
-[<Emit("fetch($0, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: $1 }).then(async r => ({ status: r.status, cacheControl: '', body: await r.text() }))")>]
-let private postForm (url: string) (body: string) : JS.Promise<obj> = Fable.Core.Util.jsNative
-
-/// A GET that keeps its status. `Interop.getText` discards it, and a route whose whole job
-/// is to distinguish "here it is" from "no such session" needs the number.
-[<Emit("fetch($0).then(async r => ({ status: r.status, cacheControl: '', contentType: r.headers.get('content-type') || '', body: await r.text() }))")>]
-let private getReply (url: string) : JS.Promise<obj> = Fable.Core.Util.jsNative
-
-[<Emit("$0.status")>]
-let private statusOfReply (reply: obj) : int = Fable.Core.Util.jsNative
-
-/// What the answer said it WAS. A route a browser navigates to is not fully described by its
-/// status: `text/plain` is a message on a laptop and a downloaded `document.txt` on a phone.
-[<Emit("$0.contentType")>]
-let private contentTypeOfReply (reply: obj) : string = Fable.Core.Util.jsNative
-
-[<Emit("$0.body")>]
-let private bodyOfReply (reply: obj) : string = Fable.Core.Util.jsNative
-
 /// A form POST that does NOT follow its redirect. Where the create route points is the
 /// contract; an auto-following fetch would swallow it and assert the destination instead.
-[<Emit("fetch($0, { method: 'POST', redirect: 'manual', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: $1 }).then(async r => ({ status: r.status, cacheControl: '', location: r.headers.get('location') || '', body: await r.text() }))")>]
-let private postFormHere (url: string) (body: string) : JS.Promise<obj> = Fable.Core.Util.jsNative
-
-[<Emit("$0.location")>]
-let private locationOfReply (reply: obj) : string = Fable.Core.Util.jsNative
+let private postFormHere (url: string) (body: string) : Async<TestHttp.Reply> =
+    TestHttp.postUnredirected "application/x-www-form-urlencoded" body url
 
 /// A Manager with its management endpoint up, over real child processes. Hoisted because
 /// the archiving cases below each pin ONE invariant and each needs one of these; the setup
@@ -1052,8 +1030,8 @@ let private readinessTests =
         testCaseAsync "a session the front door has not mapped yet is not ready" <|
             async {
                 let! pm, baseUrl, _, door = managerBehindFrontDoor "ready-miss"
-                let! answer = getReply (baseUrl + "/sessions/ready-miss/ready") |> Interop.awaitPromise
-                Expect.equal (statusOfReply answer) 503 "the session is running and its published address is not"
+                let! answer = TestHttp.get (baseUrl + "/sessions/ready-miss/ready")
+                Expect.equal answer.Status 503 "the session is running and its published address is not"
                 do! pm.StopAll ()
                 door.close ignore
             }
@@ -1062,8 +1040,8 @@ let private readinessTests =
             async {
                 let! pm, baseUrl, mapIt, door = managerBehindFrontDoor "ready-hit"
                 mapIt ()
-                let! answer = getReply (baseUrl + "/sessions/ready-hit/ready") |> Interop.awaitPromise
-                Expect.equal (statusOfReply answer) 200 "the door routes to it now, so it is reachable"
+                let! answer = TestHttp.get (baseUrl + "/sessions/ready-hit/ready")
+                Expect.equal answer.Status 200 "the door routes to it now, so it is reachable"
                 do! pm.StopAll ()
                 door.close ignore
             }
@@ -1076,9 +1054,9 @@ let private readinessTests =
             async {
                 let! pm = managerWithUi "open-page"
                 let baseUrl = sprintf "http://127.0.0.1:%d" pm.EndpointPort.Value
-                let! missing = getReply (baseUrl + "/sessions/no-such-session/open") |> Interop.awaitPromise
-                Expect.equal (statusOfReply missing) 404 "an unknown session is still a 404"
-                Expect.stringContains (contentTypeOfReply missing) "text/html" "and it is a page a browser can show"
+                let! missing = TestHttp.get (baseUrl + "/sessions/no-such-session/open")
+                Expect.equal missing.Status 404 "an unknown session is still a 404"
+                Expect.stringContains (TestHttp.requiredHeader "content-type" missing) "text/html" "and it is a page a browser can show"
                 do! pm.StopAll ()
             }
 
@@ -1106,14 +1084,14 @@ let private readinessTests =
                     if m.Success then Some m.Groups.[1].Value else None
                 let resolvedFrom (pageUrl: string) (page: string) =
                     stylesheetOf page |> Option.map (fun href -> resolveUrl pageUrl href)
-                let! manager = getReply managerUrl |> Interop.awaitPromise
-                let! standalone = getReply standaloneUrl |> Interop.awaitPromise
-                let expected = resolvedFrom managerUrl (bodyOfReply manager)
+                let! manager = TestHttp.get managerUrl
+                let! standalone = TestHttp.get standaloneUrl
+                let expected = resolvedFrom managerUrl manager.Body
                 Expect.isSome expected "the Manager page links its stylesheet"
-                let linked = resolvedFrom standaloneUrl (bodyOfReply standalone)
+                let linked = resolvedFrom standaloneUrl standalone.Body
                 Expect.equal linked expected "from where each page lives, both links name the same file"
-                let! sheet = getReply linked.Value |> Interop.awaitPromise
-                Expect.equal (statusOfReply sheet) 200 "and the browser can follow it from the standalone page"
+                let! sheet = TestHttp.get linked.Value
+                Expect.equal sheet.Status 200 "and the browser can follow it from the standalone page"
                 do! pm.StopAll ()
             }
     ]
@@ -1148,9 +1126,9 @@ let private archiveFlowTests =
                 // Over the wire, because `/open` is the URL a session client's reconnect card
                 // points at: a bookmark landing there must read as a conflict it can resolve,
                 // not as the Manager having broken.
-                let! refused = getReply (baseUrl + "/sessions/arch-refuse/open") |> Interop.awaitPromise
-                Expect.equal (statusOfReply refused) 409 "a durable-state conflict, not a server fault"
-                Expect.stringContains (bodyOfReply refused) "archived" "and it says why"
+                let! refused = TestHttp.get (baseUrl + "/sessions/arch-refuse/open")
+                Expect.equal refused.Status 409 "a durable-state conflict, not a server fault"
+                Expect.stringContains refused.Body "archived" "and it says why"
                 do! pm.StopAll ()
             }
 
@@ -1366,15 +1344,15 @@ let private uiFlowTests =
                 // creating one is asking to work in it, and `/open` is the stable route that
                 // launches it and lands you there. Not followed here: this case still wants
                 // it stopped, and what /open does with it is /open's own case below.
-                let! created = postFormHere (baseUrl + "/sessions") "id=ui-1&name=UI+One" |> Interop.awaitPromise
-                Expect.equal (statusOfReply created) 303 "creating hands the browser onward, rather than a table to look at"
-                Expect.equal (locationOfReply created) "/sessions/ui-1/open" "onward is the session's stable open route"
-                let! duplicate = postFormHere (baseUrl + "/sessions") "id=ui-1&name=Again" |> Interop.awaitPromise
-                Expect.equal (statusOfReply duplicate) 400 "duplicates are rejected"
+                let! created = postFormHere (baseUrl + "/sessions") "id=ui-1&name=UI+One"
+                Expect.equal created.Status 303 "creating hands the browser onward, rather than a table to look at"
+                Expect.equal (TestHttp.requiredHeader "location" created) "/sessions/ui-1/open" "onward is the session's stable open route"
+                let! duplicate = postFormHere (baseUrl + "/sessions") "id=ui-1&name=Again"
+                Expect.equal duplicate.Status 400 "duplicates are rejected"
 
                 // Launch from the UI; the fragment reflects it and the child REALLY serves.
-                let! launched = postForm (baseUrl + "/sessions/ui-1/launch") "" |> Interop.awaitPromise
-                let row = bodyOfReply launched
+                let! launched = TestHttp.postForm "" (baseUrl + "/sessions/ui-1/launch")
+                let row = launched.Body
                 Expect.isTrue (row.Contains (Dom.attr Dom.Manager.status Dom.Manager.statusRunning)) "the row shows running"
                 let sessionPort =
                     match (pm.TryFind (SessionId.create "ui-1" |> expect)).Value.Status with
@@ -1395,15 +1373,15 @@ let private uiFlowTests =
 
                 // Stop, resume — each transition pushes a fresh table on the open stream.
                 let beforeStop = tables.Count
-                let! stopped = postForm (baseUrl + "/sessions/ui-1/stop") "" |> Interop.awaitPromise
-                Expect.isTrue ((bodyOfReply stopped).Contains (Dom.attr Dom.Manager.status Dom.Manager.statusStopped)) "stopped from the UI"
+                let! stopped = TestHttp.postForm "" (baseUrl + "/sessions/ui-1/stop")
+                Expect.isTrue (stopped.Body.Contains (Dom.attr Dom.Manager.status Dom.Manager.statusStopped)) "stopped from the UI"
                 do! waitUntil "the stop frame" (fun () ->
                         tables
                         |> Seq.skip beforeStop
                         |> Seq.exists (fun t -> t.Contains (Dom.attr Dom.Manager.status Dom.Manager.statusStopped)))
                 let beforeResume = tables.Count
-                let! resumed = postForm (baseUrl + "/sessions/ui-1/launch") "" |> Interop.awaitPromise
-                Expect.isTrue ((bodyOfReply resumed).Contains (Dom.attr Dom.Manager.status Dom.Manager.statusRunning)) "resume is just launch"
+                let! resumed = TestHttp.postForm "" (baseUrl + "/sessions/ui-1/launch")
+                Expect.isTrue (resumed.Body.Contains (Dom.attr Dom.Manager.status Dom.Manager.statusRunning)) "resume is just launch"
                 do! waitUntil "the resume frame" (fun () ->
                         tables
                         |> Seq.skip beforeResume
@@ -1472,14 +1450,14 @@ let private uiFlowTests =
                 | other -> failwithf "expected it to still be running, got %A" other
 
                 // An unknown session is a 404, not a launch attempt.
-                let! missing = getReply (baseUrl + "/sessions/nope-nope/open") |> Interop.awaitPromise
-                Expect.equal (statusOfReply missing) 404 "unknown sessions are not created by asking to open them"
+                let! missing = TestHttp.get (baseUrl + "/sessions/nope-nope/open")
+                Expect.equal missing.Status 404 "unknown sessions are not created by asking to open them"
 
                 // An id that could not BE a session's is a 400 that says what one is — not a
                 // 404, which reads as "no such session" to someone who mistyped one.
-                let! malformed = getReply (baseUrl + "/sessions/-nope/open") |> Interop.awaitPromise
-                Expect.equal (statusOfReply malformed) 400 "a malformed id is refused, not looked up"
-                Expect.stringContains (bodyOfReply malformed) "-nope is not a session id" "and the answer names the id and the rule"
+                let! malformed = TestHttp.get (baseUrl + "/sessions/-nope/open")
+                Expect.equal malformed.Status 400 "a malformed id is refused, not looked up"
+                Expect.stringContains malformed.Body "-nope is not a session id" "and the answer names the id and the rule"
 
                 do! pm.StopAll ()
             }
@@ -1673,8 +1651,8 @@ let private startPackagedManager (args: string list) (env: (string * string) lis
 /// itself, so that a relaunch cannot break the link.
 let private portOfOpen (openUrl: string) : Async<int> =
     async {
-        let! reply = getReply openUrl |> Interop.awaitPromise
-        let page = bodyOfReply reply
+        let! reply = TestHttp.get openUrl
+        let page = reply.Body
         let m = System.Text.RegularExpressions.Regex.Match (page, "href=\"http://127\\.0\\.0\\.1:(\\d+)/")
         if m.Success then return int m.Groups.[1].Value else return failwithf "no session address on the open page: %s" page
     }
@@ -1697,10 +1675,10 @@ let private compositionTests =
                 // not followed: creating now launches and opens, and this case wants the
                 // launch to be its own act; the port is then read off `/open`, the one page
                 // that spells it.
-                let! created = postFormHere (manager.UiUrl + "sessions") "id=composed&name=Composed" |> Interop.awaitPromise
-                Expect.equal (statusOfReply created) 303 "created via the UI"
-                let! launched = postForm (manager.UiUrl + "sessions/composed/launch") "" |> Interop.awaitPromise
-                let row = bodyOfReply launched
+                let! created = postFormHere (manager.UiUrl + "sessions") "id=composed&name=Composed"
+                Expect.equal created.Status 303 "created via the UI"
+                let! launched = TestHttp.postForm "" (manager.UiUrl + "sessions/composed/launch")
+                let row = launched.Body
                 Expect.isTrue (row.Contains (Dom.attr Dom.Manager.status Dom.Manager.statusRunning)) "launched via the UI"
                 let! sessionPort = portOfOpen (manager.UiUrl + "sessions/composed/open")
 
@@ -1722,9 +1700,9 @@ let private compositionTests =
                 do! a.Channel.Close ()
 
                 // Stop and resume from the UI; history replays into the fresh child.
-                let! stopped = postForm (manager.UiUrl + "sessions/composed/stop") "" |> Interop.awaitPromise
-                Expect.isTrue ((bodyOfReply stopped).Contains (Dom.attr Dom.Manager.status Dom.Manager.statusStopped)) "stopped via the UI"
-                let! resumed = postForm (manager.UiUrl + "sessions/composed/launch") "" |> Interop.awaitPromise
+                let! stopped = TestHttp.postForm "" (manager.UiUrl + "sessions/composed/stop")
+                Expect.isTrue (stopped.Body.Contains (Dom.attr Dom.Manager.status Dom.Manager.statusStopped)) "stopped via the UI"
+                let! resumed = TestHttp.postForm "" (manager.UiUrl + "sessions/composed/launch")
                 let! resumedPort = portOfOpen (manager.UiUrl + "sessions/composed/open")
                 let! openedB = OidcHttp.openSession (sprintf "http://127.0.0.1:%d" resumedPort)
                 let! b = connectClient (sprintf "http://127.0.0.1:%d/signal" resumedPort) openedB.PeerToken "grace" "Grace"
@@ -1739,8 +1717,8 @@ let private compositionTests =
                 let! manager2 = startPackagedManager args env
                 let! page = Interop.getText manager2.UiUrl |> Interop.awaitPromise
                 Expect.isTrue (page.Contains (Dom.attr Dom.Manager.session "composed")) "the registry survived the manager restart"
-                let! relaunched = postForm (manager2.UiUrl + "sessions/composed/launch") "" |> Interop.awaitPromise
-                Expect.isTrue ((bodyOfReply relaunched).Contains (Dom.attr Dom.Manager.status Dom.Manager.statusRunning)) "relaunched via the UI"
+                let! relaunched = TestHttp.postForm "" (manager2.UiUrl + "sessions/composed/launch")
+                Expect.isTrue (relaunched.Body.Contains (Dom.attr Dom.Manager.status Dom.Manager.statusRunning)) "relaunched via the UI"
                 let! relaunchedPort = portOfOpen (manager2.UiUrl + "sessions/composed/open")
                 let! openedC = OidcHttp.openSession (sprintf "http://127.0.0.1:%d" relaunchedPort)
                 let! c = connectClient (sprintf "http://127.0.0.1:%d/signal" relaunchedPort) openedC.PeerToken "carol" "Carol"
@@ -2438,20 +2416,10 @@ let private notificationStreamTests =
             }
     ]
 
-[<Emit("fetch($0, { method: 'POST', headers: $1, body: $2 }).then(r => r.status)")>]
-let private postTo (url: string) (headers: obj) (body: string) : JS.Promise<int> = jsNative
-
 /// POST a delivery the way a provider would: our own headers, our own body, no control
 /// secret. Local to the suite because the product has no reason to make this request.
-let private postDelivery (url: string) (headers: (string * string) list) (body: string) : JS.Promise<int> =
-    // JSON unless the caller says otherwise: a repeated name takes the later value, which is
-    // what assigning over the starting object did.
-    let sent =
-        Fable.Core.JsInterop.createObj
-            [ yield "content-type", box "application/json"
-              for name, value in headers -> name, box value ]
-
-    postTo url sent body
+let private postDelivery (url: string) (headers: (string * string) list) (body: string) : Async<TestHttp.Reply> =
+    TestHttp.post headers "application/json" body url
 
 let private hookDeliveryStreamTests =
     testList "A hook delivery across the control channel (the relay end to end)" [
@@ -2480,13 +2448,12 @@ let private hookDeliveryStreamTests =
                         (sprintf "%s/hooks/github" url)
                         [ "x-hub-signature-256", "sha256=" + Interop.hmacSha256 secret body "hex" ]
                         body
-                    |> Interop.awaitPromise
 
                 // The relay's answer is checked BEFORE the wait: a delivery that never
                 // arrives could be a refused signature, an undeclared endpoint, or a stream
                 // that has not connected yet, and a bare timeout cannot tell those apart.
                 let! accepted = deliver ()
-                Expect.equal accepted 204 "the relay accepted the signed delivery"
+                Expect.equal accepted.Status 204 "the relay accepted the signed delivery"
 
                 // The stream connects asynchronously and nothing is buffered, so deliver
                 // until the first arrives (or a generous timeout) — the sibling suite's rule.
@@ -2971,9 +2938,9 @@ let private registryStreamTests =
                             Expect.isTrue
                                 (rendered.Contains "href=\"/sessions/reg-1/open\"")
                                 "the row links to the open route on the Manager's own origin"
-                            let! opening = getReply (baseUrl + "/sessions/reg-1/open") |> Interop.awaitPromise
+                            let! opening = TestHttp.get (baseUrl + "/sessions/reg-1/open")
                             Expect.isTrue
-                                ((bodyOfReply opening).Contains (sprintf "href=\"http://home.example.ts.net:%d/" port))
+                                (opening.Body.Contains (sprintf "href=\"http://home.example.ts.net:%d/" port))
                                 "and /open hands the browser to the public origin"
                             let! login = OidcHttp.getWithJar (OidcHttp.newJar ()) (sprintf "http://127.0.0.1:%d/login" port)
                             Expect.equal login.Status 302 "/login redirects into the authorize chain"

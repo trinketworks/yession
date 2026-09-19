@@ -580,12 +580,9 @@ let private auditTests =
 // pre-authorized handlers the Manager composes (ProcessManager.secretsApiFor), driven
 // as raw HTTP so denied shapes below the typed client are expressible.
 
-type private ControlReply =
-    abstract status : int
-    abstract body : string
-
-[<Fable.Core.Emit("fetch($0, { method: 'POST', headers: { 'x-yession-control': $1, 'content-type': 'application/json' }, body: $2 }).then(async r => ({ status: r.status, body: await r.text() }))")>]
-let private postControl (url: string) (secret: string) (body: string) : Fable.Core.JS.Promise<ControlReply> = Fable.Core.Util.jsNative
+/// A POST on a control route, under the shared secret that gates them.
+let private postControl (url: string) (secret: string) (body: string) : Async<TestHttp.Reply> =
+    TestHttp.post [ "x-yession-control", secret ] "application/json" body url
 
 let private startControlServer (callers: (string * Control.ControlCaller) list) (api: Control.SecretsApi option) (onUnauthorized: string -> unit) =
     async {
@@ -646,7 +643,7 @@ let private routeTests =
                           "secret-b", caller sessionB Set.empty ]
                         (Some (apiOver (fun r -> audited <- r :: audited) (fun s -> if s = sessionA then Set.singleton alice else Set.empty) store))
                         (fun path -> unauthorized <- path :: unauthorized)
-                let post route secret body = postControl (sprintf "%s/control/secrets/%s" url route) secret body |> Interop.awaitPromise
+                let post route secret body = postControl (sprintf "%s/control/secrets/%s" url route) secret body
                 let eventNames () =
                     audited
                     |> List.rev
@@ -658,39 +655,39 @@ let private routeTests =
                 // Own scope: the full lifecycle.
                 let setBody = ControlWire.toString ControlWire.setSecretRequest { Scope = SessionScope sessionA; Name = name; Value = "hunter2" }
                 let! set = post "set" "secret-a" setBody
-                Expect.equal set.status 200 "own-scope set permits"
-                Expect.isFalse (set.body.Contains "hunter2") "the set response carries no value"
+                Expect.equal set.Status 200 "own-scope set permits"
+                Expect.isFalse (set.Body.Contains "hunter2") "the set response carries no value"
                 let! listed = post "list" "secret-a" (ControlWire.toString ControlWire.listSecretsRequest { Scope = SessionScope sessionA })
-                Expect.equal listed.status 200 "own-scope list permits"
-                Expect.isTrue (listed.body.Contains "deploy-token") "metadata names the secret"
-                Expect.isFalse (listed.body.Contains "hunter2") "the raw list body carries no value"
+                Expect.equal listed.Status 200 "own-scope list permits"
+                Expect.isTrue (listed.Body.Contains "deploy-token") "metadata names the secret"
+                Expect.isFalse (listed.Body.Contains "hunter2") "the raw list body carries no value"
 
                 // An unknown secret is turned away at the door.
                 let! unknown = post "set" "not-a-secret" setBody
-                Expect.equal unknown.status 401 "invalid control secret"
+                Expect.equal unknown.Status 401 "invalid control secret"
 
                 // Session B cannot touch A's scope (and the deny does not echo values).
                 let! cross = post "set" "secret-b" setBody
-                Expect.equal cross.status 403 "cross-session write denies"
+                Expect.equal cross.Status 403 "cross-session write denies"
                 let! crossList = post "list" "secret-b" (ControlWire.toString ControlWire.listSecretsRequest { Scope = SessionScope sessionA })
-                Expect.equal crossList.status 403 "cross-session list denies"
+                Expect.equal crossList.Status 403 "cross-session list denies"
 
                 // User scope: sessions never write; a bound user's collection lists.
                 let! userWrite = post "set" "secret-a" (ControlWire.toString ControlWire.setSecretRequest { Scope = UserScope alice; Name = name; Value = "v" })
-                Expect.equal userWrite.status 403 "sessions cannot write user scope"
+                Expect.equal userWrite.Status 403 "sessions cannot write user scope"
                 let! userList = post "list" "secret-a" (ControlWire.toString ControlWire.listSecretsRequest { Scope = UserScope alice })
-                Expect.equal userList.status 200 "a bound user's collection lists"
+                Expect.equal userList.Status 200 "a bound user's collection lists"
                 let! unboundList = post "list" "secret-b" (ControlWire.toString ControlWire.listSecretsRequest { Scope = UserScope alice })
-                Expect.equal unboundList.status 403 "an unbound session cannot list a user's collection"
+                Expect.equal unboundList.Status 403 "an unbound session cannot list a user's collection"
 
                 // There is no read-back route, for anyone.
                 let! get = post "get" "secret-a" setBody
-                Expect.equal get.status 404 "/control/secrets/get does not exist"
+                Expect.equal get.Status 404 "/control/secrets/get does not exist"
 
                 // Delete closes the lifecycle.
                 let! deleted = post "delete" "secret-a" (ControlWire.toString ControlWire.deleteSecretRequest { Scope = SessionScope sessionA; Name = name })
-                Expect.equal deleted.status 200 "own-scope delete permits"
-                Expect.isTrue (deleted.body.Contains "true") "reports the entry existed"
+                Expect.equal deleted.Status 200 "own-scope delete permits"
+                Expect.isTrue (deleted.Body.Contains "true") "reports the entry existed"
 
                 // The audit trail (Plan 06 telemetry): permitted ops and every deny
                 // became records; the 401 hook saw the path; no formatted record leaks
@@ -722,27 +719,27 @@ let private routeTests =
                 let userName = SecretName.create "user-held-token" |> expect
                 let! _ = store.Set { Scope = SessionScope sessionA; Name = name } "session-held"
                 let! _ = store.Set { Scope = UserScope alice; Name = userName } "user-held"
-                let post secret body = postControl (url + "/control/secrets/resolve") secret body |> Interop.awaitPromise
+                let post secret body = postControl (url + "/control/secrets/resolve") secret body
                 let resolveBody = ControlWire.toString ControlWire.resolveSecretRequest { Name = name }
 
                 // The caller's own scope resolves — this is the ONE value-returning
                 // secrets route, feeding env injection at the session's sandbox spawn.
                 let! own = post "secret-a" resolveBody
-                Expect.equal own.status 200 "own-scope resolve permits"
-                Expect.isTrue (own.body.Contains "session-held") "the value crosses the authenticated channel"
+                Expect.equal own.Status 200 "own-scope resolve permits"
+                Expect.isTrue (own.Body.Contains "session-held") "the value crosses the authenticated channel"
 
                 // A bound user's scope is readable too (same walk as injection)...
                 let! bound = post "secret-a" (ControlWire.toString ControlWire.resolveSecretRequest { Name = userName })
-                Expect.equal bound.status 200 "a bound user's secret resolves"
+                Expect.equal bound.Status 200 "a bound user's secret resolves"
 
                 // ...but a sibling session reaches neither, and the deny echoes no value.
                 let! cross = post "secret-b" resolveBody
-                Expect.equal cross.status 403 "another session's secret does not resolve"
-                Expect.isFalse (cross.body.Contains "session-held") "the deny carries no value"
+                Expect.equal cross.Status 403 "another session's secret does not resolve"
+                Expect.isFalse (cross.Body.Contains "session-held") "the deny carries no value"
 
                 // An unknown control secret is turned away at the door.
                 let! unknown = post "stolen" resolveBody
-                Expect.equal unknown.status 401 "invalid control secret"
+                Expect.equal unknown.Status 401 "invalid control secret"
 
                 // The typed session-side client (what sandbox spawn uses) round-trips.
                 let! typed = ControlClient.resolveSecret url "secret-a" name
@@ -790,8 +787,8 @@ let private routeTests =
                         (url + "/control/secrets/list")
                         "secret-a"
                         (ControlWire.toString ControlWire.listSecretsRequest { Scope = SessionScope sessionA })
-                    |> Interop.awaitPromise
-                Expect.equal reply.status 403 "no store configured"
+                   
+                Expect.equal reply.Status 403 "no store configured"
             }
     ]
 

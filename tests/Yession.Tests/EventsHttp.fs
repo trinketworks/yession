@@ -19,41 +19,16 @@ open Yession.Host
 open Yession.Tests.Support
 open Yession.Peer
 
-// A GET that exposes status + cache header alongside the body (Node 24 global fetch).
-type private HttpReply =
-    abstract status : int
-    abstract cacheControl : string
-    abstract body : string
-
-[<Emit("fetch($0).then(async r => ({ status: r.status, cacheControl: r.headers.get('cache-control') || '', body: await r.text() }))")>]
-let private httpGet (url: string) : JS.Promise<HttpReply> = Fable.Core.Util.jsNative
-
-// The same GET with redirects left unfollowed, so the cursor's own answer is observable
-// rather than the range's. `location` is empty on anything that is not a redirect.
-type private RedirectReply =
-    abstract status : int
-    abstract cacheControl : string
-    abstract location : string
-
-[<Emit("fetch($0, { redirect: 'manual' }).then(r => ({ status: r.status, cacheControl: r.headers.get('cache-control') || '', location: r.headers.get('location') || '' }))")>]
-let private httpGetRaw (url: string) : JS.Promise<RedirectReply> = Fable.Core.Util.jsNative
-
-// The chunk GET shaped as `Client.HttpGet` is — total, with the status on a refusal. Identical
-// to the browser's port (app/browser/Browser.fs); failure classification is covered in
-// Resilience.fs, so here it only has to be the real thing.
-[<Emit("""fetch($0).then(
-  async r => r.ok ? { ok: true, status: r.status, url: r.url, detail: await r.text() } : { ok: false, status: r.status, url: r.url, detail: '' },
-  e => ({ ok: false, status: 0, url: '', detail: String(e) }))""")>]
-let private fetchChunk (url: string) : JS.Promise<{| ok: bool; status: int; url: string; detail: string |}> = Fable.Core.Util.jsNative
-
+// The chunk GET shaped as `Client.HttpGet` is — total, with the status on a refusal. What
+// the browser's port does with the same answer is in app/browser/Browser.fs; failure
+// classification is covered in Resilience.fs, so here it only has to be the real thing.
 let private chunkGet : Client.HttpGet =
     fun url ->
         async {
-            let! reply = fetchChunk url |> Interop.awaitPromise
-            return
-                if reply.ok then Ok { Url = reply.url; Body = reply.detail }
-                elif reply.status = 0 then Error (Client.HttpUnreachable reply.detail)
-                else Error (Client.HttpStatus reply.status)
+            match! TestHttp.attempt url with
+            | Error reason -> return Error (Client.HttpUnreachable reason)
+            | Ok reply when TestHttp.ok reply -> return Ok { Url = reply.Url; Body = reply.Body }
+            | Ok reply -> return Error (Client.HttpStatus reply.Status)
         }
 
 let private endpointTests =
@@ -82,19 +57,19 @@ let private endpointTests =
                 let offset (n: int64) = EventOffset.create n |> expect
 
                 // The cursor itself: no events, never cached, and it says where to look.
-                let! start = httpGetRaw (at (EventsAfter None) mintedToken) |> Interop.awaitPromise
-                Expect.equal start.status 307 "a cursor redirects rather than answering"
-                Expect.equal start.cacheControl "no-store" "where the events are is a thing that moves"
-                Expect.stringContains start.location (sprintf "events/0-%d" (EventChunk.size - 1)) "to the first range"
-                Expect.stringContains start.location "token=" "carrying the token, which a redirect would otherwise drop"
+                let! start = TestHttp.getUnredirected (at (EventsAfter None) mintedToken)
+                Expect.equal start.Status 307 "a cursor redirects rather than answering"
+                Expect.equal (TestHttp.requiredHeader "cache-control" start) "no-store" "where the events are is a thing that moves"
+                Expect.stringContains (TestHttp.requiredHeader "location" start) (sprintf "events/0-%d" (EventChunk.size - 1)) "to the first range"
+                Expect.stringContains (TestHttp.requiredHeader "location" start) "token=" "carrying the token, which a redirect would otherwise drop"
 
                 // Following it lands on the events.
-                let! first = httpGet (at (EventsAfter None) mintedToken) |> Interop.awaitPromise
-                Expect.equal first.status 200 "the range serves"
-                Expect.equal first.cacheControl "no-store" "the client keeps this, not the HTTP cache"
+                let! first = TestHttp.get (at (EventsAfter None) mintedToken)
+                Expect.equal first.Status 200 "the range serves"
+                Expect.equal (TestHttp.requiredHeader "cache-control" first) "no-store" "the client keeps this, not the HTTP cache"
                 let lines (body: string) = body.Split '\n' |> Array.filter (fun l -> l.Trim().Length > 0)
-                Expect.equal (lines first.body).Length EventChunk.size "one answer's worth"
-                let decoded = Codec.fromString Codec.sessionEventEnvelope (lines first.body).[0] |> expect
+                Expect.equal (lines first.Body).Length EventChunk.size "one answer's worth"
+                let decoded = Codec.fromString Codec.sessionEventEnvelope (lines first.Body).[0] |> expect
                 Expect.equal (EventOffset.value decoded.Offset) 0L "starting at the beginning"
 
                 // The tail, at an address of its own — and still five events after the log
@@ -102,35 +77,35 @@ let private endpointTests =
                 // meant "whatever chunk 2 holds now", so the newest events were unkeepable.
                 let tailFirst = int64 (2 * EventChunk.size)
                 let tailRange = Events (tailFirst, tailFirst + 4L)
-                let! tail = httpGet (at tailRange mintedToken) |> Interop.awaitPromise
-                Expect.equal tail.status 200 "the tail has an address"
-                Expect.equal (lines tail.body).Length 5 "and five events in it"
+                let! tail = TestHttp.get (at tailRange mintedToken)
+                Expect.equal tail.Status 200 "the tail has an address"
+                Expect.equal (lines tail.Body).Length 5 "and five events in it"
                 do! append 10
-                let! tailAgain = httpGet (at tailRange mintedToken) |> Interop.awaitPromise
-                Expect.equal tailAgain.body tail.body "the same address answers the same bytes after the log grew"
+                let! tailAgain = TestHttp.get (at tailRange mintedToken)
+                Expect.equal tailAgain.Body tail.Body "the same address answers the same bytes after the log grew"
 
                 // A range the log has not reached is a 404, never a short answer: a partial
                 // body here would be kept for ever as if it were the whole range.
-                let! unreached = httpGet (at (Events (10_000L, 10_009L)) mintedToken) |> Interop.awaitPromise
-                Expect.equal unreached.status 404 "a range beyond the log does not exist yet"
+                let! unreached = TestHttp.get (at (Events (10_000L, 10_009L)) mintedToken)
+                Expect.equal unreached.Status 404 "a range beyond the log does not exist yet"
 
                 // Current: nothing to keep, so nothing to give an address to.
-                let! current = httpGetRaw (at (EventsAfter (Some (offset (2L * int64 EventChunk.size + 14L)))) mintedToken) |> Interop.awaitPromise
-                Expect.equal current.status 204 "a caller at the end is told it is current"
-                Expect.equal current.cacheControl "no-store" "and emptiness is never kept"
+                let! current = TestHttp.getUnredirected (at (EventsAfter (Some (offset (2L * int64 EventChunk.size + 14L)))) mintedToken)
+                Expect.equal current.Status 204 "a caller at the end is told it is current"
+                Expect.equal (TestHttp.requiredHeader "cache-control" current) "no-store" "and emptiness is never kept"
 
-                let! wrongToken = httpGet (at (EventsAfter None) "stolen") |> Interop.awaitPromise
-                Expect.equal wrongToken.status 401 "the cursor is gated on minted tokens"
-                Expect.equal wrongToken.cacheControl "no-store" "rejections never cache"
+                let! wrongToken = TestHttp.get (at (EventsAfter None) "stolen")
+                Expect.equal wrongToken.Status 401 "the cursor is gated on minted tokens"
+                Expect.equal (TestHttp.requiredHeader "cache-control" wrongToken) "no-store" "rejections never cache"
 
-                let! wrongTokenRange = httpGet (at (Events (0L, 9L)) "stolen") |> Interop.awaitPromise
-                Expect.equal wrongTokenRange.status 401 "and so are the events themselves"
+                let! wrongTokenRange = TestHttp.get (at (Events (0L, 9L)) "stolen")
+                Expect.equal wrongTokenRange.Status 401 "and so are the events themselves"
 
-                let! bare = httpGet (sprintf "http://127.0.0.1:%d/events" h.Port) |> Interop.awaitPromise
-                Expect.equal bare.status 401 "no cookie and no token is unauthorized"
+                let! bare = TestHttp.get (sprintf "http://127.0.0.1:%d/events" h.Port)
+                Expect.equal bare.Status 401 "no cookie and no token is unauthorized"
 
-                let! notARange = httpGet (sprintf "http://127.0.0.1:%d/events/nope?token=%s" h.Port mintedToken) |> Interop.awaitPromise
-                Expect.equal notARange.status 404 "an unparseable range is not a route"
+                let! notARange = TestHttp.get (sprintf "http://127.0.0.1:%d/events/nope?token=%s" h.Port mintedToken)
+                Expect.equal notARange.Status 404 "an unparseable range is not a route"
                 do! h.Stop ()
             }
 
