@@ -69,8 +69,19 @@ NEXT request properly.
   it; and an entry that fails, or never reports inside 60 minutes, is dropped from the queue
   and its PR quietly returns to open with auto-merge off. Read
   `gh pr view <n> --json state,mergedAt,mergeStateStatus` and believe that instead.
+- **A stuck PR has a reason, and `mergeStateStatus` names it — read it before you act.** A PR
+  that sits queued without merging is not automatically an ejection to re-enqueue. Look at the
+  status first: `DIRTY` (or `CONFLICTING`) is a real conflict with master — rebase onto
+  origin/master and force-push, which you can do yourself; re-enqueueing a DIRTY PR never lands
+  it, it just waits again. `BEHIND` the queue brings up to date for you — leave it. `BLOCKED` is
+  a required check or review still owed — go find it. `CLEAN`/`UNSTABLE` on a PR that is OUT of
+  the queue is the ejection case below. The trap this closes: a queued PR that quietly went
+  DIRTY looks identical to one still on its way in, so "it says queued" is read as "it will
+  land" and the conflict is never seen — a PR sat conflicted-but-queued for two days that way,
+  its watcher inventing reasons it was stuck instead of reading the one word that said so.
 - **Silence is not progress.** A dropped entry produces no failure event. If a PR has neither
-  merged nor failed by your next check-in, assume ejection and re-enqueue.
+  merged nor failed by your next check-in — and its `mergeStateStatus` is not DIRTY/BEHIND/
+  BLOCKED per above — assume ejection and re-enqueue.
 - **`autoMergeRequest` reads `null` while a PR is IN the queue.** It is not proof the PR left
   it. Read the queue: `gh api graphql -f query='{ repository(owner:"trinketworks",
   name:"yession"){ mergeQueue(branch:"master"){ entries(first:10){ nodes{
