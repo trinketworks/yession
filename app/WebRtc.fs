@@ -17,11 +17,10 @@ type [<AllowNullLiteral>] private SdpMessage =
     abstract ``type`` : string
     abstract sdp : string
 
-[<Emit("JSON.stringify({ type: $0, sdp: $1 })")>]
-let private sdpToJson (ty: string) (sdp: string) : string = jsNative
+let private sdpToJson (ty: string) (sdp: string) : string =
+    JS.JSON.stringify {| ``type`` = ty; sdp = sdp |}
 
-[<Emit("JSON.parse($0)")>]
-let private parseSdp (json: string) : SdpMessage = jsNative
+let private parseSdp (json: string) : SdpMessage = unbox (JS.JSON.parse json)
 
 /// The transport never inspects the state-sync payload, so its codec is just a string.
 let private frameCodec : Codec<SessionFrame<string>> = Codec.sessionFrame Codec.string

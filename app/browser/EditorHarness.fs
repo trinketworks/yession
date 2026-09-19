@@ -350,8 +350,8 @@ let private onKeystrokePainted (host: obj) (take: float -> unit) : unit =
 let private exposeTypingDiag (f: unit -> string) : unit = jsNative
 
 /// Two named number series as one JSON object — the shape every scenario returns.
-[<Emit("JSON.stringify({ [$0]: $1, [$2]: $3 })")>]
-let private twoSeries (a: string) (xs: float[]) (b: string) (ys: float[]) : string = jsNative
+let private twoSeries (a: string) (xs: float[]) (b: string) (ys: float[]) : string =
+    JS.JSON.stringify (Fable.Core.JsInterop.createObj [ a, box xs; b, box ys ])
 
 [<Emit("window.__benchSeed = $0")>]
 let private exposeSeed (f: int -> JS.Promise<int>) : unit = jsNative
@@ -366,8 +366,8 @@ let private exposeBenchReset (f: unit -> unit) : unit = jsNative
 let private exposeTyping (f: unit -> string) : unit = jsNative
 
 /// One named number series as JSON — `twoSeries` for a scenario that measures one thing.
-[<Emit("JSON.stringify({ [$0]: $1 })")>]
-let private oneSeries (a: string) (xs: float[]) : string = jsNative
+let private oneSeries (a: string) (xs: float[]) : string =
+    JS.JSON.stringify (Fable.Core.JsInterop.createObj [ a, box xs ])
 
 [<Emit("window.__benchTranscript = $0")>]
 let private exposeTranscript (f: int -> int -> int -> string) : unit = jsNative
@@ -399,10 +399,16 @@ let private exposeScrollEnd (f: unit -> string) : unit = jsNative
 /// What the scroll scenario recorded, in the series shape the driver reads everywhere else,
 /// plus the counts that say whether it measured anything: renders against records sent, and
 /// where the scroll started and ended.
-[<Emit("JSON.stringify({ frame: $0, render: $1, renders: $2, records: $3, scrolledFrom: $4, scrolledTo: $5 })")>]
 let private scrollReport
     (frames: float[]) (renders: float[]) (rendersN: int) (recordsN: int) (scrolledFrom: float) (scrolledTo: float)
-    : string = jsNative
+    : string =
+    JS.JSON.stringify
+        {| frame = frames
+           render = renders
+           renders = rendersN
+           records = recordsN
+           scrolledFrom = scrolledFrom
+           scrolledTo = scrolledTo |}
 
 /// Open a session the way the app opens one it has been to before — from what it kept — and
 /// say what the page did between its first paint and its connection: `items` conversation
@@ -466,11 +472,20 @@ let private nextTask () : JS.Promise<unit> =
 /// What the open scenario recorded. Counts and distances, mostly, because what a person sees
 /// on opening a session is not a latency: how many different pictures the page showed, how
 /// far the words under their eye moved, and how long the page sat frozen.
-[<Emit("JSON.stringify({ renders: $0, paints: $1, jumps: $2, jump: $3, blocked: $4, time: $5, items: $6, connection: $7, replaced: $8 })")>]
 let private openReport
     (renders: int) (paints: int) (jumps: int) (jump: float) (blocked: float) (time: float)
     (items: int) (connection: string) (replaced: int)
-    : string = jsNative
+    : string =
+    JS.JSON.stringify
+        {| renders = renders
+           paints = paints
+           jumps = jumps
+           jump = jump
+           blocked = blocked
+           time = time
+           items = items
+           connection = connection
+           replaced = replaced |}
 
 /// Markdown of roughly `chars` characters, as paragraphs rather than one enormous line: what
 /// the reconciliation walks is NODES, so a document's structure is part of what is being

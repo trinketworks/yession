@@ -84,8 +84,13 @@ let private argv () : string array = jsNative
 [<Emit("process.exit($0)")>]
 let private exitWith (code: int) : unit = jsNative
 
-[<Emit("(console.error($0), process.exit(2))")>]
-let abort (message: string) : 'a = jsNative
+/// The abort's own exit. Generic, because it does not come back — see above.
+[<Emit("process.exit(2)")>]
+let private exitAborting () : 'a = jsNative
+
+let abort (message: string) : 'a =
+    JS.console.error message
+    exitAborting ()
 
 // --- declaring a command line ------------------------------------------------------------
 

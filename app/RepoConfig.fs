@@ -38,8 +38,12 @@ let private problemMessage (problem: obj) : string = jsNative
 let private complaints (doc: obj) : string array =
     Array.append (errors doc) (warnings doc) |> Array.map problemMessage
 
-[<Emit("JSON.stringify($0.toJS())")>]
-let private toJson (doc: obj) : string = jsNative
+/// The parsed document as plain JavaScript values — what the YAML library hands over for
+/// anything that wants JSON out of it.
+[<Emit("$0.toJS()")>]
+let private toJs (doc: obj) : obj = jsNative
+
+let private toJson (doc: obj) : string = JS.JSON.stringify (toJs doc)
 
 /// How the parser is constructed, and every field is load-bearing.
 ///

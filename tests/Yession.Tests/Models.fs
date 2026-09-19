@@ -219,11 +219,9 @@ let private startClaudeRoutes (list: ListModels) =
         return SessionRoute.at url SessionRoute.ClaudeStatus, server
     }
 
-[<Emit("JSON.parse($0)")>]
-let private parseJson (body: string) : obj = Util.jsNative
+let private parseJson (body: string) : obj = JS.JSON.parse body
 
-[<Emit("JSON.stringify($0)")>]
-let private stringifyJson (value: obj) : string = Util.jsNative
+let private stringifyJson (value: obj) : string = JS.JSON.stringify value
 
 /// The catalogue field, and nothing when the reply carries none. `||` rather than `??`
 /// because that is what this said as JavaScript: a `models` spelled `null` and one left off

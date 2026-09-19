@@ -33,8 +33,7 @@ open Yession.Domain.Agent
 /// The binding layer (module `Fable.OpenTelemetry`), qualified for clarity in app code.
 module OpenTelemetry = Fable.OpenTelemetry
 
-[<Emit("Promise.resolve()")>]
-let private resolved () : JS.Promise<unit> = jsNative
+let private resolved () : JS.Promise<unit> = JS.Constructors.Promise.resolve ()
 
 /// The telemetry sink plus a graceful flush. `Emit turnId usage` records one agent-turn log
 /// record (session emitters); `Log body attrs` records a general log record (the Manager's

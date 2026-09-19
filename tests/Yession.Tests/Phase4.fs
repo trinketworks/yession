@@ -903,8 +903,7 @@ let private uiRenderTests =
 [<Emit("$0.readFileSync($1, 'utf8')")>]
 let private readFileSync (fs: obj) (path: string) : string = Fable.Core.Util.jsNative
 
-[<Emit("parseInt($0, 16)")>]
-let private parseHex (s: string) : float = Fable.Core.Util.jsNative
+let private parseHex (s: string) : float = Fable.Core.JS.parseInt s 16
 
 let private themeColour (css: string) (name: string) : string =
     let marker = sprintf "--color-%s:" name

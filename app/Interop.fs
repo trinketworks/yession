@@ -193,13 +193,11 @@ let randomSecret () : string = jsNative
 /// Uniform `[0, 1)` — what a jittered retry schedule spreads its delays with. Not
 /// cryptographic and not meant to be: the only thing it decides is which millisecond inside
 /// a backoff window a retry lands on.
-[<Emit("Math.random()")>]
-let random () : float = jsNative
+let random () : float = JS.Math.random ()
 
 /// A repeating timer, for the beats a long-lived process keeps (the MCP poll, the activity
-/// report). Returns the handle `clearInterval` wants.
-[<Emit("setInterval($1, $0)")>]
-let setInterval (ms: int) (callback: unit -> unit) : obj = jsNative
+/// report). Returns the handle `JS.clearInterval` wants.
+let setInterval (ms: int) (callback: unit -> unit) : int = JS.setInterval callback ms
 
 [<ImportAll("node:crypto")>]
 let private nodeCrypto : obj = jsNative
@@ -271,8 +269,7 @@ let postText (url: string) (body: string) : JS.Promise<string> = jsNative
 let getText (url: string) : JS.Promise<string> = jsNative
 
 /// Extract the `sdp` field from a `{ type, sdp }` JSON message.
-[<Emit("JSON.parse($0).sdp")>]
-let sdpField (json: string) : string = jsNative
+let sdpField (json: string) : string = (unbox<{| sdp: string |}> (JS.JSON.parse json)).sdp
 
 /// Read an environment variable, falling back to `fallback` when unset or empty.
 [<Emit("process.env[$0] || $1")>]

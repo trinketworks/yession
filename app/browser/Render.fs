@@ -297,11 +297,6 @@ let internal raf (f: unit -> unit) : unit = jsNative
 // An armed deadline: something is true NOW and only worth saying if it is still true then
 // (see `syncCatchUpTimer`). Nothing debounces on it any more — what needs pacing is paced by
 // the frame (`raf`).
-[<Emit("setTimeout($0, $1)")>]
-let internal setTimeoutJs (f: unit -> unit) (ms: int) : float = jsNative
-[<Emit("clearTimeout($0)")>]
-let internal clearTimeoutJs (handle: float) : unit = jsNative
-
 [<Emit("performance.now()")>]
 let private now () : float = jsNative
 
@@ -720,22 +715,22 @@ let create (deps: Deps) : Renderer =
     // "up to date" → "catching up" → "up to date" on every message sent, which reads as a
     // fault. Disarmed the moment catch-up ends, and the reducer refuses a late `true`
     // anyway (`CatchUpSlowMsg`), so a fire that races a landing page changes nothing.
-    let mutable catchUpTimer = 0.0
+    let mutable catchUpTimer = 0
     let syncCatchUpTimer (model: ClientModel) =
         let consumer = model.EventConsumer
         if consumer.IsCatchingUp && not consumer.CatchUpIsSlow then
             // Idempotent: an armed timer is left to run, or a stream of pages would keep
             // pushing the deadline out and it would never fire.
-            if catchUpTimer = 0.0 then
+            if catchUpTimer = 0 then
                 catchUpTimer <-
-                    setTimeoutJs
+                    JS.setTimeout
                         (fun () ->
-                            catchUpTimer <- 0.0
+                            catchUpTimer <- 0
                             dispatch (CatchUpSlowMsg true))
                         catchUpQuietMs
-        elif catchUpTimer <> 0.0 then
-            clearTimeoutJs catchUpTimer
-            catchUpTimer <- 0.0
+        elif catchUpTimer <> 0 then
+            JS.clearTimeout catchUpTimer
+            catchUpTimer <- 0
 
     // Overlay each body's remote cursors, PACED BY THE FRAME: a render marks the push wanted
     // and the next animation frame performs it, at most once per frame however many renders
@@ -855,22 +850,22 @@ let create (deps: Deps) : Renderer =
             |> Option.iter (fun (repo, cursor) -> deps.Actions.LaunchBranchesMore repo cursor))
 
     let mutable renderedAt = -infinity
-    let mutable held = 0.0
+    let mutable held = 0
     let rec setState (model: ClientModel) =
         let since = now () - renderedAt
         if model.EventConsumer.IsCatchingUp && since < float catchUpQuietMs then
             latest <- Some model
-            if held = 0.0 then
+            if held = 0 then
                 held <-
-                    setTimeoutJs
+                    JS.setTimeout
                         (fun () ->
-                            held <- 0.0
+                            held <- 0
                             latest |> Option.iter render)
                         (catchUpQuietMs - int since)
         else
-            if held <> 0.0 then
-                clearTimeoutJs held
-                held <- 0.0
+            if held <> 0 then
+                JS.clearTimeout held
+                held <- 0
             render model
     and render (model: ClientModel) =
         renderedAt <- now ()

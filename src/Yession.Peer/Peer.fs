@@ -37,12 +37,6 @@ module Harness =
     [<Fable.Core.Emit("queueMicrotask($0)")>]
     let private defer (f: unit -> unit) : unit = Fable.Core.Util.jsNative
 
-    [<Fable.Core.Emit("setTimeout($0, $1)")>]
-    let private setTimer (f: unit -> unit) (ms: int) : float = Fable.Core.Util.jsNative
-
-    [<Fable.Core.Emit("clearTimeout($0)")>]
-    let private clearTimer (handle: float) : unit = Fable.Core.Util.jsNative
-
     /// How long a single `WaitFor` may wait before it is a FAILURE rather than a wait.
     ///
     /// A condition that never arrives used to hang for ever, and the run's own budget
@@ -94,15 +88,15 @@ module Harness =
                         // continuation the model already resumed, and a model update cannot
                         // resume one the timer already failed.
                         let settled = ref false
-                        let timer = ref 0.0
+                        let timer = ref 0
                         let resume () =
                             if not settled.Value then
                                 settled.Value <- true
-                                clearTimer timer.Value
+                                JS.clearTimeout timer.Value
                                 cont ()
                         waiters <- (predicate, resume) :: waiters
                         timer.Value <-
-                            setTimer
+                            JS.setTimeout
                                 (fun () ->
                                     if not settled.Value then
                                         settled.Value <- true

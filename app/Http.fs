@@ -77,8 +77,7 @@ let headerOf (name: string) (response: Fetch.Types.Response) : string =
     | value -> value
 
 /// A value on its way into a query string.
-[<Emit("encodeURIComponent($0)")>]
-let urlPart (value: string) : string = jsNative
+let urlPart (value: string) : string = JS.encodeURIComponent value
 
 /// One request, with its body read by `read`.
 ///

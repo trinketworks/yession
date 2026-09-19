@@ -1137,12 +1137,6 @@ let private brokerTests =
 let private caller sessionId users local : Control.ControlCaller =
     { SessionId = sessionId; Users = users; Local = local }
 
-[<Emit("setTimeout($0, $1)")>]
-let private setTimer (f: unit -> unit) (ms: int) : float = jsNative
-
-[<Emit("clearTimeout($0)")>]
-let private clearTimer (handle: float) : unit = jsNative
-
 /// Watch a launch's status stream, and wait for the frame a case is about by predicate.
 ///
 /// The wait is BOUNDED, for the reason `Harness.waitForTimeoutMs` writes down: a
@@ -1171,7 +1165,7 @@ let private watchingConnections (url: string) (secret: string) =
                     waiter.Value <- None
                     act ()
             let timer =
-                setTimer
+                JS.setTimeout
                     (fun () ->
                         finish (fun () ->
                             econt (
@@ -1186,7 +1180,7 @@ let private watchingConnections (url: string) (secret: string) =
             let check () =
                 if frames |> Seq.exists predicate then
                     finish (fun () ->
-                        clearTimer timer
+                        JS.clearTimeout timer
                         cont ())
             waiter.Value <- Some check
             check ())

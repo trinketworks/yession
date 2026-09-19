@@ -30,8 +30,7 @@ type ReceivedLog =
 [<Emit("$0[$1]")>]
 let private prop (o: obj) (key: string) : obj = jsNative
 
-[<Emit("Array.isArray($0)")>]
-let private isArray (o: obj) : bool = jsNative
+let private isArray (o: obj) : bool = JS.Constructors.Array.isArray o
 
 [<Emit("$0 == null")>]
 let private isNullish (o: obj) : bool = jsNative
@@ -48,8 +47,7 @@ let private truncated (o: obj) : int = jsNative
 [<Emit("(parseInt($0, 10) || undefined)")>]
 let private parsedInt (o: obj) : int option = jsNative
 
-[<Emit("JSON.parse($0)")>]
-let private parseJson (json: string) : obj = jsNative
+let private parseJson (json: string) : obj = JS.JSON.parse json
 
 /// A field that is a JSON array, or nothing at all — an absent `scopeLogs` is no scopes, not
 /// a throw partway through decoding somebody else's payload.
