@@ -175,3 +175,33 @@ higher up. Stretching the glyph is cheaper than bending the cube — at 170% it 
 recognisably Noto's Y. Seven degrees of rotation reads as intent and fourteen reads as an
 accident. And semibold is the weight that survives 16px: a counterform has to read as a gap,
 not a scratch.
+
+## Sixth pass: the held cube
+
+`pair/` follows `glyph/overshoot.svg` — where the letter is set larger than the solid and cuts
+out through the silhouette — and puts something in the fork it opens. The mark becomes two
+objects and one relationship: a green solid with Noto's Y cut through it, and a blue solid it
+has hold of.
+
+Built in three steps: the folded solid, the letter cut through it overshooting the silhouette,
+then the second solid dropped in with its own clearance punched out of the first — so the gap
+around it is the big cube's material removed, not a stroke drawn on top.
+
+- **Held** — `cradle`, `tight` (0.9px clearance), `perch` (larger, breaking the silhouette),
+  `float` (2.6px, nothing touching), `sunk` (behind the solid, revealed only by the cut).
+- **Gripped** — `prongs` (narrow cut, the wedge between the arms survives and the small cube
+  sits on it), `grip` (cube at the junction, arms rising from behind it), `bracket`, `claw`,
+  `deepfork` (arms reaching past it on both sides), `core` (at the junction, behind).
+- **Ratio, colour, orientation** — `small30`, `small60`, `twin` (green: a session inside a
+  session), `socket` (unfilled: the space kept for one), `turned` (18° off the large one's
+  axis), `mixed` (the large solid keeping its blue top — two things claiming to be the agent).
+- **Without the cut** — `stack`: the same two solids corner to corner, no Y anywhere.
+- `lockup.svg` — the pair against the name, the small solid sitting where an ascender would.
+
+Findings: `prongs` is the one that keeps both readings, because a narrow cut leaves the large
+solid whole. Past about 40px of reach the cut severs it, and `bracket`/`claw`/`deepfork` stop
+being one object holding another and become two green pieces flanking a blue one — which is the
+original brief (two humans either side of an agent) arrived at from the opposite direction, and
+worth keeping as its own line. Clearance does more work than size: `tight` and `float` are the
+same solids in the same places, and one is holding while the other is merely near. And the
+large solid has to give up blue entirely, or the pair has two agents in it.
