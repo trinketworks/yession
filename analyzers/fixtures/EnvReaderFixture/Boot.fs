@@ -16,3 +16,10 @@ let signature (channel: string) = Access.setting (sprintf "FIXTURE_SIGNATURE_%s"
 
 /// Writing is not reading, so this is not a second reader of `FIXTURE_MODE`.
 let plant () = Access.write "FIXTURE_MODE" "on"
+
+/// Through a binding declared in ANOTHER assembly (`Fable.NodeExtras`), which is how the
+/// product reads. Read here and in `Elsewhere` both.
+let home = Fable.NodeExtras.ProcessEnv.get "FIXTURE_HOME" // YES008
+
+/// The same binding, read in one place: nothing is said.
+let shell = Fable.NodeExtras.ProcessEnv.get "FIXTURE_SHELL"

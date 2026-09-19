@@ -103,8 +103,10 @@ let private webSocket (url: string) : obj = jsNative
 [<Emit("new Promise(resolve => setTimeout(resolve, $0))")>]
 let private delay (ms: int) : JS.Promise<unit> = jsNative
 
-[<Emit("process.env[$0] ?? ''")>]
-let private env (name: string) : string = jsNative
+let private env (name: string) : string =
+    match Fable.NodeExtras.ProcessEnv.get name with
+    | Some value -> value
+    | None -> ""
 
 let private exitWith (code: int) : unit = Node.Api.``process``.exit code
 

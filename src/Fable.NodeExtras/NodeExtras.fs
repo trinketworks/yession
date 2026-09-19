@@ -271,6 +271,33 @@ module WebSockets =
     let payload (event: MessageEvent) : Frame =
         if isText event then Frame.Text (frameText event) else Frame.Binary (frameBytes event)
 
+// --- The process environment ----------------------------------------------------------------
+
+/// `process.env`, one variable at a time. Bindings and nothing else: what a variable MEANS when
+/// it is unset or empty is a decision, and the decision belongs where the variable is read —
+/// which the environment rules (`EnvReaders`, `EnvWrites`) hold to one place per variable and
+/// one writing file per assembly. Those rules recognise an access by the macro on its callee,
+/// so these ARE the macros, and a wrapper that hands its parameter to one of them is a reader
+/// in its own right.
+[<RequireQualifiedAccess>]
+module ProcessEnv =
+
+    /// The variable's value, or nothing when it is not set at all. Set to the empty string it
+    /// is `Some ""`: whether that counts as set is the reader's call, not this binding's.
+    [<Emit("process.env[$0]")>]
+    let get (name: string) : string option = jsNative
+
+    [<Emit("process.env[$0] = $1")>]
+    let set (name: string) (value: string) : unit = jsNative
+
+    [<Emit("delete process.env[$0]")>]
+    let unset (name: string) : unit = jsNative
+
+    /// Every variable's NAME. Names only: a report can say which are present without reading
+    /// any of them, so this is not a reader of anything.
+    [<Emit("Object.keys(process.env)")>]
+    let names () : string array = jsNative
+
 // --- This process ---------------------------------------------------------------------------
 
 /// What `Fable.Node`'s `process` leaves out. Everything it types — `execPath`, `platform`,

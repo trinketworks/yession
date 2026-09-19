@@ -1857,8 +1857,7 @@ let private hostSandboxFor (sessionId: SessionId) : CreateSandbox =
 // tier: those sessions started with no credential, `SessionMain` answers that by starting no
 // agent at all, and a turn just never got a reply. `Support.withEnv` is the fix; these three
 // are what make its red mean something.
-[<Fable.Core.Emit("(process.env[$0] ?? null)")>]
-let private envRaw (name: string) : string option = Fable.Core.Util.jsNative
+let private envRaw (name: string) : string option = Fable.NodeExtras.ProcessEnv.get name
 
 let private testEnvTests =
     testList "The test environment (take and give back)" [

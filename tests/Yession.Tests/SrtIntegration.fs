@@ -26,8 +26,13 @@ open Yession.Tests.Support
 
 let private nodeNet : obj = importAll "node:net"
 
-[<Emit("process.env.HOME || ''")>]
-let private hostHome () : string = jsNative
+/// The account's home, which the probe below plants a secret in. A box with no `HOME` cannot
+/// host that probe, and says so rather than planting the secret at `/` — which is where the
+/// `|| ''` this replaced would have put it.
+let private hostHome () : string =
+    match Fable.NodeExtras.ProcessEnv.get "HOME" with
+    | Some home when home <> "" -> home
+    | _ -> failwith "HOME is not set in this environment, and the home-directory probe needs one"
 
 let private nodePath () : string = Node.Api.``process``.execPath
 

@@ -7,6 +7,8 @@ module EnvWriteFixture.Elsewhere
 let plant (name: string) (value: string) =
     Access.set name value // YES007
     System.Environment.SetEnvironmentVariable (name, value) // YES007
+    // And through a binding declared in ANOTHER assembly, which is how the product writes.
+    Fable.NodeExtras.ProcessEnv.set name value // YES007
 
 /// Handing a child its own environment, and asking what this one holds. Neither writes.
 let launch (run: obj) =

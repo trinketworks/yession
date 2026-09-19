@@ -23,6 +23,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="../../src/Fable.NodeExtras/Fable.NodeExtras.fsproj" />
     <ProjectReference Include="../../src/Yession.App/Yession.App.fsproj" />
   </ItemGroup>
 

@@ -6,3 +6,5 @@ module EnvReaderFixture.Elsewhere
 let mode = Access.setting "FIXTURE_MODE" // YES008
 
 let shared = Access.read Access.Shared "" // YES008
+
+let home = Fable.NodeExtras.ProcessEnv.get "FIXTURE_HOME" // YES008

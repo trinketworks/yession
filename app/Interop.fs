@@ -301,18 +301,20 @@ let postText (url: string) (body: string) : JS.Promise<string> =
 let getText (url: string) : JS.Promise<string> =
     Fetch.fetchUnsafe url [] |> Promise.bind (fun response -> response.text ())
 
-/// Read an environment variable, falling back to `fallback` when unset or empty.
-[<Emit("process.env[$0] || $1")>]
-let envOr (name: string) (fallback: string) : string = jsNative
+/// Read an environment variable, falling back to `fallback` when unset OR empty — an
+/// operator who exported a blank has not configured anything, which is what `||` said and
+/// what is now said here.
+let envOr (name: string) (fallback: string) : string =
+    match ProcessEnv.get name with
+    | Some value when value <> "" -> value
+    | _ -> fallback
 
-[<Emit("process.env[$0] = $1")>]
-let setEnv (name: string) (value: string) : unit = jsNative
+let setEnv (name: string) (value: string) : unit = ProcessEnv.set name value
 
 /// Every variable name in this process's environment, sorted. NAMES only, and that is the
 /// point: a report can say which are present without reading any of them, so this is not a
 /// second reader of anything — `envOr` remains the one way a value is read.
-[<Emit("Object.keys(process.env).sort()")>]
-let envNames () : string array = jsNative
+let envNames () : string array = ProcessEnv.names () |> Array.sort
 
 /// How this deployment is reached from outside: the two operator
 /// variables, parsed into the one value that decides both the Manager's public origin

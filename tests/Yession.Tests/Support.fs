@@ -302,27 +302,18 @@ module OidcHttp =
 // Runtime-aware, because this file is compiled for BOTH runtimes: a bare `jsNative` here is a
 // trap that springs the first time a browser-tier suite reaches for the environment.
 
-[<Fable.Core.Emit("process.env[$0] = $1")>]
-let private jsSetEnv (name: string) (value: string) : unit = Fable.Core.Util.jsNative
-
-[<Fable.Core.Emit("delete process.env[$0]")>]
-let private jsUnsetEnv (name: string) : unit = Fable.Core.Util.jsNative
-
-[<Fable.Core.Emit("(process.env[$0] ?? null)")>]
-let private jsGetEnv (name: string) : string option = Fable.Core.Util.jsNative
-
 let private setEnvRaw (name: string) (value: string) : unit =
-    if Compiler.isDotnet then System.Environment.SetEnvironmentVariable (name, value) else jsSetEnv name value
+    if Compiler.isDotnet then System.Environment.SetEnvironmentVariable (name, value) else Fable.NodeExtras.ProcessEnv.set name value
 
 let private unsetEnvRaw (name: string) : unit =
-    if Compiler.isDotnet then System.Environment.SetEnvironmentVariable (name, null) else jsUnsetEnv name
+    if Compiler.isDotnet then System.Environment.SetEnvironmentVariable (name, null) else Fable.NodeExtras.ProcessEnv.unset name
 
 let private getEnvRaw (name: string) : string option =
     if Compiler.isDotnet then
         match System.Environment.GetEnvironmentVariable name with
         | null -> None
         | v -> Some v
-    else jsGetEnv name
+    else Fable.NodeExtras.ProcessEnv.get name
 
 /// Run `body` with these environment variables replaced (`None` removes one), then put back
 /// exactly what was there — including absence — whether the body returns or throws.
