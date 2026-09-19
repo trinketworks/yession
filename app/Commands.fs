@@ -130,6 +130,7 @@ let private addRepoTool = "add_repo"
 let private removeRepoTool = "remove_repo"
 let private switchBranchTool = "switch_branch"
 let private createPrTool = "create_pr"
+let private mergePrTool = "merge_pr"
 let private watchPrTool = "watch_pr"
 let private unwatchPrTool = "unwatch_pr"
 let private startWorkSandboxTool = "start_work_sandbox"
@@ -317,6 +318,29 @@ let dispatch (services: CommandServices) : CommandDispatch =
                         match PrDraft.create repo head onto title body (draft = "true") with
                         | Error e -> return Error e
                         | Ok drafted -> return! service.Create (Authority.credential invocation.Authority) drafted
+            }
+
+          mergePrTool,
+          fun (invocation: GatedInvocation) ->
+            async {
+                match services.Prs (), decodeArgs invocation.Args with
+                | None, _ -> return Error "this session cannot merge pull requests"
+                | Some service, [ repo; number; method ] ->
+                    match RepoRef.create repo, System.Int32.TryParse number, PrMergeMethod.create method with
+                    | Error e, _, _ -> return Error (sprintf "not a repo name: %s" e)
+                    | _, (false, _), _ -> return Error "not a pull request number"
+                    | _, _, Error e -> return Error e
+                    | Ok repo, (true, number), Ok method ->
+                        match PrRef.create repo number with
+                        | Error e -> return Error e
+                        | Ok pr ->
+                            // The verb begins a watch on what it armed, so the query the
+                            // watch reads back through has moved.
+                            return!
+                                andPublish services PrWatches.queryName (
+                                    service.Merge invocation.Authority pr method)
+                | Some _, other ->
+                    return Error (sprintf "merge_pr takes a repo, a number and a method, got %d arguments" (List.length other))
             }
 
           watchPrTool,
@@ -700,6 +724,15 @@ let private repoCapabilitiesFor
                                  (if draft.Draft then "true" else "false") ]
                                @ Option.toList draft.Body)
                               summary
+                      MergePr =
+                        fun repo number method ->
+                          // The method is in the summary: a squash and a merge commit leave
+                          // different histories on the base branch, and the sentence a person
+                          // reads before it happens should say which.
+                          gated
+                              mergePrTool
+                              [ RepoRef.value repo; string number; PrMergeMethod.render method ]
+                              (sprintf "merge_pr %s#%d (%s)" (RepoRef.value repo) number (PrMergeMethod.render method))
                       WatchPr =
                         fun repo number ->
                           gated
@@ -718,7 +751,7 @@ let private repoCapabilitiesFor
                       Status = service.RepoStatus
                       Log = service.RepoLog
                       Diff = service.RepoDiff } }
-        // GitHub's three tools (`create_pr`, `watch_pr`, `unwatch_pr`) are declared
+        // GitHub's tools (`create_pr`, `merge_pr`, `watch_pr`, `unwatch_pr`) are declared
         // here, against the GATED verbs just bound above, rather than in `AgentTools.fs`
         // (Plan 16, part A cont'd): everything GitHub-specific about a session's pull
         // requests lives in `GitHubPrs.fs` and nowhere else.

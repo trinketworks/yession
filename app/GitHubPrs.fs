@@ -4,9 +4,10 @@ module Yession.Host.GitHubPrs
 // `GitHubConnection.fs` precedent, for the same reason: the Manager brokers the credential
 // and never learns which service it brokered, so a REST endpoint has no business above
 // this file. What is left here is the endpoints and their JSON — the two a look reads
-// (`fetchOver`, the whole of the `FetchPr` seam this side owns), and the two that open one
-// (`openOver`: the list that keeps a repeated ask a question, then the create) — and the one
-// field path a delivery names its repo at. The cadence, the ETag bookkeeping, the verbs and
+// (`fetchOver`, the whole of the `FetchPr` seam this side owns), the two that open one
+// (`openOver`: the list that keeps a repeated ask a question, then the create), the query
+// and three mutations that merge one (`mergeOver`) — and the one field path a delivery
+// names its repo at. The cadence, the ETag bookkeeping, the verbs and
 // the query are provider-neutral and live in `PrWatches.fs`; a second forge is a second copy
 // of this file, not a second poller.
 
@@ -457,6 +458,180 @@ let openOver (apiBase: string) (spending: Spending) : OpenPr =
                                 | Error e -> return PrOpenFailed (PrUnreadable e)
         }
 
+// --- merging one -------------------------------------------------------------------------
+// GraphQL, because that is where GitHub keeps this: auto merge and the merge queue have no
+// REST, and a merge that goes through the queue is a mutation on the pull request's node id.
+// One query says where the pull request stands, then one of three mutations does what that
+// standing calls for — which is the shape `gh pr merge` has, and for the same reason: "merge
+// this" is one intent, and which mechanism carries it out is the provider's fact, not the
+// caller's choice.
+
+/// What a GraphQL request sends: the REST headers with the merge-info preview in place of
+/// the versioned `accept`, which is what makes `mergeStateStatus` readable.
+let private graphqlHeaders (token: string) : (string * string) list =
+    sentHeaders token
+    |> List.map (fun (name, value) ->
+        if name = "accept" then name, "application/vnd.github.merge-info-preview+json" else name, value)
+
+/// One GraphQL error as GitHub reports it: a `type` (`NOT_FOUND`, `UNPROCESSABLE`, …) when it
+/// has one, and the sentence.
+type private GraphqlError = { Type : string option; Message : string }
+
+let private graphqlErrors : Decoder<GraphqlError list> =
+    Decode.field
+        "errors"
+        (Decode.list (
+            Decode.object (fun get ->
+                { Type = get.Optional.Field "type" Decode.string
+                  Message = get.Required.Field "message" Decode.string })))
+
+/// `POST /graphql` with one document and its variables, and the `data` read by `decoder`.
+///
+/// A GraphQL reply is 200 whether or not it did anything, and says no in `errors` — so the
+/// classification a REST status carries is read off the body here. A `NOT_FOUND` is the same
+/// fact a REST 404 is (gone, or a credential that cannot see it); every other error is the
+/// provider having READ the request and declined, which is an answer in its own words.
+let private askGraphql
+    (root: string)
+    (spending: Spending)
+    (token: string)
+    (document: string)
+    (variables: (string * JsonValue) list)
+    (decoder: Decoder<'a>)
+    : Async<Result<'a, PrMergeOutcome>> =
+    async {
+        let payload =
+            Encode.object [ "query", Encode.string document; "variables", Encode.object variables ]
+            |> Encode.toString 0
+        let! attempt =
+            Http.text
+                (root + "/graphql")
+                [ Fetch.Types.RequestProperties.Method Fetch.Types.HttpMethod.POST
+                  Http.headers (("content-type", "application/json") :: graphqlHeaders token)
+                  Fetch.Types.RequestProperties.Body (U3.Case3 payload) ]
+        let reply = replyOf attempt (fun _ -> "")
+        spending.Learned (allowanceIn reply)
+        if not (reply.Reachable && reply.Status >= 200 && reply.Status < 300) then
+            return Error (PrMergeFailed (failureOf reply))
+        else
+            match Decode.fromString graphqlErrors reply.Body with
+            | Ok errors when not (List.isEmpty errors) ->
+                if errors |> List.exists (fun e -> e.Type = Some "NOT_FOUND") then
+                    return Error (PrMergeFailed PrNotFound)
+                else
+                    return Error (PrMergeRefused (errors |> List.map (fun e -> e.Message) |> String.concat "; "))
+            | _ ->
+                match Decode.fromString (Decode.field "data" decoder) reply.Body with
+                | Ok value -> return Ok value
+                | Error e -> return Error (PrMergeFailed (PrUnreadable (sprintf "unrecognised graphql reply: %s" e)))
+    }
+
+/// Where a pull request stands, as far as merging it is concerned.
+type private MergeStanding =
+    { /// The node id every mutation names it by.
+      Id : string
+      Merged : bool
+      Closed : bool
+      /// `mergeStateStatus`: `CLEAN`, `BLOCKED`, `UNSTABLE`, … — whether it could go in now.
+      MergeState : string
+      /// The base branch has a merge queue, so "now" means "into the queue".
+      QueueEnabled : bool
+      AutoMergeArmed : bool
+      InQueue : bool }
+
+let private standingQuery =
+    "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){id state merged mergeStateStatus isMergeQueueEnabled autoMergeRequest{mergeMethod} mergeQueueEntry{id}}}}"
+
+/// `data.repository.pullRequest`, null when the number names nothing this credential can see —
+/// which GitHub also reports as a `NOT_FOUND` error, read first by `askGraphql`.
+let private standingDecoder : Decoder<MergeStanding option> =
+    Decode.at
+        [ "repository"; "pullRequest" ]
+        (Decode.option (
+            Decode.object (fun get ->
+                { Id = get.Required.Field "id" Decode.string
+                  Merged = get.Required.Field "merged" Decode.bool
+                  Closed = get.Required.Field "state" Decode.string = "CLOSED"
+                  MergeState = get.Required.Field "mergeStateStatus" Decode.string
+                  QueueEnabled = get.Required.Field "isMergeQueueEnabled" Decode.bool
+                  AutoMergeArmed = get.Optional.Field "autoMergeRequest" Decode.value |> Option.exists (fun v -> not (Decode.Helpers.isNullValue v))
+                  InQueue = get.Optional.Field "mergeQueueEntry" Decode.value |> Option.exists (fun v -> not (Decode.Helpers.isNullValue v)) })))
+
+/// Could it go in right now? The three statuses `gh pr merge` treats as mergeable: clean,
+/// clean but for hooks that have yet to run, and mergeable with a non-required status failing.
+/// Everything else — `BLOCKED` by a review or a running check, `BEHIND`, `DIRTY`, `DRAFT`,
+/// `UNKNOWN` while GitHub is still computing — is a pull request to ARM rather than merge.
+let private mergeableNow (status: string) : bool =
+    status = "CLEAN" || status = "HAS_HOOKS" || status = "UNSTABLE"
+
+/// The enum GitHub's mutations take.
+let private methodName (method: PrMergeMethod) : string =
+    match method with
+    | Squash -> "SQUASH"
+    | MergeCommit -> "MERGE"
+    | Rebase -> "REBASE"
+
+let private enableAutoMerge =
+    "mutation($id:ID!,$method:PullRequestMergeMethod!){enablePullRequestAutoMerge(input:{pullRequestId:$id,mergeMethod:$method}){clientMutationId}}"
+
+let private enqueue = "mutation($id:ID!){enqueuePullRequest(input:{pullRequestId:$id}){clientMutationId}}"
+
+let private mergeNow =
+    "mutation($id:ID!,$method:PullRequestMergeMethod!){mergePullRequest(input:{pullRequestId:$id,mergeMethod:$method}){clientMutationId}}"
+
+/// Merging one, composed against a real API base like the two above.
+///
+/// It ASKS FIRST, for `openOver`'s reason: GitHub answers a mutation on a pull request that
+/// is already armed, already queued, or already merged with a 200 carrying an error whose
+/// TEXT is the only thing that separates it from a real refusal — and a verb whose meaning
+/// turns on somebody else's prose breaks when they reword it. One query makes a repeated ask
+/// a question with the standing for an answer, and it is also what says WHICH mutation the
+/// intent calls for.
+let mergeOver (apiBase: string) (spending: Spending) : MergePr =
+    fun token pr method ->
+        async {
+            match spending.Permit () with
+            | Resilience.Hold until -> return PrMergeFailed (PrRateLimited (Some (until.ToUnixTimeSeconds ())))
+            | Resilience.Go ->
+                let bearer = Option.toObj token
+                let root = apiBase.TrimEnd '/'
+                let ask (document: string) (variables: (string * JsonValue) list) (decoder: Decoder<'a>) =
+                    askGraphql root spending bearer document variables decoder
+                let! standing =
+                    ask
+                        standingQuery
+                        [ "owner", Encode.string (RepoRef.owner pr.Repo)
+                          "name", Encode.string (RepoRef.repo pr.Repo)
+                          "number", Encode.int pr.Number ]
+                        standingDecoder
+                match standing with
+                | Error outcome -> return outcome
+                | Ok None -> return PrMergeFailed PrNotFound
+                | Ok (Some standing) ->
+                    let withId = [ "id", Encode.string standing.Id ]
+                    let withMethod = ("method", Encode.string (methodName method)) :: withId
+                    let done' = Decode.value |> Decode.map ignore
+                    let after (outcome: PrMergeOutcome) (mutated: Result<unit, PrMergeOutcome>) =
+                        match mutated with
+                        | Ok () -> outcome
+                        | Error failed -> failed
+                    if standing.Merged then return PrMergeUnneeded (pr, "merged")
+                    // Closed is GitHub's own state, read a moment ago; asking it to merge one
+                    // would cost a request to be told the same thing in its words.
+                    elif standing.Closed then return PrMergeRefused "it is closed — reopen it first"
+                    elif standing.InQueue then return PrMergeUnneeded (pr, "in the merge queue")
+                    elif standing.AutoMergeArmed then return PrMergeUnneeded (pr, "armed to merge when its checks pass")
+                    elif mergeableNow standing.MergeState && standing.QueueEnabled then
+                        let! mutated = ask enqueue withId done'
+                        return after (PrMergeQueued pr) mutated
+                    elif mergeableNow standing.MergeState then
+                        let! mutated = ask mergeNow withMethod done'
+                        return after (PrMergedNow pr) mutated
+                    else
+                        let! mutated = ask enableAutoMerge withMethod done'
+                        return after (PrMergeArmed pr) mutated
+        }
+
 // --- the hook subscription -------------------------------------------------------------------
 // Push, where the deployment can take it. A delivery does not tell this session anything —
 // it tells it to LOOK, and the poll above is still what produces every fact. So this is an
@@ -547,9 +722,9 @@ let hooks
             held
             |> List.tryPick (fun (repo, current) -> if current = Some id then Some repo else None) }
 
-// --- the agent tools: create_pr, watch_pr, unwatch_pr -----------------------------------
+// --- the agent tools: create_pr, merge_pr, watch_pr, unwatch_pr -------------------------
 //
-// The three GitHub-flavoured entries `AgentTools.fs`'s registry used to declare directly,
+// The GitHub-flavoured entries `AgentTools.fs`'s registry used to declare directly,
 // moved here for the reason this file's own header states: everything GitHub-specific
 // about a session's pull requests belongs in exactly one place, and "auto merge armed" and
 // "what a merge queue ejecting an entry looks like" are GitHub-specific sentences. The
@@ -618,6 +793,18 @@ let private createPr
                 | Error e -> return sprintf "could not open the pull request: %s" e
         })
 
+let private mergePr (capabilities: AgentCapabilities) (raw: string) (number: int) (method: string) : Async<string> =
+    withRepo raw (fun repo ->
+        async {
+            match PrMergeMethod.create method with
+            // A method the domain refuses never reaches the gate, like a draft it refuses.
+            | Error e -> return e
+            | Ok method ->
+                match! capabilities.Repos.MergePr repo number method with
+                | Ok outcome -> return AgentTools.renderCommandOutcome outcome
+                | Error e -> return sprintf "could not merge the pull request: %s" e
+        })
+
 /// Reading a call's arguments, the way `AgentTools.fs`'s own `ToolArgs` does for every other
 /// tool: every body reads its own JSON, so a decode that lived elsewhere would have to know
 /// every tool's shape to do the same job.
@@ -650,7 +837,17 @@ let private prDraftArgs (json: string) : Result<string * string * string * strin
             get.Optional.Field "draft" Decode.bool |> Option.defaultValue false))
         json
 
-/// The three tools, built from a turn's capabilities exactly the way `AgentTools.fs`'s
+/// `merge_pr`'s three: the pair above, and how the commits should land — `squash` unless
+/// said otherwise, for `PrMergeMethod.create`'s reason.
+let private mergeArgs (json: string) : Result<string * int * string, string> =
+    readArgs
+        (Decode.object (fun get ->
+            get.Required.Field "repo" Decode.string,
+            get.Required.Field "number" Decode.int,
+            get.Optional.Field "method" Decode.string |> Option.defaultValue "squash"))
+        json
+
+/// The four tools, built from a turn's capabilities exactly the way `AgentTools.fs`'s
 /// `verbs` builds every other one — descriptor paired with body, so a tool cannot be
 /// declared without being callable. Merged into the `yession` registry through
 /// `AgentCapabilities.Repos.ProviderTools`.
@@ -678,6 +875,21 @@ let providerTools (capabilities: AgentCapabilities) : (ToolDescriptor * (string 
                   | Error e -> return Error e
                   | Ok (repo, head, onto, title, body, draft) ->
                       return! ok (createPr capabilities repo head onto title body draft)
+              })
+      tool
+          "merge_pr"
+          "Merge a pull request on GitHub, by whichever route its state allows: if its checks are still running it is set to merge automatically when they pass (auto merge, which watch_pr then reports as queued); if it is mergeable now and the base branch has a merge queue it goes into the queue; if it is mergeable now with no queue it is merged at once. The answer says which happened, and the session starts watching it (as watch_pr would) so the timeline says when it lands — or when a merge queue ejects it, which reads as stalled. One already armed, queued or merged is reported as such and nothing is changed, so calling it twice is safe. It spends the GitHub credential of whoever's turn this is: what lands on the base branch is theirs, and everyone in the session sees the act in the timeline. What GitHub will not do it says why in its own words — auto merge not allowed on the repository, a review still required, the method not allowed — and that sentence is what comes back."
+          [ ToolField.required "repo" "string" "owner/name"
+            ToolField.required "number" "integer" "the pull request number"
+            ToolField.optional
+                "method"
+                "string"
+                "how the commits land: \"squash\" (the default), \"merge\" for a merge commit, or \"rebase\"" ]
+          (fun args ->
+              async {
+                  match mergeArgs args with
+                  | Error e -> return Error e
+                  | Ok (repo, number, method) -> return! ok (mergePr capabilities repo number method)
               })
       tool
           "watch_pr"
