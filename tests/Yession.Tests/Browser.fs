@@ -4135,6 +4135,15 @@ type private Release =
     | LetThrough
     | AnswerNothing
 
+/// The hold a case is handed: `Held` settles once the create POST has reached the route and
+/// is being held there, and `LetGo` releases it. Nothing on the page can be READ while it is
+/// held — a Create is a top-level navigation, and `EvaluateAsync` on a page whose navigation
+/// is pending does not answer until it lands — so a case observes the hold here, at the
+/// route, and reads the page only after it has let go.
+type private Hold =
+    { Held: Async<unit>
+      LetGo: unit -> unit }
+
 let private whereCreateIs (page: IPage) : Async<float32 * float32> =
     async {
         let! box = await (page.Locator(createButton).BoundingBoxAsync ())
@@ -4148,11 +4157,16 @@ let private push (page: IPage) ((x, y): float32 * float32) : Async<unit> =
         do! awaitU (page.Mouse.UpAsync ())
     }
 
-let private isHeld = sprintf "document.querySelector('%s')?.getAttribute('aria-busy') === 'true'" createButton
-
-/// One Manager and one page on it, with the create POST held for `holdMs` and then released
-/// as asked — wide enough that what happens under a held Create can be arranged and observed.
-let private withHeldCreate (name: string) (holdMs: int) (release: Release) (body: IBrowser -> IPage -> Async<unit>) : Async<unit> =
+/// One Manager and one page on it, with the create POST held until the BODY lets it go (or
+/// until the body ends, so a route is never left hanging) and then released as asked — wide
+/// enough that what happens under a held Create can be arranged and observed.
+///
+/// Held on a gate the case opens, never on a timer: this used to release after a fixed
+/// `holdMs`, which made every read of the page a race against the clock — the wait that
+/// asked `aria-busy` only ever answered once the timer had released the navigation, and on a
+/// slow runner it answered "execution context was destroyed" instead, which is how master's
+/// release run for #736 went red on a case the product had passed.
+let private withHeldCreate (name: string) (release: Release) (body: IBrowser -> IPage -> Hold -> Async<unit>) : Async<unit> =
     async {
         if Directory.Exists pressDataDir then Directory.Delete (pressDataDir, true)
         let manager =
@@ -4174,19 +4188,31 @@ let private withHeldCreate (name: string) (holdMs: int) (release: Release) (body
             page.SetDefaultTimeout 30000.0f
             let evidence = watching page
             do! reporting name page evidence <| async {
-                let hold (route: IRoute) =
+                // Continuations on their own threads, never on the one that settles a source:
+                // that thread is Playwright's, and a route call issued from inside the driver's
+                // own dispatch is a deadlock rather than a call.
+                let held = TaskCompletionSource<unit> (TaskCreationOptions.RunContinuationsAsynchronously)
+                let gate = TaskCompletionSource<unit> (TaskCreationOptions.RunContinuationsAsynchronously)
+                let hold =
+                    { Held = Async.AwaitTask held.Task
+                      LetGo = fun () -> gate.TrySetResult () |> ignore }
+                let holding (route: IRoute) =
                     async {
-                        do! Async.Sleep holdMs
+                        held.TrySetResult () |> ignore
+                        do! Async.AwaitTask gate.Task
                         match release with
                         | LetThrough -> do! awaitU (route.ContinueAsync ())
                         | AnswerNothing -> do! awaitU (route.FulfillAsync (RouteFulfillOptions (Status = 204)))
                     }
                 do! awaitU (page.RouteAsync ("**/sessions", fun route ->
-                        if route.Request.Method = "POST" then Async.Start (hold route)
+                        if route.Request.Method = "POST" then Async.Start (holding route)
                         else route.ContinueAsync () |> ignore))
                 let! _ = await (page.GotoAsync (sprintf "http://127.0.0.1:%d/" PRESS_MANAGER_PORT))
                 let! _ = await (page.WaitForSelectorAsync createButton)
-                do! body br page
+                try
+                    do! body br page hold
+                finally
+                    hold.LetGo ()
             }
         finally
             browserToClose |> Option.iter (fun b -> b.CloseAsync () |> ignore)
@@ -4197,27 +4223,34 @@ let private withHeldCreate (name: string) (holdMs: int) (release: Release) (body
 let pressTests =
     testList "Pressing Create (browser)" [
         testCaseAsync "a second push before the first lands is refused: one session" <|
-            withHeldCreate "double create" 1500 LetThrough (fun _ page -> async {
+            withHeldCreate "double create" LetThrough (fun _ page hold -> async {
                 let posted = ResizeArray<string> ()
                 page.Request.Add (fun r -> if r.Method = "POST" && r.Url.EndsWith "/sessions" then posted.Add r.Url)
                 let! at = whereCreateIs page
                 do! push page at
-                do! waitFor "the pushed Create to be held" page isHeld
+                // The first push's POST is at the route now, held: the state the second push
+                // arrives into, and the one thing this case is about.
+                do! hold.Held
                 do! push page at
+                hold.LetGo ()
                 do! waitFor "the browser to have left for the new session" page (sprintf "location.port !== '%d'" PRESS_MANAGER_PORT)
                 Expect.equal posted.Count 1 (sprintf "two pushes, one session: %A" (List.ofSeq posted))
             })
 
         testCaseAsync "a rows frame under a held Create leaves it held, and under the same finger" <|
-            withHeldCreate "held through a frame" 3000 AnswerNothing (fun br page -> async {
+            withHeldCreate "held through a frame" AnswerNothing (fun br page hold -> async {
                 let! at = whereCreateIs page
                 do! push page at
-                // A frame, from elsewhere: another reader archives the seeded session, and the
-                // stream this page holds answers with the whole table. (Nothing can be read
-                // off this page until the hold ends, so the frame is confirmed afterwards.)
+                do! hold.Held
+                // A frame, from elsewhere, while the Create is held: another reader archives
+                // the seeded session, and the stream this page holds answers with the whole
+                // table. (Nothing can be read off this page until the hold ends, so the hold
+                // is let go — answered with nothing, which leaves the page where it was — and
+                // the frame confirmed afterwards.)
                 let! other = await (br.NewPageAsync ())
                 let! _ = await (other.GotoAsync (sprintf "http://127.0.0.1:%d/" PRESS_MANAGER_PORT))
                 do! awaitU (other.ClickAsync (sprintf "[%s]" Yession.App.Dom.Manager.archive))
+                hold.LetGo ()
                 do! waitFor "the frame to have landed here" page (sprintf "document.querySelector('[%s]') === null" Yession.App.Dom.Manager.archive)
                 let! seen =
                     await (page.EvaluateAsync<string>
