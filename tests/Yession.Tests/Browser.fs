@@ -2899,6 +2899,54 @@ let editorTests =
                         """document.querySelector('#shell [data-pane-panel]')?.getAttribute('data-pane-panel') === 'block:term-harness:block-burst-failed'""")
                 return ()
             }
+
+        // Guardrail for the whole `Style.fieldType` family (Plan: `fieldSelect` zoomed the
+        // page in on iOS Safari the moment the model picker was tapped, and never zoomed back
+        // out — Safari zooms in on ANY focused text control under 16px. `touchType` is folded
+        // into `fieldType` now precisely so nothing built on it can forget it again, but that
+        // fold only covers ONE family; the mono/message fields (`fieldMonoBare`, the terminal
+        // command line, a queued command, a chapter's name) each hand-spell their own font
+        // class and still have to append `touchType` themselves. This is the net under both:
+        // whatever a person can focus on a phone, at whatever class got there, has to compute
+        // to 16px or more, or this fails HERE rather than on somebody's phone.
+        editorCaseIn 390 844 "no field a phone can focus renders under 16px" (EDITOR_PORT + 43) <| fun page ->
+            async {
+                let! _ = await (page.WaitForSelectorAsync "#shell")
+                // The model picker lives behind settings, and settings lives behind the
+                // sidebar — both off-canvas on a phone until `nav-alt`/`settings-open` land
+                // on <html> (Style.fs: "Two presentation bits live on the root <html>
+                // element, outside `#app`... toggled by `[data-nav-toggle]`"/`[data-settings-
+                // toggle]`"). This harness mounts `View.view` over a fixed model with no
+                // Session Process behind it (`ToggleNav`/`ToggleSettings` are `ignore` here,
+                // deliberately — see `EditorHarness.fs`), so the buttons that ask for those
+                // classes in the real client do nothing here. Setting them directly is
+                // asking the same question `Browser.fs`'s handlers answer by setting them:
+                // whether the settings face, once ON screen, holds a field under 16px.
+                do! awaitU (page.EvaluateAsync "() => document.documentElement.classList.add('nav-alt', 'settings-open')")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-model-select]")
+
+                let! undersized =
+                    await (page.EvaluateAsync<string[]>
+                        """() => {
+                             const els = document.querySelectorAll(
+                               "#shell input, #shell select, #shell textarea, #shell [contenteditable='true']")
+                             const small = []
+                             els.forEach(el => {
+                               const box = el.getBoundingClientRect()
+                               if (box.width === 0 && box.height === 0) return   // not on screen
+                               const size = parseFloat(getComputedStyle(el).fontSize)
+                               if (size < 16) {
+                                 const name = el.id || Object.values(el.attributes)
+                                   .map(a => a.name).find(n => n.startsWith('data-')) || el.tagName
+                                 small.push(name + ': ' + size + 'px')
+                               }
+                             })
+                             return small
+                           }""")
+                Expect.isEmpty undersized
+                    (sprintf "these focusable fields render under 16px on a phone and will zoom iOS in on focus: %s"
+                        (String.Join (", ", undersized)))
+            }
     ]
 
 // --- A path-mounted session in a real browser --------------------------------------------

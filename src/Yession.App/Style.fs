@@ -390,7 +390,11 @@ module Style =
     ///
     /// `--text-touch` carries no line-height pair, so this sets the SIZE alone and each field
     /// keeps the line box its own step gave it.
-    let private touchType = "max-md:text-touch"
+    ///
+    /// Not private any more: `fieldType` folds it in below, and the mono/message fields that
+    /// still hand-spell their own font class (no shared size function to fold it into) keep
+    /// composing it directly, the way they always did.
+    let touchType = "max-md:text-touch"
 
     // --- Fields: ONE face, worn by every input in the product ----------------------------
     // A field is the surface tone inside a hairline ring that brightens on hover and goes
@@ -417,17 +421,23 @@ module Style =
     /// token, a mode select are chrome a person operates: nothing is being said, so there is no
     /// attribution to make, and a serif form control on a sans page reads as a mistake rather
     /// than a signal.
+    /// `touchType` is IN here rather than beside it at every call site: nine of these used to
+    /// each hand-append `touchType` themselves, and a tenth (`fieldSelect`) forgot to — the
+    /// field rendered fine everywhere except a thumb on iOS, and nothing failed loudly enough
+    /// to notice. Folding it into the one function every settings-style field already calls
+    /// for its size means there is no longer a second ingredient to remember: any field built
+    /// on `fieldType` gets the phone-safe size for free, forgetting is no longer a way to lose it.
     let private fieldType =
-        cls [ "font-ui font-light text-small leading-5 text-ink placeholder:text-ink-faint" ]
+        cls [ "font-ui font-light text-small leading-5 text-ink placeholder:text-ink-faint"; touchType ]
 
     /// A settings field (input/select), filling the column it sits in.
-    let field = cls [ fieldFace; fieldType; "w-full"; touchType ]
+    let field = cls [ fieldFace; fieldType; "w-full" ]
 
     /// The same field where the ROW gives it a width rather than the column — the Manager's
     /// forms lay three of them out side by side. Public because the alternative is what was
     /// here before: the Manager spelling the whole face inline, which drifted to a 42px input
     /// beside a 32px button.
-    let fieldOf (width: string) = cls [ fieldFace; fieldType; width; touchType ]
+    let fieldOf (width: string) = cls [ fieldFace; fieldType; width ]
 
     /// A select. Everything a field is, plus room for the mark below it — `appearance-none`
     /// (see `fieldFace`) takes the platform's caret away, and a menu with no caret is a text
@@ -450,7 +460,7 @@ module Style =
     /// beside it. The select's caret above is the other half of the pattern and deliberately
     /// not this — a mark takes no pointer events, a button is the thing you press.
     let fieldActionWrap = "relative w-full"
-    let fieldWithAction = cls [ fieldFace; fieldType; "w-full pr-10"; touchType ]
+    let fieldWithAction = cls [ fieldFace; fieldType; "w-full pr-10" ]
     let fieldAction = cls [ btnInField; "absolute right-1 top-1/2 -translate-y-1/2 text-ink-faint hover:text-ink" ]
 
     /// The chrome-LESS field: an input whose CONTAINER already carries the stroke (the
@@ -1290,7 +1300,7 @@ module Style =
     /// signal is the field face's — the rule goes blue.
     let askSearch =
         cls [ askInset; "w-full h-12 mt-6 bg-transparent outline-none appearance-none"; fieldType
-              Stroke.underline; Stroke.hair; Stroke.hoverRim; Stroke.focus; touchType ]
+              Stroke.underline; Stroke.hair; Stroke.hoverRim; Stroke.focus ]
 
     /// A line the card says rather than one it offers — looking, cloning, a refusal, a clone
     /// that failed. Where the first row would have been, so an answer and the absence of one
@@ -1337,23 +1347,6 @@ module Style =
     let askRowNote = cls [ label; "ml-auto shrink-0" ]
     let askRowNoteNew = cls [ caps; "ml-auto shrink-0 text-blue" ]
 
-    /// The held row's second line. Bare, because the row it sits in already carries a ground:
-    /// a bordered field here was a box inside a box, and the last box on the card.
-    ///
-    /// Its rule is a `rim` where the search's is a `hair`, because it is drawn on the held
-    /// row's LIFTED ground rather than on the card's: a hairline that reads as a rule against
-    /// `surface` is all but gone against `surface-2`, and a field nobody can see the edge of
-    /// is a field nobody types in.
-    ///
-    /// No `touchType`, alone among the fields here: it sets 16px on a phone so that iOS does
-    /// not zoom into a tapped field, and a branch a step LARGER than the name it belongs to
-    /// reads as a different kind of thing rather than as that row's branch.
-    let askBranch = cls [ askInset; "pb-3" ]
-    let askBranchLine = cls [ askMeasure; "flex items-center gap-3" ]
-    let askBranchField =
-        cls [ "flex-1 min-w-0 h-7 bg-transparent outline-none appearance-none"
-              "font-terminal text-small text-ink"
-              Stroke.underline; Stroke.rim; Stroke.hoverInk; Stroke.focus ]
     /// The foot of the list: where the next page is reached rather than pressed for. A row's
     /// height, because that is what it stands in for — the rows still to come.
     let askFoot = cls [ askInset; "h-12 flex items-center" ]
