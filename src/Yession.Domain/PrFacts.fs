@@ -152,10 +152,12 @@ module ChecksRollup =
         | ChecksGreen -> "checks green"
         | ChecksRed -> "checks red"
 
-/// What one look at the provider answered. Minimal on purpose: `Mergeable` is carried
-/// for the query surface and NEVER drives a transition — GitHub computes it lazily and
-/// answers null until it has, so a fact this unreliable may be displayed but never
-/// announced.
+/// What one look at the provider answered. `Mergeable` is a THREE-valued fact and its
+/// third value is why it is handled with care: GitHub computes it lazily and answers
+/// `None` until it has, so `None` is "not known yet", never "mergeable". Only a COMPUTED
+/// value moves anything — `Some false` announces `Conflicted`, `Some true` clears it — and
+/// `None` holds the baseline where it was, so the window between a push and the provider
+/// recomputing raises no false alarm. `PrTransitions.detect` is where that rule lives.
 type PrSnapshot =
     { State : PrState
       Title : string
@@ -184,6 +186,19 @@ type PrTransition =
     /// the pull request simply stops being on its way in. Somebody has to re-arm it, and
     /// until this was said nobody was told.
     | Stalled
+    /// The base moved under the branch and the two no longer merge — a conflict the
+    /// provider has now COMPUTED (`mergeable = false`), not the `null` it answers while it
+    /// is still working the merge out. Unlike a stall this is not a call for a person: the
+    /// agent whose branch it is rebases, resolves and force-pushes it, the same way it
+    /// answers `ChecksFailed`. The reason it earns a transition at all is that nothing else
+    /// announces it — a queued pull request that develops a conflict simply stops merging,
+    /// its checks last green, and until this was said the watcher armed auto-merge and
+    /// waited for a landing that could never come.
+    | Conflicted
+    /// A computed conflict cleared: `mergeable = false` back to `true`. The other side of
+    /// `Conflicted`, so a watch that announced the conflict can say when the work that
+    /// answered it took — and a re-arm is worth it again.
+    | Resolved
 
 module PrTransition =
     let describe (transition: PrTransition) : string =
@@ -195,6 +210,8 @@ module PrTransition =
         | PrTransition.ChecksFailed -> "checks failed"
         | PrTransition.Queued -> "queued"
         | PrTransition.Stalled -> "stalled"
+        | PrTransition.Conflicted -> "conflicted"
+        | PrTransition.Resolved -> "conflict resolved"
 
 // --- event payloads (the RepoFacts shape: MessageId + payload + attribution) -----------
 
