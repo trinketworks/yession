@@ -22,12 +22,18 @@ type PrQueue =
     | Stalled
 
 /// What the log has recorded about one pull request: the baseline the next detection
-/// compares against. Deliberately not the whole snapshot — title, head sha and
-/// mergeability are display facts whose movement is not news.
+/// compares against. Deliberately not the whole snapshot — title and head sha are display
+/// facts whose movement is not news. Mergeability IS carried, because a computed conflict
+/// arriving is news (`PrTransition.Conflicted`); but only its COMPUTED value, `Some`, ever
+/// advances this baseline — see `PrTransitions.detect`.
 type PrKnown =
     { State : PrState
       Checks : ChecksRollup
-      Queue : PrQueue }
+      Queue : PrQueue
+      /// The last COMPUTED mergeability, or `None` if the provider has never answered one
+      /// for this watch yet. Never set to `None` by a fresh look that came back `None`: a
+      /// provider still recomputing does not un-know what it last computed.
+      Mergeable : bool option }
 
 /// The one word for where a pull request stands, and how loudly to say it. ONE home,
 /// because the settings panel, the roster summary and the header strip must not each
@@ -160,7 +166,8 @@ module PrTransitions =
     let knownOf (snapshot: PrSnapshot) : PrKnown =
         { State = snapshot.State
           Checks = snapshot.Checks
-          Queue = (if snapshot.Queued then Queued else NotQueued) }
+          Queue = (if snapshot.Queued then Queued else NotQueued)
+          Mergeable = snapshot.Mergeable }
 
     /// Advance a baseline by one announced transition — the projection's fold, and the
     /// poller's, so the two cannot disagree about what has been said.
@@ -173,6 +180,8 @@ module PrTransitions =
         | PrTransition.ChecksFailed -> { known with Checks = ChecksRed }
         | PrTransition.Queued -> { known with Queue = Queued }
         | PrTransition.Stalled -> { known with Queue = Stalled }
+        | PrTransition.Conflicted -> { known with Mergeable = Some false }
+        | PrTransition.Resolved -> { known with Mergeable = Some true }
 
     /// What a fresh snapshot means against the last recorded baseline: at most one state
     /// transition, at most one checks transition and at most one queue transition, in
@@ -217,7 +226,26 @@ module PrTransitions =
                 | Queued, false -> [ PrTransition.Stalled ]
                 | _, false -> []
             | PrMerged | PrClosed -> []
-        state @ checks @ queue
+        // Mergeability news, and the one axis whose fresh value can be UNKNOWN. `None` is
+        // the provider still computing the merge (routinely, right after a push), so it
+        // holds the baseline and says nothing — only a COMPUTED value moves. A computed
+        // conflict is `Conflicted`; a computed clean that follows a known conflict is
+        // `Resolved`. A watch that BEGINS conflicted reads `Some false` as its baseline and
+        // re-announces nothing, the honest `Stalled` rule: nobody watching saw it break.
+        // Suppressed off `PrOpen` for the checks reason — a merged or closed pull request's
+        // mergeability is not something the watcher acts on from here.
+        let merge =
+            match stateAfter.State with
+            | PrOpen ->
+                match known.Mergeable, fresh.Mergeable with
+                | _, None -> []
+                | Some false, Some false
+                | Some true, Some true -> []
+                | _, Some false -> [ PrTransition.Conflicted ]
+                | Some false, Some true -> [ PrTransition.Resolved ]
+                | _, Some true -> []
+            | PrMerged | PrClosed -> []
+        state @ checks @ queue @ merge
 
 module PrWatchesProjection =
 

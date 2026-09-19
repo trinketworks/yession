@@ -1124,7 +1124,9 @@ module Codec =
                 | PrTransition.ChecksPassed -> Encode.string "checksGreen"
                 | PrTransition.ChecksFailed -> Encode.string "checksRed"
                 | PrTransition.Queued -> Encode.string "queued"
-                | PrTransition.Stalled -> Encode.string "stalled")
+                | PrTransition.Stalled -> Encode.string "stalled"
+                | PrTransition.Conflicted -> Encode.string "conflicted"
+                | PrTransition.Resolved -> Encode.string "resolved")
           Decode =
             Decode.string
             |> Decode.andThen (function
@@ -1135,6 +1137,8 @@ module Codec =
                 | "checksRed" -> Decode.succeed PrTransition.ChecksFailed
                 | "queued" -> Decode.succeed PrTransition.Queued
                 | "stalled" -> Decode.succeed PrTransition.Stalled
+                | "conflicted" -> Decode.succeed PrTransition.Conflicted
+                | "resolved" -> Decode.succeed PrTransition.Resolved
                 | other -> Decode.fail (sprintf "Unknown pull request transition: %s" other)) }
 
     /// The watcher is not on the wire: it is derived from the authority by the one rule

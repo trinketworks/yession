@@ -444,6 +444,35 @@ let private frameSerializationTests =
                 (Codec.fromString Codec.sessionEvent (stored """{"kind":"agent"}"""))
                 "the agent is not a watcher this version can represent"
 
+        testCase "the conflict transitions pin their wire strings and round-trip" <| fun () ->
+            // A durable log's transition words are a contract: these two joined the
+            // vocabulary after the others, and a rename would silently drop them from
+            // every history that recorded one. Pinned as literals, not just round-tripped.
+            let stored (word: string) =
+                sprintf
+                    """{"type":"prTransitioned","payload":{"messageId":"t1","pr":{"repo":"octo/hello","number":12},"transition":"%s","state":"open","checks":"green","watcher":{"kind":"peer","peerId":"ada"}}}"""
+                    word
+            let transitionOf event =
+                match event with
+                | PrTransitioned p -> p.Transition
+                | _ -> failwith "not a transition"
+            Expect.equal
+                (Codec.fromString Codec.sessionEvent (stored "conflicted") |> expect |> transitionOf)
+                PrTransition.Conflicted "conflicted decodes"
+            Expect.equal
+                (Codec.fromString Codec.sessionEvent (stored "resolved") |> expect |> transitionOf)
+                PrTransition.Resolved "resolved decodes"
+            for t in [ PrTransition.Conflicted; PrTransition.Resolved ] do
+                let event =
+                    PrTransitioned
+                        { MessageId = MessageId.create "t1" |> expect
+                          Pr = { Repo = RepoRef.create "octo/hello" |> expect; Number = 12 }
+                          Transition = t
+                          State = PrOpen
+                          Checks = ChecksGreen
+                          Watcher = Principal.Peer (PeerId.create "ada" |> expect) }
+                Expect.equal (Codec.fromString Codec.sessionEvent (Codec.toString Codec.sessionEvent event) |> expect) event "round-trip"
+
         testCase "a MessageSent persisted before Phase 3 (no queueId field) still decodes" <| fun () ->
             // Wire compatibility: event-log lines written by earlier versions carry no
             // queueId; they must decode to None, not fail the whole log open.
@@ -1070,9 +1099,9 @@ let private prWatchTests =
         { State = state; Title = "Add feature"; HeadSha = "abc123"; Checks = checks; Queued = queued; Mergeable = None }
     let snapshot state checks : PrSnapshot = snapshotOf state checks false
     /// The baseline as a watch that has never seen a queue reads it.
-    let known state checks : PrKnown = { State = state; Checks = checks; Queue = NotQueued }
+    let known state checks : PrKnown = { State = state; Checks = checks; Queue = NotQueued; Mergeable = None }
     /// ...and as one that has: auto merge armed, the last thing anybody was told.
-    let queued state checks : PrKnown = { State = state; Checks = checks; Queue = Queued }
+    let queued state checks : PrKnown = { State = state; Checks = checks; Queue = Queued; Mergeable = None }
     let started state checks : SessionEvent =
         PrWatched.create (msg "w1") (Authority.ofAuthor (Principal.Peer ada)) pr (snapshot state checks)
         |> expect
@@ -1201,6 +1230,48 @@ let private prWatchTests =
             Expect.equal
                 (PrTransitions.detect (queued PrOpen ChecksGreen) (snapshot PrMerged ChecksGreen))
                 [ PrTransition.Merged ] "the merge is the whole news"
+
+        testCase "a computed conflict is announced, and only once" <| fun () ->
+            // `mergeable` moving to a computed false is a conflict the branch developed —
+            // the base moved under it — which nothing else here reports. Announced once;
+            // saying it again on every poll while it stays conflicted would be noise.
+            Expect.equal
+                (PrTransitions.detect (known PrOpen ChecksGreen) { snapshot PrOpen ChecksGreen with Mergeable = Some false })
+                [ PrTransition.Conflicted ] "the base moved under the branch"
+            Expect.equal
+                (PrTransitions.detect { known PrOpen ChecksGreen with Mergeable = Some false } { snapshot PrOpen ChecksGreen with Mergeable = Some false })
+                [] "still conflicted is not news again"
+
+        testCase "the provider still computing mergeability says nothing and forgets nothing" <| fun () ->
+            // `None` is GitHub working out the merge, not a verdict — routinely so right
+            // after a push. It must neither announce nor erase what was last computed.
+            Expect.equal
+                (PrTransitions.detect (known PrOpen ChecksGreen) { snapshot PrOpen ChecksGreen with Mergeable = None })
+                [] "unknown is not a conflict"
+            Expect.equal
+                (PrTransitions.detect { known PrOpen ChecksGreen with Mergeable = Some false } { snapshot PrOpen ChecksGreen with Mergeable = None })
+                [] "and a recompute window does not clear a known conflict"
+
+        testCase "a conflict clearing is announced, and only against a known conflict" <| fun () ->
+            Expect.equal
+                (PrTransitions.detect { known PrOpen ChecksGreen with Mergeable = Some false } { snapshot PrOpen ChecksGreen with Mergeable = Some true })
+                [ PrTransition.Resolved ] "the rebase took"
+            Expect.equal
+                (PrTransitions.detect (known PrOpen ChecksGreen) { snapshot PrOpen ChecksGreen with Mergeable = Some true })
+                [] "a pull request that was never conflicted has nothing to resolve"
+
+        testCase "a watch that begins conflicted re-announces nothing" <| fun () ->
+            // The honest-baseline rule stalled follows: nobody watching saw it break, so a
+            // watch whose first look is already conflicted starts from that and says
+            // nothing. The initial snapshot is what surfaces it (a display concern).
+            Expect.equal
+                (PrTransitions.detect (PrTransitions.knownOf { snapshot PrOpen ChecksGreen with Mergeable = Some false }) { snapshot PrOpen ChecksGreen with Mergeable = Some false })
+                [] "the baseline already holds the conflict"
+
+        testCase "mergeability movement on a pull request no longer open is suppressed" <| fun () ->
+            Expect.equal
+                (PrTransitions.detect (known PrMerged ChecksGreen) { snapshot PrMerged ChecksGreen with Mergeable = Some false })
+                [] "a merged pull request's mergeability is not actionable from here"
 
         testCase "a status word is the last thing that happened, worst first" <| fun () ->
             Expect.equal (PrStatus.word Queued PrOpen) "queued" "armed and waiting on machines"
