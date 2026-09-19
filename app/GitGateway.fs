@@ -57,6 +57,8 @@ open System
 open Fable.Core
 open Fable.Core.JsInterop
 open Fable.NodeExtras
+open Node.Api
+open Node.Buffer
 open Yession.Domain
 open Yession.Host.Interop
 
@@ -145,8 +147,7 @@ let loanConfig (host: string) (port: int) (secret: string) : string * string =
 
 /// The UTF-8 byte length, which a pkt-line's header counts — not the string length, which
 /// a message with an em dash in it taught the difference of.
-[<Emit("Buffer.byteLength($0, 'utf8')")>]
-let private byteLength (s: string) : int = jsNative
+let private byteLength (s: string) : int = buffer.Buffer.byteLength (s, BufferEncoding.Utf8)
 
 /// One pkt-line: four hex digits of total length, then the payload.
 let pktLine (payload: string) : string =

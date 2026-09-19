@@ -344,6 +344,10 @@ type SubtleCrypto =
     /// case to route around.
     abstract decrypt : algorithm: AesGcmParams * key: CryptoKey * data: Buffer -> JS.Promise<JS.ArrayBuffer>
 
+    /// A hash of the bytes, by name (`"SHA-256"`). Keyless, so there is no key to import and
+    /// nothing to keep: the only thing it can leak is what was hashed.
+    abstract digest : algorithm: string * data: Buffer -> JS.Promise<JS.ArrayBuffer>
+
 /// The WHATWG `crypto` global, which on Node is `node:crypto`'s `webcrypto`. Fable.Node types
 /// neither.
 [<AllowNullLiteral>]
@@ -406,6 +410,13 @@ module Bytes =
     /// change what this returned.
     [<Emit("Buffer.from($0)")>]
     let bufferOf (bytes: JS.Uint8Array) : Buffer = jsNative
+
+    /// A `Buffer` over an `ArrayBuffer`'s bytes — the shape WebCrypto answers a digest in,
+    /// and the only thing that encodes bytes as base64url is a `Buffer`. A VIEW rather than a
+    /// copy, which is what `Buffer.from(arrayBuffer)` means and is safe here because the
+    /// digest's buffer belongs to nobody else.
+    [<Emit("Buffer.from($0)")>]
+    let bufferOverArrayBuffer (bytes: JS.ArrayBuffer) : Buffer = jsNative
 
     /// The same bytes as a `Uint8Array`, which a Node `Buffer` already IS — it is a subclass,
     /// so nothing is copied and nothing is converted. Declared once, here, for the reason

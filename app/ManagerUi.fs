@@ -11,6 +11,8 @@ module Yession.Host.ManagerUi
 // client; it shares the Manager's 127.0.0.1 endpoint with the control RPC.
 
 open Fable.Core.JsInterop
+open Node.Api
+open Node.Buffer
 open Yession.Domain
 open Yession.Domain.Link
 open Yession.Domain.Tools
@@ -651,8 +653,8 @@ let private cssUrl = ManagerRoute.path (ManagerRoute.asset assets.Build AssetFil
 
 /// The icon's constant is base64 (it lives in source); the wire wants the PNG. Same decode
 /// the session server does, for the same reason — `res.end` takes what Node's `end` takes.
-[<Fable.Core.Emit("Buffer.from($0, 'base64')")>]
-let private decodeBase64 (encoded: string) : string = Fable.Core.Util.jsNative
+let private decodeBase64 (encoded: string) : string =
+    unbox (buffer.Buffer.from (encoded, BufferEncoding.Base64))
 
 let private readBody (req: IncomingMessage) (cont: string -> unit) =
     let mutable acc = ""
@@ -683,9 +685,20 @@ let private jsonLiteral (s: string) : string = Fable.Core.JS.JSON.stringify s
 
 /// GET a URL and report the status its answer carried; `0` when nothing answered at all.
 /// Redirects are followed, because a session that bounces its shell through sign-in has
-/// still answered.
-[<Fable.Core.Emit("fetch($0, { redirect: 'follow', cache: 'no-store' }).then(r => r.status, () => 0)")>]
-let private statusOf (url: string) : Fable.Core.JS.Promise<int> = Fable.Core.Util.jsNative
+/// still answered. Nothing reads the body, so nothing reads it.
+let private statusOf (url: string) : Async<int> =
+    async {
+        let! attempt =
+            Http.attempt
+                (fun _ -> Promise.lift ())
+                url
+                [ Fetch.Types.RequestProperties.Redirect Fetch.Types.RedirectMode.Follow
+                  Fetch.Types.RequestProperties.Cache Fetch.Types.RequestCache.Nostore ]
+
+        match attempt with
+        | Http.Answered (response, ()) -> return response.Status
+        | Http.Unreachable _ -> return 0
+    }
 
 /// Is something answering FOR this address yet?
 ///
@@ -1034,7 +1047,7 @@ let tryHandle
                     let address = PublicAccess.sessionAddress sessionId port pm.Public
                     Async.StartImmediate (
                         async {
-                            let! status = statusOf (sprintf "%s/" address.Url) |> awaitPromise
+                            let! status = statusOf (sprintf "%s/" address.Url)
                             if answeredFor status then respond res 200 "text/plain" "ready"
                             else
                                 respond

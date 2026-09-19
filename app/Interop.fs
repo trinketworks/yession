@@ -6,6 +6,8 @@ module Yession.Host.Interop
 
 open Fable.Core
 open Fable.NodeExtras
+open Node.Api
+open Node.Buffer
 open Yession.Domain.Link
 open Fable.Core.JsInterop
 
@@ -234,23 +236,16 @@ let contentDigest (content: string option) : string =
     | Some text -> (sha256Base64Url text).Substring (0, 12)
     | None -> ""
 
-[<Emit("Buffer.from($0, 'utf8')")>]
-let private utf8Buffer (text: string) : obj = jsNative
-
-[<Emit("$0.length")>]
-let private bufferLength (buffer: obj) : int = jsNative
-
-/// `timingSafeEqual` THROWS on operands of different lengths, which is why the guard below
-/// is not an optimisation and cannot be dropped.
-[<Emit("$0.timingSafeEqual($1, $2)")>]
-let private timingSafeEqualBuffers (cryptoModule: obj) (a: obj) (b: obj) : bool = jsNative
-
 /// Constant-time string equality (client secrets); length mismatch short-circuits,
 /// which leaks only the length.
+///
+/// `timingSafeEqual` THROWS on operands of different lengths, which is why the guard is not
+/// an optimisation and cannot be dropped. The comparison is `Fable.NodeExtras`'s binding of
+/// `node:crypto`'s, which is where the one place a secret may be compared lives.
 let timingSafeEqualStr (a: string) (b: string) : bool =
-    let left = utf8Buffer a
-    let right = utf8Buffer b
-    bufferLength left = bufferLength right && timingSafeEqualBuffers nodeCrypto left right
+    let left = buffer.Buffer.from (a, BufferEncoding.Utf8)
+    let right = buffer.Buffer.from (b, BufferEncoding.Utf8)
+    left.length = right.length && timingSafeEqual left right
 
 /// The TCP peer address of a request (`socket.remoteAddress`); None once disconnected.
 [<Emit("($0.socket?.remoteAddress ?? null)")>]
@@ -260,13 +255,23 @@ let remoteAddressOf (req: IncomingMessage) : string option = jsNative
 [<Emit("new URL($0, 'http://local').searchParams.get($1)")>]
 let queryParamOf (url: string) (name: string) : string option = jsNative
 
-/// POST a JSON body and resolve with the response text. Uses Node 24's global `fetch`.
-[<Emit("fetch($0, { method: 'POST', headers: { 'content-type': 'application/json' }, body: $1 }).then(r => r.text())")>]
-let postText (url: string) (body: string) : JS.Promise<string> = jsNative
+/// POST a JSON body and resolve with the response text.
+///
+/// `Fable.Fetch` rather than a macro, and `fetchUnsafe` rather than `fetch`, because the
+/// plain binding throws on a non-2xx status — which these two do not, and never did.
+/// `Http.fs` is where this host's requests otherwise go; it is compiled AFTER this file
+/// (it awaits through `Interop.awaitPromise`), so these two name the binding themselves.
+let postText (url: string) (body: string) : JS.Promise<string> =
+    Fetch.fetchUnsafe
+        url
+        [ Fetch.Types.RequestProperties.Method Fetch.Types.HttpMethod.POST
+          Fetch.requestHeaders [ Fetch.Types.HttpRequestHeaders.ContentType "application/json" ]
+          Fetch.Types.RequestProperties.Body (U3.Case3 body) ]
+    |> Promise.bind (fun response -> response.text ())
 
 /// GET a URL and resolve with the response text.
-[<Emit("fetch($0).then(r => r.text())")>]
-let getText (url: string) : JS.Promise<string> = jsNative
+let getText (url: string) : JS.Promise<string> =
+    Fetch.fetchUnsafe url [] |> Promise.bind (fun response -> response.text ())
 
 /// Extract the `sdp` field from a `{ type, sdp }` JSON message.
 let sdpField (json: string) : string = (unbox<{| sdp: string |}> (JS.JSON.parse json)).sdp
@@ -296,8 +301,7 @@ let publicAccess () : Result<Yession.Domain.Link.PublicAccess, string> =
     Yession.Domain.Link.PublicAccess.create (envOr "YESSION_MANAGER_URL" "") (envOr "YESSION_SESSION_URL" "")
 
 /// Terminate the Node process with an exit code.
-[<Emit("process.exit($0)")>]
-let exit (code: int) : unit = jsNative
+let exit (code: int) : unit = ``process``.exit code
 
 // Command-line reading lives in `Cli`, over Node's own `parseArgs`. There used to be a
 // `versionFlag` and an `argValue` here that scanned `process.argv` by hand; they could not

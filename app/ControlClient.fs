@@ -16,8 +16,14 @@ open Yession.Manager
 open Yession.Oidc
 open Yession.App
 
-[<Emit("fetch($0, { method: 'POST', headers: { 'x-yession-control': $1, 'content-type': 'application/json' }, body: $2 })")>]
-let private post (url: string) (secret: string) (body: string) : JS.Promise<Fetch.Types.Response> = jsNative
+/// One control POST: the per-launch secret is the whole authentication, and the body is
+/// always this repository's own JSON.
+let private post (url: string) (secret: string) (body: string) : JS.Promise<Fetch.Types.Response> =
+    Fetch.fetchUnsafe
+        url
+        [ Fetch.Types.RequestProperties.Method Fetch.Types.HttpMethod.POST
+          Http.headers [ "x-yession-control", secret; "content-type", "application/json" ]
+          Fetch.Types.RequestProperties.Body (Fable.Core.U3.Case3 body) ]
 
 /// One control call's body, or a rejection naming the status that refused it.
 ///
@@ -120,9 +126,12 @@ let summaryReporter (baseUrl: string) (secret: string) : string -> Async<unit> =
             with _ -> return ()
         }
 
-[<Emit("""fetch($0, { method: 'POST', headers: { 'x-yession-control': $1, 'content-type': 'application/json' }, body: $2 })
-  .then(async r => ({ status: r.status, body: await r.text() }))""")>]
-let private postJsonReply (url: string) (secret: string) (body: string) : JS.Promise<{| status: int; body: string |}> = jsNative
+/// The same call, keeping the status beside the body rather than rejecting on it.
+let private postJsonReply (url: string) (secret: string) (body: string) : JS.Promise<{| status: int; body: string |}> =
+    post url secret body
+    |> Promise.bind (fun response ->
+        response.text ()
+        |> Promise.map (fun said -> {| status = response.Status; body = said |}))
 
 /// Report whether this session is in use (Plan 11).
 ///
