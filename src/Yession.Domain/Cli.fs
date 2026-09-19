@@ -57,20 +57,22 @@ type Parsed =
 
 // --- the Node parser ---------------------------------------------------------------------
 
+/// What `parseArgs` answers with: one entry per option that was GIVEN, under its long name.
+/// An entry is `true` for a boolean option and — because `configFor` asks for every value
+/// option as `multiple` — a `string[]` for a value option; which of the two it is comes from
+/// the spec this module built the config from, never from looking at the value.
+[<AllowNullLiteral>]
+type private ParsedValues =
+    /// `undefined` for an option that was not given, which is `None` here.
+    [<EmitIndexer>]
+    abstract Item : name: string -> obj option
+
+[<AllowNullLiteral>]
+type private ParsedArgs =
+    abstract values : ParsedValues
+
 [<Import("parseArgs", "node:util")>]
-let private parseArgs (config: obj) : obj = jsNative
-
-[<Emit("({})")>]
-let private newObject () : obj = jsNative
-
-[<Emit("$0[$1] = $2")>]
-let private setField (target: obj) (name: string) (value: obj) : unit = jsNative
-
-[<Emit("$0[$1]")>]
-let private field (source: obj) (name: string) : obj = jsNative
-
-[<Emit("$0 == null")>]
-let private absent (value: obj) : bool = jsNative
+let private parseArgs (config: obj) : ParsedArgs = jsNative
 
 /// The argv a bin was started with, its own executable and script dropped.
 [<Emit("process.argv.slice(2)")>]
@@ -154,19 +156,19 @@ let usage (spec: Spec) : string =
 
 /// The `parseArgs` config this spec describes. Built from the SAME list `usage` prints.
 let private configFor (spec: Spec) (args: string array) : obj =
-    let options = newObject ()
-    for opt in spec.Options do
-        let entry = newObject ()
-        setField entry "type" (box (if opt.Placeholder.IsSome then "string" else "boolean"))
-        // Every value option is parsed as a LIST, whatever its declared arity, so that a
-        // repeat is a fact this module can see. Without it Node keeps the last silently, and
-        // `--auth localhost --auth none` would run as `none` with nothing said.
-        if opt.Placeholder.IsSome then setField entry "multiple" (box true)
-        opt.Short |> Option.iter (fun short -> setField entry "short" (box short))
-        setField options opt.Long entry
+    let entry (opt: Opt) =
+        createObj
+            [ yield "type", box (if opt.Placeholder.IsSome then "string" else "boolean")
+              // Every value option is parsed as a LIST, whatever its declared arity, so that a
+              // repeat is a fact this module can see. Without it Node keeps the last silently,
+              // and `--auth localhost --auth none` would run as `none` with nothing said.
+              if opt.Placeholder.IsSome then yield "multiple", box true
+              match opt.Short with
+              | Some short -> yield "short", box short
+              | None -> () ]
     createObj
         [ "args", box args
-          "options", options
+          "options", createObj [ for opt in spec.Options -> opt.Long, entry opt ]
           // Refuse an unknown option and a missing value rather than carrying on without
           // them, and refuse bare words too: no bin here takes a positional argument, so
           // one is always a mistake.
@@ -187,16 +189,17 @@ let rejectValue (spec: Spec) (message: string) : 'a = abort (complaint spec mess
 /// carrying the parser's own complaint and the usage under it.
 let parse (spec: Spec) (args: string array) : Result<Parsed, string> =
     try
-        let values = field (parseArgs (configFor spec args)) "values"
+        let values = (parseArgs (configFor spec args)).values
         // Walk the DECLARATION, not the result: every name here is one this spec knows, so
         // nothing can arrive that `isSet`/`valueOf` could not name.
         let given =
             spec.Options
             |> List.choose (fun opt ->
-                let raw = field values opt.Long
-                if absent raw then None
-                elif opt.Placeholder.IsSome then Some (opt, unbox<string array> raw |> List.ofArray)
-                else Some (opt, []))
+                match values.[opt.Long] with
+                | None -> None
+                // `configFor` declared this option `multiple`, so what Node put here is a list.
+                | Some raw when opt.Placeholder.IsSome -> Some (opt, unbox<string array> raw |> List.ofArray)
+                | Some _ -> Some (opt, []))
         // The declared arity, enforced. `configFor` asked for every value as a list precisely
         // so this is answerable: Node keeps the last of a repeat and says nothing, which is
         // the silent-ignore this module exists to end.

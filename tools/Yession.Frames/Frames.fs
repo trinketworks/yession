@@ -115,9 +115,6 @@ let private say (line: string) : unit = JS.console.log line
 
 let private now () : float = JS.Constructors.Date.now ()
 
-[<Emit("String($0).padStart($1, '0')")>]
-let private padded (n: int) (width: int) : string = jsNative
-
 let private joinTwo (a: string) (b: string) : string = nodePath?join (a, b) |> unbox
 let private writeFile (path: string) (content: obj) : unit = fs?writeFileSync (path, content) |> ignore
 let private readDir (path: string) : string array = fs?readdirSync path |> unbox
@@ -377,7 +374,7 @@ type private Frame =
       Changed: int
       Box: int array option }
 
-let private frameName (f: Frame) = sprintf "frames/f%s.png" (padded f.Index 4)
+let private frameName (f: Frame) = sprintf "frames/f%04d.png" f.Index
 
 /// The layout summary's diff against the previous render's, one line per key that moved.
 let private changes (before: obj option) (after: obj) : string list =
