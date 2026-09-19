@@ -24,27 +24,7 @@ open Yession.Tests.Support
 
 // --- Node helpers: host-side fixtures the sandbox is then pointed at ----------------------
 
-let private nodeFs : obj = importAll "node:fs"
-let private nodeOs : obj = importAll "node:os"
 let private nodeNet : obj = importAll "node:net"
-
-[<Emit("$0.mkdtempSync($1.tmpdir() + '/yession-srt-')")>]
-let private mkdtemp (fs: obj) (os: obj) : string = jsNative
-
-[<Emit("$0.writeFileSync($1, $2)")>]
-let private writeFile (fs: obj) (path: string) (content: string) : unit = jsNative
-
-[<Emit("$0.existsSync($1)")>]
-let private exists (fs: obj) (path: string) : bool = jsNative
-
-[<Emit("$0.realpathSync($1)")>]
-let private realpath (fs: obj) (path: string) : string = jsNative
-
-[<Emit("$0.mkdirSync($1)")>]
-let private mkdir (fs: obj) (path: string) : unit = jsNative
-
-[<Emit("$0.symlinkSync($1, $2)")>]
-let private symlink (fs: obj) (target: string) (path: string) : unit = jsNative
 
 [<Emit("process.env.HOME || ''")>]
 let private hostHome () : string = jsNative
@@ -205,11 +185,11 @@ let tests =
                 ptestCase "a socket named by a later sandbox is one it can still connect to (macOS only: Linux cannot scope a socket grant to a path)" (fun () -> ())
              else
              testCaseAsync "a socket named by a later sandbox is one it can still connect to" (async {
-                let workspace = mkdtemp nodeFs nodeOs
+                let workspace = TestFiles.tempDir "yession-srt-"
                 // Canonical, because `mkdtemp` hands back `/var/folders/...` on macOS and
                 // `/var` is a symlink — the exact fault #330 refuses for an operator, and it
                 // bites a test that writes a path the same way.
-                let elsewhere = mkdtemp nodeFs nodeOs |> Fs.canonical |> Option.get
+                let elsewhere = TestFiles.tempDir "yession-srt-" |> Fs.canonical |> Option.get
                 let socketPath = elsewhere + "/probe.sock"
                 let close = listenOn socketPath
 
@@ -238,12 +218,12 @@ let tests =
             }))
 
             testCaseAsync "a command runs confined, writes its workspace, and streams its output" (async {
-                let workspace = mkdtemp nodeFs nodeOs
+                let workspace = TestFiles.tempDir "yession-srt-"
                 let! sandbox = startSandbox (policyIn workspace [])
                 let! run, out, _ = shell sandbox "echo confined > marker; cat marker"
                 Expect.equal (exitCode run) 0 "the command ran"
                 Expect.isTrue (out.Contains "confined") "its stdout reached the caller"
-                Expect.isTrue (exists nodeFs (workspace + "/marker")) "the workspace write landed on the host"
+                Expect.isTrue (TestFiles.exists (workspace + "/marker")) "the workspace write landed on the host"
                 do! sandbox.Dispose ()
             })
 
@@ -262,7 +242,7 @@ let tests =
                 // (relative writes from a cwd inside it are fine, which is what every other
                 // case here does). Production's paths are under the session directory and
                 // never symlinked.
-                let workspace = realpath nodeFs (mkdtemp nodeFs nodeOs)
+                let workspace = TestFiles.canonical (TestFiles.tempDir "yession-srt-")
                 // A home the sandbox cannot write is refused before any shell opens —
                 // production hands a sandbox its own home under the session, so this one
                 // lives in the workspace it may write.
@@ -279,7 +259,7 @@ let tests =
                 // each block as its own process in the sandbox's working directory, and a
                 // `cd` to that same directory would pass without a shell at all.
                 let inner = workspace + "/inner"
-                mkdir nodeFs inner
+                TestFiles.makeDir inner
                 match! host.TerminalCommands.Execute (CommandRequest.ofCommand ("cd " + inner)) agent with
                 | Error e -> failwithf "cd did not run: %s" e
                 | Ok first ->
@@ -298,12 +278,12 @@ let tests =
             })
 
             testCaseAsync "a write outside the policy's paths is refused" (async {
-                let workspace = mkdtemp nodeFs nodeOs
-                let outside = mkdtemp nodeFs nodeOs
+                let workspace = TestFiles.tempDir "yession-srt-"
+                let outside = TestFiles.tempDir "yession-srt-"
                 let! sandbox = startSandbox (policyIn workspace [])
                 let! run, _, _ = shell sandbox (sprintf "echo escaped > %s/escaped" outside)
                 Expect.notEqual (exitCode run) 0 "writing outside the allowed paths fails"
-                Expect.isFalse (exists nodeFs (outside + "/escaped")) "and nothing was written"
+                Expect.isFalse (TestFiles.exists (outside + "/escaped")) "and nothing was written"
                 do! sandbox.Dispose ()
             })
 
@@ -312,9 +292,9 @@ let tests =
                 // reads used to be denied only inside the operator's home, so anything else
                 // nobody had thought to name — another session's data directory, a checkout
                 // this session was never given — was readable by every command.
-                let outside = mkdtemp nodeFs nodeOs
-                writeFile nodeFs (outside + "/secret") "not-yours"
-                let workspace = mkdtemp nodeFs nodeOs
+                let outside = TestFiles.tempDir "yession-srt-"
+                TestFiles.write (outside + "/secret") "not-yours"
+                let workspace = TestFiles.tempDir "yession-srt-"
                 let! sandbox = startSandbox (policyIn workspace [])
                 let! run, out, _ = shell sandbox (sprintf "cat %s/secret" outside)
                 Expect.notEqual (exitCode run) 0 "reading a path the policy never named fails"
@@ -326,7 +306,7 @@ let tests =
                 // The other half of denying every read: an interpreter the sandbox cannot read
                 // is a sandbox that runs nothing. This is the case that goes red when the
                 // allow-back list stops matching where this box keeps its runtime.
-                let workspace = mkdtemp nodeFs nodeOs
+                let workspace = TestFiles.tempDir "yession-srt-"
                 let! sandbox = startSandbox (policyIn workspace [])
                 let! run, out, _ =
                     runInSandbox sandbox (nodePath ()) [ "-e"; "process.stdout.write('ran')" ] Map.empty None
@@ -339,7 +319,7 @@ let tests =
                 // The AgentSandbox names ONE path — its per-session scratch HOME — so it is
                 // the narrowest read scope in the product, and the place a missing allow-back
                 // would surface as a session that cannot start a turn at all.
-                let home = mkdtemp nodeFs nodeOs
+                let home = TestFiles.tempDir "yession-srt-"
                 let ambient = Sandboxes.ambientEnv ()
                 let policy =
                     Sandboxes.AgentSandbox.policyFor ambient home (Sandboxes.AgentSandbox.envFor ambient home None)
@@ -357,8 +337,8 @@ let tests =
                 // deny too much and a session cannot use its own workspace.
                 let home = hostHome ()
                 let secret = home + "/.yession-srt-probe"
-                writeFile nodeFs secret "top-secret"
-                let workspace = mkdtemp nodeFs nodeOs
+                TestFiles.write secret "top-secret"
+                let workspace = TestFiles.tempDir "yession-srt-"
                 let! sandbox = startSandbox (policyIn workspace [])
                 let! denied, out, _ = shell sandbox (sprintf "cat %s" secret)
                 Expect.notEqual (exitCode denied) 0 "the home-directory read fails"
@@ -372,7 +352,7 @@ let tests =
                 // Deterministic without reaching the internet: the sandbox's network namespace
                 // is unshared, so an unlisted host cannot be connected to whether or not this
                 // box has a route to it.
-                let workspace = mkdtemp nodeFs nodeOs
+                let workspace = TestFiles.tempDir "yession-srt-"
                 let! sandbox = startSandbox (policyIn workspace [ "api.anthropic.com" ])
                 let! run, _, _ =
                     runInSandbox
@@ -389,7 +369,7 @@ let tests =
                 // The reason srt was chosen over a container per command. The bound is loose
                 // (a loaded CI runner is not a benchmark rig) but a regression to container
                 // start-up — seconds, not milliseconds — cannot hide under it.
-                let workspace = mkdtemp nodeFs nodeOs
+                let workspace = TestFiles.tempDir "yession-srt-"
                 let! sandbox = startSandbox (policyIn workspace [])
                 let! _ = shell sandbox "true"          // the manager is up; measure a spawn, not a start
                 let started = nowMs ()
@@ -405,7 +385,7 @@ let tests =
                 // back is a stand-in that joins the real child later. This drives it exactly
                 // as the SDK does — write stdin, read stdout, wait for exit — through a
                 // command that only answers if every one of those was plumbed through.
-                let workspace = mkdtemp nodeFs nodeOs
+                let workspace = TestFiles.tempDir "yession-srt-"
                 let policy = policyIn workspace []
                 let spawner =
                     Sandboxes.AgentSandbox.srtClaudeSpawner (Sandboxes.SrtSandbox.wrapperFor (srtTools ()) policy)
@@ -429,7 +409,7 @@ let tests =
                 ptestCase "a probe that could not run is not an answer, and is not remembered (Linux only: macOS initialize probes nothing)" (fun () -> ())
              else
              testCaseAsync "a probe that could not run is not an answer, and is not remembered" (async {
-                let workspace = mkdtemp nodeFs nodeOs
+                let workspace = TestFiles.tempDir "yession-srt-"
                 // A manager is already up by now, and `initialize` returns early once srt
                 // has one — probe included. So the question can only be asked of a process
                 // that has none, which is what forgetting both halves leaves behind.
@@ -460,12 +440,12 @@ let tests =
                 ptestCase "a symlink is not a way into what nothing granted (macOS only: Seatbelt matches paths as written)" (fun () -> ())
              else
              testCaseAsync "a symlink is not a way into what nothing granted" (async {
-                let workspace = mkdtemp nodeFs nodeOs |> Fs.canonical |> Option.get
-                let elsewhere = mkdtemp nodeFs nodeOs |> Fs.canonical |> Option.get
-                writeFile nodeFs (elsewhere + "/not-yours") "secret"
+                let workspace = TestFiles.tempDir "yession-srt-" |> Fs.canonical |> Option.get
+                let elsewhere = TestFiles.tempDir "yession-srt-" |> Fs.canonical |> Option.get
+                TestFiles.write (elsewhere + "/not-yours") "secret"
                 // The link itself is inside the workspace, so it is granted and only its
                 // target is not — the shape a policy cannot see by reading paths alone.
-                symlink nodeFs elsewhere (workspace + "/out")
+                TestFiles.symlink elsewhere (workspace + "/out")
 
                 let! sandbox = startSandbox (policyIn workspace [])
                 let! run, out, _ = shell sandbox ("cat " + workspace + "/out/not-yours")

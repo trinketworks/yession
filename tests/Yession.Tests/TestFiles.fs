@@ -24,8 +24,38 @@ open Fable.NodeExtras
 /// one suite — and two suites in one process — never share a tree.
 let tempDir (prefix: string) : string = fs.mkdtempSync (os.tmpdir () + "/" + prefix)
 
+/// A fresh directory under `prefix`, which is a path rather than a name: the suites that
+/// need one under `$HOME` rather than the OS temp directory do so because a Colima daemon
+/// shares only `$HOME` into its VM, and a bind source outside it mounts empty.
+let tempDirAt (prefix: string) : string = fs.mkdtempSync prefix
+
+/// This account's home directory — where the fixtures above put their trees.
+let homeDir () : string = os.homedir ()
+
 /// Create a directory and any missing parents; a no-op when it is already there.
 let ensureDir (path: string) : unit = Files.mkdirp path
+
+/// Create ONE directory, failing when its parent is not there. The stricter of the two, for
+/// a fixture whose point is the tree it built a moment ago.
+let makeDir (path: string) : unit = fs.mkdirSync path
+
+/// Copy a file, overwriting the destination.
+let copyFile (source: string) (destination: string) : unit = Files.copyFile source destination
+
+/// A path with every symlink on the way in resolved — the path the KERNEL checks, which is
+/// not the same path a sandbox grant was written with.
+let canonical (path: string) : string = fs.realpathSync (U2.Case1 path)
+
+/// Make a file executable (0o755) — a fixture script the code under test then runs.
+let makeExecutable (path: string) : unit = fs.chmodSync (U2.Case1 path, 0o755)
+
+/// World-writable (0o777). One fixture is, on purpose: a mount-mode test has to assert
+/// rw-vs-ro MOUNT semantics and nothing about the capabilities its container happens to
+/// keep, so the mode is taken out of the question.
+let makeWorldWritable (path: string) : unit = fs.chmodSync (U2.Case1 path, 0o777)
+
+/// Set a path's mode. A fixture handed to a container needs one a container's user can read.
+let chmod (path: string) (mode: int) : unit = fs.chmodSync (U2.Case1 path, mode)
 
 /// Write text, creating the file or replacing what was in it.
 let write (path: string) (text: string) : unit = fs.writeFileSync (path, box text)

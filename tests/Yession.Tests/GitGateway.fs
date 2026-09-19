@@ -195,20 +195,6 @@ let private carryTests =
 
 // --- [Ports]: a real git, at a real gateway ------------------------------------------------
 
-let private nodeFs : obj = importAll "node:fs"
-let private nodeOs : obj = importAll "node:os"
-
-[<Emit("$0.mkdtempSync($1.tmpdir() + '/yession-gateway-')")>]
-let private mkdtemp (fs: obj) (os: obj) : string = jsNative
-
-[<Emit("$0.mkdirSync($1, { recursive: true })")>]
-let private mkdir (fs: obj) (path: string) : unit = jsNative
-
-[<Emit("$0.writeFileSync($1, $2)")>]
-let private writeFile (fs: obj) (path: string) (content: string) : unit = jsNative
-
-[<Emit("$0.rmSync($1, { recursive: true, force: true })")>]
-let private rmrf (fs: obj) (path: string) : unit = jsNative
 
 /// What one git run said. The sandbox-side git under test is judged by its stdout and by
 /// the sentence on its stderr, which is the whole point of the `ERR` channel.
@@ -839,10 +825,10 @@ let private gitHttpBackend (root: string) (seen: ResizeArray<string option>) : H
 /// it. Handed to `body` as (bare, work, seen, upstream origin).
 let private withPushSides (body: string -> string -> ResizeArray<string option> -> string -> Async<unit>) : Async<unit> =
     async {
-        let root = mkdtemp nodeFs nodeOs
+        let root = TestFiles.tempDir "yession-gateway-"
         try
             let served = sprintf "%s/served" root
-            mkdir nodeFs (sprintf "%s/octo" served)
+            TestFiles.ensureDir (sprintf "%s/octo" served)
             let bare = sprintf "%s/octo/hello.git" served
             do! gitOk [ "init"; "--bare"; "-b"; "main"; bare ] root |> Async.Ignore
             let seen = ResizeArray<string option> ()
@@ -850,9 +836,9 @@ let private withPushSides (body: string -> string -> ResizeArray<string option> 
             do! Async.FromContinuations (fun (cont, _, _) -> upstream.listen (0, "127.0.0.1", fun () -> cont ()) |> ignore)
             try
                 let work = sprintf "%s/work" root
-                mkdir nodeFs work
+                TestFiles.ensureDir work
                 do! gitOk [ "init"; "-b"; "main" ] work |> Async.Ignore
-                writeFile nodeFs (sprintf "%s/README.md" work) "pushed through the gateway\n"
+                TestFiles.write (sprintf "%s/README.md" work) "pushed through the gateway\n"
                 do! gitOk [ "add"; "." ] work |> Async.Ignore
                 do! gitOk [ "commit"; "-m"; "seed" ] work |> Async.Ignore
                 do! gitOk [ "remote"; "add"; "origin"; "https://github.com/octo/hello.git" ] work |> Async.Ignore
@@ -860,7 +846,7 @@ let private withPushSides (body: string -> string -> ResizeArray<string option> 
             finally
                 upstream.close ignore
         finally
-            rmrf nodeFs root
+            TestFiles.removeTree root
     }
 
 /// The record is written after the answer has gone back to git, so a report of its loss can
@@ -967,7 +953,7 @@ let private srtTests =
                         // Canonical, because seatbelt matches the path as written and `/tmp`
                         // is a symlink here (the note in GitIntegration.fs).
                         let workspace =
-                            match Fs.canonical (mkdtemp nodeFs nodeOs) with
+                            match Fs.canonical (TestFiles.tempDir "yession-gateway-") with
                             | Some path -> path
                             | None -> failwith "the workspace does not resolve"
                         let policy : SandboxPolicy =
@@ -995,7 +981,7 @@ let private srtTests =
                             Expect.isTrue (out.Contains "refs/heads/main") "and read the upstream's refs"
                             Expect.equal (List.ofSeq upstream.Authorizations) [ Some (basic "ghu_lent") ] "github.com saw the lent credential"
                             do! confined.Dispose ()
-                        rmrf nodeFs workspace
+                        TestFiles.removeTree workspace
                     })
             do! upstream.Close ()
         }

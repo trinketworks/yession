@@ -39,24 +39,7 @@ open Yession.Tests.Support
 
 let private expect = function Ok v -> v | Error e -> failwithf "%A" e
 
-let private nodeFs : obj = importAll "node:fs"
-let private nodeOs : obj = importAll "node:os"
 let private childProcess : obj = importAll "node:child_process"
-
-[<Emit("$0.mkdirSync($1, { recursive: true })")>]
-let private mkdirp (fs: obj) (path: string) : unit = jsNative
-
-[<Emit("$0.mkdtempSync($1)")>]
-let private mkdtempAt (fs: obj) (prefix: string) : string = jsNative
-
-[<Emit("$0.homedir()")>]
-let private homedir (os: obj) : string = jsNative
-
-[<Emit("$0.rmSync($1, { recursive: true, force: true })")>]
-let private rmrf (fs: obj) (path: string) : unit = jsNative
-
-[<Emit("$0.copyFileSync($1, $2)")>]
-let private copyFile (fs: obj) (from: string) (dest: string) : unit = jsNative
 
 [<Emit("$0.execSync($1, { stdio: 'pipe' })")>]
 let private execSync (cp: obj) (command: string) : unit = jsNative
@@ -74,11 +57,11 @@ let private repoRef = RepoRef.create "trinketworks/yession" |> expect
 /// A repos directory holding this repo's checkout at the place the session would put it —
 /// under $HOME (see the module comment), removed by the caller.
 let private reposDirWith (checkout: string -> unit) : string =
-    let root = homedir nodeOs + "/.cache/yession-tests"
-    mkdirp nodeFs root
-    let reposDir = mkdtempAt nodeFs (root + "/devcontainer-")
+    let root = TestFiles.homeDir () + "/.cache/yession-tests"
+    TestFiles.ensureDir root
+    let reposDir = TestFiles.tempDirAt (root + "/devcontainer-")
     let dir = sprintf "%s/%s" reposDir (RepoRef.relativePath repoRef)
-    mkdirp nodeFs dir
+    TestFiles.ensureDir dir
     checkout dir
     reposDir
 
@@ -174,7 +157,7 @@ let private withDevSpec
             let! _ = runInSandbox s "sh" [ "-c"; sprintf "rm -rf /repos/%s" (RepoRef.value repoRef) ] Map.empty None
             do! s.Dispose ()
         | None -> ()
-        rmrf nodeFs reposDir
+        TestFiles.removeTree reposDir
         match failure with
         | Some e -> return raise e
         | None -> return ()
@@ -183,7 +166,7 @@ let private withDevSpec
 /// The declared container over a copy of the file alone — see `declaredDevBare`.
 let private withDev granted checkout body = withDevSpec declaredDevBare granted checkout body
 
-let private copiedConfig (dir: string) = copyFile nodeFs "yession.yaml" (dir + "/yession.yaml")
+let private copiedConfig (dir: string) = TestFiles.copyFile "yession.yaml" (dir + "/yession.yaml")
 
 let tests =
     Tag.needs "The declared dev container" [ Tag.Docker ] (fun () ->
