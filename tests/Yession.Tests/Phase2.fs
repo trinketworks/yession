@@ -20,17 +20,8 @@ open Yession.Domain.Terminals
 open Yession.App
 open Yession.Peer
 
-[<ImportAll("node:fs")>]
-let private nodeFs : obj = jsNative
-
-[<ImportAll("node:os")>]
-let private nodeOs : obj = jsNative
-
-[<Emit("$0.mkdtempSync($1.tmpdir() + '/yession-tmp-')")>]
-let private mkdtemp (fs: obj) (os: obj) : string = jsNative
-
 /// A directory nothing else in this run writes to.
-let private tempDir () : string = mkdtemp nodeFs nodeOs
+let private tempDir () : string = TestFiles.tempDir "yession-tmp-"
 
 /// A sandbox whose only behaviour is how its one spawn ends. Enough to drive
 /// `SessionEnvironment.verify`, which asks a sandbox exactly one question.

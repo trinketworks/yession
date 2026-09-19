@@ -18,17 +18,6 @@ open Fable.Pyxpecto
 open Yession.App
 open Yession.Host
 
-let private nodeFs : obj = importAll "node:fs"
-
-[<Emit("$0.mkdirSync($1, { recursive: true })")>]
-let private mkdirp (fs: obj) (dir: string) : unit = jsNative
-
-[<Emit("$0.rmSync($1, { recursive: true, force: true })")>]
-let private rmrf (fs: obj) (dir: string) : unit = jsNative
-
-[<Emit("$0.writeFileSync($1, $2)")>]
-let private writeFile (fs: obj) (path: string) (contents: string) : unit = jsNative
-
 /// What a response was. `ServerResponse` is an interface over Node's, so the cheapest honest
 /// double is an object carrying the three members `Assets.serve` uses.
 type private Reply =
@@ -71,11 +60,11 @@ let private buildOf (assets: Assets.AssetSet) = let (AssetBuild digest) = assets
 /// beside the set must not become a public URL.
 let private withAssets (name: string) (body: Assets.AssetSet -> 'a) : 'a =
     let dir = "tests/Yession.Tests/out/.assets/" + name
-    rmrf nodeFs dir
-    mkdirp nodeFs (dir + "/fonts")
-    writeFile nodeFs (dir + "/" + AssetFile.path AssetFile.``app``) "body{color:red}"
-    writeFile nodeFs (dir + "/" + AssetFile.path AssetFile.``source-serif-350``) "not really a face, but bytes are bytes"
-    writeFile nodeFs (dir + "/undeclared.txt") "no route to here"
+    TestFiles.removeTree dir
+    TestFiles.ensureDir (dir + "/fonts")
+    TestFiles.write (dir + "/" + AssetFile.path AssetFile.``app``) "body{color:red}"
+    TestFiles.write (dir + "/" + AssetFile.path AssetFile.``source-serif-350``) "not really a face, but bytes are bytes"
+    TestFiles.write (dir + "/undeclared.txt") "no route to here"
     body (Assets.load dir)
 
 let tests =
@@ -115,7 +104,7 @@ let tests =
             // together or not at all.
             let before = withAssets "digest" id
             let dir = "tests/Yession.Tests/out/.assets/digest"
-            writeFile nodeFs (dir + "/" + AssetFile.path AssetFile.``source-serif-350``) "different bytes entirely"
+            TestFiles.write (dir + "/" + AssetFile.path AssetFile.``source-serif-350``) "different bytes entirely"
             let after = Assets.load dir
             Expect.notEqual after.Build before.Build "a byte anywhere is a new set"
             Expect.equal (Assets.load dir).Build after.Build "and the same set always addresses the same"
@@ -126,9 +115,9 @@ let tests =
             // un-built and the half-built directory both boot rather than taking the process
             // down. Only absence reads that way; see the case below for what does not.
             let dir = "tests/Yession.Tests/out/.assets/partial"
-            rmrf nodeFs dir
-            mkdirp nodeFs dir
-            writeFile nodeFs (dir + "/" + AssetFile.path AssetFile.``app``) "body{color:red}"
+            TestFiles.removeTree dir
+            TestFiles.ensureDir dir
+            TestFiles.write (dir + "/" + AssetFile.path AssetFile.``app``) "body{color:red}"
             let assets = Assets.load dir
             Expect.equal
                 (assets.Files |> Map.toList |> List.map fst)
@@ -147,10 +136,10 @@ let tests =
             // root often enough that `chmod 000` is not a denial, and a directory is a
             // genuine there-and-unreadable for any user.
             let dir = "tests/Yession.Tests/out/.assets/unreadable"
-            rmrf nodeFs dir
-            mkdirp nodeFs (dir + "/fonts")
-            writeFile nodeFs (dir + "/" + AssetFile.path AssetFile.``app``) "body{color:red}"
-            mkdirp nodeFs (dir + "/" + AssetFile.path AssetFile.``client``)
+            TestFiles.removeTree dir
+            TestFiles.ensureDir (dir + "/fonts")
+            TestFiles.write (dir + "/" + AssetFile.path AssetFile.``app``) "body{color:red}"
+            TestFiles.ensureDir (dir + "/" + AssetFile.path AssetFile.``client``)
             Expect.throwsC
                 (fun () -> Assets.load dir |> ignore)
                 (fun error ->
@@ -164,9 +153,9 @@ let tests =
             // set-wide address exists to make impossible.
             let setOf (name: string) (file: AssetFile) =
                 let dir = "tests/Yession.Tests/out/.assets/" + name
-                rmrf nodeFs dir
-                mkdirp nodeFs (dir + "/fonts")
-                writeFile nodeFs (dir + "/" + AssetFile.path file) "the very same bytes"
+                TestFiles.removeTree dir
+                TestFiles.ensureDir (dir + "/fonts")
+                TestFiles.write (dir + "/" + AssetFile.path file) "the very same bytes"
                 Assets.load dir
 
             Expect.notEqual

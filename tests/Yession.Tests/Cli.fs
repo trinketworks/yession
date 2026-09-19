@@ -19,14 +19,6 @@ open Yession.Host
 // Reading this repository's own workflow files, for the retirement scan below. The Cli suite
 // is Node-only (it needs no browser), so `node:fs` is always there when this runs, and the
 // suite's working directory is the repository root.
-let private nodeFs : obj = importAll "node:fs"
-
-[<Emit("$0.readdirSync($1)")>]
-let private readDir (fs: obj) (dir: string) : string array = jsNative
-
-[<Emit("$0.readFileSync($1, 'utf8')")>]
-let private readText (fs: obj) (path: string) : string = jsNative
-
 let private auth = Cli.value "auth" "rule" "how a request's subject is established"
 let private secrets = Cli.value "secrets" "mode" "whether secrets persist"
 let private webhook = Cli.values "webhook" "name" "a webhook endpoint to serve"
@@ -289,11 +281,10 @@ let tests =
         testCase "no workflow file sets a variable the bins no longer read" <| fun () ->
             let dir = ".github/workflows"
             let offences =
-                readDir nodeFs dir
-                |> Array.toList
+                TestFiles.entries dir
                 |> List.filter (fun name -> name.EndsWith ".yml" || name.EndsWith ".yaml")
                 |> List.collect (fun name ->
-                    Retirements.assignedIn Retirements.manager (readText nodeFs (dir + "/" + name))
+                    Retirements.assignedIn Retirements.manager (TestFiles.read (dir + "/" + name))
                     |> List.map (fun r -> sprintf "%s sets %s (now %s)" name r.Was r.Now))
             Expect.equal offences [] "a workflow that sets one of these fails the bin it starts"
 

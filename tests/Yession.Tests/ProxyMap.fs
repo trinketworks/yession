@@ -20,15 +20,6 @@ open Yession.Oidc
 open Yession.Host
 open Yession.Tests.Support
 
-[<ImportAll("node:fs")>]
-let private nodeFs : obj = jsNative
-
-[<Emit("$0.existsSync($1)")>]
-let private existsSync (fs: obj) (path: string) : bool = jsNative
-
-[<Emit("$0.readFileSync($1, 'utf8')")>]
-let private readFileSync (fs: obj) (path: string) : string = jsNative
-
 [<Emit("process.execPath")>]
 let private nodePath : string = jsNative
 
@@ -166,11 +157,11 @@ let tests =
                         let port = expect launched
                         let expected = sprintf "mapped -> 127.0.0.1:%d" port
                         do! waitUntil "the map to carry the launched session" (fun () ->
-                                existsSync nodeFs out && (readFileSync nodeFs out).Contains expected)
-                        Expect.equal (readFileSync nodeFs out) expected "one running session is one rendering, and nothing else"
+                                TestFiles.exists out && (TestFiles.read out).Contains expected)
+                        Expect.equal (TestFiles.read out) expected "one running session is one rendering, and nothing else"
                         let! stopped = pm.Stop record.SessionId
                         expect stopped
-                        do! waitUntil "the map to empty" (fun () -> readFileSync nodeFs out = "")
+                        do! waitUntil "the map to empty" (fun () -> TestFiles.read out = "")
                     }
                     |> Async.Catch
                 do! map.Stop ()
@@ -186,6 +177,6 @@ let tests =
                 let! result = runMap [| "--template"; "static"; "--out"; out |]
                 Expect.equal result.Code 64 "EX_USAGE, the way the bins refuse an argument"
                 Expect.isTrue (result.Stderr.Contains "neither {id} nor {port}") "it names the rule that refused it"
-                Expect.isFalse (existsSync nodeFs out) "refused means nothing was written"
+                Expect.isFalse (TestFiles.exists out) "refused means nothing was written"
             }
     ]
