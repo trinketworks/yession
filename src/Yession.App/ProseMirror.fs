@@ -2,6 +2,7 @@ namespace Yession.App
 
 open Fable.Core
 open Fable.Core.JsInterop
+open Fable.BrowserExtras
 open Yjs
 
 /// Fable bindings for the focused ProseMirror + y-prosemirror surface the rich-text editor
@@ -307,14 +308,15 @@ module ProseMirror =
     [<Emit("$0.map($1, $2)")>]
     let decoSetMap (set: obj) (mapping: obj) (doc: obj) : obj = jsNative
 
-    /// The two inline colours the caret carries. `Fable.Browser.Dom` stops at the DOM —
-    /// `element.style` is the CSSOM, which it does not type — so these are the one-line
-    /// bindings that assignment is, sitting beside their use rather than reached for through a
-    /// reference this project does not carry.
-    [<Emit("$0.style.borderColor = $1")>]
-    let private setBorderColour (element: Browser.Types.HTMLElement) (colour: string) : unit = jsNative
-    [<Emit("$0.style.background = $1")>]
-    let private setBackground (element: Browser.Types.HTMLElement) (colour: string) : unit = jsNative
+    /// The two inline colours the caret carries, written through `Fable.BrowserExtras`'s
+    /// CSSOM slice — the same one the shell writes its layout number with. `setProperty` is
+    /// the CSSOM's general accessor, so a standard property goes through it as readily as a
+    /// custom one.
+    let private setBorderColour (element: Browser.Types.HTMLElement) (colour: string) : unit =
+        setStyleProperty element "border-color" colour
+
+    let private setBackground (element: Browser.Types.HTMLElement) (colour: string) : unit =
+        setStyleProperty element "background" colour
 
     /// The DOM for one caret + name label (a widget decoration). Built through the typed DOM
     /// binding rather than a JavaScript program in a string: an emit binds a platform API, and

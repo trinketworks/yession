@@ -43,6 +43,8 @@
     <PackageReference Include="Fable.Lit" />
     <PackageReference Include="Ylmish" />
     <PackageReference Include="Fable.Yjs" />
+    <PackageReference Include="Fable.Browser.Dom" />
+    <ProjectReference Include="..\Fable.BrowserExtras\Fable.BrowserExtras.fsproj" />
   </ItemGroup>
 
   <ItemGroup>
