@@ -138,3 +138,40 @@ at the price of the cube being geometrically true. `tone` is the quietest and th
 no holes in it. Six flats survive 16px and six gradients do not — `lit` and `sweep` want a
 second, flatter build rather than a compromise. And radius at the hub buys more than radius at
 the rim, because the junction is the part a reader looks at.
+
+## Fifth pass: Noto's own Y against the solid
+
+`glyph/` stops drawing a Y and uses the one the shell already serves. The outline is read
+straight out of `app/fonts/noto-sans-latin-<weight>-normal.woff2` with fontTools, junction
+placed on the solid's hub.
+
+The measurement that drives the whole pass: **Noto Sans cuts its capital Y with the arms 33°
+off vertical and the junction at 39% of the cap height** (junction at 283,277 on a 1000 em, cap
+at 714). An isometric cube puts its three interior edges at 60° and the junction dead centre.
+27° apart, and every mark here is a position on that argument.
+
+The solid is no longer fixed either. Any three vectors out of a hub are a legitimate parallel
+projection of a cube corner, so the *view* is a free variable — which is what lets the geometry
+move toward the letter instead of the letter being bent to fit 120°.
+
+- **The ladder** — `arm60`, `arm52`, `arm45`, `arm38`, `arm33`: one variable, the arm angle,
+  from the isometric down to Noto's own, with the solid re-derived at each step.
+- **The shipped glyph** — `iso400`, `iso600`, `iso200`: three weights of the real letter as the
+  cut, over the true isometric solid, so the cut crosses the folds.
+- **Moving the view** — `wide66`, `wide72` (flattened: the top face widens until the letter has
+  room), `rot7`, `rot14` (solid turned under an upright letter), `dimetric` (arms at 54° and 68°,
+  so the cube is turned toward the viewer while the letter stays symmetrical).
+- **Manipulating the letter** — `stretch17` (glyph at 170% width: arms walk out to ~50°),
+  `stretch27` (at 267%: arms land exactly on the solid's 60° edges).
+- **Finish** — `inlay` (the letter as a lightened region, nothing cut away), `hub` (Noto 300
+  over a flattened solid with radiused hub corners), `overshoot` (letter larger than the solid,
+  cutting out through the silhouette).
+- **Retained** — `retained-whisper`, `retained-modulated`, carried unchanged from `fold/`.
+
+Findings: 45° is the floor for the solid — below it the hexagon becomes a leaf, so pulling the
+geometry all the way to the letter costs the thing the letter was sitting on. Flattening the
+view to 66° is the move that works, because nothing has to be falsified: you are simply standing
+higher up. Stretching the glyph is cheaper than bending the cube — at 170% it is still
+recognisably Noto's Y. Seven degrees of rotation reads as intent and fourteen reads as an
+accident. And semibold is the weight that survives 16px: a counterform has to read as a gap,
+not a scratch.
