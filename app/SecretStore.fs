@@ -179,16 +179,12 @@ module SecretResolution =
     /// the pre-Plan-06 "smallest local-dev store" (docs/GAPS.md), kept so existing
     /// flows work unseeded. Inside the Manager's trust boundary; any store entry
     /// shadows it.
-    [<Fable.Core.Emit("process.env[$0]")>]
-    let private processEnvRaw (name: string) : string = Fable.Core.Util.jsNative
-
     let processEnv : ResolveSecret =
         fun _sessionId name ->
             async {
-                let value = processEnvRaw (SecretName.value name)
-                if isNull (box value) then
-                    return Error (sprintf "secret '%s' is not available" (SecretName.value name))
-                else return Ok value
+                match Fable.NodeExtras.ProcessEnv.get (SecretName.value name) with
+                | None -> return Error (sprintf "secret '%s' is not available" (SecretName.value name))
+                | Some value -> return Ok value
             }
 
     /// The scopes a launch may read from, most specific first: the session's own, then

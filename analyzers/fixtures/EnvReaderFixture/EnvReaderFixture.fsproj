@@ -22,5 +22,11 @@
   <ItemGroup>
     <PackageReference Include="Fable.Core" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- The product goes through Fable.NodeExtras' bindings, whose macros live in ANOTHER
+         assembly; a rule that saw only macros declared in the project it judges would report
+         the product clean. The cases that go through it are what prove it sees across. -->
+    <ProjectReference Include="../../../src/Fable.NodeExtras/Fable.NodeExtras.fsproj" />
+  </ItemGroup>
 
 </Project>

@@ -796,8 +796,11 @@ let summaryFor (backend: SandboxBackend) (spec: EnvironmentSpec) : string =
     | Container _
     | Confinement -> SandboxBackend.describe backend
 
-[<Emit("Object.entries(process.env).filter(([, v]) => typeof v === 'string')")>]
-let private ambientEntries () : (string * string) array = jsNative
+/// Name by name through the binding, which answers nothing for a variable that is not there
+/// — the same reading the `typeof v === 'string'` filter this replaced was making of the
+/// entries.
+let private ambientEntries () : (string * string) array =
+    ProcessEnv.names () |> Array.choose (fun name -> ProcessEnv.get name |> Option.map (fun value -> name, value))
 
 /// The Session Process's own environment, as data (the input `policyFor` filters).
 let ambientEnv () : Map<string, string> = ambientEntries () |> Map.ofArray

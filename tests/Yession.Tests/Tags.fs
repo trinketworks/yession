@@ -49,16 +49,16 @@ type Need =
     | Dogfood     // consent to the LONG self-hosting run: this repo's own suite inside the
                   // dev container it declares. Needs Docker beside it, egress, and patience.
 
-// process.env under Node; the CLR reads it through System.Environment below. Guarded so this
-// branch is dead-code-eliminated out of the .NET build path — jsNative would throw there.
-[<Emit("(typeof process !== 'undefined' && process.env[$0]) || ''")>]
-let private jsEnv (name: string) : string = Fable.Core.Util.jsNative
-
-/// Read an environment variable on whichever runtime we are on.
+/// Read an environment variable on whichever runtime we are on: `process.env` under Node,
+/// `System.Environment` on the CLR. The Node binding is `jsNative` on the CLR, and the
+/// `isDotnet` branch is what keeps it off that path.
 let private getEnv (name: string) : string =
     if Compiler.isDotnet then
         match System.Environment.GetEnvironmentVariable name with null -> "" | v -> v
-    else jsEnv name
+    else
+        match Fable.NodeExtras.ProcessEnv.get name with
+        | Some value -> value
+        | None -> ""
 
 // `Bench` is deliberately absent: `verify` means "every capability", and a timing suite in the
 // release gate is minutes of runtime buying a number nothing in the gate asserts on. It is asked
