@@ -2,7 +2,7 @@ namespace Yession.App
 
 open Fable.Core
 open Lit
-open Yession.App.ProseMirror
+open Fable.ProseMirror.ProseMirror
 
 /// Read-only rendering of a Markdown body to formatted rich text for the conversation
 /// timeline — the mirror of the composer's live formatting, so the timeline shows exactly

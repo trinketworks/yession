@@ -15,6 +15,7 @@ open Yjs
 open Ylmish.Codec
 open Yession.Domain
 open Yession.Domain.Collab
+open Fable.ProseMirror
 open Yession.App
 
 /// A fresh, integrated root `Y.XmlFragment` on its own doc.

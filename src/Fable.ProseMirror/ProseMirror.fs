@@ -1,4 +1,4 @@
-namespace Yession.App
+namespace Fable.ProseMirror
 
 open Fable.Core
 open Fable.Core.JsInterop
@@ -10,6 +10,11 @@ open Yjs
 /// invariant, master #7). Hand-written for the small used surface rather than full ts2fable
 /// generation (the `Fable.Yjs` precedent, scaled down). Opaque PM values we only pass around
 /// are `obj`; only the members actually called are typed.
+///
+/// Its own project, beside `Fable.Yjs` and `Fable.BrowserExtras` rather than inside the app
+/// that uses it, because that is what it IS: bindings to somebody else's library. It lived in
+/// `Yession.App` only because that is where the editor was written, and a reader of that
+/// project met forty-four macros before reaching a line of this repository's own code.
 ///
 /// TipTap was rejected here: its value is JS-side ergonomics that F# does not collect, it drags
 /// a heavier dependency tree, and its own mount lifecycle would be a second thing fighting Lit

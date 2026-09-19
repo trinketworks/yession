@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Fable bindings to the ProseMirror surface the rich-text editor uses — the schema and
+    markdown round-trip (`prosemirror-markdown`), the state and view, the keymap and the
+    commands, the decoration set, and the `y-prosemirror` binding that puts a Yjs type behind
+    all of it. An npm dependency rather than a platform API, which is why this is a project of
+    its own and not a slice of `Fable.BrowserExtras`: the same distinction `Fable.Dockerode`
+    and `Fable.Jose` draw, and what `package.json` keeps it in step with.
+
+    Only the members the editor calls are declared. The bar for adding one is that the editor
+    calls it — a binding written ahead of its use is a binding nothing checks.
+
+    Fable-only: `dotnet build` type-checks it and stops there.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="ProseMirror.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Fable.Core" />
+    <!-- `y-prosemirror` binds a Yjs type to the editor, so the Yjs types are in the signatures. -->
+    <PackageReference Include="Fable.Yjs" />
+    <!-- The CSSOM slice the decoration widgets style themselves through. -->
+    <ProjectReference Include="..\Fable.BrowserExtras\Fable.BrowserExtras.fsproj" />
+  </ItemGroup>
+
+</Project>
