@@ -237,3 +237,32 @@ cube perched on top. The concave/convex reading is genuinely ambiguous — `bite
 the same polygons and differ only in the order of three values, so some readers will see the
 other one; `rimmed` settles it. And it holds at 16px better than `pair/` did: one silhouette
 instead of two, with the void a solid shape rather than a gap between things.
+
+## Eighth pass: the cube in the fork
+
+`pair/` perched the second cube above the mark; `void/` made it the piece removed. `fork/` puts
+it where it was asked for: seated in the fork of the cut Y.
+
+It needs no fitting. The Y cut out of an isometric solid leaves a fork of exactly 120°, and 120°
+is what a hexagon's bottom corner measures — so the held cube's two lower edges lie along the
+arms' own inner edges. Both the fork and the cube are the same construction; they were always
+going to meet.
+
+- **In the fork** — `fit` (seated, filled), `clear` (1.3px of ground opened around it), `fit-hole`
+  (the opening left empty and still cube-shaped), `fit-tint` (blue mixed back toward green),
+  `fit-edges` (three strokes in the hole — the cube's own interior Y and nothing else),
+  `concave` (values reversed, so it reads as a socket).
+- **How big, how high** — `snug` (30%), `flush` (46%: the held cube's top vertex lands exactly on
+  the large one's), `filling` (52%), `raised` (lifted off the junction), `brim` (arms running past
+  its shoulders and out through the silhouette), `short` (arms stopping at its shoulders, so the
+  cut is one shape — a Y with a cube for a head).
+- **Finish** — `folded` (the large solid creased, six greens), `tapered` (the cut given a pen's
+  taper rather than parallel sides).
+- `lockup.svg` — against the name.
+
+Findings: `flush` is the only ratio that is not a preference — at 46% the two silhouettes share a
+corner and the top face fills edge to edge. Clearance is what decides whether the mark reads as
+one object or two: `fit` and `clear` are the same geometry 1.3px apart. `fit-edges` is the most
+suggested build that still reads — nine lines, two cubes, nothing drawn that the cut did not
+already imply. And unlike `pair/`, it holds at 16px, because the held cube is a solid shape with
+its own colour rather than a gap between things.
