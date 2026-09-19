@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Fable bindings to the `node-pty` npm package — the pseudo-terminal a sandbox opens for a
+    full-screen program. Fable-only, like app/Yession.Host.fsproj: `dotnet build` only
+    type-checks it; the runnable JS comes from Fable. A standalone project so the bindings are
+    a distinct layer, mirroring Fable.NodeDataChannel, the other native addon.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="NodePty.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Fable.Core" />
+  </ItemGroup>
+
+</Project>

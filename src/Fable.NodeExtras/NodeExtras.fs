@@ -709,6 +709,31 @@ type HttpResponse =
     abstract statusCode : int
 
 /// A request this process is MAKING: write the body into it, and its answer arrives at the
+/// The half of a spawned child that is only sayable once `Readable` exists: its streams as
+/// the streams this project reads, and the two events that end it. `ChildProcesses` above
+/// declares the spawn.
+[<AutoOpen>]
+module ChildProcessStreams =
+
+    /// The child's output as the stream `Readables.text` can tell to decode. Fable.Node types
+    /// the same stream as a `Readable<string>`, which is a chunk type it has only if
+    /// somebody called `setEncoding` — `Readables.text` is that somebody.
+    [<Emit("$0.stdout")>]
+    let stdout (child: ChildProcess) : Readable = jsNative
+
+    [<Emit("$0.stderr")>]
+    let stderr (child: ChildProcess) : Readable = jsNative
+
+    /// A spawn that failed before exec, or a child that could not be signalled: the
+    /// platform's own `Error`, for `StreamError.describe` to read.
+    [<Emit("$0.on('error', $1)")>]
+    let onError (child: ChildProcess) (handler: StreamError -> unit) : unit = jsNative
+
+    /// The child ended and its stdio closed. `None` is a child a signal took, which Node
+    /// reports as a `null` code; what to say about that is the caller's.
+    [<Emit("$0.on('close', $1)")>]
+    let onClose (child: ChildProcess) (handler: int option -> unit) : unit = jsNative
+
 /// callback `httpRequest` took.
 [<AllowNullLiteral>]
 type HttpRequest =

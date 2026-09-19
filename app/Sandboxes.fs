@@ -879,62 +879,46 @@ type private OneShot<'a> () =
 /// exit reporting have one implementation and behave identically under both.
 module private Children =
 
-    let private childProcess : obj = importAll "node:child_process"
+    /// A start directory as the spawn options say it: the empty string this seam is handed
+    /// for "no directory" is `None`, which inherits this process's.
+    let private startIn (cwd: string) : string option =
+        match cwd with
+        | null
+        | "" -> None
+        | directory -> Some directory
 
-    /// The spawned child, as much of it as this module reads. Its two output streams are
-    /// `Readable`s so they can be told to decode; what it exits with is an option, because a
-    /// child a SIGNAL ended has no code and Node says so with `null`.
-    [<AllowNullLiteral>]
-    type Child =
-        abstract pid : int
-        abstract stdout : Readable
-        abstract stderr : Readable
-
-    // `detached: true` makes the child its own process group leader, so `Kill` can take
-    // the whole tree with one signal to `-pid`.
-    [<Emit("$0.spawn($1, $2, { cwd: $3 || undefined, env: Object.fromEntries($4), stdio: ['pipe', 'pipe', 'pipe'], detached: true })")>]
-    let private spawnChild (cp: obj) (executable: string) (args: string array) (cwd: string) (env: (string * string) array) : Child = jsNative
-
-    /// A spawn that failed before exec, or a child that could not be signalled: the platform's
-    /// own `Error`, read by `StreamError.describe` — which is the message when there is one and
-    /// JavaScript's rendering of the value when there is not, decided in F# rather than in an
-    /// `||` inside the macro.
-    [<Emit("$0.on('error', $1)")>]
-    let private onError (child: Child) (handler: StreamError -> unit) : unit = jsNative
-
-    /// The child ended. `None` is a child a signal took, which Node reports as a `null` code;
-    /// what this module says about that (-1, "the OS gave us none") is said at the call, not
-    /// inside the binding.
-    [<Emit("$0.on('close', $1)")>]
-    let private onClose (child: Child) (handler: int option -> unit) : unit = jsNative
-
-    [<Emit("$0.stdin.write($1)")>]
-    let private stdinWrite (child: Child) (text: string) : unit = jsNative
-
-    [<Emit("$0.stdin.end()")>]
-    let private stdinEnd (child: Child) : unit = jsNative
+    /// `detached` makes the child its own process group leader, so `Kill` can take the whole
+    /// tree with one signal to `-pid`. `Pipe` for all three streams: stdout and stderr are
+    /// read below, stdin is written by whoever holds the handle.
+    let private spawnChild (executable: string) (args: string list) (cwd: string) (env: Map<string, string>) : ChildProcess =
+        ChildProcesses.spawn
+            executable
+            args
+            { Cwd = startIn cwd
+              Env = env
+              Stdio = Stdio.Pipe
+              Detached = true }
 
     // Writing to — or closing — the stdin of a child that has already gone throws, and a
     // keystroke that arrived after the process exited is not something a caller can act on.
     // Swallowed here rather than in the binding, so what is ignored is F# anyone can read.
-    let private writeStdin (child: Child) (text: string) : unit =
-        try stdinWrite child text with _ -> ()
+    let private writeStdin (child: ChildProcess) (text: string) : unit =
+        try child.stdin.write text |> ignore with _ -> ()
 
-    let private endStdin (child: Child) : unit =
-        try stdinEnd child with _ -> ()
+    let private endStdin (child: ChildProcess) : unit =
+        try child.stdin.``end`` () with _ -> ()
 
     /// The whole tree at once: the child is a group leader (`detached`), so its NEGATED pid
     /// names the group.
-    let private killGroup (child: Child) : unit = Processes.kill (-child.pid) "SIGKILL"
+    let private killGroup (child: ChildProcess) : unit = Processes.kill (-(int child.pid)) "SIGKILL"
 
-    [<Emit("$0.kill('SIGKILL')")>]
-    let private killChild (child: Child) : unit = jsNative
+    let private killChild (child: ChildProcess) : unit = child.kill "SIGKILL"
 
     /// The group first — `detached: true` made the child its own leader, so one signal to
     /// `-pid` takes the whole tree. A child that never became a leader (a spawn that failed
     /// before exec) has no group to signal, so the process itself is the fallback, and a
     /// child that is already gone is what the outer ignore is for.
-    let private killTree (child: Child) : unit =
+    let private killTree (child: ChildProcess) : unit =
         try
             killGroup child
         with _ ->
@@ -950,16 +934,17 @@ module private Children =
             (executable: string, arguments: string list, cwd: string, env: Map<string, string>)
             (onChunk: OutputStream * string -> unit)
             : SandboxProcessHandle =
-            let child = spawnChild childProcess executable (List.toArray arguments) cwd (Map.toArray env)
+            let child = spawnChild executable arguments cwd env
             let id = next
             next <- next + 1
             live <- (id, fun () -> killTree child) :: live
             let forget () = live <- live |> List.filter (fun (other, _) -> other <> id)
             let ended = OneShot<SandboxRun> ()
-            Readables.text child.stdout (fun text -> onChunk (Stdout, text))
-            Readables.text child.stderr (fun text -> onChunk (Stderr, text))
-            onError child (fun error -> forget (); ended.Settle (SandboxRunFailed (StreamError.describe error)))
-            onClose child (fun code -> forget (); ended.Settle (SandboxExited (code |> Option.defaultValue -1)))
+            Readables.text (ChildProcessStreams.stdout child) (fun text -> onChunk (Stdout, text))
+            Readables.text (ChildProcessStreams.stderr child) (fun text -> onChunk (Stderr, text))
+            ChildProcessStreams.onError child (fun error -> forget (); ended.Settle (SandboxRunFailed (StreamError.describe error)))
+            // -1, "the OS gave us none", for a child a signal took.
+            ChildProcessStreams.onClose child (fun code -> forget (); ended.Settle (SandboxExited (code |> Option.defaultValue -1)))
             { WriteStdin = writeStdin child
               CloseStdin = fun () -> endStdin child
               Kill = fun () -> killTree child
@@ -981,36 +966,30 @@ module private Pty =
     /// throw — no addon, or a require that is not defined at all — is the same answer.
     /// `Interop.require` rather than a static `import`: node-pty is CJS-only, and a missing
     /// package would fail the whole module's load rather than this one lookup.
-    let private tryRequire () : obj =
-        try Interop.require "node-pty" with _ -> null
+    let private tryRequire () : Fable.NodePty.Exports =
+        try unbox<Fable.NodePty.Exports> (Interop.require "node-pty") with _ -> null
 
     /// Resolved once. `require` is not free and the answer cannot change within a process.
     let private modul = lazy (tryRequire ())
 
     let available () : bool = not (isNull (modul.Force ()))
 
-    [<Emit("$0.spawn($1, $2, { name: 'xterm-256color', cols: $3, rows: $4, cwd: $5 || undefined, env: Object.fromEntries($6) })")>]
-    let private ptySpawn
-        (m: obj) (file: string) (args: string[]) (cols: int) (rows: int) (cwd: string) (env: (string * string)[]) : obj =
-        jsNative
+    /// node-pty reports an exit code AND a signal; a process a signal ended has no meaningful
+    /// code, so it is reported the way `SandboxExited` reports one everywhere else — -1, "the
+    /// OS gave us none". node-pty says "no signal" as `0` as readily as by leaving it out.
+    let private exitCode (exit: Fable.NodePty.Exit) : int =
+        match exit.signal with
+        | Some signal when signal <> 0 -> -1
+        | Some _
+        | None -> exit.exitCode
 
-    [<Emit("$0.onData($1)")>]
-    let private onData (p: obj) (cb: string -> unit) : unit = jsNative
-
-    /// node-pty reports an exit code AND a signal; a process killed by a signal has no
-    /// meaningful code, so it is reported the way `SandboxExited` reports one everywhere
-    /// else — -1, "the OS gave us none".
-    [<Emit("$0.onExit(({ exitCode, signal }) => $1(signal ? -1 : exitCode))")>]
-    let private onExit (p: obj) (cb: int -> unit) : unit = jsNative
-
-    [<Emit("$0.write($1)")>]
-    let private write (p: obj) (data: string) : unit = jsNative
-
-    [<Emit("$0.resize($1, $2)")>]
-    let private resize (p: obj) (cols: int) (rows: int) : unit = jsNative
-
-    [<Emit("$0.kill()")>]
-    let private kill (p: obj) : unit = jsNative
+    /// The start directory as node-pty's options say it: the empty string this seam is handed
+    /// for "no directory" is `None`, which starts the pty where this process is.
+    let private startIn (cwd: string) : string option =
+        match cwd with
+        | null
+        | "" -> None
+        | directory -> Some directory
 
     /// Open a pty running `executable args`. Output is one stream, not two: a tty has a
     /// single device and stdout/stderr are indistinguishable on it by construction.
@@ -1029,13 +1008,22 @@ module private Pty =
             try
                 let exited = OneShot<SandboxRun> ()
                 let proc =
-                    ptySpawn m executable (Array.ofList arguments) cols rows cwd (Map.toArray env)
-                onData proc onOutput
-                onExit proc (fun code -> exited.Settle (SandboxExited code))
+                    m.spawn (
+                        executable,
+                        Array.ofList arguments,
+                        { Fable.NodePty.ForkOptions.name = "xterm-256color"
+                          Fable.NodePty.ForkOptions.cols = cols
+                          Fable.NodePty.ForkOptions.rows = rows
+                          Fable.NodePty.ForkOptions.cwd = startIn cwd
+                          Fable.NodePty.ForkOptions.env =
+                            createObj [ for name, value in Map.toList env -> name ==> value ] }
+                    )
+                proc.onData onOutput
+                proc.onExit (fun exit -> exited.Settle (SandboxExited (exitCode exit)))
                 Ok
-                    { Write = write proc
-                      Resize = resize proc
-                      Kill = fun () -> kill proc
+                    { Write = proc.write
+                      Resize = fun cols rows -> proc.resize (cols, rows)
+                      Kill = fun () -> proc.kill ()
                       Exited = exited.Await }
             with ex -> Error ex.Message
 
