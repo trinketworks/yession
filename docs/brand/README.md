@@ -526,3 +526,25 @@ toward the centre. With magnification falling with radius the line bows away: ou
 
 The lens lines bow with the object: the neon strokes go through the same subdivided warp as
 the faces.
+
+## Eighteenth pass: flat and a little 3D, the Zune way
+
+`zune/` drops the lens and dresses the panels-on-a-cube the way Zune dressed a tile: a hue sweep
+inside each shape that runs saturated to more saturated (green to `#d8f54a`, blue to `#6fd8ff`)
+and never to white, and each piece's own colour bloomed softly behind it on black.
+
+- **Flat** — the object straight down (φ = 89.5°): `flat`, `flat-glow` (per-piece glow: the blue
+  glows blue beside two greens, so the count survives), `flat-gradient`, `flat-gradient-glow` (the
+  Zune tile), `flat-sweep` (one green-to-blue gradient under the whole mark — the prettiest and
+  the least honest, since the blue corner is just where the sweep ends), `flat-drop` (a deeper
+  copy of each piece 1.6px under it — 3D without a camera), `chevron-flat-glow`, `cubes-flat-glow`.
+- **A little 3D** — φ = 66°, a sliver of side under each top: `shallow`, `shallow-glow`,
+  `shallow-gradient` (tops sweep hot-to-hue, sides run to deep), `shallow-thin` (height at a third
+  — three tiles with a little thickness, the Zune's own physical vocabulary), `shallow-chevron`,
+  `shallow-lit` (a faint white wash on the tops where the three meet — the kerfs are the Y and this
+  is where they join).
+
+Findings: `flat-gradient-glow` is the Zune tile and the same object as everything since the
+sketch. The glow has to be per piece. `shallow-thin` is the build that belongs beside a Metro
+surface. `flat-drop` does most of what the shallow elevation does while staying a flat SVG with
+no projection in it.
