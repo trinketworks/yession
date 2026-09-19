@@ -29,6 +29,7 @@ open Yession.Domain
 open Yession.Domain.Link
 open Yession.Domain.Terminals
 open Yession.Domain.Collab
+open Fable.ProseMirror
 open Yession.App
 
 // --- What the page can do that a template cannot -------------------------------------------

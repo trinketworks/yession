@@ -23,6 +23,7 @@ open Yession.Domain.Link
 open Yession.Domain.Terminals
 open Yession.Domain.Collab
 open Yession.Domain.Chat
+open Fable.ProseMirror
 open Yession.App
 
 let private host : Browser.Types.HTMLElement = Browser.Dom.document.getElementById "host"

@@ -19,6 +19,7 @@ module Yession.Host.Emulator
 open Fable.Core
 open Fable.Core.JsInterop
 open Yession.SessionProcess
+open Fable.ProseMirror
 
 // --- The binding ------------------------------------------------------------------------
 

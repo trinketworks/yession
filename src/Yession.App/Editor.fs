@@ -3,7 +3,7 @@ namespace Yession.App
 open Fable.Core
 open Fable.Core.JsInterop
 open Yjs
-open Yession.App.ProseMirror
+open Fable.ProseMirror.ProseMirror
 
 /// The Linear-style rich-text editor: type or paste Markdown, rendered live as formatted
 /// rich text. Pure F# over the `ProseMirror` bindings (no authored JS). The document lives

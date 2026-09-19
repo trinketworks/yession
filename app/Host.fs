@@ -14,6 +14,7 @@ open Yession.Domain.Terminals
 open Yession.Domain.Collab
 open Yession.Domain.Tools
 open Yession.SessionProcess
+open Fable.ProseMirror
 
 /// How often a busy session repeats its activity report (Plan 11). Comfortably shorter
 /// than any sane idle window, so a Manager reaping on silence needs several missed beats
@@ -737,7 +738,7 @@ let startFull
                             SyncedStateSync.nameTextOf doc subject
                             |> Option.map (fun text ->
                                 // Collapsed: a writer's caret is a bar, never a selection.
-                                let at = Yession.App.ProseMirror.relPosFromTypeIndex (box text) index |> Yession.App.ProseMirror.encodeRel
+                                let at = Fable.ProseMirror.ProseMirror.relPosFromTypeIndex (box text) index |> Fable.ProseMirror.ProseMirror.encodeRel
                                 { Field = fieldOf subject; Pos = { Anchor = at; Head = at } }))
                     broadcastPresence
                         { Who = ActorRef.Agent; DisplayName = Yession.App.Dom.Text.agent; Focus = focus } }
