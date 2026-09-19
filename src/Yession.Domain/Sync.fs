@@ -841,9 +841,6 @@ module DocSync =
     [<Import("fromBase64", "lib0/buffer")>]
     let private fromBase64 (s: string) : JS.Uint8Array = jsNative
 
-    [<Emit("$0 === $1")>]
-    let private refEq (a: obj) (b: obj) : bool = jsNative
-
     [<Emit("$0.on('update', $1)")>]
     let private addUpdateListener (doc: Y.Doc) (handler: JS.Uint8Array -> obj -> unit) : unit = jsNative
 
@@ -859,8 +856,11 @@ module DocSync =
         fun () -> removeUpdateListener doc handler
 
     /// The origin tag under which remote payloads are applied, letting the local-update
-    /// broadcast tell relayed changes from locally-originated ones.
-    let private remoteOrigin : obj = box "yession-remote-state"
+    /// broadcast tell relayed changes from locally-originated ones. An IDENTITY, told apart
+    /// by reference: it was a string once, compared with `===`, which is a value comparison
+    /// for a string — so any origin that happened to spell the same words was "remote". A
+    /// fresh object is a tag nobody else can mint.
+    let private remoteOrigin : obj = obj ()
 
     /// The full current doc state as one wire payload. Full-state updates are idempotent
     /// and order-independent, so this is the safe initial exchange.
@@ -880,7 +880,7 @@ module DocSync =
     /// channel is shut, and every local update walks one more of them per reconnect.
     let onLocalUpdate (doc: Y.Doc) (send: string -> unit) : unit -> unit =
         onUpdate doc (fun update origin ->
-            if not (refEq origin remoteOrigin) then send (toBase64 update))
+            if not (obj.ReferenceEquals (origin, remoteOrigin)) then send (toBase64 update))
 
     /// Invoke `handle` after every doc update, however it originated.
     let onAnyUpdate (doc: Y.Doc) (handle: unit -> unit) : unit =
