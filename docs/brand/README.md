@@ -329,3 +329,32 @@ placed, roll 03 at the same angle looks broken. Roll 13 draws "no cut" with ever
 working and says nothing at all, which settles whether the letter is decoration. And glow and
 heavy round-ended cuts are the two levels to retire — every roll carrying them is muddier for it
 and worst at 16px.
+
+## Eleventh pass: seven ideas from a tile
+
+The dice turned up the squircle, so `tile/` chases what that silhouette unlocks rather than
+re-permuting the cube. A hexagon is a drawing of a solid; a squircle is an object — a key, a
+window, a lens, a card — and each of those is a different family. Drawn as real superellipses
+(n = 4, sampled), not rounded rectangles.
+
+- **Panes** — `panes`, `panes-inset`, `panes-asym`, `panes-chrome`: the tile as a window, the Y as
+  the gutter between three panes. The only family here that draws what the product IS rather than
+  what its initial looks like.
+- **Aperture** — `aperture`, `aperture-open`: three blades swung in from the rim like a lens iris.
+  The opening is the junction, the seams are the arms, and the mark has a state.
+- **Object** — `keycap` (base, dished top, letter cut into it), `keycap-pressed`, `keycap-lit`
+  (the Y filled in blue: a lit key), `emboss` (the letter pressed into one green surface, no cut
+  and no second colour), `chip`.
+- **Overlap** — `overlap`, `overlap-tight`, `overlap-loose`: three tiles cleared of each other, the
+  Y in the gap. Kept as a negative result — at every arrangement tried it reads as a face.
+- **Bars** — `bars`, `bars-gap`, `bars-hub`, `bars-tile`: the letter built out of three
+  squircle-ended bars rather than cut into a shape.
+- **Contained** — `contained`, `bleed`: the folded solid given the tile as a ground, at icon
+  padding and cropped.
+- **Stack** — `stack`: the tile repeated, newest in front.
+
+Worth taking further: `panes` (the Y falls out of a shared window split three ways — the first
+mark that is about the product rather than the letter), `aperture` (the best drawing here, and the
+only one with an honest animation in it), `keycap-lit` (answers the dice's discovery — the Y as a
+lit object rather than an absence), and `bars` (three separate objects meeting, so the two humans
+are finally plainly two). `overlap` and `chip` are recorded as failures: a face and a costume.
