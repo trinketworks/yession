@@ -16,17 +16,28 @@ open FSharp.Analyzers.SDK
 ///   * a repeated placeholder EVALUATES its argument again. `$0` written three times evaluated
 ///     a fresh peer-id mint three times, so a first visit stored one id and returned another,
 ///     and every peer-scoped call was denied for the life of that launch.
+///   * a `new` over a placeholder binds to whatever the caller's text happens to be. `new
+///     $0($1)` at a call site that passes `ndc().PeerConnection` emits `new
+///     ndc().PeerConnection(name)`, which JavaScript reads as `(new ndc()).PeerConnection(name)`
+///     — the module function is constructed and the class is called without `new`. Every
+///     suite that opened a real connection went red in CI with "Class constructors cannot be
+///     invoked without 'new'", while the cheap tier, which opens none, stayed green here.
 ///
 /// Both were written down as comments beside the emits that caused them. That is what we had
 /// instead of a check, and it did not work: the emit in `examples/serial/src/Ws.fs` broke the
 /// rule its own comment stated, twice, and one of those was a live error.
 ///
-/// The rule makes both unrepresentable rather than describing them. When the substitutions
-/// arrive as real function parameters, a parameter binds INSIDE the function while the
-/// argument is evaluated OUTSIDE it, exactly once — so nothing inside can collide with a
-/// caller's identifier however it is spelled, and nothing is evaluated twice:
+/// The rule makes all three unrepresentable rather than describing them. When the
+/// substitutions arrive as real function parameters, a parameter binds INSIDE the function
+/// while the argument is evaluated OUTSIDE it, exactly once — so nothing inside can collide
+/// with a caller's identifier however it is spelled, and nothing is evaluated twice:
 ///
 ///     (() => { const peer = $0; ... })()     ->     (function (pc) { ... })($0)
+///
+/// And a constructed placeholder is parenthesised, so the `new` binds to the whole of whatever
+/// text arrives rather than to its first call:
+///
+///     new $0($1)                             ->     new ($0)($1)
 ///
 /// It applies only to a macro that actually substitutes something. With no `$n` there is no
 /// caller text to collide with and nothing to evaluate twice, so a body that takes no
@@ -49,6 +60,10 @@ let private declaration = Regex @"\b(?:const|let|var|function|class)\s+[A-Za-z_$
 
 /// The safe shape: the substitutions arrive as parameters of a real function.
 let private parameterised = Regex @"\(\s*(?:async\s+)?function\s*\([^)]*[A-Za-z_$]"
+
+/// A `new` whose constructor expression starts with a placeholder — `new $0(`, `new
+/// $0.Class(` — rather than with a parenthesis around it.
+let private constructedPlaceholder = Regex @"\bnew\s+\$\d"
 
 /// JS comments are prose, and prose about this rule necessarily contains examples of breaking
 /// it. Strip them before looking for declarations — without this the rule goes red on the very
@@ -83,7 +98,14 @@ let private faults (macro: string) =
               if uses > 1 then
                   yield
                       $"this emit macro reads $%d{slot} %d{uses} times, so the caller's argument "
-                      + $"expression is evaluated %d{uses} times rather than once. %s{remedy}" ]
+                      + $"expression is evaluated %d{uses} times rather than once. %s{remedy}"
+
+          if constructedPlaceholder.IsMatch (withoutComments macro) then
+              yield
+                  "this emit macro writes `new` over a placeholder, and Fable pastes the caller's "
+                  + "text there: `new f().Class(x)` is `(new f()).Class(x)` to JavaScript, so a "
+                  + "receiver that is a call is constructed and the class is invoked without `new`. "
+                  + "Parenthesise the receiver, so `new` binds to the whole of it: new ($0)($1)." ]
 
 [<Literal>]
 let Code = "YES003"

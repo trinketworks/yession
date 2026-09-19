@@ -490,7 +490,7 @@ let private fetchMe (url: string) (deadlineMs: float) : Async<ProbeOutcome> =
 [<Import("IndexeddbPersistence", "y-indexeddb")>]
 let private indexeddbPersistence : obj = jsNative
 
-[<Emit("new $0($1, $2)")>]
+[<Emit("new ($0)($1, $2)")>]
 let private newPersistence (ctor: obj) (name: string) (doc: Y.Doc) : obj = jsNative
 
 [<Emit("new Promise((resolve) => $0.once('synced', resolve))")>]

@@ -84,7 +84,7 @@ type [<AllowNullLiteral>] Docker =
     abstract listContainers: options: obj -> JS.Promise<obj array>
     abstract modem: Modem
 
-[<Emit("new $0($1)")>]
+[<Emit("new ($0)($1)")>]
 let private newWith (ctor: obj) (opts: obj) : 'a = jsNative
 
 let private dockerCtor: obj = importDefault "dockerode"

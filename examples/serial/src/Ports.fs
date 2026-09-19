@@ -98,7 +98,7 @@ let private importSerialport () : JS.Promise<SerialPortModule> = jsNative
 /// `new SerialPort(options, opened)`: the callback form of `autoOpen`, so the handle is only
 /// handed over once there is really an fd behind it — `opened` is called with an error, or
 /// with nothing at all once the port is open.
-[<Emit("new $0($1, $2)")>]
+[<Emit("new ($0)($1, $2)")>]
 let private newPort (cls: SerialPortClass) (options: obj) (opened: obj -> unit) : RawHandle = jsNative
 
 /// What a caught value SAYS. JavaScript admits throwing anything, so an `Error`'s message is

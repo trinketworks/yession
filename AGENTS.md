@@ -389,7 +389,11 @@ same (`const pc = $0` emitting `const pc = pc`, a temporal dead zone error that 
 down and reported as eight unrelated browser timeouts), and a placeholder written twice
 evaluates its argument twice (a fresh peer id minted three times, so a first visit stored one
 and returned another). Both are unrepresentable when the substitutions arrive as parameters of
-a real function, which is what the rule asks for. It was a suite that matched `[<Emit(...)>]`
+a real function, which is what the rule asks for. Its third case is `new` over a placeholder:
+`new $0($1)` handed `ndc().PeerConnection` emits `new ndc().PeerConnection(name)`, which is
+`(new ndc()).PeerConnection(name)` to JavaScript — the class called without `new`, red on
+every suite that opened a real connection and green on the cheap tier that opens none — so a
+constructed placeholder is written `new ($0)($1)`. It was a suite that matched `[<Emit(...)>]`
 in F# source with a hand-kept list of directories to walk; that scan could not write its own
 fixtures — a violating macro quoted literally in a scanned file would have been a real
 violation — and needed a case asserting it had matched at least 300 emits, because a pattern

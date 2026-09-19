@@ -809,7 +809,7 @@ module Ttys =
     [<Import("ReadStream", "node:tty")>]
     let private readStreamClass : obj = jsNative
 
-    [<Emit("new $0($1)")>]
+    [<Emit("new ($0)($1)")>]
     let private construct (cls: obj) (fd: int) : Readable = jsNative
 
     /// Read a tty through a descriptor already open on it — a pty's far end, a terminal this

@@ -134,7 +134,7 @@ module ProseMirror =
 
     [<Import("EditorView", "prosemirror-view")>]
     let private editorViewClass : obj = jsNative
-    [<Emit("new $0($1, $2)")>]
+    [<Emit("new ($0)($1, $2)")>]
     let private viewNew (cls: obj) (host: obj) (props: obj) : EditorView = jsNative
     let createView (host: obj) (props: obj) : EditorView = viewNew editorViewClass host props
 
@@ -212,7 +212,7 @@ module ProseMirror =
     let private inputRuleClass : obj = jsNative
     /// `new InputRule(regexp, handler)` — the handler is a JS multi-arg callback, so it is a
     /// `System.Func` (Fable emits a native n-ary function, never a curried F# closure).
-    [<Emit("new $0($1, $2)")>]
+    [<Emit("new ($0)($1, $2)")>]
     let private inputRuleNew (cls: obj) (regexp: obj) (handler: System.Func<EditorState, string[], int, int, Transaction>) : InputRule = jsNative
     let makeInputRule (regexp: obj) (handler: System.Func<EditorState, string[], int, int, Transaction>) : InputRule =
         inputRuleNew inputRuleClass regexp handler
@@ -289,14 +289,14 @@ module ProseMirror =
     // prosemirror-state: PluginKey + a Plugin carrying state + props.
     [<Import("PluginKey", "prosemirror-state")>]
     let private pluginKeyClass : obj = jsNative
-    [<Emit("new $0($1)")>]
+    [<Emit("new ($0)($1)")>]
     let private pluginKeyNew (cls: obj) (name: string) : obj = jsNative
     let pluginKey (name: string) : obj = pluginKeyNew pluginKeyClass name
     [<Emit("$0.getState($1)")>]
     let pluginKeyGetState (key: obj) (state: EditorState) : obj = jsNative
     [<Import("Plugin", "prosemirror-state")>]
     let private pluginClass : obj = jsNative
-    [<Emit("new $0($1)")>]
+    [<Emit("new ($0)($1)")>]
     let private pluginNew (cls: obj) (spec: obj) : Plugin = jsNative
     let makePlugin (spec: obj) : Plugin = pluginNew pluginClass spec
 
