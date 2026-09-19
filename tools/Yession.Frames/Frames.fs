@@ -106,8 +106,7 @@ let private delay (ms: int) : JS.Promise<unit> = jsNative
 [<Emit("process.env[$0] ?? ''")>]
 let private env (name: string) : string = jsNative
 
-[<Emit("process.exit($0)")>]
-let private exitWith (code: int) : unit = jsNative
+let private exitWith (code: int) : unit = Node.Api.``process``.exit code
 
 let private pretty (value: obj) : string = JS.JSON.stringify (value, space = 1)
 

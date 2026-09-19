@@ -271,6 +271,18 @@ module WebSockets =
     let payload (event: MessageEvent) : Frame =
         if isText event then Frame.Text (frameText event) else Frame.Binary (frameBytes event)
 
+// --- This process ---------------------------------------------------------------------------
+
+/// What `Fable.Node`'s `process` leaves out. Everything it types — `execPath`, `platform`,
+/// `argv`, `exit`, `stdin`, the listeners — is used through `Node.Api.process` directly.
+[<RequireQualifiedAccess>]
+module Processes =
+
+    /// `process.kill(pid, signal)`: a signal to a process by id — or to a whole process group,
+    /// which is what a NEGATIVE id names, and how a detached child's tree is taken with one.
+    [<Emit("process.kill($0, $1)")>]
+    let kill (pid: int) (signal: string) : unit = jsNative
+
 // --- Child processes ------------------------------------------------------------------------
 
 /// What the child's three standard streams are wired to. Node's uniform shorthand; the

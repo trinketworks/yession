@@ -27,10 +27,9 @@ open Yession.Host.Interop
 [<Import("fileURLToPath", "node:url")>]
 let private fileUrlToPath (url: obj) : string = jsNative
 
-/// The packaged location: `assets/` beside the running bundle. `import.meta.url` resolves to
-/// the module, which is the package root once esbuild has flattened everything into one file.
-[<Emit("new URL('./assets', import.meta.url)")>]
-let private packagedAssets : obj = jsNative
+/// The packaged location: `assets/` beside the running bundle, which is the package root once
+/// esbuild has flattened everything into one file.
+let private packagedAssets : Node.Url.URL = urlBesideModule "./assets"
 
 /// Why a root did not yield a declared file.
 ///

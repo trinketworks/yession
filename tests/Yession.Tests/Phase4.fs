@@ -394,11 +394,9 @@ let private queryTests =
 // by `verify` before the suite runs) and connect real WebRTC clients.
 // -----------------------------------------------------------------------------
 
-[<Emit("process.execPath")>]
-let private nodePath : string = Fable.Core.Util.jsNative
+let private nodePath : string = Node.Api.``process``.execPath
 
-[<Emit("process.kill($0, 'SIGKILL')")>]
-let private sigkill (pid: int) : unit = Fable.Core.Util.jsNative
+let private sigkill (pid: int) : unit = Fable.NodeExtras.Processes.kill pid "SIGKILL"
 
 let private processTests =
     testList "Session Process as an OS process (Step 23)" [

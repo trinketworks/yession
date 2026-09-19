@@ -97,8 +97,7 @@ let private publicAccess =
     | Ok access -> access
     | Error e -> Cli.abort e
 
-[<Fable.Core.Emit("process.execPath")>]
-let private nodePath : string = Fable.Core.Util.jsNative
+let private nodePath : string = Node.Api.``process``.execPath
 
 // The session process command: this Node running the session entry. `--spawn-bin` overrides
 // with a standalone command, which is what a deployment doing rolling upgrades points at a

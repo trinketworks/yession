@@ -90,20 +90,45 @@ type [<AllowNullLiteral>] PeerConnection =
 // bundle. Resolve it lazily via `createRequire` instead: the addon loads only on the first
 // real connection (the verify tier and production), so the cheap tier runs without it. This
 // mirrors the dynamic-`import()` pattern already used for the agent SDK and Docker backend.
+// `createRequire`, not a bare `require`: Fable emits ESM and the bundle runs as ESM, where
+// `require` is simply not defined — a bare one throws ReferenceError, which a lookup's `try`
+// would swallow into "the thing is absent" on a box that has it. That is exactly what happened
+// once: a standalone node-pty probe passed (`node -e` runs as CJS) while every pty test
+// reported no pty support.
+//
+// ONE argument, answering the `NodeRequire` itself — never `string -> (string -> obj)`: Fable
+// sees a curried arrow and wraps the import in `uncurry2`, which rewrites a use into
+// `createRequire(url, name)`, one call where two were meant.
 [<Import("createRequire", "node:module")>]
-let private createRequire (url: string) : obj = jsNative
+let private createRequire (url: string) : Node.Base.NodeRequire = jsNative
 
+/// This module's own address. A macro by necessity, and the one thing a binding project could
+/// not declare for its callers: `import.meta.url` names the module it is written in, so a copy
+/// in `Fable.NodeExtras` would answer for NodeExtras. Everything below is relative to the
+/// bundle this module is part of — one file, once esbuild has flattened it.
 [<Emit("import.meta.url")>]
 let private moduleUrl : string = jsNative
 
-[<Emit("$0($1)")>]
-let private callRequire (require: obj) (id: string) : obj = jsNative
+/// A CommonJS `require` rooted here. Made once: `createRequire` is not free, and the answer
+/// cannot change within a process.
+let private required = lazy (createRequire moduleUrl)
+
+/// `require(id)`, from this bundle's location — for the native addons that are CJS-only and
+/// loaded lazily, so their absence is an answer at the lookup rather than a failure of the
+/// whole module's load. THROWS the way `require` does when there is nothing to load.
+let require (id: string) : obj = required.Force().Invoke id
+
+/// Where `require(id)` would load from, without loading it. THROWS when it would not resolve.
+let resolveModule (id: string) : string = required.Force().resolve id
+
+/// A url resolved against this bundle's own — `./assets` beside the running file.
+let urlBesideModule (relative: string) : Node.Url.URL = Node.Api.URL.Create (relative, moduleUrl)
 
 let mutable private nodeDataChannel : obj = null
 /// The lazily-required `node-datachannel` module (cached after first use).
 let private ndc () : obj =
     if isNull nodeDataChannel then
-        nodeDataChannel <- callRequire (createRequire moduleUrl) "node-datachannel"
+        nodeDataChannel <- require "node-datachannel"
     nodeDataChannel
 
 [<Emit("new ($0.PeerConnection)($1, $2)")>]

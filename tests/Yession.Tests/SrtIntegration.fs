@@ -29,11 +29,9 @@ let private nodeNet : obj = importAll "node:net"
 [<Emit("process.env.HOME || ''")>]
 let private hostHome () : string = jsNative
 
-[<Emit("process.execPath")>]
-let private nodePath () : string = jsNative
+let private nodePath () : string = Node.Api.``process``.execPath
 
-[<Emit("process.platform")>]
-let private platform () : string = jsNative
+let private platform () : Node.Base.Platform = Node.Api.``process``.platform
 
 let private nowMs () : float = JS.Constructors.Date.now ()
 
@@ -181,7 +179,7 @@ let tests =
             // entirely — see docs/GAPS.md. Skipped rather than asserted either way: the
             // invariant is real and this platform cannot express it, which is what a visible
             // skip says and a quiet pass does not.
-            (if platform () <> "darwin" then
+            (if platform () <> Node.Base.Platform.Darwin then
                 ptestCase "a socket named by a later sandbox is one it can still connect to (macOS only: Linux cannot scope a socket grant to a path)" (fun () -> ())
              else
              testCaseAsync "a socket named by a later sandbox is one it can still connect to" (async {
@@ -405,7 +403,7 @@ let tests =
             // so `create` succeeds and an empty PATH surfaces at the first command's
             // shell resolution instead. Discovered the first time this tier ran on a Mac
             // (CI's Srt tier is Linux): the case errored on master, stock srt, same way.
-            (if platform () = "darwin" then
+            (if platform () = Node.Base.Platform.Darwin then
                 ptestCase "a probe that could not run is not an answer, and is not remembered (Linux only: macOS initialize probes nothing)" (fun () -> ())
              else
              testCaseAsync "a probe that could not run is not an answer, and is not remembered" (async {
@@ -436,7 +434,7 @@ let tests =
             // spelling a process uses may be refused (see docs/GAPS.md), and a link
             // planted inside a granted directory must never reach past what was granted.
             // Only the second is a promise, so only the second is asserted here.
-            (if platform () <> "darwin" then
+            (if platform () <> Node.Base.Platform.Darwin then
                 ptestCase "a symlink is not a way into what nothing granted (macOS only: Seatbelt matches paths as written)" (fun () -> ())
              else
              testCaseAsync "a symlink is not a way into what nothing granted" (async {

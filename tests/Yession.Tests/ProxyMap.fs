@@ -20,8 +20,7 @@ open Yession.Oidc
 open Yession.Host
 open Yession.Tests.Support
 
-[<Emit("process.execPath")>]
-let private nodePath : string = jsNative
+let private nodePath : string = Node.Api.``process``.execPath
 
 /// `main.mjs` under this Node, started the way a deployment starts it: the environment of
 /// this run, verbatim, and both output streams read as text — the example writes its own

@@ -106,8 +106,7 @@ let private say (line: string) : unit = JS.console.log line
 
 // The peer connection keeps Node's event loop alive after the watch is over, so a probe that
 // merely returned would sit there until killed — and did, three of them, until this.
-[<Emit("process.exit($0)")>]
-let private exitWith (code: int) : unit = jsNative
+let private exitWith (code: int) : unit = Node.Api.``process``.exit code
 
 // Wall-clock, for deadlines a caller sets in seconds rather than in polling ticks.
 [<Emit("Date.now()")>]
