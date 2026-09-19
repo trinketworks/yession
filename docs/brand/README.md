@@ -296,3 +296,36 @@ holds, 200 does not. `flush` is decided by the construction rather than by taste
 the one for 16px, because anything larger breaks the outline and a broken outline at that size is
 two specks rather than one mark. And `stretched` is the compromise worth testing: a wider letter
 buys a bigger held cube without it leaving the silhouette.
+
+## Tenth pass: eleven dice
+
+The shortlist is `fold/whisper.svg` and `fold/modul.svg`, and they differ in exactly one property
+— so the property list is the instrument. `dice/` breaks the mark into eleven dimensions, every
+one of them something those two already decide silently, and throws all of them independently.
+
+| Dimension | Levels |
+| --- | --- |
+| silhouette | hexagon, rounded hexagon, circle, chamfered, squircle |
+| arm angle | 60° (isometric), 45°, 33° (letterform), Noto glyph |
+| cut weight | none, hairline 1.2, light 2.4, medium 3.8, heavy 5.4 |
+| cut profile | parallel, tapered, reverse taper, flared, round-ended |
+| cut reach | short, to the rim, overshoot |
+| corners | sharp, soft 1.6, round 3.2, hub only |
+| fold | flat, subtle, normal, strong, inverted |
+| colour | blue top, blue right, blue left, split, green + blue cut |
+| surface | flat, per-face gradient, sweep, glow |
+| extra | none, bevel, rim, shadow |
+| rotation | 0, −7, +7, −14 |
+
+Seed 7, eighteen throws, no curation — `rolls.json` records what each one drew, so any result can
+be reproduced, half-kept, or bred with another. Re-roll by changing `SEED` in the generator.
+
+What the dice turned up that nine deliberate passes had not: **a blue Y drawn INTO the cut on an
+all-green solid** (rolls 01, 04, 05, 08, 14). Every previous mark made the letter an absence;
+none of them made it an object. Roll 14 is the striking one. The **squircle** is also better than
+expected (06, 09, 12, 14) — the only silhouette that reads as a made object rather than a diagram
+of a solid. Rotation is worth more under a glyph cut than a symmetric one: roll 11 at −14° looks
+placed, roll 03 at the same angle looks broken. Roll 13 draws "no cut" with every other dimension
+working and says nothing at all, which settles whether the letter is decoration. And glow and
+heavy round-ended cuts are the two levels to retire — every roll carrying them is muddier for it
+and worst at 16px.
