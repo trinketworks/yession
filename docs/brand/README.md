@@ -205,3 +205,35 @@ original brief (two humans either side of an agent) arrived at from the opposite
 worth keeping as its own line. Clearance does more work than size: `tight` and `float` are the
 same solids in the same places, and one is holding while the other is merely near. And the
 large solid has to give up blue entirely, or the pair has two agents in it.
+
+## Seventh pass: cube minus cube
+
+`pair/` drew the second cube as a literal object perched in the fork. `void/` makes it the piece
+that was taken away.
+
+Remove a cube-shaped corner from the cube facing you. In an isometric projection the three edge
+vectors sum to zero, so the void's inner corner lands exactly on the outer one and its three
+faces project as a small hexagon — the silhouette of a small cube. Nothing is drawn twice: the
+second solid is the absence, and the three edges running out of it are already the Y. The
+construction is the same at both scales, with the small cube's interior Y rotated 180° from the
+large one's.
+
+- **The void** — `bite` (34% of the edge), `bite-small` (22%), `bite-deep` (50%, the solid
+  reduced to three L-plates), `folded` (each plate creased, six greens and three blues),
+  `hollow` (the void punched through to the ground), `open` (hole and seams together).
+- **Which way it reads** — `flip` (the void's values in the outer order, so it reads convex: a
+  small cube in front rather than a hole), `rimmed` (clearance around the opening so the two
+  never touch), `suggested` (the void in the solid's own colours, a shade off), `ghost` (blue
+  mixed back toward green until it is a tint).
+- **With the letter** — `seamed` (the three edges the bite leaves, opened into a cut — both Y's
+  visible at once and nothing added), `glyphed` (Noto's Y arriving at the void).
+- **Elsewhere** — `corner`: the same subtraction at the top vertex, where it notches the
+  silhouette.
+- `lockup.svg` — seamed against the name.
+
+Findings: blue belongs to the void. The solid is green throughout and the only blue in the mark
+is the part that was removed, which is a more precise claim about a scoped agent than a small
+cube perched on top. The concave/convex reading is genuinely ambiguous — `bite` and `flip` are
+the same polygons and differ only in the order of three values, so some readers will see the
+other one; `rimmed` settles it. And it holds at 16px better than `pair/` did: one silhouette
+instead of two, with the void a solid shape rather than a gap between things.
