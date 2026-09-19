@@ -892,20 +892,35 @@ module ClientModel =
     let private withSynced (synced: SyncedSessionState) (model: ClientModel) : ClientModel =
         { model with Synced = synced }
 
-    /// Whether the launch surface stands at the head of the timeline (`Launch.offered`): a
-    /// connected client that has read the log to its end, in a session with no repo and
-    /// nothing said.
+    /// A repo, or anything said - the fact that retires the launch surface for good; see
+    /// `Launch.offered`'s own doc for why these two and nothing wider.
+    let private launchBegun (model: ClientModel) : bool =
+        not (List.isEmpty model.Repos.Repos)
+        || model.Conversation.Items |> List.exists (fun item -> item.Kind = ConversationItemKind.Message)
+
+    /// Whether the launch surface stands at the head of the timeline. Reads the anchor
+    /// `reconcileLaunch` keeps decided, not the live connection - `Launch.offered`'s doc,
+    /// and `Launch.anchor`'s beside it, say why a live read is the wrong read for this.
     let launchOffered (model: ClientModel) : bool =
-        let begun =
-            not (List.isEmpty model.Repos.Repos)
-            || model.Conversation.Items |> List.exists (fun item -> item.Kind = ConversationItemKind.Message)
-        Launch.offered
-            (model.Connection = Connected)
-            model.HistoryRead
-            model.EventConsumer.LatestKnownOffset
-            model.EventConsumer.IsCatchingUp
-            begun
-            model.Launch
+        Launch.offered (launchBegun model) model.Launch
+
+    /// Keeps `model.Launch.Anchored` decided. Run after every message (`update`, below,
+    /// pipes its whole result through this), so whichever one first carries the client past
+    /// eligible - connected, historyRead, its own read of the log, caught up, still
+    /// unstarted - is the one that anchors it, for the rest of this client's life on this
+    /// session. Idempotent: a model already anchored, or not yet eligible, comes back with
+    /// the same `Launch` it was given, so paying this after every message costs a few
+    /// comparisons on the ones that were never going to move it.
+    let private reconcileLaunch (model: ClientModel) : ClientModel =
+        { model with
+            Launch =
+                Launch.anchor
+                    (model.Connection = Connected)
+                    model.HistoryRead
+                    model.EventConsumer.LatestKnownOffset
+                    model.EventConsumer.IsCatchingUp
+                    (launchBegun model)
+                    model.Launch }
 
     /// Whose draft the composer is showing — the resolved answer to `ComposerChoice`, and the
     /// only place the "join what is already being written" default lives.
@@ -1583,7 +1598,11 @@ module ClientModel =
         | None -> signal + "yession"
 
     /// Fold a message into the model.
+    /// Piped through `reconcileLaunch` (see its doc) so the launch surface anchors here,
+    /// after every message, rather than being read live from whatever the connection
+    /// happens to be doing at render time.
     let rec update (msg: ClientMsg) (model: ClientModel) : ClientModel =
+        reconcileLaunch (
         match msg with
         | ConnectingMsg ->
             { model with Connection = Connecting }
@@ -2035,3 +2054,4 @@ module ClientModel =
                 |> withSynced
                     { model.Synced with Chapters = Chapters.rename item said model.Synced.Chapters }
             | None -> model
+)
