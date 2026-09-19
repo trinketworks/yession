@@ -66,17 +66,32 @@ let private skewTests =
     ]
 
 let private readinessTests =
-    testList "the readiness line's version field" [
-        testCase "a readiness line without a version is still a valid readiness line" <| fun () ->
+    testList "the readiness line" [
+        testCase "a readiness line without a version is still a readiness line" <| fun () ->
             Expect.equal
-                (Spawn.parseReadyVersion """{"yession":"ready","port":1234}""")
-                None
+                (Spawn.parseReady """{"yession":"ready","port":1234}""")
+                (Some { Spawn.ReadyLine.Port = 1234; Version = None })
                 "an older session bundle reports no version — and is not compared against one"
+
+        testCase "a current bundle reports its build on the same line" <| fun () ->
             Expect.equal
-                (Spawn.parseReadyVersion """{"yession":"ready","port":1234,"version":"2.0.0-beta.1"}""")
-                (Some "2.0.0-beta.1")
-                "a current bundle reports its build"
-            Expect.equal (Spawn.parseReadyVersion "not json at all") None "a log line is not a readiness line"
+                (Spawn.parseReady """{"yession":"ready","port":1234,"version":"2.0.0-beta.1"}""")
+                (Some { Spawn.ReadyLine.Port = 1234; Version = Some "2.0.0-beta.1" })
+                "the port and the build arrive together, read once"
+
+        testCase "a log line is not a readiness line" <| fun () ->
+            Expect.equal (Spawn.parseReady "not json at all") None "what the child prints for a person is passed through"
+
+        // The port is the whole point of the line, and `typeof port === 'number'` was what
+        // used to ask for it. A line that states none — or states one that is not a number —
+        // is not a session this Manager can reach.
+        testCase "a line stating no usable port is not a readiness line" <| fun () ->
+            Expect.equal (Spawn.parseReady """{"yession":"ready"}""") None "no port is nothing to connect to"
+            Expect.equal (Spawn.parseReady """{"yession":"ready","port":"1234"}""") None "the text of a number is not a port"
+
+        testCase "json that is not this message is not a readiness line" <| fun () ->
+            Expect.equal (Spawn.parseReady """{"port":1234}""") None "a line that does not say it is ready is not"
+            Expect.equal (Spawn.parseReady "null") None "and neither is a bare null"
     ]
 
 let tests = testList "Version" [ currentTests; majorTests; skewTests; readinessTests ]
