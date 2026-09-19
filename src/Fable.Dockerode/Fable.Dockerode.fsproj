@@ -18,4 +18,9 @@
     <PackageReference Include="Fable.Core" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- A dockerode stream is a Node stream; `Stream` inherits NodeExtras' `Readable`. -->
+    <ProjectReference Include="..\Fable.NodeExtras\Fable.NodeExtras.fsproj" />
+  </ItemGroup>
+
 </Project>

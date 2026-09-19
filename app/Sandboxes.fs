@@ -1111,21 +1111,12 @@ module DockerSandbox =
 
     module DK = Fable.Dockerode
 
-    [<Emit("$0 == null")>]
-    let private isNil (o: obj) : bool = jsNative
-
-    [<Emit("$0.toString('utf8')")>]
-    let private bufToStr (b: obj) : string = jsNative
-
-    [<Emit("$0.ExitCode")>]
-    let private inspectedExitCode (inspect: obj) : obj = jsNative
-
     /// Docker reports no exit code for a container that was killed rather than exiting, and
     /// that reads the way it reads everywhere else in this module: -1, "the OS gave us none".
-    let private exitCodeOf (inspect: obj) : int =
-        match inspectedExitCode inspect with
-        | code when isNil code -> -1
-        | code -> unbox<int> code
+    let private exitCodeOf (inspect: DK.ExecInspect) : int =
+        match inspect.ExitCode with
+        | Some code -> code
+        | None -> -1
 
     let private nodeFs : obj = importAll "node:fs"
 
@@ -1155,7 +1146,9 @@ module DockerSandbox =
     let private drainProgress (client: DK.Docker) (stream: DK.Stream) : Async<Result<unit, string>> =
         Async.FromContinuations(fun (cont, _, _) ->
             client.modem.followProgress (stream, fun err _ ->
-                if isNil err then cont (Ok ()) else cont (Error (bufToStr err))))
+                match err with
+                | None -> cont (Ok ())
+                | Some error -> cont (Error (StreamError.describe error))))
 
     /// Count containers (running or not) carrying a `yession-session` label value — lets
     /// tests assert a stopped session leaves nothing behind.
@@ -1258,13 +1251,13 @@ module DockerSandbox =
                                 settled <- true
                                 (try stream.destroy () with _ -> ())
                                 cont answer
-                        stdout.on ("data", fun d ->
-                            said.Append (bufToStr d) |> ignore
-                            if said.ToString().Contains startedMark then settle (Ok ())) |> ignore
-                        stderr.on ("data", fun d -> said.Append (bufToStr d) |> ignore) |> ignore
-                        stream.on ("end", fun _ ->
-                            settle (Error (sprintf "the container's start command ended before it reported itself started; it said: %s" (said.ToString().Trim ())))) |> ignore
-                        stream.on ("error", fun e -> settle (Error (string e))) |> ignore)
+                        Readables.text stdout (fun text ->
+                            said.Append text |> ignore
+                            if said.ToString().Contains startedMark then settle (Ok ()))
+                        Readables.text stderr (fun text -> said.Append text |> ignore)
+                        stream.onEnd (fun () ->
+                            settle (Error (sprintf "the container's start command ended before it reported itself started; it said: %s" (said.ToString().Trim ()))))
+                        stream.onError (fun error -> settle (Error (StreamError.describe error))))
                 return outcome
             with ex -> return Error (sprintf "could not follow the container's output: %s" ex.Message)
         }
@@ -1522,8 +1515,8 @@ module DockerSandbox =
                                     let stdout = DK.createPassThrough ()
                                     let stderr = DK.createPassThrough ()
                                     client.modem.demuxStream (stream, stdout, stderr)
-                                    stdout.on ("data", fun d -> onChunk (Stdout, bufToStr d)) |> ignore
-                                    stderr.on ("data", fun d -> onChunk (Stderr, bufToStr d)) |> ignore
+                                    Readables.text stdout (fun text -> onChunk (Stdout, text))
+                                    Readables.text stderr (fun text -> onChunk (Stderr, text))
                                     let ended = OneShot<SandboxRun> ()
                                     let finish () =
                                         Async.StartImmediate (
@@ -1533,8 +1526,8 @@ module DockerSandbox =
                                                     ended.Settle (SandboxExited (exitCodeOf inspect))
                                                 with ex -> ended.Settle (SandboxRunFailed ex.Message)
                                             })
-                                    stream.on ("end", fun _ -> finish ()) |> ignore
-                                    stream.on ("error", fun e -> ended.Settle (SandboxRunFailed (string e))) |> ignore
+                                    stream.onEnd finish
+                                    stream.onError (fun error -> ended.Settle (SandboxRunFailed (StreamError.describe error)))
                                     return
                                         Ok
                                             { WriteStdin = fun text -> stream.write (box text) |> ignore
@@ -1581,7 +1574,7 @@ module DockerSandbox =
                                     // docker terminal ran a shell through the Host; the first
                                     // one printed `\x01\x00…\x14sed (GNU sed) 4.10`.
                                     let! stream = started.start (createObj [ "hijack", box true; "stdin", box true; "Tty", box true ]) |> Interop.awaitPromise
-                                    stream.on ("data", fun d -> onOutput (bufToStr d)) |> ignore
+                                    Readables.text stream onOutput
                                     // Size it before anything runs: a program that reads its
                                     // dimensions at startup must not read 80x24 and then be
                                     // told the truth afterwards.
@@ -1595,8 +1588,8 @@ module DockerSandbox =
                                                     ended.Settle (SandboxExited (exitCodeOf inspect))
                                                 with ex -> ended.Settle (SandboxRunFailed ex.Message)
                                             })
-                                    stream.on ("end", fun _ -> finish ()) |> ignore
-                                    stream.on ("error", fun e -> ended.Settle (SandboxRunFailed (string e))) |> ignore
+                                    stream.onEnd finish
+                                    stream.onError (fun error -> ended.Settle (SandboxRunFailed (StreamError.describe error)))
                                     return
                                         Ok
                                             // Written whole. Docker's double-PTY proxy is
