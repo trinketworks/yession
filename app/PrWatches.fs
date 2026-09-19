@@ -5,12 +5,13 @@ module Yession.Host.PrWatches
 // how a session keeps looking: the cadence, the ETag bookkeeping, the in-flight guard, the
 // verbs that start and stop a watch, and the query all of it reads back through.
 //
-// The whole provider surface is three functions — `FetchPr`, one look; `OpenPr`, one
-// pull request opened; `MergePr`, one merged or set to merge — plus a `provider` label the
-// error copy is written around, because "github rejected this credential" is a sentence a
-// person has to read and "the provider rejected this credential" is not. A second forge is
-// a second `fetchOver`, a second `openOver`, a second `mergeOver` and a second hook filter
-// (`GitHubPrs.fs` is the first), and nothing in this file changes to admit it.
+// The whole provider surface is four functions — `FetchPr`, one look; `OpenPr`, one
+// pull request opened; `MergePr`, one merged or set to merge; `UnmergePr`, that taken
+// back — plus a `provider` label the error copy is written around, because "github
+// rejected this credential" is a sentence a person has to read and "the provider rejected
+// this credential" is not. A second forge is a second `fetchOver`, `openOver`, `mergeOver`,
+// `unmergeOver` and hook filter (`GitHubPrs.fs` is the first), and nothing in this file
+// changes to admit it.
 //
 // Polling, not webhooks, and that is a decision rather than a stopgap: a repo webhook
 // needs admin on every repo somebody wants watched, and inbound delivery needs a
@@ -115,6 +116,21 @@ type PrMergeOutcome =
 /// THE SEAM for merging one, beside `OpenPr`: the credential the caller resolved, the pull
 /// request, one answer.
 type MergePr = string option -> PrRef -> PrMergeMethod -> Async<PrMergeOutcome>
+
+/// What came of taking one back off its way in — `PrMergeOutcome` undone. A watch on it
+/// then reports `stalled`, which is the same fact whoever caused it: armed, and no longer.
+type PrUnmergeOutcome =
+    /// Auto merge was armed and is not now.
+    | PrMergeDisarmed of PrRef
+    /// It sat in the merge queue and does not now.
+    | PrMergeDequeued of PrRef
+    /// Nothing was on its way in to take back — never armed, or already merged.
+    | PrUnmergeUnneeded of PrRef * already: string
+    | PrUnmergeRefused of string
+    | PrUnmergeFailed of PrFetchFailure
+
+/// THE SEAM for taking one back, beside `MergePr`.
+type UnmergePr = string option -> PrRef -> Async<PrUnmergeOutcome>
 
 // --- the poller --------------------------------------------------------------------------
 
@@ -424,7 +440,11 @@ type PrService =
       /// what it changed lives at the provider — where a WATCH reads it back, which is why
       /// this takes the whole `Authority` and begins one: a merge nobody is watching lands
       /// (or is ejected from the queue) with nothing on the timeline to say so.
-      Merge : Authority -> PrRef -> PrMergeMethod -> Async<Result<string, string>> }
+      Merge : Authority -> PrRef -> PrMergeMethod -> Async<Result<string, string>>
+      /// Take one back off its way in: auto merge disarmed, or the queue entry pulled. The
+      /// undoing of `Merge`, on the credential of whoever's turn it is. Changes nothing
+      /// about the watch — a watch that saw it armed will say `stalled`, which is true.
+      Unmerge : CredentialFor -> PrRef -> Async<Result<string, string>> }
 
 /// Build the watch verbs over the session's log and the poller they reconcile into.
 ///
@@ -438,6 +458,7 @@ let service
     (fetch: FetchPr)
     (openPr: OpenPr)
     (mergePr: MergePr)
+    (unmergePr: UnmergePr)
     (resolveToken: CredentialFor -> Async<string option>)
     (refold: PrWatch list -> unit)
     : PrService =
@@ -578,6 +599,18 @@ let service
                     return Ok (sprintf "%s is already %s — nothing was changed" (PrRef.render pr) already)
                 | PrMergeRefused said -> return Error (sprintf "%s would not merge it: %s" provider said)
                 | PrMergeFailed failure -> return Error (cannotReach (PrRef.render pr) failure)
+            }
+      Unmerge =
+        fun credential pr ->
+            async {
+                let! token = resolveToken credential
+                match! unmergePr token pr with
+                | PrMergeDisarmed pr -> return Ok (sprintf "%s will no longer merge on its own" (PrRef.render pr))
+                | PrMergeDequeued pr -> return Ok (sprintf "%s is out of the merge queue" (PrRef.render pr))
+                | PrUnmergeUnneeded (pr, already) ->
+                    return Ok (sprintf "%s is %s — nothing was changed" (PrRef.render pr) already)
+                | PrUnmergeRefused said -> return Error (sprintf "%s would not take it back: %s" provider said)
+                | PrUnmergeFailed failure -> return Error (cannotReach (PrRef.render pr) failure)
             } }
 
 // --- the query -----------------------------------------------------------------------------
