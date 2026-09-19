@@ -478,6 +478,50 @@ module Bytes =
     /// each call site is a check nobody performs several times over.
     let bytesOf (bytes: Buffer) : JS.Uint8Array = !!bytes
 
+// --- What was thrown ----------------------------------------------------------------------------
+
+[<AutoOpen>]
+module Thrown =
+
+    /// An `Error` as JavaScript shapes one: the two properties a sentence is made from.
+    [<AllowNullLiteral>]
+    type JsError =
+        abstract name : string
+        abstract message : string
+
+    /// Whether what was thrown is an `Error`. JavaScript lets a `throw` carry any value at
+    /// all, and F#'s `with` binds whatever arrived without asking — so code handing a caught
+    /// value on to somebody who expects an `Error` is the code that has to ask.
+    [<Emit("$0 instanceof Error")>]
+    let isError (thrown: obj) : bool = jsNative
+
+    /// What was thrown, as words. Every kind of value a `throw` can carry is named here and
+    /// made into text on its own terms, where `String(x)` used to be asked — and answered
+    /// `[object Object]` for an object, `null` in the middle of a sentence for nothing, and
+    /// `Error` for an error carrying no message. An `Error` is its message, or its name when
+    /// the message is empty; text is itself; a number or a boolean is its digits or its word;
+    /// nothing at all says so; anything else is its JSON, which is at least the value, or — for
+    /// the values JSON has no text for, a function or a symbol — says that much.
+    let describe (thrown: obj) : string =
+        match thrown with
+        | null -> "nothing"
+        | :? string as text -> text
+        | :? float as number -> string number
+        | :? bool as flag -> if flag then "true" else "false"
+        | error when isError error ->
+            let error = unbox<JsError> error
+            if System.String.IsNullOrEmpty error.message then error.name else error.message
+        | value ->
+            match (try JS.JSON.stringify value with _ -> null) with
+            | null -> "a value with no text"
+            | json -> json
+
+    /// `new Error(message)` — the platform's own error, not F#'s `exn`, which Fable compiles
+    /// to a class of its own. Both are `instanceof Error`, and only one of them is what a
+    /// listener written in JavaScript will have its hands on.
+    [<Emit("new Error($0)")>]
+    let errorWith (message: string) : exn = jsNative
+
 // --- Streams, and the HTTP client that speaks over them --------------------------------------
 
 /// What a stream's `error` event carries. Node's own streams emit an `Error`, but only by
@@ -490,17 +534,13 @@ type StreamError =
 [<RequireQualifiedAccess>]
 module StreamError =
 
-    /// JavaScript's own `String` conversion, for the cases `message` cannot answer.
-    [<Emit("String($0)")>]
-    let private stringify (error: StreamError) : string = jsNative
-
     /// What to put in a sentence somebody reads: the error's message, or — when there is
-    /// none, because what arrived was not an `Error` or carried an empty message — whatever
-    /// JavaScript makes of the value itself. Declared here, beside the type, rather than
-    /// written out at each stream that can fail: it is the same defensive dance every time,
-    /// and one spelled out per call site is one that is subtly different per call site.
+    /// none, because what arrived was not an `Error` or carried an empty message — what
+    /// `Thrown.describe` makes of the value itself. Declared here, beside the type, rather
+    /// than written out at each stream that can fail: it is the same defensive dance every
+    /// time, and one spelled out per call site is one that is subtly different per call site.
     let describe (error: StreamError) : string =
-        if isNull (box error) || System.String.IsNullOrEmpty error.message then stringify error else error.message
+        if isNull (box error) || System.String.IsNullOrEmpty error.message then Thrown.describe (box error) else error.message
 
 /// A byte stream something can be written INTO — an outgoing request, a server response, a
 /// child's stdin. Only what a proxy needs of one: somewhere for `pipe` to end up, a way to
@@ -749,28 +789,6 @@ module EventRelays =
 
     /// `new EventEmitter()`, with its listeners left opaque.
     let createRelay () : EventRelay = !!Node.Api.events.EventEmitter.Create ()
-
-// --- What was thrown ----------------------------------------------------------------------------
-
-[<AutoOpen>]
-module Thrown =
-
-    /// Whether what was thrown is an `Error`. JavaScript lets a `throw` carry any value at
-    /// all, and F#'s `with` binds whatever arrived without asking — so code handing a caught
-    /// value on to somebody who expects an `Error` is the code that has to ask.
-    [<Emit("$0 instanceof Error")>]
-    let isError (thrown: obj) : bool = jsNative
-
-    /// `String(x)` — JavaScript's own conversion, which spells `null` and `undefined` out
-    /// where F#'s `string` answers the empty string for both.
-    [<Emit("String($0)")>]
-    let describe (thrown: obj) : string = jsNative
-
-    /// `new Error(message)` — the platform's own error, not F#'s `exn`, which Fable compiles
-    /// to a class of its own. Both are `instanceof Error`, and only one of them is what a
-    /// listener written in JavaScript will have its hands on.
-    [<Emit("new Error($0)")>]
-    let errorWith (message: string) : exn = jsNative
 
 // --- Child processes: an environment this process did not build ----------------------------------
 
