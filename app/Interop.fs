@@ -56,40 +56,15 @@ let awaitPromise (promise: JS.Promise<'a>) : Async<'a> =
     }
 
 // --- node-datachannel --------------------------------------------------------
-
-type [<AllowNullLiteral>] LocalDescription =
-    abstract ``type`` : string
-    abstract sdp : string
-
-type [<AllowNullLiteral>] DataChannel =
-    abstract sendMessage : string -> bool
-    abstract close : unit -> unit
-    abstract isOpen : unit -> bool
-    abstract getLabel : unit -> string
-    abstract onOpen : (unit -> unit) -> unit
-    abstract onClosed : (unit -> unit) -> unit
-    abstract onError : (string -> unit) -> unit
-    abstract onMessage : (string -> unit) -> unit
-
-type [<AllowNullLiteral>] PeerConnection =
-    abstract close : unit -> unit
-    abstract setLocalDescription : unit -> unit
-    abstract setRemoteDescription : string * string -> unit
-    abstract localDescription : unit -> LocalDescription
-    abstract createDataChannel : string -> DataChannel
-    abstract state : unit -> string
-    abstract gatheringState : unit -> string
-    abstract onLocalDescription : (string -> string -> unit) -> unit
-    abstract onStateChange : (string -> unit) -> unit
-    abstract onGatheringStateChange : (string -> unit) -> unit
-    abstract onDataChannel : (DataChannel -> unit) -> unit
-
-// `node-datachannel` is a native addon. A static top-level `import` loads its `.node`
-// binary at module-eval — which would force the CHEAP test tier (pure/model/protocol tests
-// that never open a WebRTC connection) to build and ship that binary just to LOAD the test
-// bundle. Resolve it lazily via `createRequire` instead: the addon loads only on the first
-// real connection (the verify tier and production), so the cheap tier runs without it. This
-// mirrors the dynamic-`import()` pattern already used for the agent SDK and Docker backend.
+//
+// The types are `Fable.NodeDataChannel`'s. The module is a native addon, and a static
+// top-level `import` loads its `.node` binary at module-eval — which would force the CHEAP
+// test tier (pure/model/protocol tests that never open a WebRTC connection) to build and
+// ship that binary just to LOAD the test bundle. So it is resolved lazily through `require`
+// below: the addon loads only on the first real connection (the verify tier and
+// production), and the cheap tier runs without it. This mirrors the dynamic-`import()`
+// pattern already used for the agent SDK and Docker backend.
+//
 // `createRequire`, not a bare `require`: Fable emits ESM and the bundle runs as ESM, where
 // `require` is simply not defined — a bare one throws ReferenceError, which a lookup's `try`
 // would swallow into "the thing is absent" on a box that has it. That is exactly what happened
@@ -124,21 +99,16 @@ let resolveModule (id: string) : string = required.Force().resolve id
 /// A url resolved against this bundle's own — `./assets` beside the running file.
 let urlBesideModule (relative: string) : Node.Url.URL = Node.Api.URL.Create (relative, moduleUrl)
 
-let mutable private nodeDataChannel : obj = null
-/// The lazily-required `node-datachannel` module (cached after first use).
-let private ndc () : obj =
+let mutable private nodeDataChannel : Fable.NodeDataChannel.Exports = null
+/// The lazily-required `node-datachannel` module (cached after first use), viewed through
+/// the shape `Fable.NodeDataChannel` declares for it — the one place that typing is asserted.
+let private ndc () : Fable.NodeDataChannel.Exports =
     if isNull nodeDataChannel then
-        nodeDataChannel <- require "node-datachannel"
+        nodeDataChannel <- unbox<Fable.NodeDataChannel.Exports> (require "node-datachannel")
     nodeDataChannel
 
-[<Emit("new ($0.PeerConnection)($1, $2)")>]
-let private newPeerConnection (module': obj) (name: string) (config: obj) : PeerConnection = jsNative
-
-[<Emit("$0.cleanup()")>]
-let private ndcCleanup (module': obj) : unit = jsNative
-
 /// libdatachannel's global teardown; lazy like the constructor (loads the addon on demand).
-let cleanup () : unit = ndcCleanup (ndc ())
+let cleanup () : unit = (ndc ()).cleanup ()
 
 /// Create a peer connection. Empty `iceServers` means no STUN and no TURN: gathering stops at
 /// host candidates. Those are gathered on EVERY interface, not just loopback — so a session on
@@ -146,9 +116,8 @@ let cleanup () : unit = ndcCleanup (ndc ())
 /// and a remote browser connects to it directly. That is the whole of remote data-channel
 /// access, and why it needs a network whose addresses route directly; narrowing this to
 /// loopback would silently take remote sessions with it.
-let createPeerConnection (name: string) : PeerConnection =
-    let config = createObj [ "iceServers" ==> ([||]: obj[]) ]
-    newPeerConnection (ndc ()) name config
+let createPeerConnection (name: string) : Fable.NodeDataChannel.PeerConnection =
+    (ndc ()).PeerConnection.Create (name, { Fable.NodeDataChannel.PeerConnectionConfig.iceServers = [||] })
 
 // --- node:http ---------------------------------------------------------------
 
