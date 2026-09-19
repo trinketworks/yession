@@ -481,3 +481,26 @@ edges makes a Y but leaves the chevron as it was; the floor strip turns the chev
 letter. Outer halves or inner halves is the fork in the road — a chevron without a stem, or a
 stem without a chevron. Slab height reads as a claim: taller than the cube says the agent is
 inside the humans' space, lower says it stands proud, level is neutral and the only clean one.
+
+## Sixteenth pass: panels, and a lens
+
+`panels/` takes the half width on the other axis. The green blocks keep the cube's full width and
+lose half their depth, so they lie against the cube's two near faces as panels with a kerf
+between, rather than running out from it as arms. Same object and camera as `blocks/`.
+
+- **The other way** — `hug` (48°), `hug-62` (the panels a thick V wrapped round the cube's near
+  corner, the kerfs drawing the fork of the Y where a letter would put it), `hug-plan` (a square
+  with two bars along its lower edges — the chevron inverted), `hug-30`.
+- **How the panels stand** — `hug-tall` (two walls, the cube seen over them), `hug-low` (the cube
+  on a V-shaped step), `far` (pushed to the far ends of their quadrants, ground between),
+  `hug-thin` (fins).
+- **Through a lens** — a barrel term applied after projection, every edge subdivided first so
+  straight edges come out as shallow arcs: `blocks-lens` (the sketch, k = 0.14), `chevron-lens`,
+  `hug-lens`, `cubes-lens`, `plan-lens` (k = 0.2), `chevron-lens-strong` (k = 0.32, a fisheye —
+  past the edge, kept to show where it is).
+
+Findings: the panels make it one solid — `hug-62` is the tightest three-part mark in the set and
+the first where the Y sits exactly where a letter would put it. Plan inverts the chevron. The lens
+works only because the edges bow: a radial scale alone swells the mark, and subdividing every
+edge before warping is what turns straight lines into arcs — the whole difference between plotted
+and photographed. The tighter the arrangement, the better it takes the bulge.
