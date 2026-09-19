@@ -15,18 +15,7 @@ module Yession.Host.RepoConfig
 open Fable.Core
 open Yession.Domain
 open Yession.Domain.Sandboxes
-
-[<Import("parseDocument", "yaml")>]
-let private parseDocument (text: string) (options: obj) : obj = jsNative
-
-[<Emit("$0.errors")>]
-let private errors (doc: obj) : obj array = jsNative
-
-[<Emit("$0.warnings")>]
-let private warnings (doc: obj) : obj array = jsNative
-
-[<Emit("$0.message")>]
-let private problemMessage (problem: obj) : string = jsNative
+open Fable.Yaml
 
 /// Everything the parser objected to, as messages.
 ///
@@ -35,15 +24,10 @@ let private problemMessage (problem: obj) : string = jsNative
 /// value and decodes as though the tag had never been written. `parseDocument` keeps the
 /// complaints, which is what lets an unrecognised tag be a refusal rather than a silent
 /// downgrade.
-let private complaints (doc: obj) : string array =
-    Array.append (errors doc) (warnings doc) |> Array.map problemMessage
+let private complaints (doc: Document) : string array =
+    Array.append doc.errors doc.warnings |> Array.map (fun problem -> problem.message)
 
-/// The parsed document as plain JavaScript values — what the YAML library hands over for
-/// anything that wants JSON out of it.
-[<Emit("$0.toJS()")>]
-let private toJs (doc: obj) : obj = jsNative
-
-let private toJson (doc: obj) : string = JS.JSON.stringify (toJs doc)
+let private toJson (doc: Document) : string = JS.JSON.stringify (doc.toJS ())
 
 /// How the parser is constructed, and every field is load-bearing.
 ///
@@ -57,8 +41,10 @@ let private toJson (doc: obj) : string = JS.JSON.stringify (toJs doc)
 ///
 /// Anchors themselves are deliberately allowed: `&base` / `*base` resolve before the decoder
 /// sees anything, so reuse inside a file costs the schema nothing.
-[<Emit("{ schema: 'core', uniqueKeys: true, maxAliasCount: 100 }")>]
-let private parseOptions : obj = jsNative
+let private parseOptions : ParseOptions =
+    { ParseOptions.schema = "core"
+      uniqueKeys = true
+      maxAliasCount = 100 }
 
 /// Where one repo's file lives, given the session's repos directory.
 let pathIn (reposDir: string) (repo: RepoRef) : string =

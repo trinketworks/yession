@@ -22,36 +22,22 @@ open Yession.Domain
 open Yession.Domain.Sandboxes
 open Yession.Domain.Tools
 open Yession.SessionProcess
+open Fable.Yaml
 
-[<Import("parseDocument", "yaml")>]
-let private parseDocument (text: string) (options: obj) : obj = jsNative
+let private complaints (doc: Document) : string array =
+    Array.append doc.errors doc.warnings |> Array.map (fun problem -> problem.message)
 
-[<Emit("$0.errors")>]
-let private errors (doc: obj) : obj array = jsNative
-
-[<Emit("$0.warnings")>]
-let private warnings (doc: obj) : obj array = jsNative
-
-[<Emit("$0.message")>]
-let private problemMessage (problem: obj) : string = jsNative
-
-let private complaints (doc: obj) : string array =
-    Array.append (errors doc) (warnings doc) |> Array.map problemMessage
-
-/// The parsed document as plain JavaScript values — what the YAML library hands over for
-/// anything that wants JSON out of it.
-[<Emit("$0.toJS()")>]
-let private toJs (doc: obj) : obj = jsNative
-
-let private toJson (doc: obj) : string = JS.JSON.stringify (toJs doc)
+let private toJson (doc: Document) : string = JS.JSON.stringify (doc.toJS ())
 
 /// The same parser construction `RepoConfig` uses, and every field is load-bearing there for
 /// the same reasons: `core` resolves only what JSON could express, `uniqueKeys` makes a
 /// repeated key an error rather than a silent last-wins fold — which is what makes the
 /// domain's "declared twice" refusal reachable from a real file — and `maxAliasCount` stops
 /// a self-referential anchor turning a small file into an unbounded tree.
-[<Emit("{ schema: 'core', uniqueKeys: true, maxAliasCount: 100 }")>]
-let private parseOptions : obj = jsNative
+let private parseOptions : ParseOptions =
+    { ParseOptions.schema = "core"
+      uniqueKeys = true
+      maxAliasCount = 100 }
 
 /// Every path a resource names must be the one the KERNEL will check.
 ///

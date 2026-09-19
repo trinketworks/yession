@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Fable bindings to the `yaml` npm package — the parser the operator profile and a repo's
+    `yession.yaml` are read with. Fable-only, like app/Yession.Host.fsproj: `dotnet build`
+    only type-checks it; the runnable JS comes from Fable. A standalone project so the
+    bindings are a distinct layer, mirroring Fable.Jose / Fable.Dockerode.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Yaml.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Fable.Core" />
+  </ItemGroup>
+
+</Project>
