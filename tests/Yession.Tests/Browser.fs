@@ -4058,6 +4058,126 @@ let filterTests =
             }
     ]
 
+// --- Pressing Create (browser) ---------------------------------------------------------------
+//
+// Create is a real form and a real POST, and the browser follows the answer into the new
+// session. Between the push and the arrival this page has nothing to show for it, so the
+// button is HELD (`aria-busy`) — and two things have to hold true of a held Create that only a
+// browser with the page script running can observe. One: a second push in that window is
+// refused, because two Creates are two sessions. Two: a rows frame landing under it — the
+// stream announces the new session before the redirect is followed — does not put a fresh,
+// released button under the reader's finger.
+//
+// The window is opened by holding the POST at the browser's edge (`RouteAsync`), and two
+// things about a page with a navigation in flight shape how the cases are written. Every
+// locator action, measuring included, waits for that navigation to commit — so the button is
+// measured before the push and pushed by the mouse, by coordinates, after. And `evaluate`
+// does not answer until the navigation settles either — the page is running (its stream
+// delivers, its swaps happen, verified by hand with a server that answered late) but nothing
+// can be READ off it until then. So the case that reads answers the POST with a 204, which
+// is the one response a navigation can get that leaves the page where it was.
+
+let private PRESS_MANAGER_PORT = 8195
+let private pressDataDir = "tests/browser/.data-press"
+let private createButton = sprintf "[%s] button" Yession.App.Dom.Manager.createSession
+
+/// How a held create POST is let go: on to the Manager, so the browser leaves for the new
+/// session; or answered with nothing, so the page stays and can be read.
+type private Release =
+    | LetThrough
+    | AnswerNothing
+
+let private whereCreateIs (page: IPage) : Async<float32 * float32> =
+    async {
+        let! box = await (page.Locator(createButton).BoundingBoxAsync ())
+        return box.X + box.Width / 2.0f, box.Y + box.Height / 2.0f
+    }
+
+let private push (page: IPage) ((x, y): float32 * float32) : Async<unit> =
+    async {
+        do! awaitU (page.Mouse.MoveAsync (x, y))
+        do! awaitU (page.Mouse.DownAsync ())
+        do! awaitU (page.Mouse.UpAsync ())
+    }
+
+let private isHeld = sprintf "document.querySelector('%s')?.getAttribute('aria-busy') === 'true'" createButton
+
+/// One Manager and one page on it, with the create POST held for `holdMs` and then released
+/// as asked — wide enough that what happens under a held Create can be arranged and observed.
+let private withHeldCreate (name: string) (holdMs: int) (release: Release) (body: IBrowser -> IPage -> Async<unit>) : Async<unit> =
+    async {
+        if Directory.Exists pressDataDir then Directory.Delete (pressDataDir, true)
+        let manager =
+            deploy
+                "the Manager"
+                "node"
+                [ "app/out/Main.js"; "--auth"; "localhost"; "--secrets"; "ephemeral"
+                  "--port"; string PRESS_MANAGER_PORT; "--data-dir"; pressDataDir ]
+                []
+                (fun line -> line.Contains "management UI at")
+        let mutable browserToClose : IBrowser option = None
+        let mutable playwrightToDispose : IPlaywright option = None
+        try
+            let! pw = await (Playwright.CreateAsync ())
+            playwrightToDispose <- Some pw
+            let! br = await (pw.Chromium.LaunchAsync (BrowserTypeLaunchOptions (ExecutablePath = chromiumPath ())))
+            browserToClose <- Some br
+            let! page = await (br.NewPageAsync ())
+            page.SetDefaultTimeout 30000.0f
+            let evidence = watching page
+            do! reporting name page evidence <| async {
+                let hold (route: IRoute) =
+                    async {
+                        do! Async.Sleep holdMs
+                        match release with
+                        | LetThrough -> do! awaitU (route.ContinueAsync ())
+                        | AnswerNothing -> do! awaitU (route.FulfillAsync (RouteFulfillOptions (Status = 204)))
+                    }
+                do! awaitU (page.RouteAsync ("**/sessions", fun route ->
+                        if route.Request.Method = "POST" then Async.Start (hold route)
+                        else route.ContinueAsync () |> ignore))
+                let! _ = await (page.GotoAsync (sprintf "http://127.0.0.1:%d/" PRESS_MANAGER_PORT))
+                let! _ = await (page.WaitForSelectorAsync createButton)
+                do! body br page
+            }
+        finally
+            browserToClose |> Option.iter (fun b -> b.CloseAsync () |> ignore)
+            playwrightToDispose |> Option.iter (fun p -> p.Dispose ())
+            manager.Stop ()
+    }
+
+let pressTests =
+    testList "Pressing Create (browser)" [
+        testCaseAsync "a second push before the first lands is refused: one session" <|
+            withHeldCreate "double create" 1500 LetThrough (fun _ page -> async {
+                let posted = ResizeArray<string> ()
+                page.Request.Add (fun r -> if r.Method = "POST" && r.Url.EndsWith "/sessions" then posted.Add r.Url)
+                let! at = whereCreateIs page
+                do! push page at
+                do! waitFor "the pushed Create to be held" page isHeld
+                do! push page at
+                do! waitFor "the browser to have left for the new session" page (sprintf "location.port !== '%d'" PRESS_MANAGER_PORT)
+                Expect.equal posted.Count 1 (sprintf "two pushes, one session: %A" (List.ofSeq posted))
+            })
+
+        testCaseAsync "a rows frame under a held Create leaves it held, and under the same finger" <|
+            withHeldCreate "held through a frame" 3000 AnswerNothing (fun br page -> async {
+                let! at = whereCreateIs page
+                do! push page at
+                // A frame, from elsewhere: another reader archives the seeded session, and the
+                // stream this page holds answers with the whole table. (Nothing can be read
+                // off this page until the hold ends, so the frame is confirmed afterwards.)
+                let! other = await (br.NewPageAsync ())
+                let! _ = await (other.GotoAsync (sprintf "http://127.0.0.1:%d/" PRESS_MANAGER_PORT))
+                do! awaitU (other.ClickAsync (sprintf "[%s]" Yession.App.Dom.Manager.archive))
+                do! waitFor "the frame to have landed here" page (sprintf "document.querySelector('[%s]') === null" Yession.App.Dom.Manager.archive)
+                let! seen =
+                    await (page.EvaluateAsync<string>
+                            (sprintf "() => { const b = document.querySelector('%s'); return JSON.stringify({ there: !!b, held: b?.getAttribute('aria-busy') === 'true', underTheFinger: document.activeElement === b }) }" createButton))
+                Expect.equal seen """{"there":true,"held":true,"underTheFinger":true}""" "the Create that was pushed is still down, and still the one under the finger"
+            })
+    ]
+
 #else
 
 // Fable (JS on Node): Playwright is a .NET driver and does not exist here, so the flows above
@@ -4069,5 +4189,6 @@ let mountedTests : Fable.Pyxpecto.Model.TestCase = testList "Path-mounted sessio
 let frontDoorTests : Fable.Pyxpecto.Model.TestCase = testList "Creating a session behind a front door (browser)" []
 let frontedTests : Fable.Pyxpecto.Model.TestCase = testList "A fronted deployment, for real (browser)" []
 let filterTests : Fable.Pyxpecto.Model.TestCase = testList "The management page's filters (browser)" []
+let pressTests : Fable.Pyxpecto.Model.TestCase = testList "Pressing Create (browser)" []
 
 #endif

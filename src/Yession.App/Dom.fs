@@ -37,6 +37,11 @@ module Dom =
     /// A hook rather than a selector spelled twice, for the same reason every other one is.
     let playerStylesheetHook = "data-player-css"
 
+    /// A button that goes IN where it is touched — the tilt in `app/tailwind.css` is keyed
+    /// off this hook, and the page script that reads the touch point into it selects by it,
+    /// so the look and the aim are one declaration. Worn by the Manager's Create so far.
+    let press = "data-press"
+
     /// The class on the shell ROOT (`<html>`) that says the terminals column is shut. Written
     /// by two hands — the server into the first paint (`Ssr.page`) and the browser after every
     /// render (`PaneShell.setOpen`) — from the one model field, `TerminalsOpen`; the name is
