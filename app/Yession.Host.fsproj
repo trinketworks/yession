@@ -115,6 +115,13 @@
     <PackageReference Include="Fable.Node" />
     <PackageReference Include="Fable.Promise" />
     <PackageReference Include="Fable.Yjs" />
+    <!-- Decoders for the wire shapes this project owns, which five of its files already
+         read through: the Fable build uses Thoth.Json, the .NET type-check Thoth.Json.Net,
+         the same split `Yession.Domain` declares for its codecs. Named here because these
+         files name it; it arrived transitively before, which is how a reader could not tell
+         a decoded reply from an asserted one. -->
+    <PackageReference Include="Thoth.Json" />
+    <PackageReference Include="Thoth.Json.Net" />
     <PackageReference Include="Ylmish" />
   </ItemGroup>
 

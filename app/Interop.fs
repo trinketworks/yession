@@ -273,9 +273,6 @@ let postText (url: string) (body: string) : JS.Promise<string> =
 let getText (url: string) : JS.Promise<string> =
     Fetch.fetchUnsafe url [] |> Promise.bind (fun response -> response.text ())
 
-/// Extract the `sdp` field from a `{ type, sdp }` JSON message.
-let sdpField (json: string) : string = (unbox<{| sdp: string |}> (JS.JSON.parse json)).sdp
-
 /// Read an environment variable, falling back to `fallback` when unset or empty.
 [<Emit("process.env[$0] || $1")>]
 let envOr (name: string) (fallback: string) : string = jsNative

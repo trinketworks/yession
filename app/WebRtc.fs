@@ -13,14 +13,31 @@ open Yession.Domain.Link
 open Yession.SessionProcess
 open Yession.Host.Interop
 
-type [<AllowNullLiteral>] private SdpMessage =
-    abstract ``type`` : string
-    abstract sdp : string
+#if FABLE_COMPILER
+open Thoth.Json
+#else
+open Thoth.Json.Net
+#endif
+
+/// One side's session description, as the wire carries it: `{ type, sdp }`.
+type SdpMessage = { Type : string; Sdp : string }
 
 let private sdpToJson (ty: string) (sdp: string) : string =
     JS.JSON.stringify {| ``type`` = ty; sdp = sdp |}
 
-let private parseSdp (json: string) : SdpMessage = unbox (JS.JSON.parse json)
+/// Both fields required, because neither has a meaning this side can supply. A message is
+/// DECODED rather than asserted: it arrives over somebody else's POST, and the two readers
+/// that used to unbox it handed a missing `sdp` to libdatachannel as `undefined` — a native
+/// call with no answer for it, inside a handler with nowhere to report one.
+let private sdpDecoder : Decoder<SdpMessage> =
+    Decode.object (fun get ->
+        { Type = get.Required.Field "type" Decode.string
+          Sdp = get.Required.Field "sdp" Decode.string })
+
+/// What a signalling body says, or nothing — a body that is not JSON, and one that is JSON
+/// carrying no session description, are the same nothing to both callers.
+let parseSdp (json: string) : SdpMessage option =
+    Decode.fromString sdpDecoder json |> Result.toOption
 
 /// The transport never inspects the state-sync payload, so its codec is just a string.
 let private frameCodec : Codec<SessionFrame<string>> = Codec.sessionFrame Codec.string
@@ -155,8 +172,11 @@ let connect (signalUrl: string) : Async<FrameChannel<string>> =
         let opened = onceOpen dc
         let! offer = offerReady
         let! answerText = postText signalUrl offer |> Interop.awaitPromise
-        let answer = parseSdp answerText
-        pc.setRemoteDescription (answer.sdp, answer.``type``)
+        let answer =
+            match parseSdp answerText with
+            | Some answer -> answer
+            | None -> failwith "the signalling url answered the offer with no session description"
+        pc.setRemoteDescription (answer.Sdp, answer.Type)
         do! opened
         // The client owns this side's PeerConnection: closing the channel also closes
         // the connection and WAITS for libdatachannel to report it closed, so a caller
