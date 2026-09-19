@@ -672,12 +672,22 @@ module Readables =
         stream.setEncoding BufferEncoding.Utf8 |> ignore
         onText stream handler
 
+/// The connection a message arrived on: the one thing read off it is who is at the other end.
+[<AllowNullLiteral>]
+type Socket =
+    /// The peer's address, and nothing once the socket has been torn down.
+    abstract remoteAddress : string option
+
 /// A message that ARRIVED over HTTP — its headers, and its body as the stream it is. Both
 /// halves of an exchange are one of these on the receiving side, which is why the shape is
 /// shared rather than written twice.
 [<AllowNullLiteral>]
 type HttpMessage =
     inherit Readable
+
+    /// The socket it arrived on — nothing once the connection is gone, which a message read
+    /// after its peer disconnected can be.
+    abstract socket : Socket option
 
     /// Every header that arrived, as `name, value` pairs — Node LOWERCASES the names on the
     /// way in, so a caller comparing them compares lowercase.
@@ -747,8 +757,21 @@ module HttpClient =
 /// steps are declared beside `boundPort` rather than reached for through `Fable.Node` because
 /// the three are one act: `address()` answers `null` before `listen` has called back, and
 /// `null` again after `close`, so a port read outside that window is not a port.
+
+/// Where a listening server is bound.
+[<AllowNullLiteral>]
+type BoundAddress =
+    abstract port : int
+
+/// Anything that listens: a `net.Server`, an `http.Server`. `address()` answers `null` before
+/// `listen` has called back and again after `close`, which is what the option says.
+[<AllowNullLiteral>]
+type Listening =
+    abstract address : unit -> BoundAddress option
+
 [<AllowNullLiteral>]
 type NetServer =
+    inherit Listening
 
     /// Bind, and call back once the OS has chosen. Port 0 is the whole point — asked for a
     /// particular port, a probe would be racing whoever else wanted that one.
@@ -768,9 +791,13 @@ module NetServers =
     [<Import("createServer", "node:net")>]
     let createNetServer () : NetServer = jsNative
 
-    /// The port a LISTENING server was given.
-    [<Emit("$0.address().port")>]
-    let boundPort (server: NetServer) : int = jsNative
+    /// The port a LISTENING server was given. Asked of one that is not listening, this is a
+    /// fault at the caller — a port read outside the listen/close window is not a port — and
+    /// says so rather than answering a number.
+    let boundPort (server: #Listening) : int =
+        match server.address () with
+        | Some bound -> bound.port
+        | None -> failwith "the server is not listening, so it has no port"
 
 // --- A terminal, by a descriptor something else opened -----------------------------------------
 

@@ -297,21 +297,12 @@ type ReposService =
       /// it existed, and refusing there would leave no way out of an interrupted clone.
       RemoveRepo : RepoCaller -> RepoRef -> bool -> Async<Result<string, string>> }
 
-[<ImportAll("node:fs")>]
-let private fs : obj = jsNative
-
-[<Emit("$0.readdirSync($1)")>]
-let private readdirSync (fs: obj) (dir: string) : string array = jsNative
-
 /// A directory's entries, and nothing for a directory that cannot be read at all — an absent
 /// repos directory, a permission, a mount that went away. The scan that reads it is asking
 /// what is THERE, and no entries is what "nothing is there" looks like whichever way it
 /// happened.
-let private readdirSafe (fs: obj) (dir: string) : string array =
-    try readdirSync fs dir with _ -> [||]
-
-[<Emit("$0.rmSync($1, { recursive: true, force: true })")>]
-let private rmRecursive (fs: obj) (path: string) : unit = jsNative
+let private readdirSafe (dir: string) : string array =
+    try Node.Api.fs.readdirSync (U2.Case1 dir) |> Array.ofSeq with _ -> [||]
 
 let private outputLimit = 20000
 
@@ -535,7 +526,7 @@ let create (config: ReposConfig) : Result<ReposService, string> =
                 | Error e ->
                     // git removes a target it created itself, but not one it was killed
                     // out of. Either way the staging area is ours to leave clean.
-                    rmRecursive fs staging
+                    Fable.NodeExtras.Files.removeTree staging
                     // Only when a credential was actually spent: an anonymous clone that
                     // failed says nothing about anybody's sign-in.
                     if token.IsSome then do! config.OnNetworkFailure caller.Credential e
@@ -597,9 +588,9 @@ let create (config: ReposConfig) : Result<ReposService, string> =
         let listRepos () : Async<Result<RepoListing list, string>> =
             async {
                 let refs =
-                    readdirSafe fs reposDir
+                    readdirSafe reposDir
                     |> Array.collect (fun owner ->
-                        readdirSafe fs (sprintf "%s/%s" reposDir owner)
+                        readdirSafe (sprintf "%s/%s" reposDir owner)
                         |> Array.choose (fun repo ->
                             match RepoRef.create (sprintf "%s/%s" owner repo) with
                             | Ok ref when Fs.exists (sprintf "%s/%s/%s/.git" reposDir owner repo) -> Some ref
@@ -666,7 +657,7 @@ let create (config: ReposConfig) : Result<ReposService, string> =
                 async {
                     let remove () =
                         async {
-                            rmRecursive fs (pathOf repo)
+                            Fable.NodeExtras.Files.removeTree (pathOf repo)
                             do!
                                 append
                                     caller.Actor

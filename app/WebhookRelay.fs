@@ -290,16 +290,18 @@ let create
 
 // --- the route ---------------------------------------------------------------------------
 
-/// Every header, as pairs, names lowercased by Node on the way in.
-///
-/// An ARRAY, converted at the boundary: a JS array is what `Object.entries` yields and what
-/// Fable's array maps onto, while an F# list is a linked structure it does not. Typing this
-/// as a list compiles and then quietly matches nothing.
-[<Emit("Object.entries($0.headers).map(([k, v]) => [k, Array.isArray(v) ? v.join(', ') : String(v)])")>]
-let private headerPairsOf (req: Interop.IncomingMessage) : (string * string) array = jsNative
-
+/// Every header, as pairs, names lowercased by Node on the way in. A header that repeated
+/// arrives as an array, and is carried joined the way HTTP joins one. Those are the two
+/// shapes Node's typings admit for a value; the third, `undefined`, they admit and never
+/// send, and reads as empty.
 let private headersOf (req: Interop.IncomingMessage) : (string * string) list =
-    headerPairsOf req |> List.ofArray
+    req.headerEntries ()
+    |> Array.map (fun (name, value) ->
+        match value with
+        | :? string as text -> name, text
+        | :? (string[]) as repeated -> name, String.concat ", " repeated
+        | _ -> name, "")
+    |> List.ofArray
 
 let private respond (res: Interop.ServerResponse) (status: int) (text: string) =
     res.writeHead (status, JsInterop.createObj [ "content-type", box "text/plain"; "cache-control", box "no-store" ])
