@@ -215,20 +215,33 @@ module Style =
     /// break. A FIELD is built the same way from the same token (`fieldFace`), which is what
     /// makes a button and an input in one row actually line up.
     let private btnBase =
-        cls [ "bg-transparent cursor-pointer font-ui"; caps
+        cls [ "group/btn bg-transparent cursor-pointer font-ui"; caps
               "h-control px-3.5 inline-flex items-center justify-center transition-colors"
               Stroke.ring; focusRing ]
 
     /// The three faces, as (rest tone, hover, press) — the only thing that varies between
     /// them, so a fourth would be three tokens rather than another hand-written string.
+    ///
+    /// The press face is `pressed:` (app/tailwind.css) rather than `active:` — the finger's
+    /// press AND the hold after it (`aria-busy`), for a button whose act takes the browser
+    /// somewhere else and has nothing to show on this page until it arrives. Filled while
+    /// down, and down until it lands.
     let btn =
-        cls [ btnBase; Stroke.rim; "text-ink-dim"; Stroke.hoverInk; "hover:text-ink active:bg-ink active:text-bg" ]
+        cls [ btnBase; Stroke.rim; "text-ink-dim"; Stroke.hoverInk; "hover:text-ink pressed:bg-ink pressed:text-bg" ]
 
     let btnPrimary =
-        cls [ btnBase; Stroke.blue; "text-blue hover:text-blue-bright active:bg-blue active:text-bg" ]
+        cls [ btnBase; Stroke.blue; "text-blue hover:text-blue-bright pressed:bg-blue pressed:text-bg" ]
 
     let btnDanger =
-        cls [ btnBase; Stroke.rim; "text-ink-dim"; Stroke.hoverErr; "hover:text-err active:bg-err active:text-bg" ]
+        cls [ btnBase; Stroke.rim; "text-ink-dim"; Stroke.hoverErr; "hover:text-err pressed:bg-err pressed:text-bg" ]
+
+    /// The two words a held button can be saying — the verb, and the verb under way — as
+    /// siblings inside it, one shown at a time off the button's own `aria-busy`. Copy stays
+    /// in the markup where the server spells it; the script only sets the state. The button
+    /// wears the named group for it (`btnBase`) — named, so a button sitting inside some
+    /// other group answers to its own state and never to that one's.
+    let whenReady = "group-aria-busy/btn:hidden"
+    let whenBusy = "hidden group-aria-busy/btn:inline"
 
     /// The name of a LISTED record, when the name itself opens it. The row's primary act
     /// is carried by its content rather than by another rectangle in the right rail —
