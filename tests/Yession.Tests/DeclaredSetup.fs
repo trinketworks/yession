@@ -23,47 +23,30 @@ module Yession.Tests.DeclaredSetup
 open Fable.Core
 open Fable.Core.JsInterop
 open Fable.Pyxpecto
-
-let private childProcess : obj = importAll "node:child_process"
+#if FABLE_COMPILER
+open Thoth.Json
+#else
+open Thoth.Json.Net
+#endif
 
 /// Anchored at the repository root rather than at the runner's working directory, which is
-/// not this repository's business and has moved before.
-[<Emit("$0.execSync('git rev-parse --show-toplevel', { encoding: 'utf8', stdio: ['ignore','pipe','ignore'] })")>]
-let private gitToplevel (cp: obj) : string = jsNative
-
-// `Fable.Yaml.parse`, imported rather than `require`d: this module compiles to an ES module,
-// where `require` is not defined — and the throw would not read as "this check cannot run",
-// it would read as every case in the file erroring for a reason that looks like the file's
-// own subject. `LockSource` carries the same warning for the same reason.
-
-/// A property, or `undefined` — off an absent holder too, so a file with no `sandboxes:` and a
-/// sandbox with no `container:` are the same nothing rather than a throw.
-[<Emit("$0?.[$1]")>]
-let private prop (o: obj) (key: string) : obj = jsNative
-
-/// The keys of an object that may not be there — an absent block is no keys, not a throw.
-let private keysOf (o: obj) : string array =
-    if isNull o then [||] else JS.Constructors.Object.keys o |> Array.ofSeq
-
-/// JS truthiness, kept because that is what the document is read with: a `setup:` written
-/// empty declares no command, and always did.
-[<Emit("!!$0")>]
-let private isDeclared (o: obj) : bool = jsNative
-
-let private isArray (o: obj) : bool = JS.Constructors.Array.isArray o
-
-[<Emit("$0.join(' ')")>]
-let private joinedWithSpaces (o: obj) : string = jsNative
-
-[<Emit("String($0)")>]
-let private asText (o: obj) : string = jsNative
+/// not this repository's business and has moved before. git's own stderr is left where it
+/// goes: on a box with no repository it says so once, and `repoRoot` says nothing below.
+///
+/// `Fable.Node` types the answer as a string or a `Buffer`, because which one depends on the
+/// `encoding` option; with `utf8` named it is the string, and the one `unbox` says so here
+/// rather than in a match Fable cannot compile (a `Buffer` is an interface, so a type test
+/// on it evaluates to false).
+let private gitToplevel () : string =
+    let options = jsOptions<Node.ChildProcess.ExecOptions> (fun o -> o.encoding <- Some "utf8")
+    unbox<string> (Node.Api.childProcess.execSync ("git rev-parse --show-toplevel", box options))
 
 /// Nothing for a working directory git will not answer about — this file's subject is a
 /// committed document, and a box that cannot find one has not read it rather than read an
 /// empty one.
 let private repoRoot () : string option =
     try
-        match (gitToplevel childProcess).Trim () with
+        match (gitToplevel ()).Trim () with
         | "" -> None
         | root -> Some root
     with _ -> None
@@ -71,25 +54,65 @@ let private repoRoot () : string option =
 let private readText (path: string) : string option =
     try Some (TestFiles.read path) with _ -> None
 
+/// What one sandbox declares as a way in: its `setup:`, and its container's `entrypoint`.
+[<RequireQualifiedAccess>]
+type private Declared =
+    { Setup : string option
+      Entrypoint : string option }
+
+/// An argv as the file may write one — a list of words, or the one line — read back as the
+/// line this file has an opinion about.
+let private argv : Decoder<string> =
+    Decode.oneOf
+        [ Decode.string
+          Decode.list Decode.string |> Decode.map (String.concat " ") ]
+
+/// A `setup:` is one command line. Written empty it declares no command, and always did:
+/// the document was once read with JavaScript truthiness, and this is what that meant. A
+/// `setup:` that is anything else — a list, a number — is not a command line this file has
+/// an opinion about, and rendering it as one would invent the opinion, so it is a refusal
+/// to read the file rather than a command nobody wrote.
+let private setup : Decoder<string option> =
+    Decode.string
+    |> Decode.map (function
+        | "" -> None
+        | line -> Some line)
+
+/// A sandbox's declarations. Absent `container:` is no entrypoint rather than a throw, and
+/// so is an absent `setup:` — the decoder's `Optional` is the same nothing for both.
+let private declared : Decoder<Declared> =
+    Decode.object (fun get ->
+        { Declared.Setup = get.Optional.Field "setup" setup |> Option.flatten
+          Entrypoint = get.Optional.At [ "container"; "entrypoint" ] argv })
+
+/// The file's sandboxes by name. A file with no `sandboxes:` declares none.
+let private sandboxes : Decoder<(string * Declared) list> =
+    Decode.object (fun get ->
+        match get.Optional.Field "sandboxes" (Decode.keyValuePairs declared) with
+        | Some declared -> declared
+        | None -> [])
+
 /// Every command line the file declares a sandbox runs — its `setup:`, and its container's
-/// `entrypoint` (a string, or a list joined back into one) — as (where, command). Read
-/// straight out of the YAML the way `LockSource` reads straight out of the lock's JSON: this
-/// is a question about what a committed file SAYS, and routing it through the domain's
-/// decoder would put a second thing between the assertion and the text it is about.
+/// `entrypoint` — as (where, command). Read straight out of the YAML the way `LockSource`
+/// reads straight out of the lock's JSON: this is a question about what a committed file
+/// SAYS, and routing it through the domain's decoder would put a second thing between the
+/// assertion and the text it is about. The resolved value goes through JSON on the way to
+/// the decoder, as `RepoConfig` sends it, which is what lets one reader serve both runtimes.
+///
+/// A file this cannot read is a failure with the reason in it, not an empty list: an empty
+/// list is what a file that obeys the rule looks like, and the two must not read the same.
 let private commandsIn (text: string) : (string * string) list =
-    let declared = prop (Fable.Yaml.parse text) "sandboxes"
-    [ for name in keysOf declared do
-        let sandbox = prop declared name
+    match Decode.fromString sandboxes (JS.JSON.stringify (Fable.Yaml.parse text)) with
+    | Error reason -> failwithf "yession.yaml is not a document this file can read: %s" reason
+    | Ok declared ->
+        [ for name, sandbox in declared do
+              match sandbox.Setup with
+              | Some line -> yield name + " setup", line
+              | None -> ()
 
-        let setup = prop sandbox "setup"
-        if isDeclared setup then
-            // `String`, never the join: a `setup:` that is a list is not a command line this
-            // file has an opinion about, and rendering it as one would invent the opinion.
-            yield name + " setup", asText setup
-
-        let entrypoint = prop (prop sandbox "container") "entrypoint"
-        if isDeclared entrypoint then
-            yield name + " entrypoint", (if isArray entrypoint then joinedWithSpaces entrypoint else asText entrypoint) ]
+              match sandbox.Entrypoint with
+              | Some line -> yield name + " entrypoint", line
+              | None -> () ]
 
 let private declaredCommands () : (string * string) list =
     match repoRoot () |> Option.bind (fun root -> readText (root + "/yession.yaml")) with
