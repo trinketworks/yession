@@ -17,6 +17,25 @@ open Thoth.Json
 open Thoth.Json.Net
 #endif
 
+/// Decoders for what a wire ADMITS where Thoth's own are more forgiving than a contract
+/// here is. Beside the codecs because they guard the same boundary: the place a value stops
+/// being JSON and starts being a type.
+[<RequireQualifiedAccess>]
+module Strict =
+
+    /// An int as a JSON NUMBER, refusing the text of one. Thoth's `int` accepts `"1234"`, and
+    /// the two macros this replaced — `typeof $0?.port === 'number'` on a spawn's readiness
+    /// line, `Number.isFinite($0)` on a stream's exit code — did not: a peer that states a
+    /// number as text is not speaking the contract, and reading it anyway would hide that
+    /// from the one process in a position to notice. A fraction is refused by Thoth's `int`
+    /// itself, where `x | 0` used to truncate one to a code no process ever returned.
+    let int : Decoder<int> =
+        Decode.value
+        |> Decode.andThen (fun raw ->
+            match Decode.fromValue "$" Decode.string raw with
+            | Ok _ -> Decode.fail "a number, not the text of one"
+            | Error _ -> Decode.int)
+
 /// A paired encoder/decoder for a single domain type. Serialization is an explicit
 /// boundary concern: codecs are written by hand so private constructors are honoured and
 /// the wire format never leaks into application logic. See docs/design.md §1 (Types

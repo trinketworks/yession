@@ -41,49 +41,13 @@ open Yession.Domain
 open Yession.Domain.Sandboxes
 open Yession.Domain.Terminals
 
+#if FABLE_COMPILER
+open Thoth.Json
+#else
+open Thoth.Json.Net
+#endif
+
 // --- Reading the control channel ------------------------------------------------------------
-
-/// A TEXT frame's JSON, as the wire admits it rather than as this client hopes: `type` says
-/// which control it is, and the other two are read only by the control that carries one.
-///
-/// `obj` for both of those, because JSON admits anything there and what JavaScript did with a
-/// surprise is part of the behaviour rather than beside it — a `reason` that arrived as a
-/// number has always reached a person as the text of that number, and a `code` has always been
-/// read through ToInt32.
-[<AllowNullLiteral>]
-type private ControlFrame =
-    abstract ``type`` : string
-    abstract code : obj
-    abstract reason : obj
-
-/// `JSON.parse`. THROWS on anything that is not JSON — ordinary here rather than exceptional,
-/// because a TEXT frame is whatever a provider chose to send.
-let private parseJson (text: string) : ControlFrame = unbox (JS.JSON.parse text)
-
-/// `String(x)` — JavaScript's own coercion to text, which is what a `reason` that arrived as
-/// something other than a string has always been put in front of a person as.
-[<Emit("String($0)")>]
-let private asText (value: obj) : string = jsNative
-
-/// JavaScript truthiness — the question `reason || "…"` asked. Kept as a question so the
-/// ANSWER is in F#, where it can be read without reconstructing an operator's table.
-[<Emit("!!$0")>]
-let private isTruthy (value: obj) : bool = jsNative
-
-/// `x | 0` — ToInt32, the coercion an `exited` frame's code is read through once there is
-/// something to read. Asked only of a value `isNumber` has already admitted, because ToInt32
-/// answers 0 for everything it cannot make sense of, and 0 is the one answer a person acts on
-/// differently.
-[<Emit("$0 | 0")>]
-let private toInt32 (value: obj) : int = jsNative
-
-/// Is this a number at all — finite, and a number rather than the text of one? `Number.isFinite`
-/// and not the global `isFinite`, which coerces first and so answers true for `"7"`, `[]` and
-/// `null` alike. It is the question `toInt32` cannot ask for itself: a bare `{"type":"exited"}`
-/// and `{"type":"exited","code":0}` are the same value to it, and only one of them is a clean
-/// exit.
-[<Emit("Number.isFinite($0)")>]
-let private isNumber (value: obj) : bool = jsNative
 
 /// The code an `exited` frame that named none is reported with: `SandboxRun`'s own answer for
 /// a process whose exit code nobody could read. NOT 0, which says the source ended well.
@@ -118,27 +82,56 @@ type Control =
     /// emit device output looks like from here, and it is the one `connect` warns about.
     | NotControl
 
-/// Read a TEXT frame.
-let control (text: string) : Control =
-    let frame =
-        try
-            parseJson text
-        with _ ->
-            null
+/// The words a `failed` frame carries, from whatever JSON put there. A string is the words. A
+/// number is its text, because a provider that sends `{"reason": 7}` has named an errno and
+/// the digits are what a person looks up. Nothing else is a reason: this used to be
+/// `String($0)`, which makes `""` of `[]` and `[object Object]` of an object, and sent both to
+/// a person as the explanation. A reason that is not words is the same as none.
+let private reasonText : Decoder<string> =
+    Decode.oneOf [ Decode.string; Decode.float |> Decode.map string ]
 
-    // JSON admits `null`, a number and a bare string, none of which carry a `type` — and text
-    // that would not parse at all arrived here as `null` too. A control frame is one that says
-    // which control it is.
-    if isNull frame || not (isTruthy (box frame.``type``)) then Control.NotControl
-    elif frame.``type`` = "exited" then
-        Control.Exited (if isNumber frame.code then toInt32 frame.code else noExitCode)
-    elif frame.``type`` = "failed" then
-        // The frame's TYPE is what says it failed; the reason is only the words. `String([])`
-        // is "", so a reason can coerce to nothing at all and there is still a failure to
-        // report.
-        let reason = if isTruthy frame.reason then asText frame.reason else ""
-        Control.Failed (if reason = "" then unstatedFailure else reason)
-    else Control.Unknown
+/// A field the frame MAY carry, read so that one this client cannot read is the same as one
+/// it did not carry. Thoth's own `optional` fails the whole value on a field that is there
+/// and unreadable, and here that would be wrong: `{"type":"exited","code":"seven"}` is an
+/// exited frame — the TYPE says so — whose code nobody could read.
+let private lenient (field: string) (decoder: Decoder<'a>) : Decoder<'a option> =
+    Decode.optional field Decode.value
+    |> Decode.map (Option.bind (fun raw -> Decode.fromValue "$" decoder raw |> Result.toOption))
+
+/// A control frame: `type` says which control it is, and the other two fields are read only
+/// by the control that carries one. Everything else JSON admits — `null`, a number, a bare
+/// string, an object with no `type`, a `type` that is not words — fails the decode, and the
+/// failure is what says "not a control frame".
+///
+/// This was four macros over an `obj`-typed parse: `!!$0` to ask whether `type` was there,
+/// `Number.isFinite($0)` and `$0 | 0` to read the code, `String($0)` to read the reason. Each
+/// was JavaScript's answer to a question F# can ask of a decoder, and each had a case the
+/// operator's table admitted that the wire never meant: `{"type": 7}` was truthy and so a
+/// control from a later spec; `7.5 | 0` was an exit 7.
+let private controlFrame : Decoder<Control> =
+    Decode.field "type" Decode.string
+    |> Decode.andThen (function
+        | "" -> Decode.fail "a control frame says which control it is"
+        | "exited" ->
+            lenient "code" Strict.int
+            |> Decode.map (function
+                | Some code -> Control.Exited code
+                | None -> Control.Exited noExitCode)
+        | "failed" ->
+            // The frame's TYPE is what says it failed; the reason is only the words.
+            lenient "reason" reasonText
+            |> Decode.map (function
+                | Some reason when reason <> "" -> Control.Failed reason
+                | _ -> Control.Failed unstatedFailure)
+        | _ -> Decode.succeed Control.Unknown)
+
+/// Read a TEXT frame. Text that will not parse, and JSON that is not a control frame, are the
+/// same `NotControl`: a provider that wrote device output to the text channel has done so in
+/// whatever shape its framework gave it.
+let control (text: string) : Control =
+    match Decode.fromString controlFrame text with
+    | Ok said -> said
+    | Error _ -> Control.NotControl
 
 /// What a frame MEANS on this wire — a different question from what it CARRIED, which is
 /// `Frame` and the one runtime test only JavaScript can make. Text is control, binary is the
@@ -293,7 +286,9 @@ let private connect
             try
                 Ok (WebSockets.connect ticket.Url)
             with error ->
-                Error (if isTruthy error.Message then error.Message else asText error)
+                // Its message when the throw carried one — a `new WebSocket` refusal always
+                // does — and what `Thrown.describe` makes of the throw when it did not.
+                Error (if System.String.IsNullOrEmpty error.Message then Thrown.describe (box error) else error.Message)
 
         match opening with
         | Error reason -> resolve (Error reason)

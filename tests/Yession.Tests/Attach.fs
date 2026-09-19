@@ -828,13 +828,44 @@ let tests =
                 (Ws.Control.Exited(-1))
                 "a code this client cannot read is not a success either"
 
-        // `String([])` is "", so a provider can send a `failed` frame whose reason coerces to
-        // nothing at all — and a failure that says nothing is unreadable.
-        testCase "a failed frame whose reason coerces to empty text still says something" <| fun () ->
+        // A reason is words. An array is not — `String([])` used to make "" of one, and a
+        // failure that says nothing is unreadable — so it is a failure that named none.
+        testCase "a failed frame whose reason is not words is a failure that named none" <| fun () ->
             Expect.equal
                 (Ws.control """{"type":"failed","reason":[]}""")
                 (Ws.Control.Failed "the source failed")
                 "a failure with no readable reason still reaches a person as words"
+
+        // The one non-string a reason admits: an errno is a number, and its digits are what a
+        // person looks up.
+        testCase "a failed frame whose reason is a number reaches a person as that number" <| fun () ->
+            Expect.equal
+                (Ws.control """{"type":"failed","reason":7}""")
+                (Ws.Control.Failed "7")
+                "a numeric reason is its text, not an unreadable one"
+
+        // Thoth's `int` reads `"7"` as 7. The wire says a code is a number, and a provider that
+        // sends the text of one is not speaking it — the case `"seven"` above cannot pin.
+        testCase "an exited frame whose code is the text of a number did not name a code" <| fun () ->
+            Expect.equal
+                (Ws.control """{"type":"exited","code":"7"}""")
+                (Ws.Control.Exited(-1))
+                "a number as text is not a number"
+
+        // `x | 0` used to make an exit 7 of this — a code no process ever returned.
+        testCase "an exited frame whose code is a fraction did not name a code" <| fun () ->
+            Expect.equal
+                (Ws.control """{"type":"exited","code":7.5}""")
+                (Ws.Control.Exited(-1))
+                "a fraction is not an exit code"
+
+        // JavaScript truthiness used to admit this as a control from a later spec. A control
+        // frame says which control it is, in words.
+        testCase "JSON whose type is not words is not a control frame" <| fun () ->
+            Expect.equal
+                (Ws.control """{"type":7}""")
+                Ws.Control.NotControl
+                "a type that is not a string names no control"
 
         // The frame's TYPE decides whether it failed; the reason is only the words. An empty
         // one reaching here means the frame decoder let one through, not that nothing failed.
