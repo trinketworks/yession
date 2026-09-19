@@ -392,12 +392,17 @@ let private script =
     // SERVER computed as the new location, then reopen the stream at it. The first frame is
     // the whole snapshot for the new query, so one click is one swap and no page reloads —
     // which is also why focus is never stranded.
+    //
+    // PUSHED, not replaced: the filter is the page's location, and the chips' whole claim to
+    // being links is that a bookmark restores one and the back button undoes one. A replace
+    // kept the first half and quietly broke the second — Back left the page — while the
+    // `popstate` handler below waited for an event that a chip click could never produce.
     document.addEventListener('click', (e) => {
       const a = e.target.closest('[data-filter]'); if (!a) return
       if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return
       e.preventDefault()
-      history.replaceState(null, '', a.getAttribute('href'))
-      openRows()
+      history.pushState(null, '', a.getAttribute('href'))
+      openRows(true)
     })
     // Creating is deliberately NOT intercepted here (the reasoning is on the form itself).
     // Declaring an MCP server (Plan 17): the only place a url is written, and the only
@@ -421,15 +426,23 @@ let private script =
     // filters per connection, so live status keeps arriving under whatever is being shown.
     // Its address is on the section it fills, like every other address on this page: the
     // server spells them all (`ManagerRoute`), and this script spells none.
+    //
+    // A stream reopened for a NEW query owes the page its first frame: until it lands, the
+    // address says one filter and the rows say another. If it fails before then — offline, a
+    // Manager mid-restart — the page reloads at the address it already has, which the server
+    // renders correctly by construction. Only then: the same error on a stream that had
+    // already delivered is an ordinary drop, and `EventSource` reconnects on its own.
     let rows = null
-    const openRows = () => {
+    const openRows = (moved) => {
       if (rows) rows.close()
+      let settled = !moved
       rows = new EventSource(sessionsEl().getAttribute('data-stream') + location.search)
-      rows.onmessage = (e) => { if (e.data) swap(sessionsEl(), e.data) }
+      rows.onmessage = (e) => { settled = true; if (e.data) swap(sessionsEl(), e.data) }
+      rows.onerror = () => { if (!settled) { settled = true; location.reload() } }
     }
-    openRows()
+    openRows(false)
     // The back button moves the filter, so the stream has to move with it.
-    window.addEventListener('popstate', openRows)
+    window.addEventListener('popstate', () => openRows(true))
     """
 
 /// One declared MCP server (Plan 17). The AUDIENCE is a column rather than a separate
