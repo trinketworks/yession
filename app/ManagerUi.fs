@@ -721,11 +721,6 @@ let private cssUrl = ManagerRoute.path (ManagerRoute.asset assets.Build AssetFil
 let private decodeBase64 (encoded: string) : string =
     unbox (buffer.Buffer.from (encoded, BufferEncoding.Base64))
 
-let private readBody (req: IncomingMessage) (cont: string -> unit) =
-    let mutable acc = ""
-    req.on ("data", fun chunk -> acc <- acc + bufferToString chunk) |> ignore
-    req.on ("end", fun _ -> cont acc) |> ignore
-
 let private respondWith (res: ServerResponse) (status: int) (contentType: string) (cacheControl: string) (body: string) =
     res.writeHead (status, createObj [ "content-type", box contentType; "cache-control", box cacheControl ]) |> ignore
     res.``end`` body

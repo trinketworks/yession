@@ -548,10 +548,16 @@ type Readable =
     /// What to attach when the bytes have to be READ on the way past.
     ///
     /// A chunk is a `Buffer`, whatever `Fable.Node` says about a child process's streams —
-    /// text is the caller's conversion to make, and a decoding that spans chunks is what
-    /// `TextDecoder` above is for.
+    /// unless `setEncoding` was called, after which it is text and `Readables.text` below is
+    /// the way to say so.
     [<Emit("$0.on('data', $1)")>]
     abstract onData : handler: (Buffer -> unit) -> unit
+
+    /// Have the STREAM decode its bytes to text, with the tail of a character a chunk
+    /// boundary cut in half carried into the next chunk — which per-chunk `toString('utf8')`
+    /// cannot do, and is why a `TextDecoder` is held rather than called. Node returns the
+    /// stream, for chaining; nothing here chains.
+    abstract setEncoding : encoding: BufferEncoding -> Readable
 
     /// The stream ended: every byte it had has been handed on. Mutually exclusive with
     /// `onError`, which is why a caller that settles on either settles once.
@@ -560,6 +566,27 @@ type Readable =
 
     [<Emit("$0.on('error', $1)")>]
     abstract onError : handler: (StreamError -> unit) -> unit
+
+[<RequireQualifiedAccess>]
+module Readables =
+
+    /// The data event AFTER `setEncoding`, when a chunk is a string. Private, because the type
+    /// is true only on that side of the call: attached to a stream nobody told to decode, it
+    /// hands a `Buffer` to a handler that was promised text.
+    [<Emit("$0.on('data', $1)")>]
+    let private onText (stream: Readable) (handler: string -> unit) : unit = jsNative
+
+    /// Every chunk as TEXT. One verb rather than `setEncoding` and a data event apart, for
+    /// the reason the WebSocket bindings above keep `payload` as the only way in: a handler
+    /// typed `string` is a promise the encoding keeps, and a caller who could attach one
+    /// without the other is the caller who gets bytes where the type said text.
+    ///
+    /// Sixteen readers in this repository used to ask `typeof chunk === 'string'` and call
+    /// `toString('utf8')` on the other branch — a decision per chunk, made in JavaScript, and
+    /// wrong at every chunk boundary that split a multi-byte character.
+    let text (stream: Readable) (handler: string -> unit) : unit =
+        stream.setEncoding BufferEncoding.Utf8 |> ignore
+        onText stream handler
 
 /// A message that ARRIVED over HTTP — its headers, and its body as the stream it is. Both
 /// halves of an exchange are one of these on the receiving side, which is why the shape is

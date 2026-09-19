@@ -209,11 +209,6 @@ let private bodyDecoder : Decoder<GitHubRequestBody> =
         { Scope = get.Optional.Field "scope" Decode.string |> Option.defaultValue "mine"
           Token = get.Optional.Field "token" Decode.string })
 
-let private readBody (req: IncomingMessage) (cont: string -> unit) =
-    let mutable acc = ""
-    req.on ("data", fun chunk -> acc <- acc + bufferToString chunk) |> ignore
-    req.on ("end", fun _ -> cont acc) |> ignore
-
 let private respondJson (res: ServerResponse) (status: int) (json: string) =
     res.writeHead (status, createObj [ "content-type", box "application/json"; "cache-control", box "no-store" ]) |> ignore
     res.``end`` json

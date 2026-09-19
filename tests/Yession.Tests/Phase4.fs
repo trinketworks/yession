@@ -1606,18 +1606,10 @@ let private spawnRaw : obj = Fable.Core.Util.jsNative
 [<Emit("$0(process.execPath, [$1, '--auth', 'localhost', ...$2], { env: { ...process.env, YESSION_SPAWN_MAIN: $4, ...Object.fromEntries($3) }, stdio: ['pipe', 'pipe', 'inherit'] })")>]
 let private spawnBundle (spawn: obj) (managerJs: string) (args: string array) (env: (string * string) array) (sessionJs: string) : obj = Fable.Core.Util.jsNative
 
-[<Emit("$0.stdout.on('data', $1)")>]
-let private onStdout (child: obj) (handler: obj -> unit) : unit = Fable.Core.Util.jsNative
-
-[<Emit("typeof $0 === 'string'")>]
-let private isJsString (chunk: obj) : bool = Fable.Core.Util.jsNative
-
-[<Emit("$0.toString('utf8')")>]
-let private decodeUtf8 (chunk: obj) : string = Fable.Core.Util.jsNative
-
-/// A stdout chunk as text: Node hands over a Buffer unless an encoding was set on the stream.
-let private chunkToString (chunk: obj) : string =
-    if isJsString chunk then unbox<string> chunk else decodeUtf8 chunk
+/// The spawned bundle's stdout, as the `Readable` it is — so the stream is told to decode,
+/// rather than each chunk being asked whether it already has been.
+[<Emit("$0.stdout")>]
+let private stdoutOf (child: obj) : Fable.NodeExtras.Readable = Fable.Core.Util.jsNative
 
 [<Emit("$0.kill('SIGKILL')")>]
 let private killBinary (child: obj) : unit = Fable.Core.Util.jsNative
@@ -1652,8 +1644,8 @@ let private startPackagedManager (args: string list) (env: (string * string) lis
                 settled <- true
                 econt (Exception (sprintf "packaged manager failed to start: %A" e)))) "$0.on('error', $1)"
         let mutable buffer = ""
-        onStdout child (fun chunk ->
-            buffer <- buffer + chunkToString chunk
+        Fable.NodeExtras.Readables.text (stdoutOf child) (fun chunk ->
+            buffer <- buffer + chunk
             let parts = buffer.Split '\n'
             buffer <- parts.[parts.Length - 1]
             for line in parts.[0 .. parts.Length - 2] do

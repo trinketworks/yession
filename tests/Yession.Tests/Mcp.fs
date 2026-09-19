@@ -282,10 +282,12 @@ let private headersOf (entries: (string * string) list) : obj =
 let private pathOf (url: string) = (url.Split('?').[0]).Split('#').[0]
 
 /// Read the whole body, then answer. Every frame this server takes is small and it decodes
-/// each one entire, so there is nothing here to stream.
-let private readBody (req: Interop.IncomingMessage) (answer: string -> unit) =
+/// each one entire, so there is nothing here to stream. The EXAMPLE's request type and the
+/// example's own reader, because this rig is the serial provider's server: the example owns
+/// its copies of these (the examples rule), and `Interop.` in this file names two modules.
+let private readBody (req: SerialProvider.Interop.IncomingMessage) (answer: string -> unit) =
     let body = System.Text.StringBuilder ()
-    req.on ("data", fun chunk -> body.Append (Interop.bufferToString chunk) |> ignore) |> ignore
+    req.on ("data", fun chunk -> body.Append (SerialProvider.Interop.bufferToString chunk) |> ignore) |> ignore
     req.on ("end", fun _ -> answer (body.ToString ())) |> ignore
 
 /// One text block, which is all any of these tools answers with.

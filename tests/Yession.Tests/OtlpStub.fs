@@ -150,11 +150,6 @@ type Stub =
       Received : unit -> ReceivedLog list
       Close : unit -> unit }
 
-let private readBody (req: Interop.IncomingMessage) (cont: string -> unit) =
-    let mutable acc = ""
-    req.on ("data", fun chunk -> acc <- acc + Interop.bufferToString chunk) |> ignore
-    req.on ("end", fun _ -> cont acc) |> ignore
-
 /// Start a stub OTLP collector on localhost, calling `onRecord` for each decoded record (so a
 /// caller can await arrival without polling). Any POST body is decoded and its records appended.
 let startWith (onRecord: ReceivedLog -> unit) : Async<Stub> =
@@ -164,7 +159,7 @@ let startWith (onRecord: ReceivedLog -> unit) : Async<Stub> =
             Interop.createServer (fun req res ->
                 match req.``method`` with
                 | "POST" ->
-                    readBody req (fun body ->
+                    Interop.readBody req (fun body ->
                         for r in decode body do
                             received.Add r
                             onRecord r
