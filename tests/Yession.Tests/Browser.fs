@@ -3988,6 +3988,76 @@ let frontedTests =
             }
     ]
 
+// --- The management page's filters (browser) ----------------------------------------------
+//
+// A filter chip is a link because the filter is the page's LOCATION: a bookmark restores it
+// and the back button undoes it. The first half is the server's (the URL is parsed on every
+// render) and the cheap tier pins it; the second is the page script's, and only a browser
+// with a history can observe it — which is how the script came to `replaceState` on a chip
+// click, leaving Back to exit the page, while a `popstate` handler waited for an event no
+// click could produce.
+
+let private FILTERS_MANAGER_PORT = 8194
+let private filtersDataDir = "tests/browser/.data-filters"
+
+let filterTests =
+    testList "The management page's filters (browser)" [
+        testCaseAsync "a filter click is a history entry: Back undoes it, and the rows follow" <|
+            async {
+                if Directory.Exists filtersDataDir then Directory.Delete (filtersDataDir, true)
+                let manager =
+                    deploy
+                        "the Manager"
+                        "node"
+                        [ "app/out/Main.js"; "--auth"; "localhost"; "--secrets"; "ephemeral"
+                          "--port"; string FILTERS_MANAGER_PORT; "--data-dir"; filtersDataDir ]
+                        []
+                        (fun line -> line.Contains "management UI at")
+                let mutable browserToClose : IBrowser option = None
+                let mutable playwrightToDispose : IPlaywright option = None
+                try
+                    let! pw = await (Playwright.CreateAsync ())
+                    playwrightToDispose <- Some pw
+                    let! br = await (pw.Chromium.LaunchAsync (BrowserTypeLaunchOptions (ExecutablePath = chromiumPath ())))
+                    browserToClose <- Some br
+                    let! page = await (br.NewPageAsync ())
+                    page.SetDefaultTimeout 30000.0f
+                    let evidence = watching page
+                    do! reporting "filter history" page evidence <| async {
+                    let! _ = await (page.GotoAsync (sprintf "http://127.0.0.1:%d/" FILTERS_MANAGER_PORT))
+                    let archived = sprintf "[%s=\"show-archived\"]" Yession.App.Dom.Manager.filter
+                    let! _ = await (page.WaitForSelectorAsync archived)
+                    do! awaitU (page.ClickAsync archived)
+
+                    // Both halves of one click, read off the page: the address carries the
+                    // filter, and the rows stream has answered for it — which shows as the chip
+                    // re-rendered for the NEW query, linking back to the one without it.
+                    let lit =
+                        sprintf
+                            """() => location.search.includes('show=archived')
+                                  && !document.querySelector('[%s="show-archived"]')?.getAttribute('href')?.includes('show=archived')"""
+                            Yession.App.Dom.Manager.filter
+                    let! _ = await (page.WaitForFunctionAsync lit)
+
+                    // Back is the promise. It must stay on this page, take the filter out of
+                    // the address, and move the rows with it — the chip links to adding it again.
+                    let! _ = await (page.GoBackAsync ())
+                    let unlit =
+                        sprintf
+                            """() => location.pathname === '/'
+                                  && !location.search.includes('show=archived')
+                                  && !!document.querySelector('[%s="show-archived"]')?.getAttribute('href')?.includes('show=archived')"""
+                            Yession.App.Dom.Manager.filter
+                    let! _ = await (page.WaitForFunctionAsync unlit)
+                    ()
+                    }
+                finally
+                    browserToClose |> Option.iter (fun b -> b.CloseAsync () |> ignore)
+                    playwrightToDispose |> Option.iter (fun p -> p.Dispose ())
+                    manager.Stop ()
+            }
+    ]
+
 #else
 
 // Fable (JS on Node): Playwright is a .NET driver and does not exist here, so the flows above
@@ -3998,5 +4068,6 @@ let editorTests : Fable.Pyxpecto.Model.TestCase = testList "Editor rendering (br
 let mountedTests : Fable.Pyxpecto.Model.TestCase = testList "Path-mounted session (browser)" []
 let frontDoorTests : Fable.Pyxpecto.Model.TestCase = testList "Creating a session behind a front door (browser)" []
 let frontedTests : Fable.Pyxpecto.Model.TestCase = testList "A fronted deployment, for real (browser)" []
+let filterTests : Fable.Pyxpecto.Model.TestCase = testList "The management page's filters (browser)" []
 
 #endif
