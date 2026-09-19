@@ -142,6 +142,7 @@
     <ProjectReference Include="..\src\Fable.NodeExtras\Fable.NodeExtras.fsproj" />
     <!-- The markdown parse the SSR timeline renders a message body through. -->
     <ProjectReference Include="..\src\Fable.ProseMirror\Fable.ProseMirror.fsproj" />
+    <ProjectReference Include="..\src\Fable.Xterm\Fable.Xterm.fsproj" />
     <ProjectReference Include="..\src\Fable.Keyring\Fable.Keyring.fsproj" />
     <ProjectReference Include="..\src\Fable.OpenIdClient\Fable.OpenIdClient.fsproj" />
     <ProjectReference Include="..\src\Fable.OpenTelemetry\Fable.OpenTelemetry.fsproj" />

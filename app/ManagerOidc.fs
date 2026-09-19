@@ -25,14 +25,37 @@ open Yession.Host.Interop
 
 let private urlEncode (s: string) : string = JS.encodeURIComponent s
 
-/// The public JWK with the id and algorithm this Manager signs under written onto it.
-[<Emit("({ ...$0, kid: $1, alg: 'EdDSA', use: 'sig' })")>]
-let private annotatedJwk (publicJwk: obj) (kid: string) : obj = jsNative
+/// One entry of the JWKS document: the public key's parameters, with the id and algorithm
+/// this Manager signs under written beside them. Named field by field rather than spread
+/// from the exported JWK, so the entry carries exactly what is listed here: a parameter the
+/// public key does not have is absent (`None` is not serialised), and a private one could
+/// not be copied through even if a key ever exported it.
+[<RequireQualifiedAccess>]
+type private SigningKey =
+    { kty : string
+      crv : string option
+      x : string option
+      y : string option
+      n : string option
+      e : string option
+      kid : string
+      alg : string
+      ``use`` : string }
 
 /// The JWKS document: the public JWK annotated with its id and algorithm. Only ever
 /// called with the PUBLIC key — exporting the private key would throw (non-extractable).
-let private jwksJson (publicJwk: obj) (kid: string) : string =
-    JS.JSON.stringify {| keys = [| annotatedJwk publicJwk kid |] |}
+let private jwksJson (publicJwk: Fable.Jose.Jwk) (kid: string) : string =
+    let key =
+        { SigningKey.kty = publicJwk.kty
+          SigningKey.crv = publicJwk.crv
+          SigningKey.x = publicJwk.x
+          SigningKey.y = publicJwk.y
+          SigningKey.n = publicJwk.n
+          SigningKey.e = publicJwk.e
+          SigningKey.kid = kid
+          SigningKey.alg = "EdDSA"
+          SigningKey.``use`` = "sig" }
+    JS.JSON.stringify {| keys = [| key |] |}
 
 let private respond (res: ServerResponse) (status: int) (contentType: string) (body: string) =
     res.writeHead (status, createObj [ "content-type", box contentType; "cache-control", box "no-store" ]) |> ignore

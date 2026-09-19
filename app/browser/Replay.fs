@@ -14,45 +14,25 @@ module Yession.Browser.Replay
 // the standard player replays it. The player also brings timing, seek and play/pause, which
 // IS the audit-read affordance.
 //
-// Bindings are hand-written `[<Import>]`/`[<Emit>]` over the small surface used — the
-// `Emulator.fs` / `ProseMirror.fs` precedent, and the repo invariant that the platform
-// boundary is interop rather than authored JS.
+// The bindings are `Fable.AsciinemaPlayer` — the slice of the player this view uses.
 
-open Fable.Core
 open Fable.Core.JsInterop
-open Fable.ProseMirror
+open Fable.AsciinemaPlayer
+open Fable.BrowserExtras
 open Yession.App
-
-/// What `create` hands back. Only `dispose` is used: a replay is mounted when a closed
-/// terminal is shown and torn down when it is not, and a player left attached to a detached
-/// node keeps its worker alive.
-type [<AllowNullLiteral>] private Player =
-    abstract dispose : unit -> unit
-
-/// The player's own `ended` event — playback ran off the end of the cast. The DVR's catch-up
-/// signal (Plan 14, stage 7): a rewound cast ends at the pin, so ending it means the reader
-/// caught up.
-[<Emit("$0.addEventListener('ended', $1)")>]
-let private onEnded (player: Player) (handler: unit -> unit) : unit = jsNative
-
-/// `asciinema-player` 3.x ships proper ESM with an `exports` map, so a named import resolves —
-/// unlike `@xterm/headless`, whose CommonJS `main` forced `ImportDefault`.
-[<ImportMember("asciinema-player")>]
-let private create (src: obj) (element: Browser.Types.Element) (opts: obj) : Player = jsNative
 
 /// A Blob URL over the `.cast` text, so the player fetches it the way it fetches any
 /// recording. Built from what the client already has rather than from a new whole-file route:
 /// concatenating transcript chunks reproduces the file byte for byte (see
 /// `TranscriptChunk`), so the replay rides the browser's HTTP cache — which is exactly what
 /// the design chose immutable chunks for.
-[<Emit("URL.createObjectURL(new Blob([$0], { type: 'text/plain' }))")>]
-let private blobUrl (text: string) : string = jsNative
-
-[<Emit("URL.revokeObjectURL($0)")>]
-let private revoke (url: string) : unit = jsNative
-
-[<Emit("$0.media = $1")>]
-let private setMedia (link: Browser.Types.Element) (media: string) : unit = jsNative
+let private blobUrl (text: string) : string =
+    let cast =
+        Browser.Blob.Blob.Create (
+            [| box text |],
+            jsOptions<Browser.Types.BlobPropertyBag> (fun o -> o.``type`` <- "text/plain")
+        )
+    ObjectUrls.create cast
 
 /// Turn on the player's stylesheet, which the shell links inert (`Style.deferredHeadTags`):
 /// most sessions never open a recording, and a second render-blocking sheet in the head would
@@ -62,9 +42,9 @@ let private setMedia (link: Browser.Types.Element) (media: string) : unit = jsNa
 /// Idempotent, and a no-op where no such link exists: a page may mount a replay without being
 /// the shell (the editor harness does).
 let private enableStylesheet (hook: string) : unit =
-    match Browser.Dom.document.querySelector ("[" + hook + "]") with
+    match Browser.Dom.document.querySelector ("link[" + hook + "]") with
     | null -> ()
-    | link -> setMedia link "all"
+    | link -> (link :?> Browser.Types.HTMLLinkElement).media <- "all"
 
 /// One mounted replay, and how to take it down.
 type Mounted =
@@ -95,20 +75,22 @@ type Mounted =
 let mount (element: Browser.Types.Element) (replay: PaneReplay) (caughtUp: (unit -> unit) option) : Mounted =
     enableStylesheet Dom.playerStylesheetHook
     let url = blobUrl replay.Cast
-    let options =
-        [ "fit" ==> "width"
-          "idleTimeLimit" ==> 2
-          // The same face a live terminal wears. A literal here meant a recording replayed in
-          // a different typeface than the terminal beside it — invisible on a box where both
-          // fell back to the platform mono, plain on any box where they did not.
-          "terminalFontFamily" ==> "var(--font-terminal)" ]
-        @ (match replay.StartAt with Some at -> [ "startAt" ==> at ] | None -> [])
-        @ (match replay.Poster with Some at -> [ "poster" ==> sprintf "npt:%f" at ] | None -> [])
-    let player = create (box url) element (createObj options)
-    caughtUp |> Option.iter (onEnded player)
+    let player =
+        Fable.AsciinemaPlayer.create
+            url
+            element
+            { Options.fit = "width"
+              Options.idleTimeLimit = 2
+              // The same face a live terminal wears. A literal here meant a recording replayed
+              // in a different typeface than the terminal beside it — invisible on a box where
+              // both fell back to the platform mono, plain on any box where they did not.
+              Options.terminalFontFamily = "var(--font-terminal)"
+              Options.startAt = replay.StartAt
+              Options.poster = replay.Poster |> Option.map (sprintf "npt:%f") }
+    caughtUp |> Option.iter (fun handler -> player.addEventListener ("ended", handler))
     { Dispose =
         fun () ->
             player.dispose ()
             // The Blob outlives the player unless it is revoked, and a panel someone clicks
             // through leaks one per terminal otherwise.
-            revoke url }
+            ObjectUrls.revoke url }

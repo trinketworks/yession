@@ -17,6 +17,8 @@
     <Project Path="src/Fable.OpenTelemetry/Fable.OpenTelemetry.fsproj" />
     <Project Path="src/Fable.BrowserExtras/Fable.BrowserExtras.fsproj" />
     <Project Path="src/Fable.ProseMirror/Fable.ProseMirror.fsproj" />
+    <Project Path="src/Fable.Xterm/Fable.Xterm.fsproj" />
+    <Project Path="src/Fable.AsciinemaPlayer/Fable.AsciinemaPlayer.fsproj" />
     <Project Path="src/Fable.ClaudeAgentSdk/Fable.ClaudeAgentSdk.fsproj" />
     <Project Path="src/Fable.NodeExtras/Fable.NodeExtras.fsproj" />
     <Project Path="src/Fable.Zod/Fable.Zod.fsproj" />

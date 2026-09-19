@@ -47,8 +47,32 @@ open Yession.App
 // reads a private detail of the render below, so it goes quietly VACUOUS the day the scroll
 // is preserved some other way: no calls, count zero, budget met, nothing to see. This is the
 // render saying what it did, and it is wrong only if it is removed.
-[<Emit("globalThis.__yessionRenders = (globalThis.__yessionRenders || 0) + 1")>]
-let private countRender () : unit = jsNative
+//
+// It is `globalThis.__yessionRenders`, and the two readers outside this project — the
+// render-budget case in `Browser.fs`, and the frames tool's recorder — read it by that
+// name in the page. The harness reads it through `renders` below.
+type private RenderCounter =
+    /// Absent until the first render of this document.
+    abstract __yessionRenders : int option with get, set
+
+let private counter () : RenderCounter = unbox Browser.Dom.window
+
+let private countRender () : unit =
+    let page = counter ()
+    page.__yessionRenders <-
+        Some (
+            match page.__yessionRenders with
+            | Some n -> n + 1
+            | None -> 1
+        )
+
+/// How many times the whole view has been rendered since this document loaded — the count
+/// published above, read back so a scenario counts the renders the APP made rather than a
+/// count of its own. Zero before the first.
+let renders () : int =
+    match (counter ()).__yessionRenders with
+    | Some n -> n
+    | None -> 0
 
 // The two surfaces that are read from their END — the chat, and a terminal's scrollback.
 // Both are pinned to the bottom while the reader is at (or within a few px of) it, and both
