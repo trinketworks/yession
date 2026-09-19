@@ -537,19 +537,40 @@ written — the tell is one name meaning an option in the outer scope and its co
 inner. Do not give a binding two types under one name; why CI's checker minds when nothing here
 does is not yet known, and until it is, the rename is the fix.
 
-CI's `lint` also costs far more than this box's, and what it costs is decided by the assembly
-GRAPH rather than by how much source a change touches. A four-line conversion in `View.fs`
-needed one field `Fable.Browser.Dom` does not type, so it declared `Fable.BrowserExtras` and
-`Fable.Browser.Dom` on `Yession.App` — which `Yession.Host` and `Yession.Tests` both reference,
-so one line of `.fsproj` widened the population three of the scoping rules walk, over the two
-biggest projects there are. The step ran past 48 minutes, twice, where it takes about ten; the
-same commit linted in 610s from a cold worktree here and 585s warm, exit 0 every time, and no
-local run of any shape reproduced it. Removing those two references — nothing else — brought CI
-back to 10m24s and green. So: a `ProjectReference` or a binding `PackageReference` added to a
-project that sits LOW in the graph is not the free tidiness it looks like, and the tell that you
-are about to pay for one is that CI hangs somewhere no local run does. Declare the dependency on
-the project that actually uses it, and where that is not the same project, a one-line `[<Emit>]`
-beside the use costs two duplicated lines and nothing else.
+This file used to say that a reference is what CI's `lint` cannot afford, and that a one-line
+`[<Emit>]` beside the use was the way around it. That was wrong, and it is worth keeping the
+correction rather than the rule, because the reasoning failed in a way that is easy to repeat.
+
+What happened: a four-line conversion in `View.fs` declared `Fable.BrowserExtras` and
+`Fable.Browser.Dom` on `Yession.App`, and CI's whole-solution `lint` step then ran past 48
+minutes twice — both times never finishing, the job killed around it — where it takes about
+ten. Removing the two references brought it back. The conclusion drawn was that the reference
+had widened the population three of the scoping rules walk, so references low in the graph
+were the thing to avoid.
+
+The analyzer was the fault. `Population` and `Expressions` each kept a dictionary keyed by
+project that never evicted, and those entries hold FCS symbols, which retain a project's whole
+check results — so a run over the solution held all 23 projects at once, climbed to 10.5 GB,
+and was killed by GitHub's 16 GB runners four times in one day (`Kept.fs` records the
+measurements). That is the state those two runs fell off. The extra assembly did not cost 38
+minutes of work; it cost a few hundred megabytes on a process already at the ceiling, and what
+followed was a garbage collector the run never came out of. `Kept` fixed it the next day — one
+project's answer at a time, 4.1 GB, half the wall-clock — and the rule, written 21 hours
+before anyone found the leak, was never revisited.
+
+Measured since, on the whole solution in one process, which is how CI runs it: **168s and
+5.80 GB** without those two references, **175s and 6.38 GB** with them. Seven seconds.
+
+Two smaller things the original account got wrong, both checkable: `Fable.Browser.Dom` was
+already arriving transitively through `Fable.Lit` and the view was already using it, so naming
+it added nothing to the referenced-assembly closure; and the only genuinely new assembly,
+`Fable.BrowserExtras`, is about two hundred lines.
+
+So: declare the dependency on the project that uses it. `[<Emit>]` is for binding an API this
+repository does not own — not for avoiding a reference, which was never the cost it was
+charged with. The population a scoping rule walks is a real expense and worth knowing about;
+it is measured in seconds, and a defect that turns it into an hour is a defect to fix in the
+analyzer.
 
 Every rule carries a fixture — `analyzers/fixtures/<Rule>Fixture` — whose source says in
 `// YES00n` markers which of its cases must be reported (across several files where the rule is

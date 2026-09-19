@@ -9,6 +9,7 @@ open Yession.Domain.Collab
 open Yession.Domain.Tools
 open Yession.Domain.Chat
 open Yession.Domain.Prs
+open Fable.BrowserExtras
 open Lit
 
 /// The client shell as Fable.Lit templates. The view is a total function of the model
@@ -1203,22 +1204,24 @@ module View =
                   {action}
                 </section>"""
 
-    /// Whether the event has a target that carries a caret at all. A `@focus` on something
-    /// that is not a text input, and an event with no target, both answer no.
+    /// Whether the event's target carries a caret at all. The one question no binding can
+    /// answer: `selectionStart` is a property of the text inputs and nothing else, and a
+    /// `@focus` on a button — or an event with no target — has to be told apart from an input
+    /// whose caret happens to sit at 0. `typeof` is what JavaScript has to say it with.
     [<Fable.Core.Emit("typeof $0?.target?.selectionStart === 'number'")>]
-    let private hasSelection (e: obj) : bool = Fable.Core.Util.jsNative
-
-    [<Fable.Core.Emit("$0.target.selectionStart")>]
-    let private selectionStart (e: obj) : int = Fable.Core.Util.jsNative
-
-    [<Fable.Core.Emit("$0.target.selectionEnd")>]
-    let private selectionEnd (e: obj) : int = Fable.Core.Util.jsNative
+    let private hasCaret (e: Browser.Types.Event) : bool = Fable.Core.Util.jsNative
 
     /// The `(selectionStart, selectionEnd)` of the event's target input, or `None`. Read live
     /// from the DOM; only ever invoked in the browser (SSR drops event bindings), so the `.NET`
     /// type-check sees a signature it never runs.
     let private selectionOf (e: obj) : (int * int) option =
-        if hasSelection e then Some (selectionStart e, selectionEnd e) else None
+        let event = e :?> Browser.Types.Event
+
+        if not (hasCaret event) then
+            None
+        else
+            let field = event.target :?> Browser.Types.HTMLInputElement
+            Some (int field.selectionStart, int field.selectionEnd)
 
     /// Enter, in a one-line field that has nothing to submit: let go of it.
     ///
@@ -1232,15 +1235,8 @@ module View =
     ///
     /// `isComposing` guards the IME exactly as the command line's Enter does (`Browser`'s
     /// `bindTerminalInput`): mid-composition, Enter accepts a candidate word, and taking the
-    /// field away from someone in the middle of typing one is not what they asked for.
-    /// Whether this key event arrived while an input method editor was composing.
-    /// `Fable.Browser.Dom`'s `KeyboardEvent` stops at the key and the modifiers, so the one
-    /// field that decides whether an Enter is a person committing a candidate word has to be
-    /// read directly. `Fable.BrowserExtras` declares the same binding for the browser client;
-    /// this project cannot reach it, and giving it that reference is not worth what it costs
-    /// the analyzer over `Yession.Host` and `Yession.Tests`, which both reference this.
-    [<Fable.Core.Emit("$0.isComposing")>]
-    let private isComposing (e: Browser.Types.KeyboardEvent) : bool = Fable.Core.Util.jsNative
+    /// field away from someone in the middle of typing one is not what they asked for. The
+    /// binding is `Fable.BrowserExtras`'s, which is where the browser client reads it from.
 
     let private commitOnEnter (e: Browser.Types.KeyboardEvent) : unit =
         if e.key = "Enter" && not (isComposing e) then
