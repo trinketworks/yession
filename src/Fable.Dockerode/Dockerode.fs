@@ -12,26 +12,32 @@ module Fable.Dockerode
 open Fable.Core
 open Fable.Core.JsInterop
 
-/// The slice of a Node stream we consume: event subscription, plus write/end for the
-/// hijacked exec duplex (stdin rides the same socket the output is demuxed from).
+/// The slice of a Node stream we consume. A dockerode stream IS a Node readable — the
+/// hijacked exec duplex, a demuxed `PassThrough`, a progress stream — so it is one here too,
+/// which is what lets a consumer tell it to decode (`Readables.text`) and listen to its
+/// `end` and `error` by type. What is added is write/end for the hijacked exec duplex
+/// (stdin rides the same socket the output is demuxed from).
 type [<AllowNullLiteral>] Stream =
-    abstract on: event: string * handler: (obj -> unit) -> Stream
+    inherit Fable.NodeExtras.Readable
     abstract write: chunk: obj -> bool
     abstract ``end``: unit -> unit
-    /// Tear the stream down — what a follower does once it has read what it came for.
-    abstract destroy: unit -> unit
 
 /// A `node:stream` PassThrough — a writable sink `demuxStream` pushes one output stream
 /// into, and a readable we drain via its `'data'`/`'end'` events.
 type [<AllowNullLiteral>] PassThrough =
     inherit Stream
 
+/// What `exec.inspect()` answers with, of it: the exit code — `null` while the process is
+/// still running, and for a container that was killed rather than exiting, which is `None`.
+type [<AllowNullLiteral>] ExecInspect =
+    abstract ExitCode: int option
+
 /// A running `docker exec` handle.
 type [<AllowNullLiteral>] Exec =
     /// Start the exec; resolves to the (multiplexed) output stream.
     abstract start: options: obj -> JS.Promise<Stream>
-    /// Inspect after completion; the result carries `ExitCode` (null while running).
-    abstract inspect: unit -> JS.Promise<obj>
+    /// Inspect after completion.
+    abstract inspect: unit -> JS.Promise<ExecInspect>
 
 /// A container handle (created, or looked up by name/id).
 type [<AllowNullLiteral>] Container =
@@ -58,8 +64,9 @@ type [<AllowNullLiteral>] Image =
 type [<AllowNullLiteral>] Modem =
     /// Split Docker's multiplexed exec stream into stdout/stderr sinks.
     abstract demuxStream: source: Stream * stdout: PassThrough * stderr: PassThrough -> unit
-    /// Drain a build/pull progress stream, calling back once when it finishes: `(err, output)`.
-    abstract followProgress: source: Stream * onFinished: (obj -> obj -> unit) -> unit
+    /// Drain a build/pull progress stream, calling back once when it finishes: `(err, output)`,
+    /// where `err` is `null` — `None` — when it finished well.
+    abstract followProgress: source: Stream * onFinished: (Fable.NodeExtras.StreamError option -> obj -> unit) -> unit
 
 /// The dockerode client, bound to the local daemon socket.
 type [<AllowNullLiteral>] Docker =
