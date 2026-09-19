@@ -203,6 +203,22 @@ module Clipboard =
     [<Emit("navigator.clipboard.writeText($0)")>]
     let writeClipboardText (text: string) : JS.Promise<unit> = jsNative
 
+/// `URL.createObjectURL` and its revoke: a `blob:` address over an in-memory `Blob`, which
+/// the browser fetches like any other address until the address is revoked. `Fable.Browser.Dom`
+/// stops short of `URL`; the upstream binding is `Fable.Browser.Url`, a package this
+/// repository does not otherwise need, and two static members are not worth the NuGet closure
+/// moving for.
+///
+/// Revoke is the caller's: a Blob lives as long as an address to it does, so a page that
+/// mints one per mount and never revokes leaks one per mount.
+module ObjectUrls =
+
+    [<Emit("URL.createObjectURL($0)")>]
+    let create (blob: Blob) : string = jsNative
+
+    [<Emit("URL.revokeObjectURL($0)")>]
+    let revoke (url: string) : unit = jsNative
+
 /// The slice of the Cache API that a READ goes through. `Fable.Browser.Dom` types none of it —
 /// it stops at the DOM, and a `Cache` belongs to the service-worker bindings this repository
 /// does not otherwise need.

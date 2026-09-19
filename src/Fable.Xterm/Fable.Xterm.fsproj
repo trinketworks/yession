@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Fable bindings to `@xterm/headless` and `@xterm/addon-serialize` — the terminal emulator
+    the Session Process keeps a screen with, and the browser composes a live one from.
+    Fable-only, like app/Yession.Host.fsproj: `dotnet build` only type-checks it; the runnable
+    JS comes from Fable. A standalone project so the bindings are a distinct layer, mirroring
+    Fable.Jose / Fable.ProseMirror.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Xterm.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Fable.Core" />
+  </ItemGroup>
+
+</Project>

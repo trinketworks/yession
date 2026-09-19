@@ -29,10 +29,24 @@ type [<AllowNullLiteral>] KeyPair =
 [<Import("generateKeyPair", "jose")>]
 let generateKeyPair (alg: string) (options: obj) : JS.Promise<KeyPair> = jsNative
 
+/// A key's JWK as jose exports one: its parameters and nothing else. jose strips `ext`,
+/// `key_ops`, `alg` and `use` on the way out, so what a key set says about a key's use is
+/// the publisher's to write. Which parameters are present is the key type's: an OKP key
+/// (Ed25519) carries `crv` and `x`, an EC key `crv`, `x` and `y`, an RSA key `n` and `e`.
+/// The private parameters (`d` and RSA's) are deliberately not declared: nothing that reads
+/// a JWK here may read one, and a non-extractable private key never exports (below).
+type [<AllowNullLiteral>] Jwk =
+    abstract kty : string
+    abstract crv : string option
+    abstract x : string option
+    abstract y : string option
+    abstract n : string option
+    abstract e : string option
+
 /// Export a key as a JWK object. Throws on a non-extractable private key — which is the
 /// invariant the provider relies on (only the public key can ever reach `/jwks`).
 [<Import("exportJWK", "jose")>]
-let exportJWK (key: CryptoKey) : JS.Promise<obj> = jsNative
+let exportJWK (key: CryptoKey) : JS.Promise<Jwk> = jsNative
 
 /// The `new SignJWT(payload)` builder: chain claim setters, then sign with a private key.
 type [<AllowNullLiteral>] SignJwt =

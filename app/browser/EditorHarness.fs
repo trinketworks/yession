@@ -417,11 +417,6 @@ let private exposeOpen (f: int -> int -> JS.Promise<string>) : unit = jsNative
 [<Emit("window.__benchOpenCold = $0")>]
 let private exposeOpenCold (f: int -> int -> int -> JS.Promise<string>) : unit = jsNative
 
-/// How many times the app has rendered, ever — `Render.countRender`'s own count, read back so
-/// the open scenario counts the renders the APP made rather than a count of its own.
-[<Emit("globalThis.__yessionRenders || 0")>]
-let private appRenders () : int = jsNative
-
 /// Whether an element is still in the document — the item under the eye last frame may have
 /// been replaced by this one, and measuring a detached node's box says nothing.
 [<Emit("$0.isConnected")>]
@@ -1567,7 +1562,7 @@ do
             // The shell on screen, as the app's is: the harness page keeps other fixtures
             // above it, and a conversation below the fold has nothing under the eye.
             shellHost.scrollIntoView ()
-            let rendersBefore = appRenders ()
+            let rendersBefore = Render.renders ()
             let started = now ()
             let mutable paints = 0
             let mutable jumps = 0
@@ -1603,7 +1598,7 @@ do
                 | None -> ()
                 lastLook <- Some seen
                 lastAnchor <- seen.Anchor |> Option.map (fun a -> a, anchorTop a)
-                let renders = appRenders ()
+                let renders = Render.renders ()
                 if opened && renders = lastRenders && not changed then quiet <- quiet + 1 else quiet <- 0
                 lastRenders <- renders
                 // Ten still frames after the open has finished: settled.
