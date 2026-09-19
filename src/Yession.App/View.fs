@@ -1919,7 +1919,6 @@ module View =
                              .value={launch.BranchQuery}
                              @input={EvVal(fun v -> dispatch (LaunchMsg (LaunchBranchQueryTyped v)))} />
                       <div class="{Style.askScroll}" data-repo-branch-body>{branchBody}</div>
-                      <div class="{Style.askActions}">{actionsRow}</div>
                     </div>"""
             // No row held: there is no repository to have branches of, so the pane is not
             // drawn at all rather than drawn empty.
@@ -1944,7 +1943,6 @@ module View =
                     {listing}
                     {problem}
                   </div>
-                  <div class="{Style.askActions}">{actionsRow}</div>
                 </div>"""
         html $"""
             <section class="{Style.ask}" data-repo-picker="{stage}" aria-labelledby="repo-picker-title">
@@ -1954,6 +1952,7 @@ module View =
                   {repoPane}
                   {branchPane}
                 </div>
+                <div class="{Style.askActions}">{actionsRow}</div>
               </div>
             </section>"""
 

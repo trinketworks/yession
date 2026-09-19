@@ -1215,10 +1215,13 @@ module Style =
     /// to, and the foot that pages is never reachable. The clip is for the pane that is off
     /// to the side, and only that.
     let askTrack = "relative shrink-0 overflow-hidden"
-    /// A pane is a COLUMN with three parts: what it asks, what there is to answer with, and
-    /// the commit. Only the middle scrolls — the question stays legible while a long list is
-    /// read, and START is where a thumb already is rather than a screenful below the last row
-    /// somebody scrolled past.
+    /// A pane is a COLUMN with two parts: what it asks, and what there is to answer with.
+    /// Only the list scrolls - the question stays legible while a long one is read. START is
+    /// not a third part of the pane: it is the one thing both panes mean the same way, so it
+    /// sits below the TRACK rather than inside whichever pane is showing. A button that rode
+    /// the pane would slide off with the one you just left and a second copy would slide in
+    /// with the one you land on - two buttons where there is one, the same seam `Launch.anchor`
+    /// closed for the card itself.
     let private askPaneBase =
         "min-w-0 flex flex-col max-h-[60vh] transition-transform duration-300 ease-out motion-reduce:transition-none"
     /// The list, and the only thing in a pane that scrolls. `min-h-0` is what lets it: a flex
