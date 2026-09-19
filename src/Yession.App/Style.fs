@@ -215,20 +215,33 @@ module Style =
     /// break. A FIELD is built the same way from the same token (`fieldFace`), which is what
     /// makes a button and an input in one row actually line up.
     let private btnBase =
-        cls [ "bg-transparent cursor-pointer font-ui"; caps
+        cls [ "group/btn bg-transparent cursor-pointer font-ui"; caps
               "h-control px-3.5 inline-flex items-center justify-center transition-colors"
               Stroke.ring; focusRing ]
 
     /// The three faces, as (rest tone, hover, press) — the only thing that varies between
     /// them, so a fourth would be three tokens rather than another hand-written string.
+    ///
+    /// The press face is `pressed:` (app/tailwind.css) rather than `active:` — the finger's
+    /// press AND the hold after it (`aria-busy`), for a button whose act takes the browser
+    /// somewhere else and has nothing to show on this page until it arrives. Filled while
+    /// down, and down until it lands.
     let btn =
-        cls [ btnBase; Stroke.rim; "text-ink-dim"; Stroke.hoverInk; "hover:text-ink active:bg-ink active:text-bg" ]
+        cls [ btnBase; Stroke.rim; "text-ink-dim"; Stroke.hoverInk; "hover:text-ink pressed:bg-ink pressed:text-bg" ]
 
     let btnPrimary =
-        cls [ btnBase; Stroke.blue; "text-blue hover:text-blue-bright active:bg-blue active:text-bg" ]
+        cls [ btnBase; Stroke.blue; "text-blue hover:text-blue-bright pressed:bg-blue pressed:text-bg" ]
 
     let btnDanger =
-        cls [ btnBase; Stroke.rim; "text-ink-dim"; Stroke.hoverErr; "hover:text-err active:bg-err active:text-bg" ]
+        cls [ btnBase; Stroke.rim; "text-ink-dim"; Stroke.hoverErr; "hover:text-err pressed:bg-err pressed:text-bg" ]
+
+    /// The two words a held button can be saying — the verb, and the verb under way — as
+    /// siblings inside it, one shown at a time off the button's own `aria-busy`. Copy stays
+    /// in the markup where the server spells it; the script only sets the state. The button
+    /// wears the named group for it (`btnBase`) — named, so a button sitting inside some
+    /// other group answers to its own state and never to that one's.
+    let whenReady = "group-aria-busy/btn:hidden"
+    let whenBusy = "hidden group-aria-busy/btn:inline"
 
     /// The name of a LISTED record, when the name itself opens it. The row's primary act
     /// is carried by its content rather than by another rectangle in the right rail —
@@ -377,7 +390,11 @@ module Style =
     ///
     /// `--text-touch` carries no line-height pair, so this sets the SIZE alone and each field
     /// keeps the line box its own step gave it.
-    let private touchType = "max-md:text-touch"
+    ///
+    /// Not private any more: `fieldType` folds it in below, and the mono/message fields that
+    /// still hand-spell their own font class (no shared size function to fold it into) keep
+    /// composing it directly, the way they always did.
+    let touchType = "max-md:text-touch"
 
     // --- Fields: ONE face, worn by every input in the product ----------------------------
     // A field is the surface tone inside a hairline ring that brightens on hover and goes
@@ -404,17 +421,23 @@ module Style =
     /// token, a mode select are chrome a person operates: nothing is being said, so there is no
     /// attribution to make, and a serif form control on a sans page reads as a mistake rather
     /// than a signal.
+    /// `touchType` is IN here rather than beside it at every call site: nine of these used to
+    /// each hand-append `touchType` themselves, and a tenth (`fieldSelect`) forgot to — the
+    /// field rendered fine everywhere except a thumb on iOS, and nothing failed loudly enough
+    /// to notice. Folding it into the one function every settings-style field already calls
+    /// for its size means there is no longer a second ingredient to remember: any field built
+    /// on `fieldType` gets the phone-safe size for free, forgetting is no longer a way to lose it.
     let private fieldType =
-        cls [ "font-ui font-light text-small leading-5 text-ink placeholder:text-ink-faint" ]
+        cls [ "font-ui font-light text-small leading-5 text-ink placeholder:text-ink-faint"; touchType ]
 
     /// A settings field (input/select), filling the column it sits in.
-    let field = cls [ fieldFace; fieldType; "w-full"; touchType ]
+    let field = cls [ fieldFace; fieldType; "w-full" ]
 
     /// The same field where the ROW gives it a width rather than the column — the Manager's
     /// forms lay three of them out side by side. Public because the alternative is what was
     /// here before: the Manager spelling the whole face inline, which drifted to a 42px input
     /// beside a 32px button.
-    let fieldOf (width: string) = cls [ fieldFace; fieldType; width; touchType ]
+    let fieldOf (width: string) = cls [ fieldFace; fieldType; width ]
 
     /// A select. Everything a field is, plus room for the mark below it — `appearance-none`
     /// (see `fieldFace`) takes the platform's caret away, and a menu with no caret is a text
@@ -437,7 +460,7 @@ module Style =
     /// beside it. The select's caret above is the other half of the pattern and deliberately
     /// not this — a mark takes no pointer events, a button is the thing you press.
     let fieldActionWrap = "relative w-full"
-    let fieldWithAction = cls [ fieldFace; fieldType; "w-full pr-10"; touchType ]
+    let fieldWithAction = cls [ fieldFace; fieldType; "w-full pr-10" ]
     let fieldAction = cls [ btnInField; "absolute right-1 top-1/2 -translate-y-1/2 text-ink-faint hover:text-ink" ]
 
     /// The chrome-LESS field: an input whose CONTAINER already carries the stroke (the
@@ -1215,10 +1238,13 @@ module Style =
     /// to, and the foot that pages is never reachable. The clip is for the pane that is off
     /// to the side, and only that.
     let askTrack = "relative shrink-0 overflow-hidden"
-    /// A pane is a COLUMN with three parts: what it asks, what there is to answer with, and
-    /// the commit. Only the middle scrolls — the question stays legible while a long list is
-    /// read, and START is where a thumb already is rather than a screenful below the last row
-    /// somebody scrolled past.
+    /// A pane is a COLUMN with two parts: what it asks, and what there is to answer with.
+    /// Only the list scrolls - the question stays legible while a long one is read. START is
+    /// not a third part of the pane: it is the one thing both panes mean the same way, so it
+    /// sits below the TRACK rather than inside whichever pane is showing. A button that rode
+    /// the pane would slide off with the one you just left and a second copy would slide in
+    /// with the one you land on - two buttons where there is one, the same seam `Launch.anchor`
+    /// closed for the card itself.
     let private askPaneBase =
         "min-w-0 flex flex-col max-h-[60vh] transition-transform duration-300 ease-out motion-reduce:transition-none"
     /// The list, and the only thing in a pane that scrolls. `min-h-0` is what lets it: a flex
@@ -1274,7 +1300,7 @@ module Style =
     /// signal is the field face's — the rule goes blue.
     let askSearch =
         cls [ askInset; "w-full h-12 mt-6 bg-transparent outline-none appearance-none"; fieldType
-              Stroke.underline; Stroke.hair; Stroke.hoverRim; Stroke.focus; touchType ]
+              Stroke.underline; Stroke.hair; Stroke.hoverRim; Stroke.focus ]
 
     /// A line the card says rather than one it offers — looking, cloning, a refusal, a clone
     /// that failed. Where the first row would have been, so an answer and the absence of one
@@ -1321,23 +1347,6 @@ module Style =
     let askRowNote = cls [ label; "ml-auto shrink-0" ]
     let askRowNoteNew = cls [ caps; "ml-auto shrink-0 text-blue" ]
 
-    /// The held row's second line. Bare, because the row it sits in already carries a ground:
-    /// a bordered field here was a box inside a box, and the last box on the card.
-    ///
-    /// Its rule is a `rim` where the search's is a `hair`, because it is drawn on the held
-    /// row's LIFTED ground rather than on the card's: a hairline that reads as a rule against
-    /// `surface` is all but gone against `surface-2`, and a field nobody can see the edge of
-    /// is a field nobody types in.
-    ///
-    /// No `touchType`, alone among the fields here: it sets 16px on a phone so that iOS does
-    /// not zoom into a tapped field, and a branch a step LARGER than the name it belongs to
-    /// reads as a different kind of thing rather than as that row's branch.
-    let askBranch = cls [ askInset; "pb-3" ]
-    let askBranchLine = cls [ askMeasure; "flex items-center gap-3" ]
-    let askBranchField =
-        cls [ "flex-1 min-w-0 h-7 bg-transparent outline-none appearance-none"
-              "font-terminal text-small text-ink"
-              Stroke.underline; Stroke.rim; Stroke.hoverInk; Stroke.focus ]
     /// The foot of the list: where the next page is reached rather than pressed for. A row's
     /// height, because that is what it stands in for — the rows still to come.
     let askFoot = cls [ askInset; "h-12 flex items-center" ]
@@ -1567,6 +1576,25 @@ module Style =
     /// The particulars under the headline: the same size, one step fainter, so the pair reads
     /// as one act rather than as two lines about it.
     let actNoteDetail = "text-small leading-5 text-ink-faint"
+
+    /// A sandbox start's particulars, laid out as fields rather than one sentence
+    /// (`View.sandboxStartFacts`). The container stacks each fact on its own line at the
+    /// same faint voice `actNoteDetail` uses, so the group still reads as one act under the
+    /// headline - what changed is that a screen now arranges the parts, not that they shout.
+    let actNoteFacts = "flex flex-col gap-0.5"
+    /// A path inside a fact line - the checkout, when it is worth showing. Mono, because it
+    /// is an identifier and reads as one, and dim enough to sit inside the faint line around it.
+    let actNotePath = cls [ mono; "text-code-sm text-ink-dim" ]
+    /// A forwarded credential, as its own small badge naming what rode in and whose it is,
+    /// rather than a clause in a sentence. A recessed pill, not a filled one: it is a fact on
+    /// the record, not a control, and the busy timeline is no place for another CTA-coloured chip.
+    let actNoteCred =
+        cls [ "inline-flex items-center gap-1 self-start"; "px-1.5 rounded"; "bg-surface-2"; "text-code-sm text-ink-dim" ]
+    /// A line this host could not honour exactly. One step brighter than the other
+    /// particulars (`ink-dim`, not `ink-faint`), so the one fact that means "you did not get
+    /// quite what you asked for" is the one the eye catches - without the line having to grow
+    /// louder than the act it belongs to, which a red or a fill would.
+    let actNoteRealisation = "text-small leading-5 text-ink-dim"
 
     /// History this device does not hold, standing at the top of the timeline where it would
     /// have been. An act note's voice and column, because it is the same kind of line — a

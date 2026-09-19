@@ -54,6 +54,60 @@ module Encodings =
     /// `Buffer.from(s, undefined)` silently reading utf8.
     let base64url : BufferEncoding = unbox "base64url"
 
+// --- The synchronous file calls a durable append is made of -------------------------------
+
+/// What `node:fs` offers a writer that must be durable before it answers, and `Fable.Node`
+/// does not type: a descriptor opened for APPEND rather than truncation, a `writeSync` that
+/// takes a string, the flush that makes a write durable, and `mkdirSync` with `recursive`.
+///
+/// Three stores and the Manager's shared file primitives had each written the same four
+/// macros, with the same comment above them saying which four members were missing — four
+/// copies of one binding, each invisible to the others. They are imports rather than emits,
+/// which is what the members allow once the flag and the options object are F# values.
+[<AutoOpen>]
+module Files =
+
+    [<Import("openSync", "node:fs")>]
+    let private openSyncWithFlag (path: string) (flag: string) : int = jsNative
+
+    [<Import("mkdirSync", "node:fs")>]
+    let private mkdirSyncWithOptions (path: string) (options: obj) : unit = jsNative
+
+    /// A descriptor on `path` for appending, creating the file when it is not there (`'a'`).
+    /// `Fable.Node`'s `openSync` takes the path alone, which is `'r'` — a reader.
+    let openAppend (path: string) : int = openSyncWithFlag path "a"
+
+    /// A descriptor on `path` for writing, truncating what is there (`'w'`). The half of an
+    /// atomic write that happens out of sight, before the rename.
+    let openTruncate (path: string) : int = openSyncWithFlag path "w"
+
+    /// Write text to a descriptor. `Fable.Node` types `writeSync` over a `Buffer` only, and
+    /// the answer — how many bytes went — is what a partial write is visible through.
+    [<Import("writeSync", "node:fs")>]
+    let writeText (fd: int) (text: string) : int = jsNative
+
+    /// Flush a descriptor to the device. This is the call that makes a write DURABLE rather
+    /// than merely issued, so it is what a store does before it answers.
+    [<Import("fsyncSync", "node:fs")>]
+    let fsync (fd: int) : unit = jsNative
+
+    /// Create a directory and any missing parents; a no-op when it is already there.
+    /// `Fable.Node`'s `mkdirSync` takes no options, so it cannot say `recursive`.
+    let mkdirp (path: string) : unit = mkdirSyncWithOptions path (createObj [ "recursive", box true ])
+
+    [<Import("rmSync", "node:fs")>]
+    let private rmSyncWithOptions (path: string) (options: obj) : unit = jsNative
+
+    /// Remove a path and everything under it, and say nothing about one that was not there
+    /// (`recursive` + `force`). `Fable.Node` types `rmdirSync` and `unlinkSync`, neither of
+    /// which is this: one refuses a non-empty directory and the other refuses a directory.
+    let removeTree (path: string) : unit =
+        rmSyncWithOptions path (createObj [ "recursive", box true; "force", box true ])
+
+    /// Copy a file, overwriting the destination. `Fable.Node` does not type `copyFileSync`.
+    [<Import("copyFileSync", "node:fs")>]
+    let copyFile (source: string) (destination: string) : unit = jsNative
+
 // --- Decoding bytes to text ---------------------------------------------------------------
 
 /// The WHATWG `TextDecoder`, a Node global since v11. Absent from Fable.Node — which types
@@ -494,10 +548,16 @@ type Readable =
     /// What to attach when the bytes have to be READ on the way past.
     ///
     /// A chunk is a `Buffer`, whatever `Fable.Node` says about a child process's streams —
-    /// text is the caller's conversion to make, and a decoding that spans chunks is what
-    /// `TextDecoder` above is for.
+    /// unless `setEncoding` was called, after which it is text and `Readables.text` below is
+    /// the way to say so.
     [<Emit("$0.on('data', $1)")>]
     abstract onData : handler: (Buffer -> unit) -> unit
+
+    /// Have the STREAM decode its bytes to text, with the tail of a character a chunk
+    /// boundary cut in half carried into the next chunk — which per-chunk `toString('utf8')`
+    /// cannot do, and is why a `TextDecoder` is held rather than called. Node returns the
+    /// stream, for chaining; nothing here chains.
+    abstract setEncoding : encoding: BufferEncoding -> Readable
 
     /// The stream ended: every byte it had has been handed on. Mutually exclusive with
     /// `onError`, which is why a caller that settles on either settles once.
@@ -506,6 +566,27 @@ type Readable =
 
     [<Emit("$0.on('error', $1)")>]
     abstract onError : handler: (StreamError -> unit) -> unit
+
+[<RequireQualifiedAccess>]
+module Readables =
+
+    /// The data event AFTER `setEncoding`, when a chunk is a string. Private, because the type
+    /// is true only on that side of the call: attached to a stream nobody told to decode, it
+    /// hands a `Buffer` to a handler that was promised text.
+    [<Emit("$0.on('data', $1)")>]
+    let private onText (stream: Readable) (handler: string -> unit) : unit = jsNative
+
+    /// Every chunk as TEXT. One verb rather than `setEncoding` and a data event apart, for
+    /// the reason the WebSocket bindings above keep `payload` as the only way in: a handler
+    /// typed `string` is a promise the encoding keeps, and a caller who could attach one
+    /// without the other is the caller who gets bytes where the type said text.
+    ///
+    /// Sixteen readers in this repository used to ask `typeof chunk === 'string'` and call
+    /// `toString('utf8')` on the other branch — a decision per chunk, made in JavaScript, and
+    /// wrong at every chunk boundary that split a multi-byte character.
+    let text (stream: Readable) (handler: string -> unit) : unit =
+        stream.setEncoding BufferEncoding.Utf8 |> ignore
+        onText stream handler
 
 /// A message that ARRIVED over HTTP — its headers, and its body as the stream it is. Both
 /// halves of an exchange are one of these on the receiving side, which is why the shape is

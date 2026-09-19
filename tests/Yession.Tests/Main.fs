@@ -161,6 +161,7 @@ let all =
         // The one promise a filter chip makes that only a browser with a history can check:
         // Back undoes it. Needs a Manager, which spawns its default session (Native).
         Tag.needs "The management page's filters (browser)" [ Tag.Browser; Tag.Native ] (fun () -> Browser.filterTests)
+        Tag.needs "Pressing Create (browser)" [ Tag.Browser; Tag.Native ] (fun () -> Browser.pressTests)
     ]
 
 [<EntryPoint>]

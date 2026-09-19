@@ -25,7 +25,6 @@ open Fable.Core.JsInterop
 open Fable.Pyxpecto
 
 let private childProcess : obj = importAll "node:child_process"
-let private nodeFs : obj = importAll "node:fs"
 
 /// Imported, never `require`d. This module compiles to an ES module, where `require` is not
 /// defined — and the throw does not read as "this check cannot run", it reads as every case in
@@ -37,9 +36,6 @@ let private yaml : obj = importAll "yaml"
 /// not this repository's business and has moved before.
 [<Emit("$0.execSync('git rev-parse --show-toplevel', { encoding: 'utf8', stdio: ['ignore','pipe','ignore'] })")>]
 let private gitToplevel (cp: obj) : string = jsNative
-
-[<Emit("$0.readFileSync($1, 'utf8')")>]
-let private readFileSync (fs: obj) (path: string) : string = jsNative
 
 /// `yaml.parse`, and the handful of questions this file asks of what it returns. Each one is a
 /// JavaScript expression naming a platform API; the walk over the document is below, in F#.
@@ -79,7 +75,7 @@ let private repoRoot () : string option =
     with _ -> None
 
 let private readText (path: string) : string option =
-    try Some (readFileSync nodeFs path) with _ -> None
+    try Some (TestFiles.read path) with _ -> None
 
 /// Every command line the file declares a sandbox runs — its `setup:`, and its container's
 /// `entrypoint` (a string, or a list joined back into one) — as (where, command). Read

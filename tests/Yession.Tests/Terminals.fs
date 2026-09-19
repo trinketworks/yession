@@ -22,11 +22,6 @@ open Yession.Tests.Support
 
 // Reading a transcript back as BYTES, for the one assertion that is about the file itself
 // rather than about what the store returns from it.
-let private nodeFs : obj = Fable.Core.JsInterop.importAll "node:fs"
-
-[<Fable.Core.Emit("$0.readFileSync($1, 'utf8')")>]
-let private readFileSync (fs: obj) (path: string) : string = Fable.Core.Util.jsNative
-
 let private expect =
     function
     | Ok v -> v
@@ -1472,7 +1467,7 @@ let private transcriptTests =
             transcript.Keyframe { Seq = 2; Cols = 100; Rows = 30; Screen = "SCREEN" }
             transcript.Append { At = 0.1; Kind = TranscriptOutput; Data = "after\r\n" } |> ignore
 
-            let cast = readFileSync nodeFs (sprintf "%s/%s.cast" dir (TerminalId.value terminalA))
+            let cast = TestFiles.read (sprintf "%s/%s.cast" dir (TerminalId.value terminalA))
             Expect.isFalse (cast.Contains "SCREEN") "the recording is exactly what the terminal printed"
 
             // Read back through a SECOND store over the same directory — the restart case,
@@ -1540,7 +1535,7 @@ let private transcriptTests =
             let cast = TranscriptReplay.cast header (List.rev decoded)
             Expect.equal
                 cast
-                (readFileSync nodeFs (sprintf "%s/%s.cast" dir (TerminalId.value terminalA)))
+                (TestFiles.read (sprintf "%s/%s.cast" dir (TerminalId.value terminalA)))
                 "the rebuilt cast is the file"
 
         // A terminal can hold no records the client has: one that printed nothing, or one

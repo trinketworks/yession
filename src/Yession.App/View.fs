@@ -1919,7 +1919,6 @@ module View =
                              .value={launch.BranchQuery}
                              @input={EvVal(fun v -> dispatch (LaunchMsg (LaunchBranchQueryTyped v)))} />
                       <div class="{Style.askScroll}" data-repo-branch-body>{branchBody}</div>
-                      <div class="{Style.askActions}">{actionsRow}</div>
                     </div>"""
             // No row held: there is no repository to have branches of, so the pane is not
             // drawn at all rather than drawn empty.
@@ -1944,7 +1943,6 @@ module View =
                     {listing}
                     {problem}
                   </div>
-                  <div class="{Style.askActions}">{actionsRow}</div>
                 </div>"""
         html $"""
             <section class="{Style.ask}" data-repo-picker="{stage}" aria-labelledby="repo-picker-title">
@@ -1954,6 +1952,7 @@ module View =
                   {repoPane}
                   {branchPane}
                 </div>
+                <div class="{Style.askActions}">{actionsRow}</div>
               </div>
             </section>"""
 
@@ -2024,7 +2023,39 @@ module View =
             match facts.Detail with
             | None -> Lit.nothing
             | Some detail -> html $"""<span class="{Style.actNoteDetail}" data-act-detail>{detail}</span>"""
-        // A repo note is something someone DID, not said — one quiet line, actor-attributed,
+        // The same particulars a sentence would carry, but arranged the way a screen arranges
+        // things rather than read as prose. This is the whole point of `SandboxStarted` riding
+        // the note as the event's typed fields: the checkout is shown only when it is NOT the
+        // conventional /repos/<owner>/<repo> that every reader can already assume; each
+        // forwarded credential is its own badge, not a clause; and each line
+        // this host could not honour stands on its own. `said` still builds the whole sentence
+        // for every reader that is not a screen; the screen is the one that gets to choose.
+        let sandboxStartFacts (s: WorkSandboxStarted) =
+            let describedAs =
+                s.Description
+                |> Option.map (fun d -> html $"""<span class="{Style.actNoteDetail}" data-act-fact="description">{d}</span>""")
+                |> Option.toList
+            let convention =
+                match SandboxRef.scope s.Sandbox with
+                | RepoOwned repo -> Some (sprintf "/repos/%s" (RepoRef.value repo))
+                | SessionOwned -> None
+            let checkout =
+                match s.Checkout with
+                | Some path when Some path <> convention ->
+                    [ html $"""<span class="{Style.actNoteDetail}" data-act-fact="checkout">checkout <code class="{Style.actNotePath}">{path}</code></span>""" ]
+                | _ -> []
+            let forwarded =
+                s.Forwarded
+                |> List.map (fun name ->
+                    html $"""<span class="{Style.actNoteCred}" data-act-fact="forwarded">{name}</span>""")
+            let realisation =
+                s.Realisation
+                |> List.map (fun line ->
+                    html $"""<span class="{Style.actNoteRealisation}" data-act-fact="realisation">{line}</span>""")
+            match List.concat [ describedAs; checkout; forwarded; realisation ] with
+            | [] -> Lit.nothing
+            | parts -> html $"""<div class="{Style.actNoteFacts}" data-act-facts>{parts}</div>"""
+        // A repo note is something someone DID, not said - one quiet line, actor-attributed,
         // no avatar and no rich body (Plan 14, repos). It rides the same timeline slot a
         // message does (both are `ConversationItem`s at an offset); `Kind` is what tells the
         // two apart at render time.
@@ -2045,12 +2076,18 @@ module View =
                 | ConversationItemStatus.Failed ->
                     html $"""<span class="{Style.statusErr}">{Icon.crossSm} {Dom.Text.failed}</span>"""
                 | Complete | Streaming | ConversationItemStatus.Running | ConversationItemStatus.Interrupted -> Lit.nothing
+            // A screen lays out the acts it can - a sandbox start, so far - from their typed
+            // fields; the rest it renders from the one detail line the fold left it.
+            let particulars =
+                match facts.SandboxStarted with
+                | Some s -> sandboxStartFacts s
+                | None -> actNoteDetail facts
             html $"""
                 <article class="{Style.actNote}" data-message-id="{MessageId.value item.MessageId}" tabindex="-1" data-act-note data-act-status="{messageStatusLabel item.Status}" data-message-author="{authorLabel item.Author}">
                   {itemActions item}
                   {running}
                   <span class="{Style.actNoteText}"><span class="{Style.actNoteWho}">{authorName model item.Author}</span> {item.Body} {failedMark}</span>
-                  {actNoteDetail facts}
+                  {particulars}
                 </article>"""
         let messageItem (item: ConversationItem) =
             let isAgent = (item.Author = ActorRef.Agent)

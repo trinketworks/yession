@@ -556,9 +556,7 @@ let private startTokenEndpoint () : Async<TokenEndpoint> =
         let requests = ResizeArray<string> ()
         let contentTypes = ResizeArray<string option> ()
         let handler (req: Interop.IncomingMessage) (res: Interop.ServerResponse) =
-            let mutable acc = ""
-            req.on ("data", fun chunk -> acc <- acc + Interop.bufferToString chunk) |> ignore
-            req.on ("end", fun _ ->
+            Interop.readBody req (fun acc ->
                 requests.Add acc
                 contentTypes.Add (Interop.headerOf req "content-type")
                 if failing > 0 then
@@ -1730,9 +1728,7 @@ let private startStubGitHub () : Async<StubGitHub> =
         let mutable tokenReply = """{"error":"authorization_pending"}"""
         let tokenRequests = ResizeArray<string> ()
         let handler (req: Interop.IncomingMessage) (res: Interop.ServerResponse) =
-            let mutable acc = ""
-            req.on ("data", fun chunk -> acc <- acc + Interop.bufferToString chunk) |> ignore
-            req.on ("end", fun _ ->
+            Interop.readBody req (fun acc ->
                 let reply =
                     if (req.url.Split('?').[0]) = "/device/code" then
                         sprintf """{"device_code":%s,"user_code":"WDJB-MJHT","verification_uri":"https://github.com/login/device","expires_in":900,"interval":5}"""
@@ -2758,11 +2754,8 @@ let private startStubGitHubApi () : Async<StubGitHubApi> =
             let etag = sprintf "\"v%d\"" version
             // The create endpoint: a POST, whose body is what a case reads back.
             if req.``method`` = "POST" then
-                let mutable acc = ""
-                req.on ("data", fun chunk -> acc <- acc + Interop.bufferToString chunk) |> ignore
-                req.on (
-                    "end",
-                    fun _ ->
+                Interop.readBody req (
+                    fun acc ->
                         posted.Add (path, acc)
                         if status <> 200 then refuse ()
                         // GraphQL: a document that mutates is answered as a mutation, and

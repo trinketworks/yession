@@ -100,11 +100,6 @@ type ConnectionsApi =
       Resolve : ControlCaller -> ControlWire.ConnectionResolveRequest -> Async<Result<ControlWire.ConnectionResolveResponse, SecretsError>>
       Status : ControlCaller -> Async<ConnectionStatusList> }
 
-let private readBody (req: IncomingMessage) (cont: string -> unit) =
-    let mutable acc = ""
-    req.on ("data", fun chunk -> acc <- acc + bufferToString chunk) |> ignore
-    req.on ("end", fun _ -> cont acc) |> ignore
-
 [<Fable.Core.Emit("new URL($0, 'http://local').pathname")>]
 let private pathnameOf (url: string) : string = Fable.Core.Util.jsNative
 

@@ -188,12 +188,7 @@ let private pureTests =
 
 // --- [Srt]: the verbs against local bare fixtures, confined for real ------------------------
 
-let private nodeFs : obj = importAll "node:fs"
-let private nodeOs : obj = importAll "node:os"
 let private childProcess : obj = importAll "node:child_process"
-
-[<Emit("$0.mkdtempSync($1.tmpdir() + '/yession-git-')")>]
-let private mkdtempRaw (fs: obj) (os: obj) : string = jsNative
 
 /// A fixture directory named the way the KERNEL will check it.
 ///
@@ -203,38 +198,23 @@ let private mkdtempRaw (fs: obj) (os: obj) : string = jsNative
 /// refused at the link node. That is the same fault #330 refuses for an operator and
 /// `SrtIntegration.fs` already avoids; without the `realpathSync` every repo verb under
 /// srt fails on this host with `Operation not permitted` and reads as a broken sandbox.
-let private mkdtemp (fs: obj) (os: obj) : string =
-    let made = mkdtempRaw fs os
+let private mkdtemp () : string =
+    let made = TestFiles.tempDir "yession-git-"
     match Fs.canonical made with
     | Some path -> path
     | None -> failwithf "the fixture directory %s does not resolve" made
 
-[<Emit("$0.mkdirSync($1, { recursive: true })")>]
-let private mkdir (fs: obj) (path: string) : unit = jsNative
-
-[<Emit("$0.writeFileSync($1, $2)")>]
-let private writeFile (fs: obj) (path: string) (content: string) : unit = jsNative
-
-[<Emit("$0.existsSync($1)")>]
-let private exists (fs: obj) (path: string) : bool = jsNative
-
-[<Emit("$0.readdirSync($1)")>]
-let private readdir (fs: obj) (path: string) : string array = jsNative
-
 /// Nothing for a directory that is not there yet, which is what a clone in flight looks like.
-let private readDirSafe (fs: obj) (path: string) : string array =
-    try readdir fs path with _ -> [||]
+let private readDirSafe (path: string) : string list =
+    try TestFiles.entries path with _ -> []
 
 /// A checkout that is FINISHED, rather than one that has started. `.git` appears within
 /// milliseconds of a clone beginning and says nothing about whether there is a work tree
 /// yet — which is the whole reason the clone now lands by rename. Anything beside `.git`
 /// only exists once git has checked the work tree out.
-let private checkoutWhole (fs: obj) (dir: string) : bool =
-    exists fs (sprintf "%s/.git" dir)
-    && readDirSafe fs dir |> Array.exists (fun entry -> entry <> ".git")
-
-[<Emit("$0.chmodSync($1, 0o755)")>]
-let private makeExecutable (fs: obj) (path: string) : unit = jsNative
+let private checkoutWhole (dir: string) : bool =
+    TestFiles.exists (sprintf "%s/.git" dir)
+    && readDirSafe dir |> List.exists (fun entry -> entry <> ".git")
 
 /// Host-side git for FIXTURE SETUP only — the code under test never runs unconfined.
 [<Emit("$0.execFileSync('git', $1, { cwd: $2, env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null', GIT_AUTHOR_NAME: 'fixture', GIT_AUTHOR_EMAIL: 'f@x', GIT_COMMITTER_NAME: 'fixture', GIT_COMMITTER_EMAIL: 'f@x' }, stdio: 'pipe' })")>]
@@ -257,9 +237,9 @@ let private reposIn (root: string) : string = Sandboxes.SessionLayout.reposDir r
 let private makeBareFixture (root: string) (name: string) : string =
     let fixtures = fixturesIn root
     let work = sprintf "%s/work-%s" fixtures name
-    mkdir nodeFs work
+    TestFiles.ensureDir work
     hostGit childProcess [| "init"; "-b"; "main" |] work
-    writeFile nodeFs (sprintf "%s/README.md" work) "fixture\n"
+    TestFiles.write (sprintf "%s/README.md" work) "fixture\n"
     hostGit childProcess [| "add"; "." |] work
     hostGit childProcess [| "commit"; "-m"; "seed" |] work
     let bare = sprintf "%s/%s.git" fixtures name
@@ -299,8 +279,8 @@ let private serviceAsking
     // `fixturesIn`) — that rule is about ancestry, which nesting does not change.
     let reposDir = reposIn root
     let fixtures = fixturesIn root
-    mkdir nodeFs reposDir
-    mkdir nodeFs fixtures
+    TestFiles.ensureDir reposDir
+    TestFiles.ensureDir fixtures
     Repos.create
         { Backend = SrtBackend
           ReposDir = reposDir
@@ -383,29 +363,29 @@ let private layoutTests =
         // the listing scans the new path, reports nothing, and the agent re-clones over work
         // that was never committed.
         testCase "checkouts from the old layout are moved, not stranded" <| fun () ->
-            let dataDir = mkdtemp nodeFs nodeOs
-            mkdir nodeFs (sprintf "%s/octo/hello/.git" (Sandboxes.SessionLayout.legacyReposDir dataDir))
+            let dataDir = mkdtemp ()
+            TestFiles.ensureDir (sprintf "%s/octo/hello/.git" (Sandboxes.SessionLayout.legacyReposDir dataDir))
             let repos = Sandboxes.SessionLayout.prepareReposDir dataDir
             Expect.isTrue
-                (exists nodeFs (sprintf "%s/octo/hello/.git" repos))
+                (TestFiles.exists (sprintf "%s/octo/hello/.git" repos))
                 "the checkout is where the listing now looks"
 
         // `renameSync` onto a non-empty directory throws, and this runs at boot: a session
         // that somehow had both would fail to start rather than decline the adoption.
         testCase "a session already on the current layout still boots" <| fun () ->
-            let dataDir = mkdtemp nodeFs nodeOs
-            mkdir nodeFs (sprintf "%s/octo/hello/.git" (Sandboxes.SessionLayout.legacyReposDir dataDir))
-            mkdir nodeFs (sprintf "%s/octo/current/.git" (Sandboxes.SessionLayout.reposDir dataDir))
+            let dataDir = mkdtemp ()
+            TestFiles.ensureDir (sprintf "%s/octo/hello/.git" (Sandboxes.SessionLayout.legacyReposDir dataDir))
+            TestFiles.ensureDir (sprintf "%s/octo/current/.git" (Sandboxes.SessionLayout.reposDir dataDir))
             let repos = Sandboxes.SessionLayout.prepareReposDir dataDir
             Expect.isTrue
-                (exists nodeFs (sprintf "%s/octo/current/.git" repos))
+                (TestFiles.exists (sprintf "%s/octo/current/.git" repos))
                 "the layout it already had is the one it keeps"
     ]
 
 let private srtTests =
     testList "repo verbs under srt (local fixtures)" [
         testCaseAsync "add clones into the repos dir, records the fact, and re-add is a quiet no-op" <| async {
-            let root = mkdtemp nodeFs nodeOs
+            let root = mkdtemp ()
             makeBareFixture root "hello" |> ignore
             let log = freshLog ()
             let service = serviceIn root log
@@ -414,7 +394,7 @@ let private srtTests =
             let listing = expect listing
             Expect.equal listing.Branch "main" "on the fixture's default branch"
             Expect.isFalse listing.Dirty "clean checkout"
-            Expect.isTrue (exists nodeFs (sprintf "%s/octo/hello/.git" (reposIn root))) "checkout landed at owner/repo"
+            Expect.isTrue (TestFiles.exists (sprintf "%s/octo/hello/.git" (reposIn root))) "checkout landed at owner/repo"
             let! events = eventsOf log
             match events with
             | [ SessionEvent.RepoAdded added ] ->
@@ -461,13 +441,13 @@ let private srtTests =
         // `git -C <relative>` runs in a sandbox whose cwd is already that directory and so
         // resolves it twice. A repo on disk that no verb would admit to.
         testCaseAsync "a relative repos directory is still one, however git is asked about it" <| async {
-            let fixtures = mkdtemp nodeFs nodeOs
+            let fixtures = mkdtemp ()
             makeBareFixture fixtures "hello" |> ignore
             // Relative on purpose. Fixtures stay absolute so the only variable is this.
             let relRepos =
                 Sandboxes.SessionLayout.reposDir
                     (sprintf "tests/Yession.Tests/out/.data/relative-%s" (string (Guid.NewGuid ())))
-            mkdir nodeFs relRepos
+            TestFiles.ensureDir relRepos
             let log = freshLog ()
             let service =
                 Repos.create
@@ -495,7 +475,7 @@ let private srtTests =
             // every verb failed with `xcode-select: error: ...` — read, reasonably, as a
             // broken Xcode install on a machine whose Xcode was fine. The probe turns any
             // unrunnable git into one sentence about the sandbox, whatever the reason.
-            let root = mkdtemp nodeFs nodeOs
+            let root = mkdtemp ()
             makeBareFixture root "hello" |> ignore
             let service = serviceWith (sprintf "%s/not-a-git" root) root (freshLog ())
             let! added = service.AddRepo caller (RepoRef.create "octo/hello" |> expect)
@@ -520,13 +500,13 @@ let private srtTests =
         // (the fixtures dir, already an extra read path) and every platform runs the fault
         // the way macOS ran it.
         testCaseAsync "a global git config in the operator's home never reaches a verb" <| async {
-            let root = mkdtemp nodeFs nodeOs
+            let root = mkdtemp ()
             makeBareFixture root "hello" |> ignore
             let home = sprintf "%s/home" (fixturesIn root)
-            mkdir nodeFs home
+            TestFiles.ensureDir home
             // Malformed on purpose. A config git PARSES is a fault it reports as its own,
             // which is exactly what an unhardened spawn hands back to whoever asked.
-            writeFile nodeFs (sprintf "%s/.gitconfig" home) "this is not a config\n"
+            TestFiles.write (sprintf "%s/.gitconfig" home) "this is not a config\n"
             let! added =
                 withEnv [ "HOME", Some home ] (fun () ->
                     async {
@@ -541,7 +521,7 @@ let private srtTests =
         // tell. What the failure MEANS is not decided here (git cannot tell an expired token
         // from a repo that is not there); this only has to say that one was spent.
         testCaseAsync "a network verb that fails while spending a credential says so" <| async {
-            let root = mkdtemp nodeFs nodeOs
+            let root = mkdtemp ()
             let failures = ResizeArray<CredentialFor * string> ()
             // No fixture made, so the clone has nothing to clone.
             let service = serviceSpending namedGit (Some "ghu_whatever") failures root (freshLog ())
@@ -552,7 +532,7 @@ let private srtTests =
         }
 
         testCaseAsync "a network verb that fails anonymously says nothing about anyone's sign-in" <| async {
-            let root = mkdtemp nodeFs nodeOs
+            let root = mkdtemp ()
             let failures = ResizeArray<CredentialFor * string> ()
             let service = serviceSpending namedGit None failures root (freshLog ())
             let! added = service.AddRepo caller (RepoRef.create "octo/missing" |> expect)
@@ -565,7 +545,7 @@ let private srtTests =
         // then never notices. Asked first, the provider's current name is what is refused
         // with, and nothing is cloned under the old one.
         testCaseAsync "a name the provider has moved on from is refused with the current one, before any clone" <| async {
-            let root = mkdtemp nodeFs nodeOs
+            let root = mkdtemp ()
             makeBareFixture root "hello" |> ignore
             let current = RepoRef.create "trinketworks/hello" |> expect
             let asked = ResizeArray<RepoRef> ()
@@ -596,7 +576,7 @@ let private srtTests =
         }
 
         testCaseAsync "a provider that cannot say does not stand in the way of a clone" <| async {
-            let root = mkdtemp nodeFs nodeOs
+            let root = mkdtemp ()
             makeBareFixture root "hello" |> ignore
             let service = serviceAsking namedGit None (ResizeArray ()) (fun _ _ -> async { return None }) root (freshLog ())
             let! added = service.AddRepo caller (RepoRef.create "octo/hello" |> expect)
@@ -604,7 +584,7 @@ let private srtTests =
         }
 
         testCaseAsync "a clone brings no hook templates with it" <| async {
-            let root = mkdtemp nodeFs nodeOs
+            let root = mkdtemp ()
             makeBareFixture root "hello" |> ignore
             let service = serviceIn root (freshLog ())
             let repo = RepoRef.create "octo/hello" |> expect
@@ -616,12 +596,12 @@ let private srtTests =
             // this suite cannot see that failure; what it can see is the flag that avoids
             // it, which is the absence of the directory the copy would have filled.
             Expect.isFalse
-                (exists nodeFs (sprintf "%s/octo/hello/.git/hooks" (reposIn root)))
+                (TestFiles.exists (sprintf "%s/octo/hello/.git/hooks" (reposIn root)))
                 "no hooks directory to populate (the clone asks for no templates)"
         }
 
         testCaseAsync "switch creates and moves branches, and the events say so" <| async {
-            let root = mkdtemp nodeFs nodeOs
+            let root = mkdtemp ()
             makeBareFixture root "hello" |> ignore
             let log = freshLog ()
             let service = serviceIn root log
@@ -640,7 +620,7 @@ let private srtTests =
         }
 
         testCaseAsync "a hook and an fsmonitor planted in the checkout do not fire through the verbs" <| async {
-            let root = mkdtemp nodeFs nodeOs
+            let root = mkdtemp ()
             makeBareFixture root "hello" |> ignore
             let log = freshLog ()
             let service = serviceIn root log
@@ -653,11 +633,11 @@ let private srtTests =
             // only the per-invocation GIT_CONFIG_* overrides stand between them and
             // execution.
             let hook = sprintf "#!/bin/sh\ntouch %s\n" marker
-            mkdir nodeFs (sprintf "%s/.git/hooks" checkout)
-            writeFile nodeFs (sprintf "%s/.git/hooks/post-checkout" checkout) hook
-            makeExecutable nodeFs (sprintf "%s/.git/hooks/post-checkout" checkout)
-            writeFile nodeFs (sprintf "%s/.git/evil.sh" checkout) hook
-            makeExecutable nodeFs (sprintf "%s/.git/evil.sh" checkout)
+            TestFiles.ensureDir (sprintf "%s/.git/hooks" checkout)
+            TestFiles.write (sprintf "%s/.git/hooks/post-checkout" checkout) hook
+            TestFiles.makeExecutable (sprintf "%s/.git/hooks/post-checkout" checkout)
+            TestFiles.write (sprintf "%s/.git/evil.sh" checkout) hook
+            TestFiles.makeExecutable (sprintf "%s/.git/evil.sh" checkout)
             hostGit childProcess [| "config"; "core.fsmonitor"; sprintf "%s/.git/evil.sh" checkout |] checkout
             hostGit childProcess [| "config"; "core.hooksPath"; sprintf "%s/.git/hooks" checkout |] checkout
             let! _ = service.SwitchBranch caller repo "probe" true
@@ -665,7 +645,7 @@ let private srtTests =
             expect status |> ignore
             let! diff = service.RepoDiff repo
             expect diff |> ignore
-            Expect.isFalse (exists nodeFs marker) "no planted code ran (hooksPath/fsmonitor forced off per invocation)"
+            Expect.isFalse (TestFiles.exists marker) "no planted code ran (hooksPath/fsmonitor forced off per invocation)"
         }
 
         // The rename is what makes the visible path binary, and these are its two halves:
@@ -674,7 +654,7 @@ let private srtTests =
         // git creates that in the first milliseconds — so a concurrent reader met a repo
         // with no HEAD and was told `fatal: ambiguous argument 'HEAD'`.
         testCaseAsync "a checkout is never visible half-made: the path appears whole, or not at all" <| async {
-            let root = mkdtemp nodeFs nodeOs
+            let root = mkdtemp ()
             makeBareFixture root "hello" |> ignore
             let service = serviceIn root (freshLog ())
             let repo = RepoRef.create "octo/hello" |> expect
@@ -692,7 +672,7 @@ let private srtTests =
             let watch =
                 async {
                     while running do
-                        if exists nodeFs checkout && not (checkoutWhole nodeFs checkout) then halfMade <- true
+                        if TestFiles.exists checkout && not (checkoutWhole checkout) then halfMade <- true
                         do! Async.Sleep 1
                 }
             let add =
@@ -703,28 +683,28 @@ let private srtTests =
                 }
             let! _ = Async.Parallel [ add; watch ]
             Expect.isFalse halfMade "the path was never seen with a .git and no work tree"
-            Expect.isTrue (checkoutWhole nodeFs checkout) "and it is whole once the clone answers"
+            Expect.isTrue (checkoutWhole checkout) "and it is whole once the clone answers"
         }
 
         testCaseAsync "a clone that fails leaves nothing behind — not at the repo's path, not staged" <| async {
-            let root = mkdtemp nodeFs nodeOs
+            let root = mkdtemp ()
             // No fixture is made, so the clone URL names a bare repo that is not there.
             let log = freshLog ()
             let service = serviceIn root log
             let repo = RepoRef.create "octo/missing" |> expect
             let! added = service.AddRepo caller repo
             Expect.isError added "a clone of something that is not there fails"
-            Expect.isFalse (exists nodeFs (sprintf "%s/octo/missing" (reposIn root))) "nothing at the visible path"
+            Expect.isFalse (TestFiles.exists (sprintf "%s/octo/missing" (reposIn root))) "nothing at the visible path"
             Expect.equal
-                (readDirSafe nodeFs (sprintf "%s/%s" (reposIn root) Repos.stagingDirName))
-                [||]
+                (readDirSafe (sprintf "%s/%s" (reposIn root) Repos.stagingDirName))
+                []
                 "and nothing left in the staging area"
             let! events = eventsOf log
             Expect.isEmpty events "a clone that did not happen records nothing"
         }
 
         testCaseAsync "a checkout left behind by an interrupted clone is named, with the way out" <| async {
-            let root = mkdtemp nodeFs nodeOs
+            let root = mkdtemp ()
             makeBareFixture root "hello" |> ignore
             let service = serviceIn root (freshLog ())
             let repo = RepoRef.create "octo/hello" |> expect
@@ -732,7 +712,7 @@ let private srtTests =
             // repository with no commit in it. Nothing can produce this any more, but a
             // machine that ran the old code still has one.
             let checkout = sprintf "%s/octo/hello" (reposIn root)
-            mkdir nodeFs checkout
+            TestFiles.ensureDir checkout
             hostGit childProcess [| "init"; "-b"; "main" |] checkout
             let! added = service.AddRepo caller repo
             match added with
@@ -743,7 +723,7 @@ let private srtTests =
         }
 
         testCaseAsync "the same repo asked for twice at once is cloned once, and recorded once" <| async {
-            let root = mkdtemp nodeFs nodeOs
+            let root = mkdtemp ()
             makeBareFixture root "hello" |> ignore
             let log = freshLog ()
             let service = serviceIn root log
@@ -759,38 +739,38 @@ let private srtTests =
             // The one thing removal cannot undo: `add_repo` brings back the commits and
             // nothing else. So it is refused, and the refusal has to be one a model can act
             // on rather than retry.
-            let root = mkdtemp nodeFs nodeOs
+            let root = mkdtemp ()
             makeBareFixture root "hello" |> ignore
             let service = serviceIn root (freshLog ())
             let repo = RepoRef.create "octo/hello" |> expect
             let! _ = service.AddRepo caller repo
-            writeFile nodeFs (sprintf "%s/octo/hello/README.md" (reposIn root)) "work nobody has committed\n"
+            TestFiles.write (sprintf "%s/octo/hello/README.md" (reposIn root)) "work nobody has committed\n"
             match! service.RemoveRepo caller repo false with
             | Ok _ -> failwith "uncommitted work must not be deleted by a call that did not say so"
             | Error reason ->
                 Expect.isTrue (reason.Contains "octo/hello") "the refusal names the repo"
                 Expect.isTrue (reason.Contains "force") "and says what would delete it anyway"
             Expect.isTrue
-                (exists nodeFs (sprintf "%s/octo/hello" (reposIn root)))
+                (TestFiles.exists (sprintf "%s/octo/hello" (reposIn root)))
                 "and the checkout is still there"
         }
 
         testCaseAsync "force removes a checkout with uncommitted changes" <| async {
-            let root = mkdtemp nodeFs nodeOs
+            let root = mkdtemp ()
             makeBareFixture root "hello" |> ignore
             let service = serviceIn root (freshLog ())
             let repo = RepoRef.create "octo/hello" |> expect
             let! _ = service.AddRepo caller repo
-            writeFile nodeFs (sprintf "%s/octo/hello/README.md" (reposIn root)) "work nobody has committed\n"
+            TestFiles.write (sprintf "%s/octo/hello/README.md" (reposIn root)) "work nobody has committed\n"
             let! removed = service.RemoveRepo caller repo true
             expect removed |> ignore
-            Expect.isFalse (exists nodeFs (sprintf "%s/octo/hello" (reposIn root))) "the second decision is honoured"
+            Expect.isFalse (TestFiles.exists (sprintf "%s/octo/hello" (reposIn root))) "the second decision is honoured"
         }
 
         testCaseAsync "removing answers with the path a terminal saw, so a profile can be cleared" <| async {
             // The one fact only this service has, and the only path anything outside the git
             // sandbox can act on — the git sandbox's own path is visible to no terminal here.
-            let root = mkdtemp nodeFs nodeOs
+            let root = mkdtemp ()
             makeBareFixture root "hello" |> ignore
             let service = serviceIn root (freshLog ())
             let repo = RepoRef.create "octo/hello" |> expect
@@ -801,7 +781,7 @@ let private srtTests =
         }
 
         testCaseAsync "remove deletes the checkout and records who asked" <| async {
-            let root = mkdtemp nodeFs nodeOs
+            let root = mkdtemp ()
             makeBareFixture root "hello" |> ignore
             let log = freshLog ()
             let service = serviceIn root log
@@ -810,7 +790,7 @@ let private srtTests =
             let human : Repos.RepoCaller = { Actor = PeerRef ada; Credential = CredentialFor.Person (Principal.Peer ada) }
             let! removed = service.RemoveRepo human repo false
             expect removed |> ignore
-            Expect.isFalse (exists nodeFs (sprintf "%s/octo/hello" (reposIn root))) "checkout gone"
+            Expect.isFalse (TestFiles.exists (sprintf "%s/octo/hello" (reposIn root))) "checkout gone"
             let! events = eventsOf log
             match events |> List.rev |> List.head with
             | SessionEvent.RepoRemoved r -> Expect.equal r.Actor (PeerRef ada) "the human is the acting party"
@@ -857,9 +837,9 @@ let private compositionTests =
             // repository, because the answer under test is git's: the branch it is on.
             let sessionDir = sprintf "%s/%s" dataDir record.DataDir
             let checkout = sprintf "%s/octo/hello" (Sandboxes.SessionLayout.reposDir sessionDir)
-            mkdir nodeFs checkout
+            TestFiles.ensureDir checkout
             hostGit childProcess [| "init"; "-b"; "main" |] checkout
-            writeFile nodeFs (sprintf "%s/README.md" checkout) "planted\n"
+            TestFiles.write (sprintf "%s/README.md" checkout) "planted\n"
             hostGit childProcess [| "add"; "." |] checkout
             hostGit childProcess [| "commit"; "-m"; "planted" |] checkout
 
@@ -959,9 +939,9 @@ let private errnoOf (error: exn) : string option = jsNative
 /// A directory, rendered for a person reading the report below — never a value anything
 /// decides on. Every way the read can fail is a line in that report, which is why the failure
 /// is spelled out rather than swallowed.
-let private listDir (fs: obj) (path: string) : string =
+let private listDir (path: string) : string =
     try
-        match readdir fs path |> String.concat ", " with
+        match TestFiles.entries path |> String.concat ", " with
         | "" -> "<empty>"
         | entries -> entries
     with error ->
@@ -1026,10 +1006,10 @@ let private liveClone =
                     model.Environment
                     items
                     terminals
-                    (listDir nodeFs sessionDir)
-                    (listDir nodeFs reposDir)
-                    (listDir nodeFs (sprintf "%s/octocat" reposDir))
-                    (checkoutWhole nodeFs checkout)
+                    (listDir sessionDir)
+                    (listDir reposDir)
+                    (listDir (sprintf "%s/octocat" reposDir))
+                    (checkoutWhole checkout)
 
             do! compose ada ada.Hello.PeerId (sprintf "Clone %s" liveRepo)
             ada.Connection.SendDraft ada.Hello.PeerId
@@ -1038,7 +1018,7 @@ let private liveClone =
             // rather than `waitUntilWithin` because not settling is not this case's verdict —
             // the report below is, and a throw here would take it with it.
             let settled () =
-                checkoutWhole nodeFs checkout
+                checkoutWhole checkout
                 || (ada.Runner.Model ()).Conversation.Items
                    |> List.exists (fun i ->
                        i.Author = ActorRef.Agent
@@ -1047,8 +1027,8 @@ let private liveClone =
 
             // Printed on the happy path too: a green run that says nothing teaches nothing, and
             // this is the only place a CI reader can see what the live session actually did.
-            printfn "%s" (report (if checkoutWhole nodeFs checkout then "the checkout landed" else "no checkout"))
-            Expect.isTrue (checkoutWhole nodeFs checkout) (report "the checkout never landed")
+            printfn "%s" (report (if checkoutWhole checkout then "the checkout landed" else "no checkout"))
+            Expect.isTrue (checkoutWhole checkout) (report "the checkout never landed")
 
             do! ada.Channel.Close ()
             do! pm.StopAll ()

@@ -8,6 +8,7 @@ module Yession.Host.Spawn
 
 open Fable.Core
 open Fable.Core.JsInterop
+open Fable.NodeExtras
 
 #if FABLE_COMPILER
 open Thoth.Json
@@ -19,6 +20,9 @@ type [<AllowNullLiteral>] Child =
     abstract pid : int
     abstract kill : string -> bool
     abstract on : string * (obj -> unit) -> Child
+    /// The readiness line arrives here. A `Readable`, so the stream can be told to decode —
+    /// which is how the chunks become text rather than being asked, one by one, whether they are.
+    abstract stdout : Readable
 
 [<Import("spawn", "node:child_process")>]
 let private spawnRaw : obj = jsNative
@@ -28,18 +32,6 @@ let private spawnRaw : obj = jsNative
 // Manager. stdout is parsed for the readiness line; stderr passes through.
 [<Emit("$0($1, $2, { env: { ...process.env, ...Object.fromEntries($3) }, stdio: ['pipe', 'pipe', 'inherit'] })")>]
 let private spawnWithEnv (spawn: obj) (command: string) (args: string array) (env: (string * string) array) : Child = jsNative
-
-[<Emit("$0.stdout.on('data', $1)")>]
-let private onStdout (child: Child) (handler: obj -> unit) : unit = jsNative
-
-[<Emit("typeof $0 === 'string'")>]
-let private isJsString (chunk: obj) : bool = jsNative
-
-[<Emit("$0.toString('utf8')")>]
-let private decodeUtf8 (chunk: obj) : string = jsNative
-
-let private chunkToString (chunk: obj) : string =
-    if isJsString chunk then unbox<string> chunk else decodeUtf8 chunk
 
 /// The readiness line, as the spawn contract states it: `{"yession":"ready","port":N}`, and
 /// `version` from a bundle new enough to carry one. That field is optional and stays
@@ -191,8 +183,8 @@ let launch
         // Accumulate stdout and scan complete lines for the readiness JSON; anything
         // else is a log line and passes through.
         let mutable buffer = ""
-        onStdout child (fun chunk ->
-            buffer <- buffer + chunkToString chunk
+        Readables.text child.stdout (fun chunk ->
+            buffer <- buffer + chunk
             let parts = buffer.Split '\n'
             buffer <- parts.[parts.Length - 1]
             for line in parts.[0 .. parts.Length - 2] do

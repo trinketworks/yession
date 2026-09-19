@@ -20,6 +20,7 @@ module Yession.Browser.Replay
 
 open Fable.Core
 open Fable.Core.JsInterop
+open Fable.ProseMirror
 open Yession.App
 
 /// What `create` hands back. Only `dispose` is used: a replay is mounted when a closed

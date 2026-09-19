@@ -164,15 +164,18 @@ let private createServerRaw : System.Func<IncomingMessage, ServerResponse, unit>
 let createServer (handler: IncomingMessage -> ServerResponse -> unit) : HttpServer =
     createServerRaw (System.Func<_, _, _>(handler))
 
-[<Emit("typeof $0 === 'string'")>]
-let private isJsString (chunk: obj) : bool = jsNative
-
-[<Emit("$0.toString('utf8')")>]
-let private decodeUtf8 (chunk: obj) : string = jsNative
-
-/// Decode a Node Buffer (or string) chunk to a UTF-8 string.
-let bufferToString (chunk: obj) : string =
-    if isJsString chunk then unbox<string> chunk else decodeUtf8 chunk
+/// The whole body of a request, as text, then `cont`. Every route that takes a body is
+/// small and decodes it entire, so there is nothing here to stream.
+///
+/// The stream decodes — `Readables.text` sets the encoding and hands over strings — rather
+/// than each chunk being asked whether it is one. Thirteen readers used to write this loop
+/// out with a `typeof chunk === 'string'` in it and a `toString('utf8')` on the other branch,
+/// which is a decision per chunk made in JavaScript and wrong whenever a chunk boundary fell
+/// inside a multi-byte character.
+let readBody (req: IncomingMessage) (cont: string -> unit) : unit =
+    let acc = System.Text.StringBuilder ()
+    Readables.text req (fun chunk -> acc.Append chunk |> ignore)
+    req.onEnd (fun () -> cont (acc.ToString ()))
 
 /// Read a request header (Node lowercases header names); None when absent.
 [<Emit("($0.headers[$1] ?? null)")>]

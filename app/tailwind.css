@@ -279,8 +279,65 @@
    turned ninety degrees and left at 180, the sweep ran across two pixels of height instead of
    the band's width, and blue→green blended into a single flat teal — the gradient still there
    in the stylesheet and gone from the screen. A gradient runs along the thing it is on. */
+/* PRESSED is `:active` or HELD (`aria-busy`): a button that has been pushed and is still
+   doing what it was pushed for wears the press face until the act lands, rather than
+   springing back up to say nothing while the browser is on its way somewhere. One variant,
+   so a face cannot fill for the finger and forget the hold. */
+@custom-variant pressed (&:is(:active, [aria-busy="true"]));
+
 @utility bg-grad {
   background-image: linear-gradient(90deg, var(--color-blue), var(--color-green));
+}
+
+/* A button under the hand goes IN, not only dark. This is the Windows Phone TILT — the one
+   piece of Metro's motion vocabulary the design had adopted nowhere — and it is worn by the
+   `[data-press]` hook rather than a `Style` face so the look and the script that aims it
+   (`ManagerUi.script`, `pointerdown`) cannot come apart: a button that says where it was
+   touched is a button that tilts there, and no other kind exists.
+
+   The geometry is a rotation about the centre AND a push back along Z, in that combination
+   for a reason: rotation alone lifts the far corner toward the reader, and a thing you
+   pressed should not come at you anywhere. At 12° over a control 80px wide the far edge rises
+   ~8px; the 16px push under a 480px perspective more than absorbs it, so every point of the
+   button ends up behind where it started, the touched corner furthest. Touched dead centre
+   (or by a key, which has no where — the script hands it 0,0) it goes straight in, which is
+   the same motion with the tilt term at zero rather than a second, keyboard-only design.
+
+   `--press-x/--press-y` are the touch point in [-1, 1] from the centre, and the SIGNS are
+   CSS's: `rotateY` positive carries the RIGHT edge away, `rotateX` positive the TOP edge,
+   so x rides straight and y is negated.
+
+   Two speeds. Going in is ~instant — 60ms, the finger is already there; coming back is
+   slower and overshoots by a hair (`1.15` on the curve's tail), which is what makes it read
+   as a spring and not a slide. Held (`aria-busy`) it stays where it was pushed: the act is
+   under way, the button is down until it lands, and the cursor says so too.
+
+   `prefers-reduced-motion` keeps the fill (`pressed:` in `Style`) and drops the geometry —
+   that is the whole press state with the motion taken out, not a different button. */
+[data-press] {
+  --press-x: 0;
+  --press-y: 0;
+  transform-origin: 50% 50%;
+  transform: perspective(480px) translateZ(0) rotateX(0) rotateY(0);
+  transition-property: transform, color, background-color, border-color;
+  transition-duration: 260ms, 150ms, 150ms, 150ms;
+  transition-timing-function: cubic-bezier(0.2, 0.9, 0.3, 1.15), ease, ease, ease;
+  backface-visibility: hidden;
+}
+[data-press]:is(:active, [aria-busy="true"]) {
+  transform: perspective(480px) translateZ(-16px)
+    rotateX(calc(var(--press-y) * -12deg)) rotateY(calc(var(--press-x) * 12deg));
+  transition-duration: 60ms;
+  transition-timing-function: ease-out;
+}
+[data-press][aria-busy="true"] {
+  cursor: progress;
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-press], [data-press]:is(:active, [aria-busy="true"]) {
+    transform: none;
+    transition-property: color, background-color, border-color;
+  }
 }
 
 /* The document ground. Both shells mount their own black surface (`Style.app`), but the

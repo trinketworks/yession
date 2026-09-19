@@ -43,11 +43,6 @@ let private bootstrapHtml (sessionId: SessionId) (mount: string) (managerOrigin:
 let private decodeBase64 (encoded: string) : string =
     unbox (buffer.Buffer.from (encoded, BufferEncoding.Base64))
 
-let private readBody (req: IncomingMessage) (cont: string -> unit) =
-    let mutable acc = ""
-    req.on ("data", fun chunk -> acc <- acc + bufferToString chunk) |> ignore
-    req.on ("end", fun _ -> cont acc) |> ignore
-
 [<Fable.Core.Emit("new URL($0, 'http://local').pathname")>]
 let private pathnameOf (url: string) : string = Fable.Core.Util.jsNative
 

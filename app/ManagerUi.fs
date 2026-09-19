@@ -304,7 +304,9 @@ let private tableTemplate
               {filterChip query (countOf Archived) Archived}
             </div>
             <form class="ml-auto" method="post" action="{ManagerRoute.path ManagerRoute.CreateSession}" data-create-session>
-              <button type="submit" class="{Style.btnPrimary}">Create</button>
+              <button type="submit" class="{Style.btnPrimary}" data-press>
+                <span class="{Style.whenReady}">Create</span><span class="{Style.whenBusy}">Creating…</span>
+              </button>
             </form>
           </div>
           <table class="{Col.table}">
@@ -355,6 +357,11 @@ let private script =
       // it would otherwise drop that hand onto the first chip.
       const wasCreate = !!active && !!active.closest('[data-create-session]')
       const wasAction = !!active && active.hasAttribute('data-stop')
+      // A Create that is HELD (the browser is on its way to the new session, and the rows
+      // stream announces that session before the redirect lands) keeps its own element
+      // through the swap: the state, the tilt it was pushed at, and the focus all live on it.
+      const held = el.querySelector('[data-create-session] [aria-busy="true"]')
+      if (held) { const fresh = n.querySelector('[data-create-session] button'); if (fresh) fresh.replaceWith(held) }
       el.replaceWith(n)
       if (!active) return
       const find = (sel) => sel && (n.matches(sel) ? n : n.querySelector(sel))
@@ -404,7 +411,36 @@ let private script =
       history.pushState(null, '', a.getAttribute('href'))
       openRows(true)
     })
-    // Creating is deliberately NOT intercepted here (the reasoning is on the form itself).
+    // Creating is deliberately NOT intercepted here (the reasoning is on the form itself) —
+    // but it is MARKED. Between the push and the new page there is nothing on this one to
+    // show for it, so the button stays down (`aria-busy`: held, filled, and saying what it
+    // is doing) until the browser leaves. A second push in that window is refused: two
+    // Creates are two sessions.
+    document.addEventListener('submit', (e) => {
+      const f = e.target.closest('[data-create-session]'); if (!f) return
+      const b = f.querySelector('button')
+      if (b.getAttribute('aria-busy') === 'true') { e.preventDefault(); return }
+      b.setAttribute('aria-busy', 'true')
+    })
+    // Back here from the session — the page restored as it was left — the hold is over: the
+    // act it was held for happened.
+    window.addEventListener('pageshow', (e) => {
+      if (e.persisted) document.querySelectorAll('[aria-busy="true"]').forEach((b) => b.removeAttribute('aria-busy'))
+    })
+    // A button goes in where it is touched (`[data-press]`, tailwind.css). The stylesheet does
+    // the pressing off `:active`; what it cannot know is WHERE, so this hands it the touch
+    // point as two numbers in [-1, 1] from the button's centre. A key has no where and gets
+    // the centre — straight in — rather than the corner the mouse last left behind.
+    document.addEventListener('pointerdown', (e) => {
+      const b = e.target.closest('[data-press]'); if (!b) return
+      const r = b.getBoundingClientRect()
+      b.style.setProperty('--press-x', ((e.clientX - r.left) / r.width * 2 - 1).toFixed(2))
+      b.style.setProperty('--press-y', ((e.clientY - r.top) / r.height * 2 - 1).toFixed(2))
+    })
+    document.addEventListener('keydown', (e) => {
+      const b = e.target.closest('[data-press]'); if (!b) return
+      b.style.setProperty('--press-x', '0'); b.style.setProperty('--press-y', '0')
+    })
     // Declaring an MCP server (Plan 17): the only place a url is written, and the only
     // management action that can be REFUSED for a reason a human needs to read — a name
     // clash. So this one reports, where stop/archive only swap.
@@ -684,11 +720,6 @@ let private cssUrl = ManagerRoute.path (ManagerRoute.asset assets.Build AssetFil
 /// the session server does, for the same reason — `res.end` takes what Node's `end` takes.
 let private decodeBase64 (encoded: string) : string =
     unbox (buffer.Buffer.from (encoded, BufferEncoding.Base64))
-
-let private readBody (req: IncomingMessage) (cont: string -> unit) =
-    let mutable acc = ""
-    req.on ("data", fun chunk -> acc <- acc + bufferToString chunk) |> ignore
-    req.on ("end", fun _ -> cont acc) |> ignore
 
 let private respondWith (res: ServerResponse) (status: int) (contentType: string) (cacheControl: string) (body: string) =
     res.writeHead (status, createObj [ "content-type", box contentType; "cache-control", box cacheControl ]) |> ignore

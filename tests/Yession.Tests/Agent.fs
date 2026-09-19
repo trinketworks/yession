@@ -27,15 +27,6 @@ open Yession.Tests.Support
 open Yession.Domain.Prs
 open Yession.Peer
 
-[<ImportAll("node:fs")>]
-let private nodeFs : obj = Fable.Core.Util.jsNative
-
-[<Emit("$0.mkdirSync($1, { recursive: true })")>]
-let private mkdirSync (fs: obj) (path: string) : unit = Fable.Core.Util.jsNative
-
-[<Emit("$0.writeFileSync($1, $2)")>]
-let private writeFileSync (fs: obj) (path: string) (text: string) : unit = Fable.Core.Util.jsNative
-
 [<ImportAll("node:path")>]
 let private nodePath : obj = Fable.Core.Util.jsNative
 
@@ -666,8 +657,8 @@ let private liveTests =
                 // Absolute, so the probe would succeed if a built-in file tool were
                 // back — whatever cwd the spawned CLI runs in.
                 let path = resolvePath nodePath (sprintf "%s/tool-surface-probe-%s.txt" dir (string (Guid.NewGuid ())))
-                mkdirSync nodeFs dir
-                writeFileSync nodeFs path nonce
+                TestFiles.ensureDir dir
+                TestFiles.write path nonce
                 let body = sprintf "Read the file at %s and reply with its exact contents." path
                 let probe = { trigger with Body = body }
                 let probeItem = { triggerItem with Body = body }

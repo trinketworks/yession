@@ -25,14 +25,6 @@ open Yession.SessionProcess
 open Yession.Tests.Support
 
 // Host-side fixtures the pty is then pointed at (same shape as SrtIntegration's).
-let private nodeFs : obj = importAll "node:fs"
-let private nodeOs : obj = importAll "node:os"
-
-[<Emit("$0.mkdtempSync($1.tmpdir() + '/yession-pty-')")>]
-let private mkdtemp (fs: obj) (os: obj) : string = jsNative
-
-[<Emit("$0.writeFileSync($1, $2)")>]
-let private writeFile (fs: obj) (path: string) (content: string) : unit = jsNative
 
 /// Everything a pty emits until it exits, plus how it ended. One string, not two: that is
 /// the shape of a terminal.
@@ -809,7 +801,7 @@ let private agentLeaseTests =
             withPosixTerminal "stdinshape" (fun terminals id records _ _ _ ->
                 async {
                     let ada = Principal.Peer (PeerId.create "ada" |> expect)
-                    let dir = mkdtemp nodeFs nodeOs
+                    let dir = TestFiles.tempDir "yession-pty-"
                     do! terminals.RunBlock id (agentEntry id ada "1") ("cd " + dir) ignore
                     do! terminals.RunBlock id (agentEntry id ada "2") "cat <<'EOF' # note\nHEREDOC:$PWD\nEOF" ignore
                     do! terminals.RunBlock id (agentEntry id ada "3") "echo \"IN:$PWD\"" ignore
@@ -909,7 +901,7 @@ let private throughTheHostTests =
                         Env = Sandboxes.hostBaseline (Sandboxes.ambientEnv ()) }
                 let! host = hostOver (Sandboxes.HostSandbox.create ()) policy "host-shell"
                 let agent = Authority.agentFor (Principal.Peer (PeerId.create "ada" |> expect))
-                let dir = mkdtemp nodeFs nodeOs
+                let dir = TestFiles.tempDir "yession-pty-"
                 match! host.TerminalCommands.Execute (CommandRequest.ofCommand ("cd " + dir)) agent with
                 | Error e -> failwithf "cd did not run: %s" e
                 | Ok first ->
@@ -1303,9 +1295,9 @@ let tests =
                 // every cheap-tier case and close no block at all in production.
                 let nonce = Interop.randomSecret ()
                 let rc = (Marks.rcFor "bash" nonce |> Option.get).Rc
-                let dir = mkdtemp nodeFs nodeOs
+                let dir = TestFiles.tempDir "yession-pty-"
                 let rcPath = dir + "/yrc"
-                writeFile nodeFs rcPath rc
+                TestFiles.write rcPath rc
                 let policy =
                     { ReadPaths = []
                       WritePaths = []
@@ -1376,7 +1368,7 @@ let tests =
             withLiveTerminal "cd" (fun terminals id records _ _ _ ->
                 async {
                     let ada = Principal.Peer (PeerId.create "ada" |> expect)
-                    let dir = mkdtemp nodeFs nodeOs
+                    let dir = TestFiles.tempDir "yession-pty-"
                     do! terminals.RunBlock id (queueEntry id ada "1") ("cd " + dir) ignore
                     do! terminals.RunBlock id (queueEntry id ada "2") "echo \"IN:$PWD\"" ignore
                     let printed () = records |> Seq.map (fun r -> r.Data) |> String.concat ""
@@ -1395,7 +1387,7 @@ let tests =
             withPosixTerminal "cdposix" (fun terminals id records _ _ _ ->
                 async {
                     let ada = Principal.Peer (PeerId.create "ada" |> expect)
-                    let dir = mkdtemp nodeFs nodeOs
+                    let dir = TestFiles.tempDir "yession-pty-"
                     do! terminals.RunBlock id (queueEntry id ada "1") ("cd " + dir) ignore
                     do! terminals.RunBlock id (queueEntry id ada "2") "echo \"IN:$PWD\"" ignore
                     let printed () = records |> Seq.map (fun r -> r.Data) |> String.concat ""
@@ -1514,7 +1506,7 @@ let tests =
         // The shell profile (Plan 25), end to end: the only tier that can prove the promise
         // as a person experiences it — a real instrumented shell, asked where it is.
         testCaseAsync "a shell opened under a profile really starts there" <|
-            (let directory = mkdtemp nodeFs nodeOs
+            (let directory = TestFiles.tempDir "yession-pty-"
              withPreparedTerminal
                  (fun terminals ->
                      async {
