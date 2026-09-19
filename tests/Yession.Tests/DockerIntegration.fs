@@ -23,41 +23,21 @@ open Yession.Peer
 
 // --- Node helpers (host-side fs/os and process env, for HostPath mounts + secret store) --
 
-let private nodeFs : obj = importAll "node:fs"
-let private nodeOs : obj = importAll "node:os"
 
 // Under $HOME, not the system temp dir, on purpose — the same reason DevContainer.fs
 // roots its fixtures there: a bind mount's source is resolved by the DAEMON, and the
 // common macOS arrangement (Colima) shares only $HOME into its VM. A fixture under
 // /var/folders binds as a source the daemon cannot see, and the test errors with "bind
 // source path does not exist" on every Mac dev box while passing in CI.
-[<Emit("$0.mkdirSync($1, { recursive: true })")>]
-let private mkdirp (fs: obj) (path: string) : unit = jsNative
-
-[<Emit("$0.mkdtempSync($1)")>]
-let private mkdtempAt (fs: obj) (prefix: string) : string = jsNative
-
-[<Emit("$0.homedir()")>]
-let private homedir (os: obj) : string = jsNative
-
-[<Emit("$0.rmSync($1, { recursive: true, force: true })")>]
-let private rmrf (fs: obj) (path: string) : unit = jsNative
-
-let private mkdtemp (fs: obj) (os: obj) : string =
-    let root = homedir os + "/.cache/yession-tests"
-    mkdirp fs root
-    mkdtempAt fs (root + "/docker-")
+let private mkdtemp () : string =
+    let root = TestFiles.homeDir () + "/.cache/yession-tests"
+    TestFiles.ensureDir root
+    TestFiles.tempDirAt (root + "/docker-")
 
 // World-writable, so the mount-mode test asserts rw-vs-ro MOUNT semantics and nothing
 // about capabilities. The container keeps CAP_DAC_OVERRIDE these days (a nix build needs
 // it — see the CapAdd site in Sandboxes.fs), so its root could write into a 0700 dir
 // anyway; the chmod stays because the test must hold whether or not that grant does.
-[<Emit("$0.chmodSync($1, 0o777)")>]
-let private makeWorldWritable (fs: obj) (path: string) : unit = jsNative
-
-[<Emit("$0.readFileSync($1, 'utf8')")>]
-let private readFile (fs: obj) (path: string) : string = jsNative
-
 // --- Fixtures / helpers ------------------------------------------------------------------
 
 /// Reshape the container inside a spec. The runtime union nests what used to be flat, and
@@ -297,15 +277,15 @@ let tests =
             })
 
             testCaseAsync "HostPath mounts honour read-write and read-only" (async {
-                let dir = mkdtemp nodeFs nodeOs
-                makeWorldWritable nodeFs dir
+                let dir = mkdtemp ()
+                TestFiles.makeWorldWritable dir
                 // Read-write: the container writes, the host reads it back.
                 let specRW = alpineSpec |> withContainer (fun c -> { c with Mounts = [ { Source = HostPath dir; Target = "/host"; Mode = ReadWrite } ] })
                 let! _, sandboxRW = startOrFail specRW
                 let! rw, _, _ = runInSandbox sandboxRW "sh" [ "-c"; "echo hostbound > /host/f" ] Map.empty None
                 Expect.equal rw (SandboxExited 0) "read-write mount accepts writes"
                 do! sandboxRW.Dispose ()
-                Expect.isTrue ((readFile nodeFs (dir + "/f")).Contains "hostbound") "the host sees the container's write"
+                Expect.isTrue ((TestFiles.read (dir + "/f")).Contains "hostbound") "the host sees the container's write"
                 // Read-only: the same path rejects writes.
                 let specRO = alpineSpec |> withContainer (fun c -> { c with Mounts = [ { Source = HostPath dir; Target = "/host"; Mode = ReadOnly } ] })
                 let! _, sandboxRO = startOrFail specRO
@@ -314,7 +294,7 @@ let tests =
                 do! sandboxRO.Dispose ()
                 // Under $HOME now, which the OS does not reap the way it does the system
                 // temp dir — so this one cleans up after itself.
-                rmrf nodeFs dir
+                TestFiles.removeTree dir
             })
 
             testCaseAsync "build spec: an image is built from a context and run" (async {
