@@ -359,13 +359,6 @@ let private keyTests =
 [<Emit("new URL($0).searchParams.get($1)")>]
 let private queryOfUrl (url: string) (name: string) : string option = Fable.Core.Util.jsNative
 
-type private FormReply =
-    abstract status : int
-    abstract body : string
-
-[<Emit("fetch($0, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: $1 }).then(async r => ({ status: r.status, body: await r.text() }))")>]
-let private postFormRaw (url: string) (body: string) : JS.Promise<FormReply> = Fable.Core.Util.jsNative
-
 let private opTests =
     testList "OP endpoint over HTTP" [
         testCaseAsync "authorize -> token issues a jose-verifiable ID token; replay, bad verifier, and bad secret are refused per spec" <|
@@ -424,9 +417,9 @@ let private opTests =
                 // The happy path, verified with jose against the served JWKS.
                 let! code = issueCode ()
                 Expect.isTrue (code.Length > 0) "a code is issued"
-                let! tokens = postFormRaw decoded.TokenEndpoint (tokenForm code client.ClientSecret verifier) |> Interop.awaitPromise
-                Expect.equal tokens.status 200 "the exchange succeeds"
-                let tokenResponse = Wire.fromString Wire.tokenResponse tokens.body |> expect
+                let! tokens = TestHttp.postForm (tokenForm code client.ClientSecret verifier) decoded.TokenEndpoint
+                Expect.equal tokens.Status 200 "the exchange succeeds"
+                let tokenResponse = Wire.fromString Wire.tokenResponse tokens.Body |> expect
                 Expect.equal tokenResponse.TokenType "Bearer" "token_type per RFC 6749 §5.1"
                 let! jwksReply = OidcHttp.getWithJar jar decoded.JwksUri
                 let keySet = Fable.Jose.createLocalJWKSet (JS.JSON.parse jwksReply.Body)
@@ -439,21 +432,21 @@ let private opTests =
                 Expect.equal attribution "unattributed" "localhost access is unattributed"
 
                 // Replay: the same code again -> invalid_grant.
-                let! replay = postFormRaw decoded.TokenEndpoint (tokenForm code client.ClientSecret verifier) |> Interop.awaitPromise
-                Expect.equal replay.status 400 "a replayed code is refused"
-                Expect.equal (Wire.fromString Wire.tokenError replay.body) (Ok "invalid_grant") "as invalid_grant"
+                let! replay = TestHttp.postForm (tokenForm code client.ClientSecret verifier) decoded.TokenEndpoint
+                Expect.equal replay.Status 400 "a replayed code is refused"
+                Expect.equal (Wire.fromString Wire.tokenError replay.Body) (Ok "invalid_grant") "as invalid_grant"
 
                 // A wrong verifier burns its fresh code.
                 let! code2 = issueCode ()
-                let! badVerifier = postFormRaw decoded.TokenEndpoint (tokenForm code2 client.ClientSecret "wrong-verifier-wrong-verifier-wrong-verifier") |> Interop.awaitPromise
-                Expect.equal badVerifier.status 400 "PKCE failure is refused"
-                Expect.equal (Wire.fromString Wire.tokenError badVerifier.body) (Ok "invalid_grant") "as invalid_grant"
+                let! badVerifier = TestHttp.postForm (tokenForm code2 client.ClientSecret "wrong-verifier-wrong-verifier-wrong-verifier") decoded.TokenEndpoint
+                Expect.equal badVerifier.Status 400 "PKCE failure is refused"
+                Expect.equal (Wire.fromString Wire.tokenError badVerifier.Body) (Ok "invalid_grant") "as invalid_grant"
 
                 // A wrong client secret is invalid_client (401).
                 let! code3 = issueCode ()
-                let! badSecret = postFormRaw decoded.TokenEndpoint (tokenForm code3 "stolen" verifier) |> Interop.awaitPromise
-                Expect.equal badSecret.status 401 "a bad client secret is a 401"
-                Expect.equal (Wire.fromString Wire.tokenError badSecret.body) (Ok "invalid_client") "as invalid_client"
+                let! badSecret = TestHttp.postForm (tokenForm code3 "stolen" verifier) decoded.TokenEndpoint
+                Expect.equal badSecret.Status 401 "a bad client secret is a 401"
+                Expect.equal (Wire.fromString Wire.tokenError badSecret.Body) (Ok "invalid_client") "as invalid_client"
 
                 server.close ignore
             }
@@ -463,16 +456,6 @@ let private opTests =
 
 [<Emit("process.execPath")>]
 let private nodePath : string = Fable.Core.Util.jsNative
-
-type private HeaderReply =
-    abstract status : int
-    abstract cacheControl : string
-
-[<Emit("fetch($0).then(r => ({ status: r.status, cacheControl: r.headers.get('cache-control') || '' }))")>]
-let private headRequest (url: string) : JS.Promise<HeaderReply> = Fable.Core.Util.jsNative
-
-[<Emit("""fetch($0, { method: 'POST', headers: { 'x-yession-control': $1, 'content-type': 'application/json' }, body: $2 }).then(r => r.status)""")>]
-let private postControl (url: string) (secret: string) (body: string) : JS.Promise<int> = Fable.Core.Util.jsNative
 
 let private flowTests =
     testList "Composed authorization flow" [
@@ -517,10 +500,10 @@ let private flowTests =
                 Expect.equal stale.Status 404 "a stale asset address is a 404, never a redirect to current bytes"
 
                 // The data surfaces are gated bare.
-                let! bareMe = headRequest (sessionUrl + "/me") |> Interop.awaitPromise
-                Expect.equal bareMe.status 401 "bare /me is unauthorized"
-                let! bareEvents = headRequest (sessionUrl + "/events") |> Interop.awaitPromise
-                Expect.equal bareEvents.status 401 "the bare event cursor is unauthorized"
+                let! bareMe = TestHttp.get (sessionUrl + "/me")
+                Expect.equal bareMe.Status 401 "bare /me is unauthorized"
+                let! bareEvents = TestHttp.get (sessionUrl + "/events")
+                Expect.equal bareEvents.Status 401 "the bare event cursor is unauthorized"
 
                 // /login begins the bounce.
                 let probeJar = OidcHttp.newJar ()
@@ -556,12 +539,12 @@ let private flowTests =
 
                 // DCR with a forged control secret is refused at the door.
                 let! forged =
-                    postControl
-                        (managerUrl + "/control/register-client")
-                        "forged-secret"
+                    TestHttp.post
+                        [ "x-yession-control", "forged-secret" ]
+                        "application/json"
                         (Wire.toString Wire.registerClientRequest { RedirectUri = "http://127.0.0.1:1/callback" })
-                    |> Interop.awaitPromise
-                Expect.equal forged 401 "a forged control secret cannot register a client"
+                        (managerUrl + "/control/register-client")
+                Expect.equal forged.Status 401 "a forged control secret cannot register a client"
 
                 // Stopping the launch revokes its client registration: the authorize
                 // endpoint no longer knows the client at all.
