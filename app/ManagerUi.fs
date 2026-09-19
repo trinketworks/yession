@@ -679,8 +679,7 @@ let private seeOther (res: ServerResponse) (location: string) =
 
 /// A string as a JS literal, for the one inline script below — so a URL containing a quote
 /// is data rather than syntax.
-[<Fable.Core.Emit("JSON.stringify($0)")>]
-let private jsonLiteral (s: string) : string = Fable.Core.Util.jsNative
+let private jsonLiteral (s: string) : string = Fable.Core.JS.JSON.stringify s
 
 /// GET a URL and report the status its answer carried; `0` when nothing answered at all.
 /// Redirects are followed, because a session that bounces its shell through sign-in has

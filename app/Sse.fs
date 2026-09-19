@@ -19,13 +19,6 @@ open Yession.Host.Interop
 /// Renders a payload as one SSE event's data. May be multi-line — `frame` handles that.
 type Encode<'a> = 'a -> string
 
-// The keep-alive interval, so an idle subscription is not reaped by an HTTP idle timeout.
-[<Emit("setInterval($1, $0)")>]
-let private setInterval (ms: int) (callback: unit -> unit) : obj = jsNative
-
-[<Emit("clearInterval($0)")>]
-let private clearInterval (handle: obj) : unit = jsNative
-
 /// One SSE event: every line of the payload becomes its own `data:` line, which a client rejoins
 /// with newlines (the browser's `EventSource` does exactly that, and so does `subscribe` below).
 /// Single-line payloads — every JSON frame on the control legs — are just the one-line case, so
@@ -64,9 +57,10 @@ let stream (req: IncomingMessage) (res: ServerResponse) (encode: Encode<'a>) (su
     res.write ": subscribed\n\n" |> ignore
     let sink : Sink<'a> = fun payload -> res.write (frame (encode payload)) |> ignore
     let subscription = subscribe sink
-    let heartbeat = setInterval 15000 (fun () -> res.write ": ping\n\n" |> ignore)
+    // The keep-alive beat, so an idle subscription is not reaped by an HTTP idle timeout.
+    let heartbeat = JS.setInterval (fun () -> res.write ": ping\n\n" |> ignore) 15000
     req.on ("close", fun _ ->
-        clearInterval heartbeat
+        JS.clearInterval heartbeat
         subscription.Stop ())
     |> ignore
     sink

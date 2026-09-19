@@ -103,12 +103,6 @@ let majorSkewBetween (managerVersion: string) (sessionVersion: string option) : 
 let majorSkew (sessionVersion: string option) : string option =
     majorSkewBetween Version.current sessionVersion
 
-[<Emit("setTimeout($1, $0)")>]
-let private setTimeout (ms: int) (callback: unit -> unit) : obj = jsNative
-
-[<Emit("clearTimeout($0)")>]
-let private clearTimeout (handle: obj) : unit = jsNative
-
 /// A running (or exited) child session process.
 type RunningChild =
     { Pid : int
@@ -174,9 +168,12 @@ let launch
                 settled <- true
                 cont result
 
-        let timer = setTimeout timeoutMs (fun () ->
-            running.Kill ()
-            settle (Error (sprintf "session process not ready within %dms" timeoutMs)))
+        let timer =
+            JS.setTimeout
+                (fun () ->
+                    running.Kill ()
+                    settle (Error (sprintf "session process not ready within %dms" timeoutMs)))
+                timeoutMs
 
         running.OnExit (fun code ->
             settle (Error (sprintf "session process exited before ready (code %A)" code)))
@@ -191,7 +188,7 @@ let launch
             for line in parts.[0 .. parts.Length - 2] do
                 match parseReadyLine line with
                 | Some port ->
-                    clearTimeout timer
+                    JS.clearTimeout timer
                     // The version arrives on the readiness line, so this is the first
                     // moment the pairing can be checked — and the last moment before the
                     // Manager starts treating the child as a working session.

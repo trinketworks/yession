@@ -109,14 +109,11 @@ let private env (name: string) : string = jsNative
 [<Emit("process.exit($0)")>]
 let private exitWith (code: int) : unit = jsNative
 
-[<Emit("JSON.stringify($0, null, 1)")>]
-let private pretty (value: obj) : string = jsNative
+let private pretty (value: obj) : string = JS.JSON.stringify (value, space = 1)
 
-[<Emit("console.log($0)")>]
-let private say (line: string) : unit = jsNative
+let private say (line: string) : unit = JS.console.log line
 
-[<Emit("Date.now()")>]
-let private now () : float = jsNative
+let private now () : float = JS.Constructors.Date.now ()
 
 [<Emit("String($0).padStart($1, '0')")>]
 let private padded (n: int) (width: int) : string = jsNative

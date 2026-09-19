@@ -29,13 +29,16 @@ let private pathnameOf (url: string) : string = jsNative
 [<Emit("new URL($0, 'http://local').searchParams.get($1)")>]
 let private queryOf (url: string) (name: string) : string option = jsNative
 
-[<Emit("encodeURIComponent($0)")>]
-let private urlEncode (s: string) : string = jsNative
+let private urlEncode (s: string) : string = JS.encodeURIComponent s
+
+/// The public JWK with the id and algorithm this Manager signs under written onto it.
+[<Emit("({ ...$0, kid: $1, alg: 'EdDSA', use: 'sig' })")>]
+let private annotatedJwk (publicJwk: obj) (kid: string) : obj = jsNative
 
 /// The JWKS document: the public JWK annotated with its id and algorithm. Only ever
 /// called with the PUBLIC key — exporting the private key would throw (non-extractable).
-[<Emit("JSON.stringify({ keys: [{ ...$0, kid: $1, alg: 'EdDSA', use: 'sig' }] })")>]
-let private jwksJson (publicJwk: obj) (kid: string) : string = jsNative
+let private jwksJson (publicJwk: obj) (kid: string) : string =
+    JS.JSON.stringify {| keys = [| annotatedJwk publicJwk kid |] |}
 
 let private readBody (req: IncomingMessage) (cont: string -> unit) =
     let mutable acc = ""

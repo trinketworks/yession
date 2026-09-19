@@ -55,8 +55,7 @@ let private nodePath () : string = jsNative
 [<Emit("process.platform")>]
 let private platform () : string = jsNative
 
-[<Emit("Date.now()")>]
-let private nowMs () : float = jsNative
+let private nowMs () : float = JS.Constructors.Date.now ()
 
 [<Emit("$0.createServer($1)")>]
 let private createServer (net: obj) (onConnection: obj -> unit) : obj = jsNative

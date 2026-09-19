@@ -414,8 +414,9 @@ module SyncedStateSync =
     [<Emit("$0.share.has($1)")>]
     let private shareHas (doc: Yjs.Y.Doc) (name: string) : bool = jsNative
 
-    [<Emit("Array.from($0.keys())")>]
-    let private mapKeys (m: Yjs.Y.Map<obj>) : string[] = jsNative
+    /// The map's keys, drained from the iterator Yjs answers with.
+    let private mapKeys (m: Yjs.Y.Map<obj>) : string[] =
+        JS.Constructors.Array.from (unbox<string seq> (m.keys ()))
 
     [<Emit("$0.toString()")>]
     let private textString (t: Yjs.Y.Text) : string = jsNative

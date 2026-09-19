@@ -128,8 +128,7 @@ let private pathnameOf (url: string) : string = jsNative
 /// Raw JSON text, spliced into an encoded document without being re-encoded. Thoth has no
 /// "already JSON" encoder, and round-tripping a foreign schema through `Decode.value` would
 /// reorder and reformat somebody else's document for no reason.
-[<Emit("JSON.parse($0)")>]
-let private rawJson (json: string) : JsonValue = jsNative
+let private rawJson (json: string) : JsonValue = unbox (JS.JSON.parse json)
 
 let private readBody (req: IncomingMessage) (cont: string -> unit) =
     let mutable acc = ""

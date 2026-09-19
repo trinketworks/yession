@@ -67,8 +67,13 @@ let private post (cookie: string option) (body: obj) : obj = postInit (headersFo
 [<Emit("({ id: $0 })")>]
 let private idBody (id: string) : obj = jsNative
 
-[<Emit("(JSON.parse($0).peerToken || undefined)")>]
-let private parsedPeerToken (json: string) : string option = jsNative
+/// `||` rather than a plain field read: a `peerToken` spelled `null` or left empty is no
+/// token, which is the same nothing as a field that is not there.
+[<Emit("($0.peerToken || undefined)")>]
+let private peerTokenField (parsed: obj) : string option = jsNative
+
+let private parsedPeerToken (json: string) : string option =
+    peerTokenField (JS.JSON.parse json)
 
 /// The token in a `/me` body, if there is one. That route answers JSON once the session is
 /// reachable and an error page while it is not, so a body that will not parse is a session
@@ -89,8 +94,7 @@ let private firstMatch (text: string) (pattern: string) : string option =
 [<Emit("new Promise(resolve => setTimeout(resolve, $0))")>]
 let private delay (ms: int) : JS.Promise<unit> = jsNative
 
-[<Emit("console.log($0)")>]
-let private say (line: string) : unit = jsNative
+let private say (line: string) : unit = JS.console.log line
 
 // The peer connection keeps Node's event loop alive after the watch is over, so a probe that
 // merely returned would sit there until killed — and did, three of them, until this.

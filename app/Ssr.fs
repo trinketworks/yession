@@ -36,8 +36,7 @@ let private trValues (v: obj) : obj[] = jsNative
 [<Emit("typeof $0[Symbol.iterator] === 'function'")>]
 let private hasIterator (v: obj) : bool = jsNative
 
-[<Emit("Array.from($0)")>]
-let private toArray (v: obj) : obj[] = jsNative
+let private toArray (v: obj) : obj[] = JS.Constructors.Array.from (unbox<obj seq> v)
 
 [<Emit("typeof $0")>]
 let private jsTypeof (v: obj) : string = jsNative

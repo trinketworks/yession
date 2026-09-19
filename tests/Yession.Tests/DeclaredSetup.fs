@@ -51,16 +51,16 @@ let private parseYaml (y: obj) (text: string) : obj = jsNative
 [<Emit("$0?.[$1]")>]
 let private prop (o: obj) (key: string) : obj = jsNative
 
-[<Emit("Object.keys($0 ?? {})")>]
-let private keysOf (o: obj) : string array = jsNative
+/// The keys of an object that may not be there — an absent block is no keys, not a throw.
+let private keysOf (o: obj) : string array =
+    if isNull o then [||] else JS.Constructors.Object.keys o |> Array.ofSeq
 
 /// JS truthiness, kept because that is what the document is read with: a `setup:` written
 /// empty declares no command, and always did.
 [<Emit("!!$0")>]
 let private isDeclared (o: obj) : bool = jsNative
 
-[<Emit("Array.isArray($0)")>]
-let private isArray (o: obj) : bool = jsNative
+let private isArray (o: obj) : bool = JS.Constructors.Array.isArray o
 
 [<Emit("$0.join(' ')")>]
 let private joinedWithSpaces (o: obj) : string = jsNative

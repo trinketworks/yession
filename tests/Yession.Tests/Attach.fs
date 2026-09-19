@@ -222,8 +222,7 @@ type private ClientControl =
 
 /// `JSON.parse`. THROWS on anything that is not JSON — ordinary here rather than exceptional,
 /// because a TEXT frame is whatever the other end chose to send.
-[<Emit("JSON.parse($0)")>]
-let private parseJson (text: string) : ClientControl = jsNative
+let private parseJson (text: string) : ClientControl = unbox (JS.JSON.parse text)
 
 /// What the client's TEXT frame said, or `None` when it said nothing this peer can read: it
 /// would not parse, or it parsed into something that does not say which control it is.

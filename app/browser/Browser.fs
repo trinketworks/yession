@@ -738,12 +738,12 @@ let private waitOrPoke (ms: float) (register: (unit -> unit) -> unit) : Async<bo
     Async.FromContinuations (fun (resume, _, _) ->
         let ending = ref ignore
         let stopListening = listening Browser.Dom.window "online" (fun _ -> ending.Value ())
-        let timer = if ms >= 0.0 then Some (Render.setTimeoutJs (fun () -> ending.Value ()) (int ms)) else None
+        let timer = if ms >= 0.0 then Some (JS.setTimeout (fun () -> ending.Value ()) (int ms)) else None
         ending.Value <-
             fun () ->
                 ending.Value <- ignore
                 stopListening ()
-                timer |> Option.iter Render.clearTimeoutJs
+                timer |> Option.iter JS.clearTimeout
                 resume true
         register (fun () -> ending.Value ()))
 
@@ -754,8 +754,7 @@ let private waitBeforeRetry (delay: System.TimeSpan option) : Async<bool> =
         | None -> -1.0
     waitOrPoke ms (fun finish -> pokeRetry <- finish)
 
-[<Emit("Math.random()")>]
-let private jsRandom () : float = jsNative
+let private jsRandom () : float = JS.Math.random ()
 
 let private mintId (prefix: string) =
     sprintf "%s-%d" prefix (int (jsRandom () * 1000000000.0))
@@ -778,8 +777,7 @@ let private persistentPeerId (minted: string) : string =
     with _ ->
         minted
 
-[<Emit("encodeURIComponent($0)")>]
-let private urlEncode (value: string) : string = jsNative
+let private urlEncode (value: string) : string = JS.encodeURIComponent value
 
 // --- Claude connection panel round-trips (Plan 08) --------------------------------------
 // Thin fetches against the session's /claude* routes; the same-origin auth cookie rides
@@ -866,8 +864,14 @@ let private fetchClaudeStatus () =
   .catch(e => ({ ok: false, status: 0, body: String((e && e.message) || e) }))""")>]
 let private postClaude (url: string) (body: string) : JS.Promise<{| ok: bool; status: int; body: string |}> = jsNative
 
-[<Emit("JSON.stringify({ scope: $0, code: $1 || undefined, token: $2 || undefined })")>]
-let private claudeBody (scope: string) (code: string) (token: string) : string = jsNative
+/// A field left empty is OMITTED rather than sent blank, which is what the `|| undefined`
+/// this replaces was doing: `JSON.stringify` drops a key whose value is `undefined`, and a
+/// `None` reaches it as exactly that.
+let private sentIfGiven (value: string) : string option =
+    if String.IsNullOrEmpty value then None else Some value
+
+let private claudeBody (scope: string) (code: string) (token: string) : string =
+    JS.JSON.stringify {| scope = scope; code = sentIfGiven code; token = sentIfGiven token |}
 
 /// A field off an already-parsed JSON value, or None wherever JavaScript's `||` default fell
 /// through — absent, `null`, `''` and `0` alike. That falsiness is not incidental: a poll reply
@@ -903,8 +907,8 @@ let private githubStatus : Decoder<GitHubStatus> =
 let private fetchGitHubStatus () =
     fetchStatusAt githubStatus (Page.href GitHubStatus)
 
-[<Emit("JSON.stringify({ scope: $0, token: $1 || undefined })")>]
-let private githubBody (scope: string) (token: string) : string = jsNative
+let private githubBody (scope: string) (token: string) : string =
+    JS.JSON.stringify {| scope = scope; token = sentIfGiven token |}
 
 /// Where the person goes to type the code. A string, because `GitHubAwaitingApproval` holds
 /// one — and that is the whole reason this field's absence is answered here rather than in F#:
@@ -1237,7 +1241,7 @@ let private start () =
         // The copied mark is a moment, so it is one deadline: re-armed by each copy, and the
         // one it replaces is cleared. Two live timers over one slot would let the first
         // copy's deadline take the second copy's confirmation off the screen.
-        let mutable copiedTimer = 0.0
+        let mutable copiedTimer = 0
 
         // The side effects a template can't derive from the model. Send routes to the one
         // implementation in `Client.connect` (capture markdown, enqueue, seed the queue fragment).
@@ -1346,12 +1350,12 @@ let private start () =
                         // reading — a "copied" over an empty clipboard would send them to the
                         // other tab with nothing to paste.
                         if written then
-                            if copiedTimer <> 0.0 then Render.clearTimeoutJs copiedTimer
+                            if copiedTimer <> 0 then JS.clearTimeout copiedTimer
                             dispatchRef (CopiedMsg (Some key))
                             copiedTimer <-
-                                Render.setTimeoutJs
+                                JS.setTimeout
                                     (fun () ->
-                                        copiedTimer <- 0.0
+                                        copiedTimer <- 0
                                         dispatchRef (CopiedMsg None))
                                     copiedShownMs)
               GitHubDisconnect =

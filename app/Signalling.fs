@@ -52,8 +52,7 @@ let private pathnameOf (url: string) : string = Fable.Core.Util.jsNative
 [<Fable.Core.Emit("new URL($0, 'http://local').searchParams.get($1)")>]
 let private queryOf (url: string) (name: string) : string option = Fable.Core.Util.jsNative
 
-[<Fable.Core.Emit("encodeURIComponent($0)")>]
-let private encodeUriComponent (value: string) : string = Fable.Core.Util.jsNative
+let private encodeUriComponent (value: string) : string = Fable.Core.JS.encodeURIComponent value
 
 /// The auth-gated event-log read surface: a cursor, and the ranges it resolves to.
 type EventsEndpoint =

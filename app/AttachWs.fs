@@ -58,8 +58,7 @@ type private ControlFrame =
 
 /// `JSON.parse`. THROWS on anything that is not JSON — ordinary here rather than exceptional,
 /// because a TEXT frame is whatever a provider chose to send.
-[<Emit("JSON.parse($0)")>]
-let private parseJson (text: string) : ControlFrame = jsNative
+let private parseJson (text: string) : ControlFrame = unbox (JS.JSON.parse text)
 
 /// `String(x)` — JavaScript's own coercion to text, which is what a `reason` that arrived as
 /// something other than a string has always been put in front of a person as.
@@ -241,8 +240,7 @@ let private sendControl (socket: WebSocket) (json: string) =
     with _ ->
         ()
 
-[<Emit("JSON.stringify($0)")>]
-let private toJson (value: obj) : string = jsNative
+let private toJson (value: obj) : string = JS.JSON.stringify value
 
 /// Close on a deadline — never in this tick.
 ///

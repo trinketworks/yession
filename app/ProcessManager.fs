@@ -296,15 +296,6 @@ module SecretsBacking =
                  start a Secret Service daemon), or pass --secrets ephemeral to accept a \
                  store that dies with this Manager."
 
-[<Fable.Core.Emit("setTimeout($1, $0)")>]
-let private setTimeout (ms: int) (callback: unit -> unit) : obj = Fable.Core.Util.jsNative
-
-[<Fable.Core.Emit("setInterval($1, $0)")>]
-let private setInterval (ms: int) (callback: unit -> unit) : obj = Fable.Core.Util.jsNative
-
-[<Fable.Core.Emit("clearInterval($0)")>]
-let private clearInterval (handle: obj) : unit = Fable.Core.Util.jsNative
-
 let private clock () = DateTimeOffset.UtcNow
 
 /// How often to look for sessions to reap, derived from the window rather than configured
@@ -536,7 +527,7 @@ let createWithUi
     // and mislabel the next ordinary stop.
     let mutable reaping : Map<string, ReapReason> = Map.empty
     // The reaper's sweep timer, so `StopAll` can clear it. See where it is set.
-    let mutable reapSweep : obj option = None
+    let mutable reapSweep : int option = None
 
     // The control endpoint (Step 24): the per-launch secret names WHICH session is
     // calling — supervision reports, secrets custody, connections. A secret dies with
@@ -1195,8 +1186,9 @@ let createWithUi
                     Async.FromContinuations (fun (cont, _, _) ->
                         child.OnExit (fun _ -> cont (Ok ()))
                         child.Terminate ()
-                        setTimeout options.StopGraceMs (fun () ->
-                            if not (child.HasExited ()) then child.Kill ())
+                        Fable.Core.JS.setTimeout
+                            (fun () -> if not (child.HasExited ()) then child.Kill ())
+                            options.StopGraceMs
                         |> ignore)
         }
 
@@ -1273,7 +1265,7 @@ let createWithUi
         // and the interval is a live event-loop handle besides. Neither shows up in the
         // product, where the Manager runs until the machine stops it; both are wrong for an
         // in-process one, whose `StopAll` is documented to leave nothing behind.
-        reapSweep <- Some (setInterval (sweepIntervalMsFor timeout) sweep)
+        reapSweep <- Some (Fable.Core.JS.setInterval sweep (sweepIntervalMsFor timeout))
 
     let pm =
         { CreateSession = createSession
@@ -1308,7 +1300,7 @@ let createWithUi
                 async {
                     // Before stopping anything: a sweep that fires mid-shutdown would try to
                     // reap sessions this loop is already stopping.
-                    reapSweep |> Option.iter clearInterval
+                    reapSweep |> Option.iter Fable.Core.JS.clearInterval
                     reapSweep <- None
                     for record in state.Sessions do
                         if Map.containsKey (SessionId.value record.SessionId) children then
