@@ -136,29 +136,53 @@ type SessionOrder =
     | NewestFirst
     | OldestFirst
 
-/// What a reader of the registry asked to see. `Show` is a set, so "neither state" is
-/// representable and means exactly what it says — nothing shown. That is the honest
-/// reading of two cleared filters, and the surface renders it as an empty state with the
-/// controls that caused it sitting right above.
+/// Which archive states a reader asked to see. THREE cases, not a set of two: a set made
+/// "neither" representable, and the surface rendered it as an empty list under an
+/// instruction to pick a filter — a state whose only content was the way out of it. Here the
+/// last lit filter cannot be put out (`Shown.toggling` says so), so a list is never asked to
+/// show nothing.
+type Shown =
+    | ActiveOnly
+    | ArchivedOnly
+    | Both
+
+module Shown =
+
+    let contains (state: ArchiveState) (shown: Shown) : bool =
+        match shown, state with
+        | Both, _
+        | ActiveOnly, Active
+        | ArchivedOnly, Archived -> true
+        | ActiveOnly, Archived
+        | ArchivedOnly, Active -> false
+
+    /// The selection with one state flipped — what a filter control links TO — or `None`
+    /// when the flip would put out the last lit state: a control that leads nowhere is not
+    /// rendered as one, and this is where the surface learns it.
+    let toggling (state: ArchiveState) (shown: Shown) : Shown option =
+        match shown, state with
+        | Both, Active -> Some ArchivedOnly
+        | Both, Archived -> Some ActiveOnly
+        | ActiveOnly, Archived
+        | ArchivedOnly, Active -> Some Both
+        | ActiveOnly, Active
+        | ArchivedOnly, Archived -> None
+
+/// What a reader of the registry asked to see.
 type SessionQuery =
-    { Show : Set<ArchiveState>
+    { Show : Shown
       Order : SessionOrder }
 
 /// Filtering and ordering are rules over the REGISTRY, so they live with it: pure, and
 /// inside the cheap tier. Nothing about them belongs in a render function or a route.
 module SessionQuery =
 
-    let defaults : SessionQuery = { Show = Set.singleton Active; Order = NewestFirst }
+    let defaults : SessionQuery = { Show = ActiveOnly; Order = NewestFirst }
 
     let stateOf (record: SessionRecord) : ArchiveState =
         match record.ArchivedAt with
         | Some _ -> Archived
         | None -> Active
-
-    /// The spelling of an empty `Show`. A key has to be PRESENT to mean "no states" —
-    /// absent means "you did not choose", which is the default — so the empty set needs a
-    /// word, and a word beats a bare `show=` in a URL somebody has bookmarked.
-    let private noneToken = "none"
 
     let private showToken =
         function
@@ -193,21 +217,21 @@ module SessionQuery =
     /// refused. A query string is what somebody bookmarked, and refusing one shows them no
     /// list at all — which is why this is not shaped like `SecretsMode.ofName`, where an
     /// unknown word is an operator declaring a posture that does not exist and must fail.
+    /// A `show` that names no state at all (the retired `show=none`, or only words nobody
+    /// knows) is the default view for the same reason.
     let ofQueryString (query: string) : SessionQuery =
         let pairs = pairsOf query
         let valuesOf key = pairs |> List.filter (fst >> (=) key) |> List.map snd
         let show =
-            match valuesOf "show" with
-            | [] -> defaults.Show
-            | given ->
-                given
+            let named =
+                valuesOf "show"
                 |> List.collect (fun value -> value.Split ',' |> Array.toList)
-                |> List.choose (fun token ->
-                    match token.Trim () with
-                    | "active" -> Some Active
-                    | "archived" -> Some Archived
-                    | _ -> None)
-                |> Set.ofList
+                |> List.map (fun token -> token.Trim ())
+            match List.contains "active" named, List.contains "archived" named with
+            | true, true -> Both
+            | true, false -> ActiveOnly
+            | false, true -> ArchivedOnly
+            | false, false -> defaults.Show
         let order =
             match valuesOf "sort" |> List.tryLast with
             | Some "created-asc" -> OldestFirst
@@ -219,16 +243,16 @@ module SessionQuery =
     /// this is the one encoder and the page's script never builds a URL.
     let toQueryString (query: SessionQuery) : string =
         let shown =
-            match showOrder |> List.filter (fun state -> query.Show.Contains state) with
-            | [] -> [ noneToken ]
-            | states -> states |> List.map showToken
-        (shown |> List.map (sprintf "show=%s")) @ [ sprintf "sort=%s" (sortToken query.Order) ]
+            showOrder
+            |> List.filter (fun state -> Shown.contains state query.Show)
+            |> List.map (showToken >> sprintf "show=%s")
+        shown @ [ sprintf "sort=%s" (sortToken query.Order) ]
         |> String.concat "&"
 
-    /// The same query with one archive state flipped — what a filter control links TO.
-    let toggling (state: ArchiveState) (query: SessionQuery) : SessionQuery =
-        { query with
-            Show = if query.Show.Contains state then Set.remove state query.Show else Set.add state query.Show }
+    /// The same query with one archive state flipped — what a filter control links TO — or
+    /// `None` where there is nothing to link to (`Shown.toggling`).
+    let toggling (state: ArchiveState) (query: SessionQuery) : SessionQuery option =
+        Shown.toggling state query.Show |> Option.map (fun show -> { query with Show = show })
 
     /// The same query ordered the other way — what a sortable column header links TO.
     let reversed (query: SessionQuery) : SessionQuery =
@@ -242,7 +266,7 @@ module SessionQuery =
     /// `SessionView list` the management surface holds alike, without this module having to
     /// know what a view is.
     let apply (query: SessionQuery) (recordOf: 'a -> SessionRecord) (items: 'a list) : 'a list =
-        let kept = items |> List.filter (fun item -> query.Show.Contains (stateOf (recordOf item)))
+        let kept = items |> List.filter (fun item -> Shown.contains (stateOf (recordOf item)) query.Show)
         match query.Order with
         | NewestFirst -> kept |> List.sortByDescending (fun item -> (recordOf item).CreatedAt)
         | OldestFirst -> kept |> List.sortBy (fun item -> (recordOf item).CreatedAt)

@@ -210,28 +210,41 @@ let private rowTemplate (view: ProcessManager.SessionView) : TemplateResult =
           <td class="py-3 pl-4 align-middle">{actions view}</td>
         </tr>"""
 
-/// One filter chip. A real `<a>`, because the filter IS the page's location: it lives in the
-/// URL, a bookmark restores it, and the back button undoes it. That makes it keyboard-operable
-/// and focusable with no help, and `aria-current` says which states are being shown to anything
-/// that cannot see which chips are lit.
+/// One filter chip, wearing the COUNT of what it filters. A real `<a>`, because the filter
+/// IS the page's location: it lives in the URL, a bookmark restores it, and the back button
+/// undoes it. That makes it keyboard-operable and focusable with no help.
+///
+/// The count is what tells a reader there is anything behind an unlit chip — without it
+/// `archived` was a door with no window, opened to find out — and it is the honest total for
+/// the state, not the number of rows on screen. Beside it, off-screen, the state the chip is
+/// in ("shown" / "hidden"): a link's name should say what following it does, and a lit chip
+/// differs from an unlit one by a border step nothing but an eye can read. Not `aria-current`,
+/// which names THE current item of a set and was being claimed by two chips at once.
+///
+/// The last lit chip is not a control. `SessionQuery.toggling` has nowhere for it to go — a
+/// list is never asked to show nothing — so it renders as the lit word and count with no
+/// href, rather than as a link that leads to an empty state saying to come back.
 ///
 /// Its href is computed HERE, server-side, from `SessionQuery.toQueryString` — the page's script
 /// never builds a URL, so there is exactly one encoder and a chip can never link somewhere the
 /// rows beside it disagree with.
-let private filterChip (query: SessionQuery) (state: ArchiveState) : TemplateResult =
-    let shown = query.Show.Contains state
+let private filterChip (query: SessionQuery) (count: int) (state: ArchiveState) : TemplateResult =
+    let shown = Shown.contains state query.Show
     let word, key =
         match state with
         | Active -> "active", "show-active"
         | Archived -> "archived", "show-archived"
-    let href = sprintf "?%s" (SessionQuery.toQueryString (SessionQuery.toggling state query))
     let face = if shown then Style.filterChipOn else Style.filterChipOff
-    if shown then
-        html $"""<a class="{face}" href="{href}" data-filter="{key}" aria-current="true">{word}</a>"""
-    else
-        html $"""<a class="{face}" href="{href}" data-filter="{key}">{word}</a>"""
+    let standing = if shown then "shown" else "hidden"
+    let label =
+        html $"""{word}<span class="{Style.filterChipCount}">{count}</span><span class="sr-only">, {standing}</span>"""
+    match SessionQuery.toggling state query with
+    | Some target ->
+        let href = sprintf "?%s" (SessionQuery.toQueryString target)
+        html $"""<a class="{face}" href="{href}" data-filter="{key}">{label}</a>"""
+    | None -> html $"""<span class="{face}" data-filter="{key}">{label}</span>"""
 
-// The swap unit for a create is the whole section (filter, count, table), so the count, the
+// The swap unit is the whole section (filters with their counts, table), so the counts, the
 // empty state and the controls can never go stale against the rows they describe. Which is
 // also why this takes the QUERY and does the filtering itself: a caller that filtered on its
 // own could hand these chips a list they do not describe.
@@ -240,14 +253,15 @@ let private tableTemplate
     (all: ProcessManager.SessionView list)
     : TemplateResult =
     let views = SessionQuery.apply query (fun (v: ProcessManager.SessionView) -> v.Record) all
+    let countOf (state: ArchiveState) =
+        all |> List.filter (fun (v: ProcessManager.SessionView) -> SessionQuery.stateOf v.Record = state) |> List.length
     // Nothing to show has two quite different causes, and saying the wrong one sends somebody
     // looking for a bug. An empty REGISTRY is "no sessions yet"; a filter that hid everything
     // says so, and names what it is hiding, with the chip that reveals it directly above.
     let emptyWord =
-        match all, query.Show.IsEmpty with
-        | [], _ -> "no sessions yet"
-        | _, true -> "no filter selected — pick active or archived above"
-        | _, false ->
+        match all with
+        | [] -> "no sessions yet"
+        | _ ->
             let hidden = List.length all - List.length views
             sprintf "no sessions match — %d hidden" hidden
     let rows =
@@ -280,12 +294,14 @@ let private tableTemplate
     // about the new session from the rows stream anyway.
     html $"""
         <section class="flex flex-col gap-3" data-sessions data-stream="{ManagerRoute.path ManagerRoute.SessionRows}">
-          <div class="flex items-center gap-2.5 flex-wrap">
+          <!-- On a phone the chips, now carrying counts, take a line of their own UNDER the
+               label and Create rather than wrapping wherever the width happens to break:
+               `basis-full` + `order-last` is a decision, a wrap is luck. -->
+          <div class="flex items-center gap-y-3 gap-x-2.5 flex-wrap">
             <span class="{Style.label}">sessions</span>
-            <span class="font-semibold text-[11px] leading-4 tracking-[0.18em] text-ink-faint tabular-nums">{List.length views}</span>
-            <div class="flex items-center gap-1.5 ml-2" role="group" aria-label="Show sessions">
-              {filterChip query Active}
-              {filterChip query Archived}
+            <div class="flex items-center gap-1.5 ml-2 max-md:ml-0 max-md:basis-full max-md:order-last" role="group" aria-label="Show sessions">
+              {filterChip query (countOf Active) Active}
+              {filterChip query (countOf Archived) Archived}
             </div>
             <form class="ml-auto" method="post" action="{ManagerRoute.path ManagerRoute.CreateSession}" data-create-session>
               <button type="submit" class="{Style.btnPrimary}">Create</button>
