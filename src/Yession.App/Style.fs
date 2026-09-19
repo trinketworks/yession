@@ -262,6 +262,9 @@ module Style =
               Stroke.ring; focusRing ]
 
     let filterChipOn = cls [ filterChipBase; Stroke.rim; "text-ink" ]
+    /// The count a chip wears, in the chip's own voice and colour — the word is the filter,
+    /// the number is what it holds, and they light and dim together.
+    let filterChipCount = "ml-1.5 tabular-nums"
     let filterChipOff = cls [ filterChipBase; Stroke.hair; "text-ink-faint"; Stroke.hoverInk; "hover:text-ink" ]
 
     /// A sortable column header. Wears the header's own caps-faint voice so a sortable column

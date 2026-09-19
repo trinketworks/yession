@@ -324,28 +324,31 @@ let private queryTests =
             Expect.equal (named SessionQuery.defaults) [ "gamma"; "alpha" ] "beta is archived"
 
         testCase "the archived filter shows the archived ones" <| fun () ->
-            Expect.equal (named { SessionQuery.defaults with Show = Set.singleton Archived }) [ "beta" ] "only beta"
+            Expect.equal (named { SessionQuery.defaults with Show = ArchivedOnly }) [ "beta" ] "only beta"
 
         testCase "both states shown is the whole registry" <| fun () ->
             Expect.equal
-                (named { SessionQuery.defaults with Show = Set.ofList [ Active; Archived ] })
+                (named { SessionQuery.defaults with Show = Both })
                 [ "gamma"; "beta"; "alpha" ]
                 "everything, newest first"
 
-        // Two cleared filters mean what they say. The surface renders this as an empty state
-        // with the controls that caused it directly above, never as an empty registry.
-        testCase "neither state shown is nothing" <| fun () ->
-            Expect.isEmpty (named { SessionQuery.defaults with Show = Set.empty }) "nothing was asked for"
+        // A list is never asked to show nothing: `Shown` has no case for it. (This replaced a
+        // case asserting that two cleared filters showed an empty list — the set that made
+        // that representable was the bug, and the surface rendered it as an empty state whose
+        // only content was an instruction to pick a filter.)
+        testCase "the last lit state cannot be put out" <| fun () ->
+            Expect.equal (Shown.toggling Active ActiveOnly) None "active alone stays"
+            Expect.equal (Shown.toggling Archived ArchivedOnly) None "archived alone stays"
 
         testCase "newest first orders by when the session was created" <| fun () ->
             Expect.equal
-                (named { Show = Set.ofList [ Active; Archived ]; Order = NewestFirst })
+                (named { Show = Both; Order = NewestFirst })
                 [ "gamma"; "beta"; "alpha" ]
                 "the most recently created leads"
 
         testCase "oldest first is the other way round" <| fun () ->
             Expect.equal
-                (named { Show = Set.ofList [ Active; Archived ]; Order = OldestFirst })
+                (named { Show = Both; Order = OldestFirst })
                 [ "alpha"; "beta"; "gamma" ]
                 "the earliest leads"
 
@@ -360,17 +363,20 @@ let private queryTests =
         testCase "a query reads back the states it names" <| fun () ->
             Expect.equal
                 (SessionQuery.ofQueryString "/?show=active&show=archived&sort=created-asc")
-                { Show = Set.ofList [ Active; Archived ]; Order = OldestFirst }
+                { Show = Both; Order = OldestFirst }
                 "both chips lit, oldest first"
 
-        // The empty set needs a WORD, because an absent key already means "you did not
-        // choose" — which is the default, not nothing.
+        // The retired spelling of "nothing shown". A bookmark of it lands on the default
+        // view, like any `show` that names no state — not on an empty list.
+        testCase "a query that names no state shows the default one" <| fun () ->
+            Expect.equal (SessionQuery.ofQueryString "?show=none").Show ActiveOnly "the old empty-set token"
+            Expect.equal (SessionQuery.ofQueryString "?show=banana").Show ActiveOnly "and a word nobody knows"
+
         testCase "a query round-trips through its own query string" <| fun () ->
             for query in
                 [ SessionQuery.defaults
-                  { Show = Set.ofList [ Active; Archived ]; Order = OldestFirst }
-                  { Show = Set.singleton Archived; Order = NewestFirst }
-                  { Show = Set.empty; Order = OldestFirst } ] do
+                  { Show = Both; Order = OldestFirst }
+                  { Show = ArchivedOnly; Order = NewestFirst } ] do
                 Expect.equal
                     (SessionQuery.ofQueryString (SessionQuery.toQueryString query))
                     query
@@ -379,11 +385,15 @@ let private queryTests =
         testCase "toggling a state flips that one and leaves the other alone" <| fun () ->
             Expect.equal
                 (SessionQuery.toggling Archived SessionQuery.defaults)
-                { SessionQuery.defaults with Show = Set.ofList [ Active; Archived ] }
+                (Some { SessionQuery.defaults with Show = Both })
                 "archived joins active rather than replacing it"
+            Expect.equal
+                (SessionQuery.toggling Active { SessionQuery.defaults with Show = Both })
+                (Some { SessionQuery.defaults with Show = ArchivedOnly })
+                "and active leaves archived standing"
 
         testCase "reversing an order changes nothing else" <| fun () ->
-            let query = { Show = Set.singleton Archived; Order = NewestFirst }
+            let query = { Show = ArchivedOnly; Order = NewestFirst }
             Expect.equal (SessionQuery.reversed query) { query with Order = OldestFirst } "only the direction moves"
     ]
 
@@ -617,6 +627,14 @@ let private uiRecord : SessionRecord =
       DataDir = "sessions/ui-render"
       ArchivedAt = None }
 
+/// One active session and one archived, for the filter cases: a table with one of each is
+/// what lets a chip's count and a chip's link be told apart from a chip that has nothing.
+let private oneOfEach =
+    [ { ProcessManager.Record = uiRecord; ProcessManager.Status = ProcessManager.NotRunning; ProcessManager.Summary = None }
+      { ProcessManager.Record = { uiRecord with ArchivedAt = Some archivedAt }
+        ProcessManager.Status = ProcessManager.NotRunning
+        ProcessManager.Summary = None } ]
+
 let private uiRenderTests =
     testList "Management UI rendering (Step 25)" [
         // Opening is launching: the name is the way in from every state a session can be
@@ -768,7 +786,7 @@ let private uiRenderTests =
                 ManagerUi.page
                     "app.css"
                     PublicAccess.Loopback
-                    { SessionQuery.defaults with Show = Set.ofList [ Active; Archived ] }
+                    { SessionQuery.defaults with Show = Both }
                     views
                     [ { Server = serialServer; Audience = AnySession } ]
                     []
@@ -832,17 +850,43 @@ let private uiRenderTests =
             // session — a column of "Archive" says nothing about which row you are on.
             Expect.isTrue (active.Contains "aria-label=\"Archive UI &lt;Render&gt;\"") "named, and escaped"
 
-        testCase "the filter says which states are shown and links to the ones that are not" <| fun () ->
-            let table =
-                ManagerUi.sessionsTable
-                    SessionQuery.defaults
-                    [ { Record = uiRecord; Status = ProcessManager.NotRunning; Summary = None } ]
-            Expect.isTrue (table.Contains (Dom.attr Dom.Manager.filter "show-active")) "the active filter is a control"
-            Expect.isTrue (table.Contains (Dom.attr Dom.Manager.filter "show-archived")) "so is the archived one"
-            Expect.isTrue (table.Contains "aria-current=\"true\"") "and the shown one says it is shown"
-            Expect.isTrue
-                (table.Contains "show=active&amp;show=archived")
-                "the unlit chip links to the query that adds it, computed server-side"
+        testCase "the unlit filter links to the query that adds it, computed server-side" <| fun () ->
+            let table = ManagerUi.sessionsTable SessionQuery.defaults oneOfEach
+            Expect.isTrue (table.Contains (Dom.attr Dom.Manager.filter "show-archived")) "the archived filter is there"
+            Expect.isTrue (table.Contains "show=active&amp;show=archived") "and links to the query that adds it"
+
+        // A control that leads to an empty list saying "pick a filter" is not a control. The
+        // discriminating half is the lit chip when BOTH are lit, which does link — so the
+        // absence here is the rule and not a chip that never links.
+        testCase "the last lit filter is not offered as a link" <| fun () ->
+            let alone = ManagerUi.sessionsTable SessionQuery.defaults oneOfEach
+            Expect.isFalse
+                (alone.Contains ("<a class=\"" + Style.filterChipOn))
+                "the only lit chip is not a link"
+            Expect.isTrue (alone.Contains (Dom.attr Dom.Manager.filter "show-active")) "but it is still named as the filter it is"
+            let both = ManagerUi.sessionsTable { SessionQuery.defaults with Show = Both } oneOfEach
+            Expect.isTrue (both.Contains ("<a class=\"" + Style.filterChipOn)) "a lit chip with a companion links"
+            Expect.isTrue (both.Contains "href=\"?show=archived&amp;sort=created-desc\"") "to the query without it"
+
+        // What tells a reader there is anything behind an unlit chip — and it counts the
+        // registry, not the rows on screen, or a chip would say 0 about the state it hides.
+        testCase "each filter wears the count of what it filters, whether or not it is shown" <| fun () ->
+            let table = ManagerUi.sessionsTable SessionQuery.defaults oneOfEach
+            // The chip's text up to its first closing tag: the word, then the count's span.
+            let chip (key: string) =
+                let at = table.IndexOf (Dom.attr Dom.Manager.filter key)
+                table.Substring (at, table.IndexOf ("</span>", at) - at)
+            Expect.isTrue ((chip "show-active").EndsWith ">1") "one active"
+            Expect.isTrue ((chip "show-archived").EndsWith ">1") "one archived, though none is on screen"
+
+        // A lit chip differs from an unlit one by a border step. The state has to be in the
+        // link's text too, for anything that cannot see the border.
+        testCase "each filter says in words whether its state is shown" <| fun () ->
+            let table = ManagerUi.sessionsTable SessionQuery.defaults oneOfEach
+            Expect.isTrue (table.Contains "active<span") "the word leads"
+            Expect.isTrue (table.Contains ", shown</span>") "the lit one says shown"
+            Expect.isTrue (table.Contains ", hidden</span>") "the unlit one says hidden"
+            Expect.isFalse (table.Contains "aria-current") "and neither claims to be the current item of a set"
 
         testCase "the created column declares which way it is sorted, and links to the reverse" <| fun () ->
             let newest =
@@ -862,7 +906,7 @@ let private uiRenderTests =
         testCase "a filter that hides everything says so, rather than that there is nothing" <| fun () ->
             let hidden =
                 ManagerUi.sessionsTable
-                    { SessionQuery.defaults with Show = Set.singleton Archived }
+                    { SessionQuery.defaults with Show = ArchivedOnly }
                     [ { Record = uiRecord; Status = ProcessManager.NotRunning; Summary = None } ]
             Expect.isFalse (hidden.Contains "no sessions yet") "the registry is not empty"
             Expect.isTrue (hidden.Contains "1 hidden") "it says what it is hiding"
