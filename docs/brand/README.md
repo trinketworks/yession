@@ -601,3 +601,34 @@ Findings: the stem is cheap (grow the blocks) and the fork is not (skew the plan
 cube); 8° is the far end. The chevron wants 1/φ panels. 46° stays the angle: six degrees down
 buys stem and loses the top faces that carry the gradient. Golden is a candidate, not a proof —
 its value is that every proportion is on one ratio.
+
+## Twenty-first pass: letter first, then the block
+
+`letter/` starts from the typeface's capital Y, bends it for the block, and lays it over the
+block as the feedback while the block's parameters move.
+
+- **The letter** — `noto` (Noto Sans's own capital: fork 28.6° off vertical, box √φ tall, stem
+  0.126 of cap, stem 0.62 of arm — golden already), `rebuilt` (the same letter regenerated from
+  four numbers — fork, weight, stem : arm = 1/φ, mitred junction — so it can be bent; its box
+  comes out √φ on its own). Opening the fork forces a choice: `golden-box` (39°, box held — the
+  stem grows tall, arms too short to leave a block) or `golden-stem` (39°, stem held — the box
+  goes wide and the arms run long). `mid-stem` (42°), `open-stem` (45°). The stem wins.
+- **Why the anchor is not a letter** — `anchor-y`: the 39° letter over last pass's anchor, stem
+  to stem. The camera cannot narrow a square plan's fork below 45°; at 46° elevation it is 54°.
+- **Kerfs turned** — the plan stays square and only the kerfs turn: each arm kerf leaves the
+  near corner a few degrees into the cube's quadrant and exits through the SIDE of the block,
+  not at a corner, so the arm tips are lost off the edge and the angle says they continue. The
+  blue piece becomes a kite prism; the green panels taper to keep the kerf a hairline.
+  `turned-39` (kerfs turned 15° in plan, cube corner 60°), `turned-42` (12°, 66°), `turned-45`
+  (9°, 71°), each with a `-y` twin carrying the letter at 34% white. `turned-39-tall` (1.7×).
+- **Two other ways** — `flare-39` (panels kept as true blocks, the kerf widening toward the
+  tips — reads as ground showing through, not a stroke), `weight-39` (kerf widened to the
+  letter's own stroke — the Y becomes a blue positive between two green blocks: the blue-fork
+  idea arriving by another road).
+
+Findings: Noto's Y is golden in the stem and √φ in the box, and opening the fork makes those
+part company; holding the stem is what lets the arms run 1.7× the visible kerf. Turning the
+kerfs rather than the plan keeps the square silhouette and charges the whole cost to the blue
+top's near corner. 42° is the balance: the top still reads as a square seen from a corner, the
+fork still reads as a letter's. A 24-cell grid (fork × elevation × height × mode) was judged
+on a sheet; only these cells said something.
