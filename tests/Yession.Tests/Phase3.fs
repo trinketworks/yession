@@ -428,15 +428,6 @@ let private interruptTests =
 
 // --- Step 19: process doc persistence (sidecar doc JSONL) -------------------------------
 
-[<Fable.Core.ImportAll("node:fs")>]
-let private nodeFs : obj = Fable.Core.Util.jsNative
-
-[<Fable.Core.Emit("$0.appendFileSync($1, $2)")>]
-let private appendFileSync (fs: obj) (path: string) (text: string) : unit = Fable.Core.Util.jsNative
-
-[<Fable.Core.Emit("$0.readFileSync($1, 'utf8')")>]
-let private readFileSync (fs: obj) (path: string) : string = Fable.Core.Util.jsNative
-
 let private docPersistenceTests =
     let freshPaths (name: string) =
         let dir = "tests/Yession.Tests/out/.data"
@@ -488,7 +479,7 @@ let private docPersistenceTests =
                 // Compaction: the second open collapsed the history to one snapshot
                 // line (plus any updates appended after boot).
                 let lineCount =
-                    (readFileSync nodeFs docPath).Split '\n'
+                    (TestFiles.read docPath).Split '\n'
                     |> Array.filter (fun l -> l.Trim().Length > 0)
                     |> Array.length
                 Expect.isTrue (lineCount <= 3) (sprintf "the store is compacted at open (found %d lines)" lineCount)
@@ -541,7 +532,7 @@ let private docPersistenceTests =
                 do! h1.Stop ()
 
                 // A crash tore the final append: an unparseable half-line, no newline.
-                appendFileSync nodeFs docPath "////////"
+                TestFiles.append docPath "////////"
 
                 let! h2 = Host.startFull Clock.system (fun () -> None) (fun _ -> None) None None (Some (openLog ())) (Some (DocStore.openStore docPath)) None None None (fun _ _ -> ()) None McpClient.McpConnections.none None sessionId None "" None false None 0
                 let synced = SyncedStateSync.ofDoc h2.Doc |> Result.mapError (sprintf "%A") |> expect
@@ -562,7 +553,7 @@ let private docPersistenceTests =
                 do! h1.Stop ()
                 // A garbage line WITH a trailing newline claims to be acknowledged:
                 // that is corruption, and it must never be silently dropped.
-                appendFileSync nodeFs docPath "////////\n"
+                TestFiles.append docPath "////////\n"
 
                 let mutable failedLoudly = false
                 try

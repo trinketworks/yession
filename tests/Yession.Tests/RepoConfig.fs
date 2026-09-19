@@ -18,34 +18,13 @@ open Yession.Host
 
 let private expect = function Ok v -> v | Error e -> failwithf "%A" e
 
-[<ImportAll("node:fs")>]
-let private nodeFs : obj = jsNative
-
-[<ImportAll("node:os")>]
-let private nodeOs : obj = jsNative
-
-[<Emit("$0.mkdtempSync($1.tmpdir() + '/yession-config-')")>]
-let private mkdtemp (fs: obj) (os: obj) : string = jsNative
-
-[<Emit("$0.mkdirSync($1, { recursive: true })")>]
-let private mkdirp (fs: obj) (path: string) : unit = jsNative
-
-[<Emit("$0.readFileSync($1, 'utf8')")>]
-let private readFile (fs: obj) (path: string) : string = jsNative
-
-[<Emit("$0.writeFileSync($1, $2)")>]
-let private writeFile (fs: obj) (path: string) (text: string) : unit = jsNative
-
-[<Emit("$0.symlinkSync($1, $2)")>]
-let private symlink (fs: obj) (target: string) (path: string) : unit = jsNative
-
 let private repo (raw: string) = RepoRef.create raw |> expect
 
 /// A repos directory holding one checkout, with `text` as its `yession.yaml` when given.
 let private checkout (r: RepoRef) (text: string option) : string =
-    let reposDir = mkdtemp nodeFs nodeOs
-    mkdirp nodeFs (sprintf "%s/%s" reposDir (RepoRef.relativePath r))
-    text |> Option.iter (writeFile nodeFs (RepoConfig.pathIn reposDir r))
+    let reposDir = TestFiles.tempDir "yession-config-"
+    TestFiles.ensureDir (sprintf "%s/%s" reposDir (RepoRef.relativePath r))
+    text |> Option.iter (TestFiles.write (RepoConfig.pathIn reposDir r))
     reposDir
 
 // YAML fixtures live at module level: a triple-quoted string whose content starts at column 0
@@ -93,12 +72,12 @@ let tests =
         // A grant that reads as held and behaves as denied says nothing at any point, so this
         // is refused where an operator is still looking at their own file.
         testCase "a resource reached through a symlink is refused, naming the path to write" <| fun () ->
-            let dir = mkdtemp nodeFs nodeOs |> Fs.canonical |> Option.get
-            mkdirp nodeFs (dir + "/real")
-            writeFile nodeFs (dir + "/real/thing") "x"
-            symlink nodeFs (dir + "/real") (dir + "/link")
+            let dir = TestFiles.tempDir "yession-config-" |> Fs.canonical |> Option.get
+            TestFiles.ensureDir (dir + "/real")
+            TestFiles.write (dir + "/real/thing") "x"
+            TestFiles.symlink (dir + "/real") (dir + "/link")
             let file = dir + "/resources.yaml"
-            writeFile nodeFs file (
+            TestFiles.write file (
                 sprintf "version: 1\nresources:\n  thing:\n    mount:\n      - { from: %s/link/thing, mode: read }\n" dir)
             match OperatorResources.read file with
             | Ok _ -> failwith "expected a refusal"
@@ -112,12 +91,12 @@ let tests =
         // canonical form of the SAME file loads. Without this, a rule that refused everything
         // would be green above and useless.
         testCase "the canonical form of that same path loads" <| fun () ->
-            let dir = mkdtemp nodeFs nodeOs |> Fs.canonical |> Option.get
-            mkdirp nodeFs (dir + "/real")
-            writeFile nodeFs (dir + "/real/thing") "x"
-            symlink nodeFs (dir + "/real") (dir + "/link")
+            let dir = TestFiles.tempDir "yession-config-" |> Fs.canonical |> Option.get
+            TestFiles.ensureDir (dir + "/real")
+            TestFiles.write (dir + "/real/thing") "x"
+            TestFiles.symlink (dir + "/real") (dir + "/link")
             let file = dir + "/resources.yaml"
-            writeFile nodeFs file (
+            TestFiles.write file (
                 sprintf "version: 1\nresources:\n  thing:\n    mount:\n      - { from: %s/real/thing, mode: read }\n" dir)
             match OperatorResources.read file with
             | Ok (Some profile) ->
@@ -134,9 +113,9 @@ let tests =
         // symlink rule's name — an operator would read "reached through a symlink" about a
         // path that is not.
         testCase "a path that does not exist yet is not refused" <| fun () ->
-            let dir = mkdtemp nodeFs nodeOs |> Fs.canonical |> Option.get
+            let dir = TestFiles.tempDir "yession-config-" |> Fs.canonical |> Option.get
             let file = dir + "/resources.yaml"
-            writeFile nodeFs file (
+            TestFiles.write file (
                 sprintf "version: 1\nresources:\n  cache:\n    mount:\n      - { from: %s/not-yet, mode: write }\n" dir)
             match OperatorResources.read file with
             | Ok (Some _) -> ()
@@ -158,9 +137,9 @@ let tests =
         // schema is wrong — and a plausible-looking sample in a doc would never find out.
         testCase "the file this repo carries is one this build can read" <| fun () ->
             let r = repo "trinketworks/yession"
-            let dir = mkdtemp nodeFs nodeOs
-            mkdirp nodeFs (sprintf "%s/%s" dir (RepoRef.relativePath r))
-            writeFile nodeFs (RepoConfig.pathIn dir r) (readFile nodeFs "yession.yaml")
+            let dir = TestFiles.tempDir "yession-config-"
+            TestFiles.ensureDir (sprintf "%s/%s" dir (RepoRef.relativePath r))
+            TestFiles.write (RepoConfig.pathIn dir r) (TestFiles.read "yession.yaml")
             let file = RepoConfig.read dir r |> expect |> Option.get
             let dev = file.Sandboxes |> Map.find (SandboxName.create "dev" |> expect)
             let gate = file.Sandboxes |> Map.find (SandboxName.create "gate" |> expect)
@@ -237,10 +216,10 @@ let tests =
             // A session held hostage by whichever checkout happens to have a typo would be
             // worse than no file support at all.
             let good, bad = repo "octo/good", repo "octo/bad"
-            let dir = mkdtemp nodeFs nodeOs
-            for r in [ good; bad ] do mkdirp nodeFs (sprintf "%s/%s" dir (RepoRef.relativePath r))
-            writeFile nodeFs (RepoConfig.pathIn dir good) "version: 2\nsandboxes:\n  dev: {}\n"
-            writeFile nodeFs (RepoConfig.pathIn dir bad) "version: 2\nsandboxes:\n  dev:\n    nope: 1\n"
+            let dir = TestFiles.tempDir "yession-config-"
+            for r in [ good; bad ] do TestFiles.ensureDir (sprintf "%s/%s" dir (RepoRef.relativePath r))
+            TestFiles.write (RepoConfig.pathIn dir good) "version: 2\nsandboxes:\n  dev: {}\n"
+            TestFiles.write (RepoConfig.pathIn dir bad) "version: 2\nsandboxes:\n  dev:\n    nope: 1\n"
             let declared, refused = RepoConfig.readAll dir [ good; bad ]
             Expect.equal (Map.count declared) 1 "the good repo's sandbox survived"
             Expect.isTrue
@@ -327,10 +306,10 @@ let foldTests =
         testCaseAsync "every declaration reaches the gate as a start_work_sandbox" <|
             async {
                 let one, two = repo "octo/one", repo "octo/two"
-                let dir = mkdtemp nodeFs nodeOs
-                for r in [ one; two ] do mkdirp nodeFs (sprintf "%s/%s" dir (RepoRef.relativePath r))
-                writeFile nodeFs (RepoConfig.pathIn dir one) "version: 2\nsandboxes:\n  dev: {}\n"
-                writeFile nodeFs (RepoConfig.pathIn dir two) "version: 2\nsandboxes:\n  dev: {}\n  gate: {}\n"
+                let dir = TestFiles.tempDir "yession-config-"
+                for r in [ one; two ] do TestFiles.ensureDir (sprintf "%s/%s" dir (RepoRef.relativePath r))
+                TestFiles.write (RepoConfig.pathIn dir one) "version: 2\nsandboxes:\n  dev: {}\n"
+                TestFiles.write (RepoConfig.pathIn dir two) "version: 2\nsandboxes:\n  dev: {}\n  gate: {}\n"
                 let seen = ResizeArray<GatedCall> ()
                 let folded =
                     RepoSandboxes.create

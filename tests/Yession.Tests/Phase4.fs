@@ -24,15 +24,6 @@ open Yession.Host
 open Yession.Tests.Support
 open Yession.Peer
 
-[<ImportAll("node:fs")>]
-let private nodeFs : obj = Fable.Core.Util.jsNative
-
-[<Emit("$0.existsSync($1)")>]
-let private existsSync (fs: obj) (path: string) : bool = Fable.Core.Util.jsNative
-
-[<Emit("$0.writeFileSync($1, $2)")>]
-let private writeFileSync (fs: obj) (path: string) (text: string) : unit = Fable.Core.Util.jsNative
-
 /// What a browser makes of a link on a page: the href resolved against the page's own URL.
 [<Emit("new URL($1, $0).href")>]
 let private resolveUrl (pageUrl: string) (href: string) : string = Fable.Core.Util.jsNative
@@ -189,7 +180,7 @@ let private stateTests =
             ManagerStore.save path twoSessions
             // Second life: a fresh load sees exactly what was saved.
             Expect.equal (ManagerStore.load path) twoSessions "the registry survives the restart"
-            Expect.isFalse (existsSync nodeFs (path + ".tmp")) "the atomic-write temp file never lingers"
+            Expect.isFalse (TestFiles.exists (path + ".tmp")) "the atomic-write temp file never lingers"
             // Saves replace the whole state — no accumulation, no merge surprises.
             let shrunk = { twoSessions with Sessions = [ record "alpha" "Alpha work" ] }
             ManagerStore.save path shrunk
@@ -197,7 +188,7 @@ let private stateTests =
 
         testCase "a corrupt state file fails loudly, never a silent reset" <| fun () ->
             let path = statePath "corrupt"
-            writeFileSync nodeFs path """{"version": 1, "sessions": [{"broken": tru"""
+            TestFiles.write path """{"version": 1, "sessions": [{"broken": tru"""
             let mutable failedLoudly = false
             try
                 ManagerStore.load path |> ignore
@@ -944,9 +935,6 @@ let private uiRenderTests =
 // The tokens live in app/tailwind.css (@theme); every text colour must keep >= 4.5:1
 // against every surface it can sit on. Computed here exactly as WCAG 2.0 defines it.
 
-[<Emit("$0.readFileSync($1, 'utf8')")>]
-let private readFileSync (fs: obj) (path: string) : string = Fable.Core.Util.jsNative
-
 let private parseHex (s: string) : float = Fable.Core.JS.parseInt s 16
 
 let private themeColour (css: string) (name: string) : string =
@@ -975,7 +963,7 @@ let private contrast (a: string) (b: string) : float =
 let private themeContrastTests =
     testList "Theme contrast (WCAG 2.0 AA floor)" [
         testCase "every text colour keeps >= 4.5:1 on every surface" <| fun () ->
-            let colour = themeColour (readFileSync nodeFs "app/tailwind.css")
+            let colour = themeColour (TestFiles.read "app/tailwind.css")
             // The terminal palette (Plan 13) is text like any other: output sits on the
             // same surfaces, so it answers to the same floor. Listing all sixteen is the
             // point — raw ANSI would fail here, which is why the theme names its own.
@@ -989,7 +977,7 @@ let private themeContrastTests =
                     Expect.isTrue (ratio >= 4.5) (sprintf "--color-%s on --color-%s is %.2f:1 — the AA floor is 4.5:1" fg bg ratio)
 
         testCase "inverse text on filled (active) buttons keeps >= 4.5:1" <| fun () ->
-            let colour = themeColour (readFileSync nodeFs "app/tailwind.css")
+            let colour = themeColour (TestFiles.read "app/tailwind.css")
             for fill in [ "blue"; "green"; "err"; "ink" ] do
                 let ratio = contrast (colour "bg") (colour fill)
                 Expect.isTrue (ratio >= 4.5) (sprintf "text-bg on bg-%s is %.2f:1 — the AA floor is 4.5:1" fill ratio)

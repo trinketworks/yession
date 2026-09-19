@@ -19,6 +19,10 @@
     <!-- The one HTTP client the suites drive routes with. Early, because everything that
          serves something uses it. -->
     <Compile Include="TestHttp.fs" />
+    <!-- The filesystem a fixture drives, beside the HTTP one and for the same reason: every
+         suite that writes to disk wanted the same half-dozen calls, and each had written its
+         own. Here rather than in `Support.fs`, which compiles after `Assets.fs`. -->
+    <Compile Include="TestFiles.fs" />
     <Compile Include="Version.fs" />
     <Compile Include="Domain.fs" />
     <Compile Include="Routes.fs" />

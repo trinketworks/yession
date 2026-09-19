@@ -95,6 +95,19 @@ module Files =
     /// `Fable.Node`'s `mkdirSync` takes no options, so it cannot say `recursive`.
     let mkdirp (path: string) : unit = mkdirSyncWithOptions path (createObj [ "recursive", box true ])
 
+    [<Import("rmSync", "node:fs")>]
+    let private rmSyncWithOptions (path: string) (options: obj) : unit = jsNative
+
+    /// Remove a path and everything under it, and say nothing about one that was not there
+    /// (`recursive` + `force`). `Fable.Node` types `rmdirSync` and `unlinkSync`, neither of
+    /// which is this: one refuses a non-empty directory and the other refuses a directory.
+    let removeTree (path: string) : unit =
+        rmSyncWithOptions path (createObj [ "recursive", box true; "force", box true ])
+
+    /// Copy a file, overwriting the destination. `Fable.Node` does not type `copyFileSync`.
+    [<Import("copyFileSync", "node:fs")>]
+    let copyFile (source: string) (destination: string) : unit = jsNative
+
 // --- Decoding bytes to text ---------------------------------------------------------------
 
 /// The WHATWG `TextDecoder`, a Node global since v11. Absent from Fable.Node — which types
