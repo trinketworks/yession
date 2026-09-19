@@ -5,6 +5,7 @@ open Yession.Domain.Agent
 open Yession.Domain.Terminals
 open Yession.Domain.Collab
 open Yession.Domain.Chat
+open Yession.Domain.Repos
 
 /// The queue-drain scheduler (Phase 3): the Session Process is the single consumer of
 /// the shared message queue, and the drain here is the linearization point of
@@ -173,7 +174,9 @@ module Scheduler =
                                     |> Digest.build
                                         (fun id fromSeq toSeq -> readTranscript id fromSeq toSeq |> Transcript.printed)
                                         (Digest.window events)
-                                do! AgentTurn.run log agent (signalFor turn) capabilitiesFor emitUsage (fun () -> turn.TurnId) mintMessageId sessionId projection.Items terminals (selectedModel ()) guidance trigger
+                                let repos =
+                                    events |> List.fold ReposProjection.applyEvent ReposProjection.empty
+                                do! AgentTurn.run log agent (signalFor turn) capabilitiesFor emitUsage (fun () -> turn.TurnId) mintMessageId sessionId projection.Items terminals repos.Repos (selectedModel ()) guidance trigger
                                 // Release the slot and re-arm — unless an interrupt
                                 // already released it (and possibly started a successor).
                                 match running with
@@ -228,6 +231,8 @@ module Scheduler =
                                 |> Digest.build
                                     (fun id fromSeq toSeq -> readTranscript id fromSeq toSeq |> Transcript.printed)
                                     (Digest.window events)
+                            let repos =
+                                events |> List.fold ReposProjection.applyEvent ReposProjection.empty
                             do!
                                 AgentTurn.run
                                     log
@@ -240,6 +245,7 @@ module Scheduler =
                                     sessionId
                                     projection.Items
                                     terminals
+                                    repos.Repos
                                     (selectedModel ())
                                     guidance
                                     (AgentTurn.FromWake (reason, turnActor))

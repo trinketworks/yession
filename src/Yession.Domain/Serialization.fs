@@ -1030,13 +1030,15 @@ module Codec =
                     [ "messageId", messageId.Encode p.MessageId
                       "repo", repoRef.Encode p.Repo
                       "branch", Encode.string p.Branch
-                      "actor", actor.Encode p.Actor ]
+                      "actor", actor.Encode p.Actor
+                      "agentsMd", Encode.option Encode.string p.AgentsMd ]
           Decode =
             Decode.object (fun get ->
                 { RepoAdded.MessageId = get.Required.Field "messageId" messageId.Decode
                   RepoAdded.Repo = get.Required.Field "repo" repoRef.Decode
                   RepoAdded.Branch = get.Required.Field "branch" Decode.string
-                  RepoAdded.Actor = get.Required.Field "actor" actor.Decode }) }
+                  RepoAdded.Actor = get.Required.Field "actor" actor.Decode
+                  RepoAdded.AgentsMd = get.Optional.Field "agentsMd" Decode.string }) }
 
     let private repoRemoved : Codec<RepoRemoved> =
         { Encode =

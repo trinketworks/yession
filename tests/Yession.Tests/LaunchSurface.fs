@@ -97,7 +97,7 @@ let private offeredTests =
 
         testCase "a repo, or anything said, takes it away" <| fun () ->
             let begun =
-                clientAt 2L (fresh @ [ at 2L (RepoAdded { MessageId = MessageId.create "r1" |> expect; Repo = hello; Branch = "main"; Actor = PeerRef ada }) ])
+                clientAt 2L (fresh @ [ at 2L (RepoAdded { MessageId = MessageId.create "r1" |> expect; Repo = hello; Branch = "main"; Actor = PeerRef ada; AgentsMd = None }) ])
             Expect.isFalse (ClientModel.launchOffered begun) "a repo note is the session having begun"
             let spoken =
                 clientAt 2L (fresh @ [ at 2L (MessageSent { MessageId = MessageId.create "m1" |> expect; QueueId = None; Author = Principal.Peer ada; Body = "hi" }) ])

@@ -4,6 +4,7 @@ open Yession.Domain
 open Yession.Domain.Agent
 open Yession.Domain.Terminals
 open Yession.Domain.Chat
+open Yession.Domain.Repos
 
 /// Orchestration of one agent turn (Step 08): builds the context pack from the
 /// projection-derived conversation, drives the injected `RunAgent` capability, and
@@ -130,6 +131,10 @@ module AgentTurn =
         // caller from the same log page the conversation came from, so the two describe
         // the same instant.
         (terminals: BlockDigest list)
+        // The session's repos, off the same page terminals came off (Plan: repo AGENTS.md
+        // into per-turn context). Carried separately from `guidance`: this is repo-authored,
+        // not the operator's words, and `promptOf` is where that distinction is enforced.
+        (repos: SessionRepo list)
         // Which model this turn runs on, read from the session's collaborative register at
         // the same instant the page above it was (`None` = the provider's own default). A
         // value rather than a thunk, so the whole context pack describes ONE moment: a turn
@@ -192,6 +197,7 @@ module AgentTurn =
                       TurnActor = turnActor
                       CurrentMessage = currentMessage
                       Terminals = terminals
+                      Repos = repos
                       Model = model
                       SystemPrompt = promptWith guidance }
                 do! append (AgentContextBuilt { AgentTurnId = turnId; MessageCount = List.length conversation })

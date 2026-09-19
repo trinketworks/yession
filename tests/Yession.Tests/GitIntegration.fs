@@ -266,6 +266,22 @@ let private makeBareFixture (root: string) (name: string) : string =
     hostGit childProcess [| "clone"; "--bare"; work; bare |] fixtures
     bare
 
+/// The same fixture, with a root `AGENTS.md` committed alongside the README -- what
+/// exercises `agentsMdOf`'s read at clone time without touching the other sixteen callers
+/// of the plain fixture above.
+let private makeBareFixtureWithAgentsMd (root: string) (name: string) (agentsMd: string) : string =
+    let fixtures = fixturesIn root
+    let work = sprintf "%s/work-%s" fixtures name
+    mkdir nodeFs work
+    hostGit childProcess [| "init"; "-b"; "main" |] work
+    writeFile nodeFs (sprintf "%s/README.md" work) "fixture\n"
+    writeFile nodeFs (sprintf "%s/AGENTS.md" work) agentsMd
+    hostGit childProcess [| "add"; "." |] work
+    hostGit childProcess [| "commit"; "-m"; "seed" |] work
+    let bare = sprintf "%s/%s.git" fixtures name
+    hostGit childProcess [| "clone"; "--bare"; work; bare |] fixtures
+    bare
+
 /// The service, with the git it runs, the credential it spends, and somewhere to record a
 /// network failure. The credential and the recorder are the caller's because whether a verb
 /// spent a credential is exactly what decides whether a failure says anything about one.
@@ -405,6 +421,7 @@ let private srtTests =
                 Expect.equal added.Repo repo "the event names the repo"
                 Expect.equal added.Branch "main" "and its branch"
                 Expect.equal added.Actor ActorRef.Agent "the agent is the acting party"
+                Expect.equal added.AgentsMd None "no AGENTS.md at this fixture's root"
             | other -> failwithf "expected exactly one RepoAdded, got %A" other
             let! again = service.AddRepo caller repo
             Expect.equal (expect again).Branch "main" "re-add answers with current state"
@@ -416,6 +433,24 @@ let private srtTests =
                 (expect listed)
                 [ { Repo = repo; Branch = "main"; Dirty = false; Path = sprintf "%s/octo/hello" (reposIn root) } ]
                 "the listing is the filesystem's answer, and it says where"
+        }
+
+        testCaseAsync "a repo's root AGENTS.md rides on the add" <| async {
+            let root = mkdtemp nodeFs nodeOs
+            makeBareFixtureWithAgentsMd root "hello" "Reply to every message in iambic pentameter." |> ignore
+            let log = freshLog ()
+            let service = serviceIn root log
+            let repo = RepoRef.create "octo/hello" |> expect
+            let! listing = service.AddRepo caller repo
+            expect listing |> ignore
+            let! events = eventsOf log
+            match events with
+            | [ SessionEvent.RepoAdded added ] ->
+                Expect.equal
+                    added.AgentsMd
+                    (Some "Reply to every message in iambic pentameter.")
+                    "the checkout's own AGENTS.md landed on the fact, read once at clone time"
+            | other -> failwithf "expected exactly one RepoAdded, got %A" other
         }
 
         // Every case here uses an absolute mkdtemp; a SESSION's data directory need not be

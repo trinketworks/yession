@@ -284,7 +284,7 @@ let private frameSerializationTests =
                   CommandCompleted { CommandId = CommandId.create "cmd-1" |> expect; Result = CommandFailed 3 }
                   CommandCompleted { CommandId = CommandId.create "cmd-1" |> expect; Result = CommandTimedOut }
                   CommandCompleted { CommandId = CommandId.create "cmd-1" |> expect; Result = CommandExecutionFailed "denied" }
-                  RepoAdded { MessageId = messageId; Repo = RepoRef.create "octo/hello" |> expect; Branch = "main"; Actor = PeerRef peerId }
+                  RepoAdded { MessageId = messageId; Repo = RepoRef.create "octo/hello" |> expect; Branch = "main"; Actor = PeerRef peerId; AgentsMd = None }
                   RepoRemoved { MessageId = messageId; Repo = RepoRef.create "octo/hello" |> expect; Actor = ActorRef.Agent }
                   RepoBranchSwitched { MessageId = messageId; Repo = RepoRef.create "octo/hello" |> expect; Branch = "feature/x"; Created = true; Actor = UserRef (UserId.create "alice" |> expect) }
                   WorkSandboxStarted
@@ -688,13 +688,21 @@ let private repoTests =
             let repo = RepoRef.create "octo/hello" |> expect
             let ada = PeerId.create "ada" |> expect
             let folded =
-                [ RepoAdded { MessageId = msg "r1"; Repo = repo; Branch = "main"; Actor = PeerRef ada }
+                [ RepoAdded { MessageId = msg "r1"; Repo = repo; Branch = "main"; Actor = PeerRef ada; AgentsMd = Some "say hi to every reviewer" }
                   RepoBranchSwitched { MessageId = msg "r2"; Repo = repo; Branch = "feature/x"; Created = true; Actor = ActorRef.Agent }
                   MessageSent { MessageId = msg "m"; QueueId = None; Author = Principal.Peer ada; Body = "hi" } ]
                 |> List.fold ReposProjection.applyEvent ReposProjection.empty
-            Expect.equal folded.Repos [ { Repo = repo; Branch = "feature/x"; AddedBy = PeerRef ada } ] "one repo, on the switched branch"
-            let readded = ReposProjection.applyEvent folded (RepoAdded { MessageId = msg "r3"; Repo = repo; Branch = "main"; Actor = ActorRef.Agent })
-            Expect.equal readded.Repos [ { Repo = repo; Branch = "main"; AddedBy = ActorRef.Agent } ] "re-add replaces in place"
+            Expect.equal
+                folded.Repos
+                [ { Repo = repo; Branch = "feature/x"; AddedBy = PeerRef ada; AgentsMd = Some "say hi to every reviewer" } ]
+                "one repo, on the switched branch, carrying what its AGENTS.md said at add time"
+            // Re-add with no file this time: the newest add wins, notes  a repoincluded 
+            // that removed its AGENTS.md between adds is not still quoted from the last one.
+            let readded = ReposProjection.applyEvent folded (RepoAdded { MessageId = msg "r3"; Repo = repo; Branch = "main"; Actor = ActorRef.Agent; AgentsMd = None })
+            Expect.equal
+                readded.Repos
+                [ { Repo = repo; Branch = "main"; AddedBy = ActorRef.Agent; AgentsMd = None } ]
+                "re-add replaces in place, notes and all"
             let removed = ReposProjection.applyEvent readded (RepoRemoved { MessageId = msg "r4"; Repo = repo; Actor = PeerRef ada })
             Expect.equal removed.Repos [] "removed"
 
@@ -704,7 +712,7 @@ let private repoTests =
             let sessionId = SessionId.create "repo-session" |> expect
             let ada = PeerId.create "ada" |> expect
             let envelopes =
-                [ RepoAdded { MessageId = msg "r1"; Repo = repo; Branch = "main"; Actor = PeerRef ada }
+                [ RepoAdded { MessageId = msg "r1"; Repo = repo; Branch = "main"; Actor = PeerRef ada; AgentsMd = None }
                   RepoBranchSwitched { MessageId = msg "r2"; Repo = repo; Branch = "fix/y"; Created = false; Actor = ActorRef.Agent }
                   RepoRemoved { MessageId = msg "r3"; Repo = repo; Actor = PeerRef ada } ]
                 |> List.mapi (fun i event ->
