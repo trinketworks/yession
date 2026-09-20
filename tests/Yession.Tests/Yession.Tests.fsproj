@@ -120,6 +120,10 @@
 
   <ItemGroup>
     <PackageReference Include="Fable.Core" />
+    <!-- The Fetch API this suite drives routes over: `TestHttp` names its `RequestProperties`
+         and `Response` directly, so the dependency is declared where it is used rather than
+         taken transitively through `Fable.NodeExtras`. -->
+    <PackageReference Include="Fable.Fetch" />
     <PackageReference Include="Fable.Pyxpecto" />
     <!-- CLR-only: drives the real-browser E2E (Browser.fs). Fable never sees it (that code
          is #if-compiled out under Fable), so it does not need Fable bindings. -->

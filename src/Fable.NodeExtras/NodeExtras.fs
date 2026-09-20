@@ -177,6 +177,16 @@ module Streams =
     [<Emit("$0.body")>]
     let responseBody (response: Fetch.Types.Response) : ReadableStream option = jsNative
 
+    /// Every header pair an answer carried, as `Headers` iterates them — names lowercased,
+    /// and a header sent twice joined the way HTTP joins one.
+    ///
+    /// `Fable.Fetch`'s `Headers` types `get`, `has` and `getAll`, each of which takes the name
+    /// in hand: they answer what a reader already knows to ask about. A reader that wants to
+    /// know WHICH headers arrived — a test asserting on the whole answer, a relay copying it —
+    /// has no member to call, because the iterator the object actually has is not declared.
+    [<Emit("[...$0]")>]
+    let headerPairs (headers: Fetch.Types.Headers) : (string * string)[] = jsNative
+
 // --- WebSocket ------------------------------------------------------------------------------
 
 /// How a BINARY frame arrives. The WHATWG default is `Blob`, which is why a caller that wants
