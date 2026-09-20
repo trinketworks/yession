@@ -10,6 +10,7 @@ module Yession.Tests.Phase2
 
 open System
 open Fable.Core
+open Fable.NodeExtras
 open Fable.Pyxpecto
 open Ylmish
 open Yession.Domain
@@ -2311,15 +2312,6 @@ let private nodePath () : string = Node.Api.``process``.execPath
 
 /// The FIRING end of an abort, which the product never holds: the signals it sees come from
 /// the agent SDK. Here because a spawner that listens to one needs something to listen to.
-[<Emit("new AbortController()")>]
-let private abortController () : obj = jsNative
-
-[<Emit("$0.signal")>]
-let private signalOf (controller: obj) : obj = jsNative
-
-[<Emit("$0.abort()")>]
-let private abortNow (controller: obj) : unit = jsNative
-
 /// Call a spawner the way the SDK does: one request in, one process out.
 let private askSpawner (spawner: obj) (fields: (string * obj) list) : Fable.ClaudeAgentSdk.SpawnedProcess =
     (unbox<Func<Fable.ClaudeAgentSdk.SpawnOptions, Fable.ClaudeAgentSdk.SpawnedProcess>> spawner)
@@ -2348,12 +2340,12 @@ let private killedAfterAbort (spawner: obj) : Async<bool> =
                 [ "command", box (nodePath ())
                   "args", box [| "-e"; "setTimeout(() => {}, 60000)" |]
                   "env", Fable.Core.JsInterop.createObj []
-                  "signal", signalOf controller ]
+                  "signal", controller.signal ]
 
         let exited = ref false
         spawned.on ("exit", box (Func<obj, obj, unit> (fun _ _ -> exited.Value <- true)))
 
-        abortNow controller
+        controller.abort ()
         do! Support.waitUntilWithin 5000 "the child exits" (fun () -> exited.Value)
         return spawned.killed
     }
@@ -2385,10 +2377,10 @@ let private agentSpawnerPortsTests =
                     [ "command", box (nodePath ())
                       "args", box [| "-e"; "setTimeout(() => {}, 60000)" |]
                       "env", Fable.Core.JsInterop.createObj []
-                      "signal", signalOf controller ]
+                      "signal", controller.signal ]
 
             let child = unbox<Node.ChildProcess.ChildProcess> spawned
-            abortNow controller
+            controller.abort ()
 
             do! Support.waitUntilWithin 5000 "the child is signalled" (fun () ->
                     (Fable.NodeExtras.ChildProcesses.signalCode child).IsSome)
@@ -2403,7 +2395,7 @@ let private agentSpawnerPortsTests =
         // the spawner was ever asked never calls a listener, so the spawner has to ASK too.
         testCaseAsync "a signal that had already fired kills the child anyway" <| async {
             let controller = abortController ()
-            abortNow controller
+            controller.abort ()
 
             let spawned =
                 askSpawner
@@ -2411,7 +2403,7 @@ let private agentSpawnerPortsTests =
                     [ "command", box (nodePath ())
                       "args", box [| "-e"; "setTimeout(() => {}, 60000)" |]
                       "env", Fable.Core.JsInterop.createObj []
-                      "signal", signalOf controller ]
+                      "signal", controller.signal ]
 
             let child = unbox<Node.ChildProcess.ChildProcess> spawned
 

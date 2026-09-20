@@ -367,15 +367,6 @@ let socketTests =
 /// `new AbortController()` — the FIRING end, which the product never holds: the signals it
 /// sees arrive from the agent SDK. Declared here rather than in the binding for that reason,
 /// and because a test of a listening binding needs something to make it listen to.
-[<Emit("new AbortController()")>]
-let private abortController () : obj = jsNative
-
-[<Emit("$0.signal")>]
-let private signalOf (controller: obj) : AbortSignal = jsNative
-
-[<Emit("$0.abort()")>]
-let private abort (controller: obj) : unit = jsNative
-
 let eventTests =
     testList "Node platform bindings, aborting and relaying (Fable.NodeExtras)" [
 
@@ -387,17 +378,17 @@ let eventTests =
         testCase "a handler hung on a signal runs when the signal fires" <| fun () ->
             let controller = abortController ()
             let mutable ran = 0
-            (signalOf controller).onAbort (fun () -> ran <- ran + 1)
-            abort controller
+            controller.signal.onAbort (fun () -> ran <- ran + 1)
+            controller.abort ()
             Expect.equal ran 1 "the abort reached the handler"
 
         // The half a listener cannot answer: registering after the fact never runs, so a
         // caller has to ask as well as listen.
         testCase "a signal that has already fired says so" <| fun () ->
             let controller = abortController ()
-            Expect.isFalse (signalOf controller).aborted "nothing has fired"
-            abort controller
-            Expect.isTrue (signalOf controller).aborted "and now it has"
+            Expect.isFalse controller.signal.aborted "nothing has fired"
+            controller.abort ()
+            Expect.isTrue controller.signal.aborted "and now it has"
 
         testCase "what the relay emits reaches the listener, arguments and all" <| fun () ->
             let relay = createRelay ()
