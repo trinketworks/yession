@@ -28,10 +28,8 @@ module Yession.Tests.LockSource
 open Fable.Core
 open Fable.Core.JsInterop
 open Fable.Pyxpecto
+open Fable.NodeExtras
 open Thoth.Json
-
-let private childProcess : obj = importAll "node:child_process"
-
 
 /// The two things this rule asks the lock: which nodes it carries, and which inputs its root
 /// resolves through. Only the NAMES — what a node pins is devenv's business, and the rule is
@@ -68,8 +66,16 @@ let private read (json: string) : Lock =
 /// on any machine that has run devenv — that is the normal state and not what this is about.
 /// Read through `git show` so this asks the question that matters: what would a laptop or a CI
 /// runner get when it checks this out.
-[<Emit("$0.execSync('git show HEAD:devenv.lock', { encoding: 'utf8', stdio: ['ignore','pipe','ignore'] })")>]
-let private gitShow (cp: obj) : string = jsNative
+///
+/// git's own stderr is silenced rather than inherited: in a checkout that cannot answer, the
+/// throw below is the answer, and a "fatal: not a git repository" printed into the run would
+/// read as a failure of the suite rather than the state it is testing for.
+let private gitShow () : string =
+    execFileSync
+        "git"
+        [ "show"; "HEAD:devenv.lock" ]
+        { SyncOptions.none with
+            Streams = Some { Stdin = Stdio.Ignore; Stdout = Stdio.Pipe; Stderr = Stdio.Ignore } }
 
 /// Nothing, rather than empty text, for a checkout that cannot answer — every case below
 /// fails on it out loud, because a run that could not read the tracked lock has checked
@@ -80,7 +86,7 @@ let private gitShow (cp: obj) : string = jsNative
 /// rather than "this check cannot run". It read as the former for one whole run.
 let private committedLock () : string option =
     try
-        match gitShow childProcess with
+        match gitShow () with
         | "" -> None
         | json -> Some json
     with _ -> None

@@ -17,6 +17,7 @@ module Yession.Tests.GitIntegration
 open System
 open Fable.Core
 open Fable.Core.JsInterop
+open Fable.NodeExtras
 open Fable.Pyxpecto
 open Yession.Domain
 open Yession.Domain.Sandboxes
@@ -188,7 +189,6 @@ let private pureTests =
 
 // --- [Srt]: the verbs against local bare fixtures, confined for real ------------------------
 
-let private childProcess : obj = importAll "node:child_process"
 
 /// A fixture directory named the way the KERNEL will check it.
 ///
@@ -216,9 +216,33 @@ let private checkoutWhole (dir: string) : bool =
     TestFiles.exists (sprintf "%s/.git" dir)
     && readDirSafe dir |> List.exists (fun entry -> entry <> ".git")
 
+/// What a fixture's git must not read or be: the operator's own config, and an author it did
+/// not choose. Named once, because every fixture commit below is made under it — and because
+/// a name that goes missing here makes a commit that git refuses with a question about the
+/// user's identity, a long way from the case that was being set up.
+let private fixtureGitEnv : Map<string, string> =
+    Map.ofList
+        [ "GIT_CONFIG_GLOBAL", "/dev/null"
+          "GIT_CONFIG_SYSTEM", "/dev/null"
+          "GIT_AUTHOR_NAME", "fixture"
+          "GIT_AUTHOR_EMAIL", "f@x"
+          "GIT_COMMITTER_NAME", "fixture"
+          "GIT_COMMITTER_EMAIL", "f@x" ]
+
 /// Host-side git for FIXTURE SETUP only — the code under test never runs unconfined.
-[<Emit("$0.execFileSync('git', $1, { cwd: $2, env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null', GIT_AUTHOR_NAME: 'fixture', GIT_AUTHOR_EMAIL: 'f@x', GIT_COMMITTER_NAME: 'fixture', GIT_COMMITTER_EMAIL: 'f@x' }, stdio: 'pipe' })")>]
-let private hostGit (cp: obj) (args: string array) (cwd: string) : unit = jsNative
+///
+/// `execFileSync` throws on a non-zero exit, which is what setup wants: a fixture that did not
+/// get made must not go on to be asserted about. Its output is kept rather than inherited so
+/// the throw carries it, instead of git narrating every fixture into the run.
+let private hostGit (args: string list) (cwd: string) : unit =
+    execFileSync
+        "git"
+        args
+        { SyncOptions.none with
+            Cwd = Some cwd
+            Env = fixtureGitEnv
+            Streams = Some { Stdin = Stdio.Pipe; Stdout = Stdio.Pipe; Stderr = Stdio.Pipe } }
+    |> ignore
 
 /// The fixtures live in a SIBLING of the repos dir, never an ancestor of it. srt re-binds
 /// an allowRead path over the write binds when both sit under a denyRead region (HOME —
@@ -238,12 +262,12 @@ let private makeBareFixture (root: string) (name: string) : string =
     let fixtures = fixturesIn root
     let work = sprintf "%s/work-%s" fixtures name
     TestFiles.ensureDir work
-    hostGit childProcess [| "init"; "-b"; "main" |] work
+    hostGit [ "init"; "-b"; "main" ] work
     TestFiles.write (sprintf "%s/README.md" work) "fixture\n"
-    hostGit childProcess [| "add"; "." |] work
-    hostGit childProcess [| "commit"; "-m"; "seed" |] work
+    hostGit [ "add"; "." ] work
+    hostGit [ "commit"; "-m"; "seed" ] work
     let bare = sprintf "%s/%s.git" fixtures name
-    hostGit childProcess [| "clone"; "--bare"; work; bare |] fixtures
+    hostGit [ "clone"; "--bare"; work; bare ] fixtures
     bare
 
 /// The same fixture, with a root `AGENTS.md` committed alongside the README -- what
@@ -253,13 +277,13 @@ let private makeBareFixtureWithAgentsMd (root: string) (name: string) (agentsMd:
     let fixtures = fixturesIn root
     let work = sprintf "%s/work-%s" fixtures name
     TestFiles.ensureDir work
-    hostGit childProcess [| "init"; "-b"; "main" |] work
+    hostGit [ "init"; "-b"; "main" ] work
     TestFiles.write (sprintf "%s/README.md" work) "fixture\n"
     TestFiles.write (sprintf "%s/AGENTS.md" work) agentsMd
-    hostGit childProcess [| "add"; "." |] work
-    hostGit childProcess [| "commit"; "-m"; "seed" |] work
+    hostGit [ "add"; "." ] work
+    hostGit [ "commit"; "-m"; "seed" ] work
     let bare = sprintf "%s/%s.git" fixtures name
-    hostGit childProcess [| "clone"; "--bare"; work; bare |] fixtures
+    hostGit [ "clone"; "--bare"; work; bare ] fixtures
     bare
 
 /// The service, with the git it runs, the credential it spends, and somewhere to record a
@@ -638,8 +662,8 @@ let private srtTests =
             TestFiles.makeExecutable (sprintf "%s/.git/hooks/post-checkout" checkout)
             TestFiles.write (sprintf "%s/.git/evil.sh" checkout) hook
             TestFiles.makeExecutable (sprintf "%s/.git/evil.sh" checkout)
-            hostGit childProcess [| "config"; "core.fsmonitor"; sprintf "%s/.git/evil.sh" checkout |] checkout
-            hostGit childProcess [| "config"; "core.hooksPath"; sprintf "%s/.git/hooks" checkout |] checkout
+            hostGit [ "config"; "core.fsmonitor"; sprintf "%s/.git/evil.sh" checkout ] checkout
+            hostGit [ "config"; "core.hooksPath"; sprintf "%s/.git/hooks" checkout ] checkout
             let! _ = service.SwitchBranch caller repo "probe" true
             let! status = service.RepoStatus repo
             expect status |> ignore
@@ -713,7 +737,7 @@ let private srtTests =
             // machine that ran the old code still has one.
             let checkout = sprintf "%s/octo/hello" (reposIn root)
             TestFiles.ensureDir checkout
-            hostGit childProcess [| "init"; "-b"; "main" |] checkout
+            hostGit [ "init"; "-b"; "main" ] checkout
             let! added = service.AddRepo caller repo
             match added with
             | Ok _ -> failwith "expected an unreadable checkout to be reported, not described"
@@ -837,10 +861,10 @@ let private compositionTests =
             let sessionDir = sprintf "%s/%s" dataDir record.DataDir
             let checkout = sprintf "%s/octo/hello" (Sandboxes.SessionLayout.reposDir sessionDir)
             TestFiles.ensureDir checkout
-            hostGit childProcess [| "init"; "-b"; "main" |] checkout
+            hostGit [ "init"; "-b"; "main" ] checkout
             TestFiles.write (sprintf "%s/README.md" checkout) "planted\n"
-            hostGit childProcess [| "add"; "." |] checkout
-            hostGit childProcess [| "commit"; "-m"; "planted" |] checkout
+            hostGit [ "add"; "." ] checkout
+            hostGit [ "commit"; "-m"; "planted" ] checkout
 
             let! launched = pm.Launch record.SessionId
             let port = launched |> expect
