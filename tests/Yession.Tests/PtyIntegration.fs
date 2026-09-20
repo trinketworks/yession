@@ -310,6 +310,11 @@ let private integrationLostTests =
                             // `C`, because nothing instrumented it.
                             let running = terminals.RunBlock id (queueEntry id ada "2") "echo after-exec" ignore
                             Async.StartImmediate running
+                            // Let the shell RENDER the line before the clock is turned: what it
+                            // prints behind the gate is not observable from here (that is the
+                            // gate), and the fact below is asserted to carry it. The same
+                            // shape as the wait above, for the same reason.
+                            do! Async.Sleep 500
                             // The block's line is typed once its anchor is durable, and the
                             // detector is armed beside it; the window is then the clock's to
                             // turn. Turned each look, because the arming is what is waited
@@ -321,13 +326,21 @@ let private integrationLostTests =
                             Expect.isTrue detected "the missing `C` is what gives it away"
                             Expect.isTrue (reDrains () > before) "and the drain is re-armed so the queue can be held"
                             let! page = log.Read None 1000
-                            Expect.isTrue
-                                (page.Events
-                                 |> List.exists (fun e ->
-                                     match e.Event with
-                                     | SessionEvent.TerminalIntegrationLost l -> l.TerminalId = id
-                                     | _ -> false))
-                                "recorded, because it is a GAP in what the record can say"
+                            let lost =
+                                page.Events
+                                |> List.tryPick (fun e ->
+                                    match e.Event with
+                                    | SessionEvent.TerminalIntegrationLost l when l.TerminalId = id -> Some l
+                                    | _ -> None)
+                            match lost with
+                            | None -> failwith "recorded, because it is a GAP in what the record can say"
+                            | Some lost ->
+                                // And what the shell said meanwhile is on the fact: this one
+                                // RAN the command and marked nothing, which reads apart from
+                                // a shell that had not answered at all.
+                                match lost.Evidence with
+                                | None -> failwith "a loss the detector declared carries what it saw"
+                                | Some evidence -> Expect.stringContains evidence.Said "after-exec" "the shell's own output, never in the transcript, is in the evidence"
 
                             // The re-arm control types the instrumentation into the shell that
                             // is actually there now — Warp's move, minus the rc-file edit.

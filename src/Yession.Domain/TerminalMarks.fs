@@ -79,6 +79,19 @@ module BlockEnv =
 
     let none : BlockEnv = { GitConfig = None; Vars = [] }
 
+    /// `text` with every value this block was lent blotted out. The line that carries a loan
+    /// is never recorded — the shell's echo of it is dropped for exactly this reason — so a
+    /// fact that quotes what the shell printed around that line has to take the loan back
+    /// out of it: a durable event replays to every peer for the life of the session, and a
+    /// credential's whole value is that it does not.
+    let redact (env: BlockEnv) (text: string) : string =
+        let values =
+            [ yield! env.GitConfig |> Option.map snd |> Option.toList
+              yield! env.Vars |> List.choose snd ]
+        values
+        |> List.filter (fun value -> value <> "")
+        |> List.fold (fun (acc: string) value -> acc.Replace (value, "\u2022")) text
+
     let isNone (env: BlockEnv) : bool = env.GitConfig.IsNone && List.isEmpty env.Vars
 
     /// Two loans for one block: the later git config wins (there is one slot), the

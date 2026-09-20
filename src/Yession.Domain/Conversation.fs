@@ -620,6 +620,7 @@ module ConversationProjection =
         | SessionEvent.TerminalCommandRejected _
         | SessionEvent.TerminalIntegrationLost _
         | SessionEvent.TerminalIntegrationRestored _
+        | SessionEvent.TerminalMarkedLate _
         | SessionEvent.TerminalTranscriptTruncated _ -> proj
         // Tool use (Plan 16, part C) does not fold here either, and for the same hazard in
         // a sharper form: the agent MADE the call and already has the result in its own

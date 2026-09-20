@@ -881,14 +881,14 @@ let private integrationTests =
             let lost =
                 fold
                     [ opened terminalA "build"
-                      SessionEvent.TerminalIntegrationLost { TerminalId = terminalA; BlockId = Some (block "1") } ]
+                      SessionEvent.TerminalIntegrationLost { TerminalId = terminalA; BlockId = Some (block "1"); Evidence = None } ]
             Expect.isTrue
                 (Projection.tryFind terminalA lost |> Option.map (fun t -> t.IntegrationLost) |> Option.defaultValue false)
                 "every client sees it, because it is an event rather than a screen"
             let repaired =
                 fold
                     [ opened terminalA "build"
-                      SessionEvent.TerminalIntegrationLost { TerminalId = terminalA; BlockId = None }
+                      SessionEvent.TerminalIntegrationLost { TerminalId = terminalA; BlockId = None; Evidence = None }
                       SessionEvent.TerminalIntegrationRestored { TerminalId = terminalA } ]
             Expect.isFalse
                 (Projection.tryFind terminalA repaired |> Option.map (fun t -> t.IntegrationLost) |> Option.defaultValue true)
@@ -1583,9 +1583,21 @@ let private codecTests =
                       { TerminalId = terminalA; Was = ActorRef.Agent; Reason = LeaseHolderGone; ToSeq = 0 }
                   SessionEvent.TerminalLeaseReleased
                       { TerminalId = terminalA; Was = PeerRef ada; Reason = LeaseIdle; ToSeq = 0 }
-                  SessionEvent.TerminalIntegrationLost { TerminalId = terminalA; BlockId = Some (block "1") }
-                  SessionEvent.TerminalIntegrationLost { TerminalId = terminalA; BlockId = None }
-                  SessionEvent.TerminalIntegrationRestored { TerminalId = terminalA } ]
+                  SessionEvent.TerminalIntegrationLost { TerminalId = terminalA; BlockId = Some (block "1"); Evidence = None }
+                  SessionEvent.TerminalIntegrationLost
+                      { TerminalId = terminalA
+                        BlockId = Some (block "1")
+                        Evidence =
+                          Some
+                              { WrittenAt = System.DateTimeOffset (2026, 9, 20, 0, 14, 44, System.TimeSpan.Zero)
+                                Due = System.DateTimeOffset (2026, 9, 20, 0, 14, 46, System.TimeSpan.Zero)
+                                Said = "$ echo hi\\x0d\\x0a" } }
+                  SessionEvent.TerminalIntegrationLost { TerminalId = terminalA; BlockId = None; Evidence = None }
+                  SessionEvent.TerminalIntegrationRestored { TerminalId = terminalA }
+                  SessionEvent.TerminalMarkedLate
+                      { TerminalId = terminalA
+                        BlockId = block "1"
+                        WrittenAt = System.DateTimeOffset (2026, 9, 20, 0, 14, 44, System.TimeSpan.Zero) } ]
             for event in events do
                 let encoded = Codec.toString Codec.sessionEvent event
                 Expect.equal (Codec.fromString Codec.sessionEvent encoded) (Ok event) ("round-trips: " + encoded)
@@ -3748,6 +3760,132 @@ let private shellStartTests =
             }
     ]
 
+/// A shell that renders a block's line the way one does — the echo, a prompt — and marks
+/// its start only when the case says. The shape of a shell answering late over a slow
+/// stream: nothing is wrong with its instrumentation, and nothing this process can see says
+/// so until the mark arrives.
+let private lateMarkingShell () =
+    let environment, _, _ = profileEnvironment (fun () -> Set.empty)
+    let mutable prints : string -> unit = ignore
+    let mark (body: string) = prints (sprintf "\u001b]133;%s;y=test-nonce\u0007" body)
+    let late : SessionEnvironment.SessionEnvironment =
+        { environment with
+            SpawnPty =
+                fun _ _ _ onOutput ->
+                    async {
+                        prints <- onOutput
+                        let _, never = latch ()
+                        return
+                            Ok
+                                { Write =
+                                    fun line ->
+                                        // The block's line, rendered and not run; everything
+                                        // else typed at this shell is bootstrap, answered with
+                                        // the prompt mark that makes the terminal instrumented.
+                                        if line.Contains "__y_c; " then onOutput ("$ " + line.Trim () + "\r\n")
+                                        else mark "A"
+                                  Resize = fun _ _ -> ()
+                                  Kill = ignore
+                                  Exited =
+                                    async {
+                                        do! never
+                                        return SandboxExited 0
+                                    } }
+                    } }
+    late, mark
+
+/// A block typed at a late-marking shell and its detector left to fire: the terminal is lost,
+/// and what the case gets back is the fact that said so, the moment the line went in, and
+/// the shell's marks to type at will.
+let private lostOverALateShellLent (loans: SessionTerminals.BlockLoans) =
+    async {
+        let log = newLog ()
+        let shell, mark = lateMarkingShell ()
+        let clock = virtualClock (fixedClock ())
+        let openTranscript, _, _, _, readTranscript = recordingTranscripts ()
+        let terminals, _, _ =
+            makeTerminalsOn clock.Clock Principal.Peer loans AttachTerminal.unavailable Classifier.approveAll log shell openTranscript readTranscript [] ShellProfileProjection.empty
+        let! opened = terminals.Open (PeerRef ada) (SandboxShell SandboxRef.defaultRef) (TerminalTitle.fromProse "build")
+        let id = opened |> expect
+        let writtenAt = clock.Clock.Now ()
+        Async.StartImmediate (terminals.RunBlock id (entry "b1" id byAda 1.0) "echo hi" ignore)
+        do! clock.Armed ()
+        clock.Advance (TimeSpan.FromSeconds 3.0)
+        let! events = eventsOf log
+        let lost =
+            events
+            |> List.pick (function
+                | SessionEvent.TerminalIntegrationLost l when l.TerminalId = id -> Some l
+                | _ -> None)
+        return terminals, id, log, clock, mark, writtenAt, lost
+    }
+
+let private lostOverALateShell () = lostOverALateShellLent SessionTerminals.BlockLoans.none
+
+let private lostEvidenceTests =
+    testList "What a loss says about itself" [
+        // The fact without this read the same for a shell somebody had replaced and one that
+        // answered ten seconds late over a container's stream: both said lost, one wrongly,
+        // and telling them apart took the cast file, the event log and a stopwatch.
+        testCaseAsync "a loss says when the line went in, when the mark was due, and what the shell said" <|
+            async {
+                let! _, _, _, _, _, writtenAt, lost = lostOverALateShell ()
+                let evidence = lost.Evidence |> Option.defaultWith (fun () -> failwith "a loss the detector declared carries what it saw")
+                Expect.equal evidence.WrittenAt writtenAt "the moment the block's line was handed to the shell"
+                Expect.equal (evidence.Due - evidence.WrittenAt) (TimeSpan.FromSeconds 2.0) "and the moment its start mark was due — the write plus the window"
+                Expect.stringContains evidence.Said "echo hi" "what the shell printed meanwhile: the line's echo, which the transcript never carries"
+                Expect.stringContains evidence.Said "\\x0d" "with its control bytes escaped, not carried"
+            }
+
+        // The line that carries a loan is never recorded, and the shell's echo of it is what
+        // the evidence quotes. A durable fact replays to every peer for the life of the
+        // session, which is the one place a credential must not be.
+        testCaseAsync "what the shell said never carries what the block was lent" <|
+            async {
+                let lent : BlockEnv =
+                    { GitConfig = Some ("http.https://gateway/.extraheader", "X-Yession-Loan: loan-secret-1")
+                      Vars = [ "GIT_AUTHOR_NAME", Some "Ada"; "GIT_COMMITTER_EMAIL", None ] }
+                let loans : SessionTerminals.BlockLoans = { Lend = (fun _ _ _ _ -> async { return lent }); Retire = ignore }
+                let! _, _, _, _, _, _, lost = lostOverALateShellLent loans
+                let said = (lost.Evidence |> Option.get).Said
+                Expect.stringContains said "echo hi" "the line's echo is what the evidence has to offer"
+                Expect.isFalse (said.Contains "loan-secret-1") "and the loan in that line is not in it"
+                Expect.isFalse (said.Contains "Ada") "nor anything else the block was lent"
+            }
+
+        testCaseAsync "a start mark arriving after the loss is recorded against the line it answers" <|
+            async {
+                let! _, id, log, _, mark, writtenAt, _ = lostOverALateShell ()
+                mark "C"
+                let! events = eventsOf log
+                let late =
+                    events
+                    |> List.pick (function
+                        | SessionEvent.TerminalMarkedLate l when l.TerminalId = id -> Some l
+                        | _ -> None)
+                Expect.equal late.WrittenAt writtenAt "naming the write it was late for, so how late is the envelope's own arithmetic"
+            }
+
+        // The mark does not repair the terminal. Whether it should is a decision the fact
+        // above exists to inform; today only a person re-arming does, and a queue held behind
+        // a shell that has just proved it marks is the cost this fact makes legible.
+        testCaseAsync "a late start mark does not, by itself, clear the loss" <|
+            async {
+                let! terminals, id, log, _, mark, _, _ = lostOverALateShell ()
+                mark "C"
+                mark "D;0"
+                mark "A"
+                Expect.isTrue (Set.contains (TerminalId.value id) (terminals.Lost ())) "the terminal is still held"
+                let! events = eventsOf log
+                Expect.isTrue
+                    (events |> List.exists (function SessionEvent.TerminalBlockCompleted c -> c.TerminalId = id | _ -> false))
+                    "even though its block completed with the exit code the marks carried"
+                Expect.isFalse
+                    (events |> List.exists (function SessionEvent.TerminalIntegrationRestored r -> r.TerminalId = id | _ -> false))
+                    "and nothing said it was restored"
+            }
+    ]
+
 let private shellProfileTests =
     /// The checkout the way everything in this session says it: as a terminal reaches it,
     /// which is what `add_repo` answers with and what the profile holds.
@@ -4447,6 +4585,7 @@ let tests =
         agentVerbTests
         shellStartTests
         shellProfileTests
+        lostEvidenceTests
         codecTests
         orderTests
         managerTests

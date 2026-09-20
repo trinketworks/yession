@@ -829,7 +829,7 @@ let private blockStartedIn (id: TerminalId) (n: string) (background: bool) (owne
           Background = background }
 
 let private integrationLost (id: TerminalId) =
-    SessionEvent.TerminalIntegrationLost { TerminalId = id; BlockId = None }
+    SessionEvent.TerminalIntegrationLost { TerminalId = id; BlockId = None; Evidence = None }
 
 let private closedNow (id: TerminalId) =
     SessionEvent.TerminalClosed { TerminalId = id; Reason = "the source went away" }
