@@ -108,13 +108,13 @@ and WorkSandboxStarted =
       /// profile at it inside the container, watched it silently not take, and spent six
       /// calls working out why.
       Checkout : string option
-      /// The credential NAMES forwarded into it — never a value, and never a token
+      /// The connections forwarded into it, by NAME — never a value, and never a token
       /// shape that could be mistaken for one. Forwarding is a fact about the sandbox
       /// that outlives the turn that asked for it, so the log has to carry it; what the
       /// credential IS belongs only in the sandbox's env. WHOSE is not a fact about the
       /// sandbox at all: a forward is a route, and each block's request spends the
       /// credential of the act that made it (`GitCredentialSpent`).
-      Forwarded : string list
+      Forwarded : ConnectionName list
       /// Where this host could not give exactly what the sandbox's resources named, one line
       /// each. Empty is the ordinary case and says nothing.
       ///
@@ -168,10 +168,20 @@ module WorkSandboxStarted =
     /// nothing declared, nothing forwarded, nothing rescoped - because a seam printed over
     /// a single clause stands for content that is not there.
     let particulars (s: WorkSandboxStarted) : Phrase list =
+        // Each connection a REFERENCE: the prose reader spells it by name, a screen draws it
+        // as that connection is drawn everywhere else — the same GitHub the sidebar's panel
+        // is about, not a bare word that happens to match.
         let forwarded =
             match s.Forwarded with
             | [] -> None
-            | names -> Some (sprintf "forwarding %s" (String.concat ", " names))
+            | names ->
+                Some (
+                    Segment.Text "forwarding "
+                    :: (names
+                        |> List.mapi (fun i name ->
+                            let reference = Segment.Ref (EntityRef.Connection name)
+                            if i = 0 then [ reference ] else [ Segment.Text ", "; reference ])
+                        |> List.concat))
         // Where this host could not give what the sandbox's resources named. On the start
         // NOTE rather than a note of its own, because it is a property of THIS sandbox coming
         // up - a separate item would be a second thing to correlate, and the correlation is
@@ -188,7 +198,11 @@ module WorkSandboxStarted =
         // What it is for, where its checkout sits, whose credential rode in, and what this
         // host could not give exactly are separate facts, not clauses chained onto the
         // headline - each is its own phrase, so each stays its own fact.
-        List.choose id [ s.Description; checkout; forwarded; realisation ] |> List.map Phrase.text
+        List.choose id
+            [ s.Description |> Option.map Phrase.text
+              checkout |> Option.map Phrase.text
+              forwarded
+              realisation |> Option.map Phrase.text ]
 
 module WorkSandboxStarting =
 

@@ -1249,7 +1249,7 @@ module Codec =
                       // Names only. There is no branch of this codec that can carry a
                       // credential VALUE, which is the point: the log is replicated to
                       // every peer, and a shape that could hold a token eventually does.
-                      "forwarded", Encode.list (p.Forwarded |> List.map Encode.string)
+                      "forwarded", Encode.list (p.Forwarded |> List.map (ConnectionName.value >> Encode.string))
                       "realisation", Encode.list (p.Realisation |> List.map Encode.string)
                       "actor", actor.Encode p.Actor ]
           Decode =
@@ -1267,7 +1267,8 @@ module Codec =
                     get.Optional.Field "checkout" (Decode.option Decode.string) |> Option.flatten
                   // A `credentialOwner` beside it in an older log is left unread: a start
                   // no longer has one, and what it said is not a fact this version can act on.
-                  WorkSandboxStarted.Forwarded = get.Required.Field "forwarded" (Decode.list Decode.string)
+                  WorkSandboxStarted.Forwarded =
+                    get.Required.Field "forwarded" (Decode.list (viaSmartCtor ConnectionName.create Decode.string))
                   // Optional on the way in, and this is the only backward-compatible reading
                   // available: a start written before this field existed has no answer, and
                   // absent is the right one — nothing was measured, so nothing is claimed.

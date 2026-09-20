@@ -1171,6 +1171,39 @@ let private uiChecklistTests =
             Expect.equal text (ConversationItem.said note) "the disclosure reads exactly as the prompt did"
             Expect.isTrue (text.Contains "on branch main") "particulars included, not the headline alone"
 
+        // A connection a sandbox forwards is drawn as the connection — the same reference
+        // every other sentence gives it — not as a badge that happens to carry the word.
+        // That it is a reference to the connection is the promise; the mark is the design.
+        testCase "a sandbox start's forwarded connection is drawn as the connection" <| fun () ->
+            let github = ConnectionName.create "github" |> expect
+            let start : ConversationItem =
+                { MessageId = MessageId.create "msg-start" |> expect
+                  Author = ActorRef.Agent
+                  Content =
+                    ItemContent.Act (
+                        Act.SandboxStarted
+                            { MessageId = MessageId.create "msg-start" |> expect
+                              Sandbox = SandboxRef.defaultRef
+                              Backend = "srt"
+                              Description = None
+                              Checkout = None
+                              Forwarded = [ github ]
+                              Realisation = []
+                              Actor = ActorRef.Agent })
+                  Status = Complete
+                  Offset = EventOffset.create 1L |> expect
+                  Woke = None; Replying = None }
+            let model =
+                { representativeModel with
+                    Conversation = { representativeModel.Conversation with Items = [ start ] } }
+            let html = Support.render model
+            let fact = html.IndexOf (Dom.attr "data-act-fact" "forwarded")
+            Expect.isTrue (fact >= 0) "the forwarding is on the start"
+            let row = html.Substring (fact, html.IndexOf ("</div>", fact) - fact)
+            Expect.isTrue
+                (row.Contains (Dom.attr "data-entity" (EntityRef.said (EntityRef.Connection github))))
+                "and what it forwards is the connection, as a reference"
+
         // The other half, and the reason the detail is an option rather than an empty
         // string: an act that is already one clause must not grow a blank second line under
         // it, which reads as something withheld.

@@ -1141,7 +1141,7 @@ Async.StartImmediate (
             SandboxRuntime.scopedBackend workBackend (SandboxRef.scope sandbox)
             |> Sandboxes.hostAddressHere (Interop.hostname ())
         let forwardableCredentials : WorkSandboxes.CredentialSource list =
-            [ { Name = "github"
+            [ { Name = GitHubConnection.connectionName
                 // The route, and only the route: nobody's credential is named at a start.
                 // Each block is lent its own act's below, and a sandbox whose blocks are
                 // all somebody with no github connected is a sandbox where every push is

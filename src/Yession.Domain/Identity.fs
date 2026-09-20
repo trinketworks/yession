@@ -269,6 +269,19 @@ module ConnectionName =
         normalize "ConnectionName" raw |> Result.map (fun s -> ConnectionName (s.ToLowerInvariant ()))
     let value (ConnectionName s) = s
 
+    /// A forwarding list as WRITTEN becomes the list as ASKED: each name constructed (so
+    /// case-folded and trimmed), a blank dropped rather than refused — an empty entry in a
+    /// file is nothing to forward, not a reason to refuse the sandbox — then deduplicated
+    /// and sorted, so two asks that mean the same thing compare equal. Without this,
+    /// `["github"]` and `["GitHub", "github"]` would be a configuration CHANGE, and the
+    /// second ask would be refused for no reason a caller could see. It lived in the
+    /// sandbox registry as a pass over raw strings; a `ConnectionName list` has had it.
+    let normalise (raw: string list) : ConnectionName list =
+        raw
+        |> List.choose (fun name -> match create name with Ok n -> Some n | Error _ -> None)
+        |> List.distinct
+        |> List.sortBy value
+
 /// Who an event or action is attributed to. `UserRef` is a durable human identity the
 /// Manager verified; `PeerRef` is a client connection — the fallback attribution when no
 /// authentication strategy binds a user to the connection.

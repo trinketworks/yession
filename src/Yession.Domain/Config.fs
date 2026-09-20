@@ -287,7 +287,9 @@ module SandboxDecl =
                       Runtime = runtime
                       Setup = decl.Setup
                       ReposAt = decl.Repos }
-                  Forward = decl.Forward }
+                  // As written becomes as asked, here and nowhere else: what the registry
+                  // compares has already been normalised by construction.
+                  Forward = ConnectionName.normalise decl.Forward }
 
 /// One repo's whole file.
 type ConfigFile =

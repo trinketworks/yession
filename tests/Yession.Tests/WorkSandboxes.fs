@@ -56,7 +56,10 @@ let private isAct (item: ConversationItem) : bool =
 /// The ask most of these cases make: nothing in particular about the sandbox, some
 /// credentials forwarded into it. The spec half has its own cases below.
 let private forwarding (names: string list) : SandboxRequest =
-    { SandboxRequest.defaults with Forward = names }
+    { SandboxRequest.defaults with Forward = ConnectionName.normalise names }
+
+/// The one connection these cases forward, as a name.
+let private github : ConnectionName = ConnectionName.create "github" |> expect
 
 /// An ask that differs from the default in the SPEC rather than the forwarding — the half
 /// only a declared sandbox has ever been able to name.
@@ -138,7 +141,7 @@ let private caller : ActorRef = ActorRef.Agent
 /// it was asked to take back, which is the pair the revoke cases compare.
 let private githubSource (route: string) : WorkSandboxes.CredentialSource * ResizeArray<string> =
     let revoked = ResizeArray<string> ()
-    { Name = "github"
+    { Name = github
       Provision =
         fun _ ->
             async {
@@ -204,10 +207,10 @@ let private normaliseTests =
         // as a configuration change for a difference nobody made.
         testCase "normalise so an equivalent ask is an equal ask" <| fun () ->
             Expect.equal
-                (WorkSandboxes.normaliseForward [ " GitHub "; "github"; ""; "aws" ])
+                (ConnectionName.normalise [ " GitHub "; "github"; ""; "aws" ] |> List.map ConnectionName.value)
                 [ "aws"; "github" ]
                 "trimmed, lowercased, deduped, sorted"
-            Expect.equal (WorkSandboxes.normaliseForward []) [] "nothing stays nothing"
+            Expect.equal (ConnectionName.normalise []) [] "nothing stays nothing"
     ]
 
 // --- the ensure contract --------------------------------------------------------------------
@@ -460,7 +463,7 @@ let private ensureTests =
                 let! restarted = sandboxes.Ensure caller (sandbox "test") (forwarding [ "github" ])
                 Expect.equal
                     (WorkSandboxes.SandboxOutcome.sandbox (expect restarted)).Request.Forward
-                    [ "github" ]
+                    [ github ]
                     "the new configuration takes"
                 let! events = eventsOf log
                 Expect.equal (List.length (startedEvents events)) 2 "both starts are recorded"
@@ -592,7 +595,7 @@ let private credentialTests =
                 let! started = sandboxes.Ensure caller (sandbox "test") (forwarding [ "github" ])
                 Expect.equal
                     (WorkSandboxes.SandboxOutcome.sandbox (expect started)).Request.Forward
-                    [ "github" ]
+                    [ github ]
                     "it forwards what was asked"
 
                 let _, provision = built |> Seq.find (fun (name, _) -> name = "test")
@@ -601,7 +604,7 @@ let private credentialTests =
                 let! events = eventsOf log
                 match startedEvents events with
                 | [ e ] ->
-                    Expect.equal e.Forwarded [ "github" ] "the event names the credential"
+                    Expect.equal e.Forwarded [ github ] "the event names the credential"
                     Expect.equal e.Actor ActorRef.Agent "and the acting party"
                 | other -> failwithf "expected one start, got %A" other
 
@@ -628,7 +631,7 @@ let private credentialTests =
                 let! events = eventsOf log
                 match startedEvents events with
                 | [ e ] ->
-                    Expect.equal e.Forwarded [ "github" ] "with the route"
+                    Expect.equal e.Forwarded [ github ] "with the route"
                     Expect.equal e.Actor (ActorRef.Configured repo) "by the file"
                 | other -> failwithf "expected one start, got %A" other
             }
@@ -673,7 +676,7 @@ let private credentialTests =
             async {
                 let log = newLog ()
                 let source : WorkSandboxes.CredentialSource =
-                    { Name = "github"
+                    { Name = github
                       Provision = fun _ -> async { return WorkSandboxes.CredentialForwarding.Unforwardable "no route from here" }
                       Revoke = ignore
                       Lend = fun _ _ _ _ -> async { return BlockEnv.none }
@@ -827,7 +830,7 @@ let private timelineTests =
                           Backend = "srt"
                           Description = None
                           Checkout = None
-                          Forwarded = [ "github" ]
+                          Forwarded = [ github ]
                           Realisation = []
                           Actor = ActorRef.Agent } }
             let proj, _ = ConversationProjection.applyEvents None [ envelope ] ConversationProjection.empty
@@ -842,10 +845,33 @@ let private timelineTests =
                     "what went in is on the note, and nobody's name"
                 match item.Content with
                 | ItemContent.Act (Act.SandboxStarted s) ->
-                    Expect.equal s.Forwarded [ "github" ] "the note carries the sandbox's typed facts, for a screen to arrange"
+                    Expect.equal s.Forwarded [ github ] "the note carries the sandbox's typed facts, for a screen to arrange"
                 | _ -> failwith "a sandbox start is an act carrying its facts, not a message"
                 Expect.equal item.Author ActorRef.Agent "attributed to whoever acted"
             | other -> failwithf "expected one note, got %A" other
+
+        // What a start forwards is a REFERENCE to the connection, not the word that names
+        // it: the prose reader spells it `github`, a screen draws the same GitHub the
+        // sidebar's panel is about. The sentence case above cannot tell the two apart.
+        testCase "a forwarding start points at each connection it forwards" <| fun () ->
+            let aws = ConnectionName.create "aws" |> expect
+            let started : WorkSandboxStarted =
+                { MessageId = MessageId.create "msg-1" |> expect
+                  Sandbox = sandbox "test"
+                  Backend = "srt"
+                  Description = None
+                  Checkout = None
+                  Forwarded = [ aws; github ]
+                  Realisation = []
+                  Actor = ActorRef.Agent }
+            Expect.equal
+                (WorkSandboxStarted.particulars started |> List.collect Phrase.refs)
+                [ EntityRef.Connection aws; EntityRef.Connection github ]
+                "one reference per connection, in the order forwarded"
+            Expect.equal
+                (WorkSandboxStarted.particulars started |> List.map Phrase.said)
+                [ "forwarding aws, github" ]
+                "and the prose reader still gets the one clause"
 
         // The person whose credential was spent finds out HERE: the block that pushed is on
         // the timeline already, but a block says what ran, not whose key went out on it.

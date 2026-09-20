@@ -99,17 +99,27 @@ module Entity =
     /// points at it. `data-entity` carries the prose spelling (`EntityRef.said`), so a test
     /// can find the element for a thing without knowing what the design calls it.
     ///
-    /// The mark says the KIND — a person's checker, the repository glyph — and the host a
-    /// repository lives on is the link's to say, not the mark's: a reference that leads
-    /// somewhere is a real `<a>`, keyboard-reachable like every action on the page. A
-    /// connection's mark comes with the act that first draws one.
+    /// The mark a connection wears: its provider's own, for the providers this client knows
+    /// by name, and a key for any other — what a connection IS is a credential somebody
+    /// signed in for. The table is HERE, beside the other marks, rather than a field on the
+    /// name: a name is a fact the log carries and a mark is a fact about this screen.
+    let connectionMark (connection: ConnectionName) : TemplateResult =
+        match ConnectionName.value connection with
+        | "github" -> Icon.githubSm
+        | _ -> Icon.keySm
+
+    /// The mark says the KIND — a person's checker, the repository glyph, a connection's
+    /// provider — and the host a repository lives on is the link's to say, not the mark's:
+    /// a reference that leads somewhere is a real `<a>`, keyboard-reachable like every
+    /// action on the page.
     let render (model: ClientModel) (entity: EntityRef) : TemplateResult =
         let mark =
             match entity with
             | EntityRef.Actor actor ->
                 html $"""<span class="{Style.cls [ Style.avatarSm; actorMark model actor ]}" aria-hidden="true"></span>"""
             | EntityRef.Repo _ -> html $"""<span class="{Style.entityMark}" aria-hidden="true">{Icon.repoSm}</span>"""
-            | EntityRef.Connection _ -> Lit.nothing
+            | EntityRef.Connection connection ->
+                html $"""<span class="{Style.entityMark}" aria-hidden="true">{connectionMark connection}</span>"""
         let inner = html $"""{mark}<span class="{Style.entityName}">{name model entity}</span>"""
         match href entity with
         | Some url ->

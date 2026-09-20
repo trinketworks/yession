@@ -44,6 +44,13 @@ let secretName : SecretName =
     | Ok name -> name
     | Error e -> failwithf "github secret name invariant violated: %s" e
 
+/// The same name as the CONNECTION a sandbox forwards and a sentence points at — one
+/// spelling, beside the secret it stores under, so the two cannot drift.
+let connectionName : ConnectionName =
+    match ConnectionName.create "github" with
+    | Ok name -> name
+    | Error e -> failwithf "github connection name invariant violated: %s" e
+
 /// GitHub's device-flow endpoints. There is no default client id: the operator
 /// registers their own GitHub App (device flow enabled; user-token expiration may stay
 /// on — the grant leg stores the refresh token with the Manager, which rotates the
