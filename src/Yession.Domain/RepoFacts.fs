@@ -171,7 +171,7 @@ module RepoConfigRefused =
     /// which is also why it is the headline there and not a particular under one.
     let phrase (r: RepoConfigRefused) : Phrase =
         match r.Sandbox with
-        | Some sandbox -> Phrase.text (sprintf "could not start sandbox %s" (SandboxRef.render sandbox))
+        | Some sandbox -> [ Segment.Text "could not start sandbox "; Segment.Ref (EntityRef.Sandbox sandbox) ]
         | None -> Phrase.text r.Reason
 
     let particulars (r: RepoConfigRefused) : Phrase list =

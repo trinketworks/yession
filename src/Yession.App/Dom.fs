@@ -669,6 +669,7 @@ module Dom =
         // A sandbox-start act note's fact labels (`View.sandboxStartFacts`). One quiet word
         // each: the screen labels the parts the sentence would have chained into prose.
         let sandboxFactFor = "for"
+        let sandboxFactBackend = "backend"
         let sandboxFactCheckout = "checkout"
         let sandboxFactForwarding = "forwarding"
         let sandboxFactAdjusted = "adjusted"

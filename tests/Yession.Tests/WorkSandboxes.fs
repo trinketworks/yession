@@ -873,6 +873,21 @@ let private timelineTests =
                 [ "forwarding aws, github" ]
                 "and the prose reader still gets the one clause"
 
+        // The sandbox a start names is a REFERENCE: prose spells it whole, a screen draws it
+        // as that sandbox — and, under the repo that declared it, by its bare name.
+        testCase "a start points at its sandbox" <| fun () ->
+            let started : WorkSandboxStarted =
+                { MessageId = MessageId.create "msg-1" |> expect
+                  Sandbox = sandbox "test"
+                  Backend = "srt"
+                  Description = None
+                  Checkout = None
+                  Forwarded = []
+                  Realisation = []
+                  Actor = ActorRef.Agent }
+            Expect.equal (Phrase.refs (WorkSandboxStarted.phrase started)) [ EntityRef.Sandbox (sandbox "test") ] "the sandbox, once"
+            Expect.equal (Phrase.said (WorkSandboxStarted.phrase started)) "started sandbox test (srt)" "and prose says it whole"
+
         // The person whose credential was spent finds out HERE: the block that pushed is on
         // the timeline already, but a block says what ran, not whose key went out on it.
         testCase "a push reads as the act, naming the repository and who it was done for" <| fun () ->
