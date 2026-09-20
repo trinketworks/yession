@@ -130,13 +130,39 @@ let private envelopeSerializationTests =
             Expect.equal roundTripped original "round-trip should be identical"
     ]
 
-/// What an act note said beyond its headline. A reader rather than a match at every call
-/// site: the split is the thing under test in several cases here, and a case that has to
-/// destructure a union to ask its question reads as being about the union.
+/// What an act note said beyond its headline, as the prose reader joins it. A reader rather
+/// than a match at every call site: the split is the thing under test in several cases here,
+/// and a case that has to destructure a union to ask its question reads as being about the
+/// union.
 let private noteDetail (item: ConversationItem) : string option =
-    match item.Kind with
-    | ConversationItemKind.ActNote facts -> facts.Detail
-    | ConversationItemKind.Message -> None
+    match item.Content with
+    | ItemContent.Act act ->
+        match Act.particulars act with
+        | [] -> None
+        | particulars -> Some (particulars |> List.map Phrase.said |> String.concat "; ")
+    | ItemContent.Message _ -> None
+
+let private isAct (item: ConversationItem) : bool =
+    match item.Content with
+    | ItemContent.Act _ -> true
+    | ItemContent.Message _ -> false
+
+/// Two acts for the cases that need one of each and do not care which: an ordinary one,
+/// and one that opens a chapter by nature (`Act.notable`).
+let private ordinaryAct : Act =
+    Act.RepoRemoved
+        { MessageId = MessageId.create "act-ordinary" |> expect
+          Repo = RepoRef.create "octo/hello" |> expect
+          Actor = ActorRef.Agent }
+
+let private notableAct : Act =
+    Act.SandboxSetupQueued
+        { MessageId = MessageId.create "act-notable" |> expect
+          Sandbox = SandboxRef.defaultRef
+          Command = "make ready"
+          Handle = None
+          Problem = Some "the terminal could not be opened"
+          Actor = ActorRef.SessionProcess }
 
 let private conversationProjectionTests =
     let sessionId = SessionId.create "session-proj" |> expect
@@ -642,7 +668,7 @@ let private shellProfileTests =
                 ConversationProjection.applyEvents None [ envelope ] ConversationProjection.empty
             match proj.Items with
             | [ item ] ->
-                Expect.equal item.Body "new terminals in default start in /repos/octo/hello" "the line says where"
+                Expect.equal (ConversationItem.headline item) "new terminals in default start in /repos/octo/hello" "the line says where"
                 Expect.equal item.Author ActorRef.Agent "attributed to whoever set it"
             | other -> failwithf "expected one act-note, got %A" other
 
@@ -752,10 +778,8 @@ let private repoTests =
                       Timestamp = DateTimeOffset(2026, 8, 8, 10, 0, 0, TimeSpan.Zero)
                       Event = event })
             let proj, _ = ConversationProjection.applyEvents None envelopes ConversationProjection.empty
-            Expect.isTrue
-                (proj.Items |> List.forall (fun i -> match i.Kind with ConversationItemKind.ActNote _ -> true | _ -> false))
-                "all notes"
-            Expect.equal (proj.Items |> List.map (fun i -> i.Body))
+            Expect.isTrue (proj.Items |> List.forall isAct) "all notes"
+            Expect.equal (proj.Items |> List.map ConversationItem.headline)
                 [ "added repo octo/hello"; "switched octo/hello to branch fix/y"; "removed repo octo/hello" ]
                 "the notes read as sentences"
             Expect.equal (proj.Items |> List.map noteDetail)
@@ -785,7 +809,7 @@ let private repoTests =
             let proj, _ = ConversationProjection.applyEvents None [ envelope ] ConversationProjection.empty
             match proj.Items with
             | [ item ] ->
-                Expect.equal item.Body "failed add_repo octo/hello" "the headline names the act"
+                Expect.equal (ConversationItem.headline item) "failed add_repo octo/hello" "the headline names the act"
                 Expect.equal (noteDetail item) (Some "github says not found") "the particulars say why"
                 Expect.equal item.Author ActorRef.System "said by the process: nobody refused it"
             | other -> failwithf "one note expected, got %A" other
@@ -799,33 +823,38 @@ let private repoTests =
             let note : ConversationItem =
                 { MessageId = MessageId.create "n1" |> expect
                   Author = ActorRef.Agent
-                  Body = "started sandbox work (srt)"
+                  Content =
+                    ItemContent.Act (
+                        Act.RepoAdded
+                            { MessageId = MessageId.create "n1" |> expect
+                              Repo = RepoRef.create "octo/hello" |> expect
+                              Branch = "main"
+                              Actor = ActorRef.Agent
+                              AgentsMd = None })
                   Status = Complete
-                  Kind = ConversationItemKind.ActNote { Detail = Some "forwarding github from user:ada"; Notable = false; SandboxStarted = None }
                   Offset = EventOffset.create 1L |> expect
                   Woke = None; Replying = None }
             Expect.equal
                 (ConversationItem.said note)
-                "started sandbox work (srt) — forwarding github from user:ada"
+                "added repo octo/hello — on branch main"
                 "both halves, in one sentence"
 
         // And nothing invented where there is no second half: a seam printed over an item
         // that has one clause is punctuation standing for content that does not exist.
         testCase "an item holding nothing back says exactly its body" <| fun () ->
-            let item kind : ConversationItem =
+            let item content : ConversationItem =
                 { MessageId = MessageId.create "n1" |> expect
                   Author = ActorRef.Agent
-                  Body = "removed repo octo/hello"
+                  Content = content
                   Status = Complete
-                  Kind = kind
                   Offset = EventOffset.create 1L |> expect
                   Woke = None; Replying = None }
             Expect.equal
-                (ConversationItem.said (item (ConversationItemKind.ActNote { Detail = None; Notable = false; SandboxStarted = None })))
+                (ConversationItem.said (item (ItemContent.Act ordinaryAct)))
                 "removed repo octo/hello"
                 "an act with one clause"
             Expect.equal
-                (ConversationItem.said (item ConversationItemKind.Message))
+                (ConversationItem.said (item (ItemContent.Message "removed repo octo/hello")))
                 "removed repo octo/hello"
                 "and a message, which never has a second half at all"
 
@@ -850,7 +879,7 @@ let private repoTests =
                               RepoCapabilitiesChanged.Actor = ActorRef.SessionProcess } }
                 let proj, _ = ConversationProjection.applyEvents None [ envelope ] ConversationProjection.empty
                 match proj.Items with
-                | [ item ] -> item.Body, noteDetail item
+                | [ item ] -> ConversationItem.headline item, noteDetail item
                 | other -> failwithf "expected one note, got %A" other
             Expect.equal
                 (asked [ "/nix, read-only"; "reaches cache.nixos.org"; "reaches anywhere (sensitive)" ])
@@ -877,25 +906,23 @@ let private repoTests =
             let proj, _ = ConversationProjection.applyEvents None [ envelope ] ConversationProjection.empty
             match proj.Items with
             | [ item ] ->
-                Expect.equal item.Body "asks for /nix, read-only" "the grant itself"
+                Expect.equal (ConversationItem.headline item) "asks for /nix, read-only" "the grant itself"
                 Expect.equal (noteDetail item) None "and no second line restating it"
             | other -> failwithf "expected one note, got %A" other
     ]
 
 let private chapterTests =
     /// Somebody's own words, unless a case says otherwise — what a name is made from.
-    let itemSaying id body kind : ConversationItem =
+    let itemSaying id content : ConversationItem =
         { MessageId = MessageId.create id |> expect
           Author = ActorRef.UserRef (UserId.create "ada" |> expect)
-          Body = body
+          Content = content
           Status = Complete
-          Kind = kind
           Offset = EventOffset.create 1L |> expect
           Woke = None; Replying = None }
-    let item id kind = itemSaying id "something happened" kind
-    let notable = item "n" (ConversationItemKind.ActNote { Detail = None; Notable = true; SandboxStarted = None })
-    let ordinary = item "o" (ConversationItemKind.ActNote { Detail = None; Notable = false; SandboxStarted = None })
-    let said = item "s" ConversationItemKind.Message
+    let notable = itemSaying "n" (ItemContent.Act notableAct)
+    let ordinary = itemSaying "o" (ItemContent.Act ordinaryAct)
+    let said = itemSaying "s" (ItemContent.Message "something happened")
     /// What somebody's verdict alone looks like, without a name over it — the shape a doc
     /// written before chapters had names decodes to, and the one an auto-chapter keeps.
     let verdict (item: ConversationItem) (opens: bool) =
@@ -945,12 +972,12 @@ let private chapterTests =
         // A message is markdown, and a chapter is a line. The first line is the part of a
         // message a person wrote as its subject, whether or not they meant to.
         testCase "a message is named by its first line" <| fun () ->
-            let message = itemSaying "m" "Do both ends.\nUpstream so it fails loudly." ConversationItemKind.Message
+            let message = itemSaying "m" (ItemContent.Message "Do both ends.\nUpstream so it fails loudly.")
             Expect.equal (Chapters.defaultName message) "Do both ends." "the first line, and only it"
 
         testCase "a long first line is cut on a word boundary, and says it was cut" <| fun () ->
             let message =
-                itemSaying "m" "Upstream: capture under pipefail and refuse an empty result" ConversationItemKind.Message
+                itemSaying "m" (ItemContent.Message "Upstream: capture under pipefail and refuse an empty result")
             let name = Chapters.defaultName message
             Expect.isTrue (name.EndsWith "…") (sprintf "a cut name says so, got %s" name)
             Expect.isFalse (name.Contains "resul…") "and the cut falls between words, not inside one"
@@ -959,20 +986,20 @@ let private chapterTests =
         // taking a headline and making a worse headline.
         testCase "a short act headline is its whole name" <| fun () ->
             let act =
-                itemSaying "a" "PR octo/hello#12 merged" (ConversationItemKind.ActNote { Detail = None; Notable = true; SandboxStarted = None })
-            Expect.equal (Chapters.defaultName act) "PR octo/hello#12 merged" "nothing to cut"
+                itemSaying "a" (ItemContent.Act notableAct)
+            Expect.equal (Chapters.defaultName act) "default could not start its setup" "nothing to cut"
 
         // The guess reads the line's WORDS. A line that opens with markdown opens with
         // punctuation that says how it is set, not what it says.
         testCase "a line that opens with markdown is named by what it says" <| fun () ->
-            let bulleted = itemSaying "b" "- ship the guard first" ConversationItemKind.Message
+            let bulleted = itemSaying "b" (ItemContent.Message "- ship the guard first")
             Expect.equal (Chapters.defaultName bulleted) "ship the guard first" "the bullet is not the name"
 
         // The name belongs to the SESSION from the moment the chapter does, so every peer
         // reads the same words — and the person who wants to change them has something to
         // change rather than an empty field.
         testCase "opening a chapter writes the guess down" <| fun () ->
-            let message = itemSaying "m" "Do both ends." ConversationItemKind.Message
+            let message = itemSaying "m" (ItemContent.Message "Do both ends.")
             Expect.equal (nameIn message (Chapters.toggle message Map.empty)) (Some "Do both ends.") "seeded, not left empty"
 
         // A mis-tap costs a chapter, never a sentence.
@@ -993,8 +1020,8 @@ let private chapterTests =
         // entry at all until somebody touches it, and a decoded doc written before names
         // has an entry with nothing in it. Both read as the guess.
         testCase "a chapter nobody has named is called what the message says" <| fun () ->
-            Expect.equal (Chapters.name Map.empty notable) "something happened" "no entry, still a name"
-            Expect.equal (Chapters.name (verdict notable true) notable) "something happened" "an empty name, still a name"
+            Expect.equal (Chapters.name Map.empty said) "something happened" "no entry, still a name"
+            Expect.equal (Chapters.name (verdict said true) said) "something happened" "an empty name, still a name"
 
         // Renaming is not a way to divide the session: what it writes down is the verdict the
         // item already carried, so naming a chapter that opened by itself leaves it open.
@@ -1026,34 +1053,34 @@ let private chapterTests =
         // What a reader takes a chapter to mean: this, and everything after it, until the
         // next chapter starts. Which is therefore what naming one has to read.
         testCase "a chapter covers its own stretch, up to where the next one begins" <| fun () ->
-            let a = itemSaying "a" "first" ConversationItemKind.Message
-            let b = itemSaying "b" "second" ConversationItemKind.Message
-            let c = itemSaying "c" "third" ConversationItemKind.Message
-            let d = itemSaying "d" "fourth" ConversationItemKind.Message
+            let a = itemSaying "a" (ItemContent.Message "first")
+            let b = itemSaying "b" (ItemContent.Message "second")
+            let c = itemSaying "c" (ItemContent.Message "third")
+            let d = itemSaying "d" (ItemContent.Message "fourth")
             let chapters =
                 Map.ofList
                     [ a.MessageId, { Opens = true; Name = Ylmish.Text.empty }
                       c.MessageId, { Opens = true; Name = Ylmish.Text.empty } ]
             Expect.equal
-                (Chapters.covers chapters [ a; b; c; d ] a |> List.map (fun i -> i.Body))
+                (Chapters.covers chapters [ a; b; c; d ] a |> List.map ConversationItem.said)
                 [ "first"; "second" ]
                 "up to the next chapter, and not past it"
 
         testCase "the last chapter covers the rest of the session" <| fun () ->
-            let a = itemSaying "a" "first" ConversationItemKind.Message
-            let b = itemSaying "b" "second" ConversationItemKind.Message
+            let a = itemSaying "a" (ItemContent.Message "first")
+            let b = itemSaying "b" (ItemContent.Message "second")
             let chapters = Map.ofList [ a.MessageId, { Opens = true; Name = Ylmish.Text.empty } ]
             Expect.equal
-                (Chapters.covers chapters [ a; b ] a |> List.map (fun i -> i.Body))
+                (Chapters.covers chapters [ a; b ] a |> List.map ConversationItem.said)
                 [ "first"; "second" ]
                 "nothing after it to stop at"
 
         // --- What to ask, and what to do with the answer -----------------------------------
 
         testCase "the ask carries the chapter's own stretch" <| fun () ->
-            let a = itemSaying "a" "first" ConversationItemKind.Message
-            let b = itemSaying "b" "second" ConversationItemKind.Message
-            let c = itemSaying "c" "third" ConversationItemKind.Message
+            let a = itemSaying "a" (ItemContent.Message "first")
+            let b = itemSaying "b" (ItemContent.Message "second")
+            let c = itemSaying "c" (ItemContent.Message "third")
             let chapters =
                 Map.ofList
                     [ a.MessageId, { Opens = true; Name = Ylmish.Text.empty }
@@ -1064,11 +1091,11 @@ let private chapterTests =
         // the shape of a chapter, and an ask that sent all of it would spend a model's
         // context on the part that moves a name least.
         testCase "a chapter longer than anybody reads is not sent whole" <| fun () ->
-            let long = itemSaying "l" (String.replicate 500 "word ") ConversationItemKind.Message
+            let long = itemSaying "l" (ItemContent.Message (String.replicate 500 "word "))
             let chapters = Map.ofList [ long.MessageId, { Opens = true; Name = Ylmish.Text.empty } ]
             let ask = Chapters.summaryAsk (Chapters.reading chapters [ long ] long) None
             let sent = ask.Lines |> List.sumBy (fun line -> line.Length)
-            Expect.isTrue (sent < long.Body.Length) "bounded, rather than the whole of it"
+            Expect.isTrue (sent < (ConversationItem.said long).Length) "bounded, rather than the whole of it"
 
         // A model writes prose. Every shape it writes that a name cannot hold is something
         // WRAPPING the words, so what comes back is unwrapped rather than rejected.
@@ -1457,7 +1484,7 @@ let private prWatchTests =
                       Event = event })
             let proj, _ = ConversationProjection.applyEvents None envelopes ConversationProjection.empty
             Expect.equal
-                (proj.Items |> List.map (fun i -> i.Body))
+                (proj.Items |> List.map ConversationItem.headline)
                 [ "PR octo/hello#12 watched"
                   "PR octo/hello#12 merged"
                   "PR octo/hello#12 unwatched" ]
@@ -1470,19 +1497,14 @@ let private prWatchTests =
                 (proj.Items |> List.map (fun i -> i.Author))
                 [ PeerRef ada; PeerRef ada; PeerRef ada ]
                 "a transition wears the watcher's name, not System's"
-            Expect.isTrue
-                (proj.Items |> List.forall (fun i -> match i.Kind with ConversationItemKind.ActNote _ -> true | _ -> false))
-                "all notes"
+            Expect.isTrue (proj.Items |> List.forall isAct) "all notes"
 
         // Which acts arrive on the rail without anybody asking. Deliberately a short list:
         // a transcript where everything opens a chapter has none. A watch and its news do because
         // a watch is the reason somebody is waiting; the unwatch is not, because it is where
         // the story stops being told rather than a place worth coming back to.
         testCase "a watch and its news are chapters; letting it go is not" <| fun () ->
-            let notable (item: ConversationItem) =
-                match item.Kind with
-                | ConversationItemKind.ActNote facts -> facts.Notable
-                | ConversationItemKind.Message -> false
+            let notable = ConversationItem.notable
             let envelopes =
                 [ PrWatched.create (msg "w1") (Authority.ofAuthor (Principal.Peer ada)) pr (snapshotOf PrOpen ChecksPending false)
                   |> expect
@@ -2753,9 +2775,8 @@ let private namingTests =
     let saying id body : ConversationItem =
         { MessageId = MessageId.create id |> expect
           Author = ActorRef.UserRef (UserId.create "ada" |> expect)
-          Body = body
+          Content = ItemContent.Message (body)
           Status = Complete
-          Kind = ConversationItemKind.Message
           Offset = EventOffset.create 1L |> expect
           Woke = None; Replying = None }
     /// A chapter opening at this item, wearing whatever is written on it.
@@ -2842,8 +2863,7 @@ let private namingTests =
         // note is a sentence somebody already wrote short.
         testCase "a chapter no doc entry opens is not a subject" <| fun () ->
             let act =
-                { saying "n" "PR octo/hello#12 merged" with
-                    Kind = ConversationItemKind.ActNote { Detail = None; Notable = true; SandboxStarted = None } }
+                { saying "n" "PR octo/hello#12 merged" with Content = ItemContent.Act notableAct }
             Expect.isTrue (Chapters.opens Map.empty act) "it does open a chapter"
             Expect.equal (chaptersOwed Map.empty Map.empty [ act ]) [] "and it is still not named"
 
@@ -2963,7 +2983,7 @@ let private namingTests =
             let noted =
                 { saying "b" "repo octo/hello added" with
                     Author = ActorRef.SessionProcess
-                    Kind = ConversationItemKind.ActNote { Detail = None; Notable = true; SandboxStarted = None } }
+                    Content = ItemContent.Act notableAct }
             Expect.equal
                 (Naming.owed Map.empty "" Map.empty [ asked; noted ] |> List.collect (fun job -> job.Ask.Lines))
                 [ "fix the refresh token" ]

@@ -498,15 +498,15 @@ module TimelineProjection =
             | TaskDone -> None
         match item with
         | TimelineMessage item ->
-            match item.Kind with
-            | ConversationItemKind.ActNote _ ->
+            match item.Content with
+            | ItemContent.Act _ ->
                 match item.Status with
                 | ConversationItemStatus.Running -> Some TaskRunning
                 | ConversationItemStatus.Failed -> Some TaskFailed
                 | ConversationItemStatus.Complete
                 | ConversationItemStatus.Streaming
                 | ConversationItemStatus.Interrupted -> None
-            | ConversationItemKind.Message -> None
+            | ItemContent.Message _ -> None
         | TimelineBlock (_, _, blockId) -> blockStatus blockId |> Option.map TaskCard.stateOf |> Option.bind live
         | TimelineToolUse (_, id) ->
             match toolUse id proj with

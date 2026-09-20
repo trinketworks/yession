@@ -111,3 +111,70 @@ and RepoConfigRefused =
       /// The repo's file, as the party that asked (`ActorRef.Configured`) — the same
       /// attribution its successful starts carry.
       Actor : ActorRef }
+
+// --- What each repo act SAYS ----------------------------------------------------------------
+// The sentence an event writes into the timeline lives beside the event, for the reason
+// `WorkSandboxStarted.phrase` does: what an event's leaves MEAN is knowledge that belongs
+// with the event, not assembled by whatever folds it. `Act.phrase` (Acts.fs) dispatches here;
+// the fold composes nothing. A `Phrase` rather than a string, so a reader that is a screen
+// can draw what the sentence points at — today every phrase here is text, and the first to
+// carry a reference changes nothing about where it lives.
+
+module RepoAdded =
+
+    let phrase (r: RepoAdded) : Phrase = Phrase.text (sprintf "added repo %s" (RepoRef.value r.Repo))
+
+    let particulars (r: RepoAdded) : Phrase list = [ Phrase.text (sprintf "on branch %s" r.Branch) ]
+
+module RepoRemoved =
+
+    let phrase (r: RepoRemoved) : Phrase = Phrase.text (sprintf "removed repo %s" (RepoRef.value r.Repo))
+
+module RepoBranchSwitched =
+
+    let phrase (r: RepoBranchSwitched) : Phrase =
+        if r.Created then Phrase.text (sprintf "created branch %s in %s" r.Branch (RepoRef.value r.Repo))
+        else Phrase.text (sprintf "switched %s to branch %s" (RepoRef.value r.Repo) r.Branch)
+
+module RepoCapabilitiesChanged =
+
+    /// What a repo asks for, when it changed. A person reading the timeline sees the whole
+    /// set rather than the diff: a diff answers "what moved", and the question somebody
+    /// actually has to answer is "is THIS the access I am content for this checkout to
+    /// have" — which needs the whole of it.
+    let phrase (c: RepoCapabilitiesChanged) : Phrase =
+        match c.Granted with
+        | [] -> Phrase.text "asks for nothing"
+        | [ one ] -> Phrase.text (sprintf "asks for %s" one)
+        | granted -> Phrase.text (sprintf "asks for %d capabilities" (List.length granted))
+
+    /// The whole set, never a count on its own: the particulars are rendered beside the
+    /// headline rather than behind a disclosure, so what a person has to decide about is
+    /// still on the screen. One clause, because one is already the headline.
+    let particulars (c: RepoCapabilitiesChanged) : Phrase list =
+        match c.Granted with
+        | []
+        | [ _ ] -> []
+        | granted -> [ Phrase.text (String.concat "; " granted) ]
+
+module RepoCapabilitiesApproved =
+
+    let phrase (a: RepoCapabilitiesApproved) : Phrase =
+        Phrase.text (sprintf "approved what %s asks for" (RepoRef.value a.Repo))
+
+module RepoConfigRefused =
+
+    /// Said in the refusal's own words rather than summarised: the `repo_config` query is
+    /// showing that same sentence, and two renderings of one refusal are two things free to
+    /// disagree. When it is the FILE itself, the reason already names the repo and the path
+    /// inside the file, so anything in front of it would be a second copy of what it says —
+    /// which is also why it is the headline there and not a particular under one.
+    let phrase (r: RepoConfigRefused) : Phrase =
+        match r.Sandbox with
+        | Some sandbox -> Phrase.text (sprintf "could not start sandbox %s" (SandboxRef.render sandbox))
+        | None -> Phrase.text r.Reason
+
+    let particulars (r: RepoConfigRefused) : Phrase list =
+        match r.Sandbox with
+        | Some _ -> [ Phrase.text r.Reason ]
+        | None -> []

@@ -570,9 +570,9 @@ let startFull
                                     // it just did, and an answer that read them back to it
                                     // would be the call describing itself.
                                     item.Author <> ActorRef.Agent
-                                    && (match item.Kind with
-                                        | Yession.Domain.Chat.ConversationItemKind.ActNote _ -> true
-                                        | _ -> false))
+                                    && (match item.Content with
+                                        | Yession.Domain.Chat.ItemContent.Act _ -> true
+                                        | Yession.Domain.Chat.ItemContent.Message _ -> false))
                                 |> List.map Yession.Domain.Chat.ConversationItem.said
                     } }
 

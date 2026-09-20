@@ -441,7 +441,7 @@ let private processTests =
                 do! compose a a.Hello.PeerId "hello from another process"
                 a.Connection.SendDraft a.Hello.PeerId
                 do! a.Runner.WaitFor (fun m ->
-                        m.Conversation.Items |> List.exists (fun i -> i.Body = "hello from another process"))
+                        m.Conversation.Items |> List.exists (fun i -> (ConversationItem.said i) = "hello from another process"))
                 do! a.Channel.Close ()
 
                 // Stop is graceful and reflected; resume is just launch — over the same
@@ -454,7 +454,7 @@ let private processTests =
                 let! b = connectClient (sprintf "http://127.0.0.1:%d/signal" resumedPort) reopened.PeerToken "grace" "Grace"
                 do! b.Runner.WaitFor (fun m ->
                         not m.EventConsumer.IsCatchingUp
-                        && (m.Conversation.Items |> List.exists (fun i -> i.Body = "hello from another process")))
+                        && (m.Conversation.Items |> List.exists (fun i -> (ConversationItem.said i) = "hello from another process")))
                 do! b.Channel.Close ()
 
                 // A crash (killed outside the Manager) is observed, isolates to the
@@ -587,7 +587,7 @@ let private controlRpcTests =
                 // unconfined default would fail here instead of passing quietly.
                 do! a.Runner.WaitFor (fun m ->
                         (m.Conversation.Items
-                         |> List.exists (fun i -> i.Author = ActorRef.Agent && i.Status = Complete && i.Body.Contains "diagnostic-ok"))
+                         |> List.exists (fun i -> i.Author = ActorRef.Agent && i.Status = Complete && (ConversationItem.said i).Contains "diagnostic-ok"))
                         && (match m.Environment with EnvironmentRunning ref -> ref = "srt" | _ -> false)
                         // The diagnostic agent's command is a terminal BLOCK now (Plan 13,
                         // stage 3b): the read-only command log retired with the merged tool.
@@ -1734,9 +1734,9 @@ let private compositionTests =
                 do! compose a a.Hello.PeerId "built binaries talking"
                 a.Connection.SendDraft a.Hello.PeerId
                 do! a.Runner.WaitFor (fun m ->
-                        (m.Conversation.Items |> List.exists (fun i -> i.Body = "built binaries talking"))
+                        (m.Conversation.Items |> List.exists (fun i -> (ConversationItem.said i) = "built binaries talking"))
                         && (m.Conversation.Items
-                            |> List.exists (fun i -> i.Author = ActorRef.Agent && i.Status = Complete && i.Body.Contains "diagnostic-ok"))
+                            |> List.exists (fun i -> i.Author = ActorRef.Agent && i.Status = Complete && (ConversationItem.said i).Contains "diagnostic-ok"))
                         && (match m.Environment with EnvironmentRunning _ -> true | _ -> false)
                         && (m.Terminals.Terminals
                             |> List.exists (fun t ->
@@ -1752,7 +1752,7 @@ let private compositionTests =
                 let! b = connectClient (sprintf "http://127.0.0.1:%d/signal" resumedPort) openedB.PeerToken "grace" "Grace"
                 do! b.Runner.WaitFor (fun m ->
                         not m.EventConsumer.IsCatchingUp
-                        && (m.Conversation.Items |> List.exists (fun i -> i.Body = "built binaries talking")))
+                        && (m.Conversation.Items |> List.exists (fun i -> (ConversationItem.said i) = "built binaries talking")))
                 do! b.Channel.Close ()
 
                 // Kill the manager (its children die with it), restart over the same
@@ -1768,7 +1768,7 @@ let private compositionTests =
                 let! c = connectClient (sprintf "http://127.0.0.1:%d/signal" relaunchedPort) openedC.PeerToken "carol" "Carol"
                 do! c.Runner.WaitFor (fun m ->
                         not m.EventConsumer.IsCatchingUp
-                        && (m.Conversation.Items |> List.exists (fun i -> i.Body = "built binaries talking")))
+                        && (m.Conversation.Items |> List.exists (fun i -> (ConversationItem.said i) = "built binaries talking")))
                 do! c.Channel.Close ()
                 do! manager2.Shutdown ()
             }

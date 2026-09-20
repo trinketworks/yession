@@ -34,6 +34,22 @@ let private draftQueueId = QueueId.create "queue-ui-draft" |> expect
 let private ada = PeerId.create "ada" |> expect
 let private bob = PeerId.create "bob" |> expect
 let private carol = UserId.create "carol@example.com" |> expect
+
+/// Two acts for the cases that need one and do not care which: one clause, and one with a
+/// particular under it.
+let private repoRemoved (repo: string) : Act =
+    Act.RepoRemoved
+        { MessageId = MessageId.create "act-removed" |> expect
+          Repo = RepoRef.create repo |> expect
+          Actor = PeerRef ada }
+
+let private repoAdded (repo: string) (branch: string) : Act =
+    Act.RepoAdded
+        { MessageId = MessageId.create "act-added" |> expect
+          Repo = RepoRef.create repo |> expect
+          Branch = branch
+          Actor = PeerRef ada
+          AgentsMd = None }
 let private sessionId = SessionId.create "demo-session" |> expect
 let private terminalId = TerminalId.create "term-ui" |> expect
 let private blockId = BlockId.create "block-ui" |> expect
@@ -102,16 +118,14 @@ let private representativeModel : ClientModel =
         { Items =
             [ { MessageId = MessageId.create "msg-1" |> expect
                 Author = PeerRef ada
-                Body = "ship it"
+                Content = ItemContent.Message ("ship it")
                 Status = Complete
-                Kind = ConversationItemKind.Message
                 Offset = EventOffset.create 1L |> expect
                 Woke = None; Replying = None }
               { MessageId = MessageId.create "msg-agent" |> expect
                 Author = ActorRef.Agent
-                Body = "Sounds go"
+                Content = ItemContent.Message ("Sounds go")
                 Status = Streaming
-                Kind = ConversationItemKind.Message
                 Offset = EventOffset.create 4L |> expect
                 Woke = None; Replying = None } ]
           ActiveAgentMessages = Map.ofList [ turnId, MessageId.create "msg-agent" |> expect ]
@@ -271,7 +285,7 @@ let private silentTurnModel : ClientModel =
             { representativeModel.Conversation with
                 Items =
                     representativeModel.Conversation.Items
-                    |> List.map (fun item -> if item.Status = Streaming then { item with Body = "" } else item) } }
+                    |> List.map (fun item -> if item.Status = Streaming then { item with Content = ItemContent.Message "" } else item) } }
 
 /// Nothing running: the last turn finished and nobody has asked for another.
 let private restingModel : ClientModel =
@@ -1026,9 +1040,8 @@ let private uiChecklistTests =
             let richItem : ConversationItem =
                 { MessageId = MessageId.create "msg-rich" |> expect
                   Author = PeerRef ada
-                  Body = "# Heading one\n\nText with **bold** and `code`.\n\n- item one\n- item two"
+                  Content = ItemContent.Message ("# Heading one\n\nText with **bold** and `code`.\n\n- item one\n- item two")
                   Status = Complete
-                  Kind = ConversationItemKind.Message
                   Offset = EventOffset.create 1L |> expect
                   Woke = None; Replying = None }
             let model =
@@ -1057,9 +1070,8 @@ let private uiChecklistTests =
             let note : ConversationItem =
                 { MessageId = MessageId.create "msg-repo-note" |> expect
                   Author = PeerRef ada
-                  Body = "added repo octo/hello (branch main)"
+                  Content = ItemContent.Act (repoRemoved "octo/hello")
                   Status = Complete
-                  Kind = ConversationItemKind.ActNote { Detail = None; Notable = false; SandboxStarted = None }
                   Offset = EventOffset.create 1L |> expect
                   Woke = None; Replying = None }
             let model =
@@ -1067,7 +1079,7 @@ let private uiChecklistTests =
                     Conversation = { representativeModel.Conversation with Items = [ note ] } }
             let html = Support.render model
             Expect.isTrue (html.Contains "data-act-note") "the note hook renders"
-            Expect.isTrue (html.Contains "added repo octo/hello (branch main)") "the act reads as its sentence"
+            Expect.isTrue (html.Contains "removed repo octo/hello") "the act reads as its sentence"
             let noteStart = html.IndexOf "data-act-note"
             let article = html.Substring (html.LastIndexOf ("<article", noteStart), 300)
             Expect.isFalse (article.Contains "data-message-body") "no message body — it is not something someone said"
@@ -1082,9 +1094,8 @@ let private uiChecklistTests =
             let note : ConversationItem =
                 { MessageId = MessageId.create "msg-sandbox-note" |> expect
                   Author = PeerRef ada
-                  Body = "started sandbox work (srt)"
+                  Content = ItemContent.Act (repoAdded "octo/hello" "main")
                   Status = Complete
-                  Kind = ConversationItemKind.ActNote { Detail = Some "forwarding github from user:ada"; Notable = false; SandboxStarted = None }
                   Offset = EventOffset.create 1L |> expect
                   Woke = None; Replying = None }
             let model =
@@ -1097,10 +1108,10 @@ let private uiChecklistTests =
             // a failure of this case rather than of whatever it is watching.
             let openedAt = html.LastIndexOf ("<article", noteStart)
             let article = html.Substring (openedAt, html.IndexOf ("</article>", openedAt) - openedAt)
-            Expect.isTrue (article.Contains "started sandbox work (srt)") "the headline is what the act was"
+            Expect.isTrue (article.Contains "added repo octo/hello") "the headline is what the act was"
             Expect.isTrue (article.Contains "data-act-detail") "and the particulars are their own element"
             let detail = article.Substring (article.IndexOf "data-act-detail")
-            Expect.isTrue (detail.Contains "forwarding github from user:ada") "carrying what the headline left out"
+            Expect.isTrue (detail.Contains "on branch main") "carrying what the headline left out"
 
         // The other half, and the reason the detail is an option rather than an empty
         // string: an act that is already one clause must not grow a blank second line under
@@ -1109,9 +1120,8 @@ let private uiChecklistTests =
             let note : ConversationItem =
                 { MessageId = MessageId.create "msg-plain-note" |> expect
                   Author = PeerRef ada
-                  Body = "removed repo octo/hello"
+                  Content = ItemContent.Act (repoRemoved "octo/hello")
                   Status = Complete
-                  Kind = ConversationItemKind.ActNote { Detail = None; Notable = false; SandboxStarted = None }
                   Offset = EventOffset.create 1L |> expect
                   Woke = None; Replying = None }
             let model =
@@ -1131,9 +1141,8 @@ let private uiChecklistTests =
             let agentItem (messageId: MessageId) (woke: WakeReason option) : ConversationItem =
                 { MessageId = messageId
                   Author = ActorRef.Agent
-                  Body = "the build finished"
+                  Content = ItemContent.Message ("the build finished")
                   Status = Complete
-                  Kind = ConversationItemKind.Message
                   Offset = EventOffset.create 1L |> expect
                   Woke = woke; Replying = None }
             let model =
@@ -1234,9 +1243,8 @@ let private uiChecklistTests =
             let saidBy id at =
                 { MessageId = MessageId.create id |> expect
                   Author = PeerRef ada
-                  Body = "ship it"
+                  Content = ItemContent.Message ("ship it")
                   Status = Complete
-                  Kind = ConversationItemKind.Message
                   Offset = EventOffset.create at |> expect
                   Woke = None; Replying = None }
             let first = saidBy "msg-a" 1L
@@ -1293,9 +1301,8 @@ let private uiChecklistTests =
             let silent =
                 { MessageId = MessageId.create "msg-silent" |> expect
                   Author = PeerRef ada
-                  Body = ""
+                  Content = ItemContent.Message ("")
                   Status = Complete
-                  Kind = ConversationItemKind.Message
                   Offset = EventOffset.create 9L |> expect
                   Woke = None; Replying = None }
             Expect.equal
@@ -1310,12 +1317,11 @@ let private uiChecklistTests =
             // Both kinds explicitly: the representative fixture is all messages, so a case
             // counting only it would pass with the control missing from every act note in the
             // product — which is exactly half of what a timeline holds.
-            let item id kind : ConversationItem =
+            let item id content : ConversationItem =
                 { MessageId = MessageId.create id |> expect
                   Author = PeerRef ada
-                  Body = "something happened"
+                  Content = content
                   Status = Complete
-                  Kind = kind
                   Offset = EventOffset.create 1L |> expect
                   Woke = None; Replying = None }
             let model =
@@ -1323,8 +1329,8 @@ let private uiChecklistTests =
                     Conversation =
                         { representativeModel.Conversation with
                             Items =
-                                [ item "said" ConversationItemKind.Message
-                                  item "done" (ConversationItemKind.ActNote { Detail = None; Notable = false; SandboxStarted = None }) ] } }
+                                [ item "said" (ItemContent.Message "something happened")
+                                  item "done" (ItemContent.Act (repoRemoved "octo/hello")) ] } }
             let html = Support.render model
             Expect.equal (occurrences "data-message-id=" html) 2 "a message and an act"
             Expect.equal (occurrences "data-item-actions=" html) 2 "one control per item, none left out"
@@ -2127,9 +2133,8 @@ let private semanticsTests =
                     { Items =
                         [ { MessageId = MessageId.create "msg-bob" |> expect
                             Author = PeerRef bob
-                            Body = "on it"
+                            Content = ItemContent.Message ("on it")
                             Status = Complete
-                            Kind = ConversationItemKind.Message
                             Offset = EventOffset.create 1L |> expect
                             Woke = None; Replying = None } ]
                       ActiveAgentMessages = Map.empty; WokenTurn = None; TriggeredTurn = None }
@@ -2173,9 +2178,8 @@ let private semanticsTests =
                             { Items =
                                 [ { MessageId = MessageId.create "msg-carol" |> expect
                                     Author = UserRef carol
-                                    Body = "on it"
+                                    Content = ItemContent.Message ("on it")
                                     Status = Complete
-                                    Kind = ConversationItemKind.Message
                                     Offset = EventOffset.create 1L |> expect
                                     Woke = None; Replying = None } ]
                               ActiveAgentMessages = Map.empty; WokenTurn = None; TriggeredTurn = None }
@@ -2199,9 +2203,8 @@ let private semanticsTests =
                             { Items =
                                 [ { MessageId = MessageId.create "msg-carol" |> expect
                                     Author = UserRef carol
-                                    Body = "on it"
+                                    Content = ItemContent.Message ("on it")
                                     Status = Complete
-                                    Kind = ConversationItemKind.Message
                                     Offset = EventOffset.create 1L |> expect
                                     Woke = None; Replying = None } ]
                               ActiveAgentMessages = Map.empty; WokenTurn = None; TriggeredTurn = None }
@@ -2229,9 +2232,8 @@ let private semanticsTests =
                             { Items =
                                 [ { MessageId = MessageId.create "msg-carol" |> expect
                                     Author = UserRef carol
-                                    Body = "on it"
+                                    Content = ItemContent.Message ("on it")
                                     Status = Complete
-                                    Kind = ConversationItemKind.Message
                                     Offset = EventOffset.create 1L |> expect
                                     Woke = None; Replying = None } ]
                               ActiveAgentMessages = Map.empty; WokenTurn = None; TriggeredTurn = None }
@@ -2282,9 +2284,8 @@ let private semanticsTests =
                         { Items =
                             [ { MessageId = MessageId.create "msg-carol" |> expect
                                 Author = UserRef carol
-                                Body = "on it"
+                                Content = ItemContent.Message ("on it")
                                 Status = Complete
-                                Kind = ConversationItemKind.Message
                                 Offset = EventOffset.create 1L |> expect
                                 Woke = None; Replying = None } ]
                           ActiveAgentMessages = Map.empty; WokenTurn = None; TriggeredTurn = None }
@@ -2297,6 +2298,25 @@ let private semanticsTests =
                 html.Substring (start, html.IndexOf ("</div>", start) - start)
             Expect.isTrue (rosterRow.Contains mark) "the roster row wears the person's mark"
             Expect.isTrue ((messageMetaOfLabel (UserId.value carol) html).Contains mark) "and so does the chat's author line"
+
+        // A sentence that points at a person shows the person — the name the roster knows,
+        // drawn as they are drawn everywhere else — and never their subject. The prose reader
+        // gets `user:carol@example.com`; a screen has a roster and uses it. What is pinned is
+        // that the reference element carries the resolved name and not the raw one; how a
+        // reference is drawn is the design.
+        testCase "a phrase's reference to a person is drawn as the person, not their subject" <| fun () ->
+            let model =
+                { representativeModel with
+                    Peers = Map.ofList [ bob, "quiet-otter" ]
+                    Attribution = { Attribution.empty with PeerUsers = Map.ofList [ bob, carol ]; UserPeers = Map.ofList [ carol, bob ] } }
+            let phrase = [ Segment.Text "pushed on behalf of "; Segment.Ref (EntityRef.Actor (UserRef carol)) ]
+            let html = Entity.phrase model phrase |> List.map Support.renderTemplate |> String.concat ""
+            let start = html.IndexOf (Dom.attr "data-entity" (EntityRef.said (EntityRef.Actor (UserRef carol))))
+            Expect.isTrue (start >= 0) "the reference is its own element, found by the prose spelling"
+            let element = html.Substring start
+            Expect.isTrue (element.Contains ">quiet-otter<") "and it shows the person's name"
+            Expect.isFalse (element.Contains ">carol@example.com<") "never the subject as a name"
+            Expect.isTrue (html.StartsWith "pushed on behalf of ") "the words around it are words"
 
         // A destructive control offered over nothing is a live-looking button that does not do
         // anything, and the way a working one and a dead one come to look identical. Whether

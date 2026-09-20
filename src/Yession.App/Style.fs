@@ -561,6 +561,14 @@ module Style =
     let avatar = "w-5 h-5 shrink-0"
     let avatarSm = "w-3.5 h-3.5 shrink-0"
 
+    // --- A thing a sentence points at (`Entity.render`) ---------------------------------
+    // Mark and name, inline in the sentence's own line: an entity is part of what is being
+    // said, not a chip beside it. The name one step brighter than the words around it, so
+    // WHO and WHAT is where the eye lands first — the step `actNoteWho` took for the
+    // author before acts folded under a shared author line.
+    let entity = "inline-flex items-center gap-1 align-baseline"
+    let entityName = "text-ink"
+
     let private checker (a: string) (b: string) =
         sprintf "bg-[conic-gradient(from_0deg,%s_25%%,%s_0_50%%,%s_0_75%%,%s_0)]" a b a b
 

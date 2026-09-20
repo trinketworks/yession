@@ -23,67 +23,29 @@ type ConversationItemStatus =
     /// (`Timeline.taskState`).
     | Running
 
-/// What an act has to say beyond its headline. The fold KNOWS which half of a sentence is
-/// the gist and which is the particulars — it built both from an event whose shape it
-/// matched — so the split is made here rather than by a renderer hunting for a punctuation
-/// mark in finished prose. A view that split on an em-dash would be re-parsing its own copy,
-/// and every rewording would silently move the seam.
+/// What an item in the timeline IS (Plan 14): something someone SAID, or something someone
+/// DID. A message is one body — markdown, streamed in. An act carries the facts of what was
+/// done (`Act`), and nothing else: not a sentence, which is a reader's to make, and not a
+/// detail string, which was the same sentence's second half stored beside its first.
 ///
-/// `None` is an act that is already one clause. Most are: "removed repo octo/hello" has no
-/// second half to withhold, and inventing one would pad every short line into looking like a
-/// long one.
-type ActNoteFacts =
-    { Detail : string option
-      /// Whether this act opens a chapter BY NATURE — one nobody had to ask for.
-      ///
-      /// It is the fold's to say, for the same reason `Detail` is: the fold matched the
-      /// event, and a renderer deciding this would be deciding it by reading the finished
-      /// sentence. What is notable is deliberately a short list — a transcript where
-      /// everything opens a chapter has none — and `Chapters` is where a person's own
-      /// verdict overrides it in either direction.
-      Notable : bool
-      /// The typed facts of a sandbox start, when this note is one - carried so a SCREEN can
-      /// arrange its fields itself (drop the checkout that is only the convention, badge a
-      /// forwarded credential rather than fold it into a clause) instead of reading the one
-      /// sentence `said` builds. `None` on every other act, which a screen still renders from
-      /// `Detail`.
-      ///
-      /// It rides beside `Detail`, not instead of it: the sentence every non-screen reader
-      /// needs and the fields a screen arranges are two renderings of the same event, and
-      /// NEITHER is parsed from the other - `said` asks `WorkSandboxStarted.detail`, the view
-      /// matches these fields, both from `SandboxesFacts`. The FIRST act laid out field by
-      /// field; a second would make this a small union of the ones that are, which is when
-      /// that union earns its place rather than before.
-      SandboxStarted : Yession.Domain.Sandboxes.WorkSandboxStarted option }
-
-/// What an item in the timeline IS (Plan 14). A message is something someone said; a
-/// repo note is something someone DID (added/removed/switched a repo), folded into the
-/// same ordered list so humans see it where it happened and the agent's context —
-/// built from this projection — carries the same history. Distinguished by a field
-/// rather than by author or body convention, so a renderer can style a note without
-/// parsing anything.
+/// One union rather than a `Body` beside a `Kind`, so a message cannot be written carrying
+/// an act's facts and an act cannot be written carrying a body nobody built from its facts.
+/// Distinguished by a case rather than by author or body convention, so a renderer can
+/// style a note without parsing anything — and every act lands in one case, because the
+/// timeline is how a human sees what was done on their behalf, and a kind per capability
+/// would be a renderer per capability.
 [<RequireQualifiedAccess>]
-type ConversationItemKind =
-    | Message
-    /// Something a party DID, rather than said: a repo added, a sandbox started. Named
-    /// for the category rather than for repos (Plan 15) because every command the agent
-    /// gains lands here — the timeline is how a human sees what was done on their behalf,
-    /// and a kind per capability would be a renderer per capability.
-    ///
-    /// It carries what only an ACT can have: a message is one body with no particulars to
-    /// hold back, so the facts ride the case rather than the item — and a message cannot be
-    /// written carrying a detail it could never show.
-    | ActNote of ActNoteFacts
+type ItemContent =
+    | Message of body: string
+    | Act of Act
 
 type ConversationItem =
     { MessageId : MessageId
       Author    : ActorRef
-      /// What a message said — and, on an act note, only its HEADLINE: the particulars are
-      /// in `ActNoteFacts.Detail` beside it. A reader that is not a screen wants both, and
-      /// `ConversationItem.said` is the one that gives both. See it for why.
-      Body      : string
+      /// What was said, or what was done. A reader that is not a screen wants a sentence
+      /// either way, and `ConversationItem.said` is the one that gives it. See it for why.
+      Content   : ItemContent
       Status    : ConversationItemStatus
-      Kind      : ConversationItemKind
       /// The offset of the event at which this item first SAID something — the message that
       /// was sent, the note that was made, or the agent's first word (Plan 14, stage 1).
       /// Later deltas and the completion move the body and the status; they never move the
@@ -136,23 +98,28 @@ module ConversationItem =
     /// It lives here rather than in each of those readers for the ordinary reason: a rule
     /// about how an act's two halves compose is a rule about the act, and a caller that had
     /// to remember to ask for the second half is a caller that will one day not.
-    let rec said (item: ConversationItem) : string =
-        match item.Kind with
-        // A sandbox start holds its facts, not a sentence. Turn them into the same detail
-        // string every describe produces, then let the join below draw the seam exactly as
-        // it does for any other note - so the agent's reader and the screen's never diverge,
-        // and this stays the one place the seam is drawn.
-        | ConversationItemKind.ActNote ({ SandboxStarted = Some s } as facts) ->
-            said
-                { item with
-                    Kind =
-                        ConversationItemKind.ActNote
-                            { facts with
-                                SandboxStarted = None
-                                Detail = Yession.Domain.Sandboxes.WorkSandboxStarted.detail s } }
-        | ConversationItemKind.ActNote { Detail = Some detail } -> item.Body + " — " + detail
-        | ConversationItemKind.ActNote _
-        | ConversationItemKind.Message -> item.Body
+    let said (item: ConversationItem) : string =
+        match item.Content with
+        | ItemContent.Message body -> body
+        | ItemContent.Act act ->
+            let headline = Phrase.said (Act.phrase act)
+            match Act.particulars act with
+            | [] -> headline
+            | particulars -> headline + " — " + (particulars |> List.map Phrase.said |> String.concat "; ")
+
+    /// The headline alone — what a message said, or the one sentence an act leads with.
+    /// For a reader that has its own way of showing the particulars, or none: a chapter's
+    /// default name is cut from this, not from the whole account.
+    let headline (item: ConversationItem) : string =
+        match item.Content with
+        | ItemContent.Message body -> body
+        | ItemContent.Act act -> Phrase.said (Act.phrase act)
+
+    /// Whether this act opens a chapter by nature. A message never does.
+    let notable (item: ConversationItem) : bool =
+        match item.Content with
+        | ItemContent.Act act -> Act.notable act
+        | ItemContent.Message _ -> false
 
     /// Whether this is a person's OWN words — which is the only thing a name is made from.
     ///
@@ -165,8 +132,8 @@ module ConversationItem =
     /// It lives here rather than in the naming rule because it is a fact about an item, and
     /// the naming rule is not the only reader that will want to know whose words these are.
     let personal (item: ConversationItem) : bool =
-        match item.Kind, item.Author with
-        | ConversationItemKind.Message, (ActorRef.UserRef _ | ActorRef.PeerRef _) -> true
+        match item.Content, item.Author with
+        | ItemContent.Message _, (ActorRef.UserRef _ | ActorRef.PeerRef _) -> true
         | _ -> false
 
 /// One chapter, as the session holds it: whether one opens at this message, and what it is
@@ -261,16 +228,14 @@ module Chapters =
     /// A GUESS, and the only one. It stands until something better is written over it — by the
     /// person reading, or by whatever answers `summaryAsk` below — and `unwritten` is what says
     /// a chapter is still wearing it.
-    let defaultName (item: ConversationItem) : string = cutToLimit (headline item.Body)
+    let defaultName (item: ConversationItem) : string = cutToLimit (headline (ConversationItem.headline item))
 
     /// Whether a chapter opens at this item.
     let opens (chapters: Map<MessageId, ChapterMark>) (item: ConversationItem) : bool =
         match chapters |> Map.tryFind item.MessageId with
         | Some mark -> mark.Opens
         | None ->
-            match item.Kind with
-            | ConversationItemKind.ActNote facts -> facts.Notable
-            | ConversationItemKind.Message -> false
+            ConversationItem.notable item
 
     /// The name as the session HOLDS it: empty where nobody has written one.
     ///
@@ -394,7 +359,7 @@ module Chapters =
         reading
         |> List.truncate ReadItems
         |> List.map (fun i ->
-            let body = i.Body.Trim ()
+            let body = (ConversationItem.said i).Trim ()
             if body.Length <= ReadChars then body else body.Substring (0, ReadChars) + "…")
         |> List.filter (fun line -> line <> "")
 
@@ -532,6 +497,53 @@ module ConversationProjection =
     /// Why the given turn exists, if nobody asked for it. Matched on the turn id rather than
     /// taken on trust: a late event from a turn the wake did not start must not inherit the
     /// current one's reason.
+    /// One act, appended where it happened. What it says is the act's own (`Act.phrase`),
+    /// and every arm that notes something hands over the facts and nothing else.
+    let private noted
+        (messageId: MessageId)
+        (actor: ActorRef)
+        (act: Act)
+        (envelope: EventEnvelope<SessionEvent>)
+        (proj: ConversationProjection)
+        : ConversationProjection =
+        { proj with
+            Items =
+                proj.Items
+                @ [ { MessageId = messageId
+                      Author = actor
+                      Content = ItemContent.Act act
+                      Status = Complete
+                      Offset = envelope.Offset
+                      Woke = None; Replying = None } ] }
+
+    /// An act that RESOLVES a running one in place — the same id, a settled status and the
+    /// facts of how it settled. A log written before the running half existed has no such
+    /// item, so the act is appended as it always was; an id is either there or not, so the
+    /// two readings never both fire.
+    let private resolved
+        (messageId: MessageId)
+        (actor: ActorRef)
+        (act: Act)
+        (status: ConversationItemStatus)
+        (envelope: EventEnvelope<SessionEvent>)
+        (proj: ConversationProjection)
+        : ConversationProjection =
+        if proj.Items |> List.exists (fun i -> i.MessageId = messageId) then
+            { proj with
+                Items =
+                    proj.Items
+                    |> updateItem messageId (fun item -> { item with Content = ItemContent.Act act; Status = status }) }
+        else
+            { proj with
+                Items =
+                    proj.Items
+                    @ [ { MessageId = messageId
+                          Author = actor
+                          Content = ItemContent.Act act
+                          Status = status
+                          Offset = envelope.Offset
+                          Woke = None; Replying = None } ] }
+
     let private wokeBy (turnId: AgentTurnId) (proj: ConversationProjection) : WakeReason option =
         match proj.WokenTurn with
         | Some (woken, reason) when woken = turnId -> Some reason
@@ -564,9 +576,8 @@ module ConversationProjection =
                     proj.Items
                     @ [ { MessageId = m.MessageId
                           Author = Principal.toActor m.Author
-                          Body = m.Body
+                          Content = ItemContent.Message m.Body
                           Status = Complete
-                          Kind = ConversationItemKind.Message
                           Offset = envelope.Offset
                           Woke = None; Replying = None } ] }
         // Lifecycle; the item appears at `AgentMessageStarted`. What is remembered here is
@@ -624,44 +635,11 @@ module ConversationProjection =
         // a session-shaping act ("we are now working on X, on branch Y") that reads like
         // a sentence, carries no output stream, and is exactly what a joining human or
         // the agent's next turn needs to know. Each note rides the Process-minted
-        // MessageId its event carries.
-        | SessionEvent.RepoAdded r ->
-            { proj with
-                Items =
-                    proj.Items
-                    @ [ { MessageId = r.MessageId
-                          Author = r.Actor
-                          Body = sprintf "added repo %s" (RepoRef.value r.Repo)
-                          Status = Complete
-                          Kind =
-                            ConversationItemKind.ActNote
-                                { Detail = Some (sprintf "on branch %s" r.Branch); Notable = false; SandboxStarted = None }
-                          Offset = envelope.Offset
-                          Woke = None; Replying = None } ] }
-        | SessionEvent.RepoRemoved r ->
-            { proj with
-                Items =
-                    proj.Items
-                    @ [ { MessageId = r.MessageId
-                          Author = r.Actor
-                          Body = sprintf "removed repo %s" (RepoRef.value r.Repo)
-                          Status = Complete
-                          Kind = ConversationItemKind.ActNote { Detail = None; Notable = false; SandboxStarted = None }
-                          Offset = envelope.Offset
-                          Woke = None; Replying = None } ] }
-        | SessionEvent.RepoBranchSwitched r ->
-            { proj with
-                Items =
-                    proj.Items
-                    @ [ { MessageId = r.MessageId
-                          Author = r.Actor
-                          Body =
-                            if r.Created then sprintf "created branch %s in %s" r.Branch (RepoRef.value r.Repo)
-                            else sprintf "switched %s to branch %s" (RepoRef.value r.Repo) r.Branch
-                          Status = Complete
-                          Kind = ConversationItemKind.ActNote { Detail = None; Notable = false; SandboxStarted = None }
-                          Offset = envelope.Offset
-                          Woke = None; Replying = None } ] }
+        // MessageId its event carries, and carries the event's FACTS: what it says is
+        // `Act.phrase`'s, beside the event, and how a screen lays it out is the screen's.
+        | SessionEvent.RepoAdded r -> proj |> noted r.MessageId r.Actor (Act.RepoAdded r) envelope
+        | SessionEvent.RepoRemoved r -> proj |> noted r.MessageId r.Actor (Act.RepoRemoved r) envelope
+        | SessionEvent.RepoBranchSwitched r -> proj |> noted r.MessageId r.Actor (Act.RepoBranchSwitched r) envelope
         // Named WorkSandboxes (Plan 15, stage 2) fold in for the repo notes' reason and
         // one more: forwarding a credential into a sandbox is the most consequential thing
         // a command here does, and the timeline is where the person whose credential it is
@@ -677,244 +655,45 @@ module ConversationProjection =
                     proj.Items
                     @ [ { MessageId = s.MessageId
                           Author = s.Actor
-                          // Short headline, like the start it resolves into: which sandbox, on
-                          // what backend. What it is for rides the detail, not the headline.
-                          Body = sprintf "starting sandbox %s (%s)" (SandboxRef.render s.Sandbox) s.Backend
+                          Content = ItemContent.Act (Act.SandboxStarting s)
                           Status = Running
-                          Kind = ConversationItemKind.ActNote { Detail = s.Description; Notable = false; SandboxStarted = None }
                           Offset = envelope.Offset
                           Woke = None; Replying = None } ] }
-        | SessionEvent.WorkSandboxStarted s ->
-            // The note carries the event's TYPED facts, not a finished sentence. The screen
-            // arranges them itself (`View.actNoteItem` -> `SandboxStarted`); every other
-            // reader gets the sentence from `ConversationItem.said`, which asks the colocated
-            // `SandboxesFacts.WorkSandboxStarted.detail`. The fold composes neither, which is
-            // why `Detail` here is `None`.
-            let body = Yession.Domain.Sandboxes.WorkSandboxStarted.headline s
-            let resolve (item: ConversationItem) =
-                { item with
-                    Body = body
-                    Status = Complete
-                    Kind = ConversationItemKind.ActNote { Detail = None; Notable = false; SandboxStarted = Some s } }
-            // Resolve the running item this start's `WorkSandboxStarting` opened, in place. A
-            // start from a log written before `Starting` existed has no such item — so it is
-            // appended, exactly as it was before, and the two readings never both fire because
-            // an id is either already there or not.
-            if proj.Items |> List.exists (fun i -> i.MessageId = s.MessageId) then
-                { proj with Items = proj.Items |> updateItem s.MessageId resolve }
-            else
-                { proj with
-                    Items =
-                        proj.Items
-                        @ [ { MessageId = s.MessageId
-                              Author = s.Actor
-                              Body = body
-                              Status = Complete
-                              Kind = ConversationItemKind.ActNote { Detail = None; Notable = false; SandboxStarted = Some s }
-                              Offset = envelope.Offset
-                              Woke = None; Replying = None } ] }
+        // Resolve the running item this start's `WorkSandboxStarting` opened, in place. A
+        // start from a log written before `Starting` existed has no such item — so it is
+        // appended, exactly as it was before, and the two readings never both fire because
+        // an id is either already there or not.
+        | SessionEvent.WorkSandboxStarted s -> proj |> resolved s.MessageId s.Actor (Act.SandboxStarted s) Complete envelope
         // The sandbox could not come up: resolve its running item to a failure in place. Like
         // the start above, an id already present is updated and an absent one appended, so a
         // failure whose `Starting` predates this code still reads.
         | SessionEvent.WorkSandboxStartFailed s ->
-            let resolve (item: ConversationItem) =
-                { item with
-                    Body = sprintf "sandbox %s could not start" (SandboxRef.render s.Sandbox)
-                    Status = Failed
-                    Kind = ConversationItemKind.ActNote { Detail = Some s.Reason; Notable = false; SandboxStarted = None } }
-            if proj.Items |> List.exists (fun i -> i.MessageId = s.MessageId) then
-                { proj with Items = proj.Items |> updateItem s.MessageId resolve }
-            else
-                { proj with
-                    Items =
-                        proj.Items
-                        @ [ { MessageId = s.MessageId
-                              Author = s.Actor
-                              Body = sprintf "sandbox %s could not start" (SandboxRef.render s.Sandbox)
-                              Status = Failed
-                              Kind = ConversationItemKind.ActNote { Detail = Some s.Reason; Notable = false; SandboxStarted = None }
-                              Offset = envelope.Offset
-                              Woke = None; Replying = None } ] }
-        // The other outcome of a declaration, beside the start above. Said in the refusal's
-        // own words rather than summarised: the `repo_config` query is showing that same
-        // sentence, and two renderings of one refusal are two things free to disagree.
-        // What a repo asks for, when it changed. A person reading the timeline sees the whole
-        // set rather than the diff: a diff answers "what moved", and the question somebody
-        // actually has to answer is "is THIS the access I am content for this checkout to
-        // have" — which needs the whole of it.
-        | SessionEvent.RepoCapabilitiesChanged c ->
-            { proj with
-                Items =
-                    proj.Items
-                    @ [ { MessageId = c.MessageId
-                          Author = c.Actor
-                          Body =
-                            match c.Granted with
-                            | [] -> "asks for nothing"
-                            | [ one ] -> sprintf "asks for %s" one
-                            | granted -> sprintf "asks for %d capabilities" (List.length granted)
-                          Status = Complete
-                          // The whole set, never a count on its own: the detail is rendered
-                          // beside the headline rather than behind a disclosure, so what a
-                          // person has to decide about is still on the screen.
-                          Kind =
-                            ConversationItemKind.ActNote
-                                { Detail =
-                                    match c.Granted with
-                                    | []
-                                    | [ _ ] -> None
-                                    | granted -> Some (String.concat "; " granted)
-                                  Notable = false; SandboxStarted = None }
-                          Offset = envelope.Offset
-                          Woke = None; Replying = None } ] }
-        | SessionEvent.RepoCapabilitiesApproved a ->
-            { proj with
-                Items =
-                    proj.Items
-                    @ [ { MessageId = a.MessageId
-                          Author = a.Actor
-                          Body = sprintf "approved what %s asks for" (RepoRef.value a.Repo)
-                          Status = Complete
-                          Kind = ConversationItemKind.ActNote { Detail = None; Notable = false; SandboxStarted = None }
-                          Offset = envelope.Offset
-                          Woke = None; Replying = None } ] }
-        | SessionEvent.RepoConfigRefused r ->
-            { proj with
-                Items =
-                    proj.Items
-                    @ [ { MessageId = r.MessageId
-                          Author = r.Actor
-                          Body =
-                            match r.Sandbox with
-                            | Some sandbox -> sprintf "could not start sandbox %s" (SandboxRef.render sandbox)
-                            // The file itself. Its reason already names the repo and the
-                            // path inside the file, so anything in front of it would be a
-                            // second copy of what it says — which is also why it is the
-                            // headline here and not the detail under one.
-                            | None -> r.Reason
-                          Status = Complete
-                          Kind =
-                            ConversationItemKind.ActNote
-                                { Detail = r.Sandbox |> Option.map (fun _ -> r.Reason); Notable = false; SandboxStarted = None }
-                          Offset = envelope.Offset
-                          Woke = None; Replying = None } ] }
-        | SessionEvent.WorkSandboxStopped s ->
-            { proj with
-                Items =
-                    proj.Items
-                    @ [ { MessageId = s.MessageId
-                          Author = s.Actor
-                          Body = sprintf "stopped sandbox %s" (SandboxRef.render s.Sandbox)
-                          Status = Complete
-                          Kind = ConversationItemKind.ActNote { Detail = None; Notable = false; SandboxStarted = None }
-                          Offset = envelope.Offset
-                          Woke = None; Replying = None } ] }
+            proj |> resolved s.MessageId s.Actor (Act.SandboxStartFailed s) Failed envelope
+        // The other outcome of a declaration, beside the start above. What a repo asks for,
+        // when it changed; a person's yes to it; and the file that could not be honoured.
+        | SessionEvent.RepoCapabilitiesChanged c -> proj |> noted c.MessageId c.Actor (Act.RepoCapabilitiesChanged c) envelope
+        | SessionEvent.RepoCapabilitiesApproved a -> proj |> noted a.MessageId a.Actor (Act.RepoCapabilitiesApproved a) envelope
+        | SessionEvent.RepoConfigRefused r -> proj |> noted r.MessageId r.Actor (Act.RepoConfigRefused r) envelope
+        | SessionEvent.WorkSandboxStopped s -> proj |> noted s.MessageId s.Actor (Act.SandboxStopped s) envelope
         // Where new terminals start (Plan 25) folds in for the repo notes' reason: it is a
         // session-shaping act everyone is affected by — the next terminal a PERSON opens
         // lands there too — and the timeline is the only place they would learn it.
-        | SessionEvent.ShellProfileSet p ->
-            { proj with
-                Items =
-                    proj.Items
-                    @ [ { MessageId = p.MessageId
-                          Author = p.Actor
-                          Body =
-                            match p.WorkingDirectory with
-                            | Some cwd ->
-                                sprintf "new terminals in %s start in %s" (SandboxRef.render p.Sandbox) cwd
-                            | None ->
-                                sprintf
-                                    "new terminals in %s start where the sandbox puts them"
-                                    (SandboxRef.render p.Sandbox)
-                          Status = Complete
-                          Kind = ConversationItemKind.ActNote { Detail = None; Notable = false; SandboxStarted = None }
-                          Offset = envelope.Offset
-                          Woke = None; Replying = None } ] }
+        | SessionEvent.ShellProfileSet p -> proj |> noted p.MessageId p.Actor (Act.ShellProfileSet p) envelope
         // A refusal reads in the timeline beside the acts that happened, attributed to the
         // person who said no rather than to the agent that asked (Plan 15, stage 3). Same
         // reason `BlockRejected` renders in the terminal: an act that simply vanishes is
         // indistinguishable from a bug.
-        | SessionEvent.CommandRefused c ->
-            { proj with
-                Items =
-                    proj.Items
-                    @ [ { MessageId = c.MessageId
-                          Author = c.RejectedBy
-                          Body = sprintf "refused %s" c.Summary
-                          Status = Complete
-                          Kind = ConversationItemKind.ActNote { Detail = c.Reason; Notable = false; SandboxStarted = None }
-                          Offset = envelope.Offset
-                          Woke = None; Replying = None } ] }
+        | SessionEvent.CommandRefused c -> proj |> noted c.MessageId c.RejectedBy (Act.CommandRefused c) envelope
         // Its sibling, said by the process: nobody refused it; it ran and did not succeed.
-        | SessionEvent.GatedCommandFailed c ->
-            { proj with
-                Items =
-                    proj.Items
-                    @ [ { MessageId = c.MessageId
-                          Author = ActorRef.System
-                          Body = sprintf "failed %s" c.Summary
-                          Status = Complete
-                          Kind = ConversationItemKind.ActNote { Detail = Some c.Reason; Notable = false; SandboxStarted = None }
-                          Offset = envelope.Offset
-                          Woke = None; Replying = None } ] }
+        | SessionEvent.GatedCommandFailed c -> proj |> noted c.MessageId ActorRef.System (Act.GatedCommandFailed c) envelope
         // A repo's `setup:`, said because nobody in the session asked for it. Every other
         // block on this timeline is somebody here running something; this one appears in a
-        // terminal they will find busy, holding it until it finishes. The DETAIL carries the
-        // handle, which is what makes it actionable rather than merely honest — `said` gives
-        // the agent both, and a screen shows the headline with the mechanics beside it.
-        | SessionEvent.SandboxSetupQueued q ->
-            { proj with
-                Items =
-                    proj.Items
-                    @ [ { MessageId = q.MessageId
-                          Author = q.Actor
-                          Body =
-                            match q.Problem with
-                            | Some _ -> sprintf "%s could not start its setup" (SandboxRef.render q.Sandbox)
-                            | None -> sprintf "%s is running its setup: %s" (SandboxRef.render q.Sandbox) q.Command
-                          Status = Complete
-                          Kind =
-                            ConversationItemKind.ActNote
-                                { Detail =
-                                    match q.Handle, q.Problem with
-                                    | Some handle, _ ->
-                                        Some (
-                                            sprintf
-                                                "it holds that terminal until it finishes; check_pending with handle '%s' for the outcome"
-                                                (QueueId.value handle))
-                                    | None, Some problem -> Some problem
-                                    | None, None -> None
-                                  // Worth seeing when it FAILED: a sandbox whose setup never
-                                  // ran is a sandbox the next command pays for in full, and
-                                  // that is the case somebody should be told loudly.
-                                  Notable = q.Problem.IsSome; SandboxStarted = None }
-                          Offset = envelope.Offset
-                          Woke = None; Replying = None } ] }
+        // terminal they will find busy, holding it until it finishes.
+        | SessionEvent.SandboxSetupQueued q -> proj |> noted q.MessageId q.Actor (Act.SandboxSetupQueued q) envelope
         // A push spent somebody's credential. The person whose it was finds out HERE, which
         // is the reason the event exists: the block that pushed is on the timeline already,
-        // but a block says what ran, not whose key went out on it. The sentence leads with
-        // the act and names the person it was done for, the way the actor column reads —
-        // "agent pushed … on behalf of user:ada" — rather than with the credential, which
-        // is the mechanism. "Pushed to" is the request that went out, not github.com's
-        // answer to it: a branch protection or a rejected ref is git's to print, in the
-        // block.
-        | SessionEvent.GitCredentialSpent g ->
-            { proj with
-                Items =
-                    proj.Items
-                    @ [ { MessageId = g.MessageId
-                          Author = g.Actor
-                          Body =
-                            match g.Block with
-                            | Some _ -> sprintf "pushed to github:%s on behalf of %s" g.Repo (CredentialFor.token g.Owner)
-                            // Typed under a lease: no block on the timeline says what ran,
-                            // so this line says where it was typed.
-                            | None ->
-                                sprintf "pushed to github:%s on behalf of %s, holding the terminal" g.Repo (CredentialFor.token g.Owner)
-                          Status = Complete
-                          Kind = ConversationItemKind.ActNote { Detail = None; Notable = false; SandboxStarted = None }
-                          Offset = envelope.Offset
-                          Woke = None; Replying = None } ] }
+        // but a block says what ran, not whose key went out on it.
+        | SessionEvent.GitCredentialSpent g -> proj |> noted g.MessageId g.Actor (Act.CredentialSpent g) envelope
         // Reasoning is recorded and shown to NOBODY, and this case exists to say that is a
         // decision rather than an omission. It is a summary of what a model thought before it
         // acted: useful for asking why a turn did what it did, and not the same kind of thing
@@ -927,80 +706,17 @@ module ConversationProjection =
         // did it, and the DELTA only — the Process compares what it was last told, from
         // its own events, against the newly resolved set, so a boot, a reconnect and a
         // restart all emit nothing and only a genuine change by the operator is loud.
-        | SessionEvent.McpServerAvailable m ->
-            { proj with
-                Items =
-                    proj.Items
-                    @ [ { MessageId = m.MessageId
-                          Author = ActorRef.System
-                          Body = sprintf "you can now use the %s tools" (McpServerName.value m.Name)
-                          Status = Complete
-                          Kind = ConversationItemKind.ActNote { Detail = None; Notable = false; SandboxStarted = None }
-                          Offset = envelope.Offset
-                          Woke = None; Replying = None } ] }
-        | SessionEvent.McpServerUnavailable m ->
-            { proj with
-                Items =
-                    proj.Items
-                    @ [ { MessageId = m.MessageId
-                          Author = ActorRef.System
-                          Body = sprintf "the %s tools are no longer available" (McpServerName.value m.Name)
-                          Status = Complete
-                          Kind = ConversationItemKind.ActNote { Detail = None; Notable = false; SandboxStarted = None }
-                          Offset = envelope.Offset
-                          Woke = None; Replying = None } ] }
+        | SessionEvent.McpServerAvailable m -> proj |> noted m.MessageId ActorRef.System (Act.McpServerAvailable m) envelope
+        | SessionEvent.McpServerUnavailable m -> proj |> noted m.MessageId ActorRef.System (Act.McpServerUnavailable m) envelope
         // Watched pull requests fold in for the repo notes' reason: a watch is a
         // session-shaping act, and a transition is exactly what a joining human or the
         // agent's next turn needs to be told — the news arrived through no other door.
-        | SessionEvent.PrWatched p ->
-            let initial = PrWatched.initial p
-            { proj with
-                Items =
-                    proj.Items
-                    @ [ { MessageId = PrWatched.messageId p
-                          Author = PrWatched.actor p
-                          Body = sprintf "PR %s watched" (PrRef.render (PrWatched.pr p))
-                          Status = Complete
-                          Kind =
-                            ConversationItemKind.ActNote
-                                { Detail =
-                                    Some (
-                                        sprintf
-                                            "%s, %s%s"
-                                            (PrState.describe initial.State)
-                                            (ChecksRollup.describe initial.Checks)
-                                            (PrSnapshot.conflictClause initial.State initial.Mergeable))
-                                  // Where the waiting began. A chapter by nature, like the
-                                  // news that follows it — and unlike the unwatch below,
-                                  // which is where the story stops being told rather than a
-                                  // place worth coming back to.
-                                  Notable = true; SandboxStarted = None }
-                          Offset = envelope.Offset
-                          Woke = None; Replying = None } ] }
-        | SessionEvent.PrUnwatched p ->
-            { proj with
-                Items =
-                    proj.Items
-                    @ [ { MessageId = p.MessageId
-                          Author = p.Actor
-                          Body = sprintf "PR %s unwatched" (PrRef.render p.Pr)
-                          Status = Complete
-                          Kind = ConversationItemKind.ActNote { Detail = None; Notable = false; SandboxStarted = None }
-                          Offset = envelope.Offset
-                          Woke = None; Replying = None } ] }
+        | SessionEvent.PrWatched p -> proj |> noted (PrWatched.messageId p) (PrWatched.actor p) (Act.PrWatched p) envelope
+        | SessionEvent.PrUnwatched p -> proj |> noted p.MessageId p.Actor (Act.PrUnwatched p) envelope
         // Attributed to the WATCHER rather than the envelope's System: the person whose
         // watch noticed is who the news is for, and whose name it should wear.
         | SessionEvent.PrTransitioned p ->
-            { proj with
-                Items =
-                    proj.Items
-                    @ [ { MessageId = p.MessageId
-                          Author = Principal.toActor p.Watcher
-                          Body = sprintf "PR %s %s" (PrRef.render p.Pr) (PrTransition.describe p.Transition)
-                          Status = Complete
-                          Kind = ConversationItemKind.ActNote { Detail = None; Notable = true; SandboxStarted = None }
-                          Offset = envelope.Offset
-                          Woke = None; Replying = None } ] }
+            proj |> noted p.MessageId (Principal.toActor p.Watcher) (Act.PrTransitioned p) envelope
         | AgentMessageStarted a ->
             // A message that follows another is that other one's close: the model has moved
             // on, so what the antecedent streamed is what it said. Only a streaming item
@@ -1017,9 +733,8 @@ module ConversationProjection =
                     closed
                     @ [ { MessageId = a.MessageId
                           Author = ActorRef.Agent
-                          Body = ""
+                          Content = ItemContent.Message ""
                           Status = Streaming
-                          Kind = ConversationItemKind.Message
                           Offset = envelope.Offset
                           // Why the turn ran is attribution for the TURN, said once where it
                           // begins; a follower's antecedent already wears it.
@@ -1036,20 +751,26 @@ module ConversationProjection =
                 Items =
                     proj.Items
                     |> updateItem a.MessageId (fun item ->
-                        if item.Status = Streaming then
+                        match item.Content with
+                        | ItemContent.Message body when item.Status = Streaming ->
                             { item with
-                                Body = item.Body + a.Delta
-                                Offset = if item.Body = "" then envelope.Offset else item.Offset }
-                        else item) }
+                                Content = ItemContent.Message (body + a.Delta)
+                                Offset = if body = "" then envelope.Offset else item.Offset }
+                        | ItemContent.Message _
+                        | ItemContent.Act _ -> item) }
         | AgentMessageCompleted a ->
             { proj with
                 Items =
                     proj.Items
                     |> updateItem a.MessageId (fun item ->
+                        let spoken =
+                            match item.Content with
+                            | ItemContent.Message body -> body <> ""
+                            | ItemContent.Act _ -> true
                         { item with
-                            Body = a.Body
+                            Content = ItemContent.Message a.Body
                             Status = Complete
-                            Offset = if item.Body = "" && a.Body <> "" then envelope.Offset else item.Offset })
+                            Offset = if not spoken && a.Body <> "" then envelope.Offset else item.Offset })
                 ActiveAgentMessages = Map.remove a.AgentTurnId proj.ActiveAgentMessages }
         | AgentTurnInterrupted a ->
             match Map.tryFind a.AgentTurnId proj.ActiveAgentMessages with
@@ -1083,9 +804,8 @@ module ConversationProjection =
                     | Error e -> failwithf "derived message id invariant violated: %s" e
                 { MessageId = messageId
                   Author = ActorRef.Agent
-                  Body = a.Reason
+                  Content = ItemContent.Message a.Reason
                   Status = Failed
-                  Kind = ConversationItemKind.Message
                   Offset = envelope.Offset
                   Woke = wokeBy a.AgentTurnId proj
                   // A turn that failed before saying anything is still a reply to what asked
@@ -1097,14 +817,14 @@ module ConversationProjection =
                 |> Option.bind (fun messageId ->
                     proj.Items
                     |> List.tryFind (fun item -> item.MessageId = messageId)
-                    |> Option.map (fun item -> messageId, item.Body.Trim () <> ""))
+                    |> Option.map (fun item -> messageId, (ConversationItem.said item).Trim () <> ""))
             match spoke with
             | Some (messageId, true) ->
                 { proj with
                     Items =
                         proj.Items
                         |> updateItem messageId (fun item ->
-                            { item with Body = withReason item.Body a.Reason; Status = Failed })
+                            { item with Content = ItemContent.Message (withReason (ConversationItem.said item) a.Reason); Status = Failed })
                     ActiveAgentMessages = closed }
             | Some (messageId, false) ->
                 { proj with

@@ -451,7 +451,7 @@ let tests =
             let humanBodies =
                 first.Items
                 |> List.filter (fun i -> match i.Author with PeerRef _ -> true | _ -> false)
-                |> List.map (fun i -> i.Body)
+                |> List.map (fun i -> (ConversationItem.said i))
             let consumedBodies = r.Events |> List.choose (fun e -> match e with MessageSent m -> Some m.Body | _ -> None)
             Expect.equal humanBodies consumedBodies "the timeline is the consumed messages, in log order — nothing else"
 
