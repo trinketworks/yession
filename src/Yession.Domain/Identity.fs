@@ -226,9 +226,13 @@ module RepoRef =
         && s <> "." && s <> ".."
 
     /// Parse `owner/repo`. A trailing `.git` is stripped rather than refused — it is how
-    /// people paste repo names, and the canonical form should win.
+    /// people paste repo names, and the canonical form should win. So is a leading
+    /// `github:`, which is how the session's own prose spells a repo (`EntityRef.said`):
+    /// the agent reads that prose and quotes it back into `add_repo`, and a spelling this
+    /// repository chose must not be one its own tools refuse.
     let create (raw: string) : Result<RepoRef, string> =
         let trimmed = raw |> Option.ofObj |> Option.map (fun r -> r.Trim ()) |> Option.defaultValue ""
+        let trimmed = if trimmed.StartsWith "github:" then trimmed.Substring 7 else trimmed
         match trimmed.Split '/' with
         | [| owner; repo |] ->
             let repo = if repo.EndsWith ".git" then repo.Substring (0, repo.Length - 4) else repo
@@ -247,6 +251,23 @@ module RepoRef =
 
     /// Where the checkout lives under the session's repos directory.
     let relativePath (RepoRef (o, r)) : string = sprintf "%s/%s" o r
+
+/// The name of a connection — an external-service credential a person signed in to from a
+/// session (`Yession.Domain.Access`): `github`, `claude`. It is what a sandbox declares it
+/// forwards, what a status stream reports on, and what a sentence in the timeline points at
+/// when it says whose key rode in.
+///
+/// Case-folded and trimmed on construction, because a name is compared: `["github"]` and
+/// `["GitHub", "github"]` are one ask, and a registry that held both spellings would refuse
+/// the second for a difference nobody could see. That rule lived in the sandbox registry as
+/// a normalising pass over raw strings; a value of this type has already had it applied,
+/// which is the difference between a rule and a convention.
+type ConnectionName = private ConnectionName of string
+
+module ConnectionName =
+    let create (raw: string) : Result<ConnectionName, string> =
+        normalize "ConnectionName" raw |> Result.map (fun s -> ConnectionName (s.ToLowerInvariant ()))
+    let value (ConnectionName s) = s
 
 /// Who an event or action is attributed to. `UserRef` is a durable human identity the
 /// Manager verified; `PeerRef` is a client connection — the fallback attribution when no

@@ -18,6 +18,10 @@
     <!-- Time as a port: now, and waiting. Depends on nothing but System. -->
     <Compile Include="Clock.fs" />
     <Compile Include="Identity.fs" />
+    <!-- What a sentence on the timeline points at, and the sentence itself. Right after
+         Identity.fs, because the references are identities and the facts files below are
+         where each event says its sentence. -->
+    <Compile Include="Entities.fs" />
     <Compile Include="Running.fs" />
     <!-- A feature's FACTS sit below the event spine, because `SessionEvent` names them;
          the projections that fold that union sit above it. So a feature spans Events.fs
