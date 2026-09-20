@@ -683,7 +683,11 @@ let startFull
               Sandboxes = AgentCapabilities.none.Sandboxes
               // The read is the Host's own; the two changes are denials here and gated
               // calls once `bindFor` knows whose turn it is, like the sandbox commands.
-              Files = { AgentCapabilities.none.Files with Read = files.Read }
+              Files =
+                { AgentCapabilities.none.Files with
+                    Read = files.Read
+                    Search = files.Search
+                    Find = files.Find }
               Tools =
                 { Record = toolUseLogFor turnId
                   // Snapshotted HERE, which is what makes a turn's tool list stable: a set

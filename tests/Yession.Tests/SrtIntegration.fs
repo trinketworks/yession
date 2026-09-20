@@ -18,6 +18,7 @@ open Fable.NodeExtras
 open Yession.Domain
 open Yession.Domain.Sandboxes
 open Yession.Domain.Agent
+open Yession.Domain.Files
 open Yession.Domain.Terminals
 open Yession.Host
 open Yession.SessionProcess
@@ -265,6 +266,56 @@ let tests =
                         Expect.isTrue
                             (second.Output.Contains ("IN:" + inner))
                             (sprintf "the second block ran where the first left the shell (%s); it printed: %s" inner second.Output)
+                do! host.Stop ()
+            })
+
+            // The file verbs, against the sandbox that SHIPS as the default: one bare spawn
+            // each way, the path an argv element, the shell profile's directory as the root a
+            // relative path is meant against. Every other case of these verbs substitutes the
+            // sandbox; this is the one that does not, and it is what says `cat -- "$1"` and
+            // `mkdir -p … && cat > "$1"` are what this box's `sh` makes of them.
+            testCaseAsync "the file verbs read, write, edit and search a confined workspace" (async {
+                let workspace = TestFiles.canonical (TestFiles.tempDir "yession-srt-")
+                let policy = policyIn workspace []
+                let policy =
+                    { policy with
+                        Env =
+                            policy.Env
+                            |> Map.add "HOME" (workspace + "/home")
+                            |> Map.add "TMPDIR" (workspace + "/tmp") }
+                let! host = hostOver (Sandboxes.SrtSandbox.create (srtTools ())) policy "srt-files"
+                let sandbox = SandboxRef.defaultRef
+                let files = host.Files
+                // A new file in a new directory: the directories are made on the way.
+                match! files.Write sandbox "src/a/One.fs" "let one = 1\nlet two = 2\n" with
+                | Error e -> failwithf "write refused: %s" e
+                | Ok () -> ()
+                Expect.isTrue (TestFiles.exists (workspace + "/src/a/One.fs")) "the write landed in the workspace"
+                match! files.Read sandbox "src/a/One.fs" with
+                | Error e -> failwithf "read refused: %s" e
+                | Ok text -> Expect.equal text "let one = 1\nlet two = 2\n" "what was written is what is read"
+                match!
+                    files.Edit
+                        { FileEditRequest.Sandbox = sandbox
+                          FileEditRequest.Path = "src/a/One.fs"
+                          FileEditRequest.OldText = "two = 2"
+                          FileEditRequest.NewText = "two = 22"
+                          FileEditRequest.ReplaceAll = false }
+                    with
+                | Error e -> failwithf "edit refused: %s" e
+                | Ok edited -> Expect.equal edited.Replaced 1 "one place"
+                match! files.Search sandbox "two = 2+" (Some "src") (Some "*.fs") with
+                | Error e -> failwithf "search refused: %s" e
+                | Ok hits -> Expect.stringContains hits "src/a/One.fs:2:let two = 22" "grep's own line, after the edit"
+                match! files.Search sandbox "nowhere" None None with
+                | Error e -> failwithf "a search with no match is not a fault: %s" e
+                | Ok hits -> Expect.equal hits "" "no match is an empty answer, not grep's exit 1 as an error"
+                match! files.Find sandbox "*.fs" None with
+                | Error e -> failwithf "find refused: %s" e
+                | Ok paths -> Expect.equal paths "./src/a/One.fs" "one path per line"
+                match! files.Read sandbox "src/a/Missing.fs" with
+                | Ok _ -> failwith "a missing file read as something"
+                | Error reason -> Expect.stringContains reason "No such file" "cat's own words, without its name"
                 do! host.Stop ()
             })
 

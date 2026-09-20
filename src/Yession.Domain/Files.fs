@@ -176,3 +176,25 @@ module FileEdit =
     /// The same line for a whole-file write: which file, and how much of it.
     let writeSummary (path: string) (content: string) : string =
         sprintf "write_file %s (%d lines)" path (List.length (FileSlice.lines content))
+
+/// What `search_files` and `find_files` hand back: the sandbox's own lines — `grep -n`'s
+/// `path:line:text`, `find`'s one path per line — bounded, and saying what the bound left
+/// out. The lines are the sandbox's because the two tools are the shell's own `grep` and
+/// `find` behind a typed door: what changes is that the record says what was searched for,
+/// not that the answer is reshaped.
+module FileHits =
+
+    /// Lines per answer. A search that matches more than this has a pattern to narrow, and
+    /// the answer says so rather than spending the turn's context on the rest.
+    let cap = 200
+
+    /// The non-empty lines of `raw`, the first `cap` of them, and a closing line when there
+    /// were more. `"…"` alone for nothing — the empty string a model reads as "the tool
+    /// said nothing" rather than "nothing matched".
+    let render (nothing: string) (raw: string) : string =
+        let lines = raw.Replace("\r\n", "\n").Split '\n' |> Array.filter (fun line -> line <> "")
+        if lines.Length = 0 then nothing
+        elif lines.Length <= cap then String.Join ("\n", lines)
+        else
+            String.Join ("\n", Array.truncate cap lines)
+            + sprintf "\n[%d more not shown — narrow the search]" (lines.Length - cap)
