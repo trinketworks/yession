@@ -13,6 +13,7 @@
     <Project Path="src/Fable.Jose/Fable.Jose.fsproj" />
     <Project Path="src/Fable.Yaml/Fable.Yaml.fsproj" />
     <Project Path="src/Fable.NodeDataChannel/Fable.NodeDataChannel.fsproj" />
+    <Project Path="src/Fable.NodePty/Fable.NodePty.fsproj" />
     <Project Path="src/Fable.Keyring/Fable.Keyring.fsproj" />
     <Project Path="src/Fable.OpenIdClient/Fable.OpenIdClient.fsproj" />
     <Project Path="src/Fable.OpenTelemetry/Fable.OpenTelemetry.fsproj" />
