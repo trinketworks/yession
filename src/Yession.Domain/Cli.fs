@@ -13,6 +13,29 @@ module Yession.Domain.Cli
 //     nothing an operator could act on. `outcome` answers with the reason and the usage
 //     instead, and the bin says it before it stops.
 //
+// --- an option knows what its own value means ----------------------------------------------
+//
+// `--auth banana` is the same mistake to an operator as `--auht localhost`: a word this bin
+// does not know. It used to be reported by a different mechanism in a different place — the
+// parser refused the typo, while the boot refused the value, four times over in `Main.fs`:
+//
+//     match Oidc.Strategy.ofName (Cli.valueOf authOption args) with
+//     | Ok s -> s
+//     | Error e -> Interop.rejectValue cli e
+//
+// A refusal reached that way is a decision taken in the composition root, which is the one
+// place a cheap test cannot go (`design.md` §1, and AGENTS.md on colocation). So an option
+// carries its own vocabulary: `parsedValue` takes the reader that says what the value MEANS,
+// the parse runs it, and `valueOf` answers with the thing itself — an `AuthenticationStrategy`
+// rather than a string somebody still has to interpret. The readers already existed and
+// already had the right shape, which is the tell that this is where they belonged: `ofName`
+// takes `string option`, because absence is an answer the vocabulary gives (no `--auth` is
+// deny-everything) and never a default a caller supplies.
+//
+// The refusal keeps the wording it had. `Interop.rejectValue` stays for the rules that are
+// about MORE than one option — `--detailed` needing `--check`, an environment still setting a
+// variable that moved — which are the bin's to state because no single option can.
+//
 // --- why the parsing is F# rather than a library's or Node's -------------------------------
 //
 // Argu is the F# answer on .NET and cannot be the answer here, which was checked rather than
@@ -36,9 +59,10 @@ module Yession.Domain.Cli
 // purely to make a repeat visible, and the declared arity was then re-checked here. What was
 // left of Node's contribution is the tokenising, which is `walk`.
 //
-// What Argu is loved for survives, by a different route: an `Opt` is a VALUE, and reading a
+// What Argu is loved for survives, by a different route: an `Opt<'a>` is a VALUE, and reading a
 // parse back takes the same value that declared the option. There is no name to mistype at the
-// call site, and an option cannot be read unless it was declared.
+// call site, an option cannot be read unless it was declared, and what it reads back as is the
+// type the declaration chose.
 
 /// What an option takes, and the spellings that come with it. The two cases do not cross, and
 /// that is load-bearing rather than tidy: there is no short option here that takes a value —
@@ -52,74 +76,147 @@ type private Takes =
     /// or refused — declared, because the parse is checked against it in BOTH directions.
     | AValue of placeholder: string * repeatable: bool
 
-/// One option a bin accepts. Private, so every option is built by `flag`, `value` or `values`
-/// and its declared shape cannot disagree with how it is read back.
-type Opt =
-    private
-        { Long : string
-          Takes : Takes
-          Help : string }
+/// What the PARSER needs of an option, which is everything except the type of its value: the
+/// spellings to recognise, the line to print, and what the values given for it COME TO.
+///
+/// `Resolve` answers `obj` because a spec holds options that answer with different types —
+/// `--port` is an int and `--auth` a strategy — and F# has no list that holds both. The type
+/// is put back by `valueOf`, safely, because the only writer under an option's name is that
+/// option's own reader: `Opt<'a>` is this plus the `'a` its reader produces, and the two are
+/// minted together by `flag`/`value`/`values`/`parsedValue` and never separately.
+///
+/// It is handed `None` when the option was not given at all and `Some values` when it was —
+/// `Some []` for a switch, which has presence and no value. The difference is the vocabulary's
+/// to interpret, which is the whole point: `--auth` absent means deny-everything, and that is
+/// a fact about authentication rather than about parsing.
+[<NoEquality; NoComparison>]
+type private Decl =
+    { Long : string
+      Takes : Takes
+      Help : string
+      Resolve : string list option -> Result<obj, string> }
+
+/// One option a bin accepts, and what reading it back answers with. Private, so every option
+/// is built by `flag`, `value`, `values` or `parsedValue` and its declared shape cannot
+/// disagree with how it is read.
+[<NoEquality; NoComparison>]
+type Opt<'a> = private { Declared : Decl }
 
 /// Everything a bin accepts, in one value — the thing `--help` prints and the parser reads,
-/// so they cannot drift.
+/// so they cannot drift. Built up by `accepts`, one option at a time, because the options of
+/// one bin do not share a type and no list can hold them.
+[<NoEquality; NoComparison>]
 type Spec =
     private
         { Bin : string
-          Options : Opt list }
+          /// What this bin declared, in the order `--help` prints them. `--version` and
+          /// `--help` are not here: every bin answers them identically, so they are appended
+          /// by `all` rather than remembered by each spec.
+          Options : Decl list }
 
-/// A successful parse. Opaque: read it with `isSet`/`valueOf`.
+/// A successful parse: every declared option resolved to what it came to. Opaque — read it
+/// with `isSet`/`valueOf`.
 type Parsed =
     private
-        { Present : Set<string>
-          /// Every value given, in the order given. `Values` is the last of these, so the
-          /// two views of one option cannot disagree — there is one parse behind both.
-          Many : Map<string, string list>
-          Values : Map<string, string> }
+        { /// The options the operator actually wrote, which is a different question from what
+          /// each came to: `--port` absent and `--port 8321` resolve alike, and only this can
+          /// tell a chosen value from a defaulted one (`--check` exists to answer that).
+          Present : Set<string>
+          /// One entry per DECLARED option, so `valueOf` is total. See `Decl.Resolve`.
+          Values : Map<string, obj> }
 
 // --- declaring a command line ------------------------------------------------------------
 
 /// A boolean switch: given or not.
-let flag (long: string) (short: string option) (help: string) : Opt =
-    { Long = long; Takes = Nothing short; Help = help }
+let flag (long: string) (short: string option) (help: string) : Opt<bool> =
+    { Declared =
+        { Long = long
+          Takes = Nothing short
+          Help = help
+          Resolve = fun given -> Ok (box (Option.isSome given)) } }
 
-/// An option that takes a value, once. `placeholder` is what `--help` shows in the angle
-/// brackets. Given twice, it is refused — see `values` for the option that is not.
-let value (long: string) (placeholder: string) (help: string) : Opt =
-    { Long = long; Takes = AValue (placeholder, false); Help = help }
+/// An option that takes a value, once, and takes the operator at their word. `placeholder` is
+/// what `--help` shows in the angle brackets. Given twice it is refused — see `values` for the
+/// option that is not, and `parsedValue` for the one whose value has a vocabulary of its own.
+let value (long: string) (placeholder: string) (help: string) : Opt<string option> =
+    { Declared =
+        { Long = long
+          Takes = AValue (placeholder, false)
+          Help = help
+          Resolve = fun given -> Ok (box (given |> Option.bind List.tryLast)) } }
 
 /// An option that takes a value and may be given more than once, collecting every value in
 /// order. For configuration that is a SET rather than a choice — one webhook endpoint per
 /// service, say — where a single option would otherwise carry a separator this parser would
 /// have to invent, and a repeat would silently mean "the last one".
-let values (long: string) (placeholder: string) (help: string) : Opt =
-    { Long = long; Takes = AValue (placeholder, true); Help = help }
+let values (long: string) (placeholder: string) (help: string) : Opt<string list> =
+    { Declared =
+        { Long = long
+          Takes = AValue (placeholder, true)
+          Help = help
+          Resolve = fun given -> Ok (box (defaultArg given [])) } }
+
+/// An option whose value is a VOCABULARY rather than a string: `read` says what the operator
+/// wrote means, or why this bin does not know it, and the parse refuses on its word — in the
+/// same breath as a misspelt option, because that is the same mistake to whoever typed it.
+///
+/// `read` is handed `None` when the option was not given, because what absence means belongs
+/// to the vocabulary and never to a caller's memory: no `--auth` is deny-everything, no
+/// `--port` is 8321. That is already the shape the domain's own readers have — `Strategy
+/// .ofName`, `ManagerPort.ofName` and `SecretsMode.ofName` each take `string option` — which
+/// is the tell that this is where they belonged.
+let parsedValue
+    (long: string)
+    (placeholder: string)
+    (help: string)
+    (read: string option -> Result<'a, string>)
+    : Opt<'a> =
+    { Declared =
+        { Long = long
+          Takes = AValue (placeholder, false)
+          Help = help
+          Resolve = fun given -> read (given |> Option.bind List.tryLast) |> Result.map box } }
 
 /// Every bin answers these two identically, so they belong to what a spec IS rather than to
-/// what each bin remembers to declare.
-let version : Opt = flag "version" (Some "v") "print the version and exit"
-let help : Opt = flag "help" (Some "h") "show this message and exit"
+/// what each bin remembers to declare — `all` is where they join.
+let version : Opt<bool> = flag "version" (Some "v") "print the version and exit"
+let help : Opt<bool> = flag "help" (Some "h") "show this message and exit"
 
-let spec (bin: string) (options: Opt list) : Spec =
-    { Bin = bin; Options = options @ [ version; help ] }
+/// A bin that accepts nothing yet but `--version` and `--help`.
+let spec (bin: string) : Spec = { Bin = bin; Options = [] }
+
+/// Declare an option on this spec. One at a time rather than a list, because the options of
+/// one bin answer with different types and F# has no list that holds them all — the pipeline
+/// is what lets each keep its own.
+let accepts (opt: Opt<'a>) (spec: Spec) : Spec =
+    { spec with Options = spec.Options @ [ opt.Declared ] }
+
+/// Every option this bin has, with the two every bin answers last. ONE list, so what `--help`
+/// prints and what the parser recognises cannot differ.
+let private all (spec: Spec) : Decl list = spec.Options @ [ version.Declared; help.Declared ]
 
 // --- reading a parse ---------------------------------------------------------------------
 
-/// Was this option given? Takes the `Opt` that declared it, so there is no name to mistype.
-let isSet (opt: Opt) (parsed: Parsed) : bool = Set.contains opt.Long parsed.Present
+/// Did the operator write this option? A different question from what it came to, and the
+/// only one that can tell a chosen value from a defaulted one.
+let isSet (opt: Opt<'a>) (parsed: Parsed) : bool = Set.contains opt.Declared.Long parsed.Present
 
-/// The value given for this option, or None when it was not given. For a repeatable option
-/// this is the last value; `valuesOf` is the whole of it.
-let valueOf (opt: Opt) (parsed: Parsed) : string option = Map.tryFind opt.Long parsed.Values
-
-/// Every value given for this option, in order — empty when it was not given. An option
-/// that is not repeatable answers with at most one, because a second was refused.
-let valuesOf (opt: Opt) (parsed: Parsed) : string list =
-    Map.tryFind opt.Long parsed.Many |> Option.defaultValue []
+/// What this option came to: what its own vocabulary made of what the operator wrote, or of
+/// their having written nothing. Total, because the parse ran every declared reader and
+/// refused the whole command line if any of them said no.
+///
+/// It fails only when handed an option this spec never declared, which is a mistake in the
+/// program rather than on the command line — so it says so rather than inventing an absence
+/// that would read as "the operator gave nothing". The cheap tier pins it.
+let valueOf (opt: Opt<'a>) (parsed: Parsed) : 'a =
+    match Map.tryFind opt.Declared.Long parsed.Values with
+    | Some resolved -> unbox<'a> resolved
+    | None -> failwithf "--%s was read off a parse of a spec that does not declare it" opt.Declared.Long
 
 // --- usage --------------------------------------------------------------------------------
 
 let usage (spec: Spec) : string =
-    let line (opt: Opt) =
+    let line (opt: Decl) =
         let names =
             match opt.Takes with
             | Nothing (Some short) -> sprintf "-%s, --%s" short opt.Long
@@ -128,17 +225,17 @@ let usage (spec: Spec) : string =
             | AValue (placeholder, true) -> sprintf "    --%s <%s>..." opt.Long placeholder
             | AValue (placeholder, false) -> sprintf "    --%s <%s>" opt.Long placeholder
         sprintf "  %-26s %s" names opt.Help
-    let options = spec.Options |> List.map line |> String.concat "\n"
+    let options = all spec |> List.map line |> String.concat "\n"
     sprintf "usage: %s [options]\n\noptions:\n%s" spec.Bin options
 
 // --- parsing --------------------------------------------------------------------------------
 
 /// How every command-line complaint reads: which bin, what was wrong, then the usage.
 ///
-/// Public because a parse failure is not the only way a command line is wrong: a VALUE the
-/// parser accepted and the bin refused (`--auth banana`) is the same class of mistake to the
-/// operator who typed it, and `Interop.rejectValue` reports it in these words rather than
-/// inventing a second voice for it.
+/// Public because a parse failure is not the only way a command line is wrong: a rule over
+/// SEVERAL options (`--detailed` needs `--check`) or over the environment around them (a
+/// variable that moved onto one) is the bin's to state, because no single option can — and
+/// `Interop.rejectValue` reports those in these words rather than inventing a second voice.
 let complaint (spec: Spec) (message: string) : string =
     sprintf "%s: %s\n\n%s" spec.Bin message (usage spec)
 
@@ -146,12 +243,12 @@ let complaint (spec: Spec) (message: string) : string =
 // stops a bin accepting an option it does not document.
 
 /// The option this spec spells `--name`.
-let private longNamed (spec: Spec) (name: string) : Opt option =
-    spec.Options |> List.tryFind (fun opt -> opt.Long = name)
+let private longNamed (spec: Spec) (name: string) : Decl option =
+    all spec |> List.tryFind (fun opt -> opt.Long = name)
 
 /// The option this spec spells `-x`.
-let private shortNamed (spec: Spec) (letter: char) : Opt option =
-    spec.Options
+let private shortNamed (spec: Spec) (letter: char) : Decl option =
+    all spec
     |> List.tryFind (fun opt ->
         match opt.Takes with
         | Nothing (Some short) -> short = string letter
@@ -171,11 +268,11 @@ let private splitAtEquals (token: string) : string * string option =
 /// takes one carries what it was given. Occurrences rather than a map, because both questions
 /// asked of them afterwards — was this given, and how many times — are about occurrences, and
 /// a map that kept the last is precisely the silent-ignore this module exists to end.
-type private Hit = { Of : Opt; Value : string option }
+type private Hit = { Of : Decl; Value : string option }
 
 /// Whether a second of this option is collected or refused. A switch is never refused a
 /// repeat: `--check --check` says the same thing twice, and there is no value to lose.
-let private repeatable (opt: Opt) : bool =
+let private repeatable (opt: Decl) : bool =
     match opt.Takes with
     | AValue (_, repeatable) -> repeatable
     | Nothing _ -> false
@@ -185,15 +282,15 @@ let private repeatable (opt: Opt) : bool =
 ///
 /// A value is taken from the next token VERBATIM, so `--auth --version` sets `--auth` to the
 /// text `--version` rather than guessing that a value starting with a dash was a mistake:
-/// whether it is depends on the option's own vocabulary, which refuses it a line later and in
+/// whether it is depends on the option's own vocabulary, which refuses it a stage later and in
 /// its own words. Every other refusal names what the operator typed, because the alternative
 /// — this repository's own history — is a bin that ran with the option missing.
 let rec private walk (spec: Spec) (hits: Hit list) (rest: string list) : Result<Hit list, string> =
     let refuse message : Result<Hit list, string> = Error (complaint spec message)
     match rest with
-    | [] -> Ok (List.rev hits)
     // `--` introduces bare words, and no bin here takes one — so it is refused as the
     // separator it is, rather than reported as an option nobody declared.
+    | [] -> Ok (List.rev hits)
     | "--" :: _ -> refuse "-- introduces bare words, and no bin here takes one"
     | token :: rest when token.StartsWith "--" ->
         let name, inlineValue = splitAtEquals (token.Substring 2)
@@ -222,16 +319,22 @@ let rec private walk (spec: Spec) (hits: Hit list) (rest: string list) : Result<
         shorts hits (List.ofSeq (token.Substring 1))
     | token :: _ -> refuse (sprintf "%s is not an option, and no bin here takes a bare word" token)
 
-/// Parse `args` against `spec`. Total — the failure is a message an operator can act on,
-/// carrying what was wrong and the usage under it.
-let parse (spec: Spec) (args: string array) : Result<Parsed, string> =
+/// What the operator WROTE, before any option's vocabulary has had a say: each option they
+/// gave, with the values they gave it, in declaration order.
+///
+/// A stage of its own because `--version` and `--help` are answered from it. Every bin answers them
+/// "before any configuration is read" (`SessionMain.fs`), so a command line carrying both a
+/// value this bin refuses and `--version` still says what this bin is.
+type private Given = (Decl * string list) list
+
+let private tokenised (spec: Spec) (args: string array) : Result<Given, string> =
     match walk spec [] (List.ofArray args) with
     | Error message -> Error message
     | Ok hits ->
         // Walk the DECLARATION, not the tokens: every name here is one this spec knows, so
         // nothing can arrive that `isSet`/`valueOf` could not name.
         let given =
-            spec.Options
+            all spec
             |> List.choose (fun opt ->
                 match hits |> List.filter (fun hit -> hit.Of.Long = opt.Long) with
                 | [] -> None
@@ -241,15 +344,30 @@ let parse (spec: Spec) (args: string array) : Result<Parsed, string> =
         match given |> List.tryFind (fun (opt, vs) -> not (repeatable opt) && List.length vs > 1) with
         | Some (opt, vs) ->
             Error (complaint spec (sprintf "--%s was given %d times, and takes one value" opt.Long (List.length vs)))
-        | None ->
+        | None -> Ok given
+
+/// Every declared option's vocabulary, run. One entry per DECLARED option rather than per
+/// given one, because absence is something an option answers FOR — and answering it here,
+/// once, is what makes `valueOf` total and a refusal the parser's rather than the boot's.
+let private resolved (spec: Spec) (given: Given) : Result<Parsed, string> =
+    let wrote (opt: Decl) =
+        given |> List.tryPick (fun (o, vs) -> if o.Long = opt.Long then Some vs else None)
+    let rec step (decls: Decl list) (values: Map<string, obj>) =
+        match decls with
+        | [] ->
             Ok
                 { Present = given |> List.map (fun (opt, _) -> opt.Long) |> Set.ofList
-                  Many = given |> List.map (fun (opt, vs) -> opt.Long, vs) |> Map.ofList
-                  // The last of the same list, so one parse answers both readers.
-                  Values =
-                    given
-                    |> List.choose (fun (opt, vs) -> vs |> List.tryLast |> Option.map (fun v -> opt.Long, v))
-                    |> Map.ofList }
+                  Values = values }
+        | opt :: rest ->
+            match opt.Resolve (wrote opt) with
+            | Ok resolved -> step rest (Map.add opt.Long resolved values)
+            | Error message -> Error (complaint spec message)
+    step (all spec) Map.empty
+
+/// Parse `args` against `spec`. Total — the failure is a message an operator can act on,
+/// carrying what was wrong and the usage under it.
+let parse (spec: Spec) (args: string array) : Result<Parsed, string> =
+    tokenised spec args |> Result.bind (resolved spec)
 
 // --- what a command line asks of the process ----------------------------------------------
 
@@ -272,10 +390,19 @@ type Outcome =
 /// answers them identically, so answering them belongs to what a command line IS rather than
 /// to what each bin remembers to do. `--version` wins over `--help`, because a line carrying
 /// both asked two questions and only one process can answer.
+///
+/// Both are answered from the TOKENS, before any option's vocabulary runs, because a bin
+/// answers them before it reads any configuration — so `--auth banana --version` still says
+/// what this bin is rather than refusing a value it was never going to use.
 let outcome (spec: Spec) (currentVersion: string) (args: string array) : Outcome =
-    match parse spec args with
+    let wrote (opt: Opt<bool>) (given: Given) =
+        given |> List.exists (fun (declared, _) -> declared.Long = opt.Declared.Long)
+    match tokenised spec args with
     | Error message -> Outcome.Refused message
-    | Ok parsed ->
-        if isSet version parsed then Outcome.Answered currentVersion
-        elif isSet help parsed then Outcome.Answered (usage spec)
-        else Outcome.Proceed parsed
+    | Ok given ->
+        if wrote version given then Outcome.Answered currentVersion
+        elif wrote help given then Outcome.Answered (usage spec)
+        else
+            match resolved spec given with
+            | Ok parsed -> Outcome.Proceed parsed
+            | Error message -> Outcome.Refused message

@@ -267,6 +267,21 @@ module SecretsMode =
         | Some "ephemeral" -> Ok ForceEphemeral
         | Some other -> Error (sprintf "unknown secrets mode '%s' (expected durable or ephemeral)" other)
 
+    /// How an operator spells this mode back, or `None` for the one that has no spelling.
+    ///
+    /// The encode side of `ofName`, and it earns its place the way `IdleWindow.describe`
+    /// does: `--check` prints the resolved configuration, and what it prints must be what an
+    /// operator could type back — so `ofName (describe m) = Ok m` wherever `describe` answers.
+    /// `AutoSecrets` answers `None` because there is deliberately no `auto` spelling: absence
+    /// already says "I made no choice", and only absence produces it. A report that has to
+    /// say what this host will actually do has both outcomes to name and no single word for
+    /// them, which is the caller's sentence to write rather than this one's.
+    let describe (mode: SecretsMode) : string option =
+        match mode with
+        | AutoSecrets -> None
+        | RequireDurable -> Some "durable"
+        | ForceEphemeral -> Some "ephemeral"
+
     /// Is the credential-manager probe worth running for this mode? Only whether to spend
     /// the probe — `forMode` still decides the outcome, and answers the same thing for
     /// `ForceEphemeral` with or without a key store, so the two cannot disagree.

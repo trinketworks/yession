@@ -47,46 +47,29 @@ let private expect =
 let private defaultSession =
     Cli.valueOf ManagerCli.defaultSessionOption args |> Option.defaultValue (SessionId.value SessionId.local)
 let private dataDir = Cli.valueOf ManagerCli.dataDirOption args |> Option.defaultValue ".yession"
-// Where the management UI answers. Parsed by `ManagerPort.ofName`, beside the port it
-// configures and where the cheap tier can reach it, for the reason `--secrets` is.
-let private managerPort =
-    match ProcessManager.ManagerPort.ofName (Cli.valueOf ManagerCli.portOption args) with
-    | Ok port -> port
-    | Error e -> Interop.rejectValue cli e
+// Where the management UI answers. `--port` carries `ManagerPort.ofName` as its vocabulary,
+// so a value that is not a port number refused this command line before this line ran.
+let private managerPort = Cli.valueOf ManagerCli.portOption args
 
 // How long a session may go unused before the Manager stops it (Plan 11). Unset = never,
 // which is the default: reaping trades a launch on the next visit for everything an idle
 // session holds, and on a deployment that tracks a fast-moving build, for sessions that
-// return on the new one without the Manager having to restart. Both are choices.
-let private idleTimeout =
-    // Not given is answered HERE, rather than handed down as an empty string: absence is the
-    // default (reaping off), and spelling it `""` would ask the parser to rediscover from a
-    // value what this already knows from the option.
-    match Cli.valueOf ManagerCli.idleTimeoutOption args with
-    | None -> None
-    | Some given ->
-        match Yession.Manager.IdleWindow.parse given with
-        | Ok window -> window
-        | Error e -> Interop.rejectValue cli e
+// return on the new one without the Manager having to restart. Both are choices — and which
+// one "unset" is belongs to the option, not to whoever read it last.
+let private idleTimeout = Cli.valueOf ManagerCli.idleTimeoutOption args
 
 // Who the humans at this Manager are (Plan 07): `--auth localhost` trusts the
 // loopback interface (single-machine deployment), `--auth trusted-headers` trusts the
 // canonical x-yession-* identity headers an operator-run authenticating proxy asserts.
 // No `--auth` means nobody authenticates — choosing a trust rule is deliberate, and an
-// unknown name fails the boot loudly rather than defaulting to anything.
-let private strategy =
-    match Yession.Oidc.Strategy.ofName (Cli.valueOf ManagerCli.authOption args) with
-    | Ok s -> s
-    | Error e -> Interop.rejectValue cli e
+// unknown name never reached this line: it is the option's vocabulary, so the command line
+// was refused rather than defaulted to anything.
+let private strategy = Cli.valueOf ManagerCli.authOption args
 
-// Whether secrets persist across restarts (`--secrets`). Only the NAME is settled here —
+// Whether secrets persist across restarts (`--secrets`). Only the MODE is settled here —
 // what it resolves to needs the host probed for a credential manager, which happens in the
-// async below. Parsed up here beside `--auth` so an unknown value refuses the boot before
-// anything else is touched.
-let private secretsMode =
-    match ProcessManager.SecretsMode.ofName (Cli.valueOf ManagerCli.secretsOption args) with
-    | Ok m -> m
-    | Error e -> Interop.rejectValue cli e
+// async below. An unknown name refused the command line, so nothing was touched at all.
+let private secretsMode = Cli.valueOf ManagerCli.secretsOption args
 
 // How this deployment is reached from outside (Plan 09). Parsed once, HERE, so a
 // combination that cannot work is a refused boot rather than links and redirect URIs that
@@ -120,7 +103,7 @@ let private checkReport () =
     // Whether the operator chose a value, or the bin fell back to its own. Only this file
     // knows: the resolved values above have already lost the difference, and the difference
     // is the question `--check` is asked.
-    let origin (option: Cli.Opt) =
+    let origin (option: Cli.Opt<'a>) =
         if Cli.isSet option args then ManagerCli.Chosen else ManagerCli.Default
     let addressing =
         match publicAccess with
@@ -131,10 +114,11 @@ let private checkReport () =
         { Version = Version.current
           TrustRule = strategy.Name, origin ManagerCli.authOption
           Secrets =
-            (match Cli.valueOf ManagerCli.secretsOption args with
-             | Some mode -> mode, ManagerCli.Chosen
-             // Not `auto`: `--secrets` deliberately has no such spelling, so printing one
-             // would name a value the parser refuses. What it resolves to is both outcomes.
+            // Not `auto`: `--secrets` deliberately has no such spelling, so printing one
+            // would name a value the parser refuses. What it resolves to is both outcomes,
+            // which is why the mode with no spelling is the one that says it was defaulted.
+            (match ProcessManager.SecretsMode.describe secretsMode with
+             | Some spelling -> spelling, ManagerCli.Chosen
              | None -> "durable or in-memory", ManagerCli.Default)
           Port = string managerPort, origin ManagerCli.portOption
           DataDir = dataDir, origin ManagerCli.dataDirOption
@@ -149,7 +133,7 @@ let private checkReport () =
           // than what was typed. A declaration that could not be decoded refused the boot
           // above.
           Webhooks =
-            Cli.valuesOf ManagerCli.webhookOption args
+            Cli.valueOf ManagerCli.webhookOption args
             |> WebhookRelay.EndpointSpec.decodeAll
             |> Result.map (List.map WebhookRelay.EndpointSpec.encode)
             |> Result.defaultValue []
@@ -202,7 +186,7 @@ Async.StartImmediate(
                     OnEvent = telemetry.Log
                     Strategy = Some strategy
                     Secrets = Some secretsBacking
-                    Webhooks = Cli.valuesOf ManagerCli.webhookOption args }
+                    Webhooks = Cli.valueOf ManagerCli.webhookOption args }
                 (Some ManagerUi.tryHandle)
 
         // Ensure the default session exists (an existing registration is resume).

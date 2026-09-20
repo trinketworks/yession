@@ -16,20 +16,45 @@ module Yession.Host.ManagerCli
 /// Every option, in the order `--help` prints them.
 open Yession.Domain
 
+/// Not a string: a `--auth` the parse accepted is an `AuthenticationStrategy`, because the
+/// vocabulary of trust rules is `Strategy.ofName`'s and an unknown name is a command line
+/// this bin refuses. It used to be refused in `Main.fs`, halfway down a boot, where no cheap
+/// test could reach the refusal.
 let authOption =
-    Cli.value "auth" "rule" "how a request's subject is established: none, localhost, trusted-headers"
+    Cli.parsedValue
+        "auth"
+        "rule"
+        "how a request's subject is established: none, localhost, trusted-headers"
+        Yession.Oidc.Strategy.ofName
 
 let secretsOption =
-    Cli.value "secrets" "mode" "whether secrets persist across restarts: durable, ephemeral"
+    Cli.parsedValue
+        "secrets"
+        "mode"
+        "whether secrets persist across restarts: durable, ephemeral"
+        ProcessManager.SecretsMode.ofName
 
 let portOption =
-    Cli.value "port" "port" "the port the Manager listens on; 0 lets the OS choose (default 8321)"
+    Cli.parsedValue
+        "port"
+        "port"
+        "the port the Manager listens on; 0 lets the OS choose (default 8321)"
+        ProcessManager.ManagerPort.ofName
 
 let dataDirOption =
     Cli.value "data-dir" "path" "where this Manager keeps its state (default .yession)"
 
+/// `IdleWindow.parse` says what a window MEANS and deliberately does not answer for the
+/// option being absent — "its caller knows the difference between not asking and asking for
+/// nothing". This is that caller, and not asking is reaping off.
 let idleTimeoutOption =
-    Cli.value "idle-timeout" "window" "stop a session unused for this long: 90s, 30m, 2h (default never)"
+    Cli.parsedValue
+        "idle-timeout"
+        "window"
+        "stop a session unused for this long: 90s, 30m, 2h (default never)"
+        (function
+         | None -> Ok None
+         | Some given -> Yession.Manager.IdleWindow.parse given)
 
 let defaultSessionOption =
     Cli.value "default-session" "id" "the session ensured and launched at boot (default local-session)"
@@ -69,18 +94,27 @@ let detailedOption =
 /// the boot with the reason and the usage, rather than being ignored into a deny-everything
 /// Manager.
 let spec =
-    Cli.spec
-        "yession-manager"
-        [ authOption; secretsOption; portOption; dataDirOption; idleTimeoutOption
-          defaultSessionOption; spawnBinOption; webhookOption; checkOption; detailedOption ]
+    Cli.spec "yession-manager"
+    |> Cli.accepts authOption
+    |> Cli.accepts secretsOption
+    |> Cli.accepts portOption
+    |> Cli.accepts dataDirOption
+    |> Cli.accepts idleTimeoutOption
+    |> Cli.accepts defaultSessionOption
+    |> Cli.accepts spawnBinOption
+    |> Cli.accepts webhookOption
+    |> Cli.accepts checkOption
+    |> Cli.accepts detailedOption
 
 /// What `--check` reports: the RESOLVED configuration, as text that has already been through
 /// every parser this bin has.
 ///
-/// Strings rather than the domain types they came from, deliberately. This module is compiled
-/// before the Manager's own, so it could not name them; and the report is a rendering, which
-/// is the one job it should be possible to test without building a Manager. The boot resolves,
-/// this prints.
+/// Strings rather than the domain types they came from, deliberately: the report is a
+/// RENDERING, which is the one job it should be possible to test without building a Manager.
+/// The boot resolves, this prints. (It used to give a second reason — that this module was
+/// compiled before the Manager's own and so could not name them — which stopped being true
+/// when the options took their own vocabularies and this file moved below `ProcessManager`.
+/// One live reason beats a live one and a stale one.)
 /// Where a value came from.
 ///
 /// This is the question `--check` exists to answer. An operator reads a report to find out

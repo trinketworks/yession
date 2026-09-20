@@ -372,7 +372,14 @@ let private desktopOption = Cli.flag "desktop" None "1280x800 instead of a 390x8
 let private keepOption = Cli.flag "keep" None "leave the created session running"
 
 let private spec =
-    Cli.spec "yession-frames" [ managerOption; sessionOption; secondsOption; outOption; minPxOption; desktopOption; keepOption ]
+    Cli.spec "yession-frames"
+    |> Cli.accepts managerOption
+    |> Cli.accepts sessionOption
+    |> Cli.accepts secondsOption
+    |> Cli.accepts outOption
+    |> Cli.accepts minPxOption
+    |> Cli.accepts desktopOption
+    |> Cli.accepts keepOption
 
 // --- the run -----------------------------------------------------------------------------------
 

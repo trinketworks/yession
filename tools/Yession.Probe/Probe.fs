@@ -124,9 +124,14 @@ let private tokenOption =
     Cli.value "peer-token" "token" "join with this instead of signing in — for a front door a CLI cannot bounce through"
 
 let spec =
-    Cli.spec
-        "yession-probe"
-        [ managerOption; sayOption; sessionOption; timeoutOption; stopOption; keepOption; tokenOption ]
+    Cli.spec "yession-probe"
+    |> Cli.accepts managerOption
+    |> Cli.accepts sayOption
+    |> Cli.accepts sessionOption
+    |> Cli.accepts timeoutOption
+    |> Cli.accepts stopOption
+    |> Cli.accepts keepOption
+    |> Cli.accepts tokenOption
 
 // --- the browser's own three steps ----------------------------------------------------------
 
@@ -198,7 +203,7 @@ let private run () =
         // the empty string. `--say` is repeatable, so this is a list — an empty one is the
         // same nothing as a missing Manager.
         let manager, says =
-            match Cli.valueOf managerOption args, Cli.valuesOf sayOption args with
+            match Cli.valueOf managerOption args, Cli.valueOf sayOption args with
             | Some manager, (_ :: _ as says) -> manager.TrimEnd '/', says
             | None, _ -> Yession.Host.Interop.abort "yession-probe needs --manager: which Manager to join a session on"
             | _, [] -> Yession.Host.Interop.abort "yession-probe needs --say: what to send once it is connected"
