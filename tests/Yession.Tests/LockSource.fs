@@ -28,15 +28,41 @@ module Yession.Tests.LockSource
 open Fable.Core
 open Fable.Core.JsInterop
 open Fable.Pyxpecto
+open Thoth.Json
 
 let private childProcess : obj = importAll "node:child_process"
 
 
-[<Emit("Object.keys(JSON.parse($0).nodes ?? {})")>]
-let private nodeNames (json: string) : string array = jsNative
+/// The two things this rule asks the lock: which nodes it carries, and which inputs its root
+/// resolves through. Only the NAMES — what a node pins is devenv's business, and the rule is
+/// about which nodes exist at all.
+type private Lock =
+    { Nodes : string list
+      RootInputs : string list }
 
-[<Emit("Object.keys(((JSON.parse($0).nodes ?? {}).root ?? {}).inputs ?? {})")>]
-let private rootInputs (json: string) : string array = jsNative
+/// A map's keys, whatever its values are. `Decode.value` is what says "and this decoder has
+/// no opinion about them": a node's contents vary by input type, and reading them would make
+/// this rule fail on a lock it has nothing to say about.
+let private names : Decoder<string list> =
+    Decode.keyValuePairs Decode.value |> Decode.map (List.map fst)
+
+/// An absent key is no names rather than a failure: a lock with no `nodes` at all, or a root
+/// with no `inputs`, is a lock this rule has something to SAY about (both cases below assert
+/// exactly what should be there), not one it cannot read.
+let private lock : Decoder<Lock> =
+    Decode.map2
+        (fun nodes rootInputs -> { Nodes = nodes; RootInputs = rootInputs })
+        (Decode.optional "nodes" names |> Decode.map (Option.defaultValue []))
+        (Decode.optional "nodes" (Decode.optional "root" (Decode.optional "inputs" names))
+         |> Decode.map (Option.flatten >> Option.flatten >> Option.defaultValue []))
+
+/// The lock, read. A file this cannot decode fails by name — where `JSON.parse` inside a macro
+/// threw a `SyntaxError` from somewhere in the middle of the assertion, saying nothing about
+/// which file was unreadable or why.
+let private read (json: string) : Lock =
+    match Decode.fromString lock json with
+    | Ok lock -> lock
+    | Error reason -> failwithf "HEAD:devenv.lock is not a lock this check can read: %s" reason
 
 /// The lock as GIT has it, never the working copy. The working copy carries the devenv node
 /// on any machine that has run devenv — that is the normal state and not what this is about.
@@ -70,7 +96,7 @@ let tests =
                 failwith "could not read HEAD:devenv.lock — this check needs a git checkout, and proves nothing without one"
             | Some json ->
                 Expect.equal
-                    (nodeNames json |> Array.sort |> List.ofArray)
+                    ((read json).Nodes |> List.sort)
                     [ "nixpkgs"; "root" ]
                     "the lock pins the channel this repo names, and records nobody's container"
 
@@ -91,7 +117,7 @@ let tests =
             | None -> failwith "could not read HEAD:devenv.lock"
             | Some json ->
                 Expect.equal
-                    (rootInputs json |> Array.sort |> List.ofArray)
+                    ((read json).RootInputs |> List.sort)
                     [ "nixpkgs" ]
                     "stripping the node without its root input would leave a lock that does not resolve"
     ]
