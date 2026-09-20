@@ -404,3 +404,34 @@ module CacheStorage =
     /// is a store outliving the build that filled it, not an error.
     [<Emit("$0.headers.get($1)")>]
     let cachedHeader (response: CachedResponse) (name: string) : string = jsNative
+
+/// The Storage Standard's `navigator.storage`, which no `Fable.Browser.*` package types:
+/// `Fable.Browser.Navigator` carries `navigator` itself, and stops at a `// TODO: abstract
+/// storage: StorageManager` — so the one member this repository asks for is declared here,
+/// which is what this project is for.
+///
+/// Only `persist` is declared. `estimate`, `persisted` and the origin's file system are the
+/// rest of the interface, and none of them is a question this client acts on: what it would
+/// do differently knowing its store is kept, or how much room is left, is nothing.
+[<AllowNullLiteral>]
+type StorageManager =
+
+    /// Ask for this origin's storage to be KEPT — not evicted when the browser is reclaiming
+    /// room. A request rather than a guarantee: granted for an engaged site on Chrome,
+    /// essentially only for an installed app on Safari, and the promise says which it was.
+    /// A refusal is an ordinary answer, not a fault.
+    abstract persist : unit -> JS.Promise<bool>
+
+module PersistentStorage =
+
+    /// The page's storage manager, or nothing where there is none to ask.
+    ///
+    /// Nothing covers two contexts and deliberately does not distinguish them, because a
+    /// caller can do the same thing about either: a document served insecurely has no
+    /// `navigator.storage` at all, and a browser old enough to carry one without `persist`
+    /// cannot be asked — reaching through either would throw where a refusal would have
+    /// answered false. `globalThis` rather than `window`, for the reason `caches` above gives:
+    /// a bundle that also evaluates where there is no window must be able to ASK without the
+    /// asking being the thing that fails.
+    [<Emit("(typeof globalThis !== 'undefined' && globalThis.navigator && globalThis.navigator.storage && globalThis.navigator.storage.persist) ? globalThis.navigator.storage : undefined")>]
+    let storage () : StorageManager option = jsNative

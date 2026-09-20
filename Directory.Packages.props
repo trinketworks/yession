@@ -32,6 +32,15 @@
     <!-- `performance.now()`: the monotonic clock the handshake and the keystroke bench time
          themselves against, which `Date.now()` is not. -->
     <PackageVersion Include="Fable.Browser.Performance" Version="1.3.0" />
+    <!-- `navigator`, typed: `navigator.serviceWorker` as an OPTION (a context with no
+         container answers nothing rather than throwing), and through its dependency on
+         Fable.Browser.Worker the container itself — the registration, its scope and its
+         states. It was left out of the bindings that landed with WebRTC because the only
+         member wanted then was `navigator.clipboard`, a two-line binding not worth four
+         transitive assemblies; a service-worker registration is not two lines, and
+         MediaStream is already in the closure, so what this actually adds is Gamepad,
+         Geolocation and Worker — type-only, emitting nothing. -->
+    <PackageVersion Include="Fable.Browser.Navigator" Version="2.5.0" />
     <!-- Typed fetch() binding: the app's one place that talks to the host's network API
          (the /me probe) does it through this, not a hand-rolled Emit string. -->
     <PackageVersion Include="Fable.Fetch" Version="2.7.0" />
