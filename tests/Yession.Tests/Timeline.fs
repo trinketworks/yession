@@ -818,8 +818,14 @@ let private videoTests =
             //
             // The phrase is carried deliberately: `swift-heron` alone also appears in the
             // roster, so an assertion decoupled from the copy passes even when this pane
-            // prints the bare id. Coupling to "rejected by" is what SCOPES it to the refusal.
-            Expect.isTrue (html.Contains "rejected by swift-heron") "the tab says who refused it"
+            // prints the bare id. Coupling to "rejected by" is what SCOPES it to the refusal
+            // — and the refuser is a REFERENCE after it, drawn as they are drawn everywhere.
+            let at = html.IndexOf "rejected by "
+            Expect.isTrue (at >= 0) "the tab says who refused it"
+            let refuser = html.Substring (at, html.IndexOf ("</span></span>", at) + "</span></span>".Length - at)
+            Expect.isTrue (refuser.Contains (Dom.attr "data-entity-kind" "actor")) "as a reference to the person"
+            Expect.isTrue (refuser.Contains ">swift-heron<") "by name"
+            Expect.isFalse (refuser.Contains ">ada<") "never the id"
             Expect.isFalse (html.Contains (Dom.attr Dom.Hooks.paneReplay "block:term-a:b-no")) "and mounts no player"
 
         testCase "a block offers the way to its command in the terminal's own history" <| fun () ->
