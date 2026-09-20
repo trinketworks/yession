@@ -1475,6 +1475,11 @@ module View =
             // "unavailable" would claim more than that — a person with an empty composer is not
             // blocked, they just have not typed yet. The weight is the signal; the control
             // stays whole. `Resilience.fs` pins the same promise from the other direction.
+            //
+            // Same place in FOCUS order always, even where it is not the same place on
+            // screen: on a phone (`Style.draftCommit`) this row leaves the line and sits
+            // below it, dark until the composer has focus, so the text can use the width
+            // it was sharing with two icons that a thumb reaches once per message.
             let sendClass =
                 if hasContent then Style.btnSendInField else Style.btnSendInFieldWaiting
             let author =
