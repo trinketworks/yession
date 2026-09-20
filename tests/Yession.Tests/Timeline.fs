@@ -329,8 +329,8 @@ let private unchangedTests =
             let withTerminals, _ = ConversationProjection.applyEvents None (terminalEvents @ said) ConversationProjection.empty
             let without, _ = ConversationProjection.applyEvents None said ConversationProjection.empty
             Expect.equal
-                (withTerminals.Items |> List.map (fun i -> i.MessageId, i.Author, i.Body, i.Status))
-                (without.Items |> List.map (fun i -> i.MessageId, i.Author, i.Body, i.Status))
+                (withTerminals.Items |> List.map (fun i -> i.MessageId, i.Author, (ConversationItem.said i), i.Status))
+                (without.Items |> List.map (fun i -> i.MessageId, i.Author, (ConversationItem.said i), i.Status))
                 "the same items, in the same order, whatever the terminals did"
 
         testCase "an agent's message anchors at its FIRST WORD, and later words do not move it" <| fun () ->
@@ -352,7 +352,7 @@ let private unchangedTests =
             | [ silent ], [ item ] ->
                 Expect.equal (EventOffset.value silent.Offset) 2L "until it speaks, it sits where it opened"
                 Expect.equal (EventOffset.value item.Offset) 3L "anchored at the first word"
-                Expect.equal item.Body "hello" "even though the rest of the body arrived later"
+                Expect.equal (ConversationItem.said item) "hello" "even though the rest of the body arrived later"
             | opened, items -> failwithf "expected one item each, got %d and %d" (List.length opened) (List.length items)
 
         testCase "a completion that carries the only words anchors the message too" <| fun () ->
@@ -1720,27 +1720,30 @@ let private sandboxTaskTests =
             match conversationOf [ at 1L 0.0 (starting "1") ] with
             | [ item ] ->
                 Expect.equal item.Status ConversationItemStatus.Running "the act is running while the sandbox comes up"
-                Expect.isTrue (item.Body.StartsWith "starting sandbox") "and says the sandbox is starting"
-                match item.Kind with
-                | ConversationItemKind.ActNote _ -> ()
-                | ConversationItemKind.Message -> failwith "a sandbox coming up is an act, not a message"
+                Expect.isTrue ((ConversationItem.headline item).StartsWith "starting sandbox") "and says the sandbox is starting"
+                match item.Content with
+                | ItemContent.Act _ -> ()
+                | ItemContent.Message _ -> failwith "a sandbox coming up is an act, not a message"
             | other -> failwithf "expected one running act, got %d items" (List.length other)
 
         testCase "the start resolves that same item in place, not a second" <| fun () ->
             match conversationOf [ at 1L 0.0 (starting "1"); at 2L 1.0 (startedSandbox "1") ] with
             | [ item ] ->
                 Expect.equal item.Status ConversationItemStatus.Complete "the running act became complete"
-                Expect.isTrue (item.Body.StartsWith "started sandbox") "and reads as started, not starting"
+                Expect.isTrue ((ConversationItem.headline item).StartsWith "started sandbox") "and reads as started, not starting"
             | other -> failwithf "the start must resolve the running act, not add a second — got %d items" (List.length other)
 
         testCase "a failure resolves that same item to failed, carrying why" <| fun () ->
             match conversationOf [ at 1L 0.0 (starting "1"); at 2L 1.0 (startFailed "1" "the docker daemon is not reachable") ] with
             | [ item ] ->
                 Expect.equal item.Status ConversationItemStatus.Failed "the running act became failed"
-                match item.Kind with
-                | ConversationItemKind.ActNote facts ->
-                    Expect.equal facts.Detail (Some "the docker daemon is not reachable") "and carries why it could not start"
-                | ConversationItemKind.Message -> failwith "still an act"
+                match item.Content with
+                | ItemContent.Act act ->
+                    Expect.equal
+                        (Act.particulars act |> List.map Phrase.said)
+                        [ "the docker daemon is not reachable" ]
+                        "and carries why it could not start"
+                | ItemContent.Message _ -> failwith "still an act"
             | other -> failwithf "the failure must resolve the running act, not add a second — got %d items" (List.length other)
 
         testCase "a start with no preceding starting still appears (a log written before starting existed)" <| fun () ->

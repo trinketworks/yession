@@ -149,6 +149,13 @@ module Style =
     /// button, and author line. Colour composes at the use site.
     let private caps = "font-semibold text-label tracking-caps uppercase"
 
+    /// The same voice one step up, for a verb that has ROOM: 13px rather than 11. Worn by
+    /// the composer's Send and Clear and by the interrupt above them — the three that stand
+    /// on a band of their own with nothing competing for the width. At the label size a word
+    /// button there read as a caption of the glyph it replaced rather than as the thing you
+    /// press.
+    let private capsLg = "font-semibold text-small tracking-caps uppercase"
+
     /// The voice a body is written in: Source Serif 4 for a person, and the system's own Noto
     /// Sans for the agent, which is part of the system (`--font-human`/`--font-agent`). A serif
     /// on the sans's own skeleton, so a conversation reads as one voice in two registers rather
@@ -366,34 +373,53 @@ module Style =
     let btnBare = cls [ btnBareBase; "text-ink-faint hover:text-ink" ]
     let btnBareDanger = cls [ btnBareBase; "text-ink-faint hover:text-err" ]
 
-    /// 32px square and BORDERLESS: the verb at the trailing edge of a field.
+    /// 32px square and BORDERLESS: the verb parked INSIDE a field, over the text.
     ///
     /// A Metro button IS its rectangle, so dropping the rectangle is not a quieter button, it
     /// is a different kind of control — and it earns that by living inside the field it acts
-    /// on rather than beside it. `SEND →` was the word and the arrow saying one thing twice
-    /// in a 93px box on a strip of its own; the arrow alone, on the line you just wrote, says
-    /// it once. The name goes on `aria-label`, which is where an icon-only control keeps it.
+    /// on rather than beside it. The terminal's command line is what still needs one: its Run
+    /// is absolutely placed at the line's trailing edge (`terminalCommandTrail`), where a word
+    /// would sit on top of the command being typed. The name goes on `aria-label`, which is
+    /// where an icon-only control keeps it.
+    ///
+    /// The message composer's Send used to be this control too, and is not any more
+    /// (`btnComposerSend`, below). They parted over a fact about the two surfaces rather than
+    /// a preference: the composer's verbs have a row to themselves, and a row with room in it
+    /// should say the word.
     let private btnInField =
         cls [ "w-8 h-8 shrink-0 grid place-items-center bg-transparent border-0 cursor-pointer p-0"
               "transition-colors"; focusRing ]
     let btnSendInField = cls [ btnInField; "text-blue hover:text-blue-bright" ]
+    /// Waiting for something to run. The same control in the same place, at the weight of a
+    /// thing with nothing to do — never `disabled`, in either spelling: an empty command line
+    /// is not a blocked one.
+    let btnSendInFieldWaiting = cls [ btnInField; "text-ink-faint hover:text-ink" ]
+
+    /// The composer's verbs, as WORDS — a Metro button with its border taken off.
+    ///
+    /// `SEND →` was once the word and an arrow saying one thing twice, in a 93px bordered box
+    /// on a strip of its own; the arrow alone replaced it and said it once, correctly, while
+    /// it rode the end of the line you had just written. It stopped riding that line when the
+    /// verbs dropped onto a row of their own on a phone — and a row holding two glyphs and
+    /// the rest of the screen is room the word was only ever given up for. So the word is
+    /// back, at 13px caps, without the rectangle: the band IS the surface here, and a border
+    /// round a control standing on it is the box this design spent three revisions removing.
+    ///
+    /// 40px tall, which is the composer's resting line exactly (`draftInput`: a 24px line in
+    /// `py-2`) — so the pair bottom-aligns onto it with no correction, and `draftCommit`
+    /// spends no `pb` to centre them.
+    let private btnComposerWord =
+        cls [ "h-10 px-3 shrink-0 inline-flex items-center bg-transparent border-0 cursor-pointer font-ui"
+              capsLg; "transition-colors"; focusRing ]
+    let btnComposerSend = cls [ btnComposerWord; "text-blue hover:text-blue-bright" ]
     /// Waiting for something to send. The same control in the same place, at the weight of a
     /// thing with nothing to do — never `disabled`, in either spelling: an empty composer is
     /// not a blocked one.
-    let btnSendInFieldWaiting = cls [ btnInField; "text-ink-faint hover:text-ink" ]
-    let btnDiscardInField = cls [ btnInField; "text-ink-faint hover:text-err" ]
-    /// The verb at the LEADING edge of the composer's line: stop the turn that is running.
-    /// Send's mirror image, and deliberately the same 32px in-field control rather than a
-    /// bordered button on a strip of its own — the band it sits in is the surface, here as
-    /// everywhere else.
-    ///
-    /// Faint at rest, err under the hand, exactly as discard is: it is a control, not an
-    /// announcement. What says the agent is writing is the caret in the timeline, where the
-    /// words are landing; a second blue pulse down here would be the same fact twice.
-    ///
-    /// `ml-2 mb-1` is `draftCommit`'s `pr-2 pb-1` reflected, so the two verbs sit at the same
-    /// height on the same line (the row is `items-end`).
-    let btnStopInField = cls [ btnInField; "text-ink-faint hover:text-err ml-2 mb-1" ]
+    let btnComposerSendWaiting = cls [ btnComposerWord; "text-ink-faint hover:text-ink" ]
+    /// What the `✕` became. The glyph was a verdict on the draft — *discard* — drawn in the
+    /// one mark a tab strip uses for *gone*; the word says what the press does to the line in
+    /// front of you, which is the same act described from where the person is standing.
+    let btnComposerClear = cls [ btnComposerWord; "text-ink-faint hover:text-err" ]
     /// Chrome, not an action: the small sidebar collapse/reveal chevrons. They lean the way
     /// they travel on hover and lead further on press — the only motion chrome earns, and the
     /// reason the two directions are separate values rather than one class plus a guess.
@@ -560,6 +586,14 @@ module Style =
 
     let avatar = "w-5 h-5 shrink-0"
     let avatarSm = "w-3.5 h-3.5 shrink-0"
+
+    // --- A thing a sentence points at (`Entity.render`) ---------------------------------
+    // Mark and name, inline in the sentence's own line: an entity is part of what is being
+    // said, not a chip beside it. The name one step brighter than the words around it, so
+    // WHO and WHAT is where the eye lands first — the step `actNoteWho` took for the
+    // author before acts folded under a shared author line.
+    let entity = "inline-flex items-center gap-1 align-baseline"
+    let entityName = "text-ink"
 
     let private checker (a: string) (b: string) =
         sprintf "bg-[conic-gradient(from_0deg,%s_25%%,%s_0_50%%,%s_0_75%%,%s_0)]" a b a b
@@ -1687,12 +1721,41 @@ module Style =
     let proseLink = "text-blue underline decoration-1 underline-offset-2 hover:text-blue-bright"
     let proseHr = "border-0 " + Stroke.dividerTop + " my-3"
 
+    // --- Interrupt: one verb, docked over the composer ---------------------------------------
     // The agent's activity strip used to live here: a 48px band carrying a pulse, the words
     // "agent is responding", the turn's number and a bordered Interrupt. It said what the
     // streaming message's own meta line said one line above it, and what that message's caret
     // said in the same breath — one fact, three animated marks, a twelfth of a phone's screen
-    // spent on the third of them. The control it carried was the only part that was its own,
-    // and it moved into the composer band (`btnStopInField`), where a person answers the turn.
+    // spent on the third of them. The control it carried was the only part that was its own.
+
+    /// Where that control ended up: a band of its own again, holding the verb and NOTHING
+    /// ELSE. That is the whole difference from the strip, and it is worth stating because the
+    /// two look alike from a distance — what says a turn is running is still the caret in the
+    /// timeline where the words are landing, and still the composer's live region for a
+    /// reader the caret cannot reach. A band that holds one verb is a verb you can reach; a
+    /// band that holds a bulletin is the strip coming back.
+    ///
+    /// It spent one revision at the LEADING edge of the composer's own line, mirroring Send.
+    /// That put a destructive verb exactly where the cursor starts, and moved the line
+    /// sideways every time a turn began. Above the line it interrupts nothing: the composer
+    /// keeps its full width whether or not the agent is writing.
+    ///
+    /// `px-2` around the button's own `px-2` is the composer's `px-4` gutter, so the word
+    /// starts on the same reading edge as the text under it.
+    let interruptBand = "shrink-0 flex items-center px-2 pb-1"
+
+    /// Ink at rest, err under the hand — the face every destructive verb here wears, and worn
+    /// for the same reason rather than out of symmetry. Err AT rest is this product's tone for
+    /// *something is wrong*, and nothing is: a turn running is the normal case, and a red word
+    /// standing over it every time the agent speaks would say otherwise within a day. What
+    /// makes this one findable is not its colour but that it is the only thing in its band.
+    ///
+    /// A step brighter than the faint verbs that ride a listed row (`btnBare`), though, and
+    /// that difference is the same rule read the other way: those are faint because the ROW is
+    /// the subject and they are a thing you can do to it. Here the verb IS the subject.
+    let btnInterrupt =
+        cls [ "h-8 px-2 shrink-0 inline-flex items-center bg-transparent border-0 cursor-pointer font-ui"
+              capsLg; "text-ink-dim hover:text-err transition-colors"; focusRing ]
 
     // --- Queue: editable until drained; the head's green count says so ------------------------
     // The queue is the composer's dock, not a list floating over the ground: its rows are
@@ -1750,12 +1813,20 @@ module Style =
         "group relative shrink-0 flex flex-col bg-surface focus-within:bg-surface-2 transition-colors"
 
     /// On the phones this is for, the band is the last thing on screen and used to run flush
-    /// to the bottom edge, under the thumb about to press it; `max-md:pb-6` gives it room
-    /// without touching desktop, where the band never meets an edge at all. Wider than the
-    /// terminal's own clearance (`terminalComposer`'s `max-md:pb-4`) because Send and Discard
-    /// (`draftCommit`, below) land in this gap now, not beside the text: the terminal's Run
-    /// button stays on its line, so its gap stays the thumb-clearance size alone.
-    let composer = composerBand + " max-md:pb-6"
+    /// to the bottom edge, under the thumb about to press it; the `max-md` clearance gives it
+    /// room without touching desktop, where the band never meets an edge at all.
+    ///
+    /// TWO clearances, because the band has two heights. Open, it is the terminal's plus a
+    /// step, for the verbs' row landing in the gap (`draftCommit`, below). At rest that row
+    /// takes no height at all, so the step would be 8px of band under a line nobody is
+    /// typing in — and the composer's whole argument is that it gives the conversation back
+    /// the room it is not using. Closed it is plain thumb room, the same `pb-4` the
+    /// terminal's command band spends for the same reason.
+    ///
+    /// `focus-within`, not `group-focus-within`: this element IS the group, and a group
+    /// variant only ever matches the group's DESCENDANTS — so the open clearance was written
+    /// once, served, and never applied to anything.
+    let composer = composerBand + " max-md:pb-4 max-md:focus-within:pb-6"
 
     /// The band's top rule, in two parts — because it is doing two jobs and one element could
     /// only ever do one of them.
@@ -1798,9 +1869,28 @@ module Style =
     /// rather than on the messages; it takes the room when it is being used and gives it back
     /// when it is not. `max-height` rather than `height` so the growth is animatable and so a
     /// long draft still scrolls inside rather than pushing the timeline off the top.
+    ///
+    /// A LINE AND A HALF, once there is more than a line. The rest height was exactly the one
+    /// line (40px), so a longer draft stopped dead at the padding — a hard horizontal cut
+    /// through the second line, which reads as a rendering fault rather than as text
+    /// continuing. 52px shows most of the next line and the mask fades it out, so the
+    /// collapsed composer says *there is more here* in the only language a collapsed thing
+    /// has. It costs nothing when there is not: height is content-driven and `max-height`
+    /// only caps it, so a one-line draft still stands at 40.
+    ///
+    /// The mask's stops are absolute FROM THE TOP (2.5rem → 3.25rem) rather than a percentage
+    /// or an offset from the bottom, and that is the whole reason it is safe. A ramp measured
+    /// from the bottom edge is a ramp whose position moves with the box: at 40px it would run
+    /// up through the first line and fade the descenders of a draft that fits perfectly well.
+    /// Anchored at the top it begins exactly where line one's box ends, so line one is never
+    /// touched and the ramp is simply off the end of a box that has not grown.
     let draftInput =
-        cls [ "block w-full max-h-10 overflow-hidden transition-[max-height] duration-200 ease-out"
-              "group-focus-within:max-h-64 group-focus-within:overflow-y-auto motion-reduce:transition-none"
+        cls [ "block w-full max-h-[3.25rem] overflow-hidden transition-[max-height] duration-200 ease-out"
+              "[mask-image:linear-gradient(#000_2.5rem,transparent_3.25rem)]"
+              "group-focus-within:max-h-64 group-focus-within:overflow-y-auto"
+              // Gone on focus, not merely pushed down: the ramp would otherwise sit over the
+              // line being typed the moment a draft scrolls inside.
+              "group-focus-within:[mask-image:none] motion-reduce:transition-none"
               fieldBare
               messageVoice false
               // No `placeholder:` variant: this field is a mounted editor, not an `<input>`,
@@ -1821,25 +1911,46 @@ module Style =
     /// it taught something, but it spent a permanent strip saying what one press teaches; it
     /// survives as `aria-keyshortcuts` on the control it describes, which is where a screen
     /// reader looks for it and where it cannot go stale.
-    /// `pb-1`, derived, not eyeballed: the rest-state input is a 24px line inside `py-2`
-    /// (40px), so the line's centre sits 20px from the box top; a 32px control bottom-aligned
-    /// with 4px spent below centres at 20px too. `pb-2` put the pair 4px low of the text
-    /// beside them — measured as the send arrow riding under the line it sends.
+    /// `pr-1` beside the buttons' own `px-3` is the composer's 16px gutter, read from the
+    /// other edge: the word ends where `draftInput`'s `px-4` begins, so the line of text and
+    /// the verb that sends it are on one rail rather than four pixels apart.
+    ///
+    /// No `pb`, derived, not eyeballed: the rest-state input is a 24px line inside `py-2`
+    /// (40px), so the line's centre sits 20px from the box top; a 40px control bottom-aligned
+    /// on the same 40px box centres at 20px too. It used to spend `pb-1` because the controls
+    /// were 32px squares and needed 4px under them to reach that centre — the correction went
+    /// out with the glyphs (`btnComposerWord`, above, is the line's own height).
     ///
     /// On a phone this row leaves the line entirely: it wants the full width
     /// (`max-md:w-full max-md:justify-end`, its buttons pushed to the trailing edge the
     /// way they sit on desktop), it sits BELOW the text now (`draftBox`'s
-    /// `max-md:flex-col` puts it there in document order), and it is invisible at rest
-    /// (`max-md:opacity-0`), surfacing on the same signal the band itself lifts a tone
-    /// on: `group-focus-within`. A permanently visible row was two icons' width borrowed
-    /// from every line of every message, on the narrowest screens this ships to, for a
-    /// control a thumb reaches once per message; tapping in is the gesture that already
-    /// opens the composer, so it costs nothing extra to be what reveals them too.
-    /// `composer`'s wider `max-md:pb-6` (above) is the room this needs to land in.
+    /// `max-md:flex-col` puts it there in document order), and it is gone at rest,
+    /// surfacing on the same signal the band itself lifts a tone on: `group-focus-within`.
+    /// A permanently visible row was two icons' width borrowed from every line of every
+    /// message, on the narrowest screens this ships to, for a control a thumb reaches once
+    /// per message; tapping in is the gesture that already opens the composer, so it costs
+    /// nothing extra to be what reveals them too.
+    ///
+    /// GONE means `max-h-0` beside the fade, not the fade alone. `opacity-0` hides a row and
+    /// keeps every pixel of its height, so the band under a composer nobody was typing in
+    /// carried a 44px row of invisible buttons plus the clearance meant to sit below them —
+    /// two thirds of a collapsed composer, and a gap no markup test can tell from an empty
+    /// one. `composer`'s `max-md:focus-within:pb-6` (above) is the room this lands in once
+    /// it is real.
     let draftCommit =
-        cls [ "shrink-0 flex items-center gap-1 pr-2 pb-1"
-              "max-md:w-full max-md:justify-end max-md:pt-1"
-              "max-md:opacity-0 max-md:pointer-events-none max-md:transition-opacity max-md:duration-150"
+        cls [ "shrink-0 flex items-center gap-1 pr-1"
+              "max-md:w-full max-md:justify-end"
+              "max-md:max-h-0 max-md:overflow-hidden max-md:opacity-0 max-md:pointer-events-none"
+              "max-md:transition-[max-height,opacity] max-md:duration-150"
+              // `max-md:` on the reduced-motion variant too, and not for symmetry: Tailwind
+              // orders the stylesheet by variant, so a bare `motion-reduce:transition-none`
+              // is EMITTED ABOVE the `max-md:` transition it is meant to cancel and loses to
+              // it at exactly the widths that have one.
+              "max-md:motion-reduce:transition-none"
+              // The row's top padding is part of the row, so it waits with it: `max-h-0` is
+              // a border-box cap and cannot clamp below the padding, so a `pt-1` left on at
+              // rest is 4px of band that the row still owns while claiming to be gone.
+              "max-md:group-focus-within:pt-1 max-md:group-focus-within:max-h-12"
               "max-md:group-focus-within:opacity-100 max-md:group-focus-within:pointer-events-auto" ]
     let draftAuthor = "pl-4 pt-2 " + caps + " text-ink-faint truncate"
 
@@ -2209,8 +2320,9 @@ module Style =
     /// `composerBand`, above, kept as one token rather than a matching string, so the tone
     /// and the rule can never quietly drift from the message composer's. The bottom
     /// clearance is its own, though (`max-md:pb-4`, plain thumb room): Run stays on the
-    /// command line rather than dropping into the gap the way Send and Discard now do
-    /// (`composer`'s wider `max-md:pb-6`, above), so this band does not need their room.
+    /// command line rather than dropping below it the way Send and Clear do, so this band
+    /// never needs their room — which is also the clearance the message composer falls back
+    /// to when its own row is not showing (`composer`, above).
     let terminalComposer = composerBand + " max-md:pb-4"
 
     /// A row in the band that is not the command line — the lease bar, the "not marking"
@@ -2240,12 +2352,14 @@ module Style =
     /// this slot, and the verb.
     let terminalCommandTrail = "absolute right-1 inset-y-0 flex items-center gap-1"
 
-    // Run itself is `btnSendInField` / `btnSendInFieldWaiting` — the message composer's Send,
-    // unchanged. Queueing a command and sending a message are the same act, which is why the
-    // terminal composer was built from the message composer's parts in the first place; they
-    // should not have two different verbs at two different weights. Which of the two faces it
-    // wears comes from the MODEL (a published slot, the same fact the send path acts on),
-    // never from a second measurement of the field.
+    // Run itself is `btnSendInField` / `btnSendInFieldWaiting`, which the message composer's
+    // Send used to be as well. The two parted over the geometry rather than the meaning:
+    // queueing a command and sending a message are still the same act, but this verb is
+    // parked OVER the command line (`terminalCommandTrail`, absolutely placed inside the
+    // field), where a word would sit on top of what is being typed, while the composer's
+    // verbs have a row to themselves and can afford one (`btnComposerSend`). Which of the two
+    // faces it wears comes from the MODEL (a published slot, the same fact the send path acts
+    // on), never from a second measurement of the field.
     /// A queued command awaiting its turn — a listed row, so its leading edge carries its
     /// state.
     let private terminalQueued = cls [ "flex-col gap-1 px-3 py-2"; rowBase ]

@@ -134,12 +134,12 @@ let private announcedPair () : Async<ChildProcess * string * string> =
             spawn
                 (socatBinary env)
                 [ "-d"; "-d"; "pty,raw,echo=0"; "pty,raw,echo=0" ]
-                // Its stdin and stdout are pipes nobody reads rather than `/dev/null`, because
-                // `stdio` is one setting for all three streams — and socat with `-d -d` says
-                // everything it has to say on stderr and puts its data on the ptys.
+                // Its stdin and stdout are pipes nobody reads rather than `/dev/null`: socat
+                // with `-d -d` says everything it has to say on stderr and puts its data on the
+                // ptys, so the other two carry nothing either way.
                 { Cwd = None
-                  Env = env
-                  Stdio = Pipe
+                  Env = ChildEnv.Replacing env
+                  Streams = { Stdin = Pipe; Stdout = Pipe; Stderr = Pipe }
                   Detached = false }
 
         // `setEncoding` rather than converting each chunk: it puts a decoder in front of the

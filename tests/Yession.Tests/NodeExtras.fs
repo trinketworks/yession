@@ -243,12 +243,12 @@ let tests =
 // --- Spawning, and the members of a child Fable.Node does not declare ------------------------
 
 /// Options with nothing in them, so each case below varies exactly the one field it is about.
-/// An empty `Env` is not an omission: Node REPLACES the environment rather than merging it, and
-/// a child spawned by absolute path needs nothing in it.
+/// An empty `Replacing` is not an omission: it is a child given no environment at all, which a
+/// child spawned by absolute path needs nothing more than.
 let private bare =
     { Cwd = None
-      Env = Map.empty
-      Stdio = Pipe
+      Env = ChildEnv.Replacing Map.empty
+      Streams = { Stdin = Pipe; Stdout = Pipe; Stderr = Pipe }
       Detached = false }
 
 let private node (script: string) (arguments: string list) (options: SpawnOptions) =
@@ -267,10 +267,73 @@ let portsTests =
         // `obj` — so what is pinned is that each field arrives under the name Node reads it by.
         testCaseAsync "the environment given is the environment the child has" <| async {
             let child =
-                node "process.exit(process.env.YESSION_MARK === 'set' ? 4 : 5)" [] { bare with Env = Map [ "YESSION_MARK", "set" ] }
+                node
+                    "process.exit(process.env.YESSION_MARK === 'set' ? 4 : 5)"
+                    []
+                    { bare with Env = ChildEnv.Replacing (Map [ "YESSION_MARK", "set" ]) }
 
             let! _ = until (fun () -> (exitCode child).IsSome)
             Expect.equal (exitCode child) (Some 4) "the child saw the variable it was given"
+        }
+
+        // The other half of `ChildEnv`, and the half a caller means far more often. `PATH` is
+        // the witness because it is what a replacing env silently costs a child: this process
+        // has one, the caller named none, and the child must still have it.
+        testCaseAsync "an added environment is this process's with the names given over it" <| async {
+            let child =
+                node
+                    "process.exit(process.env.YESSION_MARK === 'set' && process.env.PATH ? 4 : 5)"
+                    []
+                    { bare with Env = ChildEnv.Adding (Map [ "YESSION_MARK", "set" ]) }
+
+            let! _ = until (fun () -> (exitCode child).IsSome)
+            Expect.equal (exitCode child) (Some 4) "the child kept what it inherited and took what it was told"
+        }
+
+        // Replacing is the opposite promise, and it is only worth stating because getting it by
+        // accident is the fault `ChildEnv` exists to make unwritable.
+        testCaseAsync "a replaced environment is only the names given" <| async {
+            let child =
+                node
+                    "process.exit(process.env.PATH === undefined ? 4 : 5)"
+                    []
+                    { bare with Env = ChildEnv.Replacing (Map [ "YESSION_MARK", "set" ]) }
+
+            let! _ = until (fun () -> (exitCode child).IsSome)
+            Expect.equal (exitCode child) (Some 4) "nothing of this process's reached the child"
+        }
+
+        // `Streams` says one thing per stream, and the fault it guards against is the ORDER:
+        // three identical wirings would pass whatever order `StreamWiring.toJs` put them in. So
+        // one of the three differs, and the child says which of its own descriptors it landed
+        // on — `Ignore` opens `/dev/null`, a character device, and a pipe is never one. Which
+        // KIND of thing a pipe is left unasked, because Node's answer to that is a socket on
+        // this platform and a FIFO is just as legal an answer elsewhere; that a descriptor is
+        // not `/dev/null` is the part the wiring decides.
+        testCaseAsync "each of the three streams is wired where it was told" <| async {
+            let child =
+                node
+                    ("const fs = require('node:fs');"
+                     + "const kind = fd => fs.fstatSync(fd).isCharacterDevice() ? 'c' : 'n';"
+                     + "process.exit(kind(0) + kind(1) + kind(2) === 'cnn' ? 4 : 5)")
+                    []
+                    { bare with Streams = { Stdin = Ignore; Stdout = Pipe; Stderr = Pipe } }
+
+            let! _ = until (fun () -> (exitCode child).IsSome)
+            Expect.equal (exitCode child) (Some 4) "the ignored stream landed on stdin and nowhere else"
+        }
+
+        // `onExit` is an emit like every other binding here — an event name and a handler type
+        // that the compiler cannot check against each other — so it is called once, on Node,
+        // and what arrives is compared to what the child chose. Which of `exit` and `close`
+        // fires FIRST is not asserted: the answer is Node's, not this binding's, and a case
+        // that raced the two would be a case that fails for the weather.
+        testCaseAsync "a child's exit is reported with the code it chose" <| async {
+            let child = node "process.exit(8)" [] bare
+            let mutable reported : int option option = None
+            ChildProcessStreams.onExit child (fun code -> reported <- Some code)
+            let! _ = until (fun () -> reported.IsSome)
+            Expect.equal reported (Some (Some 8)) "the code the child chose, through the exit event"
         }
 
         testCaseAsync "the working directory given is where the child runs" <| async {

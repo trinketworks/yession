@@ -272,13 +272,6 @@ let private connectChannel (signalUrl: string) : Async<Result<FrameChannel<strin
 
 let private appRoot () : Browser.Types.HTMLElement = Browser.Dom.document.getElementById "app"
 
-// lit-html's `render` inserts its content AFTER a container's existing children rather
-// than replacing them, so the server-rendered shell (first paint) would linger beside the
-// live one. Clear it once before the client's first render so Lit owns `#app` outright.
-/// `replaceChildren()` with no arguments, which `Fable.Browser.Dom` does not type.
-[<Emit("$0.replaceChildren()")>]
-let private clearChildren (el: Browser.Types.Element) : unit = jsNative
-
 /// Put text on the system clipboard, and say whether the browser let us. Asynchronous
 /// because the write may be a permission prompt, and refusable for reasons the page cannot
 /// see coming — an insecure context has no `navigator.clipboard` at all, which is the
@@ -421,9 +414,10 @@ let private revealSettings () : unit =
 // (`Yession.Domain.MeProbe`) the Session Process encodes its answer with — rather than one
 // JS `Emit` string that encoded the branching itself. The fetch call itself goes through
 // `Fable.Fetch` (https://github.com/fable-compiler/fable-fetch), a typed binding, not a
-// hand-rolled Emit; `AbortSignal.timeout` is the one piece it does not cover and stays a
-// one-line Emit below. What the answer MEANS is this file's `ProbeOutcome` and the match
-// below, both type-checked.
+// hand-rolled Emit; `AbortSignal.timeout` is the one piece it does not cover and comes from
+// `Fable.FetchExtras`, which is a binding too — and one the host shares, because that signal
+// is a global in Node as well as here. What the answer MEANS is this file's `ProbeOutcome`
+// and the match below, both type-checked.
 //
 // The URL is a PARAMETER: every fetch below takes its URL from `Page.href`, so it stays
 // checked against the route table — and resolved against the base this page declared —
@@ -441,12 +435,6 @@ let private revealSettings () : unit =
 // turns into data a `match` must cover, rather than an exception a caller must remember to
 // catch.
 
-/// `Fetch.AbortSignal.timeout(...)` is the one piece `Fable.Fetch` does not bind (it is not
-/// part of the fetch surface itself), so this stays a one-line Emit, typed against the
-/// package's own `AbortSignal` so it slots straight into `RequestProperties.Signal` below.
-[<Emit("AbortSignal.timeout($0)")>]
-let private abortAfter (deadlineMs: float) : Fetch.Types.AbortSignal = jsNative
-
 /// The two axes `fetchMe` resolves to. A record of two independent bools (the shape this
 /// replaced) let a caller ask whether `reachable = false, authorized = true` — a
 /// combination that cannot actually happen; a case per real outcome makes it
@@ -460,7 +448,7 @@ let private fetchMe (url: string) (deadlineMs: float) : Async<ProbeOutcome> =
     async {
         let init =
             [ Fetch.Types.RequestProperties.Cache Fetch.Types.RequestCache.Nostore
-              Fetch.Types.RequestProperties.Signal(abortAfter deadlineMs) ]
+              Fetch.Types.RequestProperties.Signal(Fable.FetchExtras.timeoutSignal deadlineMs) ]
         // `fetchUnsafe`, not `fetch`: the plain binding throws on a non-2xx status, which
         // would fold the "refused" and "not there" axes back into one exception to
         // re-inspect. This wants the raw response so it can tell 401/403 (refused) apart
@@ -512,35 +500,80 @@ let private persistenceKey () : string =
     | None -> "yession/" + Browser.Dom.window.location.host + Browser.Dom.window.location.pathname
 
 // Resolved against the shell's `<base href>`, so a session mounted under a path signals
-// to its own prefix rather than the origin root.
-[<Emit("new URL($0, document.baseURI).href")>]
-let private absolute (relative: string) : string = jsNative
+// to its own prefix rather than the origin root. `document.baseURI` IS that base, or the
+// document's own address where the shell declared none — and naming it here rather than
+// inside the binding is the point: which base an address resolves against is this client's
+// decision about its own document, and `Urls.resolve` resolves against whichever it is told.
+let private absolute (relative: string) : string =
+    Urls.resolve relative Browser.Dom.document.baseURI
 
 // `location.replace` resolves against the DOCUMENT's URL, not `<base href>` — the one place
 // relative resolution does not follow the base — so it is handed an address already resolved
 // against `document.baseURI`, once, rather than resolved again at each call site.
 let private renavigateTo (url: string) : unit = Browser.Dom.window.location.replace (absolute url)
 
-// The event-chunk GET as a TOTAL function: the body, the status it refused with, or the
-// transport error it never got past (`status: 0` — offline, refused, DNS, TLS). It never
-// rejects, because the information a rejection destroys is exactly the information the
-// resilience policy needs to decide whether retrying could help.
-// `r.url` is the address the answer came back FROM, which after a redirect is not the one
-// that was asked for — and it is the one worth keeping, because a range's bounds never move
-// while a cursor's answer does (Plan 20).
-[<Emit("""fetch($0).then(
-  async r => r.ok ? { ok: true, status: r.status, url: r.url, detail: await r.text() } : { ok: false, status: r.status, url: r.url, detail: '' },
-  e => ({ ok: false, status: 0, url: '', detail: String(e) }))""")>]
-let private fetchChunk (url: string) : JS.Promise<{| ok: bool; status: int; url: string; detail: string |}> = jsNative
+// Every round trip this client makes below is the same program: ask, and hand back what came
+// of it as DATA. It never rejects, because the information a rejection destroys is exactly the
+// information the caller needs — whether retrying could help (`Client.HttpFailure`, the
+// resilience policy), and whether a sign-in flow has ended or merely had a bad moment
+// (`GitHubFlow.ended`).
+//
+// It was three `[<Emit>]` macros — a chunk GET, a JSON POST, a no-store GET — which is one
+// JavaScript program written three times, in three spellings of the same outcome, each with
+// its own chance to bury a decision where nothing but the runtime could read it. Written once
+// in F# it is the shape `fetchMe` above already has, and the one
+// `tests/Yession.Tests/TestHttp.fs` gives the suites.
 
+/// What one round trip answered. `Status` rides beside `Ok` because the 2xx question and WHICH
+/// status decide different things: a caller that knows only THAT a request failed cannot tell a
+/// refusal from a session it could not reach, and a 401 is the one answer with a button
+/// (connect GitHub) rather than a retry. `0` is a fetch that never answered — offline, refused,
+/// DNS, TLS.
+///
+/// `Url` is the address the answer came back FROM, which after a redirect is not the one that
+/// was asked for — and it is the one worth keeping, because a range's bounds never move while a
+/// cursor's answer does (Plan 20). A request that never answered carries no address, so it
+/// carries the empty string.
+type private Answered =
+    { Ok : bool
+      Status : int
+      Url : string
+      Body : string }
+
+/// A fetch as a TOTAL function: what the far end said, or the reason it said nothing.
+///
+/// `fetchUnsafe`, not `fetch`: the plain binding throws on a non-2xx status, which would fold a
+/// refusal back into the same exception a dead network raises, and the status is the thing
+/// every caller here is deciding on (`fetchMe` above carries the rest of why). Reading the body
+/// sits INSIDE the caught region with the request, because a body that fails to arrive is the
+/// same "no answer" as a request that never did, and there is one case for both. `Message` is
+/// what the `String(e.message || e)` in the macros this replaces was reaching for.
+let private answered (props: Fetch.Types.RequestProperties list) (url: string) : Async<Answered> =
+    async {
+        let! arrived =
+            async {
+                let! response = Fetch.fetchUnsafe url props |> Async.AwaitPromise
+                let! body = response.text () |> Async.AwaitPromise
+                return response, body
+            }
+            |> Async.Catch
+        match arrived with
+        | Choice1Of2 (response, body) ->
+            return { Ok = response.Ok; Status = response.Status; Url = response.Url; Body = body }
+        | Choice2Of2 exn -> return { Ok = false; Status = 0; Url = ""; Body = exn.Message }
+    }
+
+/// The event-chunk GET. A plain one, with no cache directive: a chunk is asked for by the
+/// address its answer came back from, and the bytes at that address never move — which is the
+/// same property the history store below keeps them on.
 let private httpGet : Client.HttpGet =
     fun url ->
         async {
-            let! reply = fetchChunk url |> Async.AwaitPromise
+            let! reply = answered [] url
             return
-                if reply.ok then Ok { Url = reply.url; Body = reply.detail }
-                elif reply.status = 0 then Error (Client.HttpUnreachable reply.detail)
-                else Error (Client.HttpStatus reply.status)
+                if reply.Ok then Ok { Url = reply.Url; Body = reply.Body }
+                elif reply.Status = 0 then Error (Client.HttpUnreachable reply.Body)
+                else Error (Client.HttpStatus reply.Status)
         }
 
 // --- The history store (Plan 20, step 2): the Cache API, not the HTTP cache ---------------
@@ -877,13 +910,15 @@ let private fetchStatusAt (decoder: Decoder<'reply>) (url: string) : Async<'repl
 let private fetchClaudeStatus () =
     fetchStatusAt claudeReply (Page.href ClaudeStatus)
 
-/// `status` rides beside `ok` because a panel that only knows THAT a post failed cannot tell
-/// a refusal from a session it could not reach, and those end a sign-in flow differently
-/// (`GitHubFlow.ended`). `0` is a fetch that never answered.
-[<Emit("""fetch($0, { method: 'POST', headers: { 'content-type': 'application/json' }, body: $1 })
-  .then(async r => ({ ok: r.ok, status: r.status, body: await r.text() }))
-  .catch(e => ({ ok: false, status: 0, body: String((e && e.message) || e) }))""")>]
-let private postClaude (url: string) (body: string) : JS.Promise<{| ok: bool; status: int; body: string |}> = jsNative
+/// A JSON POST: the one write shape both connection panels use. Every route they post to
+/// decodes its body as JSON, so the content-type is stated once here rather than at each of
+/// the six call sites — one of which would eventually be written without it.
+let private postJson (url: string) (body: string) : Async<Answered> =
+    answered
+        [ Fetch.Types.RequestProperties.Method Fetch.Types.HttpMethod.POST
+          Fetch.requestHeaders [ Fetch.Types.HttpRequestHeaders.ContentType "application/json" ]
+          Fetch.Types.RequestProperties.Body (Fetch.Types.BodyInit.Case3 body) ]
+        url
 
 /// A field left empty is OMITTED rather than sent blank, which is what the `|| undefined`
 /// this replaces was doing: `JSON.stringify` drops a key whose value is `undefined`, and a
@@ -985,10 +1020,11 @@ let private parseDevicePoll (body: string) : {| status: string option; interval:
 // session encoded them with. A failure carries its status, because a 401 is the one answer
 // with a button (connect GitHub) rather than a retry.
 
-[<Emit("""fetch($0, { cache: 'no-store' })
-  .then(async r => ({ ok: r.ok, status: r.status, body: await r.text() }))
-  .catch(e => ({ ok: false, status: 0, body: String((e && e.message) || e) }))""")>]
-let private getText (url: string) : JS.Promise<{| ok: bool; status: int; body: string |}> = jsNative
+/// `no-store`, because each of these is asked at the moment somebody looks: a listing served
+/// from a kept copy would answer with the repositories this person could reach when the tab
+/// was opened rather than the ones they can reach now.
+let private getText (url: string) : Async<Answered> =
+    answered [ Fetch.Types.RequestProperties.Cache Fetch.Types.RequestCache.Nostore ] url
 
 /// One page of the listing. The URL is composed here only for the FIRST page, from what was
 /// typed; every page after it is asked for with the cursor the page before it carried, and
@@ -996,14 +1032,14 @@ let private getText (url: string) : JS.Promise<{| ok: bool; status: int; body: s
 /// makes the cursor the session's to define (`Repos.RepoPage`).
 let private fetchRepoPage (url: string) : Async<Result<RepoPage, string * bool>> =
     async {
-        let! reply = getText url |> Async.AwaitPromise
-        if not reply.ok then
+        let! reply = getText url
+        if not reply.Ok then
             return
                 Error (
-                    (if reply.body = "" then sprintf "the session answered %d" reply.status else reply.body),
-                    reply.status = 401)
+                    (if reply.Body = "" then sprintf "the session answered %d" reply.Status else reply.Body),
+                    reply.Status = 401)
         else
-            match Codec.fromString Codec.repoPage reply.body with
+            match Codec.fromString Codec.repoPage reply.Body with
             | Ok page -> return Ok page
             | Error reason -> return Error (reason, false)
     }
@@ -1023,11 +1059,11 @@ let private fetchRepoListing (query: string) : Async<LaunchListing> =
 /// the listing's reason (`fetchRepoPage`).
 let private fetchBranchPage (url: string) : Async<Result<BranchPage, string>> =
     async {
-        let! reply = getText url |> Async.AwaitPromise
-        if not reply.ok then
-            return Error (if reply.body = "" then sprintf "the session answered %d" reply.status else reply.body)
+        let! reply = getText url
+        if not reply.Ok then
+            return Error (if reply.Body = "" then sprintf "the session answered %d" reply.Status else reply.Body)
         else
-            match Codec.fromString Codec.branchPage reply.body with
+            match Codec.fromString Codec.branchPage reply.Body with
             | Ok page -> return Ok page
             | Error reason -> return Error reason
     }
@@ -1045,11 +1081,11 @@ let private fetchRepoBranches (repo: RepoRef) : Async<LaunchBranches> =
 let private fetchPullHead (repo: RepoRef) (number: int) : Async<Result<PullHead, string>> =
     async {
         let owner, name = RepoRef.owner repo, RepoRef.repo repo
-        let! reply = getText (Page.href (GitHubPullHead (owner, name, string number))) |> Async.AwaitPromise
-        if not reply.ok then
-            return Error (if reply.body = "" then sprintf "the session answered %d" reply.status else reply.body)
+        let! reply = getText (Page.href (GitHubPullHead (owner, name, string number)))
+        if not reply.Ok then
+            return Error (if reply.Body = "" then sprintf "the session answered %d" reply.Status else reply.Body)
         else
-            return Codec.fromString Codec.pullHead reply.body
+            return Codec.fromString Codec.pullHead reply.Body
     }
 
 // --- The read surface's stream (Plan 15) --------------------------------------------------
@@ -1061,18 +1097,12 @@ let private fetchPullHead (repo: RepoRef) (number: int) : Async<Result<PullHead,
 // is nothing to re-probe on, because a value arrives when it changes rather than when
 // somebody looks.
 
-[<Emit("new EventSource($0)")>]
-let private newEventSource (url: string) : obj = jsNative
-
-[<Emit("$0.onmessage = $1")>]
-let private onEventSourceMessage (source: obj) (handler: Browser.Types.MessageEvent -> unit) : unit = jsNative
-
 /// The stream, with the handler already on it: opened, subscribed, handed back. The caller
-/// keeps nothing — it never closes this — so what comes back is the source itself rather than
-/// anything this client would have to remember how to undo.
-let private openQueryStream (url: string) (onFrame: string -> unit) : obj =
-    let source = newEventSource url
-    onEventSourceMessage source (fun message -> onFrame (string message.data))
+/// keeps nothing — it never closes this, per the paragraph above — so what comes back is the
+/// source itself rather than anything this client would have to remember how to undo.
+let private openQueryStream (url: string) (onFrame: string -> unit) : EventSource =
+    let source = EventSource.create url
+    source.onmessage <- fun message -> onFrame (string message.data)
     source
 
 // --- Entry -----------------------------------------------------------------------------
@@ -1189,10 +1219,10 @@ let private start () =
             claudeAction
                 (fun () ->
                     async {
-                        let! reply = postClaude route (claudeBody scope code token) |> Async.AwaitPromise
-                        if not reply.ok then return Error reply.body
+                        let! reply = postJson route (claudeBody scope code token)
+                        if not reply.Ok then return Error reply.Body
                         elif expectUrl then
-                            match parseAuthorizeUrl reply.body with
+                            match parseAuthorizeUrl reply.Body with
                             | None -> return Error "no authorize url in the reply"
                             | Some url -> return Ok (Some url)
                         else return Ok None
@@ -1221,20 +1251,19 @@ let private start () =
                     match latestModel.GitHub.Flow with
                     | GitHubAwaitingApproval (userCode, verificationUri, scope, interval) ->
                         let! reply =
-                            postClaude
+                            postJson
                                 (Page.href (GitHub GitHubAction.Poll))
                                 (githubBody scope "")
-                            |> Async.AwaitPromise
-                        if not reply.ok then
+                        if not reply.Ok then
                             // A poll that failed is not necessarily a flow that ended. Only the
                             // session's own 4xx says this one is over; a 5xx or a fetch that
                             // never answered is a bad moment, and the code on screen — which the
                             // human may already have approved — is still good.
-                            if GitHubFlow.ended reply.status then
-                                dispatchRef (GitHubFlowMsg (GitHubError reply.body))
+                            if GitHubFlow.ended reply.Status then
+                                dispatchRef (GitHubFlowMsg (GitHubError reply.Body))
                             else pollGitHubWhileAwaiting ()
                         else
-                            let outcome = parseDevicePoll reply.body
+                            let outcome = parseDevicePoll reply.Body
                             match outcome.status with
                             | Some "connected" -> refreshGitHub ()
                             | _ ->
@@ -1353,13 +1382,12 @@ let private start () =
                     githubAction (fun () ->
                         async {
                             let! reply =
-                                postClaude
+                                postJson
                                     (Page.href (GitHub GitHubAction.Begin))
                                     (githubBody scope "")
-                                |> Async.AwaitPromise
-                            if not reply.ok then return Error reply.body
+                            if not reply.Ok then return Error reply.Body
                             else
-                                match parseDeviceBegin reply.body with
+                                match parseDeviceBegin reply.Body with
                                 | None -> return Error "the reply began no device flow"
                                 | Some began ->
                                     return
@@ -1374,11 +1402,10 @@ let private start () =
                         githubAction (fun () ->
                             async {
                                 let! reply =
-                                    postClaude
+                                    postJson
                                         (Page.href (GitHub GitHubAction.Token))
                                         (githubBody scope token)
-                                    |> Async.AwaitPromise
-                                if not reply.ok then return Error reply.body else return Ok None
+                                if not reply.Ok then return Error reply.Body else return Ok None
                             })
               Copy =
                 fun key text ->
@@ -1401,11 +1428,10 @@ let private start () =
                     githubAction (fun () ->
                         async {
                             let! reply =
-                                postClaude
+                                postJson
                                     (Page.href (GitHub GitHubAction.Disconnect))
                                     (githubBody scope "")
-                                |> Async.AwaitPromise
-                            if not reply.ok then return Error reply.body else return Ok None
+                            if not reply.Ok then return Error reply.Body else return Ok None
                         })
               OpenTerminal = fun title -> connectionRef |> Option.iter (fun c -> c.OpenTerminal title)
               ApproveRepoCapabilities =
@@ -1508,8 +1534,11 @@ let private start () =
               FocusItemActions = fun id -> PaneShell.toItemActions (MessageId.value id) }
 
         let el = appRoot ()
-        // Take over the server-rendered shell (see `clearChildren`): from here Lit owns it.
-        clearChildren el
+        // Take over the server-rendered shell: from here Lit owns it. lit-html's `render`
+        // inserts its content AFTER a container's existing children rather than replacing
+        // them, so the first paint the server rendered would linger beside the live one —
+        // clearing once, before the client's first render, is what stops that.
+        Elements.clearChildren el
 
         // The render, composed here and run by Elmish on every model change. What it needs of
         // the session it is handed as links, because the connection is wired later — and

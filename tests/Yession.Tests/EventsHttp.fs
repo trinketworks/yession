@@ -126,7 +126,7 @@ let private endpointTests =
                 a.Connection.SendDraft a.Hello.PeerId
                 do! a.Runner.WaitFor (fun m ->
                         not m.EventConsumer.IsCatchingUp
-                        && (m.Conversation.Items |> List.map (fun i -> i.Body)) = [ "fetched over http" ])
+                        && (m.Conversation.Items |> List.map (fun i -> (Yession.Domain.Chat.ConversationItem.said i))) = [ "fetched over http" ])
                 do! a.Channel.Close ()
                 do! h.Stop ()
             })

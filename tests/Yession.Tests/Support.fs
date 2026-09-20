@@ -160,6 +160,10 @@ let runInSandbox
 /// The view's `ViewActions` are no-ops (handlers fire on live browser events only).
 let render (model: ClientModel) : string = Ssr.renderModel model
 
+/// One template, rendered the same way — for a piece of the view that can be asked about
+/// on its own (an entity, a phrase) without standing up the whole page around it.
+let renderTemplate (template: Lit.TemplateResult) : string = Ssr.render template
+
 /// Drive the OIDC authorization flow over plain HTTP, the way a browser would: a cookie
 /// jar plus MANUAL redirect following. Manual matters twice — an auto-following fetch
 /// drops intermediate `Set-Cookie` headers, and the hops cross ports (session → manager

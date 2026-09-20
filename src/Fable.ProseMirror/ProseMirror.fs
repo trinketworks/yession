@@ -102,8 +102,12 @@ module ProseMirror =
     type MarkAttrs =
         abstract href : string option
 
+    /// A node's attributes as they stand, undefaulted. The two readers below answer what a
+    /// RENDERER wants — a level, a start number, each with the schema's fallback already
+    /// folded in — and that is the wrong question for a predicate, which has to be able to
+    /// tell an absent attribute from a present one that happens to equal the default.
     [<Emit("$0.attrs")>]
-    let private nodeAttrs (node: Node) : NodeAttrs = jsNative
+    let nodeAttrs (node: Node) : NodeAttrs = jsNative
     [<Emit("$0.attrs")>]
     let private markAttrs (mark: obj) : MarkAttrs = jsNative
 
@@ -119,6 +123,21 @@ module ProseMirror =
         match (nodeAttrs node).order with
         | Some order when order > 0 -> order
         | _ -> 1
+
+    /// The WRITE half of those two readers: the attribute object handed back for a node about
+    /// to be created, which is what an input rule's `getAttrs` returns. It sits beside them
+    /// because it is the same story — a heading wears a level and an ordered list a start
+    /// number — and a constructor that drifted from its reader would be caught by neither.
+    ///
+    /// Each carries only the attribute its own node type declares. ProseMirror ignores a key
+    /// the type never asked for, so a shared `{ level, order }` would build and would say, of
+    /// every heading, that it is also a list starting somewhere.
+    [<RequireQualifiedAccess>]
+    module NodeAttrs =
+
+        let heading (level: int) : NodeAttrs = unbox (createObj [ "level" ==> level ])
+        let orderedList (order: int) : NodeAttrs = unbox (createObj [ "order" ==> order ])
+
     [<Emit("$0.type.name")>]
     let markTypeName (mark: obj) : string = jsNative
     /// A link mark's target, and nothing for a mark that is not a link.
@@ -196,12 +215,29 @@ module ProseMirror =
     let inputRules (config: obj) : Plugin = jsNative
     [<Import("wrappingInputRule", "prosemirror-inputrules")>]
     let wrappingInputRule (regexp: obj) (nodeType: NodeType) : InputRule = jsNative
+    /// What ProseMirror hands an input rule's callbacks is the REGEX MATCH that fired it, and
+    /// `getAttrs` answers with the attributes for the node about to be created — or `null` to
+    /// take the node type's own defaults. `System.Func` rather than an F# function because
+    /// ProseMirror calls them with plain positional arguments, never curried.
+    ///
+    /// Both were `obj` while the callbacks were JavaScript in a string, and `obj` is what let
+    /// them be: nothing said what arrived, so nothing could be written in a language that
+    /// type-checks it.
     [<Import("wrappingInputRule", "prosemirror-inputrules")>]
-    let wrappingInputRuleAttrs (regexp: obj) (nodeType: NodeType) (getAttrs: obj) (joinPredicate: obj) : InputRule = jsNative
+    let wrappingInputRuleAttrs
+        (regexp: obj)
+        (nodeType: NodeType)
+        (getAttrs: System.Func<string[], NodeAttrs>)
+        (joinPredicate: System.Func<string[], Node, bool>)
+        : InputRule = jsNative
     [<Import("textblockTypeInputRule", "prosemirror-inputrules")>]
     let textblockTypeInputRule (regexp: obj) (nodeType: NodeType) : InputRule = jsNative
     [<Import("textblockTypeInputRule", "prosemirror-inputrules")>]
-    let textblockTypeInputRuleAttrs (regexp: obj) (nodeType: NodeType) (getAttrs: obj) : InputRule = jsNative
+    let textblockTypeInputRuleAttrs
+        (regexp: obj)
+        (nodeType: NodeType)
+        (getAttrs: System.Func<string[], NodeAttrs>)
+        : InputRule = jsNative
     [<Import("smartQuotes", "prosemirror-inputrules")>]
     let smartQuotes : InputRule[] = jsNative
     [<Import("emDash", "prosemirror-inputrules")>]

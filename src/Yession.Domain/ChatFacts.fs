@@ -90,3 +90,17 @@ and SessionNamed =
       /// deployment. `Authority.AgentFor` cannot say "nobody", and that is the honest gap
       /// rather than a case to invent: an unattributed launch has no person behind it.
       OnBehalfOf : Principal option }
+
+// --- What each chat act SAYS (see RepoFacts.fs for why the prose lives beside the event) ---
+
+module CommandRefused =
+
+    let phrase (c: CommandRefused) : Phrase = Phrase.text (sprintf "refused %s" c.Summary)
+
+    let particulars (c: CommandRefused) : Phrase list = c.Reason |> Option.map Phrase.text |> Option.toList
+
+module GatedCommandFailed =
+
+    let phrase (c: GatedCommandFailed) : Phrase = Phrase.text (sprintf "failed %s" c.Summary)
+
+    let particulars (c: GatedCommandFailed) : Phrase list = [ Phrase.text c.Reason ]

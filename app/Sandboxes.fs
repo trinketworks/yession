@@ -913,13 +913,18 @@ module private Children =
     /// `detached` makes the child its own process group leader, so `Kill` can take the whole
     /// tree with one signal to `-pid`. `Pipe` for all three streams: stdout and stderr are
     /// read below, stdin is written by whoever holds the handle.
+    ///
+    /// The environment REPLACES rather than adds: `env` is the sandbox's own, already built
+    /// whole from a policy baseline that deliberately keeps only the names `hostBaseline`
+    /// lists — so a command that ALSO inherited this process's would see everything the
+    /// baseline exists to withhold.
     let private spawnChild (executable: string) (args: string list) (cwd: string) (env: Map<string, string>) : ChildProcess =
         ChildProcesses.spawn
             executable
             args
             { Cwd = startIn cwd
-              Env = env
-              Stdio = Stdio.Pipe
+              Env = ChildEnv.Replacing env
+              Streams = { Stdin = Stdio.Pipe; Stdout = Stdio.Pipe; Stderr = Stdio.Pipe }
               Detached = true }
 
     // Writing to — or closing — the stdin of a child that has already gone throws, and a

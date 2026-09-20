@@ -76,6 +76,10 @@
          session's choice into a turn. -->
     <Compile Include="Models.fs" />
     <Compile Include="Summaries.fs" />
+    <!-- Something a party DID, as the facts of it: one case per act event, and the prose
+         readers that dispatch to each event's own words. Before Conversation.fs, whose
+         items carry one. -->
+    <Compile Include="Acts.fs" />
     <Compile Include="Conversation.fs" />
     <!-- What the session owes in the way of names (Plan 25). After Conversation.fs, whose
          chapters it is about, and after Summaries.fs, whose ask it builds. -->

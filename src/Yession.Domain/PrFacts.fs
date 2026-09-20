@@ -294,6 +294,20 @@ module PrWatched =
     let actor (p: PrWatched) : ActorRef = Authority.author p.PwAuthority
     let watcher (p: PrWatched) : Principal = p.PwWatcher
 
+    /// What the watch SAYS on the timeline (see RepoFacts.fs for why prose lives beside
+    /// the event).
+    let phrase (p: PrWatched) : Phrase = Phrase.text (sprintf "PR %s watched" (PrRef.render p.PwPr))
+
+    /// Where the waiting began, and what it began from: the state at the moment the watch
+    /// started, said whole so a reader knows what the first transition will be from.
+    let particulars (p: PrWatched) : Phrase list =
+        [ Phrase.text (
+              sprintf
+                  "%s, %s%s"
+                  (PrState.describe p.PwInitial.State)
+                  (ChecksRollup.describe p.PwInitial.Checks)
+                  (PrSnapshot.conflictClause p.PwInitial.State p.PwInitial.Mergeable)) ]
+
 type PrUnwatched =
     { MessageId : MessageId
       Pr : PrRef
@@ -314,3 +328,14 @@ type PrTransitioned =
       /// `PrWatched.watcher`, carried forward: whose credential noticed, and who the turn
       /// this wakes runs as.
       Watcher : Principal }
+
+// --- What each pull-request act SAYS (see RepoFacts.fs for why prose lives beside the event) ---
+
+module PrUnwatched =
+
+    let phrase (p: PrUnwatched) : Phrase = Phrase.text (sprintf "PR %s unwatched" (PrRef.render p.Pr))
+
+module PrTransitioned =
+
+    let phrase (p: PrTransitioned) : Phrase =
+        Phrase.text (sprintf "PR %s %s" (PrRef.render p.Pr) (PrTransition.describe p.Transition))

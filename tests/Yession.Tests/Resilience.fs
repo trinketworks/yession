@@ -659,7 +659,7 @@ let private stalled (m: ClientModel) =
     | FeedStalled _ -> true
     | _ -> false
 
-let private bodies (m: ClientModel) = m.Conversation.Items |> List.map (fun i -> i.Body)
+let private bodies (m: ClientModel) = m.Conversation.Items |> List.map (fun i -> (Yession.Domain.Chat.ConversationItem.said i))
 
 let private feedFailureTests =
     testList "A client whose history feed fails" [

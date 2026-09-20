@@ -56,17 +56,12 @@ let headers (pairs: (string * string) list) : Fetch.Types.RequestProperties =
 
 /// A request that must finish inside a bound, whatever the far end is doing.
 ///
-/// `AbortSignal.timeout(...)` is the one piece `Fable.Fetch` does not bind — it is not part
-/// of the fetch surface itself — so this stays a one-expression Emit, typed against the
-/// package's own `AbortSignal` so it slots straight into `RequestProperties.Signal`. The
-/// browser client carries the same one line (`app/browser/Browser.fs`); the two cannot be
-/// one binding, because that project references neither this one nor anything this one can
-/// see, and a shared home for it would be a new project holding a single line.
-[<Emit("AbortSignal.timeout($0)")>]
-let private abortAfter (afterMs: float) : Fetch.Types.AbortSignal = jsNative
-
+/// The signal comes from `Fable.FetchExtras`, which binds the part of the fetch surface
+/// `Fable.Fetch` leaves out. `AbortSignal.timeout` is a global in browsers and in Node
+/// alike, so the browser client's copy of it (`app/browser/Browser.fs`) is the same binding
+/// rather than a second one that happens to agree.
 let deadline (afterMs: float) : Fetch.Types.RequestProperties =
-    Fetch.Types.RequestProperties.Signal (abortAfter afterMs)
+    Fetch.Types.RequestProperties.Signal (Fable.FetchExtras.timeoutSignal afterMs)
 
 /// A response header, or `""` when the reply did not carry one — the shape every caller
 /// here wants, because each of them puts the value straight into a record whose empty

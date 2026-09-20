@@ -148,26 +148,26 @@ and ShellProfileSet =
 /// The prose a start writes into the timeline - the headline a screen lands on, and the
 /// particulars beneath it. It lives HERE, beside the event, for the same reason
 /// `PrTransition.describe` sits beside `PrTransitioned`: what this event's leaves MEAN is
-/// knowledge that belongs with the event, not assembled by whatever folds it. The fold in
-/// `Conversation.fs` calls these; it no longer composes the sentence itself.
+/// knowledge that belongs with the event, not assembled by whatever folds it. `Act.phrase`
+/// and `Act.particulars` (Acts.fs) dispatch here; the fold composes nothing.
 ///
 /// A screen wants the two halves apart - a gist to land on, particulars beneath - so they
 /// are two functions rather than one. Every other reader (the agent's prompt above all)
-/// joins them, which `ConversationItem.said` does with an em-dash; neither reader parses the
-/// other's prose, because both build from these same fields.
+/// joins them, which `ConversationItem.said` does with an em-dash and semicolons; neither
+/// reader parses the other's prose, because both build from these same fields.
 [<RequireQualifiedAccess>]
 module WorkSandboxStarted =
 
     /// The one thing worth deciding from at a glance: which sandbox, on what backend.
-    let headline (s: WorkSandboxStarted) : string =
-        sprintf "started sandbox %s (%s)" (SandboxRef.render s.Sandbox) s.Backend
+    let phrase (s: WorkSandboxStarted) : Phrase =
+        Phrase.text (sprintf "started sandbox %s (%s)" (SandboxRef.render s.Sandbox) s.Backend)
 
-    /// Everything the headline holds back, each fact its own semicolon-joined clause: what
-    /// the sandbox is FOR, where its checkout sits, whose credential rode in, and where this
-    /// host could not give exactly what was asked. `None` when the start is already one
-    /// clause - nothing declared, nothing forwarded, nothing rescoped - because a seam
-    /// printed over a single clause stands for content that is not there.
-    let detail (s: WorkSandboxStarted) : string option =
+    /// Everything the headline holds back, each fact its own phrase: what the sandbox is
+    /// FOR, where its checkout sits, whose credential rode in, and where this host could
+    /// not give exactly what was asked. Empty when the start is already one clause -
+    /// nothing declared, nothing forwarded, nothing rescoped - because a seam printed over
+    /// a single clause stands for content that is not there.
+    let particulars (s: WorkSandboxStarted) : Phrase list =
         let forwarded =
             match s.Forwarded with
             | [] -> None
@@ -187,7 +187,53 @@ module WorkSandboxStarted =
         let checkout = s.Checkout |> Option.map (sprintf "the checkout is at %s in here")
         // What it is for, where its checkout sits, whose credential rode in, and what this
         // host could not give exactly are separate facts, not clauses chained onto the
-        // headline - they ride here, semicolon-joined, so each stays its own fact.
-        match List.choose id [ s.Description; checkout; forwarded; realisation ] with
-        | [] -> None
-        | parts -> Some (String.concat "; " parts)
+        // headline - each is its own phrase, so each stays its own fact.
+        List.choose id [ s.Description; checkout; forwarded; realisation ] |> List.map Phrase.text
+
+module WorkSandboxStarting =
+
+    /// Short headline, like the start it resolves into: which sandbox, on what backend.
+    /// What it is for rides the particulars, not the headline.
+    let phrase (s: WorkSandboxStarting) : Phrase =
+        Phrase.text (sprintf "starting sandbox %s (%s)" (SandboxRef.render s.Sandbox) s.Backend)
+
+    let particulars (s: WorkSandboxStarting) : Phrase list = s.Description |> Option.map Phrase.text |> Option.toList
+
+module WorkSandboxStartFailed =
+
+    let phrase (s: WorkSandboxStartFailed) : Phrase =
+        Phrase.text (sprintf "sandbox %s could not start" (SandboxRef.render s.Sandbox))
+
+    let particulars (s: WorkSandboxStartFailed) : Phrase list = [ Phrase.text s.Reason ]
+
+module WorkSandboxStopped =
+
+    let phrase (s: WorkSandboxStopped) : Phrase =
+        Phrase.text (sprintf "stopped sandbox %s" (SandboxRef.render s.Sandbox))
+
+module ShellProfileSet =
+
+    let phrase (p: ShellProfileSet) : Phrase =
+        match p.WorkingDirectory with
+        | Some cwd -> Phrase.text (sprintf "new terminals in %s start in %s" (SandboxRef.render p.Sandbox) cwd)
+        | None ->
+            Phrase.text (sprintf "new terminals in %s start where the sandbox puts them" (SandboxRef.render p.Sandbox))
+
+module SandboxSetupQueued =
+
+    let phrase (q: SandboxSetupQueued) : Phrase =
+        match q.Problem with
+        | Some _ -> Phrase.text (sprintf "%s could not start its setup" (SandboxRef.render q.Sandbox))
+        | None -> Phrase.text (sprintf "%s is running its setup: %s" (SandboxRef.render q.Sandbox) q.Command)
+
+    /// The handle, which is what makes this actionable rather than merely honest — the
+    /// agent is told both, and a screen shows the headline with the mechanics beside it.
+    let particulars (q: SandboxSetupQueued) : Phrase list =
+        match q.Handle, q.Problem with
+        | Some handle, _ ->
+            [ Phrase.text (
+                  sprintf
+                      "it holds that terminal until it finishes; check_pending with handle '%s' for the outcome"
+                      (QueueId.value handle)) ]
+        | None, Some problem -> [ Phrase.text problem ]
+        | None, None -> []

@@ -240,7 +240,7 @@ let private hostGit (args: string list) (cwd: string) : unit =
         args
         { SyncOptions.none with
             Cwd = Some cwd
-            Env = fixtureGitEnv
+            Env = ChildEnv.Adding fixtureGitEnv
             Streams = Some { Stdin = Stdio.Pipe; Stdout = Stdio.Pipe; Stderr = Stdio.Pipe } }
     |> ignore
 
@@ -1013,7 +1013,7 @@ let private liveClone =
                     | [] -> "    (no conversation items at all)"
                     | items ->
                         items
-                        |> List.map (fun i -> sprintf "    %A [%A] %s" i.Author i.Status (i.Body.Replace ("\n", " ")))
+                        |> List.map (fun i -> sprintf "    %A [%A] %s" i.Author i.Status ((ConversationItem.said i).Replace ("\n", " ")))
                         |> String.concat "\n"
                 let terminals =
                     match model.Terminals.Terminals with

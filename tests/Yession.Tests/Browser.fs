@@ -2752,6 +2752,72 @@ let editorTests =
                 Expect.isTrue whole "the line, its send, and the new stop control all fit the phone at once"
                 return ()
             }
+        // The composer's promise is that it gives the conversation back the room it is not
+        // using, and on a phone the verbs are the room: they leave the line, sit below it,
+        // and are shown only once somebody is typing. `opacity-0` kept every pixel of that
+        // row while hiding it — 44px of invisible buttons, plus the clearance meant to land
+        // under them — so two thirds of a collapsed composer was band holding nothing.
+        //
+        // Only a browser can tell that from a composer that is simply padded: the markup is
+        // identical either way, and so is the row's own bounding box (clipping does not
+        // resize a child). What separates them is what stands between the line and the
+        // bottom of the band, which is a measurement.
+        editorCaseIn 390 844 "a composer at rest spends no height on verbs nobody can see" <| fun page ->
+            async {
+                // Measured with motion off for the reason every geometry case here is: a
+                // `max-height` mid-transition is neither of the two heights being compared.
+                do! awaitU (page.EmulateMediaAsync (PageEmulateMediaOptions (ReducedMotion = ReducedMotion.Reduce)))
+                let line = """#shell [data-draft-input] .ProseMirror"""
+                let! _ = await (page.WaitForSelectorAsync line)
+                // What is below the line, in both states. The band's bottom rather than the
+                // row's own box: a clipped child keeps its rect, so the row cannot be asked
+                // whether it is taking room — only the band it is inside can.
+                let below =
+                    """() => {
+                         const band = document.querySelector('#shell [data-draft-editor]')
+                         const line = document.querySelector('#shell [data-draft-input]')
+                         return band.getBoundingClientRect().bottom - line.getBoundingClientRect().bottom
+                       }"""
+                do! awaitU (page.ClickAsync line)
+                let! opened = await (page.EvaluateAsync<float> below)
+                do! awaitU (page.EvaluateAsync "() => document.activeElement.blur()")
+                let! rest = await (page.EvaluateAsync<float> below)
+                Expect.isTrue
+                    (rest < opened && rest <= 24.0)
+                    (sprintf "at rest the band ends under its line (%fpx below it, %fpx open)" rest opened)
+                return ()
+            }
+        // A collapsed composer holding a long draft used to stop dead at its padding: a hard
+        // cut through the second line, which reads as a rendering fault rather than as text
+        // that carries on. It hints instead — a little of the next line, faded out — and the
+        // hint is a HEIGHT, so it is a thing a browser can settle and no markup test can.
+        //
+        // Both directions, because each alone has a wrong way to pass: a composer that never
+        // grew would satisfy "still collapsed", and one that simply opened would satisfy
+        // "shows there is more".
+        editorCaseIn 390 844 "a collapsed composer hints at the draft it cannot fit, without opening" <| fun page ->
+            async {
+                do! awaitU (page.EmulateMediaAsync (PageEmulateMediaOptions (ReducedMotion = ReducedMotion.Reduce)))
+                let line = """#shell [data-draft-input] .ProseMirror"""
+                let! _ = await (page.WaitForSelectorAsync line)
+                let height =
+                    """() => document.querySelector('#shell [data-draft-input]').getBoundingClientRect().height"""
+                let! oneLine = await (page.EvaluateAsync<float> height)
+                do! awaitU (page.ClickAsync line)
+                // Three paragraphs, typed with real keys: what a person writes when they say
+                // more than fits, and more than the open composer's own cap so the two states
+                // are genuinely different heights.
+                for word in [ "first"; "second"; "third"; "fourth" ] do
+                    do! awaitU (page.Keyboard.TypeAsync word)
+                    do! awaitU (page.Keyboard.PressAsync "Enter")
+                let! opened = await (page.EvaluateAsync<float> height)
+                do! awaitU (page.EvaluateAsync "() => document.activeElement.blur()")
+                let! collapsed = await (page.EvaluateAsync<float> height)
+                Expect.isTrue
+                    (collapsed > oneLine && collapsed < opened)
+                    (sprintf "collapsed over a long draft: %fpx (one line %fpx, open %fpx)" collapsed oneLine opened)
+                return ()
+            }
         // The DVR (Plan 14, stage 7). What only a browser can answer: that rewinding a LIVE
         // terminal really mounts a player over what it has recorded so far — the same player
         // and the same cast a finished terminal's replay uses, which is what "rewound like

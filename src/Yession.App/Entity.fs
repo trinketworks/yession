@@ -1,5 +1,6 @@
 namespace Yession.App
 
+open Lit
 open Yession.Domain
 
 /// How a thing the session names is shown, wherever it is shown.
@@ -68,3 +69,47 @@ module Entity =
         // A repo's file is not a person and not the agent. Its own avatar, seeded by the
         // repo, so two repos configuring one session are told apart on sight.
         | ActorRef.Configured repo -> Style.humanAvatar (RepoRef.value repo)
+
+    /// Which kind of thing a reference is, for the hook a test reads it by.
+    let kind (entity: EntityRef) : string =
+        match entity with
+        | EntityRef.Actor _ -> "actor"
+        | EntityRef.Repo _ -> "repo"
+        | EntityRef.Connection _ -> "connection"
+
+    /// What a reference is called on a screen. A person by the name the roster knows; a
+    /// repo by `owner/repo` — the host is the mark's to say, not the name's; a connection
+    /// by its name.
+    let name (model: ClientModel) (entity: EntityRef) : string =
+        match entity with
+        | EntityRef.Actor actor -> actorName model actor
+        | EntityRef.Repo repo -> RepoRef.value repo
+        | EntityRef.Connection connection -> ConnectionName.value connection
+
+    /// One reference, drawn: its mark and its name, inline, the same wherever a sentence
+    /// points at it. `data-entity` carries the prose spelling (`EntityRef.said`), so a test
+    /// can find the element for a thing without knowing what the design calls it.
+    ///
+    /// Only an actor has a mark yet. A repo's and a connection's come with the acts that
+    /// first draw them; until then the name stands alone, which is what the sentence said
+    /// before there was a reference to draw.
+    let render (model: ClientModel) (entity: EntityRef) : TemplateResult =
+        let mark =
+            match entity with
+            | EntityRef.Actor actor ->
+                html $"""<span class="{Style.cls [ Style.avatarSm; actorMark model actor ]}" aria-hidden="true"></span>"""
+            | EntityRef.Repo _
+            | EntityRef.Connection _ -> Lit.nothing
+        html
+            $"""<span class="{Style.entity}" data-entity-kind="{kind entity}" data-entity="{EntityRef.said entity}">{mark}<span class="{Style.entityName}">{name model entity}</span></span>"""
+
+    /// A sentence, drawn: its words as words and each reference as `render` draws it. What
+    /// the agent reads as `Phrase.said` and what a person reads here are the same segments,
+    /// collapsed by two readers with two opinions — which is the whole reason a phrase is
+    /// segments rather than a string.
+    let phrase (model: ClientModel) (phrase: Phrase) : TemplateResult list =
+        phrase
+        |> List.map (fun segment ->
+            match segment with
+            | Segment.Text words -> html $"""{words}"""
+            | Segment.Ref entity -> render model entity)

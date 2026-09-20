@@ -1350,6 +1350,32 @@ module View =
         let band = if List.isEmpty entries then Style.queueEmpty else Style.queue
         html $"""<section class="{band}" data-message-queue>{head}{items}</section>"""
 
+    /// The way to stop the turn that is running, docked directly above the composer.
+    ///
+    /// ONE control, and deliberately nothing beside it. Whether a turn is running is said by
+    /// the caret in the timeline, where the words are landing, and said again to a reader who
+    /// cannot see the caret by the composer's live region below. A band that carried that
+    /// sentence a third time is the activity strip this replaced (see `Style.interruptBand`).
+    ///
+    /// Above the composer rather than at the leading edge of its line, which is where it sat
+    /// for one revision: the line is where the NEXT message is being written, and a
+    /// destructive verb standing exactly where that text begins is one a thumb reaches for
+    /// the wrong reason — and one that shoved the line sideways every time a turn started.
+    ///
+    /// It rides the composer's dock rather than the streaming message because a message
+    /// scrolls and the dock does not: a stop control that leaves the screen when the
+    /// conversation moves is one nobody can reach at the moment they want it.
+    let private interrupt (actions: ViewActions) (model: ClientModel) : TemplateResult =
+        match model.Agent.ActiveTurn with
+        | None -> Lit.nothing
+        | Some turn ->
+            html $"""
+                <div class="{Style.interruptBand}">
+                  <button type="button" class="{Style.btnInterrupt}" aria-label="{Dom.Text.interruptLabel}"
+                          data-interrupt-turn="{AgentTurnId.value turn}"
+                          @click={Ev(fun _ -> actions.Interrupt turn)}>interrupt</button>
+                </div>"""
+
     /// The composer: ONE draft open, everyone else's as a line you can open.
     ///
     /// A draft is shared WIP — any peer may edit any draft (the body is a CRDT; the carets are
@@ -1378,23 +1404,6 @@ module View =
                   <span class="{Style.draftSummaryBody}" data-rich-body="{BodyKey.draft peerId}" data-rich-readonly="true"></span>
                   <span class="{Style.draftEditors}">{editors peerId}</span>
                 </button>"""
-        // The agent's turn, in the band where a person answers it. One control, at the
-        // LEADING edge of the line: Send's mirror image, and the only part of the strip this
-        // replaced that was ever the strip's own. Whether a turn is running is said by the
-        // caret in the timeline, where the words are landing — so this is a verb, not an
-        // announcement, and it wears the weight of one (`btnStopInField`).
-        //
-        // It rides the composer rather than the streaming message because a message scrolls
-        // and the band does not: a stop control that leaves the screen when the conversation
-        // moves is one nobody can reach at the moment they want it.
-        let interrupt =
-            match model.Agent.ActiveTurn with
-            | None -> Lit.nothing
-            | Some turn ->
-                html $"""
-                    <button type="button" class="{Style.btnStopInField}" aria-label="{Dom.Text.interruptLabel}"
-                            data-interrupt-turn="{AgentTurnId.value turn}"
-                            @click={Ev(fun _ -> actions.Interrupt turn)}>{Icon.stop}</button>"""
         // The same fact for a reader who cannot see the caret, and the only place the sentence
         // still exists in the product.
         //
@@ -1418,14 +1427,18 @@ module View =
             // has content), so the controls and the send path read the same truth rather than
             // two measurements that can disagree.
             let hasContent = ClientModel.draftHasContent target model
-            // Discard exists only once there is something to discard. An empty composer used to
+            // Clear exists only once there is something to clear. An empty composer used to
             // offer a destructive control over nothing — and offering a verdict on nothing is
             // how a working button and a dead one come to look identical.
-            let discard =
+            //
+            // The WORD is the accessible name now, so there is no `aria-label` beside it: a
+            // control that says what it does needs no second copy of the sentence, and two
+            // that disagree is the fault the label was there to prevent.
+            let clear =
                 if target = myPeer && hasContent then
                     html $"""
-                        <button type="button" class="{Style.btnDiscardInField}" aria-label="Discard draft"
-                                data-discard-draft @click={Ev(fun _ -> actions.DiscardDraft myPeer)}>{Icon.close}</button>"""
+                        <button type="button" class="{Style.btnComposerClear}"
+                                data-discard-draft @click={Ev(fun _ -> actions.DiscardDraft myPeer)}>clear</button>"""
                 else Lit.nothing
             // Send STAYS — same place in the layout, same place in focus order, so nothing
             // moves under the hand and no Tab stop appears mid-sentence — and waits at a
@@ -1440,26 +1453,25 @@ module View =
             //
             // Same place in FOCUS order always, even where it is not the same place on
             // screen: on a phone (`Style.draftCommit`) this row leaves the line and sits
-            // below it, dark until the composer has focus, so the text can use the width
-            // it was sharing with two icons that a thumb reaches once per message.
+            // below it, gone until the composer has focus, so the text can use the width
+            // it was sharing with two controls that a thumb reaches once per message.
             let sendClass =
-                if hasContent then Style.btnSendInField else Style.btnSendInFieldWaiting
+                if hasContent then Style.btnComposerSend else Style.btnComposerSendWaiting
             let author =
                 if target = myPeer then Lit.nothing
                 else html $"""<span class="{Style.draftAuthor}">{ClientModel.nameOf target model}'s message</span>"""
             html $"""
                 <article class="{Style.draftBox}" data-draft-id="{PeerId.value target}" data-draft-author="{PeerId.value target}">
-                  {interrupt}
                   <div class="{Style.draftBody}">
                     {author}
                     <div class="{Style.draftInput}" data-rich-body="{BodyKey.draft target}" data-rich-readonly="false" data-draft-input="{PeerId.value target}"></div>
                   </div>
                   <div class="{Style.draftCommit}">
                     <span class="{Style.draftEditors}">{editors target}</span>
-                    {discard}
-                    <button type="button" class="{sendClass}" aria-label="Send" aria-keyshortcuts="Control+Enter"
+                    {clear}
+                    <button type="button" class="{sendClass}" aria-keyshortcuts="Control+Enter"
                             title="{Dom.Text.composerKeys}"
-                            data-send-draft="{PeerId.value target}" @click={Ev(fun _ -> actions.SendDraft target)}>{Icon.send}</button>
+                            data-send-draft="{PeerId.value target}" @click={Ev(fun _ -> actions.SendDraft target)}>send</button>
                   </div>
                 </article>"""
         // "New message" only says something when you are in someone else's draft: it is the way
@@ -1984,12 +1996,13 @@ module View =
                 </div>"""
         // The particulars, under the headline and never instead of it. A second LINE rather
         // than a disclosure: what an act asked for is exactly what a person has to decide
-        // about, and a decision behind a click is a decision most readers never see. The fold
-        // is what says which acts have one — see `ActNoteFacts`.
-        let actNoteDetail (facts: ActNoteFacts) =
-            match facts.Detail with
-            | None -> Lit.nothing
-            | Some detail -> html $"""<span class="{Style.actNoteDetail}" data-act-detail>{detail}</span>"""
+        // about, and a decision behind a click is a decision most readers never see. One
+        // element per particular, each drawn as a phrase, so a reference in one is drawn as
+        // that thing is drawn everywhere. The act is what says which acts have any — see
+        // `Act.particulars`.
+        let actNoteParticulars (act: Act) =
+            Act.particulars act
+            |> List.map (fun p -> html $"""<span class="{Style.actNoteDetail}" data-act-detail>{Entity.phrase model p}</span>""")
         // The same particulars a sentence would carry, but arranged the way a screen arranges
         // them: labelled facts, one per row, not one clause chained onto the next. `said`
         // still builds the whole sentence for every reader that is not a screen; the screen is
@@ -2056,9 +2069,11 @@ module View =
             | parts -> html $"""<div class="{Style.actNoteFacts}" data-act-facts>{parts}</div>"""
         // A repo note is something someone DID, not said - one quiet line, actor-attributed,
         // no avatar and no rich body (Plan 14, repos). It rides the same timeline slot a
-        // message does (both are `ConversationItem`s at an offset); `Kind` is what tells the
-        // two apart at render time.
-        let actNoteItem (facts: ActNoteFacts) (item: ConversationItem) =
+        // message does (both are `ConversationItem`s at an offset); `Content` is what tells
+        // the two apart at render time. The headline is the act's phrase, drawn segment by
+        // segment: the same words the agent reads, with each thing they name drawn as it is
+        // drawn everywhere else on this screen.
+        let actNoteItem (act: Act) (item: ConversationItem) =
             // A slow act coming up pulses in the LEFT gutter — a quiet dot on the margin
             // rather than a mark trailing the line, so the running ones read as a column down
             // the edge. A failed act still says so inline, where its reason sits: a terminal
@@ -2076,19 +2091,22 @@ module View =
                     html $"""<span class="{Style.statusErr}">{Icon.crossSm} {Dom.Text.failed}</span>"""
                 | Complete | Streaming | ConversationItemStatus.Running | ConversationItemStatus.Interrupted -> Lit.nothing
             // A screen lays out the acts it can - a sandbox start, so far - from their typed
-            // fields; the rest it renders from the one detail line the fold left it.
+            // fields; the rest it renders from the particulars the act says it has.
             let particulars =
-                match facts.SandboxStarted with
-                | Some s -> sandboxStartFacts s
-                | None -> actNoteDetail facts
+                match act with
+                | Act.SandboxStarted s -> [ sandboxStartFacts s ]
+                | _ -> actNoteParticulars act
             html $"""
                 <article class="{Style.actNote}" data-message-id="{MessageId.value item.MessageId}" tabindex="-1" data-act-note data-act-status="{messageStatusLabel item.Status}" data-message-author="{Entity.actorToken item.Author}">
                   {itemActions item}
                   {running}
-                  <span class="{Style.actNoteText}">{item.Body} {failedMark}</span>
+                  <span class="{Style.actNoteText}">{Entity.phrase model (Act.phrase act)} {failedMark}</span>
                   {particulars}
                 </article>"""
         let messageItem (item: ConversationItem) =
+            // What was said. An act never reaches here (`actNoteItem` takes those), and its
+            // sentence would be the wrong thing to render as markdown if one did.
+            let body = ConversationItem.said item
             let isAgent = (item.Author = ActorRef.Agent)
             // Why this turn exists, when nobody asked for it (Plan 20, stage 2). On the meta
             // line rather than in the body: it is attribution, and the body is what the agent
@@ -2175,7 +2193,7 @@ module View =
                   {itemActions item}
                   {meta}
                   {replyRef}
-                  <div class="{bodyClass}" data-message-body>{RichText.render item.Body}{caret}</div>
+                  <div class="{bodyClass}" data-message-body>{RichText.render body}{caret}</div>
                 </article>"""
         // One line: who ran what, and how it went. No output — a tail inline would make the
         // chat noisiest exactly when it is busiest, and would put everything a command
@@ -2346,9 +2364,9 @@ module View =
         let entryOf row =
             match row with
                 | RowItem (TimelineMessage item) ->
-                    match item.Kind with
-                    | ConversationItemKind.ActNote facts -> Some (Some item.Author, actNoteItem facts item)
-                    | ConversationItemKind.Message -> Some (Some item.Author, messageItem item)
+                    match item.Content with
+                    | ItemContent.Act act -> Some (Some item.Author, actNoteItem act item)
+                    | ItemContent.Message _ -> Some (Some item.Author, messageItem item)
                 | RowItem (TimelineBlock (_, terminalId, blockId)) ->
                     // Both folds read the same page, so a chip without its block is a page
                     // boundary, not a bug: the next page brings it.
@@ -3556,6 +3574,7 @@ module View =
               {chat actions dispatch model}
               {if ClientModel.launchOffered model then askCard actions dispatch model else Lit.nothing}
               {queue dispatch model}
+              {interrupt actions model}
               {drafts actions dispatch model}
             </div>
             {terminals actions dispatch model}
