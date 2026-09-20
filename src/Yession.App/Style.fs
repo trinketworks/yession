@@ -1682,8 +1682,19 @@ module Style =
 
     /// The band a message is written in. Lifts a tone while anything inside it has focus, so
     /// "this is where I am typing" is legible at a glance and not only from the 2px rule.
-    let composer =
-        "group relative shrink-0 flex flex-col bg-surface focus-within:bg-surface-2 transition-colors"
+    ///
+    /// `max-md:pb-4` is the band's own token, not a copy on each user of it. The message
+    /// composer and the terminal's command band (`terminalComposer`, below) share it by
+    /// referring to `composerBand` rather than by typing the string twice, so a phone's
+    /// clearance under the band can never drift between the two columns the way `bandRail`'s
+    /// gradient is not allowed to either. On the phones this is for, the band is the last
+    /// thing on screen and used to run flush to the bottom edge, under the thumb about to
+    /// press it; the pad gives it room without touching desktop, where the band never meets an
+    /// edge at all.
+    let composerBand =
+        "group relative shrink-0 flex flex-col bg-surface focus-within:bg-surface-2 transition-colors max-md:pb-4"
+
+    let composer = composerBand
 
     /// The band's top rule, in two parts — because it is doing two jobs and one element could
     /// only ever do one of them.
@@ -2114,8 +2125,9 @@ module Style =
     /// pane was built out of the composer's parts for that reason. It carries no gutter of its
     /// own: what is in it runs edge to edge, and the rows that are not the command line bring
     /// their own padding (`terminalBandRow`).
-    let terminalComposer =
-        "group relative shrink-0 flex flex-col bg-surface focus-within:bg-surface-2 transition-colors"
+    /// `composerBand`, above, kept as one token rather than a matching string, so this can
+    /// never quietly drift from the message composer's.
+    let terminalComposer = composerBand
 
     /// A row in the band that is not the command line — the lease bar, the "not marking"
     /// notice. They used to inherit the section's padding; the band has none.
