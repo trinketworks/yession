@@ -1683,18 +1683,22 @@ module Style =
     /// The band a message is written in. Lifts a tone while anything inside it has focus, so
     /// "this is where I am typing" is legible at a glance and not only from the 2px rule.
     ///
-    /// `max-md:pb-4` is the band's own token, not a copy on each user of it. The message
-    /// composer and the terminal's command band (`terminalComposer`, below) share it by
-    /// referring to `composerBand` rather than by typing the string twice, so a phone's
-    /// clearance under the band can never drift between the two columns the way `bandRail`'s
-    /// gradient is not allowed to either. On the phones this is for, the band is the last
-    /// thing on screen and used to run flush to the bottom edge, under the thumb about to
-    /// press it; the pad gives it room without touching desktop, where the band never meets an
-    /// edge at all.
-    let composerBand =
-        "group relative shrink-0 flex flex-col bg-surface focus-within:bg-surface-2 transition-colors max-md:pb-4"
+    /// The tone, the rule and the transition are the one thing the message composer and the
+    /// terminal's command band (`terminalComposer`, below) share, and share by referring to
+    /// this rather than by typing the string twice, so neither can quietly drift from the
+    /// other the way `bandRail`'s gradient is not allowed to either. The bottom clearance is
+    /// NOT in here any more: `composer` and `terminalComposer` now want different amounts of
+    /// it, so each states its own, below.
+    let private composerBand =
+        "group relative shrink-0 flex flex-col bg-surface focus-within:bg-surface-2 transition-colors"
 
-    let composer = composerBand
+    /// On the phones this is for, the band is the last thing on screen and used to run flush
+    /// to the bottom edge, under the thumb about to press it; `max-md:pb-6` gives it room
+    /// without touching desktop, where the band never meets an edge at all. Wider than the
+    /// terminal's own clearance (`terminalComposer`'s `max-md:pb-4`) because Send and Discard
+    /// (`draftCommit`, below) land in this gap now, not beside the text: the terminal's Run
+    /// button stays on its line, so its gap stays the thumb-clearance size alone.
+    let composer = composerBand + " max-md:pb-6"
 
     /// The band's top rule, in two parts — because it is doing two jobs and one element could
     /// only ever do one of them.
@@ -1723,7 +1727,11 @@ module Style =
     /// between the two columns meets one object twice instead of two conventions.
     ///
     /// Carries no fill and no edge of its own any more: the band it sits in is the surface.
-    let draftBox = "relative flex items-end"
+    ///
+    /// `max-md:flex-col`, added since: on a phone the row becomes a column, Send and
+    /// Discard (`draftCommit`, below) drop under the text instead of squeezing it, and
+    /// the text gets the width back. Above `md` the row shape stands as written above.
+    let draftBox = "relative flex items-end max-md:flex-col max-md:items-stretch"
 
     /// Chrome-less by construction (`fieldBare`): the band carries the tone and the rule, and
     /// the focus signal is the gradient growing across it.
@@ -1760,7 +1768,22 @@ module Style =
     /// (40px), so the line's centre sits 20px from the box top; a 32px control bottom-aligned
     /// with 4px spent below centres at 20px too. `pb-2` put the pair 4px low of the text
     /// beside them — measured as the send arrow riding under the line it sends.
-    let draftCommit = "shrink-0 flex items-center gap-1 pr-2 pb-1"
+    ///
+    /// On a phone this row leaves the line entirely: it wants the full width
+    /// (`max-md:w-full max-md:justify-end`, its buttons pushed to the trailing edge the
+    /// way they sit on desktop), it sits BELOW the text now (`draftBox`'s
+    /// `max-md:flex-col` puts it there in document order), and it is invisible at rest
+    /// (`max-md:opacity-0`), surfacing on the same signal the band itself lifts a tone
+    /// on: `group-focus-within`. A permanently visible row was two icons' width borrowed
+    /// from every line of every message, on the narrowest screens this ships to, for a
+    /// control a thumb reaches once per message; tapping in is the gesture that already
+    /// opens the composer, so it costs nothing extra to be what reveals them too.
+    /// `composer`'s wider `max-md:pb-6` (above) is the room this needs to land in.
+    let draftCommit =
+        cls [ "shrink-0 flex items-center gap-1 pr-2 pb-1"
+              "max-md:w-full max-md:justify-end max-md:pt-1"
+              "max-md:opacity-0 max-md:pointer-events-none max-md:transition-opacity max-md:duration-150"
+              "max-md:group-focus-within:opacity-100 max-md:group-focus-within:pointer-events-auto" ]
     let draftAuthor = "pl-4 pt-2 " + caps + " text-ink-faint truncate"
 
     // A draft nobody has open here: one line of it, so the composer reads as "what is being
@@ -2125,9 +2148,13 @@ module Style =
     /// pane was built out of the composer's parts for that reason. It carries no gutter of its
     /// own: what is in it runs edge to edge, and the rows that are not the command line bring
     /// their own padding (`terminalBandRow`).
-    /// `composerBand`, above, kept as one token rather than a matching string, so this can
-    /// never quietly drift from the message composer's.
-    let terminalComposer = composerBand
+    ///
+    /// `composerBand`, above, kept as one token rather than a matching string, so the tone
+    /// and the rule can never quietly drift from the message composer's. The bottom
+    /// clearance is its own, though (`max-md:pb-4`, plain thumb room): Run stays on the
+    /// command line rather than dropping into the gap the way Send and Discard now do
+    /// (`composer`'s wider `max-md:pb-6`, above), so this band does not need their room.
+    let terminalComposer = composerBand + " max-md:pb-4"
 
     /// A row in the band that is not the command line — the lease bar, the "not marking"
     /// notice. They used to inherit the section's padding; the band has none.
