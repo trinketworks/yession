@@ -92,6 +92,27 @@ module private ToolArgs =
                 get.Optional.Field "sandbox" Decode.string |> Option.filter (fun s -> s <> "")))
             json
 
+    /// `edit_file`'s five: the path, the text to find, the text to put there, whether every
+    /// occurrence, and which sandbox.
+    let fileEdit (json: string) : Result<string * string * string * bool * string option, string> =
+        read
+            (Decode.object (fun get ->
+                get.Required.Field "path" Decode.string,
+                get.Required.Field "old_string" Decode.string,
+                get.Required.Field "new_string" Decode.string,
+                get.Optional.Field "replace_all" Decode.bool |> Option.defaultValue false,
+                get.Optional.Field "sandbox" Decode.string |> Option.filter (fun s -> s <> "")))
+            json
+
+    /// `write_file`'s three: the path, the whole content, and which sandbox.
+    let fileWrite (json: string) : Result<string * string * string option, string> =
+        read
+            (Decode.object (fun get ->
+                get.Required.Field "path" Decode.string,
+                get.Required.Field "content" Decode.string,
+                get.Optional.Field "sandbox" Decode.string |> Option.filter (fun s -> s <> "")))
+            json
+
     let two (first: string) (second: string) (json: string) : Result<string * string, string> =
         read
             (Decode.object (fun get ->
@@ -446,6 +467,40 @@ module AgentTools =
                 | Error reason -> return sprintf "could not read %s: %s" path reason
             })
 
+    /// An edit is a command: the gate's answer is rendered by the one renderer every gated
+    /// command shares, so a refusal reads as a refusal here too.
+    let private editFile
+        (capabilities: AgentCapabilities)
+        (path: string)
+        (oldText: string)
+        (newText: string)
+        (replaceAll: bool)
+        (sandbox: string option)
+        : Async<string> =
+        let raw = sandbox |> Option.defaultValue (SandboxRef.render SandboxRef.defaultRef)
+        withSandbox raw (fun name ->
+            async {
+                match!
+                    capabilities.Files.Edit
+                        { FileEditRequest.Sandbox = name
+                          FileEditRequest.Path = path
+                          FileEditRequest.OldText = oldText
+                          FileEditRequest.NewText = newText
+                          FileEditRequest.ReplaceAll = replaceAll }
+                with
+                | Ok outcome -> return renderCommandOutcome outcome
+                | Error e -> return sprintf "could not edit %s: %s" path e
+            })
+
+    let private writeFile (capabilities: AgentCapabilities) (path: string) (content: string) (sandbox: string option) : Async<string> =
+        let raw = sandbox |> Option.defaultValue (SandboxRef.render SandboxRef.defaultRef)
+        withSandbox raw (fun name ->
+            async {
+                match! capabilities.Files.Write name path content with
+                | Ok outcome -> return renderCommandOutcome outcome
+                | Error e -> return sprintf "could not write %s: %s" path e
+            })
+
     let private setSecret (capabilities: AgentCapabilities) (name: string) (value: string) : Async<string> =
         async {
             match SecretName.create name with
@@ -748,6 +803,35 @@ module AgentTools =
                           | Ok (path, offset, limit, sandbox) -> return! ok (readFile capabilities path offset limit sandbox)
                       })
            { descriptor with ReadOnly = true }, body)
+
+          tool
+              "edit_file"
+              "Replace one exact piece of text in a file with another. Prefer this over sed/awk/heredocs in execute_command: the change is on the record as an edit of THIS file, and the people here see what changed. Read the file first (read_file) and quote `old_string` exactly as it appears — whitespace and indentation included, without the line numbers. It must match ONCE: if it matches more, add surrounding lines until it is unique, or pass replace_all: true to change every occurrence. Answers with what changed, or why nothing did. Paths as read_file takes them."
+              [ ToolField.required "path" "string" "the file to edit, as read_file names it"
+                ToolField.required "old_string" "string" "the exact text to replace, as it appears in the file"
+                ToolField.required "new_string" "string" "the text to put in its place"
+                ToolField.optional "replace_all" "boolean" "true to replace every occurrence; default false, which requires exactly one"
+                ToolField.optional "sandbox" "string" "the work sandbox whose file this is; omit for the default one" ]
+              (fun args ->
+                  async {
+                      match ToolArgs.fileEdit args with
+                      | Error e -> return Error e
+                      | Ok (path, oldText, newText, replaceAll, sandbox) ->
+                          return! ok (editFile capabilities path oldText newText replaceAll sandbox)
+                  })
+
+          tool
+              "write_file"
+              "Write a whole file: create it, or replace everything in it. For a change inside an existing file use edit_file, which records what changed; this records that the file was written. Directories on the way are created. Paths as read_file takes them."
+              [ ToolField.required "path" "string" "the file to write, as read_file names it"
+                ToolField.required "content" "string" "the entire new content of the file"
+                ToolField.optional "sandbox" "string" "the work sandbox whose file this is; omit for the default one" ]
+              (fun args ->
+                  async {
+                      match ToolArgs.fileWrite args with
+                      | Error e -> return Error e
+                      | Ok (path, content, sandbox) -> return! ok (writeFile capabilities path content sandbox)
+                  })
 
           tool
               "set_secret"

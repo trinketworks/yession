@@ -26,6 +26,7 @@ open Yjs
 open Yession.Domain
 open Yession.Domain.Sandboxes
 open Yession.Domain.Agent
+open Yession.Domain.Files
 open Yession.Domain.Collab
 open Yession.Domain.Prs
 open Yession.Domain.Repos
@@ -166,6 +167,7 @@ let private servicesOver (service: Repos.ReposService) : Commands.CommandService
             { InSandbox = "/repos/" + RepoRef.relativePath repo
               OnHost = "/data/repos/" + RepoRef.relativePath repo }
       Terminals = fun () -> SessionTerminals.unavailable
+      Files = fun () -> SessionFiles.unavailable
       RunCommand = fun () -> TerminalCommands.unavailable
       Prs = fun () -> None
       Invalidate = ignore
@@ -667,4 +669,96 @@ let private launchTests =
             }
     ]
 
-let tests = testList "Tool calls" [ tests'; launchTests ]
+/// Services whose file changes land in `seen` instead of a sandbox, answering as told.
+let private servicesEditing (seen: ResizeArray<FileEditRequest>) (edit: FileEditRequest -> Result<Edited, string>) =
+    { servicesOver (reposAnswering (fun _ -> async { return Error "not part of this test" })) with
+        Files =
+            fun () ->
+                { SessionFiles.unavailable with
+                    Edit =
+                        fun request ->
+                            async {
+                                seen.Add request
+                                return edit request
+                            } } }
+
+let private fileTests =
+    testList "The file commands, end to end" [
+
+        // The whole chain for an edit: five arguments, two of them arbitrary text, encoded by
+        // the binding, carried through the gate, decoded by the dispatch table. Every join is a
+        // place a reordering or an escape goes unnoticed — so the texts here carry newlines,
+        // quotes and a backslash on purpose.
+        testCaseAsync "every argument of an edit_file survives the gate in the place it was written" <|
+            async {
+                let seen = ResizeArray ()
+                let session =
+                    openToolSession (
+                        servicesEditing seen (fun _ ->
+                            Ok
+                                { Edited.Content = ""
+                                  Edited.Replaced = 1
+                                  Edited.LinesRemoved = 2
+                                  Edited.LinesAdded = 1 }))
+                let! answer =
+                    session.Call
+                        "edit_file"
+                        """{"path":"src/A.fs","old_string":"let x = \"a\"\n  |> f","new_string":"let x = 'b' \\ c","replace_all":true,"sandbox":"dev"}"""
+                let request = Seq.exactlyOne seen
+                Expect.equal request.Path "src/A.fs" "the path"
+                Expect.equal request.OldText "let x = \"a\"\n  |> f" "the text to find, newline and quotes intact"
+                Expect.equal request.NewText "let x = 'b' \\ c" "the text to put, backslash intact"
+                Expect.isTrue request.ReplaceAll "the flag"
+                Expect.equal (SandboxRef.render request.Sandbox) "dev" "the sandbox"
+                Expect.stringContains (answered answer) "edited src/A.fs: −2 +1 lines" "and what was done came back"
+            }
+
+        // A refusal from the file side — not found, ambiguous — is an ANSWER the model reads,
+        // in the words `FileEdit.describe` chose, not a protocol error it would route around.
+        testCaseAsync "an edit the file refuses is told to the model in the file's words" <|
+            async {
+                let seen = ResizeArray ()
+                let session = openToolSession (servicesEditing seen (fun r -> Error (FileEdit.describe r.Path EditFailure.NotFound)))
+                let! answer = session.Call "edit_file" """{"path":"f","old_string":"zzz","new_string":"y"}"""
+                let text = answered answer
+                Expect.stringContains text "old_string was not found in f" "which file, and why"
+            }
+
+        testCaseAsync "an edit without a sandbox is about the default one" <|
+            async {
+                let seen = ResizeArray ()
+                let session =
+                    openToolSession (
+                        servicesEditing seen (fun _ ->
+                            Ok { Edited.Content = ""; Edited.Replaced = 1; Edited.LinesRemoved = 1; Edited.LinesAdded = 1 }))
+                let! _ = session.Call "edit_file" """{"path":"f","old_string":"a","new_string":"b"}"""
+                Expect.equal (Seq.exactlyOne seen).Sandbox SandboxRef.defaultRef "where every terminal starts"
+            }
+
+        testCaseAsync "a write_file carries the whole content through the gate" <|
+            async {
+                let mutable written : (SandboxRef * string * string) option = None
+                let services =
+                    { servicesOver (reposAnswering (fun _ -> async { return Error "not part of this test" })) with
+                        Files =
+                            fun () ->
+                                { SessionFiles.unavailable with
+                                    Write =
+                                        fun sandbox path content ->
+                                            async {
+                                                written <- Some (sandbox, path, content)
+                                                return Ok ()
+                                            } } }
+                let session = openToolSession services
+                let! answer = session.Call "write_file" """{"path":"new/B.fs","content":"one\ntwo\n"}"""
+                match written with
+                | Some (sandbox, path, content) ->
+                    Expect.equal sandbox SandboxRef.defaultRef "the default sandbox"
+                    Expect.equal path "new/B.fs" "the path"
+                    Expect.equal content "one\ntwo\n" "the content, whole"
+                | None -> failwith "nothing was written"
+                Expect.stringContains (answered answer) "wrote new/B.fs (2 lines)" "and what was done came back"
+            }
+    ]
+
+let tests = testList "Tool calls" [ tests'; fileTests; launchTests ]

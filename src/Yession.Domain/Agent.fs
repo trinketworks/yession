@@ -705,11 +705,32 @@ type SandboxCapabilities =
 /// that took host paths would be the second door `execute_command` is the only one of.
 type ReadFile = SandboxRef -> string -> Async<Result<string, string>>
 
-/// the files inside a sandbox, read as text rather than through a shell line — so the
-/// record says WHICH file was read, as a fact, where a command line only said `sed`.
+/// One exact-string edit to one file in one sandbox (`FileEdit.apply`'s arguments, with
+/// the file they are about). A record rather than five positionals, because a bare
+/// `"x" "y" true` at a call site is the shape nobody can read — and because it is what a
+/// gated call encodes and decodes on its two sides.
+[<RequireQualifiedAccess>]
+type FileEditRequest =
+    { Sandbox : SandboxRef
+      Path : string
+      OldText : string
+      NewText : string
+      ReplaceAll : bool }
+
+/// Change a file: an edit, or a whole write. COMMANDS, like `set_shell_profile` — an act on
+/// the checkout everyone here shares, so it passes the gate and answers with a
+/// `CommandOutcome` a refusal can ride. A read is a look; these are the acts.
+type EditFile = FileEditRequest -> Async<Result<CommandOutcome, string>>
+type WriteFile = SandboxRef -> string -> string -> Async<Result<CommandOutcome, string>>
+
+/// the files inside a sandbox, read and changed as text rather than through a shell line —
+/// so the record says WHICH file was read or changed, as a fact, where a command line only
+/// said `sed`.
 [<RequireQualifiedAccess>]
 type FileCapabilities =
-    { Read : ReadFile }
+    { Read : ReadFile
+      Edit : EditFile
+      Write : WriteFile }
 
 /// the session's read-only queries, and how to answer one.
 type QueryCapabilities =
@@ -793,7 +814,10 @@ module AgentCapabilities =
             { Start = fun _ _ -> async { return Error "no sandbox capability" }
               Stop = fun _ -> async { return Error "no sandbox capability" }
               SetShellProfile = fun _ _ -> async { return Error "no terminal capability" } }
-          Files = { FileCapabilities.Read = fun _ _ -> async { return Error "no file capability" } }
+          Files =
+            { FileCapabilities.Read = fun _ _ -> async { return Error "no file capability" }
+              FileCapabilities.Edit = fun _ -> async { return Error "no file capability" }
+              FileCapabilities.Write = fun _ _ _ -> async { return Error "no file capability" } }
           Queries =
             { Declared = []
               Read = fun _ -> async { return Error "no query capability" } }

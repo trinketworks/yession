@@ -47,6 +47,9 @@ type SessionHost =
       Sandboxes : WorkSandboxes.WorkSandboxes
       /// The session's terminals (Plan 13) — opening one starts the environment.
       Terminals : SessionTerminals.SessionTerminals
+      /// The files inside each sandbox (the file verbs), read here and changed through the
+      /// gate.
+      Files : SessionFiles.SessionFiles
       /// Tell the command gate how each gated command is actually carried out (Plan 15,
       /// stage 3b). Set once, from SessionMain, where the repo and sandbox services are
       /// composed — the Host owns the gate because it owns the doc and the log, and the
@@ -678,7 +681,9 @@ let startFull
               Repos = AgentCapabilities.none.Repos
               Queries = AgentCapabilities.none.Queries
               Sandboxes = AgentCapabilities.none.Sandboxes
-              Files = { FileCapabilities.Read = files.Read }
+              // The read is the Host's own; the two changes are denials here and gated
+              // calls once `bindFor` knows whose turn it is, like the sandbox commands.
+              Files = { AgentCapabilities.none.Files with Read = files.Read }
               Tools =
                 { Record = toolUseLogFor turnId
                   // Snapshotted HERE, which is what makes a turn's tool list stable: a set
@@ -1101,6 +1106,7 @@ let startFull
               Environment = environment
               Sandboxes = sandboxes
               Terminals = terminals
+              Files = files
               SetCommandDispatch = fun table -> commandDispatch.Value <- table
               SetApproveCapabilities = fun approve -> approveCapabilitiesRef.Value <- approve
               SetLaunchRepo = fun launch -> launchRepoRef.Value <- launch
