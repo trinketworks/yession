@@ -869,15 +869,16 @@ let private readingFiles (files: Map<string, string>) =
         AgentTools.registry
             { AgentCapabilities.none with
                 Files =
-                    { FileCapabilities.Read =
-                        fun sandbox path ->
-                            async {
-                                asked.Add ((sandbox, path))
-                                return
-                                    match Map.tryFind path files with
-                                    | Some content -> Ok content
-                                    | None -> Error "No such file or directory"
-                            } } }
+                    { AgentCapabilities.none.Files with
+                        Read =
+                          fun sandbox path ->
+                              async {
+                                  asked.Add ((sandbox, path))
+                                  return
+                                      match Map.tryFind path files with
+                                      | Some content -> Ok content
+                                      | None -> Error "No such file or directory"
+                              } } }
     (fun (args: string) -> registry.Invoke (call "yession" "read_file" args)), asked
 
 let private fileTests =
@@ -963,4 +964,61 @@ let private fileTests =
         }
     ]
 
-let tests = testList "Tools" [ registryTests; sessionTests; fileTests; auditTests ]
+let private editTests =
+    testList "edit_file" [
+
+        // The agent CLI's own edit semantics, pinned one invariant at a time: the model's
+        // habits are tuned to them, and an edit that silently took the first of three matches
+        // is the sed footgun under a new name.
+        test "one match is replaced, and the line counts say what moved" {
+            let edited = FileEdit.apply "a\nb\nc" "b" "x\ny" false |> expect
+            Expect.equal edited.Content "a\nx\ny\nc" "the one occurrence"
+            Expect.equal edited.Replaced 1 "once"
+            Expect.equal (edited.LinesRemoved, edited.LinesAdded) (1, 2) "−1 +2"
+        }
+
+        test "several matches are refused unless every one was meant" {
+            match FileEdit.apply "b b b" "b" "x" false with
+            | Error (EditFailure.Ambiguous 3) -> ()
+            | other -> failwithf "expected an ambiguity naming three, got %A" other
+        }
+
+        test "replace_all changes every match and counts them" {
+            let edited = FileEdit.apply "b\nb\nb" "b" "x" true |> expect
+            Expect.equal edited.Content "x\nx\nx" "all three"
+            Expect.equal edited.Replaced 3 "counted"
+            Expect.equal (edited.LinesRemoved, edited.LinesAdded) (3, 3) "over every replacement"
+        }
+
+        test "text that is not there is a miss the model is told to re-read for" {
+            Expect.equal (FileEdit.apply "abc" "zzz" "y" false) (Error EditFailure.NotFound) "not found"
+            Expect.stringContains (FileEdit.describe "f" EditFailure.NotFound) "read the file again" "and the next move is named"
+        }
+
+        test "an edit that changes nothing is refused rather than counted as done" {
+            Expect.equal (FileEdit.apply "abc" "b" "b" false) (Error EditFailure.NoChange) "same text both sides"
+        }
+
+        test "an empty old_string is pointed at write_file" {
+            Expect.equal (FileEdit.apply "abc" "" "x" false) (Error EditFailure.EmptyOld) "matches everywhere and nowhere"
+            Expect.stringContains (FileEdit.describe "f" EditFailure.EmptyOld) "write_file" "the verb that creates"
+        }
+
+        // The classifier reads the summary before the file is touched, so it is computed from
+        // the two texts and names the file — never the texts, which for a write is the file.
+        test "the summary names the file and the size of the change, not the text" {
+            let summary = FileEdit.summary "src/A.fs" "one\ntwo" "three" false
+            Expect.equal summary "edit_file src/A.fs −2 +1" "file and counts"
+            Expect.stringContains (FileEdit.summary "f" "a" "b" true) "everywhere" "replace_all is said"
+            Expect.equal (FileEdit.writeSummary "f" "a\nb\nc\n") "write_file f (3 lines)" "a write says how much"
+        }
+
+        test "edit_file and write_file are declared, and are not read-only" {
+            let registry = AgentTools.registry AgentCapabilities.none
+            for name in [ "edit_file"; "write_file" ] do
+                let tool = registry.Tools |> List.find (fun t -> t.Name = name)
+                Expect.isFalse tool.ReadOnly (name + " is an act")
+        }
+    ]
+
+let tests = testList "Tools" [ registryTests; sessionTests; fileTests; editTests; auditTests ]

@@ -4,18 +4,20 @@ open System
 open Yession.Domain
 open Yession.Domain.Sandboxes
 open Yession.Domain.Agent
+open Yession.Domain.Files
 
 /// The files inside a sandbox, reached without a terminal: what `read_file` fetches before
-/// `FileSlice` cuts the window the caller asked for.
+/// `FileSlice` cuts the window the caller asked for, and where `edit_file` and `write_file`
+/// put text back.
 ///
 /// Reached INSIDE the sandbox, by asking it, for the reason `setProfile` gives: a host-side
 /// read would be wrong twice over — under docker the path is in a container this process
-/// cannot see, and under srt the sandbox's read scope is not ours. So the bytes come out
-/// through one bare spawn of `cat`, with the path as an argv element — never interpolated
-/// into a command line, which is the one place this could become a second door around
-/// `execute_command`. It is housekeeping (`Direct`), not work: it needs no toolchain and
-/// must not pay for one, and it draws no block — the tool-use record is where the read
-/// shows, saying which file.
+/// cannot see, and under srt the sandbox's read scope is not ours. So the bytes go through
+/// one bare spawn each way — `cat` out, `cat >` in — with the path as an argv element,
+/// never interpolated into a command line, which is the one place this could become a
+/// second door around `execute_command`. It is housekeeping (`Direct`), not work: it needs
+/// no toolchain and must not pay for one, and it draws no block — the tool-use record is
+/// where a read shows, and the gate's record where a change does, each saying which file.
 module SessionFiles =
 
     [<RequireQualifiedAccess>]
@@ -23,10 +25,18 @@ module SessionFiles =
         { /// The whole text of one file, as the sandbox holds it: `path` in the sandbox's own
           /// vocabulary, resolved where a terminal there would resolve it — the shell
           /// profile's directory when one is set, the sandbox's own otherwise.
-          Read : SandboxRef -> string -> Async<Result<string, string>> }
+          Read : SandboxRef -> string -> Async<Result<string, string>>
+          /// One exact-string edit (`FileEdit.apply`), read-apply-write as ONE verb: a caller
+          /// that could write without having read is a caller that can put back a file
+          /// somebody else changed in between. The write happens only when the edit applied.
+          Edit : FileEditRequest -> Async<Result<Edited, string>>
+          /// The whole file, replaced — or created, along with the directories to it.
+          Write : SandboxRef -> string -> string -> Async<Result<unit, string>> }
 
     let unavailable : SessionFiles =
-        { SessionFiles.Read = fun _ _ -> async { return Error "this session has no sandboxes to read files in" } }
+        { SessionFiles.Read = fun _ _ -> async { return Error "this session has no sandboxes to read files in" }
+          SessionFiles.Edit = fun _ -> async { return Error "this session has no sandboxes to edit files in" }
+          SessionFiles.Write = fun _ _ _ -> async { return Error "this session has no sandboxes to write files in" } }
 
     /// Characters of one file this will carry back before giving up on it. A read is a
     /// window of at most a few thousand lines; a file past this is a build artifact or a
@@ -94,4 +104,55 @@ module SessionFiles =
                         | SandboxRunFailed reason -> return Error reason
             }
 
-        { SessionFiles.Read = read }
+        /// `content` into `path`, whole. In place (`cat >`), so the file keeps its inode and
+        /// mode — an executable stays executable — and the directories to it are made, so a
+        /// new file in a new directory is one call rather than a refused one and a `mkdir`.
+        let write (sandbox: SandboxRef) (path: string) (content: string) : Async<Result<unit, string>> =
+            async {
+                let name = SandboxRef.render sandbox
+                match! (environmentFor sandbox).Ensure None "a file was written" with
+                | EnvironmentUnavailable reason -> return Error reason
+                | EnvironmentAvailable ->
+                    let complaint = Text.StringBuilder ()
+                    let! spawned =
+                        (environmentFor sandbox).Spawn
+                            { Executable = shell.Executable
+                              Arguments =
+                                shell.Arguments
+                                @ [ "mkdir -p -- \"$(dirname -- \"$1\")\" && cat > \"$1\""; "sh"; path ]
+                              Env = Map.empty
+                              WorkingDirectory = workingDirectoryFor sandbox
+                              Via = Direct }
+                            (fun (stream, chunk) ->
+                                match stream with
+                                | Stdout -> ()
+                                | Stderr -> complaint.Append chunk |> ignore)
+                    match spawned with
+                    | Error reason -> return Error reason
+                    | Ok h ->
+                        h.WriteStdin content
+                        h.CloseStdin ()
+                        match! h.Exited with
+                        | SandboxExited 0 -> return Ok ()
+                        | SandboxExited _ ->
+                            let said = complaint.ToString().Trim ()
+                            return Error (if said = "" then sprintf "the %s sandbox could not write it" name else said)
+                        | SandboxRunFailed reason -> return Error reason
+            }
+
+        let edit (request: FileEditRequest) : Async<Result<Edited, string>> =
+            async {
+                match! read request.Sandbox request.Path with
+                | Error reason -> return Error reason
+                | Ok content ->
+                    match FileEdit.apply content request.OldText request.NewText request.ReplaceAll with
+                    | Error failure -> return Error (FileEdit.describe request.Path failure)
+                    | Ok edited ->
+                        match! write request.Sandbox request.Path edited.Content with
+                        | Error reason -> return Error reason
+                        | Ok () -> return Ok edited
+            }
+
+        { SessionFiles.Read = read
+          SessionFiles.Edit = edit
+          SessionFiles.Write = write }

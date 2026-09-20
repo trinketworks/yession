@@ -531,6 +531,10 @@ let mutable private workSandboxes : WorkSandboxes.WorkSandboxes = WorkSandboxes.
 // reason: the Host owns the log both are built over.
 let mutable private terminals : SessionTerminals.SessionTerminals = SessionTerminals.unavailable
 
+/// The files inside each sandbox, filled from the Host beside `terminals`: the two commands
+/// that change one run through the gate, whose table is built here.
+let mutable private files : SessionFiles.SessionFiles = SessionFiles.unavailable
+
 /// The block-queueing door, filled from the Host beside `terminals` for the same reason: a
 /// declared `setup:` becomes a command on the record, and the thing that puts one there is
 /// built by the Host, which owns the doc every queue entry is written into.
@@ -639,6 +643,7 @@ let private commandServices : Commands.CommandServices =
       Sandboxes = fun () -> workSandboxes
       WorkCheckout = fun repo declared -> Sandboxes.checkoutViewsAt declared reposDir repo
       Terminals = fun () -> terminals
+      Files = fun () -> files
       RunCommand = fun () -> terminalCommands
       Prs = fun () -> prService
       Invalidate = fun name -> queryRegistry.Invalidate name
@@ -1215,6 +1220,7 @@ Async.StartImmediate (
         // readiness line, and therefore before any turn or any browser can ask.
         workSandboxes <- host.Sandboxes
         terminals <- host.Terminals
+        files <- host.Files
         terminalCommands <- host.TerminalCommands
         repoSandboxes <-
             RepoSandboxes.create

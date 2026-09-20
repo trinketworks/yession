@@ -28,6 +28,7 @@ module Yession.Host.Commands
 open Yession.Domain
 open Yession.Domain.Sandboxes
 open Yession.Domain.Agent
+open Yession.Domain.Files
 open Yession.Domain.Tools
 open Yession.Domain.Repos
 open Yession.SessionProcess
@@ -50,6 +51,8 @@ type CommandServices =
       WorkCheckout : RepoRef -> string option -> CheckoutViews
       /// The terminal manager, which owns the shell profile (Plan 25).
       Terminals : unit -> SessionTerminals.SessionTerminals
+      /// The files inside each sandbox, for the two commands that change one.
+      Files : unit -> SessionFiles.SessionFiles
       /// Queueing a command as a recorded block — the same door `execute_command` goes
       /// through, which is the point: a sandbox's declared `setup:` is a command somebody
       /// can watch, edit before it runs, and read the outcome of afterwards, not a private
@@ -137,6 +140,8 @@ let private unwatchPrTool = "unwatch_pr"
 let private startWorkSandboxTool = "start_work_sandbox"
 let private stopWorkSandboxTool = "stop_work_sandbox"
 let private setShellProfileTool = "set_shell_profile"
+let private editFileTool = "edit_file"
+let private writeFileTool = "write_file"
 
 /// One `start_work_sandbox` call, built where the dispatch entry that reads it lives.
 ///
@@ -562,6 +567,55 @@ let dispatch (services: CommandServices) : CommandDispatch =
                         return!
                             andPublish services ShellProfile.queryName (
                                 (services.Terminals ()).SetProfile (Authority.author invocation.Authority) name cwd)
+            }
+
+          // The two file commands (the file verbs). Acts on the shared checkout, so they
+          // pass the gate like every other command here; the sandbox does the reading and
+          // writing (`SessionFiles`), and this side only decodes what the other encoded.
+          editFileTool,
+          fun (invocation: GatedInvocation) ->
+            async {
+                match decodeArgs invocation.Args with
+                | [ rawName; path; oldText; newText; replaceAll ] ->
+                    match SandboxRef.parse rawName with
+                    | Error e -> return Error (sprintf "not a sandbox: %s" e)
+                    | Ok sandbox ->
+                        match!
+                            (services.Files ()).Edit
+                                { FileEditRequest.Sandbox = sandbox
+                                  FileEditRequest.Path = path
+                                  FileEditRequest.OldText = oldText
+                                  FileEditRequest.NewText = newText
+                                  FileEditRequest.ReplaceAll = (replaceAll = "true") }
+                        with
+                        | Error reason -> return Error reason
+                        | Ok edited ->
+                            return
+                                Ok (
+                                    if edited.Replaced = 1 then
+                                        sprintf "edited %s: −%d +%d lines" path edited.LinesRemoved edited.LinesAdded
+                                    else
+                                        sprintf
+                                            "edited %s in %d places: −%d +%d lines"
+                                            path
+                                            edited.Replaced
+                                            edited.LinesRemoved
+                                            edited.LinesAdded)
+                | other -> return Error (sprintf "edit_file takes a sandbox, a path, two texts and a flag, got %d arguments" (List.length other))
+            }
+
+          writeFileTool,
+          fun (invocation: GatedInvocation) ->
+            async {
+                match decodeArgs invocation.Args with
+                | [ rawName; path; content ] ->
+                    match SandboxRef.parse rawName with
+                    | Error e -> return Error (sprintf "not a sandbox: %s" e)
+                    | Ok sandbox ->
+                        match! (services.Files ()).Write sandbox path content with
+                        | Error reason -> return Error reason
+                        | Ok () -> return Ok (sprintf "wrote %s (%d lines)" path (List.length (FileSlice.lines content)))
+                | other -> return Error (sprintf "write_file takes a sandbox, a path and the content, got %d arguments" (List.length other))
             } ]
 
 /// How a PERSON puts the first repo into a session — the launch surface's one act, and the
@@ -817,5 +871,35 @@ let private sandboxCapabilitiesFor (turnActor: Principal) (capabilities: AgentCa
 /// the credential is the turn human's (Plan 08). The Host leaves these as denials because
 /// only the per-turn dispatcher knows who the turn is for; this is where they stop being
 /// denials, and it is one call so a turn cannot pick up half of them.
+/// The file commands, as gated calls. The summary is what the classifier reads and the
+/// record keeps, so it names the file and the size of the change (`FileEdit.summary`) — never
+/// the texts themselves, which for a whole-file write is the whole file.
+let private fileCapabilitiesFor (turnActor: Principal) (capabilities: AgentCapabilities) : AgentCapabilities =
+    let gated (tool: string) (args: string list) (summary: string) =
+        capabilities.RunGated
+            { Tool = tool
+              Args = encodeArgs args
+              Summary = summary
+              Authority = Authority.agentFor turnActor }
+    { capabilities with
+        Files =
+          { capabilities.Files with
+              Edit =
+                fun request ->
+                  gated
+                      editFileTool
+                      [ SandboxRef.render request.Sandbox
+                        request.Path
+                        request.OldText
+                        request.NewText
+                        (if request.ReplaceAll then "true" else "false") ]
+                      (FileEdit.summary request.Path request.OldText request.NewText request.ReplaceAll)
+              Write =
+                fun sandbox path content ->
+                  gated writeFileTool [ SandboxRef.render sandbox; path; content ] (FileEdit.writeSummary path content) } }
+
 let bindFor (services: CommandServices) (turnActor: Principal) (capabilities: AgentCapabilities) : AgentCapabilities =
-    capabilities |> repoCapabilitiesFor services turnActor |> sandboxCapabilitiesFor turnActor
+    capabilities
+    |> repoCapabilitiesFor services turnActor
+    |> sandboxCapabilitiesFor turnActor
+    |> fileCapabilitiesFor turnActor
