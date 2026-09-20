@@ -2123,7 +2123,7 @@ module View =
                 <article class="{Style.actNote}" data-message-id="{MessageId.value item.MessageId}" tabindex="-1" data-act-note data-act-status="{messageStatusLabel item.Status}" data-message-author="{authorLabel item.Author}">
                   {itemActions item}
                   {running}
-                  <span class="{Style.actNoteText}"><span class="{Style.actNoteWho}">{authorName model item.Author}</span> {item.Body} {failedMark}</span>
+                  <span class="{Style.actNoteText}">{item.Body} {failedMark}</span>
                   {particulars}
                 </article>"""
         let messageItem (item: ConversationItem) =
@@ -2378,14 +2378,14 @@ module View =
         let rows = TimelineProjection.rows model.Conversation model.Timeline
         // Every row resolved to (whose act it is, its rendering) BEFORE grouping, so a row
         // whose backing state a page boundary withheld contributes no entry — never an empty
-        // element, and never an author line standing over nothing. An act note's actor is
-        // `None`: its sentence carries its own name, so it neither takes an author line nor
-        // joins a run under one.
+        // element, and never an author line standing over nothing. An act note carries
+        // its own author, like a block chip or a tool run: consecutive acts by one actor
+        // fold under a single author line rather than each repeating whose act it is.
         let entryOf row =
             match row with
                 | RowItem (TimelineMessage item) ->
                     match item.Kind with
-                    | ConversationItemKind.ActNote facts -> Some (None, actNoteItem facts item)
+                    | ConversationItemKind.ActNote facts -> Some (Some item.Author, actNoteItem facts item)
                     | ConversationItemKind.Message -> Some (Some item.Author, messageItem item)
                 | RowItem (TimelineBlock (_, terminalId, blockId)) ->
                     // Both folds read the same page, so a chip without its block is a page
