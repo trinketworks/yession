@@ -1079,7 +1079,10 @@ let private uiChecklistTests =
                     Conversation = { representativeModel.Conversation with Items = [ note ] } }
             let html = Support.render model
             Expect.isTrue (html.Contains "data-act-note") "the note hook renders"
-            Expect.isTrue (html.Contains "removed repo octo/hello") "the act reads as its sentence"
+            Expect.isTrue (html.Contains "removed repo ") "the act reads as its sentence"
+            Expect.isTrue
+                (html.Contains (Dom.attr "data-entity" (EntityRef.said (EntityRef.Repo (RepoRef.create "octo/hello" |> expect)))))
+                "naming its repository as a reference"
             let noteStart = html.IndexOf "data-act-note"
             let article = html.Substring (html.LastIndexOf ("<article", noteStart), 300)
             Expect.isFalse (article.Contains "data-message-body") "no message body — it is not something someone said"
@@ -1108,7 +1111,7 @@ let private uiChecklistTests =
             // a failure of this case rather than of whatever it is watching.
             let openedAt = html.LastIndexOf ("<article", noteStart)
             let article = html.Substring (openedAt, html.IndexOf ("</article>", openedAt) - openedAt)
-            Expect.isTrue (article.Contains "added repo octo/hello") "the headline is what the act was"
+            Expect.isTrue (article.Contains "added repo ") "the headline is what the act was"
             Expect.isTrue (article.Contains "data-act-detail") "and the particulars are their own element"
             let detail = article.Substring (article.IndexOf "data-act-detail")
             Expect.isTrue (detail.Contains "on branch main") "carrying what the headline left out"
@@ -1283,7 +1286,7 @@ let private uiChecklistTests =
                 { representativeModel with
                     Conversation = { representativeModel.Conversation with Items = [ note ] } }
             let html = Support.render model
-            Expect.isTrue (html.Contains "removed repo octo/hello") "the act reads as its sentence"
+            Expect.isTrue (html.Contains "removed repo ") "the act reads as its sentence"
             Expect.isFalse (html.Contains "data-act-detail") "and no second line under it"
 
         // A turn nobody asked for (Plan 20, stage 2). The agent may now speak with nobody

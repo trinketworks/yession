@@ -117,24 +117,26 @@ and RepoConfigRefused =
 // `WorkSandboxStarted.phrase` does: what an event's leaves MEAN is knowledge that belongs
 // with the event, not assembled by whatever folds it. `Act.phrase` (Acts.fs) dispatches here;
 // the fold composes nothing. A `Phrase` rather than a string, so a reader that is a screen
-// can draw what the sentence points at — today every phrase here is text, and the first to
-// carry a reference changes nothing about where it lives.
+// can draw what the sentence points at: the repository is a REFERENCE in each, which prose
+// spells `github:owner/repo` (`EntityRef.said`) and a screen draws with its mark, as a link.
 
 module RepoAdded =
 
-    let phrase (r: RepoAdded) : Phrase = Phrase.text (sprintf "added repo %s" (RepoRef.value r.Repo))
+    let phrase (r: RepoAdded) : Phrase = [ Segment.Text "added repo "; Segment.Ref (EntityRef.Repo r.Repo) ]
 
     let particulars (r: RepoAdded) : Phrase list = [ Phrase.text (sprintf "on branch %s" r.Branch) ]
 
 module RepoRemoved =
 
-    let phrase (r: RepoRemoved) : Phrase = Phrase.text (sprintf "removed repo %s" (RepoRef.value r.Repo))
+    let phrase (r: RepoRemoved) : Phrase = [ Segment.Text "removed repo "; Segment.Ref (EntityRef.Repo r.Repo) ]
 
 module RepoBranchSwitched =
 
     let phrase (r: RepoBranchSwitched) : Phrase =
-        if r.Created then Phrase.text (sprintf "created branch %s in %s" r.Branch (RepoRef.value r.Repo))
-        else Phrase.text (sprintf "switched %s to branch %s" (RepoRef.value r.Repo) r.Branch)
+        if r.Created then
+            [ Segment.Text (sprintf "created branch %s in " r.Branch); Segment.Ref (EntityRef.Repo r.Repo) ]
+        else
+            [ Segment.Text "switched "; Segment.Ref (EntityRef.Repo r.Repo); Segment.Text (sprintf " to branch %s" r.Branch) ]
 
 module RepoCapabilitiesChanged =
 
@@ -160,7 +162,7 @@ module RepoCapabilitiesChanged =
 module RepoCapabilitiesApproved =
 
     let phrase (a: RepoCapabilitiesApproved) : Phrase =
-        Phrase.text (sprintf "approved what %s asks for" (RepoRef.value a.Repo))
+        [ Segment.Text "approved what "; Segment.Ref (EntityRef.Repo a.Repo); Segment.Text " asks for" ]
 
 module RepoConfigRefused =
 

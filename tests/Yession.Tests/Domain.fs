@@ -780,8 +780,16 @@ let private repoTests =
             let proj, _ = ConversationProjection.applyEvents None envelopes ConversationProjection.empty
             Expect.isTrue (proj.Items |> List.forall isAct) "all notes"
             Expect.equal (proj.Items |> List.map ConversationItem.headline)
-                [ "added repo octo/hello"; "switched octo/hello to branch fix/y"; "removed repo octo/hello" ]
-                "the notes read as sentences"
+                [ "added repo github:octo/hello"; "switched github:octo/hello to branch fix/y"; "removed repo github:octo/hello" ]
+                "the notes read as sentences, each naming its repository as prose spells one"
+            Expect.equal
+                (proj.Items
+                 |> List.collect (fun i ->
+                     match i.Content with
+                     | ItemContent.Act act -> Phrase.refs (Act.phrase act)
+                     | ItemContent.Message _ -> []))
+                (List.replicate 3 (EntityRef.Repo (RepoRef.create "octo/hello" |> expect)))
+                "and each POINTS at it, so a screen draws the repository rather than its name"
             Expect.equal (proj.Items |> List.map noteDetail)
                 [ Some "on branch main"; None; None ]
                 "and the particulars a headline left out are still on the note"
@@ -836,7 +844,7 @@ let private repoTests =
                   Woke = None; Replying = None }
             Expect.equal
                 (ConversationItem.said note)
-                "added repo octo/hello — on branch main"
+                "added repo github:octo/hello — on branch main"
                 "both halves, in one sentence"
 
         // And nothing invented where there is no second half: a seam printed over an item
@@ -851,7 +859,7 @@ let private repoTests =
                   Woke = None; Replying = None }
             Expect.equal
                 (ConversationItem.said (item (ItemContent.Act ordinaryAct)))
-                "removed repo octo/hello"
+                "removed repo github:octo/hello"
                 "an act with one clause"
             Expect.equal
                 (ConversationItem.said (item (ItemContent.Message "removed repo octo/hello")))
