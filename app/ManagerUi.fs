@@ -793,12 +793,16 @@ let private answeredFor (status: int) : bool =
 /// by construction: a browser is the only thing that ever lands on `/open`. A browser that is
 /// handed `text/plain` does not necessarily show it; a phone downloads it, so an operator who
 /// pressed Create is left holding a file called `document.txt` and no idea what went wrong.
+///
+/// And the Manager page's OTHER head tags — its icon, and the tint it asks of the browser's
+/// own bars — because this page sits between two that carry them: a phone's toolbar that is
+/// black on the Manager and black in the session went light for the seconds in between.
 let private standalonePage (title: string) (body: string) : string =
     sprintf
         """<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>%s</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
-%s
+%s%s
 </head><body class="%s">
 <main class="max-w-[32rem] mx-auto my-16 px-4 flex flex-col gap-3">
 <h1 class="%s">%s</h1>
@@ -807,6 +811,7 @@ let private standalonePage (title: string) (body: string) : string =
 </body></html>"""
         (Ssr.escapeText title)
         (Style.headTags cssUrl)
+        (WebApp.managerHeadTags (ManagerRoute.path ManagerRoute.Icon))
         Style.standalone
         Style.heading
         (Ssr.escapeText title)

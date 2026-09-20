@@ -346,10 +346,13 @@
    the end of a scroll (photographed on iOS Safari as a white line under the composer). The
    ground has to be said on the document itself; a class on `<main>` cannot reach it.
 
-   `color-scheme` rides along because it is the same statement to the same audience — the
-   browser's own paintwork: scrollbars, form-control defaults, and the ground it flashes
-   during navigation. It is declared HERE and nowhere else (the Manager page used to carry a
-   `<meta name="color-scheme">` saying it a second time, for one of the two pages).
+   The colour SCHEME — the browser's own paintwork: scrollbars, form-control defaults, and
+   the canvas it shows between committing a navigation and the new document's first paint —
+   is deliberately NOT declared here. This sheet is render-blocking and fetched, so anything
+   it says arrives after that canvas has already been painted; a `color-scheme` in it once
+   stood in for the meta tag (as a "duplicate") and every launch flashed white on iOS Safari
+   for as long as the sheet took to arrive. It is said once, in the head, ahead of the link
+   to this sheet: `Style.headTags`.
 
    `overscroll-behavior` is what stops the rubber band happening at all: without it a flick
    that runs the timeline off its end chains to the document and bounces the whole app. An
@@ -357,7 +360,6 @@
 @layer base {
   html {
     background-color: var(--color-bg);
-    color-scheme: dark;
     overscroll-behavior: none;
   }
 }
