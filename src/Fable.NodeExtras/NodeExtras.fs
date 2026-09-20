@@ -869,9 +869,11 @@ module Ttys =
 /// `Fable.Node` types none of it, and the `Fable.Browser.*` family is not on a Node program's
 /// path.
 ///
-/// The LISTENING end only, because that is the end this repository holds: the signals it sees
-/// arrive from somebody else's API (the agent SDK hands one to the spawner it is given), and
-/// what fires one is an `AbortController` nothing here constructs.
+/// The listening end is what the PRODUCT holds: the signals it sees arrive from somebody
+/// else's API, where the agent SDK hands one to the spawner it is given. The firing end is
+/// `AbortController` below — declared because the suites that prove a listening binding
+/// listens need something to make it fire, and two of them had each written the same three
+/// macros to get one.
 [<AllowNullLiteral>]
 type AbortSignal =
 
@@ -884,6 +886,27 @@ type AbortSignal =
     /// keeps a long-lived signal from retaining every handler ever hung on it.
     [<Emit("$0.addEventListener('abort', $1, { once: true })")>]
     abstract onAbort : handler: (unit -> unit) -> unit
+
+/// The WHATWG `AbortController` — the firing end of the signal above, and a Node global since
+/// v15. One controller owns one signal for its whole life: `signal` answers the same object
+/// every time, which is what lets a caller hang a listener on it and abort through the
+/// controller afterwards.
+[<AllowNullLiteral>]
+type AbortController =
+
+    /// The signal this controller fires. The SAME signal on every read, not a fresh one.
+    abstract signal : AbortSignal
+
+    /// Fire it. At most once by the spec: a second `abort` on a controller that has already
+    /// fired changes nothing and runs no listener.
+    abstract abort : unit -> unit
+
+[<AutoOpen>]
+module Aborting =
+
+    /// A fresh controller, its signal unfired.
+    [<Emit("new AbortController()")>]
+    let abortController () : AbortController = jsNative
 
 // --- Relaying somebody else's listeners --------------------------------------------------------
 
