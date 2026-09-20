@@ -32,11 +32,24 @@ type [<AllowNullLiteral>] LoggerProvider =
     abstract forceFlush: unit -> JS.Promise<unit>
     abstract shutdown: unit -> JS.Promise<unit>
 
+/// A record the SDK has FINISHED — what an exporter is handed, and a different thing from the
+/// plain object the emitter passes to `emit`. The SDK wraps that object and serves the body
+/// back through a getter (`body` over its own `_body`), so a reader that treats a finished
+/// record as plain data — stringifying it, walking its own properties — does not find one.
+/// These two members are what this repository reads back; the rest stays undeclared.
+type [<AllowNullLiteral>] ReadableLogRecord =
+    /// Whatever the emitter set as the body. OTel allows any value; this repository only ever
+    /// emits text, and the reader is what says so.
+    abstract body: obj
+    /// The record's attributes, flat, as the SDK stores them — a plain object whose keys are
+    /// the convention's dotted names.
+    abstract attributes: obj
+
 /// In-memory exporter (tests): finished records accumulate in memory for assertions. It is
 /// a `LogRecordExporter`, so it drops straight into a processor.
 type [<AllowNullLiteral>] InMemoryLogRecordExporter =
     inherit LogRecordExporter
-    abstract getFinishedLogRecords: unit -> obj array
+    abstract getFinishedLogRecords: unit -> ReadableLogRecord array
     abstract reset: unit -> unit
 
 /// Console exporter: writes finished records to stdout. A `LogRecordExporter`, so it drops

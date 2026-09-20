@@ -20,6 +20,7 @@ module Yession.Tests.Models
 // paging, headers and a status code, and those are exactly what the cases turn on.
 
 open Fable.Core
+open Thoth.Json
 open Fable.Pyxpecto
 open Yession.Domain
 open Yession.Domain.Agent
@@ -229,27 +230,23 @@ let private startClaudeRoutes (list: ListModels) =
         return SessionRoute.at url SessionRoute.ClaudeStatus, server
     }
 
-let private parseJson (body: string) : obj = JS.JSON.parse body
+/// The models off a status reply, as the browser reads them: the catalogue's own JSON — which
+/// the shared codec then decodes, exactly as the browser does — or the reason there is none.
+///
+/// `Optional.Field` is what the `||` in the macros this replaces meant: a field spelled `null`
+/// and a field left off are both "no catalogue here". What it does NOT do is conflate those
+/// with a reply this cannot read at all, which the old reading did — an unreadable status was
+/// a status with no catalogue, and the case asserting "a failed lookup is not a catalogue"
+/// would have passed on a reply that was not a status reply at all.
+let private catalogue : Decoder<{| models: string option; unavailable: string option |}> =
+    Decode.object (fun get ->
+        {| models = get.Optional.Field "models" Decode.value |> Option.map (Encode.toString 0)
+           unavailable = get.Optional.Field "modelsUnavailable" Decode.string |})
 
-let private stringifyJson (value: obj) : string = JS.JSON.stringify value
-
-/// The catalogue field, and nothing when the reply carries none. `||` rather than `??`
-/// because that is what this said as JavaScript: a `models` spelled `null` and one left off
-/// are both "no catalogue here", and so is the empty one a decoder could not read.
-[<Emit("($0.models || null)")>]
-let private modelsField (status: obj) : obj option = Util.jsNative
-
-/// The reason there is no catalogue, on the same falsiness and for the same reason.
-[<Emit("($0.modelsUnavailable || null)")>]
-let private unavailableField (status: obj) : string option = Util.jsNative
-
-/// The models off a status reply, as the browser reads them: the list, or the reason there
-/// is none.
 let private catalogueOf (body: string) : {| models: string option; unavailable: string option |} =
-    let status = parseJson body
-
-    {| models = modelsField status |> Option.map stringifyJson
-       unavailable = unavailableField status |}
+    match Decode.fromString catalogue body with
+    | Ok read -> read
+    | Error reason -> failwithf "the status route answered something this is not a status reply: %s" reason
 
 let private routeTests =
     testList "the catalogue on the status reply" [
