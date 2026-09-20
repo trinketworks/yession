@@ -14,6 +14,7 @@ module Yession.Tests.SrtIntegration
 open Fable.Core
 open Fable.Core.JsInterop
 open Fable.Pyxpecto
+open Fable.NodeExtras
 open Yession.Domain
 open Yession.Domain.Sandboxes
 open Yession.Domain.Agent
@@ -24,7 +25,6 @@ open Yession.Tests.Support
 
 // --- Node helpers: host-side fixtures the sandbox is then pointed at ----------------------
 
-let private nodeNet : obj = importAll "node:net"
 
 /// The account's home, which the probe below plants a secret in. A box with no `HOME` cannot
 /// host that probe, and says so rather than planting the secret at `/` — which is where the
@@ -40,29 +40,17 @@ let private platform () : Node.Base.Platform = Node.Api.``process``.platform
 
 let private nowMs () : float = JS.Constructors.Date.now ()
 
-[<Emit("$0.createServer($1)")>]
-let private createServer (net: obj) (onConnection: obj -> unit) : obj = jsNative
-
-[<Emit("$0.end($1)")>]
-let private endWith (connection: obj) (said: string) : unit = jsNative
-
-[<Emit("$0.listen($1)")>]
-let private listenAt (server: obj) (path: string) : unit = jsNative
-
-[<Emit("$0.close()")>]
-let private closeServer (server: obj) : unit = jsNative
-
 /// A unix socket with something listening on it, and a thunk that closes it.
 ///
 /// A LISTENER, rather than probing an empty path: a refused connect and a denied connect are
 /// both failures, and only a successful one says the grant reached the kernel.
 let private listenOn (path: string) : (unit -> unit) =
-    let server = createServer nodeNet (fun connection -> endWith connection "ok")
-    listenAt server path
+    let server = createNetServerAnswering (fun connection -> connection.close "ok")
+    server.listen path
     // Closing twice, or closing one that never bound, throws — and this runs at the end of a
     // case whose verdict was already reached, so a throw here would replace it with a fault
     // about the fixture.
-    fun () -> try closeServer server with _ -> ()
+    fun () -> try server.close () with _ -> ()
 
 // --- The sandbox under test ---------------------------------------------------------------
 
