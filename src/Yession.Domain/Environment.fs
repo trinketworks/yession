@@ -313,7 +313,9 @@ module EnvironmentSpec =
 /// gets killed.
 type SandboxRequest =
     { Spec : EnvironmentSpec
-      Forward : string list }
+      /// Constructed, so already normalised (`ConnectionName.normalise`): the registry
+      /// compares requests, and a comparison over raw spellings refused asks nobody changed.
+      Forward : ConnectionName list }
 
 module SandboxRequest =
 
@@ -324,6 +326,8 @@ module SandboxRequest =
         match names with
         | [] -> "nothing"
         | some -> String.concat ", " some
+
+    let private connections (names: ConnectionName list) = list (names |> List.map ConnectionName.value)
 
     let private mountsOf (runtime: SandboxRuntime) =
         match runtime with
@@ -351,7 +355,7 @@ module SandboxRequest =
             vars |> Map.toList |> List.map fst |> list
         let clauses =
             [ if running.Forward <> wanted.Forward then
-                sprintf "it forwards %s, not %s" (list running.Forward) (list wanted.Forward)
+                sprintf "it forwards %s, not %s" (connections running.Forward) (connections wanted.Forward)
               if running.Spec.WorkingDirectory <> wanted.Spec.WorkingDirectory then
                 sprintf
                     "it starts in %s, not %s"

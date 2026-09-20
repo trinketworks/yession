@@ -2038,18 +2038,21 @@ module View =
                           <code class="{Style.actNotePath}">{path}</code>
                         </div>""" ]
                 | _ -> []
+            // Each connection drawn as a REFERENCE — the same mark and name the sidebar's
+            // panel and every other sentence give it — rather than a badge of its own that
+            // happened to carry the same word.
             let forwarded =
                 match s.Forwarded with
                 | [] -> []
                 | names ->
-                    let badges =
+                    let references =
                         names
                         |> List.map (fun name ->
-                            html $"""<span class="{Style.actNoteCred}" data-act-fact="forwarded">{name}</span>""")
+                            html $"""<span data-act-fact="forwarded">{Entity.render model (EntityRef.Connection name)}</span>""")
                     [ html $"""
                         <div class="{Style.actNoteFactRow}">
                           <span class="{Style.actNoteFactKey}">{Dom.Text.sandboxFactForwarding}</span>
-                          {badges}
+                          {references}
                         </div>""" ]
             let realisation =
                 match s.Realisation with

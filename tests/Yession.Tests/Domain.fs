@@ -319,7 +319,7 @@ let private frameSerializationTests =
                       Backend = "srt"
                       Description = None
                       Checkout = None
-                      Forwarded = [ "github" ]
+                      Forwarded = [ ConnectionName.create "github" |> expect ]
                       Realisation = [ "the socket at /run/docker.sock — this host cannot scope that" ]
                       Actor = ActorRef.Agent }
                   // A repo-declared start, carrying both the things only a sandbox settles:
@@ -330,7 +330,7 @@ let private frameSerializationTests =
                       Backend = "docker"
                       Description = Some "day-to-day work"
                       Checkout = Some "/repos/octo/hello"
-                      Forwarded = [ "github" ]
+                      Forwarded = [ ConnectionName.create "github" |> expect ]
                       Realisation = []
                       Actor = ActorRef.Configured (RepoRef.create "octo/hello" |> expect) }
                   // A push spending somebody's credential: the person's own, and the
@@ -2106,7 +2106,7 @@ let private configTests =
             let request = SandboxDecl.toRequest (checkout "/data/repos/octo/hello") decl |> expect
             Expect.equal request.Spec.WorkingDirectory (Some "/data/repos/octo/hello/app") "the workdir is under the checkout"
             Expect.equal (request.Spec.Uses |> List.map ResourceName.value) [ "npm" ] "the resources it selects"
-            Expect.equal request.Forward [ "github" ] "the credentials by name"
+            Expect.equal request.Forward [ ConnectionName.create "github" |> expect ] "the credentials by name"
             Expect.equal
                 request.Spec.Runtime
                 (Container { ContainerSpec.defaults with Image = Some { Name = "node"; Tag = Some "24" } })
@@ -2204,7 +2204,7 @@ let private configTests =
         testCase "a declaration with no workdir needs no checkout" <| fun () ->
             Expect.equal
                 (SandboxDecl.toRequest None { SandboxDecl.empty with Forward = [ "github" ] } |> expect)
-                { SandboxRequest.defaults with Forward = [ "github" ] }
+                { SandboxRequest.defaults with Forward = [ ConnectionName.create "github" |> expect ] }
                 "which is every ask the agent's own tool can make"
 
         // What crosses the command gate is a declaration, so the gate's args are bounded by
@@ -2481,7 +2481,7 @@ let private configTests =
 /// A list rather than separate cases because the property under test is about ALL of them
 /// at once: whichever field moved, the refusal has something to say.
 let private variants : (string * SandboxRequest) list =
-    [ "forwarding", { SandboxRequest.defaults with Forward = [ "github" ] }
+    [ "forwarding", { SandboxRequest.defaults with Forward = [ ConnectionName.create "github" |> expect ] }
       "workdir",
         { SandboxRequest.defaults with
             Spec = { EnvironmentSpec.defaults with WorkingDirectory = Some "/somewhere" } }

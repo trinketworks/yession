@@ -148,10 +148,13 @@ let startWorkSandboxCall (authority: Authority) (sandbox: SandboxRef) (decl: San
     { Tool = startWorkSandboxTool
       Args = encodeArgs [ SandboxRef.render sandbox; SandboxDecl.encode decl ]
       Summary =
-        match WorkSandboxes.normaliseForward decl.Forward with
+        match ConnectionName.normalise decl.Forward with
         | [] -> sprintf "start_work_sandbox %s" (SandboxRef.render sandbox)
         | names ->
-            sprintf "start_work_sandbox %s forwarding %s" (SandboxRef.render sandbox) (String.concat ", " names)
+            sprintf
+                "start_work_sandbox %s forwarding %s"
+                (SandboxRef.render sandbox)
+                (names |> List.map ConnectionName.value |> String.concat ", ")
       Authority = authority }
 
 /// How each gated command is actually carried out, by tool name (Plan 15, stage 3b).
@@ -500,7 +503,7 @@ let dispatch (services: CommandServices) : CommandDispatch =
                                     let forwarding =
                                         match entry.Request.Forward with
                                         | [] -> "nothing forwarded into it"
-                                        | names -> "forwarding " + String.concat ", " names
+                                        | names -> "forwarding " + (names |> List.map ConnectionName.value |> String.concat ", ")
                                     return
                                         Ok (
                                             sprintf

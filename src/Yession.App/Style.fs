@@ -1683,11 +1683,6 @@ module Style =
     /// A path inside a fact line - the checkout, when it is worth showing. Mono, because it
     /// is an identifier and reads as one, and dim enough to sit inside the faint line around it.
     let actNotePath = cls [ mono; "text-code-sm text-ink-dim" ]
-    /// A forwarded credential, as its own small badge naming what rode in, rather than a
-    /// clause in a sentence. A recessed pill, not a filled one: it is a fact on the record,
-    /// not a control, and the busy timeline is no place for another CTA-coloured chip.
-    let actNoteCred =
-        cls [ "inline-flex items-center gap-1 self-start"; "px-1.5 rounded"; "bg-surface-2"; "text-code-sm text-ink-dim" ]
     /// What the agent was told, behind a disclosure under the facts. The notice disclosure's
     /// own summary voice, so it reads as the same move everywhere: what you need is on the
     /// surface, the mechanism is one keypress in. The sentence inside is the act's own

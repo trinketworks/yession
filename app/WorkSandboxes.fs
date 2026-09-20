@@ -63,7 +63,7 @@ type CredentialForwarding =
 /// A start therefore needs nobody signed in — a repo's file asking at boot gets its route,
 /// and the first block somebody runs in there is the first thing that names a person.
 type CredentialSource =
-    { Name : string
+    { Name : ConnectionName
       /// Provision the route into one sandbox. `Unforwardable` is a legible refusal rather
       /// than a silent start without it: a sandbox that was asked to forward `github` and
       /// did not is a sandbox whose `git push` fails much later, somewhere less informative.
@@ -177,20 +177,6 @@ type WorkSandboxes =
       /// Stop all of them — session shutdown. Sandbox lifetime is session lifetime.
       StopAll : unit -> Async<unit> }
 
-/// Normalise a forwarding list so two asks that mean the same thing compare equal.
-/// Without this, `["github"]` and `["GitHub", "github"]` would be a configuration
-/// CHANGE, and the second ask would be refused for no reason a caller could see.
-let normaliseForward (names: string list) : string list =
-    names
-    |> List.choose (Option.ofObj >> Option.map (fun name -> name.Trim().ToLowerInvariant ()))
-    |> List.filter (fun name -> name <> "")
-    |> List.distinct
-    |> List.sort
-
-/// The same, over a whole request — the form the registry stores and compares.
-let normalise (request: SandboxRequest) : SandboxRequest =
-    { request with Forward = normaliseForward request.Forward }
-
 /// Why a name found nothing, said with what WOULD have: the sandboxes there are. Three
 /// sessions running spelt a repo's `dev` as `dev` and were told to start one — which the
 /// repo's file had already done, under `owner/repo:dev`. The sentence has to name that.
@@ -265,7 +251,7 @@ let create (config: WorkSandboxesConfig) : Result<WorkSandboxes, string> =
 
     /// Take back every provision a sandbox was given — the half of forwarding that a stop
     /// owes, without which a route outlives the sandbox it was minted for.
-    let revoke (name: SandboxRef) (names: string list) : unit =
+    let revoke (name: SandboxRef) (names: ConnectionName list) : unit =
         for credential in names do
             config.Credentials
             |> List.tryFind (fun source -> source.Name = credential)
@@ -273,7 +259,7 @@ let create (config: WorkSandboxesConfig) : Result<WorkSandboxes, string> =
 
     /// Provision every named credential's route into one sandbox, or say which one could
     /// not be — revoking whatever was provisioned before the one that refused.
-    let provisionForward (name: SandboxRef) (names: string list) : Async<Result<Provision, string>> =
+    let provisionForward (name: SandboxRef) (names: ConnectionName list) : Async<Result<Provision, string>> =
         async {
             let mutable provisioned = Provision.empty
             let mutable failure = None
@@ -284,10 +270,15 @@ let create (config: WorkSandboxesConfig) : Result<WorkSandboxes, string> =
                     match config.Credentials |> List.tryFind (fun source -> source.Name = credential) with
                     | None ->
                         let known =
-                            match config.Credentials |> List.map (fun s -> s.Name) with
+                            match config.Credentials |> List.map (fun s -> ConnectionName.value s.Name) with
                             | [] -> "this session forwards none"
                             | available -> "this session knows: " + String.concat ", " available
-                        failure <- Some (sprintf "there is no credential called '%s' (%s)" credential known)
+                        failure <-
+                            Some (
+                                sprintf
+                                    "there is no credential called '%s' (%s)"
+                                    (ConnectionName.value credential)
+                                    known)
                     | Some source ->
                         match! source.Provision name with
                         | CredentialForwarding.Unforwardable reason -> failure <- Some reason
@@ -302,7 +293,9 @@ let create (config: WorkSandboxesConfig) : Result<WorkSandboxes, string> =
 
     let ensure (actor: ActorRef) (name: SandboxRef) (request: SandboxRequest) : Async<Result<SandboxOutcome, string>> =
         async {
-            let wanted = normalise request
+            // Already normalised by construction (`SandboxRequest.Forward` is a
+            // `ConnectionName list`), so two asks that mean the same thing compare equal.
+            let wanted = request
             match find name with
             | Some existing when existing.Request = wanted ->
                 // The idempotent case. Make sure it is actually up (the environment is
@@ -591,7 +584,7 @@ let query (current: unit -> WorkSandboxes) : Queries.QueryRegistration =
                               "forwarding",
                               (match entry.Request.Forward with
                                | [] -> CellText "nothing"
-                               | names -> CellText (String.concat ", " names))
+                               | names -> CellText (names |> List.map ConnectionName.value |> String.concat ", "))
                               // From the RUNNING sandbox, like `state` above and for the same
                               // reason: what a sandbox holds is a fact about the one that
                               // exists, and a stopped entry that still claimed a widening
