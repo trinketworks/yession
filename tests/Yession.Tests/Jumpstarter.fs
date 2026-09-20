@@ -111,8 +111,15 @@ let private start (children: ResizeArray<ChildProcess>) (args: string list) (tol
               // This run's environment with what the half is told on top: uv resolves the
               // locked interpreter out of it (`UV_PYTHON`), so a child handed a fresh
               // environment would go looking for one to download.
-              Env = (Sandboxes.ambientEnv (), told) ||> Map.fold (fun ambient name value -> Map.add name value ambient)
-              Stdio = Pipe
+              //
+              // Built and REPLACED rather than added to, because `ambientEnv` is what this
+              // suite means by "this run's environment" everywhere else in it — the process's
+              // own, read once through the one reader — and a spawn that merged again would
+              // have two answers to that question.
+              Env =
+                ChildEnv.Replacing (
+                    (Sandboxes.ambientEnv (), told) ||> Map.fold (fun ambient name value -> Map.add name value ambient))
+              Streams = { Stdin = Pipe; Stdout = Pipe; Stderr = Pipe }
               Detached = false }
 
     // `setEncoding` rather than converting each chunk: it puts a decoder in front of the

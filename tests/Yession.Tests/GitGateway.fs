@@ -771,18 +771,20 @@ let private gitHttpBackend (root: string) (seen: ResizeArray<string option>) : H
             spawn
                 "git"
                 [ "http-backend" ]
+                // `Replacing`: `env` above is a CGI environment built name by name, and
+                // http-backend answers for exactly what is in it.
                 { Cwd = None
-                  Env = env
-                  Stdio = Pipe
+                  Env = ChildEnv.Replacing env
+                  Streams = { Stdin = Pipe; Stdout = Pipe; Stderr = Pipe }
                   Detached = false }
 
         let answer : Readable = !!backend.stdout
         req.pipe (!!backend.stdin)
 
-        // `stdio` is one setting for all three streams, so the backend's own account of
-        // itself arrives on a pipe rather than this process's stderr — and an unread pipe is
-        // one a child eventually blocks on. Said out loud instead, because what
-        // `http-backend` complains about is the only account a refused request ever gives.
+        // The backend's own account of itself arrives on a pipe rather than this process's
+        // stderr — and an unread pipe is one a child eventually blocks on. Said out loud
+        // instead, because what `http-backend` complains about is the only account a refused
+        // request ever gives.
         (!!backend.stderr : Readable)
             .onData (fun chunk -> eprintfn "git http-backend: %s" ((chunk.toString utf8).TrimEnd ()))
 

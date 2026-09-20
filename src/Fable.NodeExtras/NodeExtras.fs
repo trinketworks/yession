@@ -340,18 +340,76 @@ module Processes =
 
 // --- Child processes ------------------------------------------------------------------------
 
-/// What the child's three standard streams are wired to. Node's uniform shorthand; the
-/// per-stream form (`['pipe', 'inherit', 'ignore']`) is not declared because nothing here
-/// wants the streams to differ.
+/// What ONE of a child's standard streams is wired to. Node also reads a single one of these
+/// as a shorthand for all three at once, which is the form `spawnWithEnv` at the end of this
+/// file passes; `StreamWiring` below is the form for a caller whose three streams differ.
 [<StringEnum>]
 type Stdio =
-    /// A pipe each, read through `stdout`/`stderr` and written through `stdin`. Node's own
-    /// default, stated rather than assumed.
+    /// A pipe, read through `stdout`/`stderr` or written through `stdin`. Node's own default,
+    /// stated rather than assumed.
     | Pipe
-    /// The parent's own handles — the child writes where this process writes.
+    /// The parent's own handle — the child writes where this process writes.
     | Inherit
     /// `/dev/null` in both directions.
     | Ignore
+
+/// Where each of a child's three streams goes, named one at a time. For the caller that does
+/// not mean the same thing about all three — one that wants the child's answer and silence
+/// from its complaints, or one that parses what it pipes and passes the rest through.
+type StreamWiring =
+    { Stdin : Stdio
+      Stdout : Stdio
+      Stderr : Stdio }
+
+module StreamWiring =
+
+    /// Node reads the three POSITIONALLY, in this order. Written once, beside the record,
+    /// rather than at each option record that carries one: the order is a fact about Node, and
+    /// a second copy of it is a second chance to put stderr where stdout goes.
+    let internal toJs (streams: StreamWiring) : Stdio array =
+        [| streams.Stdin; streams.Stdout; streams.Stderr |]
+
+/// What environment a child is given — in both of the meanings a caller can hold, each named,
+/// because Node has only one of them and it is not the one usually meant.
+///
+/// Node REPLACES: a child handed an `env` sees that object and nothing else, `PATH` included.
+/// So a caller that meant to say two things about a child, and wrote the two things, gets a
+/// child that cannot find its own executable — and the failure names neither the variable nor
+/// the option. The fault is invisible at the call site, because both meanings are spelled the
+/// same way there: a map of the names the caller cares about.
+///
+/// Hence no default. A caller says which meaning it holds, and the merge — the half that is
+/// easy to get wrong, and that was written out by hand at more than one call site — happens
+/// once, below.
+[<RequireQualifiedAccess>]
+type ChildEnv =
+    /// This process's environment, with these names written over it. What a caller that wants
+    /// to tell a child two things means, and what it would otherwise have to spell out an
+    /// entire environment to say.
+    | Adding of Map<string, string>
+    /// These names and NOTHING else — Node's own meaning for `env`. What a caller building a
+    /// child's environment from scratch wants: a fixture that pins every variable its child
+    /// may see, or a child launched by absolute path that needs none.
+    | Replacing of Map<string, string>
+
+module ChildEnv =
+
+    /// The names as the object Node reads them from.
+    let private named (names: Map<string, string>) : obj =
+        createObj [ for name, value in Map.toList names -> name ==> value ]
+
+    /// The `env` to hand Node, or NOTHING — which is how "unchanged" is said, since Node's own
+    /// default for an absent `env` is this process's environment entire. `Adding` nothing is
+    /// exactly that, so it is said that way rather than by copying an environment to no end.
+    ///
+    /// The merge builds a FRESH object and assigns into it: a child's environment is a copy,
+    /// and this process's is not something a spawn may edit on the way past.
+    let internal toJs (env: ChildEnv) : obj option =
+        match env with
+        | ChildEnv.Replacing names -> Some (named names)
+        | ChildEnv.Adding names when Map.isEmpty names -> None
+        | ChildEnv.Adding names ->
+            Some (JS.Constructors.Object.assign (createObj [], Node.Api.``process``.env, named names))
 
 /// The options `child_process.spawn` takes, which `Fable.Node` types as `obj` — so `cwd`,
 /// `env`, `stdio` and `detached` get no checking at all, and a misspelled one is silently a
@@ -359,11 +417,12 @@ type Stdio =
 type SpawnOptions =
     { /// Where the child starts. `None` inherits this process's directory.
       Cwd : string option
-      /// The child's environment, COMPLETE. Node replaces rather than merges: what is not in
-      /// here is not in the child, `PATH` included.
-      Env : Map<string, string>
-      /// See `Stdio`.
-      Stdio : Stdio
+      /// The child's environment, in whichever of `ChildEnv`'s two meanings the caller holds.
+      Env : ChildEnv
+      /// Where each of the child's three streams goes. Named one at a time rather than as
+      /// Node's uniform shorthand, because a caller whose streams differ — parse one, pass
+      /// another straight through — would otherwise have no way to say so.
+      Streams : StreamWiring
       /// Make the child its own process-group leader, so a signal to `-pid` takes the whole
       /// tree down rather than only the process spawned. It also outlives this process unless
       /// something kills it.
@@ -398,13 +457,10 @@ module ChildProcesses =
     /// unless `setEncoding` was called — real stdio yields `Buffer`, and a caller that wants
     /// text converts it.
     let spawn (command: string) (arguments: string list) (options: SpawnOptions) : ChildProcess =
-        let env =
-            options.Env |> Map.toList |> List.map (fun (name, value) -> name ==> value) |> createObj
-
         let js =
             !!{| cwd = options.Cwd
-                 env = env
-                 stdio = options.Stdio
+                 env = ChildEnv.toJs options.Env
+                 stdio = StreamWiring.toJs options.Streams
                  detached = options.Detached |}
 
         Node.Api.childProcess.spawn (command, ResizeArray arguments, js)
@@ -429,14 +485,6 @@ type SyncResult =
     /// What the child wrote to stderr, on the same terms.
     abstract stderr : string option
 
-/// Where each of a child's three streams goes, named one at a time. `Stdio` says the same
-/// thing about all three; this is for the caller that does not mean the same thing about all
-/// three — one that wants the child's answer and silence from its complaints.
-type StreamWiring =
-    { Stdin : Stdio
-      Stdout : Stdio
-      Stderr : Stdio }
-
 /// The options a synchronous child is given here. `encoding` is not among them because this
 /// binding always asks for text: `stdout` and `stderr` above are typed as strings, and a run
 /// that did not name an encoding would hand back Buffers under those names.
@@ -449,11 +497,11 @@ type SyncOptions =
       MaxBuffer : int option
       /// Where the child starts. `None` inherits this process's directory.
       Cwd : string option
-      /// Names ADDED to this process's environment, which the child otherwise inherits
-      /// entire. Deliberately not `SpawnOptions.Env`'s meaning, which REPLACES: a fixture
-      /// pinning `GIT_CONFIG_GLOBAL` wants git to go on finding a `PATH`, and spelling the
-      /// whole environment out to add two names is how one gets dropped.
-      Env : Map<string, string>
+      /// The child's environment, in whichever of `ChildEnv`'s two meanings the caller holds.
+      /// A fixture usually holds `Adding`: one pinning `GIT_CONFIG_GLOBAL` wants git to go on
+      /// finding a `PATH`, and spelling a whole environment out to add two names is how one
+      /// gets dropped.
+      Env : ChildEnv
       /// Where the child's streams go. `None` leaves Node's own default, which pipes them.
       Streams : StreamWiring option }
 
@@ -463,7 +511,7 @@ type SyncOptions =
 /// four decisions it had to make.
 module SyncOptions =
     let none : SyncOptions =
-        { Input = None; MaxBuffer = None; Cwd = None; Env = Map.empty; Streams = None }
+        { Input = None; MaxBuffer = None; Cwd = None; Env = ChildEnv.Adding Map.empty; Streams = None }
 
 [<AutoOpen>]
 module SyncChildProcesses =
@@ -477,28 +525,16 @@ module SyncChildProcesses =
     [<Import("execSync", "node:child_process")>]
     let private execSyncWith (line: string) (options: obj) : string = jsNative
 
-    /// The shape Node reads, built once. The environment is this process's plus what the
-    /// caller named, because Node REPLACES what it is given and a child that lost `PATH`
-    /// fails in a way that names neither.
+    /// The shape Node reads, built once. What the environment MEANS is `ChildEnv`'s to say and
+    /// the caller's to choose, so all that is left here is naming the fields Node reads them
+    /// under — which is the one thing `Fable.Node`'s `obj` cannot check.
     let private toJs (options: SyncOptions) : obj =
-        let env =
-            if Map.isEmpty options.Env then
-                None
-            else
-                Some (
-                    JS.Constructors.Object.assign (
-                        createObj [],
-                        Node.Api.``process``.env,
-                        createObj [ for name, value in Map.toList options.Env -> name ==> value ]))
-
         !!{| encoding = "utf8"
              input = options.Input
              maxBuffer = options.MaxBuffer
              cwd = options.Cwd
-             env = env
-             stdio =
-              options.Streams
-              |> Option.map (fun streams -> [| streams.Stdin; streams.Stdout; streams.Stderr |]) |}
+             env = ChildEnv.toJs options.Env
+             stdio = options.Streams |> Option.map StreamWiring.toJs |}
 
     /// Run `command` to completion and answer everything it said. A child that FAILED is not
     /// an exception here: `status` carries what it exited with, and a caller reads it.
@@ -873,6 +909,16 @@ module ChildProcessStreams =
     [<Emit("$0.on('close', $1)")>]
     let onClose (child: ChildProcess) (handler: int option -> unit) : unit = jsNative
 
+    /// The child ENDED — which is earlier than `onClose` above, and the difference matters to
+    /// whoever is still reading: exit fires when the process is gone, close once the pipes it
+    /// was writing into have drained as well. A caller waiting to hear that no more output is
+    /// coming wants `onClose`; one waiting to hear that the PROCESS is over — a launch that
+    /// must fail the moment its child dies, rather than once a stream it may never have
+    /// written to finishes — wants this. `None` is a child a signal took, on the same terms
+    /// as `onClose`.
+    [<Emit("$0.on('exit', $1)")>]
+    let onExit (child: ChildProcess) (handler: int option -> unit) : unit = jsNative
+
 /// callback `httpRequest` took.
 [<AllowNullLiteral>]
 type HttpRequest =
@@ -1119,8 +1165,9 @@ module ChildProcessSeams =
     /// that is not a string, a key this process's own reader does not admit — is precisely
     /// what "verbatim" is there to protect.
     ///
-    /// Everything else is `SpawnOptions`' story, spelled the same way here — including what it
-    /// says about the streams of the `ChildProcess` that comes back.
+    /// Everything else is `SpawnOptions`' story — except the streams, which are Node's uniform
+    /// shorthand here rather than a `StreamWiring`, because no caller of this seam wants its
+    /// three to differ.
     let spawnWithEnv
         (command: string)
         (arguments: string list)

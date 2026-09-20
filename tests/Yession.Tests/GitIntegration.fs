@@ -240,7 +240,7 @@ let private hostGit (args: string list) (cwd: string) : unit =
         args
         { SyncOptions.none with
             Cwd = Some cwd
-            Env = fixtureGitEnv
+            Env = ChildEnv.Adding fixtureGitEnv
             Streams = Some { Stdin = Stdio.Pipe; Stdout = Stdio.Pipe; Stderr = Stdio.Pipe } }
     |> ignore
 
