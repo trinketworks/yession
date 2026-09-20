@@ -1536,7 +1536,7 @@ module View =
         // Named, not merely absent. "rejected by nick" in line with the commands that ran
         // is the whole reason a refusal mints a block at all — so it is a NAME, resolved like
         // every other person on screen, not the id the hook carries.
-        | BlockRejected (by, _) -> html $"""<span class="{Style.statusErr}">rejected by {Entity.actorName model by}</span>"""
+        | BlockRejected (by, _) -> html $"""<span class="{Style.statusErr}">rejected by {Entity.render model by (EntityRef.Actor by)}</span>"""
 
     let private stretchEndLabel =
         function
@@ -1549,7 +1549,7 @@ module View =
     let private stretchEnding (model: ClientModel) =
         function
         | LeaseReleased -> html $"""<span class="{Style.statusFaint}">handed back</span>"""
-        | LeaseStolen by -> html $"""<span class="{Style.statusFaint}">taken over by {Entity.actorName model by}</span>"""
+        | LeaseStolen by -> html $"""<span class="{Style.statusFaint}">taken over by {Entity.render model by (EntityRef.Actor by)}</span>"""
         | LeaseHolderGone -> html $"""<span class="{Style.statusFaint}">holder left</span>"""
         | LeaseIdle -> html $"""<span class="{Style.statusFaint}">went idle</span>"""
 
@@ -2644,16 +2644,20 @@ module View =
         // you go looking for afterwards — and it is a real `<details>`, so going looking is
         // a keypress and an announcement rather than a click handler.
         let fact (text: string) = html $"""<span class="{Style.terminalBlockFact}">{text}</span>"""
+        // Who, as a REFERENCE — the same mark and name the person wears on every other
+        // surface — rather than a name typed into a sentence.
+        let who (verb: string) (actor: ActorRef) =
+            html $"""<span class="{Style.terminalBlockFact}">{verb} {Entity.render model actor (EntityRef.Actor actor)}</span>"""
         let exitFact =
             match block.Status with
             | BlockFinished (CommandSucceeded code)
             | BlockFinished (CommandFailed code) -> [ fact (sprintf "exit %d" code) ]
             | BlockFinished CommandTimedOut -> [ fact "timed out" ]
             | BlockFinished (CommandExecutionFailed reason) -> [ fact (sprintf "did not run — %s" reason) ]
-            | BlockRejected (by, _) -> [ fact (sprintf "refused by %s" (Entity.actorName model by)) ]
+            | BlockRejected (by, _) -> [ who "refused by" by ]
             | BlockRunning -> []
         let facts =
-            [ fact (sprintf "ran by %s" (Entity.actorName model (Authority.author block.Authority)))
+            [ who "ran by" (Authority.author block.Authority)
               yield! exitFact ]
         html $"""
             <article class="{Style.terminalBlock}" data-terminal-block="{BlockId.value block.BlockId}"
@@ -2711,7 +2715,7 @@ module View =
               {body}
               <div class="{Style.terminalQueuedRow}">
                 {statusLine}
-                <span class="{Style.small}">{Entity.actorName model (Authority.author entry.Authority)}</span>
+                <span class="{Style.small}">{Entity.render model (Authority.author entry.Authority) (EntityRef.Actor (Authority.author entry.Authority))}</span>
                 <div class="ml-auto flex items-center gap-2">
                   {ordering}
                 </div>
