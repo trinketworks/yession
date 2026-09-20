@@ -661,6 +661,12 @@ module Dom =
         let running = "running"
         let failed = "failed"
         let interrupted = "interrupted"
+        // A sandbox-start act note's fact labels (`View.sandboxStartFacts`). One quiet word
+        // each: the screen labels the parts the sentence would have chained into prose.
+        let sandboxFactFor = "for"
+        let sandboxFactCheckout = "checkout"
+        let sandboxFactForwarding = "forwarding"
+        let sandboxFactAdjusted = "adjusted"
         // Environment lifecycle.
         let envNotStarted = "not-started"
         let envStarting = "starting"

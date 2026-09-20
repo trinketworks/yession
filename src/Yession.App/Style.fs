@@ -1604,17 +1604,38 @@ module Style =
     /// as one act rather than as two lines about it.
     let actNoteDetail = "text-small leading-5 text-ink-faint"
 
-    /// A sandbox start's particulars, laid out as fields rather than one sentence
-    /// (`View.sandboxStartFacts`). The container stacks each fact on its own line at the
-    /// same faint voice `actNoteDetail` uses, so the group still reads as one act under the
-    /// headline - what changed is that a screen now arranges the parts, not that they shout.
-    let actNoteFacts = "flex flex-col gap-0.5"
+    /// A sandbox start's particulars, laid out as labelled fact rows rather than one
+    /// sentence (`View.sandboxStartFacts`). The container stacks each fact on its own row at
+    /// the same faint voice `actNoteDetail` uses, so the group still reads as one act under
+    /// the headline - what changed is that a screen arranges the parts, and labels them,
+    /// rather than chaining them into prose.
+    let actNoteFacts = "flex flex-col gap-1 mt-0.5"
+    /// One fact: its label and its value on a line, wrapping onto the next when the value is
+    /// a run of badges too wide for the column. `items-baseline` so a one-word label sits on
+    /// the value's first line rather than centred against a stack.
+    let actNoteFactRow = "flex flex-wrap items-baseline gap-x-2 gap-y-0.5"
+    /// The label side of a fact - one quiet word, a step fainter than its value, so a reader
+    /// scans the labels and reads across only the fact they came for. `shrink-0` so the label
+    /// keeps its word while the value takes the wrap.
+    let actNoteFactKey = cls [ "text-small leading-5 text-ink-faint shrink-0" ]
+    /// The value side of a fact - the same faint voice the one-line detail used, free to wrap
+    /// and to shrink inside the row rather than push it wide.
+    let actNoteFactVal = "text-small leading-5 text-ink-dim min-w-0 break-words"
+    /// Several value lines (a realisation is a list) stacked under one label.
+    let actNoteFactStack = "flex flex-col gap-0.5 min-w-0"
+    /// The description rides behind a native <details>, so it opens on tap with no script.
+    let actNoteDisclosure = "min-w-0"
+    /// Its summary is the label `for`, tappable. The platform's own disclosure triangle is
+    /// left on as the affordance - a mark every reader already knows means "there is more
+    /// here" - so no glyph of ours has to stand in for it.
+    let actNoteDisclosureKey =
+        cls [ actNoteFactKey; "cursor-pointer select-none hover:text-ink-dim" ]
     /// A path inside a fact line - the checkout, when it is worth showing. Mono, because it
     /// is an identifier and reads as one, and dim enough to sit inside the faint line around it.
     let actNotePath = cls [ mono; "text-code-sm text-ink-dim" ]
-    /// A forwarded credential, as its own small badge naming what rode in and whose it is,
-    /// rather than a clause in a sentence. A recessed pill, not a filled one: it is a fact on
-    /// the record, not a control, and the busy timeline is no place for another CTA-coloured chip.
+    /// A forwarded credential, as its own small badge naming what rode in, rather than a
+    /// clause in a sentence. A recessed pill, not a filled one: it is a fact on the record,
+    /// not a control, and the busy timeline is no place for another CTA-coloured chip.
     let actNoteCred =
         cls [ "inline-flex items-center gap-1 self-start"; "px-1.5 rounded"; "bg-surface-2"; "text-code-sm text-ink-dim" ]
     /// A line this host could not honour exactly. One step brighter than the other
