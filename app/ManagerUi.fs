@@ -304,7 +304,7 @@ let private tableTemplate
               {filterChip query (countOf Archived) Archived}
             </div>
             <form class="ml-auto" method="post" action="{ManagerRoute.path ManagerRoute.CreateSession}" data-create-session>
-              <button type="submit" class="{Style.btnPrimary}" data-press>
+              <button type="submit" class="{Style.btnPrimarySwap}" data-press>
                 <span class="{Style.whenReady}">Create</span><span class="{Style.whenBusy}">Creating…</span>
               </button>
             </form>
