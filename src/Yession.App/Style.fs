@@ -1823,17 +1823,12 @@ module Style =
     /// to the bottom edge, under the thumb about to press it; the `max-md` clearance gives it
     /// room without touching desktop, where the band never meets an edge at all.
     ///
-    /// TWO clearances, because the band has two heights. Open, it is the terminal's plus a
-    /// step, for the verbs' row landing in the gap (`draftCommit`, below). At rest that row
-    /// takes no height at all, so the step would be 8px of band under a line nobody is
-    /// typing in — and the composer's whole argument is that it gives the conversation back
-    /// the room it is not using. Closed it is plain thumb room, the same `pb-4` the
-    /// terminal's command band spends for the same reason.
-    ///
-    /// `focus-within`, not `group-focus-within`: this element IS the group, and a group
-    /// variant only ever matches the group's DESCENDANTS — so the open clearance was written
-    /// once, served, and never applied to anything.
-    let composer = composerBand + " max-md:pb-4 max-md:focus-within:pb-6"
+    /// ONE clearance, plain thumb room — the same `pb-4` the terminal's command band spends
+    /// for the same reason. It briefly had a second, wider one for when the verbs' row was
+    /// showing; the row carries its own `pt-1` and its own height, so the band was paying
+    /// twice for one gap, and the wider number only ever arrived while a state elsewhere in
+    /// the file happened to agree with this one.
+    let composer = composerBand + " max-md:pb-4"
 
     /// The band's top rule, in two parts — because it is doing two jobs and one element could
     /// only ever do one of them.
@@ -1930,35 +1925,49 @@ module Style =
     ///
     /// On a phone this row leaves the line entirely: it wants the full width
     /// (`max-md:w-full max-md:justify-end`, its buttons pushed to the trailing edge the
-    /// way they sit on desktop), it sits BELOW the text now (`draftBox`'s
-    /// `max-md:flex-col` puts it there in document order), and it is gone at rest,
-    /// surfacing on the same signal the band itself lifts a tone on: `group-focus-within`.
-    /// A permanently visible row was two icons' width borrowed from every line of every
-    /// message, on the narrowest screens this ships to, for a control a thumb reaches once
-    /// per message; tapping in is the gesture that already opens the composer, so it costs
-    /// nothing extra to be what reveals them too.
+    /// way they sit on desktop) and it sits BELOW the text (`draftBox`'s `max-md:flex-col`
+    /// puts it there in document order). A row that was always there spent a band of every
+    /// phone screen on two controls a thumb reaches once per message, so it comes and goes
+    /// — and WHAT it comes and goes with is the whole of this bug's story.
+    ///
+    /// It used to be `group-focus-within`, and that could not work. `focus-within` is false
+    /// the instant focus leaves the composer, and pressing a button is how focus leaves: on
+    /// iOS Safari a `<button>` takes no focus from a tap at all, so the editor's blur lands
+    /// FIRST, the row goes `pointer-events-none` under the finger, and the press arrives at
+    /// whatever was behind it — the timeline. Measured: with a draft typed and the editor
+    /// blurred, `elementFromPoint` at Send's own centre answered the `<article>` behind it.
+    /// Send did nothing, the composer collapsed, and that was the whole of what a person saw.
+    ///
+    /// So the row follows the DRAFT, not the focus: it stands exactly while there is
+    /// something for it to do (`draftCommitReady`), which is the rule Clear already followed
+    /// on its own and the rule Send's two faces are already computed from. Nothing about a
+    /// press can retract it, because a press cannot empty the draft before the press lands.
+    /// An empty composer still gives the room back, which is what the coming-and-going was
+    /// for; it simply no longer offers two controls with nothing to act on.
     ///
     /// GONE means `max-h-0` beside the fade, not the fade alone. `opacity-0` hides a row and
-    /// keeps every pixel of its height, so the band under a composer nobody was typing in
-    /// carried a 44px row of invisible buttons plus the clearance meant to sit below them —
-    /// two thirds of a collapsed composer, and a gap no markup test can tell from an empty
-    /// one. `composer`'s `max-md:focus-within:pb-6` (above) is the room this lands in once
-    /// it is real.
-    let draftCommit =
+    /// keeps every pixel of its height, so the band under an empty composer carried a 44px
+    /// row of invisible buttons plus the clearance meant to sit below them — two thirds of a
+    /// collapsed composer, and a gap no markup test can tell from an empty one.
+    let private draftCommitBase =
         cls [ "shrink-0 flex items-center gap-1 pr-1"
-              "max-md:w-full max-md:justify-end"
-              "max-md:max-h-0 max-md:overflow-hidden max-md:opacity-0 max-md:pointer-events-none"
+              "max-md:w-full max-md:justify-end max-md:overflow-hidden"
               "max-md:transition-[max-height,opacity] max-md:duration-150"
               // `max-md:` on the reduced-motion variant too, and not for symmetry: Tailwind
               // orders the stylesheet by variant, so a bare `motion-reduce:transition-none`
               // is EMITTED ABOVE the `max-md:` transition it is meant to cancel and loses to
               // it at exactly the widths that have one.
-              "max-md:motion-reduce:transition-none"
-              // The row's top padding is part of the row, so it waits with it: `max-h-0` is
-              // a border-box cap and cannot clamp below the padding, so a `pt-1` left on at
-              // rest is 4px of band that the row still owns while claiming to be gone.
-              "max-md:group-focus-within:pt-1 max-md:group-focus-within:max-h-12"
-              "max-md:group-focus-within:opacity-100 max-md:group-focus-within:pointer-events-auto" ]
+              "max-md:motion-reduce:transition-none" ]
+
+    /// Nothing to act on. The row takes no height and no presses — `pointer-events-none`
+    /// beside the fade, because a control nobody can see is not one a thumb should find.
+    let draftCommit =
+        cls [ draftCommitBase; "max-md:max-h-0 max-md:opacity-0 max-md:pointer-events-none" ]
+
+    /// There is a draft. `pt-1` arrives with the row rather than sitting under it: `max-h-0`
+    /// is a border-box cap and cannot clamp below its own padding, so a `pt-1` left on in the
+    /// face above is 4px of band the row still owns while claiming to be gone.
+    let draftCommitReady = cls [ draftCommitBase; "max-md:pt-1 max-md:max-h-12" ]
     let draftAuthor = "pl-4 pt-2 " + caps + " text-ink-faint truncate"
 
     // A draft nobody has open here: one line of it, so the composer reads as "what is being

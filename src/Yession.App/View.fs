@@ -1453,10 +1453,15 @@ module View =
             //
             // Same place in FOCUS order always, even where it is not the same place on
             // screen: on a phone (`Style.draftCommit`) this row leaves the line and sits
-            // below it, gone until the composer has focus, so the text can use the width
-            // it was sharing with two controls that a thumb reaches once per message.
+            // below it, and stands only once there is a draft for it to act on.
             let sendClass =
                 if hasContent then Style.btnComposerSend else Style.btnComposerSendWaiting
+            // The row follows the draft rather than the composer's focus, and that is this
+            // control's whole reachability: a row revealed by `focus-within` is withdrawn by
+            // the very press that reaches for it, wherever a button does not take focus from
+            // a tap. See `Style.draftCommit` for what that cost.
+            let commitClass =
+                if hasContent then Style.draftCommitReady else Style.draftCommit
             let author =
                 if target = myPeer then Lit.nothing
                 else html $"""<span class="{Style.draftAuthor}">{ClientModel.nameOf target model}'s message</span>"""
@@ -1466,7 +1471,7 @@ module View =
                     {author}
                     <div class="{Style.draftInput}" data-rich-body="{BodyKey.draft target}" data-rich-readonly="false" data-draft-input="{PeerId.value target}"></div>
                   </div>
-                  <div class="{Style.draftCommit}">
+                  <div class="{commitClass}">
                     <span class="{Style.draftEditors}">{editors target}</span>
                     {clear}
                     <button type="button" class="{sendClass}" aria-keyshortcuts="Control+Enter"
