@@ -221,11 +221,11 @@ module AgentTools =
             sprintf "EXECUTION FAILED in %s: %s%s" where reason output
         | TerminalCommandRunning ->
             sprintf
-                "STILL RUNNING in %s. It has NOT finished; nothing was cancelled. Call check_pending with handle '%s' to pick it up. If it is waiting on input, or stuck, write_terminal can type into it — \"\\u0003\" interrupts it.%s"
+                "STILL RUNNING in %s. Not finished; nothing cancelled. For long commands pass background: true and end your turn — you're woken when they finish; otherwise check_pending '%s' for the outcome. Stuck or waiting on input? write_terminal can type in — \"\\u0003\" interrupts.%s"
                 where handle output
         | TerminalCommandInteractive ->
             sprintf
-                "WAITING FOR A KEYSTROKE in %s. It opened a full-screen program, so it will not finish on its own — and the terminal is now YOURS to type into. Use write_terminal to answer it and read_terminal to see the screen; leaving the program hands the terminal back and finishes the command. Call check_pending with handle '%s' for the outcome.%s"
+                "WAITING FOR A KEYSTROKE in %s. A full-screen program opened, so it won't finish on its own, and the terminal is now YOURS. write_terminal to answer it, read_terminal to see the screen; leaving the program finishes the command. check_pending '%s' for the outcome.%s"
                 where handle output
         // Each hold names its way out. "Somebody is using it, or another command is running
         // there" was true and useless: told that over a terminal its own stuck command was
@@ -233,19 +233,19 @@ module AgentTools =
         // ended the wait was one it had not been pointed at.
         | TerminalCommandAwaitingTerminal BehindBlock ->
             sprintf
-                "WAITING FOR %s — another command is running there, and this one is queued behind it. It has not run. To run it beside that command now: open_terminal, then execute_command with that `terminal`. To end what is running there: if the running command is yours, write_terminal \"\\u0003\" into that terminal interrupts it; if the terminal is yours, close_terminal ends everything in it (whatever is queued there goes with it). Otherwise call check_pending with handle '%s' later."
+                "WAITING FOR %s — another command runs there and this one is queued behind it; it has NOT run. To run it now beside that: open_terminal, then execute_command with that `terminal`. To end the running one: if it's yours, write_terminal \"\\u0003\" into that terminal; if the terminal is yours, close_terminal ends everything in it. Otherwise check_pending '%s' later."
                 where handle
         | TerminalCommandAwaitingTerminal BehindQueue ->
             sprintf
-                "WAITING FOR %s — other commands are queued ahead of this one. It has not run; it runs when they have. Call check_pending with handle '%s' later, or open_terminal to run it somewhere else now."
+                "WAITING FOR %s — other commands are queued ahead; it has NOT run, and runs when they do. check_pending '%s' later, or open_terminal to run it elsewhere now."
                 where handle
         | TerminalCommandAwaitingTerminal HeldByPerson ->
             sprintf
-                "WAITING FOR %s — somebody is typing in it. It has not run; it runs when they finish, and that is theirs to decide. Call check_pending with handle '%s' later, or open_terminal to run it somewhere else now."
+                "WAITING FOR %s — somebody is typing there; it has NOT run, and runs when they finish, which is theirs to decide. check_pending '%s' later, or open_terminal to run it elsewhere now."
                 where handle
         | TerminalCommandAwaitingTerminal UnmarkedShell ->
             sprintf
-                "WAITING FOR %s — its shell stopped answering the session's instrumentation, and a person has to re-arm it before anything can run there. It has not run. open_terminal runs it somewhere else now; check_pending with handle '%s' picks it up if the terminal is repaired."
+                "WAITING FOR %s — its shell stopped answering the session's instrumentation, and a person must re-arm it before anything runs there; it has NOT run. open_terminal runs it elsewhere now; check_pending '%s' picks it up once the terminal is repaired."
                 where handle
         | TerminalCommandRefused (by, reason) ->
             let who = ActorRef.token by
@@ -335,7 +335,7 @@ module AgentTools =
             match outcome.Handle with
             | Some handle ->
                 sprintf
-                    "STILL RUNNING: `%s` has not finished. Nothing was cancelled and nobody is waiting on you. Call check_pending with handle '%s' to pick it up."
+                    "STILL RUNNING: `%s` not finished; nothing cancelled, nobody waiting on you. check_pending '%s' to pick it up."
                     outcome.Summary
                     (QueueId.value handle)
             | None -> sprintf "STILL RUNNING: `%s` has not finished. Nothing was cancelled." outcome.Summary
@@ -554,7 +554,7 @@ module AgentTools =
                 }
         [ tool
             "execute_command"
-            "Run a shell command in one of this session's terminals, where the people in the session can see it and edit it while it queues, and every run is on the record. This is the only way to run anything. Pass `sandbox` to run in a named work sandbox (start_work_sandbox creates one); omit it for the default sandbox, which is where everything runs unless you say otherwise. Each sandbox has one terminal of yours that runs one command at a time; pass `terminal` to run in a terminal you opened with open_terminal instead, which is how work runs beside something long. It waits for the result and returns the exit code and output; if the terminal is busy, or the command is still going, it says so and returns a handle for check_pending instead of hanging. Your commands have no stdin unless you pass `stdin: true`: anything that reads it gets end-of-file at once, so name files and pass flags rather than expecting a prompt — and when a command genuinely has to prompt, pass `stdin: true` and answer it. Write temporary and scratch files under $TMPDIR, which every sandbox sets to a writable directory of this session's own; /tmp is not yours to write and is denied. When you rewrite a file, write the new content before you delete the old — a line that deletes then writes can be refused halfway, leaving the delete done. Read what it returns: every answer states which of those happened."
+            "Run a shell command in a session terminal — the only way to run anything, seen by everyone and on the record. `sandbox`: a named work sandbox (start_work_sandbox); omit for the default one. `terminal`: a terminal from open_terminal, to run beside something long (each terminal runs one command at a time). For anything long-running pass background: true — it returns a handle at once, you end your turn, and you're woken when it finishes; otherwise it waits and hands back a check_pending handle if the command outlasts the wait. No stdin unless stdin: true (readers get EOF), so pass flags, not prompts. Scratch under $TMPDIR; /tmp is denied. Rewriting a file, write the new content before deleting the old — a delete-then-write can be refused halfway. Read the answer: it says which happened."
             [ ToolField.required "command" "string" "the shell command line to run, e.g. \"npm test -- --watch=false\""
               ToolField.optional "terminal" "string" "the id of a terminal to run in, as open_terminal or list_terminals gave it; omit for your own terminal in the sandbox"
               ToolField.optional "sandbox" "string" "the work sandbox to run in — the session's own by name (\"test\"), a repo's as \"owner/repo:name\" (its bare name also finds it when only one repo declares that name); omit for the default one"
@@ -581,7 +581,7 @@ module AgentTools =
           // thing on every surface that draws them.
           tool
               "open_terminal"
-              "Open a terminal of your own and say what it is for. Use it to work on several things at once: each terminal runs one command at a time, so a build in one does not hold up a test in another. The name is what everyone in the session reads, so name it for the job (\"tests\", \"docs build\"). You get a terminal id back; pass it to execute_command as `terminal` to run there. There is a limit per sandbox — if you have reached it, this says so, and close_terminal is how you make room."
+              "Open your own terminal and name it for the job (\"tests\", \"docs build\") — everyone reads the name. Use it to run several things at once, since each terminal runs one command at a time. Returns a terminal id; pass it to execute_command as `terminal`. There's a per-sandbox limit — if you've hit it, this says so, and close_terminal makes room."
               [ ToolField.required "name" "string" "what this terminal is for, e.g. \"tests\""
                 ToolField.optional "sandbox" "string" "the work sandbox to open it in — \"owner/repo:name\" for a repo's, or its bare name when only one repo declares it; omit for the default one" ]
               (fun args ->
@@ -605,7 +605,7 @@ module AgentTools =
 
           tool
               "close_terminal"
-              "Close one of the terminals you opened, when you have finished with it. Its recording stays in the session for anyone to read; what ends is the shell. You can only close your own — the people here can close any of them, including yours."
+              "Close a terminal you opened, when you're done with it. Its recording stays for anyone to read; only the shell ends. You can close only your own; the people here can close any, including yours."
               [ ToolField.required "terminal" "string" "the terminal id from open_terminal" ]
               (fun args ->
                   async {
@@ -622,7 +622,7 @@ module AgentTools =
 
           tool
               "list_terminals"
-              "See every terminal open in this session — yours and the people's — what each is for, and whether something is running in it. Use it to find out what you already have before opening another, and to pick one to run in."
+              "See every terminal open in this session — yours and the people's — what each is for, and whether something is running. Use it to see what you have before opening another, and to pick one to run in."
               []
               (fun _ ->
                   async {
@@ -645,7 +645,7 @@ module AgentTools =
 
           tool
               "check_pending"
-              "Pick anything back up by the handle it returned — a long build, a command queued behind a busy terminal, a program waiting on a keystroke. Works for execute_command and for any command that said it was still going. Returns the same thing the original call would have."
+              "Pick up whatever a handle named — a long build, a command queued behind a busy terminal, a program waiting on a keystroke. Works for execute_command and anything that said it was still going; returns what the original call would have. A background command needs no polling: end your turn and you're woken when it finishes."
               [ ToolField.required "handle" "string" "the handle from execute_command, or from a command that said it was still going" ]
               (fun args ->
                   async {
@@ -656,7 +656,7 @@ module AgentTools =
 
           tool
               "write_terminal"
-              "Type into a terminal you hold the keyboard for: one streaming something live — a device, a console, anything whose bytes come from outside this session — or one where a command of yours is running: a full-screen program waiting for a keystroke, a prompt you ran with `stdin: true`, or something stuck that you want to end (send \"\\u0003\" to interrupt it, \"\\u0004\" for end-of-file). Send exactly the bytes you mean, including \"\\r\" if the thing on the other end expects a newline. On a live stream, typing takes the terminal, which everyone here can see and take back, so type what you meant to and hand it over. On a shell terminal it works only while a command of yours is running there — otherwise use execute_command, where what you run is classified and on the record."
+              "Type into a terminal you hold the keyboard for: one streaming something live (a device or console — bytes from outside this session), or one running a command of yours (a full-screen program waiting on a key, a stdin: true prompt, or something stuck — \"\\u0003\" interrupts, \"\\u0004\" is EOF). Send exactly the bytes you mean, including \"\\r\" for a newline. On a live stream, typing takes the terminal — everyone sees it and can take it back. On a shell terminal it works only while a command of yours runs there; otherwise use execute_command."
               [ ToolField.required "terminal" "string" "the terminal id, from the terminal that was opened for the stream"
                 ToolField.required "data" "string" "the bytes to type, e.g. \"AT\\r\"" ]
               (fun args ->
@@ -671,7 +671,7 @@ module AgentTools =
 
           tool
               "read_terminal"
-              "Read what a terminal has said, and optionally wait for it to say something. Use it when the answer does not come back as a command's output — a terminal streaming something live, or a shell terminal where a command has opened a full-screen program and is waiting for a keystroke. With `wait_for` the read is held until that exact text appears, which is what you want after typing at a device: it answers as soon as the text arrives, and on a timeout it answers with what was said instead, which is usually where the reason it never came is written. With no `from` you get the tail: what it is saying now, capped, saying how much it left out. With `from` you get a page starting at that line and the line to carry into the next call, which is how you read what a terminal said BEFORE you arrived, however long ago. Every answer says which lines it covers and how many the terminal has, so you can tell a whole answer from the end of a long one. Reading takes nothing from anybody: whoever is typing keeps the terminal. On a shell terminal the tail is yours while a command of YOURS is running there — a build still going, a command that yielded STILL RUNNING — and `wait_for_pattern` is how you wait for a line of its output without polling. Between commands the tail is refused, because what one printed comes back from execute_command instead — but `from` still pages it, which is how you read the part a long answer left out."
+              "Read what a terminal has said, optionally waiting for it to say something. Use it when the answer doesn't come back as a command's output — a live stream, or a shell terminal where a full-screen program waits on a key. `wait_for` holds the read until that text appears (on timeout it answers with what was said, usually the reason it didn't). No `from`: the tail now, capped, saying what it left out. `from`: a page from that line, plus the line to carry into the next call — how you read what was said before you arrived. Every answer says which lines it covers of how many. Reading takes nothing — whoever's typing keeps the terminal. On a shell terminal the tail is yours while a command of yours runs, and `wait_for_pattern` waits for a line of output without polling. Between commands the tail is refused (that output comes back from execute_command), but `from` still pages it."
               [ ToolField.required "terminal" "string" "the terminal id, from the terminal that was opened for the stream"
                 ToolField.optional
                     "from"
@@ -701,7 +701,7 @@ module AgentTools =
 
           tool
               "set_secret"
-              "Persist a named secret for this session (WRITE-ONLY: no tool can read it back). To USE it, reference its name as an environment variable secret ref when an environment starts — the value is injected there directly and never appears in the conversation."
+              "Store a named secret for this session (WRITE-ONLY: no tool reads it back). To USE it, reference its name as an environment-variable secret ref when an environment starts — the value is injected there and never appears in the conversation."
               [ ToolField.required "name" "string" "the secret name, e.g. DEPLOY_TOKEN"
                 // The one argument in the repo that must never be recorded, and it says so
                 // in the schema rather than in a list somebody has to remember to update.
@@ -715,7 +715,7 @@ module AgentTools =
 
           tool
               "list_secrets"
-              "List the names and timestamps of this session's stored secrets. Never returns values."
+              "List this session's stored secret names and timestamps. Never values."
               []
               (fun _ -> ok (listSecrets capabilities ()))
 
@@ -732,13 +732,13 @@ module AgentTools =
 
           tool
               "add_repo"
-              "Clone a GitHub repo into this session's shared repos directory (visible to everyone here, and inside the work environment). Takes owner/repo — never a URL — and only repos the session's GitHub credential can reach: GitHub says \"not found\" for a repo it will not show you, so a not-found on a repo that exists means nobody has connected GitHub here — say that rather than retrying. Answers with the checkout's path as a terminal here reaches it — usually relative to where a terminal starts, so `cd` it as given, pass it to set_shell_profile as given, and never rebuild it from a longer one. Read-only bootstrap: to commit or push, use execute_command in a terminal. Already-added repos just report their current state."
+              "Clone a GitHub repo into this session's shared repos directory (visible to everyone here and inside the work environment). Takes owner/repo, never a URL, and only repos the session's GitHub credential can reach — GitHub says \"not found\" for one it won't show you, so not-found on a repo that exists means nobody has connected GitHub here; say that rather than retrying. Answers with the checkout path as a terminal here reaches it (usually relative to where a terminal starts): use it as given for cd and set_shell_profile, don't rebuild it. Read-only bootstrap — commit or push with execute_command. An already-added repo just reports its state."
               [ ToolField.required "repo" "string" "the repo as owner/name, e.g. \"octocat/hello-world\"" ]
               (ofRepo (addRepo capabilities))
 
           tool
               "remove_repo"
-              "Delete a repo's checkout from this session. Use it when a checkout is unreadable and add_repo told you to, and when the session is finished with a repo — everyone here sees it go from the repos list. A checkout with uncommitted changes is REFUSED unless you pass `force`, because removing it deletes that work and adding the repo again brings back the commits and nothing else: read the refusal and decide, rather than passing force by reflex. If terminals were set to start inside the checkout, they go back to starting wherever the sandbox puts them, and the answer says so. add_repo is the way back."
+              "Delete a repo's checkout from this session — everyone here sees it leave the repos list. Use it when add_repo says a checkout is unreadable, or when the session is done with a repo. A checkout with uncommitted changes is REFUSED unless you pass `force`: removing deletes that work, and re-adding brings back the commits and nothing else — read the refusal and decide, don't force by reflex. Terminals set to start in the checkout go back to the sandbox default, and the answer says so. add_repo is the way back."
               [ ToolField.required "repo" "string" "the repo as owner/name, e.g. \"octocat/hello-world\""
                 ToolField.optional "force" "boolean" "true to delete uncommitted changes along with the checkout" ]
               (fun args ->
@@ -777,7 +777,7 @@ module AgentTools =
 
           tool
               "start_work_sandbox"
-              "Make sure a named work sandbox exists for this session, and get it back. Asking twice for the same name with the same forwarding returns the one already running and changes nothing — safe to call every time. Asking for the same name with DIFFERENT forwarding is refused rather than silently recreated, because recreating kills whatever is running inside it: stop_work_sandbox first. `forward` names credentials to put inside the sandbox (currently \"github\", which is what lets git push work from a terminal there); it uses the credentials of the person whose turn this is, and everyone in the session sees which were forwarded and whose."
+              "Ensure a named work sandbox exists for this session, and return it. Same name and same forwarding returns the running one unchanged — safe to call every time. Same name with DIFFERENT forwarding is refused, not silently recreated (that kills what's running — stop_work_sandbox first). `forward` names credentials to put inside (\"github\" is what lets git push from a terminal there); it uses the credentials of whoever's turn this is, and everyone sees which were forwarded and whose."
               [ ToolField.required "name" "string" "the sandbox name, e.g. \"default\" or \"test\"; a repo's is \"owner/repo:name\""
                 ToolField.optionalList "forward" "string" "credential names to forward, e.g. [\"github\"]" ]
               (fun args ->
@@ -800,7 +800,7 @@ module AgentTools =
 
           tool
               "set_shell_profile"
-              "Say where terminals opened from now on should start. Use it once after add_repo, with the path add_repo gave you, and stop putting `cd` at the front of every command — every terminal opened afterwards starts there, yours and the people's, and it survives a restart. It takes a DIRECTORY, not a script: there is nothing to run here, and execute_command is still the only way to run anything. The directory must already exist inside that sandbox — this checks, and says so rather than leaving you a terminal that opens nowhere. A path from add_repo or the repos query goes in as given: the sandbox resolves it against the directory its terminals start in. Omit `cwd` to put it back the way it was. Terminals that are already open keep the directory they are in; the one exception is the terminal your plain execute_command runs in, which is reopened for you."
+              "Say where terminals opened from now on start. Use it once after add_repo, with the path add_repo gave you, so you stop putting `cd` in front of every command — every terminal opened afterwards starts there, yours and the people's, and it survives a restart. It takes a DIRECTORY, not a script (execute_command is still the only way to run anything), and the directory must already exist in that sandbox — this checks and says so rather than opening a terminal nowhere. A path from add_repo or the repos query goes in as given. Omit `cwd` to clear it. Terminals already open keep their directory, except the one your plain execute_command uses, which is reopened for you."
               [ ToolField.optional
                     "cwd"
                     "string"
