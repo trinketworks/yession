@@ -96,6 +96,9 @@ module Icon =
     /// is a credential somebody signed in for. The bow a square (no curves here), the bit
     /// two teeth.
     let private keyPath = "M2.5 9.5 L6.5 5.5 L10.5 9.5 L6.5 13.5 Z M8.5 7.5 L13.5 2.5 M11.5 4.5 L13 6"
+    /// A sandbox: a box, drawn as the three faces its edges show — a confined place work
+    /// runs in. The mark a sandbox wears wherever a sentence points at one.
+    let private sandboxPath = "M2.5 5.5 L8 2.5 L13.5 5.5 L13.5 11 L8 14 L2.5 11 Z M2.5 5.5 L8 8.5 L13.5 5.5 M8 8.5 L8 14"
 
     // --- The vocabulary ----------------------------------------------------------------------
     // 14px inside a 24px icon button; 12px where an icon rides a caps-label line.
@@ -154,6 +157,7 @@ module Icon =
     /// line at one height.
     let repoSm = stroked "w-3.5 h-3.5 block" repoPath
     let keySm = stroked "w-3.5 h-3.5 block" keyPath
+    let sandboxSm = stroked "w-3.5 h-3.5 block" sandboxPath
 
     /// GitHub's mark, as GitHub draws it: the one FILLED shape in this file, and the one
     /// exception to its vocabulary, because a brand's mark is not ours to redraw in strokes

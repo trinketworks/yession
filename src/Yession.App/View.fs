@@ -2005,31 +2005,43 @@ module View =
         // element per particular, each drawn as a phrase, so a reference in one is drawn as
         // that thing is drawn everywhere. The act is what says which acts have any — see
         // `Act.particulars`.
-        let actNoteParticulars (act: Act) =
+        let actNoteParticulars (by: ActorRef) (act: Act) =
             Act.particulars act
-            |> List.map (fun p -> html $"""<span class="{Style.actNoteDetail}" data-act-detail>{Entity.phrase model p}</span>""")
-        // The same particulars a sentence would carry, but arranged the way a screen arranges
-        // them: labelled facts, one per row, not one clause chained onto the next. `said`
-        // still builds the whole sentence for every reader that is not a screen; the screen is
-        // the one that gets to choose. Which facts show is decided from the event's typed
-        // fields (`SandboxStarted`), never by reading the sentence back:
-        //  - `for` is the description, and it rides folded behind a disclosure - it is the
-        //    same text on every start of a sandbox and the part a reader least often needs,
-        //    so a screen labels it and keeps it out of the way until asked;
-        //  - `checkout` shows only when it is NOT the conventional /repos/<owner>/<repo> every
-        //    reader can already assume;
-        //  - `forwarding` is a badge per credential, not a clause;
-        //  - `adjusted` is each line this host could not honour, on its own.
-        let sandboxStartFacts (s: WorkSandboxStarted) =
+            |> List.map (fun p -> html $"""<span class="{Style.actNoteDetail}" data-act-detail>{Entity.phrase model by p}</span>""")
+        // What the agent was told, as one row of a fact table. The facts around it are a
+        // screen's arrangement of the act; this is the OTHER reader's, and a person is owed
+        // the ability to see it — a timeline that showed a layout the agent never saw, and
+        // hid the sentence it did, would be two accounts of one act with no way to compare
+        // them. The same phrase (`Act.sentence`) both readers collapse, so `data-act-said`'s
+        // text IS what the prompt carried, to the character.
+        let toldRow (act: Act) =
+            html $"""
+                <div class="{Style.actNoteFactRow}">
+                  <span class="{Style.actNoteFactKey}">{Dom.Text.actSaid}</span>
+                  <span class="{Style.actNoteFactVal}" data-act-said>{Entity.told model (Act.sentence act)}</span>
+                </div>"""
+        // A sandbox start shows its TITLE and nothing else on the line: which sandbox, drawn
+        // as a reference (under the repo that declared it, that is the bare `dev`). Everything
+        // the sentence also carries — the backend, what it is for, where the checkout sits,
+        // what rode in, what this host could not give exactly — is a labelled row behind ONE
+        // disclosure, with the sentence the agent read as its last row. A start is the most
+        // frequent act on a busy timeline and the one whose particulars change least from one
+        // to the next; a screen that laid them all out made every start four lines tall.
+        // Which facts show is decided from the event's typed fields, never by reading the
+        // sentence back: `checkout` only when it is NOT the conventional /repos/<owner>/<repo>
+        // every reader can already assume; `forwarding` a reference per connection.
+        let sandboxStartFacts (by: ActorRef) (act: Act) (s: WorkSandboxStarted) =
+            let row (key: string) (fact: string) (value: TemplateResult) =
+                html $"""
+                    <div class="{Style.actNoteFactRow}" data-act-fact="{fact}">
+                      <span class="{Style.actNoteFactKey}">{key}</span>
+                      <div class="{Style.actNoteFactVal}">{value}</div>
+                    </div>"""
             let describedAs =
                 s.Description
-                |> Option.map (fun d ->
-                    html $"""
-                        <details class="{Style.actNoteDisclosure}" data-act-fact="description">
-                          <summary class="{Style.actNoteDisclosureKey}">{Dom.Text.sandboxFactFor}</summary>
-                          <div class="{Style.actNoteFactVal}">{d}</div>
-                        </details>""")
+                |> Option.map (fun d -> row Dom.Text.sandboxFactFor "description" (html $"""{d}"""))
                 |> Option.toList
+            let backend = [ row Dom.Text.sandboxFactBackend "backend" (html $"""{s.Backend}""") ]
             let convention =
                 match SandboxRef.scope s.Sandbox with
                 | RepoOwned repo -> Some (sprintf "/repos/%s" (RepoRef.value repo))
@@ -2037,11 +2049,7 @@ module View =
             let checkout =
                 match s.Checkout with
                 | Some path when Some path <> convention ->
-                    [ html $"""
-                        <div class="{Style.actNoteFactRow}" data-act-fact="checkout">
-                          <span class="{Style.actNoteFactKey}">{Dom.Text.sandboxFactCheckout}</span>
-                          <code class="{Style.actNotePath}">{path}</code>
-                        </div>""" ]
+                    [ row Dom.Text.sandboxFactCheckout "checkout" (html $"""<code class="{Style.actNotePath}">{path}</code>""") ]
                 | _ -> []
             // Each connection drawn as a REFERENCE — the same mark and name the sidebar's
             // panel and every other sentence give it — rather than a badge of its own that
@@ -2053,11 +2061,11 @@ module View =
                     let references =
                         names
                         |> List.map (fun name ->
-                            html $"""<span data-act-fact="forwarded">{Entity.render model (EntityRef.Connection name)}</span>""")
+                            html $"""<span data-act-fact="forwarded">{Entity.render model by (EntityRef.Connection name)}</span>""")
                     [ html $"""
                         <div class="{Style.actNoteFactRow}">
                           <span class="{Style.actNoteFactKey}">{Dom.Text.sandboxFactForwarding}</span>
-                          {references}
+                          <div class="{Style.actNoteFactVal}">{references}</div>
                         </div>""" ]
             let realisation =
                 match s.Realisation with
@@ -2072,16 +2080,21 @@ module View =
                           <span class="{Style.actNoteFactKey}">{Dom.Text.sandboxFactAdjusted}</span>
                           <div class="{Style.actNoteFactStack}">{vals}</div>
                         </div>""" ]
-            match List.concat [ describedAs; checkout; forwarded; realisation ] with
-            | [] -> Lit.nothing
-            | parts -> html $"""<div class="{Style.actNoteFacts}" data-act-facts>{parts}</div>"""
+            let rows = List.concat [ describedAs; backend; checkout; forwarded; realisation; [ toldRow act ] ]
+            html $"""
+                <details class="{Style.actNoteSaid}" data-act-facts>
+                  <summary class="{Style.actNoteSaidSummary}">{Dom.Text.details}</summary>
+                  <div class="{Style.actNoteFacts}">{rows}</div>
+                </details>"""
         // A repo note is something someone DID, not said - one quiet line, actor-attributed,
         // no avatar and no rich body (Plan 14, repos). It rides the same timeline slot a
         // message does (both are `ConversationItem`s at an offset); `Content` is what tells
         // the two apart at render time. The headline is the act's phrase, drawn segment by
         // segment: the same words the agent reads, with each thing they name drawn as it is
-        // drawn everywhere else on this screen.
+        // drawn everywhere else on this screen — except where a screen has its own layout for
+        // the act, and then the title is the screen's.
         let actNoteItem (act: Act) (item: ConversationItem) =
+            let by = item.Author
             // A slow act coming up pulses in the LEFT gutter — a quiet dot on the margin
             // rather than a mark trailing the line, so the running ones read as a column down
             // the edge. A failed act still says so inline, where its reason sits: a terminal
@@ -2098,31 +2111,35 @@ module View =
                 | ConversationItemStatus.Failed ->
                     html $"""<span class="{Style.statusErr}">{Icon.crossSm} {Dom.Text.failed}</span>"""
                 | Complete | Streaming | ConversationItemStatus.Running | ConversationItemStatus.Interrupted -> Lit.nothing
-            // A screen lays out the acts it can - a sandbox start, so far - from their typed
-            // fields; the rest it renders from the particulars the act says it has.
-            let particulars =
+            // The title, and what sits under it. A screen lays out the acts it can — a
+            // sandbox coming up or up — with a title of its own and every fact behind one
+            // disclosure; the rest read as their phrase, particulars visible, and the
+            // sentence the agent got behind a disclosure of its own.
+            let title, under =
                 match act with
-                | Act.SandboxStarted s -> [ sandboxStartFacts s ]
-                | _ -> actNoteParticulars act
-            // What the agent was told, under the facts and behind a disclosure. The facts
-            // above are a screen's arrangement of the act; this is the OTHER reader's, and a
-            // person is owed the ability to see it — a timeline that showed a layout the
-            // agent never saw, and hid the sentence it did, would be two accounts of one act
-            // with no way to compare them. The same phrase (`Act.sentence`) both readers
-            // collapse, so `data-act-said`'s text IS what the prompt carried, to the character.
-            let said =
-                html $"""
-                    <details class="{Style.actNoteSaid}" data-act-said>
-                      <summary class="{Style.actNoteSaidSummary}">{Dom.Text.actSaid}</summary>
-                      <span class="{Style.actNoteSaidBody}">{Entity.phrase model (Act.sentence act)}</span>
-                    </details>"""
+                | Act.SandboxStarted s ->
+                    [ Segment.Text "started sandbox "; Segment.Ref (EntityRef.Sandbox s.Sandbox) ], [ sandboxStartFacts by act s ]
+                | Act.SandboxStarting s ->
+                    [ Segment.Text "starting sandbox "; Segment.Ref (EntityRef.Sandbox s.Sandbox) ],
+                    [ html $"""
+                        <details class="{Style.actNoteSaid}" data-act-facts>
+                          <summary class="{Style.actNoteSaidSummary}">{Dom.Text.details}</summary>
+                          <div class="{Style.actNoteFacts}">{toldRow act}</div>
+                        </details>""" ]
+                | _ ->
+                    Act.phrase act,
+                    actNoteParticulars by act
+                    @ [ html $"""
+                          <details class="{Style.actNoteSaid}" data-act-said-disclosure>
+                            <summary class="{Style.actNoteSaidSummary}">{Dom.Text.actSaid}</summary>
+                            <span class="{Style.actNoteSaidBody}" data-act-said>{Entity.told model (Act.sentence act)}</span>
+                          </details>""" ]
             html $"""
                 <article class="{Style.actNote}" data-message-id="{MessageId.value item.MessageId}" tabindex="-1" data-act-note data-act-status="{messageStatusLabel item.Status}" data-message-author="{Entity.actorToken item.Author}">
                   {itemActions item}
                   {running}
-                  <span class="{Style.actNoteText}">{Entity.phrase model (Act.phrase act)} {failedMark}</span>
-                  {particulars}
-                  {said}
+                  <span class="{Style.actNoteText}">{Entity.phrase model by title} {failedMark}</span>
+                  {under}
                 </article>"""
         let messageItem (item: ConversationItem) =
             // What was said. An act never reaches here (`actNoteItem` takes those), and its

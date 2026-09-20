@@ -1204,6 +1204,70 @@ let private uiChecklistTests =
                 (row.Contains (Dom.attr "data-entity" (EntityRef.said (EntityRef.Connection github))))
                 "and what it forwards is the connection, as a reference"
 
+        /// A repo-declared sandbox coming up, started by `by`.
+        let sandboxStartBy (by: ActorRef) : ConversationItem =
+            let hello = RepoRef.create "octo/hello" |> expect
+            let dev = SandboxRef.inScope hello (SandboxName.create "dev" |> expect)
+            { MessageId = MessageId.create "msg-dev" |> expect
+              Author = by
+              Content =
+                ItemContent.Act (
+                    Act.SandboxStarted
+                        { MessageId = MessageId.create "msg-dev" |> expect
+                          Sandbox = dev
+                          Backend = "docker"
+                          Description = Some "the dev loop"
+                          Checkout = None
+                          Forwarded = []
+                          Realisation = []
+                          Actor = by })
+              Status = Complete
+              Offset = EventOffset.create 1L |> expect
+              Woke = None; Replying = None }
+
+        /// The sandbox reference's NAME as rendered — the text inside the entity element.
+        let sandboxNameOn (html: string) : string =
+            let start = html.IndexOf (Dom.attr "data-entity-kind" "sandbox")
+            Expect.isTrue (start >= 0) "the sandbox is a reference on the start"
+            let element = html.Substring (start, html.IndexOf ("</span></span>", start) - start)
+            let nameAt = element.LastIndexOf ">"
+            element.Substring (nameAt + 1)
+
+        // Under the repo that declared it, a sandbox is `dev`: the author line over the act
+        // already says `octo/hello`, and a title that said it again said the repo twice on
+        // every start. The whole spelling is one hover away, and prose keeps it.
+        testCase "a repo's sandbox under the repo's own attribution wears its bare name" <| fun () ->
+            let by = ActorRef.Configured (RepoRef.create "octo/hello" |> expect)
+            let html =
+                Support.render
+                    { representativeModel with
+                        Conversation = { representativeModel.Conversation with Items = [ sandboxStartBy by ] } }
+            Expect.equal (sandboxNameOn html) "dev" "the scope is the author's, so the name drops it"
+
+        // Under any other author the scope stays: the agent starting `octo/hello:dev` beside
+        // `octo/other:dev` would otherwise read as two starts of one sandbox.
+        testCase "a repo's sandbox under another author keeps its scope" <| fun () ->
+            let html =
+                Support.render
+                    { representativeModel with
+                        Conversation = { representativeModel.Conversation with Items = [ sandboxStartBy ActorRef.Agent ] } }
+            Expect.equal (sandboxNameOn html) "octo/hello:dev" "nothing over it says which repo, so the name does"
+
+        // The one disclosure on a start still carries what the agent read, to the character
+        // — the same promise the generic act keeps, kept by the layout that folds its facts.
+        testCase "a sandbox start's disclosure still says what the agent was told" <| fun () ->
+            let by = ActorRef.Configured (RepoRef.create "octo/hello" |> expect)
+            let item = sandboxStartBy by
+            let html =
+                Support.render
+                    { representativeModel with
+                        Conversation = { representativeModel.Conversation with Items = [ item ] } }
+            let start = html.IndexOf "data-act-said"
+            Expect.isTrue (start >= 0) "the sentence is offered"
+            let element = html.Substring (start, html.IndexOf ("</div>", start) - start)
+            let text = System.Text.RegularExpressions.Regex.Replace(element.Substring (element.IndexOf ">" + 1), "<[^>]*>", "").Trim ()
+            Expect.equal text (ConversationItem.said item) "whole, scope and backend included"
+
         // The other half, and the reason the detail is an option rather than an empty
         // string: an act that is already one clause must not grow a blank second line under
         // it, which reads as something withheld.
@@ -2455,7 +2519,7 @@ let private semanticsTests =
                     Peers = Map.ofList [ bob, "quiet-otter" ]
                     Attribution = { Attribution.empty with PeerUsers = Map.ofList [ bob, carol ]; UserPeers = Map.ofList [ carol, bob ] } }
             let phrase = [ Segment.Text "pushed on behalf of "; Segment.Ref (EntityRef.Actor (UserRef carol)) ]
-            let html = Entity.phrase model phrase |> List.map Support.renderTemplate |> String.concat ""
+            let html = Entity.phrase model ActorRef.Agent phrase |> List.map Support.renderTemplate |> String.concat ""
             let start = html.IndexOf (Dom.attr "data-entity" (EntityRef.said (EntityRef.Actor (UserRef carol))))
             Expect.isTrue (start >= 0) "the reference is its own element, found by the prose spelling"
             let element = html.Substring start

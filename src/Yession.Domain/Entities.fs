@@ -26,6 +26,8 @@ type EntityRef =
     /// An external-service connection somebody signed in to — the credential a sandbox
     /// forwards, named and never valued.
     | Connection of ConnectionName
+    /// A work sandbox, scope included: the session's own `dev`, or a repo's `octo/hello:dev`.
+    | Sandbox of SandboxRef
 
 module EntityRef =
 
@@ -36,12 +38,14 @@ module EntityRef =
     /// the actor column already reads. A repo is `github:owner/repo` — the host said in
     /// prose because a screen says it with a mark, and `RepoRef.create` accepts the prefix
     /// so an agent quoting this spelling into `add_repo` is not refused by it. A
-    /// connection is its name.
+    /// connection is its name. A sandbox is `SandboxRef.render` — scope and all, because
+    /// prose has no author line over it to say whose `dev` this is.
     let said (entity: EntityRef) : string =
         match entity with
         | EntityRef.Actor actor -> ActorRef.token actor
         | EntityRef.Repo repo -> "github:" + RepoRef.value repo
         | EntityRef.Connection name -> ConnectionName.value name
+        | EntityRef.Sandbox sandbox -> SandboxRef.render sandbox
 
 /// One piece of a sentence: words, or a thing the words are about.
 [<RequireQualifiedAccess>]

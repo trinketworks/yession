@@ -160,7 +160,7 @@ module WorkSandboxStarted =
 
     /// The one thing worth deciding from at a glance: which sandbox, on what backend.
     let phrase (s: WorkSandboxStarted) : Phrase =
-        Phrase.text (sprintf "started sandbox %s (%s)" (SandboxRef.render s.Sandbox) s.Backend)
+        [ Segment.Text "started sandbox "; Segment.Ref (EntityRef.Sandbox s.Sandbox); Segment.Text (sprintf " (%s)" s.Backend) ]
 
     /// Everything the headline holds back, each fact its own phrase: what the sandbox is
     /// FOR, where its checkout sits, whose credential rode in, and where this host could
@@ -209,36 +209,39 @@ module WorkSandboxStarting =
     /// Short headline, like the start it resolves into: which sandbox, on what backend.
     /// What it is for rides the particulars, not the headline.
     let phrase (s: WorkSandboxStarting) : Phrase =
-        Phrase.text (sprintf "starting sandbox %s (%s)" (SandboxRef.render s.Sandbox) s.Backend)
+        [ Segment.Text "starting sandbox "; Segment.Ref (EntityRef.Sandbox s.Sandbox); Segment.Text (sprintf " (%s)" s.Backend) ]
 
     let particulars (s: WorkSandboxStarting) : Phrase list = s.Description |> Option.map Phrase.text |> Option.toList
 
 module WorkSandboxStartFailed =
 
     let phrase (s: WorkSandboxStartFailed) : Phrase =
-        Phrase.text (sprintf "sandbox %s could not start" (SandboxRef.render s.Sandbox))
+        [ Segment.Text "sandbox "; Segment.Ref (EntityRef.Sandbox s.Sandbox); Segment.Text " could not start" ]
 
     let particulars (s: WorkSandboxStartFailed) : Phrase list = [ Phrase.text s.Reason ]
 
 module WorkSandboxStopped =
 
     let phrase (s: WorkSandboxStopped) : Phrase =
-        Phrase.text (sprintf "stopped sandbox %s" (SandboxRef.render s.Sandbox))
+        [ Segment.Text "stopped sandbox "; Segment.Ref (EntityRef.Sandbox s.Sandbox) ]
 
 module ShellProfileSet =
 
     let phrase (p: ShellProfileSet) : Phrase =
-        match p.WorkingDirectory with
-        | Some cwd -> Phrase.text (sprintf "new terminals in %s start in %s" (SandboxRef.render p.Sandbox) cwd)
-        | None ->
-            Phrase.text (sprintf "new terminals in %s start where the sandbox puts them" (SandboxRef.render p.Sandbox))
+        let where =
+            match p.WorkingDirectory with
+            | Some cwd -> sprintf " start in %s" cwd
+            | None -> " start where the sandbox puts them"
+        [ Segment.Text "new terminals in "; Segment.Ref (EntityRef.Sandbox p.Sandbox); Segment.Text where ]
 
 module SandboxSetupQueued =
 
     let phrase (q: SandboxSetupQueued) : Phrase =
-        match q.Problem with
-        | Some _ -> Phrase.text (sprintf "%s could not start its setup" (SandboxRef.render q.Sandbox))
-        | None -> Phrase.text (sprintf "%s is running its setup: %s" (SandboxRef.render q.Sandbox) q.Command)
+        let what =
+            match q.Problem with
+            | Some _ -> " could not start its setup"
+            | None -> sprintf " is running its setup: %s" q.Command
+        [ Segment.Ref (EntityRef.Sandbox q.Sandbox); Segment.Text what ]
 
     /// The handle, which is what makes this actionable rather than merely honest — the
     /// agent is told both, and a screen shows the headline with the mechanics beside it.

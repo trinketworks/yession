@@ -76,15 +76,29 @@ module Entity =
         | EntityRef.Actor _ -> "actor"
         | EntityRef.Repo _ -> "repo"
         | EntityRef.Connection _ -> "connection"
+        | EntityRef.Sandbox _ -> "sandbox"
 
-    /// What a reference is called on a screen. A person by the name the roster knows; a
-    /// repo by `owner/repo` — the host is the mark's to say, not the name's; a connection
-    /// by its name.
-    let name (model: ClientModel) (entity: EntityRef) : string =
+    /// What a reference is called on a screen, in a sentence attributed to `by`. A person by
+    /// the name the roster knows; a repo by `owner/repo` — the host is the mark's to say,
+    /// not the name's; a connection by its name.
+    ///
+    /// A sandbox by its bare name when the sentence's AUTHOR already wears its scope: a
+    /// repo's file starting its own `dev` sits under an author line that says `octo/hello`,
+    /// and `started sandbox octo/hello:dev` under it said the repo twice. Under any other
+    /// author the scope stays — the agent starting `octo/hello:dev` beside `octo/other:dev`
+    /// would otherwise read as two starts of one sandbox. The session's own carry no scope
+    /// to drop. Prose keeps the whole spelling either way (`EntityRef.said`): it has no
+    /// author line to lean on.
+    let name (model: ClientModel) (by: ActorRef) (entity: EntityRef) : string =
         match entity with
         | EntityRef.Actor actor -> actorName model actor
         | EntityRef.Repo repo -> RepoRef.value repo
         | EntityRef.Connection connection -> ConnectionName.value connection
+        | EntityRef.Sandbox sandbox ->
+            match SandboxRef.scope sandbox, by with
+            | RepoOwned repo, ActorRef.Configured author when repo = author -> SandboxName.value (SandboxRef.name sandbox)
+            | RepoOwned _, _ -> SandboxRef.render sandbox
+            | SessionOwned, _ -> SandboxName.value (SandboxRef.name sandbox)
 
     /// Where a reference leads, when it is somewhere a person can go. A repository is a page
     /// on its host; a person and a connection are not places. The one spelling of the URL
@@ -93,7 +107,8 @@ module Entity =
         match entity with
         | EntityRef.Repo repo -> Some (sprintf "https://github.com/%s" (RepoRef.value repo))
         | EntityRef.Actor _
-        | EntityRef.Connection _ -> None
+        | EntityRef.Connection _
+        | EntityRef.Sandbox _ -> None
 
     /// One reference, drawn: its mark and its name, inline, the same wherever a sentence
     /// points at it. `data-entity` carries the prose spelling (`EntityRef.said`), so a test
@@ -109,10 +124,12 @@ module Entity =
         | _ -> Icon.keySm
 
     /// The mark says the KIND — a person's checker, the repository glyph, a connection's
-    /// provider — and the host a repository lives on is the link's to say, not the mark's:
-    /// a reference that leads somewhere is a real `<a>`, keyboard-reachable like every
-    /// action on the page.
-    let render (model: ClientModel) (entity: EntityRef) : TemplateResult =
+    /// provider, the sandbox's box — and the host a repository lives on is the link's to
+    /// say, not the mark's: a reference that leads somewhere is a real `<a>`,
+    /// keyboard-reachable like every action on the page. `by` is whose sentence this is
+    /// (see `name`); the whole spelling rides `title`, so a shortened name is still one
+    /// hover from its scope.
+    let private draw (model: ClientModel) (spelled: string) (entity: EntityRef) : TemplateResult =
         let mark =
             match entity with
             | EntityRef.Actor actor ->
@@ -120,22 +137,39 @@ module Entity =
             | EntityRef.Repo _ -> html $"""<span class="{Style.entityMark}" aria-hidden="true">{Icon.repoSm}</span>"""
             | EntityRef.Connection connection ->
                 html $"""<span class="{Style.entityMark}" aria-hidden="true">{connectionMark connection}</span>"""
-        let inner = html $"""{mark}<span class="{Style.entityName}">{name model entity}</span>"""
+            | EntityRef.Sandbox _ -> html $"""<span class="{Style.entityMark}" aria-hidden="true">{Icon.sandboxSm}</span>"""
+        let inner = html $"""{mark}<span class="{Style.entityName}">{spelled}</span>"""
         match href entity with
         | Some url ->
             html
-                $"""<a class="{Style.entityLink}" href="{url}" target="_blank" rel="noopener" data-entity-kind="{kind entity}" data-entity="{EntityRef.said entity}">{inner}</a>"""
+                $"""<a class="{Style.entityLink}" href="{url}" target="_blank" rel="noopener" title="{EntityRef.said entity}" data-entity-kind="{kind entity}" data-entity="{EntityRef.said entity}">{inner}</a>"""
         | None ->
             html
-                $"""<span class="{Style.entity}" data-entity-kind="{kind entity}" data-entity="{EntityRef.said entity}">{inner}</span>"""
+                $"""<span class="{Style.entity}" title="{EntityRef.said entity}" data-entity-kind="{kind entity}" data-entity="{EntityRef.said entity}">{inner}</span>"""
+
+    let render (model: ClientModel) (by: ActorRef) (entity: EntityRef) : TemplateResult =
+        draw model (name model by entity) entity
 
     /// A sentence, drawn: its words as words and each reference as `render` draws it. What
     /// the agent reads as `Phrase.said` and what a person reads here are the same segments,
     /// collapsed by two readers with two opinions — which is the whole reason a phrase is
-    /// segments rather than a string.
-    let phrase (model: ClientModel) (phrase: Phrase) : TemplateResult list =
+    /// segments rather than a string. `by` is whose sentence it is.
+    let phrase (model: ClientModel) (by: ActorRef) (phrase: Phrase) : TemplateResult list =
         phrase
         |> List.map (fun segment ->
             match segment with
             | Segment.Text words -> html $"""{words}"""
-            | Segment.Ref entity -> render model entity)
+            | Segment.Ref entity -> render model by entity)
+
+    /// The same sentence as the AGENT read it: every reference spelled as prose spells it
+    /// (`EntityRef.said` — `user:ada`, `octo/hello:dev`), wearing its mark so a reader can
+    /// still see what kind of thing each is. This is what sits behind "as told to the agent":
+    /// its text is `Phrase.said` to the character, which a name the screen resolved or
+    /// shortened would break — that resolution is the screen's opinion, and this row is
+    /// the other reader's.
+    let told (model: ClientModel) (phrase: Phrase) : TemplateResult list =
+        phrase
+        |> List.map (fun segment ->
+            match segment with
+            | Segment.Text words -> html $"""{words}"""
+            | Segment.Ref entity -> draw model (EntityRef.said entity) entity)
