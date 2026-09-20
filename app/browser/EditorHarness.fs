@@ -23,6 +23,7 @@ open Yession.Domain.Link
 open Yession.Domain.Terminals
 open Yession.Domain.Collab
 open Yession.Domain.Chat
+open Yession.Domain.Sandboxes
 open Fable.BrowserExtras
 open Fable.YjsExtras
 open Fable.ProseMirror
@@ -139,6 +140,12 @@ type private Harness =
     /// where nothing has been said and a message body only where something has, so the one column
     /// they are both supposed to start on can be measured no other way on one page.
     abstract __launch : (bool -> unit) with get, set
+    /// Swap in the shell with one ACT on its timeline — a sandbox start whose sentence
+    /// points at a sandbox and a connection — for the case that measures where a reference
+    /// sits on its line. Its own hook rather than an item in the shared fixture, because
+    /// every other case measures that fixture's geometry and an act note is a different
+    /// shape of row to have standing in it.
+    abstract __acts : (unit -> unit) with get, set
     /// A collaborator's caret in a chapter's NAME, with no session to relay one from. The
     /// positions handed over are real relative positions over a real `Y.Text` on this page's doc,
     /// which is the whole of what the placement reads: it resolves them against the doc and
@@ -1041,6 +1048,31 @@ let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
 
 let private shellModel : ClientModel = shellModelOf Lines 16
 
+/// The shell with one act whose sentence points at things — a sandbox, a connection — so
+/// the page holds a reference drawn INSIDE a line of words. What a rendered string cannot
+/// say about one is where it sits: a reference is part of the sentence, and only a browser
+/// knows whether its name shares the line's baseline or rides above it.
+let private actsModel : ClientModel =
+    let offset (n: int64) : EventOffset = EventOffset.create n |> expect
+    let start : ConversationItem =
+        { MessageId = MessageId.create "msg-act-start" |> expect
+          Author = ActorRef.Agent
+          Content =
+            ItemContent.Act (
+                Act.SandboxStarted
+                    { MessageId = MessageId.create "msg-act-start" |> expect
+                      Sandbox = SandboxRef.defaultRef
+                      Backend = "srt"
+                      Description = None
+                      Checkout = None
+                      Forwarded = [ ConnectionName.create "github" |> expect ]
+                      Realisation = []
+                      Actor = ActorRef.Agent })
+          Status = Complete
+          Offset = offset 31L
+          Woke = None; Replying = None }
+    { shellModel with Conversation = { shellModel.Conversation with Items = shellModel.Conversation.Items @ [ start ] } }
+
 /// The session's FIRST screen: connected, the log read to an end holding nothing, and the
 /// provider's listing arrived — so the ask card stands where the timeline's first line will
 /// (`Launch.offered`). Folded through the same messages a browser takes, in the order it
@@ -1364,6 +1396,9 @@ do
                           Repos.RepoPage.Next = None }))
     (harness ()).__launch <- (fun asking ->
         model <- (if asking then launchModel else shellModel)
+        render ())
+    (harness ()).__acts <- (fun () ->
+        model <- actsModel
         render ())
     (harness ()).__chapterCaret <- System.Action<_, _, _> (fun id anchor head ->
         match MessageId.create id, PeerId.create "brave-owl" with

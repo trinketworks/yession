@@ -592,15 +592,29 @@ module Style =
     // said, not a chip beside it. The name one step brighter than the words around it, so
     // WHO and WHAT is where the eye lands first — the step `actNoteWho` took for the
     // author before acts folded under a shared author line.
-    let entity = "inline-flex items-center gap-1 align-baseline"
+    //
+    // INLINE, not inline-flex. A flex box lends the line its first item's baseline, and the
+    // mark has none — an empty square, an svg — so the box's bottom edge stood in for it and
+    // the name rode a descender above the words either side (seen on a phone: every `dev`
+    // floating over its `started sandbox`). As plain inline content the name IS text on the
+    // line's baseline, and the mark is nudged down onto it the way `Icon.checkSm` and its
+    // kin sit beside a status word. `whitespace-nowrap` keeps mark and name on one line.
+    let entity = "inline whitespace-nowrap"
     let entityName = "text-ink"
     /// A reference that is somewhere to go — a repository, on its host — is a real link, and
     /// says so the way the rest of the page does: the underline arrives on hover, so a
     /// sentence with two references in it does not read as two underlined phrases at rest.
     let entityLink = cls [ entity; "hover:underline underline-offset-2"; focusRing ]
-    /// The mark a non-person reference wears: an icon in the ink of the name beside it, sized
-    /// to the small avatar so every kind of reference sits on one line at one height.
-    let entityMark = "text-ink-dim"
+    /// The mark's seat on the line: an inline box the small avatar's size, its bottom two
+    /// pixels below the baseline so a filled square sits on the descender line like a letter
+    /// with one, and a stroked glyph — whose lowest vertex is ~2px above its box's bottom —
+    /// lands on the baseline itself. A gap to the name, since inline content has no `gap`.
+    let entitySeat = "inline-block align-[-2px] mr-1"
+    /// A person's mark on that seat: the checker, sized as the small avatar is everywhere.
+    let entityAvatar = cls [ avatarSm; entitySeat ]
+    /// A non-person reference's mark on that seat: an icon in a step fainter ink than the
+    /// name beside it, so the name is what the eye reads and the mark says what kind.
+    let entityMark = cls [ entitySeat; "text-ink-dim" ]
 
     let private checker (a: string) (b: string) =
         sprintf "bg-[conic-gradient(from_0deg,%s_25%%,%s_0_50%%,%s_0_75%%,%s_0)]" a b a b

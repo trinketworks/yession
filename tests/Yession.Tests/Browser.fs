@@ -1541,6 +1541,36 @@ let editorTests =
                 return ()
             }
 
+        // A reference is part of the sentence it sits in, so its name shares the line's
+        // baseline with the words either side. It did not: an inline-flex box lends the
+        // line its first item's baseline, the mark has none, and every `dev` on a phone
+        // floated a descender above its `started sandbox`. Geometry, which is what only a
+        // rendered page can measure — pinned as an equality of baselines, never as a pixel
+        // image, so a font or a mark redrawn does not move it.
+        editorCase "a reference's name sits on the line's baseline" <| fun page ->
+            async {
+                do! awaitU (page.EvaluateAsync "() => window.__acts()")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-act-note] [data-entity]")
+                let! drift =
+                    await (page.EvaluateAsync<float> """() => {
+                        const note = document.querySelector('#shell [data-act-note]')
+                        const line = note.querySelector('[data-entity]').parentElement
+                        const probe = document.createElement('span')
+                        probe.style.cssText = 'display:inline-block;width:0;height:0;vertical-align:baseline'
+                        line.appendChild(probe)
+                        const baseline = probe.getBoundingClientRect().bottom
+                        probe.remove()
+                        const name = note.querySelector('[data-entity] > span:last-child')
+                        const namesProbe = document.createElement('span')
+                        namesProbe.style.cssText = 'display:inline-block;width:0;height:0;vertical-align:baseline'
+                        name.appendChild(namesProbe)
+                        const nameBaseline = namesProbe.getBoundingClientRect().bottom
+                        namesProbe.remove()
+                        return Math.abs(nameBaseline - baseline)
+                    }""")
+                Expect.isTrue (drift < 0.5) (sprintf "the name's baseline is the line's, it was %.2fpx off" drift)
+            }
+
         // Terminal work in the chat, and the pane's tabs (Plan 14, stages 1-2). Host-free,
         // like the editor and the replay beside it: what needs a real browser here is not the
         // Session Process but the DOM swaps — where FOCUS goes when a chip in the chat opens
