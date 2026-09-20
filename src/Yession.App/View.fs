@@ -2024,16 +2024,26 @@ module View =
             | None -> Lit.nothing
             | Some detail -> html $"""<span class="{Style.actNoteDetail}" data-act-detail>{detail}</span>"""
         // The same particulars a sentence would carry, but arranged the way a screen arranges
-        // things rather than read as prose. This is the whole point of `SandboxStarted` riding
-        // the note as the event's typed fields: the checkout is shown only when it is NOT the
-        // conventional /repos/<owner>/<repo> that every reader can already assume; each
-        // forwarded credential is its own badge, not a clause; and each line
-        // this host could not honour stands on its own. `said` still builds the whole sentence
-        // for every reader that is not a screen; the screen is the one that gets to choose.
+        // them: labelled facts, one per row, not one clause chained onto the next. `said`
+        // still builds the whole sentence for every reader that is not a screen; the screen is
+        // the one that gets to choose. Which facts show is decided from the event's typed
+        // fields (`SandboxStarted`), never by reading the sentence back:
+        //  - `for` is the description, and it rides folded behind a disclosure - it is the
+        //    same text on every start of a sandbox and the part a reader least often needs,
+        //    so a screen labels it and keeps it out of the way until asked;
+        //  - `checkout` shows only when it is NOT the conventional /repos/<owner>/<repo> every
+        //    reader can already assume;
+        //  - `forwarding` is a badge per credential, not a clause;
+        //  - `adjusted` is each line this host could not honour, on its own.
         let sandboxStartFacts (s: WorkSandboxStarted) =
             let describedAs =
                 s.Description
-                |> Option.map (fun d -> html $"""<span class="{Style.actNoteDetail}" data-act-fact="description">{d}</span>""")
+                |> Option.map (fun d ->
+                    html $"""
+                        <details class="{Style.actNoteDisclosure}" data-act-fact="description">
+                          <summary class="{Style.actNoteDisclosureKey}">{Dom.Text.sandboxFactFor}</summary>
+                          <div class="{Style.actNoteFactVal}">{d}</div>
+                        </details>""")
                 |> Option.toList
             let convention =
                 match SandboxRef.scope s.Sandbox with
@@ -2042,16 +2052,38 @@ module View =
             let checkout =
                 match s.Checkout with
                 | Some path when Some path <> convention ->
-                    [ html $"""<span class="{Style.actNoteDetail}" data-act-fact="checkout">checkout <code class="{Style.actNotePath}">{path}</code></span>""" ]
+                    [ html $"""
+                        <div class="{Style.actNoteFactRow}" data-act-fact="checkout">
+                          <span class="{Style.actNoteFactKey}">{Dom.Text.sandboxFactCheckout}</span>
+                          <code class="{Style.actNotePath}">{path}</code>
+                        </div>""" ]
                 | _ -> []
             let forwarded =
-                s.Forwarded
-                |> List.map (fun name ->
-                    html $"""<span class="{Style.actNoteCred}" data-act-fact="forwarded">{name}</span>""")
+                match s.Forwarded with
+                | [] -> []
+                | names ->
+                    let badges =
+                        names
+                        |> List.map (fun name ->
+                            html $"""<span class="{Style.actNoteCred}" data-act-fact="forwarded">{name}</span>""")
+                    [ html $"""
+                        <div class="{Style.actNoteFactRow}">
+                          <span class="{Style.actNoteFactKey}">{Dom.Text.sandboxFactForwarding}</span>
+                          {badges}
+                        </div>""" ]
             let realisation =
-                s.Realisation
-                |> List.map (fun line ->
-                    html $"""<span class="{Style.actNoteRealisation}" data-act-fact="realisation">{line}</span>""")
+                match s.Realisation with
+                | [] -> []
+                | lines ->
+                    let vals =
+                        lines
+                        |> List.map (fun line ->
+                            html $"""<span class="{Style.actNoteRealisation}" data-act-fact="realisation">{line}</span>""")
+                    [ html $"""
+                        <div class="{Style.actNoteFactRow}">
+                          <span class="{Style.actNoteFactKey}">{Dom.Text.sandboxFactAdjusted}</span>
+                          <div class="{Style.actNoteFactStack}">{vals}</div>
+                        </div>""" ]
             match List.concat [ describedAs; checkout; forwarded; realisation ] with
             | [] -> Lit.nothing
             | parts -> html $"""<div class="{Style.actNoteFacts}" data-act-facts>{parts}</div>"""
