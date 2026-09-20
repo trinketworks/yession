@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Fable bindings to `y-indexeddb`, the Yjs provider that keeps a document in the browser's
+    IndexedDB. Fable-only, like app/Yession.Host.fsproj: `dotnet build` only type-checks it;
+    the runnable JS comes from Fable. A standalone project so the package's shapes are a
+    distinct layer, beside Fable.YjsExtras and Fable.ProseMirror.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="YIndexeddb.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Fable.Core" />
+    <PackageReference Include="Fable.Yjs" />
+  </ItemGroup>
+
+</Project>
