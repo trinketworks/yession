@@ -211,37 +211,64 @@ module Style =
     //     and a second rectangle inside the first would be chrome describing chrome.
 
     /// Sized by construction, not padding arithmetic: the box is `h-control` with the line
-    /// flex-centred in it — the old `py-[7px]` was that same height, hand-derived and easy to
-    /// break. A FIELD is built the same way from the same token (`fieldFace`), which is what
-    /// makes a button and an input in one row actually line up.
-    let private btnBase =
+    /// flex-centred in it — the old `py-[7px]` was that same height, hand-derived and
+    /// easy to break. A FIELD is built the same way from the same token (`fieldFace`), which
+    /// is what makes a button and an input in one row actually line up.
+    ///
+    /// Layout is split from the rest of the face (`btnFlex`/`btnGrid`) because one button
+    /// — Create — needs a different one: its two words (`whenReady`/`whenBusy`)
+    /// share a box whose size cannot depend on which of them is showing.
+    let private btnFace =
         cls [ "group/btn bg-transparent cursor-pointer font-ui"; caps
-              "h-control px-3.5 inline-flex items-center justify-center transition-colors"
+              "h-control px-3.5 transition-colors"
               Stroke.ring; focusRing ]
 
-    /// The three faces, as (rest tone, hover, press) — the only thing that varies between
-    /// them, so a fourth would be three tokens rather than another hand-written string.
+    /// The ordinary layout: one line of content, centred. What every button used before a
+    /// second layout existed to need distinguishing from.
+    let private btnFlex = "inline-flex items-center justify-center"
+
+    /// A single grid cell, for a button whose two words (`whenReady`/`whenBusy`) both sit in
+    /// it at once — `col-start-1 row-start-1` on each keeps them stacked rather than
+    /// auto-flowed into two rows. Both stay laid out (`invisible`, never `display:none`), so
+    /// the cell — and the button around it — sizes to the WIDER of the two and
+    /// never changes size when the one showing changes. `hidden`/`inline` (display) would
+    /// drop the other out of the box being measured, which is exactly the resize this exists
+    /// to prevent.
+    let private btnGrid = "inline-grid grid-cols-1 place-items-center"
+
+    /// The three faces, as (rest tone, hover, press) — the only thing that varies
+    /// between them, so a fourth would be three tokens rather than another hand-written
+    /// string.
     ///
-    /// The press face is `pressed:` (app/tailwind.css) rather than `active:` — the finger's
-    /// press AND the hold after it (`aria-busy`), for a button whose act takes the browser
-    /// somewhere else and has nothing to show on this page until it arrives. Filled while
-    /// down, and down until it lands.
+    /// The press face is `pressed:` (app/tailwind.css) rather than `active:` — the
+    /// finger's press AND the hold after it (`aria-busy`), for a button whose act takes the
+    /// browser somewhere else and has nothing to show on this page until it arrives. Filled
+    /// while down, and down until it lands.
+    let private btnPrimaryFace = cls [ Stroke.blue; "text-blue hover:text-blue-bright pressed:bg-blue pressed:text-bg" ]
+
     let btn =
-        cls [ btnBase; Stroke.rim; "text-ink-dim"; Stroke.hoverInk; "hover:text-ink pressed:bg-ink pressed:text-bg" ]
+        cls [ btnFace; btnFlex; Stroke.rim; "text-ink-dim"; Stroke.hoverInk; "hover:text-ink pressed:bg-ink pressed:text-bg" ]
 
     let btnPrimary =
-        cls [ btnBase; Stroke.blue; "text-blue hover:text-blue-bright pressed:bg-blue pressed:text-bg" ]
+        cls [ btnFace; btnFlex; btnPrimaryFace ]
+
+    /// `btnPrimary`, laid out on `btnGrid` — the one a held word
+    /// (`whenReady`/`whenBusy`) sits on top of, so pressing it never changes its own size.
+    let btnPrimarySwap =
+        cls [ btnFace; btnGrid; btnPrimaryFace ]
 
     let btnDanger =
-        cls [ btnBase; Stroke.rim; "text-ink-dim"; Stroke.hoverErr; "hover:text-err pressed:bg-err pressed:text-bg" ]
+        cls [ btnFace; btnFlex; Stroke.rim; "text-ink-dim"; Stroke.hoverErr; "hover:text-err pressed:bg-err pressed:text-bg" ]
 
-    /// The two words a held button can be saying — the verb, and the verb under way — as
-    /// siblings inside it, one shown at a time off the button's own `aria-busy`. Copy stays
-    /// in the markup where the server spells it; the script only sets the state. The button
-    /// wears the named group for it (`btnBase`) — named, so a button sitting inside some
-    /// other group answers to its own state and never to that one's.
-    let whenReady = "group-aria-busy/btn:hidden"
-    let whenBusy = "hidden group-aria-busy/btn:inline"
+    /// The two words a held button can be saying — the verb, and the verb under way
+    /// — as siblings inside it, both always laid out (`btnGrid`, on `btnPrimarySwap`)
+    /// so the box they share never resizes between them; `invisible` (not `hidden`) is what
+    /// keeps the one not showing in that box rather than out of it. Copy stays in the markup
+    /// where the server spells it; the script only sets the state. The button wears the
+    /// named group for it (`btnFace`) — named, so a button sitting inside some other
+    /// group answers to its own state and never to that one's.
+    let whenReady = "col-start-1 row-start-1 group-aria-busy/btn:invisible"
+    let whenBusy = "col-start-1 row-start-1 invisible group-aria-busy/btn:visible"
 
     /// The name of a LISTED record, when the name itself opens it. The row's primary act
     /// is carried by its content rather than by another rectangle in the right rail —
