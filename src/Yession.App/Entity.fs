@@ -136,7 +136,7 @@ module Entity =
         let mark =
             match entity with
             | EntityRef.Actor actor ->
-                html $"""<span class="{Style.cls [ Style.avatarSm; actorMark model actor ]}" aria-hidden="true"></span>"""
+                html $"""<span class="{Style.cls [ Style.entityAvatar; actorMark model actor ]}" aria-hidden="true"></span>"""
             | EntityRef.Repo _ -> html $"""<span class="{Style.entityMark}" aria-hidden="true">{Icon.repoSm}</span>"""
             | EntityRef.Connection connection ->
                 html $"""<span class="{Style.entityMark}" aria-hidden="true">{connectionMark connection}</span>"""
