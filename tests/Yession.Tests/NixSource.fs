@@ -64,7 +64,7 @@ let private buildSource =
                 "nix"
                 [ "--extra-experimental-features"; "nix-command"
                   "eval"; "--raw"; "--file"; "nix/worktree.nix"; "staged.src" ]
-                { Input = None; MaxBuffer = Some roomForTheWholeListing }
+                { SyncOptions.none with MaxBuffer = Some roomForTheWholeListing }
          // `None` is a child a signal killed, which has no exit code to compare and is not a
          // success: `-1` says so where reading the absent status as `0` would have a killed
          // `nix eval` report an empty source as the answer.
@@ -103,7 +103,9 @@ let tests =
                 spawnSync
                     "git"
                     [ "check-ignore"; "--stdin" ]
-                    { Input = Some (String.concat "\n" listed); MaxBuffer = Some roomForTheWholeListing }
+                    { SyncOptions.none with
+                        Input = Some (String.concat "\n" listed)
+                        MaxBuffer = Some roomForTheWholeListing }
             let exitCode = result.status |> Option.defaultValue -1
             // check-ignore exits 1 when NOTHING matched — the passing outcome here. 0 means it
             // named at least one ignored path; anything else means git failed to answer, which

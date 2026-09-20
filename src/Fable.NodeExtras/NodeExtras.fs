@@ -429,16 +429,41 @@ type SyncResult =
     /// What the child wrote to stderr, on the same terms.
     abstract stderr : string option
 
-/// The options `spawnSync` is given here. `encoding` is not among them because this binding
-/// always asks for text: `stdout` and `stderr` above are typed as strings, and a run that did
-/// not name an encoding would hand back Buffers under those names.
+/// Where each of a child's three streams goes, named one at a time. `Stdio` says the same
+/// thing about all three; this is for the caller that does not mean the same thing about all
+/// three — one that wants the child's answer and silence from its complaints.
+type StreamWiring =
+    { Stdin : Stdio
+      Stdout : Stdio
+      Stderr : Stdio }
+
+/// The options a synchronous child is given here. `encoding` is not among them because this
+/// binding always asks for text: `stdout` and `stderr` above are typed as strings, and a run
+/// that did not name an encoding would hand back Buffers under those names.
 type SyncOptions =
     { /// Text handed to the child on stdin, which is closed after. `None` gives it none.
       Input : string option
       /// How much output to keep, in bytes. Node's own default is 1 MiB and a child that
       /// exceeds it is KILLED with its output truncated — so a caller that expects a large
       /// answer says how large, rather than discovering the limit as a mysterious kill.
-      MaxBuffer : int option }
+      MaxBuffer : int option
+      /// Where the child starts. `None` inherits this process's directory.
+      Cwd : string option
+      /// Names ADDED to this process's environment, which the child otherwise inherits
+      /// entire. Deliberately not `SpawnOptions.Env`'s meaning, which REPLACES: a fixture
+      /// pinning `GIT_CONFIG_GLOBAL` wants git to go on finding a `PATH`, and spelling the
+      /// whole environment out to add two names is how one gets dropped.
+      Env : Map<string, string>
+      /// Where the child's streams go. `None` leaves Node's own default, which pipes them.
+      Streams : StreamWiring option }
+
+/// Nothing named: a child run as it comes, inheriting this process's directory and
+/// environment, given no stdin and answering within Node's own limit. What a caller wants a
+/// FIELD of is then the one it writes down, and the rest read as "unchanged" rather than as
+/// four decisions it had to make.
+module SyncOptions =
+    let none : SyncOptions =
+        { Input = None; MaxBuffer = None; Cwd = None; Env = Map.empty; Streams = None }
 
 [<AutoOpen>]
 module SyncChildProcesses =
@@ -446,14 +471,54 @@ module SyncChildProcesses =
     [<Import("spawnSync", "node:child_process")>]
     let private spawnSyncWith (command: string) (arguments: string array) (options: obj) : SyncResult = jsNative
 
-    /// Run `command` to completion and answer everything it said.
+    [<Import("execFileSync", "node:child_process")>]
+    let private execFileSyncWith (command: string) (arguments: string array) (options: obj) : string = jsNative
+
+    [<Import("execSync", "node:child_process")>]
+    let private execSyncWith (line: string) (options: obj) : string = jsNative
+
+    /// The shape Node reads, built once. The environment is this process's plus what the
+    /// caller named, because Node REPLACES what it is given and a child that lost `PATH`
+    /// fails in a way that names neither.
+    let private toJs (options: SyncOptions) : obj =
+        let env =
+            if Map.isEmpty options.Env then
+                None
+            else
+                Some (
+                    JS.Constructors.Object.assign (
+                        createObj [],
+                        Node.Api.``process``.env,
+                        createObj [ for name, value in Map.toList options.Env -> name ==> value ]))
+
+        !!{| encoding = "utf8"
+             input = options.Input
+             maxBuffer = options.MaxBuffer
+             cwd = options.Cwd
+             env = env
+             stdio =
+              options.Streams
+              |> Option.map (fun streams -> [| streams.Stdin; streams.Stdout; streams.Stderr |]) |}
+
+    /// Run `command` to completion and answer everything it said. A child that FAILED is not
+    /// an exception here: `status` carries what it exited with, and a caller reads it.
     let spawnSync (command: string) (arguments: string list) (options: SyncOptions) : SyncResult =
-        spawnSyncWith
-            command
-            (Array.ofList arguments)
-            !!{| encoding = "utf8"
-                 input = options.Input
-                 maxBuffer = options.MaxBuffer |}
+        spawnSyncWith command (Array.ofList arguments) (toJs options)
+
+    /// Run `command` with `arguments` and answer what it wrote, THROWING if it failed. The
+    /// opposite of `spawnSync` on exactly that point, and the shape a fixture's setup wants:
+    /// a step that did not happen must not read as one that did.
+    ///
+    /// The arguments go as a list, never a line — so nothing in them is a shell's business,
+    /// whatever characters a path or a message happens to contain.
+    let execFileSync (command: string) (arguments: string list) (options: SyncOptions) : string =
+        execFileSyncWith command (Array.ofList arguments) (toJs options)
+
+    /// Run a SHELL line and answer what it wrote, throwing if it failed. For a caller whose
+    /// command is a line — a pipeline, a redirect, something read from configuration — where
+    /// `execFileSync` above is for one that knows its arguments.
+    let execSync (line: string) (options: SyncOptions) : string =
+        execSyncWith line (toJs options)
 
 // --- Crypto ---------------------------------------------------------------------------------
 

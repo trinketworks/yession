@@ -31,6 +31,7 @@ module Yession.Tests.DevContainer
 open System
 open Fable.Core
 open Fable.Core.JsInterop
+open Fable.NodeExtras
 open Fable.Pyxpecto
 open Yession.Domain
 open Yession.Domain.Sandboxes
@@ -39,10 +40,12 @@ open Yession.Tests.Support
 
 let private expect = function Ok v -> v | Error e -> failwithf "%A" e
 
-let private childProcess : obj = importAll "node:child_process"
-
-[<Emit("$0.execSync($1, { stdio: 'pipe' })")>]
-let private execSync (cp: obj) (command: string) : unit = jsNative
+/// A shell line run to completion, its output kept rather than inherited: what this fixture
+/// wants from docker is whether the step SUCCEEDED, and a failure throws with the output on
+/// it, so letting it print into the run would say the same thing twice.
+let private runLine (line: string) : unit =
+    execSync line { SyncOptions.none with Streams = Some { Stdin = Stdio.Pipe; Stdout = Stdio.Pipe; Stderr = Stdio.Pipe } }
+    |> ignore
 
 module DK = Fable.Dockerode
 
@@ -254,7 +257,7 @@ let dogfood =
                 // evaluates the flake from git, and a checkout is what the session would
                 // have put there. Uncommitted changes are deliberately not smuggled in —
                 // this proves the tree as committed, which is what anything downstream gets.
-                withDevSpec declaredDev [] (fun dir -> execSync childProcess (sprintf "git clone --quiet . %s" dir)) (fun sandbox -> async {
+                withDevSpec declaredDev [] (fun dir -> runLine (sprintf "git clone --quiet . %s" dir)) (fun sandbox -> async {
                     // `check`, and nothing in front of it: the file's entrypoint is what
                     // puts `nix develop --impure --command` there, for this exec as for
                     // every block a terminal here runs. That the container STARTED is
