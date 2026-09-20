@@ -1350,6 +1350,32 @@ module View =
         let band = if List.isEmpty entries then Style.queueEmpty else Style.queue
         html $"""<section class="{band}" data-message-queue>{head}{items}</section>"""
 
+    /// The way to stop the turn that is running, docked directly above the composer.
+    ///
+    /// ONE control, and deliberately nothing beside it. Whether a turn is running is said by
+    /// the caret in the timeline, where the words are landing, and said again to a reader who
+    /// cannot see the caret by the composer's live region below. A band that carried that
+    /// sentence a third time is the activity strip this replaced (see `Style.interruptBand`).
+    ///
+    /// Above the composer rather than at the leading edge of its line, which is where it sat
+    /// for one revision: the line is where the NEXT message is being written, and a
+    /// destructive verb standing exactly where that text begins is one a thumb reaches for
+    /// the wrong reason — and one that shoved the line sideways every time a turn started.
+    ///
+    /// It rides the composer's dock rather than the streaming message because a message
+    /// scrolls and the dock does not: a stop control that leaves the screen when the
+    /// conversation moves is one nobody can reach at the moment they want it.
+    let private interrupt (actions: ViewActions) (model: ClientModel) : TemplateResult =
+        match model.Agent.ActiveTurn with
+        | None -> Lit.nothing
+        | Some turn ->
+            html $"""
+                <div class="{Style.interruptBand}">
+                  <button type="button" class="{Style.btnInterrupt}" aria-label="{Dom.Text.interruptLabel}"
+                          data-interrupt-turn="{AgentTurnId.value turn}"
+                          @click={Ev(fun _ -> actions.Interrupt turn)}>interrupt</button>
+                </div>"""
+
     /// The composer: ONE draft open, everyone else's as a line you can open.
     ///
     /// A draft is shared WIP — any peer may edit any draft (the body is a CRDT; the carets are
@@ -1378,23 +1404,6 @@ module View =
                   <span class="{Style.draftSummaryBody}" data-rich-body="{BodyKey.draft peerId}" data-rich-readonly="true"></span>
                   <span class="{Style.draftEditors}">{editors peerId}</span>
                 </button>"""
-        // The agent's turn, in the band where a person answers it. One control, at the
-        // LEADING edge of the line: Send's mirror image, and the only part of the strip this
-        // replaced that was ever the strip's own. Whether a turn is running is said by the
-        // caret in the timeline, where the words are landing — so this is a verb, not an
-        // announcement, and it wears the weight of one (`btnStopInField`).
-        //
-        // It rides the composer rather than the streaming message because a message scrolls
-        // and the band does not: a stop control that leaves the screen when the conversation
-        // moves is one nobody can reach at the moment they want it.
-        let interrupt =
-            match model.Agent.ActiveTurn with
-            | None -> Lit.nothing
-            | Some turn ->
-                html $"""
-                    <button type="button" class="{Style.btnStopInField}" aria-label="{Dom.Text.interruptLabel}"
-                            data-interrupt-turn="{AgentTurnId.value turn}"
-                            @click={Ev(fun _ -> actions.Interrupt turn)}>{Icon.stop}</button>"""
         // The same fact for a reader who cannot see the caret, and the only place the sentence
         // still exists in the product.
         //
@@ -1418,14 +1427,18 @@ module View =
             // has content), so the controls and the send path read the same truth rather than
             // two measurements that can disagree.
             let hasContent = ClientModel.draftHasContent target model
-            // Discard exists only once there is something to discard. An empty composer used to
+            // Clear exists only once there is something to clear. An empty composer used to
             // offer a destructive control over nothing — and offering a verdict on nothing is
             // how a working button and a dead one come to look identical.
-            let discard =
+            //
+            // The WORD is the accessible name now, so there is no `aria-label` beside it: a
+            // control that says what it does needs no second copy of the sentence, and two
+            // that disagree is the fault the label was there to prevent.
+            let clear =
                 if target = myPeer && hasContent then
                     html $"""
-                        <button type="button" class="{Style.btnDiscardInField}" aria-label="Discard draft"
-                                data-discard-draft @click={Ev(fun _ -> actions.DiscardDraft myPeer)}>{Icon.close}</button>"""
+                        <button type="button" class="{Style.btnComposerClear}"
+                                data-discard-draft @click={Ev(fun _ -> actions.DiscardDraft myPeer)}>clear</button>"""
                 else Lit.nothing
             // Send STAYS — same place in the layout, same place in focus order, so nothing
             // moves under the hand and no Tab stop appears mid-sentence — and waits at a
@@ -1440,26 +1453,25 @@ module View =
             //
             // Same place in FOCUS order always, even where it is not the same place on
             // screen: on a phone (`Style.draftCommit`) this row leaves the line and sits
-            // below it, dark until the composer has focus, so the text can use the width
-            // it was sharing with two icons that a thumb reaches once per message.
+            // below it, gone until the composer has focus, so the text can use the width
+            // it was sharing with two controls that a thumb reaches once per message.
             let sendClass =
-                if hasContent then Style.btnSendInField else Style.btnSendInFieldWaiting
+                if hasContent then Style.btnComposerSend else Style.btnComposerSendWaiting
             let author =
                 if target = myPeer then Lit.nothing
                 else html $"""<span class="{Style.draftAuthor}">{ClientModel.nameOf target model}'s message</span>"""
             html $"""
                 <article class="{Style.draftBox}" data-draft-id="{PeerId.value target}" data-draft-author="{PeerId.value target}">
-                  {interrupt}
                   <div class="{Style.draftBody}">
                     {author}
                     <div class="{Style.draftInput}" data-rich-body="{BodyKey.draft target}" data-rich-readonly="false" data-draft-input="{PeerId.value target}"></div>
                   </div>
                   <div class="{Style.draftCommit}">
                     <span class="{Style.draftEditors}">{editors target}</span>
-                    {discard}
-                    <button type="button" class="{sendClass}" aria-label="Send" aria-keyshortcuts="Control+Enter"
+                    {clear}
+                    <button type="button" class="{sendClass}" aria-keyshortcuts="Control+Enter"
                             title="{Dom.Text.composerKeys}"
-                            data-send-draft="{PeerId.value target}" @click={Ev(fun _ -> actions.SendDraft target)}>{Icon.send}</button>
+                            data-send-draft="{PeerId.value target}" @click={Ev(fun _ -> actions.SendDraft target)}>send</button>
                   </div>
                 </article>"""
         // "New message" only says something when you are in someone else's draft: it is the way
@@ -3556,6 +3568,7 @@ module View =
               {chat actions dispatch model}
               {if ClientModel.launchOffered model then askCard actions dispatch model else Lit.nothing}
               {queue dispatch model}
+              {interrupt actions model}
               {drafts actions dispatch model}
             </div>
             {terminals actions dispatch model}
