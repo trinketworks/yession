@@ -86,22 +86,38 @@ module Entity =
         | EntityRef.Repo repo -> RepoRef.value repo
         | EntityRef.Connection connection -> ConnectionName.value connection
 
+    /// Where a reference leads, when it is somewhere a person can go. A repository is a page
+    /// on its host; a person and a connection are not places. The one spelling of the URL
+    /// lives with the type (`RepoRef.cloneUrl` is git's; this is the page's).
+    let href (entity: EntityRef) : string option =
+        match entity with
+        | EntityRef.Repo repo -> Some (sprintf "https://github.com/%s" (RepoRef.value repo))
+        | EntityRef.Actor _
+        | EntityRef.Connection _ -> None
+
     /// One reference, drawn: its mark and its name, inline, the same wherever a sentence
     /// points at it. `data-entity` carries the prose spelling (`EntityRef.said`), so a test
     /// can find the element for a thing without knowing what the design calls it.
     ///
-    /// Only an actor has a mark yet. A repo's and a connection's come with the acts that
-    /// first draw them; until then the name stands alone, which is what the sentence said
-    /// before there was a reference to draw.
+    /// The mark says the KIND — a person's checker, the repository glyph — and the host a
+    /// repository lives on is the link's to say, not the mark's: a reference that leads
+    /// somewhere is a real `<a>`, keyboard-reachable like every action on the page. A
+    /// connection's mark comes with the act that first draws one.
     let render (model: ClientModel) (entity: EntityRef) : TemplateResult =
         let mark =
             match entity with
             | EntityRef.Actor actor ->
                 html $"""<span class="{Style.cls [ Style.avatarSm; actorMark model actor ]}" aria-hidden="true"></span>"""
-            | EntityRef.Repo _
+            | EntityRef.Repo _ -> html $"""<span class="{Style.entityMark}" aria-hidden="true">{Icon.repoSm}</span>"""
             | EntityRef.Connection _ -> Lit.nothing
-        html
-            $"""<span class="{Style.entity}" data-entity-kind="{kind entity}" data-entity="{EntityRef.said entity}">{mark}<span class="{Style.entityName}">{name model entity}</span></span>"""
+        let inner = html $"""{mark}<span class="{Style.entityName}">{name model entity}</span>"""
+        match href entity with
+        | Some url ->
+            html
+                $"""<a class="{Style.entityLink}" href="{url}" target="_blank" rel="noopener" data-entity-kind="{kind entity}" data-entity="{EntityRef.said entity}">{inner}</a>"""
+        | None ->
+            html
+                $"""<span class="{Style.entity}" data-entity-kind="{kind entity}" data-entity="{EntityRef.said entity}">{inner}</span>"""
 
     /// A sentence, drawn: its words as words and each reference as `render` draws it. What
     /// the agent reads as `Phrase.said` and what a person reads here are the same segments,

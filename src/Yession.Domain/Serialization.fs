@@ -1288,7 +1288,7 @@ module Codec =
                       // Whose, by name — the same register the rest of the log names people
                       // in, and never a value.
                       "owner", credentialFor.Encode p.Owner
-                      "repo", Encode.string p.Repo
+                      "repo", repoRef.Encode p.Repo
                       "actor", actor.Encode p.Actor ]
           Decode =
             Decode.object (fun get ->
@@ -1297,7 +1297,7 @@ module Codec =
                   GitCredentialSpent.Terminal = get.Required.Field "terminal" terminalId.Decode
                   GitCredentialSpent.Block = get.Required.Field "block" (Decode.option blockId.Decode)
                   GitCredentialSpent.Owner = get.Required.Field "owner" credentialFor.Decode
-                  GitCredentialSpent.Repo = get.Required.Field "repo" Decode.string
+                  GitCredentialSpent.Repo = get.Required.Field "repo" repoRef.Decode
                   GitCredentialSpent.Actor = get.Required.Field "actor" actor.Decode }) }
 
     let private workSandboxStarting : Codec<WorkSandboxStarting> =

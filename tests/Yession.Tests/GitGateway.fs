@@ -73,7 +73,7 @@ let private routeTests =
             let named =
                 GitGateway.route "GET" "/git/cap/github.com/octo/hello.git/info/refs" (Some "git-upload-pack")
                 |> Option.map (fun r -> r.Repo)
-            Expect.equal named (Some "octo/hello") "owner/repo, the .git a URL carries taken off"
+            Expect.equal named (Some (RepoRef.create "octo/hello" |> expect)) "owner/repo, the .git a URL carries taken off"
 
         // Where a sandbox reaches this process is the backend's fact, and srt's splits by
         // platform for a reason a test on either box can check: Linux loopback is 127/8 and
@@ -340,7 +340,7 @@ type private Lend =
     { mutable Token : string option
       mutable Refusals : int
       /// The repositories pushes went out to on this loan, in order.
-      mutable Spent : string list }
+      mutable Spent : RepoRef list }
 
 let private lending (token: string option) : Lend = { Token = token; Refusals = 0; Spent = [] }
 
@@ -889,7 +889,7 @@ let private pushTests =
                                 Expect.equal fetched.Status 0 (sprintf "ls-remote succeeded: %s" fetched.Stderr)
                                 Expect.isTrue (fetched.Stdout.Contains expected) "reads what was pushed"
                                 // The push, once — not its advertisement, and not the fetch.
-                                Expect.equal lend.Spent [ "octo/hello" ] "whoever lent it is told what it was spent on"
+                                Expect.equal lend.Spent [ RepoRef.create "octo/hello" |> expect ] "whoever lent it is told what it was spent on"
                             })
                 })
 

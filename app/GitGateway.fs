@@ -77,9 +77,9 @@ type Lender =
       Resolve : unit -> Async<string option>
       /// github.com refused it: tell whoever tracks the credential's health.
       Refused : unit -> Async<unit>
-      /// A push went out on it, to `owner/repo` — whether github.com then took the push is
+      /// A push went out on it, to a repository — whether github.com then took the push is
       /// git's to print. Told so the log can say whose credential a push spent.
-      Spent : string -> Async<unit> }
+      Spent : RepoRef -> Async<unit> }
 
 /// One request the gateway will carry, parsed off a path. Only the three requests git's
 /// smart HTTP transport makes are requests here; everything else 404s, so a cap admits git to
@@ -89,13 +89,19 @@ type GitRequest =
     { Cap : string
       /// `owner/repo.git/info/refs` and the like — the path under the upstream origin.
       Path : string
-      /// `owner/repo`, as a sentence names it — the `.git` a URL carries taken off.
-      Repo : string
+      /// The repository, as a sentence names it — parsed by the same rule `add_repo`
+      /// applies, which is what takes the `.git` a URL carries off and refuses a name no
+      /// repository could have.
+      Repo : RepoRef
       /// `git-upload-pack` (fetch) or `git-receive-pack` (push).
       Service : string }
 
-let private repoOf (owner: string) (repo: string) : string =
-    owner + "/" + (if repo.EndsWith ".git" then repo.Substring (0, repo.Length - 4) else repo)
+/// The repository two path segments name, or none: `RepoRef.create` is the one rule for
+/// what a repository may be called, and a path that fails it is not a git request here.
+let private repoOf (owner: string) (repo: string) : RepoRef option =
+    match RepoRef.create (owner + "/" + repo) with
+    | Ok r -> Some r
+    | Error _ -> None
 
 let private segmentOk (segment: string) =
     let ok (c: char) =
@@ -113,16 +119,15 @@ let route (method: string) (path: string) (service: string option) : GitRequest 
     | [ p; cap; host; owner; repo; "info"; "refs" ] when
         p = prefix && method = "GET" && host = remoteHost && segmentOk cap && segmentOk owner && segmentOk repo
         ->
-        service
-        |> Option.bind service'
-        |> Option.map (fun s ->
-            { GitRequest.Cap = cap; Path = sprintf "%s/%s/info/refs" owner repo; Repo = repoOf owner repo; Service = s })
+        match repoOf owner repo, service |> Option.bind service' with
+        | Some r, Some s -> Some { GitRequest.Cap = cap; Path = sprintf "%s/%s/info/refs" owner repo; Repo = r; Service = s }
+        | _ -> None
     | [ p; cap; host; owner; repo; posted ] when
         p = prefix && method = "POST" && host = remoteHost && segmentOk cap && segmentOk owner && segmentOk repo
         ->
-        service' posted
-        |> Option.map (fun s ->
-            { GitRequest.Cap = cap; Path = sprintf "%s/%s/%s" owner repo s; Repo = repoOf owner repo; Service = s })
+        match repoOf owner repo, service' posted with
+        | Some r, Some s -> Some { GitRequest.Cap = cap; Path = sprintf "%s/%s/%s" owner repo s; Repo = r; Service = s }
+        | _ -> None
     | _ -> None
 
 /// The git config a sandbox is given so that its git reaches github.com through the gateway
@@ -419,12 +424,12 @@ let start (upstream: string) (report: string -> unit) : Async<Gateway> =
                                                     report (
                                                         sprintf
                                                             "a push to %s went out on %s's github credential and the record of it could not be written: %s"
-                                                            request.Repo
+                                                            (RepoRef.value request.Repo)
                                                             (ownerLabel lender.Owner)
                                                             e.Message)
                                 with e ->
                                     if not (res.headersSent) then refuse (sprintf "the git gateway failed: %s" e.Message)
-                                    else report (sprintf "the git gateway failed after answering a request for %s: %s" request.Repo e.Message)
+                                    else report (sprintf "the git gateway failed after answering a request for %s: %s" (RepoRef.value request.Repo) e.Message)
                             })
 
     let server = createServer handler

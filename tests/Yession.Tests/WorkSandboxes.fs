@@ -863,7 +863,7 @@ let private timelineTests =
                           Terminal = TerminalId.create "term-1" |> expect
                           Block = Some (BlockId.create "b-1" |> expect)
                           Owner = CredentialFor.Person (Principal.User (UserId.create "ada" |> expect))
-                          Repo = "octo/hello"
+                          Repo = RepoRef.create "octo/hello" |> expect
                           Actor = ActorRef.Agent } }
             let proj, _ = ConversationProjection.applyEvents None [ envelope ] ConversationProjection.empty
             match proj.Items with
@@ -872,6 +872,45 @@ let private timelineTests =
                 Expect.equal item.Author ActorRef.Agent "by whoever's act the block was"
                 Expect.isTrue (isAct item) "an act"
             | other -> failwithf "expected one note, got %A" other
+
+        // The sentence's two names are REFERENCES: what the prose reader spells as
+        // `github:octo/hello` and `user:ada`, a screen draws as that repository and that
+        // person. A fold that pasted them in as words would say the same sentence and point
+        // at nothing — which is exactly what the string case above cannot tell apart.
+        testCase "a push points at its repository and the person it was done for" <| fun () ->
+            let ada = UserId.create "ada" |> expect
+            let spent : GitCredentialSpent =
+                { MessageId = MessageId.create "msg-5" |> expect
+                  Sandbox = sandbox "test"
+                  Terminal = TerminalId.create "term-1" |> expect
+                  Block = Some (BlockId.create "b-1" |> expect)
+                  Owner = CredentialFor.Person (Principal.User ada)
+                  Repo = RepoRef.create "octo/hello" |> expect
+                  Actor = ActorRef.Agent }
+            Expect.equal
+                (Phrase.refs (GitCredentialSpent.phrase spent))
+                [ EntityRef.Repo (RepoRef.create "octo/hello" |> expect); EntityRef.Actor (UserRef ada) ]
+                "the repository, then the person — in the order the sentence names them"
+
+        // The deployment is one party with one set of credentials, and not a thing a screen
+        // draws: a push on its own credential names it in words and points at the repo alone.
+        testCase "a push on the deployment's credential points at the repository alone" <| fun () ->
+            let spent : GitCredentialSpent =
+                { MessageId = MessageId.create "msg-5" |> expect
+                  Sandbox = sandbox "test"
+                  Terminal = TerminalId.create "term-1" |> expect
+                  Block = Some (BlockId.create "b-1" |> expect)
+                  Owner = CredentialFor.Deployment
+                  Repo = RepoRef.create "octo/hello" |> expect
+                  Actor = ActorRef.Agent }
+            Expect.equal
+                (Phrase.refs (GitCredentialSpent.phrase spent))
+                [ EntityRef.Repo (RepoRef.create "octo/hello" |> expect) ]
+                "one reference"
+            Expect.equal
+                (Phrase.said (GitCredentialSpent.phrase spent))
+                "pushed to github:octo/hello on behalf of this deployment"
+                "and the deployment in words"
 
         // No block says what ran when the push was typed under a lease, so the line says
         // where it was typed instead.
@@ -889,7 +928,7 @@ let private timelineTests =
                           Terminal = TerminalId.create "term-1" |> expect
                           Block = None
                           Owner = CredentialFor.Person (Principal.User (UserId.create "ada" |> expect))
-                          Repo = "octo/hello"
+                          Repo = RepoRef.create "octo/hello" |> expect
                           Actor = ada } }
             let proj, _ = ConversationProjection.applyEvents None [ envelope ] ConversationProjection.empty
             match proj.Items with

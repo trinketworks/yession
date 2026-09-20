@@ -341,7 +341,7 @@ let private frameSerializationTests =
                       Terminal = TerminalId.create "term-1" |> expect
                       Block = Some (BlockId.create "b-1" |> expect)
                       Owner = CredentialFor.Person (Principal.User (UserId.create "alice" |> expect))
-                      Repo = "octo/hello"
+                      Repo = RepoRef.create "octo/hello" |> expect
                       Actor = ActorRef.Agent }
                   GitCredentialSpent
                     { MessageId = messageId
@@ -349,7 +349,7 @@ let private frameSerializationTests =
                       Terminal = TerminalId.create "term-1" |> expect
                       Block = Some (BlockId.create "b-2" |> expect)
                       Owner = CredentialFor.Deployment
-                      Repo = "octo/hello"
+                      Repo = RepoRef.create "octo/hello" |> expect
                       Actor = ActorRef.Configured (RepoRef.create "octo/hello" |> expect) }
                   // Typed under a lease: no block, the holder's own.
                   GitCredentialSpent
@@ -358,7 +358,7 @@ let private frameSerializationTests =
                       Terminal = TerminalId.create "term-1" |> expect
                       Block = None
                       Owner = CredentialFor.Person (Principal.User (UserId.create "alice" |> expect))
-                      Repo = "octo/hello"
+                      Repo = RepoRef.create "octo/hello" |> expect
                       Actor = UserRef (UserId.create "alice" |> expect) }
                   WorkSandboxStarted
                     { MessageId = messageId

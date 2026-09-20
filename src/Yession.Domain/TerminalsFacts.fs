@@ -254,8 +254,8 @@ and GitCredentialSpent =
       /// Whose credential — the block's act resolved by Plan 08 precedence, which is a
       /// person's or the deployment's own.
       Owner : CredentialFor
-      /// `owner/repo`, as the push named it.
-      Repo : string
+      /// The repository the push named.
+      Repo : RepoRef
       /// Who acted: the block's author, so an agent's push on Ada's turn reads as the
       /// agent's act spending Ada's credential, which is what happened.
       Actor : ActorRef }
@@ -269,11 +269,20 @@ module GitCredentialSpent =
     /// … on behalf of user:ada" — rather than with the credential, which is the mechanism.
     /// "Pushed to" is the request that went out, not github.com's answer to it: a branch
     /// protection or a rejected ref is git's to print, in the block.
+    ///
+    /// The repository and the person are REFERENCES, not words: the prose reader spells them
+    /// (`github:octo/hello`, `user:ada`) and a screen draws them as it draws that repository
+    /// and that person everywhere else. The deployment is not a party a screen draws, so it
+    /// stays a word.
     let phrase (g: GitCredentialSpent) : Phrase =
-        match g.Block with
-        | Some _ -> Phrase.text (sprintf "pushed to github:%s on behalf of %s" g.Repo (CredentialFor.token g.Owner))
+        let owner =
+            match g.Owner with
+            | CredentialFor.Person person -> Segment.Ref (EntityRef.Actor (Principal.toActor person))
+            | CredentialFor.Deployment -> Segment.Text (CredentialFor.token CredentialFor.Deployment)
         // Typed under a lease: no block on the timeline says what ran, so this line says
         // where it was typed.
-        | None ->
-            Phrase.text (
-                sprintf "pushed to github:%s on behalf of %s, holding the terminal" g.Repo (CredentialFor.token g.Owner))
+        let typed =
+            match g.Block with
+            | Some _ -> []
+            | None -> [ Segment.Text ", holding the terminal" ]
+        [ Segment.Text "pushed to "; Segment.Ref (EntityRef.Repo g.Repo); Segment.Text " on behalf of "; owner ] @ typed

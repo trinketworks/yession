@@ -594,6 +594,13 @@ module Style =
     // author before acts folded under a shared author line.
     let entity = "inline-flex items-center gap-1 align-baseline"
     let entityName = "text-ink"
+    /// A reference that is somewhere to go — a repository, on its host — is a real link, and
+    /// says so the way the rest of the page does: the underline arrives on hover, so a
+    /// sentence with two references in it does not read as two underlined phrases at rest.
+    let entityLink = cls [ entity; "hover:underline underline-offset-2"; focusRing ]
+    /// The mark a non-person reference wears: an icon in the ink of the name beside it, sized
+    /// to the small avatar so every kind of reference sits on one line at one height.
+    let entityMark = "text-ink-dim"
 
     let private checker (a: string) (b: string) =
         sprintf "bg-[conic-gradient(from_0deg,%s_25%%,%s_0_50%%,%s_0_75%%,%s_0)]" a b a b
