@@ -1614,6 +1614,28 @@ let editorTests =
                                }""")
                 Expect.isFalse sideways "the conversation column does not scroll sideways"
             }
+        // The same promise, broken from the other side: not a body's text but a CHIP's. A
+        // queued command names the terminal it waits in, and an agent's terminal is titled
+        // `[sandbox] reason…` — sixty characters of tracked caps, wider than the column on
+        // its own. Photographed on iOS as the whole conversation shifted left under a header
+        // that stayed put, with the chip's status cut off at the right edge. The body case
+        // above cannot see it: its fixture is prose, and prose is where the fix for prose is.
+        editorCaseIn 390 844 "a queued command's terminal name never scrolls the timeline sideways" (EDITOR_PORT + 48) <| fun page ->
+            async {
+                let! width = await (page.EvaluateAsync<int> "() => window.innerWidth")
+                Expect.equal width 390 "a true phone viewport, not a clamped window"
+
+                // The chip is on screen and carries the name — otherwise this passes by
+                // rendering nothing that could have overflowed.
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-conversation] [data-chat-pending] [data-pending-subject]")
+                let! sideways =
+                    await (page.EvaluateAsync<bool>
+                            """() => {
+                                 const timeline = document.querySelector('#shell [data-conversation]')
+                                 return timeline.scrollWidth > timeline.clientWidth + 1
+                               }""")
+                Expect.isFalse sideways "the conversation column does not scroll sideways"
+            }
         // The ask card stands where the conversation will, so it reads on the conversation's
         // leading line — the one the header's title and every message body start on. It did
         // not: the card spent its own gutter, three quarters of the transcript's, and the

@@ -1027,8 +1027,13 @@ module Style =
     /// rail an absolute box that did not scroll; with the rail gone it was a wrapper around
     /// one child, and a flex child that scrolls has to be allowed to shrink or it grows past
     /// the column instead.
+    /// `overflow-x-hidden` is the guard for what `break-words` cannot reach — a flex item
+    /// that refuses to shrink, an element with a width of its own. The next of those clips
+    /// at the column's edge, which is a defect a reader can see and name; sliding the whole
+    /// conversation under the header is one they cannot. It hides nothing from the test that
+    /// pins this: `scrollWidth` still counts what is clipped.
     let timeline =
-        "flex-1 min-h-0 overflow-y-auto px-8 pb-6 flex flex-col gap-6 [&>*:first-child]:mt-6 "
+        "flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-8 pb-6 flex flex-col gap-6 [&>*:first-child]:mt-6 "
         + "max-md:px-4 max-md:pb-4 max-md:gap-5 max-md:[&>*:first-child]:mt-4 break-words"
 
     /// How wide anything in the timeline is allowed to get.
@@ -1386,6 +1391,13 @@ module Style =
               focusRing ]
     /// Who ran it — the same caps voice a message's author line wears, one step fainter.
     let chatChipWho = caps + " text-ink-faint shrink-0"
+    /// Which terminal a queued command waits in. The same voice as `chatChipWho`, but it
+    /// TRUNCATES, and is held to half the row: an agent's terminal is titled `[sandbox]
+    /// reason…`, sixty characters of caps, and a name that will not shrink is wider than a
+    /// phone's column on its own — it took the whole conversation sideways with it. Capped
+    /// rather than merely shrinkable because the command beside it has a zero basis, so an
+    /// uncapped name would squeeze it to nothing before giving up a character of its own.
+    let chatChipSubject = caps + " text-ink-faint truncate min-w-0 max-w-[50%]"
     /// The command itself: mono, truncated to one line. A chip that wrapped to three would
     /// stop being a chip.
     let chatChipCommand = "font-terminal text-code-sm text-ink-dim truncate min-w-0 flex-1"
