@@ -58,22 +58,24 @@ type Parsed =
 
 // --- the Node parser ---------------------------------------------------------------------
 
-/// What `parseArgs` answers with: one entry per option that was GIVEN, under its long name.
-/// An entry is `true` for a boolean option and — because `configFor` asks for every value
-/// option as `multiple` — a `string[]` for a value option; which of the two it is comes from
-/// the spec this module built the config from, never from looking at the value.
-[<AllowNullLiteral>]
-type private ParsedValues =
-    /// `undefined` for an option that was not given, which is `None` here.
-    [<EmitIndexer>]
-    abstract Item : name: string -> obj option
-
+/// What `parseArgs` answers with. `values` carries one property per option that was GIVEN,
+/// under its long name: `true` for a boolean option and — because `configFor` asks for every
+/// value option as `multiple` — a `string[]` for a value option. Which of the two it is comes
+/// from the spec this module built the config from, never from looking at the value.
 [<AllowNullLiteral>]
 type private ParsedArgs =
-    abstract values : ParsedValues
+    abstract values : obj
 
 [<Import("parseArgs", "node:util")>]
 let private parseArgs (config: obj) : ParsedArgs = jsNative
+
+/// Every option the parser SAW, as pairs. An object with a property per given option and an
+/// F# map of the same are the same fact, and the map is the one this module can read without
+/// an indexer macro over `undefined` — absence is a key that is not there, which `Map` says
+/// in the type rather than in a comment. The values stay `obj` because they are two shapes
+/// on purpose (see above); what they are is the declaration's to say.
+let private givenIn (parsed: ParsedArgs) : Map<string, obj> =
+    JS.Constructors.Object.entries parsed.values |> Map.ofSeq
 
 // --- declaring a command line ------------------------------------------------------------
 
@@ -169,13 +171,13 @@ let complaint (spec: Spec) (message: string) : string =
 /// carrying the parser's own complaint and the usage under it.
 let parse (spec: Spec) (args: string array) : Result<Parsed, string> =
     try
-        let values = (parseArgs (configFor spec args)).values
+        let values = givenIn (parseArgs (configFor spec args))
         // Walk the DECLARATION, not the result: every name here is one this spec knows, so
         // nothing can arrive that `isSet`/`valueOf` could not name.
         let given =
             spec.Options
             |> List.choose (fun opt ->
-                match values.[opt.Long] with
+                match Map.tryFind opt.Long values with
                 | None -> None
                 // `configFor` declared this option `multiple`, so what Node put here is a list.
                 | Some raw when opt.Placeholder.IsSome -> Some (opt, unbox<string array> raw |> List.ofArray)
