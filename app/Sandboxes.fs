@@ -2,8 +2,9 @@ module Yession.Host.Sandboxes
 
 // The sandbox backends behind the `CreateSandbox` seam. Every decision — backend
 // choice, environment assembly, policy construction — is a pure F# function here,
-// unit-testable in the cheap tier; the `[<Emit>]` blocks below stay dumb (spawn, wire
-// streams, kill) and never decide anything.
+// unit-testable in the cheap tier; the platform calls (spawn, wire streams, kill) go
+// through the binding projects — `Fable.NodeExtras`, `Fable.NodePty`,
+// `Fable.SandboxRuntime`, `Fable.Dockerode` — and never decide anything.
 //
 // The host backend passes the policy env to the child VERBATIM: no backend ever merges
 // `process.env` into a spawned command again — that merge (the old Manager-side
@@ -15,6 +16,7 @@ open System
 open Fable.Core
 open Fable.Core.JsInterop
 open Fable.NodeExtras
+open Fable.SandboxRuntime
 open Node.ChildProcess
 open Yession.Domain
 open Yession.Domain.Sandboxes
@@ -1068,11 +1070,12 @@ module HostSandbox =
 
 // --- Docker: a full isolated userland ----------------------------------------------------
 
-/// `exec.resize({ h, w })` — the Engine API's exec-resize endpoint, which is what raises
-/// SIGWINCH in the program on the other side. Fire-and-forget: a resize that loses a race
-/// with the process exiting is not an error worth failing a terminal over.
-[<Emit("$0.resize({ h: $1, w: $2 }).catch(() => {})")>]
-let private execResize (exec: obj) (rows: int) (cols: int) : unit = jsNative
+/// Resize a running exec. Fire-and-forget: a resize that loses a race with the process
+/// exiting is not an error worth failing a terminal over, so the rejection is swallowed
+/// here, where what is ignored is F# anyone can read.
+let private execResize (exec: Fable.Dockerode.Exec) (rows: int) (cols: int) : unit =
+    exec.resize { Fable.Dockerode.ExecSize.h = rows; Fable.Dockerode.ExecSize.w = cols }
+    |> Promise.catchEnd ignore
 
 /// Docker-backed sandboxes through the `Fable.Dockerode` bindings (the Engine API over
 /// the local socket — no `docker` CLI). The container and its workspace volume are
@@ -1088,11 +1091,6 @@ module DockerSandbox =
         match inspect.ExitCode with
         | Some code -> code
         | None -> -1
-
-    let private nodeFs : obj = importAll "node:fs"
-
-    [<Emit("$0.readdirSync($1)")>]
-    let private readdirSync (fs: obj) (dir: string) : string array = jsNative
 
     /// Resolve the container's image (default `alpine:3`) to a `name:tag` string.
     let private imageRef (container: ContainerSpec) : string =
@@ -1334,7 +1332,7 @@ module DockerSandbox =
                             match container.Build with
                             | Some build ->
                                 let tag = "yession-build-" + name.ToLower ()
-                                let src = readdirSync nodeFs build.ContextPath
+                                let src = Node.Api.fs.readdirSync (U2.Case1 build.ContextPath) |> Array.ofSeq
                                 let opts =
                                     [ "t", box tag ]
                                     @ (match build.DockerfilePath with Some d -> [ "dockerfile", box d ] | None -> [])
@@ -1983,72 +1981,46 @@ module SrtSandbox =
               yield! entry "ripgrep" (fun command -> createObj [ "command", box command ]) config.Ripgrep
               yield! flag "enableWeakerNestedSandbox" config.WeakNesting ]
 
-    // The package is loaded on demand: it pulls a proxy stack and a TLS library, and a
-    // session on the host backend must not pay for either. Dynamic `import` (not
-    // `createRequire`) because it is ESM-only.
-    [<Emit("import('@anthropic-ai/sandbox-runtime')")>]
-    let private importSrt () : JS.Promise<obj> = jsNative
+    /// How srt is told "no directory": its wrapper takes the child's start directory and
+    /// reads a missing one as "wherever this process is". This seam is handed the empty
+    /// string for that, and says so in srt's spelling here rather than at a caller who would
+    /// otherwise have to know which of srt and `spawn` reads which spelling.
+    let private startIn (cwd: string) : string option =
+        match cwd with
+        | null
+        | "" -> None
+        | directory -> Some directory
 
-    [<Emit("$0.SandboxManager.isSupportedPlatform()")>]
-    let private supportedPlatform (srt: obj) : bool = jsNative
+    let private wrapCwd (directory: string option) : string option = directory
 
-    [<Emit("$0.SandboxManager.initialize($1)")>]
-    let private initialize (srt: obj) (config: obj) : JS.Promise<unit> = jsNative
+    /// The confined command line for `command` under this policy's `customConfig`.
+    let private wrapArgv (srt: SandboxManager) (command: string) (custom: obj) (cwd: string option) : JS.Promise<Wrapped> =
+        srt.wrapWithSandboxArgv (command, None, custom, None, cwd)
 
-    [<Emit("$0.SandboxManager.reset()")>]
-    let private resetManager (srt: obj) : JS.Promise<unit> = jsNative
-
-    [<Emit("$0.SandboxManager.wrapWithSandboxArgv($1, undefined, $2, undefined, $3 || undefined)")>]
-    let private wrapArgv (srt: obj) (command: string) (custom: obj) (cwd: string) : JS.Promise<obj> = jsNative
-
-    /// How srt is told "no directory": its wrapper takes the child's start directory as a
-    /// string and reads any falsy one — nothing at all, or the empty string this seam used to
-    /// be handed — as "wherever this process is", which is the `|| undefined` above. That
-    /// spelling is srt's business, so an absent directory takes it HERE, at the binding that
-    /// knows it, rather than at a caller who would otherwise have to know which of srt and
-    /// `spawn` reads which spelling.
-    let private wrapCwd (directory: string option) : string = Option.toObj directory
-
-    [<Emit("$0.argv")>]
-    let private argvOf (wrapped: obj) : string array = jsNative
-
-    // Where srt's Linux egress bridge listens: the unix sockets the in-sandbox socat
-    // connects to, forwarding a confined command's proxied traffic back to the parent
-    // proxy. Both are undefined off Linux (Seatbelt needs no such bridge), so a caller
-    // reads them through `Option.ofObj`.
-    [<Emit("$0.SandboxManager.getLinuxHttpSocketPath()")>]
-    let private linuxHttpSocketPath (srt: obj) : string = jsNative
-
-    [<Emit("$0.SandboxManager.getLinuxSocksSocketPath()")>]
-    let private linuxSocksSocketPath (srt: obj) : string = jsNative
-
-    [<Emit("$0.SandboxManager.getConfig()")>]
-    let private managerConfig (srt: obj) : obj = jsNative
-
-    [<Emit("$0.network")>]
-    let private networkOf (config: obj) : obj = jsNative
-
-    /// A copy carrying the two network fields this session widens. The rest of the config —
-    /// the filesystem rules, the credential scrubbing, srt's own proxy state — is copied
-    /// through rather than restated, because `updateConfig` REPLACES what it is given.
-    [<Emit("({ ...$0, network: { ...$1, allowedDomains: $2, allowUnixSockets: $3 } })")>]
-    let private withAllowlist (config: obj) (network: obj) (allowedDomains: string array) (allowUnixSockets: string array) : obj = jsNative
-
-    [<Emit("$0.SandboxManager.updateConfig($1)")>]
-    let private updateManagerConfig (srt: obj) (config: obj) : unit = jsNative
-
-    /// Read once: `getConfig` hands back the manager's own config object, so the config and
-    /// the network it carries are two views of one read rather than two reads that could
+    /// A copy of the manager's config carrying the two network fields this session widens.
+    /// The rest of the config — the filesystem rules, the credential scrubbing, srt's own
+    /// proxy state — is copied through rather than restated, because `updateConfig` REPLACES
+    /// what it is given; `Object.assign` copies every field, a record would copy the ones it
+    /// declares. Read once: `getConfig` hands back the manager's own object, so the config
+    /// and the network it carries are two views of one read rather than two reads that could
     /// have disagreed.
-    let private widenAllowlist (srt: obj) (allowedDomains: string array) (allowUnixSockets: string array) : unit =
-        let config = managerConfig srt
-        updateManagerConfig srt (withAllowlist config (networkOf config) allowedDomains allowUnixSockets)
+    let private widenAllowlist (srt: SandboxManager) (allowedDomains: string array) (allowUnixSockets: string array) : unit =
+        match srt.getConfig () with
+        | None -> failwith "srt's manager has no config to widen: it has not been initialized"
+        | Some config ->
+            let network =
+                JS.Constructors.Object.assign (
+                    obj (),
+                    box config.network,
+                    box {| allowedDomains = allowedDomains; allowUnixSockets = allowUnixSockets |}
+                )
+            srt.updateConfig (unbox<RuntimeConfig> (JS.Constructors.Object.assign (obj (), box config, box {| network = network |})))
 
     // srt's manager is a PROCESS-WIDE singleton: one filtering proxy pair, one egress
     // allowlist, initialized once. Filesystem policy is per-spawn (it rides `customConfig`
     // into the bwrap profile), so two sandboxes in a session confine their files exactly;
     // their egress allowlists, though, can only be the union — see docs/GAPS.md.
-    let mutable private starting : JS.Promise<obj> option = None
+    let mutable private starting : JS.Promise<SandboxManager> option = None
     let mutable private allowed : Set<string> = Set.empty
     /// The sockets every sandbox of this session may connect to. Session-scoped for the
     /// same reason `allowed` is: srt reads it from the manager's config, not the spawn's.
@@ -2119,14 +2091,11 @@ module SrtSandbox =
                 sockets <- Set.empty
                 try
                     let! srt = Interop.awaitPromise promise
-                    do! Interop.awaitPromise (resetManager srt)
+                    do! Interop.awaitPromise (srt.reset ())
                 with _ -> ()
         }
 
-    [<Emit("$0.catch($1)")>]
-    let private whenRejected (promise: JS.Promise<obj>) (handler: obj -> unit) : unit = jsNative
-
-    let private managerFor (config: SrtConfig) : Async<obj> =
+    let private managerFor (config: SrtConfig) : Async<SandboxManager> =
         match starting with
         | Some promise ->
             async {
@@ -2160,8 +2129,9 @@ module SrtSandbox =
             let promise =
                 Async.StartAsPromise (
                     async {
-                        let! srt = Interop.awaitPromise (importSrt ())
-                        if not (supportedPlatform srt) then
+                        let! exports = Interop.awaitPromise (Fable.SandboxRuntime.load ())
+                        let srt = exports.SandboxManager
+                        if not (srt.isSupportedPlatform ()) then
                             return failwith "this platform has no srt sandbox"
                         let attempt (_: unit) =
                             async {
@@ -2171,7 +2141,7 @@ module SrtSandbox =
                                     // name, so an exempt one initializing the manager would
                                     // hand its exemption to the session. The exemption rides
                                     // `customConfig` per spawn, which wins outright over this.
-                                    do! Interop.awaitPromise (initialize srt (toJs { config with FilesystemDisabled = false }))
+                                    do! Interop.awaitPromise (srt.initialize (toJs { config with FilesystemDisabled = false }))
                                     return Ok srt
                                 with ex ->
                                     return Error (startFailure Fs.executable config, ex)
@@ -2190,7 +2160,8 @@ module SrtSandbox =
             // The forgetting rides the PROMISE rather than a caller: attached before anyone
             // else can be handed it, it runs once and ahead of every awaiter's continuation,
             // so no caller can clear a start that is not the one it watched fail.
-            whenRejected promise (fun _ ->
+            promise
+            |> Promise.catchEnd (fun _ ->
                 match startFailure Fs.executable config with
                 | HostCannotConfine -> ()
                 | NothingSettled -> forgetManager () |> Async.StartImmediate)
@@ -2214,10 +2185,10 @@ module SrtSandbox =
     /// Both paths are absent off Linux, where Seatbelt needs no bridge; a socks path
     /// that reuses the http one in mux mode is de-duplicated, and only real files are
     /// named — a `--bind` of a path that does not exist fails the whole spawn.
-    let private withBridgeSockets (srt: obj) (config: SrtConfig) : SrtConfig =
+    let private withBridgeSockets (srt: SandboxManager) (config: SrtConfig) : SrtConfig =
         let sockets =
-            [ linuxHttpSocketPath srt; linuxSocksSocketPath srt ]
-            |> List.choose Option.ofObj
+            [ srt.getLinuxHttpSocketPath (); srt.getLinuxSocksSocketPath () ]
+            |> List.choose id
             |> List.filter Fs.exists
             |> List.distinct
         match sockets with
@@ -2248,8 +2219,8 @@ module SrtSandbox =
                                 // first, and `customConfig` is what makes the profile this
                                 // one's rather than that one's.
                                 let! wrapped =
-                                    Interop.awaitPromise (wrapArgv srt (commandLine exec.Executable exec.Arguments) (toJs config) cwd)
-                                match List.ofArray (argvOf wrapped) with
+                                    Interop.awaitPromise (wrapArgv srt (commandLine exec.Executable exec.Arguments) (toJs config) (startIn cwd))
+                                match List.ofArray wrapped.argv with
                                 | [] -> return Error "srt returned an empty argv"
                                 | executable :: arguments ->
                                     return Ok (children.Spawn (executable, arguments, cwd, env) onChunk)
@@ -2275,8 +2246,8 @@ module SrtSandbox =
                                                     |> Option.toObj
                                                 let! wrapped =
                                                     Interop.awaitPromise
-                                                        (wrapArgv srt (commandLine exec.Executable exec.Arguments) (toJs config) cwd)
-                                                match List.ofArray (argvOf wrapped) with
+                                                        (wrapArgv srt (commandLine exec.Executable exec.Arguments) (toJs config) (startIn cwd))
+                                                match List.ofArray wrapped.argv with
                                                 | [] -> return Error "srt returned an empty argv"
                                                 | executable :: arguments ->
                                                     return Pty.spawn executable arguments cwd env cols rows onOutput
@@ -2309,7 +2280,7 @@ module SrtSandbox =
                 let! wrapped =
                     Interop.awaitPromise
                         (wrapArgv srt (commandLine executable arguments) (toJs config) (wrapCwd directory))
-                match List.ofArray (argvOf wrapped) with
+                match List.ofArray wrapped.argv with
                 | [] -> return failwith "srt returned an empty argv"
                 | argv -> return argv
             }
