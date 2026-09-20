@@ -641,13 +641,21 @@ let private cacheWrite (cache: Cache) (url: string) (body: string) : JS.Promise<
 /// Best-effort and deliberately unawaited-for-correctness: a client whose registration fails
 /// (an insecure context, a browser that refuses) is exactly today's client — it just cannot
 /// open cold. Nothing above this waits on it, and nothing breaks if it never resolves.
-/// Returns `unit`, and that is load-bearing rather than stylistic. As a promise-returning
-/// emit whose result was discarded (`|> ignore`), the whole call was dead code to the
-/// compiler and never reached the bundle at all — the registration silently did not ship,
-/// which looks exactly like a worker that will not take control. A unit-returning emit is a
-/// statement, and statements survive.
-[<Emit("""void (navigator.serviceWorker && navigator.serviceWorker.register($0).catch(() => undefined))""")>]
-let private registerWorker (url: string) : unit = jsNative
+/// Returns `unit`, and HOW it gets there is load-bearing rather than stylistic. This was a
+/// promise-returning emit whose result was discarded (`|> ignore`), which made the whole call
+/// dead code to the compiler: it never reached the bundle at all, so the registration silently
+/// did not ship — indistinguishable, from the outside, from a worker that will not take
+/// control. `Promise.catchEnd` is what keeps that from coming back: it ends the chain in a
+/// statement (`void (p.catch(f))`) over a real method call, rather than in a value nobody
+/// reads.
+let private registerWorker (url: string) : unit =
+    match Browser.Navigator.navigator.serviceWorker with
+    // No container at all: an insecure context, or a browser without service workers. An
+    // answer rather than a fault, and the same one a refused registration ends at.
+    | None -> ()
+    // Swallowed on purpose. A refusal arrives as a rejection, and there is no caller to tell:
+    // whatever the browser decided, this client carries on and loses only the offline open.
+    | Some workers -> workers.register url |> Promise.catchEnd ignore
 
 /// Ask for the store to be kept. A request, not a guarantee — granted for an engaged site on
 /// Chrome, essentially only for an installed app on Safari — and best-effort by design: the
@@ -656,8 +664,14 @@ let private registerWorker (url: string) : unit = jsNative
 /// Safari additionally caps script-writable storage at seven days without user interaction, and
 /// that reaches the Cache API — so a granted request is not the end of it, and the session
 /// nobody has opened in a week is the one this store is most likely to have lost.
-[<Emit("(navigator.storage && navigator.storage.persist) ? navigator.storage.persist().catch(() => false) : Promise.resolve(false)")>]
-let private requestPersistence () : JS.Promise<bool> = jsNative
+let private requestPersistence () : JS.Promise<bool> =
+    match PersistentStorage.storage () with
+    // No storage manager to ask. Not kept, which is what a refusal says too — and the same
+    // thing follows from either, so the two are not worth telling apart here.
+    | None -> Promise.lift false
+    // Swallowed for the reason the request is made at all: nothing above reads this, so a
+    // request the browser rejected rather than decided answers what a refusal answers.
+    | Some storage -> storage.persist () |> Promise.catch (fun _ -> false)
 
 /// The history store for this session, or the one that keeps nothing when this context cannot
 /// have one. Total either way: a client with no store is exactly today's client, asking the
