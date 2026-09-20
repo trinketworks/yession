@@ -149,10 +149,16 @@ let private turnTests =
                     Expect.stringContains AgentTurn.systemPrompt "/tmp" "and names /tmp as not the agent's"
                     // The default sandbox is not guaranteed a language runtime — python is a
                     // stub on a Mac, absent on a minimal host — so the core says not to count
-                    // on one and to edit with the shell's own tools. Product-true on every
+                    // on one. Product-true on every
                     // host; an agent that reached for python here lost turns to the stub.
                     Expect.stringContains AgentTurn.systemPrompt "language runtime" "the core warns a runtime is not assured"
-                    Expect.stringContains AgentTurn.systemPrompt "sed and awk" "and names the tools to edit with instead"
+                    // The file tools (read_file, edit_file) are what the prompt steers to; the
+                    // shell is for what only a shell does. It used to say the opposite —
+                    // "edit with sed and awk" — and every edit reached the timeline as a
+                    // head/tail/mv line nobody could read as an edit.
+                    Expect.stringContains AgentTurn.systemPrompt "edit_file" "and names the tool to edit with"
+                    Expect.stringContains AgentTurn.systemPrompt "read_file" "and the one to read with"
+                    Expect.isFalse (AgentTurn.systemPrompt.Contains "edit with sed") "the shell is no longer the way to edit"
                     Expect.isTrue (guided.StartsWith AgentTurn.systemPrompt) "the core comes first, whole"
                     Expect.isTrue (guided.EndsWith words) "the operator's words come last, whole"
                     Expect.isTrue
