@@ -24,6 +24,7 @@ open Yession.Domain
 open Yession.Domain.Sandboxes
 open Yession.Domain.Tools
 open Yession.Host
+open Yession.Tests.Support
 
 let private utf8 = BufferEncoding.Utf8
 
@@ -78,23 +79,6 @@ let private announcementTests =
     ]
 
 // --- [Jumpstarter]: the two processes -----------------------------------------------------------
-
-/// A port nothing else is on: bind one, read which the OS chose, and hand it straight back.
-///
-/// The narrowest race available, and taken deliberately — `jmp run` refuses port 0, so the
-/// exporter has to be TOLD a port, and the only honest way to name a free one is to have been
-/// holding it a moment ago. The provider needs no such thing: its port IS 0, read back off the
-/// readiness line, so concurrent runs cannot collide there at all.
-let private freePort () : Async<int> =
-    Async.FromContinuations (fun (cont, _, _) ->
-        let probe = createNetServer ()
-
-        probe.listen (
-            0,
-            "127.0.0.1",
-            fun () ->
-                let port = boundPort probe
-                probe.close (fun () -> cont port)))
 
 /// One half of the stack, started the way the deployment starts it and remembered so that
 /// stopping the stack stops it too.
@@ -195,6 +179,9 @@ let private awaitPrinted
 /// waits above fail loudly rather than hanging.
 let private startStack (timeoutMs: int) : Async<Stack> =
     async {
+        // `jmp run` refuses port 0, so the exporter has to be TOLD one — the one place here
+        // that cannot be told `0` and asked afterwards. The provider's port IS 0, read back
+        // off its readiness line, so concurrent runs cannot collide there at all.
         let! grpc = freePort ()
         let children = ResizeArray<ChildProcess> ()
 

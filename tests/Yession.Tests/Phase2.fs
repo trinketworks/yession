@@ -78,8 +78,6 @@ let private passesEveryCheck : Sandbox =
 open Yession.Host
 open Yession.Tests.Support
 
-let private basePort = 8110
-
 // -----------------------------------------------------------------------------
 // Step 10 — Session Manager & launch.
 // -----------------------------------------------------------------------------
@@ -90,6 +88,10 @@ let private launchTests =
     testList "Session Manager launch" [
         testCaseAsync "launching a session registers a Session Process and returns its bootstrap URI" <|
             async {
+                // A base the OS picked, not a number this file chose. It stays a KNOWN
+                // number, because what this case pins is that the launch result names the
+                // address the Manager was told to allocate from.
+                let! basePort = freePort ()
                 let m = Manager.create None None basePort
                 manager <- Some m
                 let request : SessionLaunchRequest =
@@ -1433,8 +1435,6 @@ let private sandboxPolicyTests =
 // need starts (or restarts) the session's one environment, all as events.
 // -----------------------------------------------------------------------------
 
-let private lazyEnvironmentPort = 8115
-
 let private environmentEventsOf (log: Yession.SessionProcess.EventLog<SessionEvent>) =
     async {
         let! page = log.Read None Int32.MaxValue
@@ -1737,7 +1737,7 @@ let private lazyLifecycleTests =
                             onChunk (AgentResponseChunk.Text "just an answer")
                             return AgentCompleted ("just an answer", None)
                         }
-                let m = Manager.create (Some conversational) (Some (fun _ -> scriptedSandbox recorder echoSandboxScript)) lazyEnvironmentPort
+                let m = Manager.create (Some conversational) (Some (fun _ -> scriptedSandbox recorder echoSandboxScript)) 0
                 let! _ =
                     m.StartSession
                         { SessionLaunchRequest.SessionId = SessionId.create "lazy-1" |> expect }
@@ -1776,7 +1776,7 @@ let private lazyLifecycleTests =
                                 return AgentCompleted ("environment is up", None)
                             | other -> return AgentFailed (sprintf "%A" other, None)
                         }
-                let m = Manager.create (Some taskAgent) (Some (fun _ -> scriptedSandbox recorder echoSandboxScript)) (lazyEnvironmentPort + 1)
+                let m = Manager.create (Some taskAgent) (Some (fun _ -> scriptedSandbox recorder echoSandboxScript)) 0
                 let! _ =
                     m.StartSession
                         { SessionLaunchRequest.SessionId = SessionId.create "lazy-2" |> expect }
@@ -1855,8 +1855,6 @@ let private lazyLifecycleTests =
 // -----------------------------------------------------------------------------
 // Step 13 — command execution: streamed into events, rendered read-only.
 // -----------------------------------------------------------------------------
-
-let private commandPort = 8120
 
 /// A real host-backend WorkSandbox composition over the given log — exactly what
 /// SessionMain wires, minus the control channel (no secret refs here).
@@ -2034,7 +2032,9 @@ let private commandTests =
                                 return AgentCompleted ("ran it", None)
                             | other -> return AgentFailed (sprintf "%A" other, None)
                         }
-                let m = Manager.create (Some devAgent) (Some hostSandboxFor) commandPort
+                // `0`: an OS-assigned port per session, which is the Manager's own default
+                // and all this suite needs — it reaches the session through `BootstrapUri`.
+                let m = Manager.create (Some devAgent) (Some hostSandboxFor) 0
                 let! _ =
                     m.StartSession
                         { SessionLaunchRequest.SessionId = SessionId.create "cmd-e2e-session" |> expect }
@@ -2090,8 +2090,6 @@ let private commandTests =
 // (E2E-8), and the Docker adapter smoke (gated on daemon availability).
 // -----------------------------------------------------------------------------
 
-let private acceptancePort = 8125
-
 let private acceptanceTests =
     testList "Phase 2 acceptance" [
         testCaseAsync "event offsets remain monotonic across message, agent, environment, and terminal events" <|
@@ -2145,7 +2143,7 @@ let private acceptanceE2eTests =
                             onChunk (AgentResponseChunk.Text "done")
                             return AgentCompleted ("done", None)
                         }
-                let m = Manager.create (Some devAgent) (Some hostSandboxFor) acceptancePort
+                let m = Manager.create (Some devAgent) (Some hostSandboxFor) 0
                 let! _ =
                     m.StartSession
                         { SessionLaunchRequest.SessionId = SessionId.create "catchup-session" |> expect }
@@ -2212,8 +2210,6 @@ let private acceptanceE2eTests =
 // Durable event log: history survives a Session Process restart.
 // -----------------------------------------------------------------------------
 
-let private persistencePort = 8130
-
 let private persistenceTests =
     testList "Durable event log" [
         testCaseAsync "a restarted session keeps its history and continues its offsets" <|
@@ -2224,7 +2220,7 @@ let private persistenceTests =
                 let makeLog (id: SessionId) = EventStore.openLog path id (fun () -> DateTimeOffset.UtcNow)
 
                 // First life: a client drafts and sends a message.
-                let m1 = Manager.createWith None None (Some makeLog) persistencePort
+                let m1 = Manager.createWith None None (Some makeLog) 0
                 let! _ = m1.StartSession { SessionLaunchRequest.SessionId = sessionId }
                 let managed1 = (m1.Registered ()) |> List.head
                 let! a = connectClient (managed1.BootstrapUri + "signal") (managed1.Host.MintPeerToken ()) "ada" "Ada"
@@ -2244,7 +2240,9 @@ let private persistenceTests =
                 do! m1.Stop ()
 
                 // Second life: a fresh Manager + Process over the same file.
-                let m2 = Manager.createWith None None (Some makeLog) (persistencePort + 1)
+                // Its own OS-assigned port, as the first life had: the second life is a
+                // fresh Manager over the same FILE, and nothing here is about where it listens.
+                let m2 = Manager.createWith None None (Some makeLog) 0
                 let! _ = m2.StartSession { SessionLaunchRequest.SessionId = sessionId }
                 let managed2 = (m2.Registered ()) |> List.head
                 let! after = managed2.Host.Log.Read None Int32.MaxValue

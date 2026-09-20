@@ -21,12 +21,19 @@ let private expect =
     | Ok v -> v
     | Error e -> failwith e
 
-let private port = 8100
 let private sessionId = SessionId.create "client-e2e-session" |> expect
 let private peerId = PeerId.create "grace" |> expect
-let private signalUrl = sprintf "http://127.0.0.1:%d/signal" port
 
 let mutable private host : Host.SessionHost option = None
+
+/// Where the host really came up. `Host.start` is given `0`, so the OS chooses and
+/// `SessionHost.Port` is the bound port rather than the requested one — which is what lets
+/// two runs of this suite exist at once. Read through the mutable slot because there is no
+/// address until the first case has started the host.
+let private signalUrl () =
+    match host with
+    | Some h -> sprintf "http://127.0.0.1:%d/signal" h.Port
+    | None -> failwith "host not started"
 
 /// Build an observer that resolves a returned async the first time a dispatched model
 /// satisfies `predicate`. `check` must be called on every model update.
@@ -48,7 +55,7 @@ let tests =
     testList "Client shell E2E" [
         testCaseAsync "start the Session Process host" <|
             async {
-                let! h = Host.start sessionId port
+                let! h = Host.start sessionId 0
                 host <- Some h
             }
 
@@ -58,10 +65,10 @@ let tests =
         // the throw — and the PeerConnection it had already minted was never closed.
         testCaseAsync "a signalling post carrying no session description is refused" <|
             async {
-                let! refused = TestHttp.postJson """{"type":"offer"}""" signalUrl
+                let! refused = TestHttp.postJson """{"type":"offer"}""" (signalUrl ())
                 Expect.equal refused.Status 400 "a body with no sdp is not an offer"
 
-                let! notJson = TestHttp.postJson "not json at all" signalUrl
+                let! notJson = TestHttp.postJson "not json at all" (signalUrl ())
                 Expect.equal notJson.Status 400 "and neither is a body that will not parse"
             }
 
@@ -75,7 +82,7 @@ let tests =
                     checkConnected model
                     checkReconnecting model
 
-                let! channel = WebRtc.connect signalUrl
+                let! channel = WebRtc.connect (signalUrl ())
                 let hello = { PeerId = peerId; DisplayName = "Grace"; Token = host.Value.MintPeerToken () }
                 Async.StartImmediate(Connection.run hello dispatch ignore (fun _ _ -> ()) (fun _ _ -> ()) (fun _ _ -> ()) channel)
 

@@ -627,11 +627,18 @@ let private queueUnitTests =
 // clients; later edits never mutate it.
 // -----------------------------------------------------------------------------
 
-let private port = 8101
 let private sessionId = SessionId.create "sync-e2e-session" |> expect
-let private signalUrl = sprintf "http://127.0.0.1:%d/signal" port
 
 let mutable private host : Host.SessionHost option = None
+
+/// Where the host really came up. `Host.start` is given `0`, so the OS chooses and
+/// `SessionHost.Port` is the bound port rather than the requested one — which is what lets
+/// two runs of this suite exist at once. Read through the mutable slot, like the peer token
+/// below: there is no address until the first case has started the host.
+let private signalUrl () =
+    match host with
+    | Some h -> sprintf "http://127.0.0.1:%d/signal" h.Port
+    | None -> failwith "host not started"
 
 // Peer tokens are minted per connection from the running host (what `/me` serves an
 // authorized browser); the suite's ordered cases read it through the mutable slot.
@@ -640,14 +647,14 @@ let private peerToken () =
     | Some h -> h.MintPeerToken ()
     | None -> failwith "host not started"
 
-let private connect (id: string) = connectClient signalUrl (peerToken ()) id
-let private reconnect = reconnectClient signalUrl
+let private connect (id: string) = connectClient (signalUrl ()) (peerToken ()) id
+let private reconnect (client: Client) = reconnectClient (signalUrl ()) client
 
 let private e2eTests =
     testList "Draft sync E2E" [
         testCaseAsync "start the Session Process host" <|
             async {
-                let! h = Host.start sessionId port
+                let! h = Host.start sessionId 0
                 host <- Some h
             }
 
@@ -781,7 +788,7 @@ let private e2eTests =
         testCaseAsync "clients are read-only event consumers: spoofed frames never append (E2E-6)" <|
             async {
                 let mallory = PeerId.create "mallory" |> expect
-                let! channel = WebRtc.connect signalUrl
+                let! channel = WebRtc.connect (signalUrl ())
                 do! channel.Send (Control (PeerHello { PeerId = mallory; DisplayName = "Mallory"; Token = peerToken () }))
                 let rec awaitAccepted () =
                     async {
