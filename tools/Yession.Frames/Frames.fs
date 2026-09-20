@@ -108,7 +108,19 @@ let private env (name: string) : string =
     | Some value -> value
     | None -> ""
 
-let private exitWith (code: int) : unit = Node.Api.``process``.exit code
+/// Stop. Typed as returning ANYTHING because it does not return, which is what an `abort`
+/// deep in a promise needs: there is no value to answer with.
+let private exitWith (code: int) : 'a = Fable.NodeExtras.Processes.exitWith code
+
+/// Say what happened and stop, having done nothing. The Host's `Interop` says this for the
+/// bins; an instrument that deliberately does not reference the Host (it wants the command
+/// line, not a session) says it here, over the same binding.
+let private abort (message: string) : 'a =
+    JS.console.error message
+    exitWith 2
+
+/// This process's arguments, its executable and script dropped — what `Cli` parses.
+let private argv () : string array = Node.Api.``process``.argv |> Seq.skip 2 |> Seq.toArray
 
 let private pretty (value: obj) : string = JS.JSON.stringify (value, space = 1)
 
@@ -136,7 +148,7 @@ let private chromiumPath () : string =
     match env "CHROMIUM_PATH" with
     | "" ->
         match env "PLAYWRIGHT_BROWSERS_PATH" with
-        | "" -> Cli.abort "no Chromium: PLAYWRIGHT_BROWSERS_PATH is unset (the dev shell sets it); outside it, set CHROMIUM_PATH"
+        | "" -> abort "no Chromium: PLAYWRIGHT_BROWSERS_PATH is unset (the dev shell sets it); outside it, set CHROMIUM_PATH"
         | root ->
             let rec walk (dir: string) : string list =
                 readDir dir
@@ -152,7 +164,7 @@ let private chromiumPath () : string =
                 else []
             match revisions |> List.collect (fun d -> try walk (realPath (joinTwo root d)) with _ -> []) with
             | found :: _ -> found
-            | [] -> Cli.abort (sprintf "no Chromium under %s (%d chromium-* revision(s)); set CHROMIUM_PATH" root (List.length revisions))
+            | [] -> abort (sprintf "no Chromium under %s (%d chromium-* revision(s)); set CHROMIUM_PATH" root (List.length revisions))
     | given -> given
 
 // --- CDP ---------------------------------------------------------------------------------------
@@ -392,11 +404,15 @@ let private changes (before: obj option) (after: obj) : string list =
 let private run () =
     promise {
         // Never bundled, so the version an unbundled run of the Fable output reports (Version.fs).
-        let args = Cli.parseOrExit spec "dev"
+        let args =
+            match Cli.outcome spec "dev" (argv ()) with
+            | Cli.Outcome.Proceed parsed -> parsed
+            | Cli.Outcome.Answered text -> say text; exitWith 0
+            | Cli.Outcome.Refused complaint -> abort complaint
         let manager =
             match Cli.valueOf managerOption args with
             | Some m -> m.TrimEnd '/'
-            | None -> Cli.abort "yession-frames needs --manager: the Manager the session lives on"
+            | None -> abort "yession-frames needs --manager: the Manager the session lives on"
         let seconds = Cli.valueOf secondsOption args |> Option.map int |> Option.defaultValue 8
         let minPx = Cli.valueOf minPxOption args |> Option.map int |> Option.defaultValue 400
         let out : string = nodePath?resolve (Cli.valueOf outOption args |> Option.defaultValue "frames") |> unbox

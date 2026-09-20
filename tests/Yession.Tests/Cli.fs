@@ -1,8 +1,10 @@
 module Yession.Tests.Cli
 
-// The command-line boundary. Pure — cheap tier, every environment — because `Cli.parse`
-// takes its args as a value rather than reading `process.argv`, which is the whole reason
-// the boundary is testable at all.
+// The command-line boundary. Pure — cheap tier, every environment — because `Cli.parse` and
+// `Cli.outcome` take their args as a value rather than reading `process.argv`, which is the
+// whole reason the boundary is testable at all. What is NOT here is the stopping: a bin that
+// answers `--version` or refuses a typo ends its process, and that half is the Host's
+// (`Interop.parseOrExit`) — one `match` over the value these cases pin.
 //
 // What these pin is that a MISUSE IS REFUSED. The parsing itself is Node's (`node:util`
 // parseArgs) and is not this repo's to test; what is this repo's is that a mistyped or
@@ -287,6 +289,45 @@ let tests =
                     Retirements.assignedIn Retirements.manager (TestFiles.read (dir + "/" + name))
                     |> List.map (fun r -> sprintf "%s sets %s (now %s)" name r.Was r.Now))
             Expect.equal offences [] "a workflow that sets one of these fails the bin it starts"
+
+        // The whole boundary as a VALUE: what a command line asks of the process. It used to
+        // be reachable only by starting a bin and watching it stop, which is why none of it
+        // was pinned — a `--version` that printed the usage would have shipped.
+        testCase "a command line a bin can run on proceeds, carrying the parse" <| fun () ->
+            match Cli.outcome spec "1.2.3" [| "--auth"; "localhost" |] with
+            | Cli.Outcome.Proceed p -> Expect.equal (Cli.valueOf auth p) (Some "localhost") "the parse it carries"
+            | other -> failwithf "expected a parse to proceed, got %A" other
+
+        testCase "--version is answered with the version, and nothing is parsed off it" <| fun () ->
+            match Cli.outcome spec "1.2.3" [| "--version" |] with
+            | Cli.Outcome.Answered text -> Expect.equal text "1.2.3" "the version it was given"
+            | other -> failwithf "expected an answer, got %A" other
+
+        testCase "--help is answered with the usage" <| fun () ->
+            match Cli.outcome spec "1.2.3" [| "--help" |] with
+            | Cli.Outcome.Answered text -> Expect.equal text (Cli.usage spec) "the same usage --help prints"
+            | other -> failwithf "expected an answer, got %A" other
+
+        testCase "a line carrying both --version and --help answers the version" <| fun () ->
+            // Two questions, one process: whichever is answered, the other is not, so which
+            // one wins is a decision rather than an accident of evaluation order.
+            match Cli.outcome spec "1.2.3" [| "--help"; "--version" |] with
+            | Cli.Outcome.Answered text -> Expect.equal text "1.2.3" "the version"
+            | other -> failwithf "expected an answer, got %A" other
+
+        testCase "a command line that is wrong is refused, in the parser's own words" <| fun () ->
+            match Cli.outcome spec "1.2.3" [| "--auht"; "localhost" |] with
+            | Cli.Outcome.Refused complaint -> Expect.equal complaint (refused [ "--auht"; "localhost" ]) "the parse's complaint"
+            | other -> failwithf "expected a refusal, got %A" other
+
+        testCase "a value the bin refuses complains in the same voice a parse failure does" <| fun () ->
+            // `--auth banana` parses: the shape was fine and the vocabulary is the bin's. What
+            // an operator hears must not depend on which half of the boundary said no, so the
+            // wording has one author — this — and the Host adds only the stopping.
+            let message = Cli.complaint spec "unknown auth rule: banana"
+            Expect.isTrue (message.StartsWith "yession-manager: ") "names the bin, as a parse failure does"
+            Expect.isTrue (message.Contains "unknown auth rule: banana") "says what was wrong"
+            Expect.isTrue (message.Contains "usage: yession-manager") "and carries the usage under it"
 
         testCase "a bin with no options of its own still answers version and help" <| fun () ->
             // `yession-session` and `yession-serial` take everything from the environment.
