@@ -1213,12 +1213,12 @@ let editorTests =
                 do! awaitU (page.Keyboard.TypeAsync "# Heading one")
                 let! _ = await (page.WaitForFunctionAsync "document.querySelector('.ProseMirror h1')?.textContent === 'Heading one'")
                 // `**bold**` -> a <strong> mark; `- ` -> a bullet list <ul><li>. The new line is
-                // Alt+Enter here because the harness mounts the editor as the COMPOSER does,
-                // where plain Enter sends (asserted below).
-                do! awaitU (page.Keyboard.PressAsync "Alt+Enter")
+                // plain Enter here because the harness mounts the editor as the COMPOSER does,
+                // where Enter is the paragraph key and Ctrl+Enter sends (asserted below).
+                do! awaitU (page.Keyboard.PressAsync "Enter")
                 do! awaitU (page.Keyboard.TypeAsync "text with **bold** now")
                 let! _ = await (page.WaitForFunctionAsync "!!document.querySelector('.ProseMirror strong')")
-                do! awaitU (page.Keyboard.PressAsync "Alt+Enter")
+                do! awaitU (page.Keyboard.PressAsync "Enter")
                 do! awaitU (page.Keyboard.TypeAsync "- item one")
                 let! _ = await (page.WaitForFunctionAsync "!!document.querySelector('.ProseMirror ul li')")
 
@@ -1229,23 +1229,29 @@ let editorTests =
                 Expect.stringContains md "* item one" "bullet serialized to markdown"
             }
 
-        editorCase "Enter sends, Shift+Enter breaks the line, Alt+Enter opens a paragraph" (EDITOR_PORT + 2) <| fun page ->
+        editorCase "Ctrl+Enter sends, Shift+Enter breaks the line, Enter opens a paragraph" (EDITOR_PORT + 2) <| fun page ->
             async {
                 let! _ = await (page.WaitForSelectorAsync ".ProseMirror")
 
                 do! awaitU (page.ClickAsync ".ProseMirror")
                 do! awaitU (page.Keyboard.TypeAsync "first line")
-                // Enter asks to send, and — the half that matters — leaves the document
-                // exactly as it was. A binding that sends AND splits the block would look
-                // right in a screenshot and lose a paragraph into every message.
+                // Enter is a prose key now, not a send: it opens the PARAGRAPH a phone's
+                // return key can reach with no modifier, and asks nothing to send. A binding
+                // that both split the block AND sent would look right in a screenshot and
+                // fire a half-written message on every return keypress.
                 do! awaitU (page.Keyboard.PressAsync "Enter")
-                let! _ = await (page.WaitForFunctionAsync "window.__sends === 1")
-                let! afterSend = await (page.EvaluateAsync<string> "() => window.__md()")
-                Expect.stringContains afterSend "first line" "the text is untouched by the send"
-                Expect.isFalse (afterSend.Trim().Contains "\n\n") "Enter inserted no new block"
+                do! awaitU (page.Keyboard.TypeAsync "second block")
+                let! _ =
+                    await (page.WaitForFunctionAsync
+                        "document.querySelectorAll('#host .ProseMirror > p').length === 2")
+                let! afterEnter = await (page.EvaluateAsync<string> "() => window.__md()")
+                Expect.stringContains afterEnter "first line" "the first block survived"
+                Expect.stringContains afterEnter "second block" "Enter opened a second block"
+                let! sendsAfterEnter = await (page.EvaluateAsync<int> "() => window.__sends")
+                Expect.equal sendsAfterEnter 0 "plain Enter did not send"
 
                 // Shift+Enter breaks the LINE: a <br> inside the block it was already in, so
-                // the paragraph is still one paragraph. This is the half a single Enter could
+                // the paragraph count does not move. This is the half a single Enter could
                 // never express, and it has to survive Markdown to be worth anything — the
                 // serializer writes a trailing backslash and the parser reads it back.
                 do! awaitU (page.Keyboard.PressAsync "Shift+Enter")
@@ -1253,23 +1259,19 @@ let editorTests =
                 let! _ = await (page.WaitForFunctionAsync "!!document.querySelector('.ProseMirror br')")
                 let! _ =
                     await (page.WaitForFunctionAsync
-                        "document.querySelectorAll('#host .ProseMirror > p').length === 1")
-                let! broken = await (page.EvaluateAsync<string> "() => window.__md()")
-                Expect.stringContains broken "first line" "the text before the break survived"
-                Expect.stringContains broken "same paragraph" "and the text after it"
-                Expect.isFalse (broken.Trim().Contains "\n\n") "a line break is not a paragraph break"
-
-                // Alt+Enter is where the PARAGRAPH went: a second block, and no second send.
-                do! awaitU (page.Keyboard.PressAsync "Alt+Enter")
-                do! awaitU (page.Keyboard.TypeAsync "second block")
-                let! _ =
-                    await (page.WaitForFunctionAsync
                         "document.querySelectorAll('#host .ProseMirror > p').length === 2")
-                let! md = await (page.EvaluateAsync<string> "() => window.__md()")
-                Expect.stringContains md "first line" "the first block survived"
-                Expect.stringContains md "second block" "Alt+Enter opened a second block"
-                let! sends = await (page.EvaluateAsync<int> "() => window.__sends")
-                Expect.equal sends 1 "neither Shift+Enter nor Alt+Enter sent"
+                let! broken = await (page.EvaluateAsync<string> "() => window.__md()")
+                Expect.stringContains broken "second block" "the text before the break survived"
+                Expect.stringContains broken "same paragraph" "and the text after it"
+
+                // Ctrl+Enter (Cmd+Enter on macOS — `ControlOrMeta` picks the right one) is
+                // where SEND went, and it leaves the document exactly as it was: a send that
+                // also touched the text would look right in a screenshot and corrupt the
+                // draft every time it fired.
+                do! awaitU (page.Keyboard.PressAsync "ControlOrMeta+Enter")
+                let! _ = await (page.WaitForFunctionAsync "window.__sends === 1")
+                let! afterSend = await (page.EvaluateAsync<string> "() => window.__md()")
+                Expect.equal afterSend broken "Ctrl+Enter sent without touching the document"
             }
 
         editorCase "a remote peer's selection renders as a caret widget, label, and highlight" (EDITOR_PORT + 1) <| fun page ->

@@ -533,11 +533,11 @@ module Dom =
         let historyNotKeptWhy =
             "It is served over plain HTTP, and a browser withholds storage of this kind outside a "
             + "secure context. Serving it over HTTPS restores it."
-        /// What the composer's keys do, shown in the composer while you are in it. Enter is
-        /// the send because that is what every chat surface's Enter is; what it used to do
-        /// did not disappear, it split in two — a line break and a paragraph, which Enter
-        /// alone could never tell apart.
-        let composerKeys = "Enter sends · Shift+Enter line · Alt+Enter paragraph"
+        /// What the composer's keys do, shown in the composer while you are in it. Enter
+        /// stays a prose key, same as a plain textarea, because a phone's return key has no
+        /// modifier to reach for; sending is the explicit second key beside it, reachable
+        /// without letting go of the line just written.
+        let composerKeys = "Ctrl+Enter sends, Shift+Enter line, Enter paragraph"
         /// What an empty composer says, so that a thin unmarked bar reads as somewhere to
         /// write. Lowercase and wordless of instruction, like every other prompt on the
         /// surface — `composerKeys` above teaches the keys, and this only says what the bar

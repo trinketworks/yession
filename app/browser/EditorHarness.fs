@@ -48,10 +48,11 @@ let private gappyReplayHost : Browser.Types.Element = Browser.Dom.document.getEl
 type private Harness =
     abstract __md : (unit -> string) with get, set
     abstract __pushRemote : (string -> unit) with get, set
-    /// How many times Enter has asked to send. The harness mounts the editor exactly as the
-    /// COMPOSER does (`onSubmit` supplied), so the E2E drives the real binding: Enter sends and
-    /// inserts nothing, Alt+Enter is the new line. A counter rather than a callback because what
-    /// the test needs to know is "did it fire", and the send itself belongs to the app.
+    /// How many times Ctrl+Enter has asked to send. The harness mounts the editor exactly as
+    /// the COMPOSER does (`onSubmit` supplied), so the E2E drives the real binding: plain
+    /// Enter opens a paragraph and Ctrl+Enter (Cmd+Enter on macOS) sends. A counter rather
+    /// than a callback because what the test needs to know is "did it fire", and the send
+    /// itself belongs to the app.
     abstract __sends : int with get, set
     /// Start or stop pushing presence decorations into the MIRROR on every animation frame.
     abstract __caretStorm : (bool -> unit) with get, set
