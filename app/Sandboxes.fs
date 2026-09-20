@@ -43,6 +43,27 @@ let hostBaseline (ambient: Map<string, string>) : Map<string, string> =
 let mergeEnv (baseline: Map<string, string>) (overrides: Map<string, string>) : Map<string, string> =
     overrides |> Map.fold (fun acc key value -> Map.add key value acc) baseline
 
+/// The host/srt pty's shell reads its input through readline (its interactive `/bin/sh -i` is
+/// bash on macOS), and readline in a non-UTF-8 locale is byte-oriented with `convert-meta` on:
+/// each high byte of a multibyte character an agent TYPES — an em-dash is `E2 80 94` — arrives
+/// as `ESC` + a 7-bit char and fires a Meta keybinding (`M-b` backward-word, …) that moves the
+/// cursor and displaces the line before the shell parses it, so `text — split` is submitted as
+/// `splittext`. The docker baseline already floors this (its image ships no locale at all); the
+/// host inherits the operator's, which is one of three cases. A UTF-8 locale is KEPT — the
+/// operator's `de_DE.UTF-8` is theirs to have. An ABSENT one is seeded to `C.UTF-8` (the
+/// observed fault: a Mac with `LANG`/`LC_*` all unset). A NON-UTF-8 one (`C`, `POSIX`, empty) is
+/// DROPPED rather than floored under, because in glibc `LC_ALL`/`LC_CTYPE` outrank `LANG`, so a
+/// floor beneath an inherited `LC_ALL=C` would never reach readline — removing every non-UTF-8
+/// locale var is what leaves the floor, or a surviving UTF-8 one, in charge.
+let localeForReadline (env: Map<string, string>) : Map<string, string> =
+    let localeVars = [ "LANG"; "LC_ALL"; "LC_CTYPE" ]
+    let isUtf8 (value: string) =
+        let v = value.ToLowerInvariant ()
+        v.Contains "utf-8" || v.Contains "utf8"
+    let kept = env |> Map.filter (fun name value -> not (List.contains name localeVars) || isUtf8 value)
+    if localeVars |> List.exists (fun name -> Map.containsKey name kept) then kept
+    else Map.add "LANG" "C.UTF-8" kept
+
 /// Append git config entries to an environment, in git's own env spelling
 /// (`GIT_CONFIG_COUNT` + `GIT_CONFIG_KEY_n`/`GIT_CONFIG_VALUE_n`).
 ///
@@ -682,7 +703,7 @@ let policyFor
             // the session's own, so leaving the manager's here made the policy state one
             // thing and the child receive another — and a policy that lies about what it
             // grants is what the start-up checks read.
-            let baseline = Map.add "TMPDIR" (SessionLayout.tmpDir ()) (hostBaseline ambient)
+            let baseline = Map.add "TMPDIR" (SessionLayout.tmpDir ()) (localeForReadline (hostBaseline ambient))
             match home with
             | Some home -> Map.add "HOME" home baseline
             | None -> baseline
