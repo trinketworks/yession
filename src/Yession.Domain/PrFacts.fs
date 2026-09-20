@@ -10,20 +10,6 @@ open Yession.Domain
 /// that carry a repo. They sit BELOW `SessionEvent` because the union names them, and
 /// the projection that folds that union (`PrWatches.fs`) sits above it.
 
-/// One pull request, named the way `add_repo` names a repo: owner/repo plus number.
-type PrRef = { Repo : RepoRef; Number : int }
-
-module PrRef =
-
-    /// Numbers are provider-assigned and start at 1; zero or negative is a paste mistake
-    /// worth refusing before it becomes a watch that can never resolve.
-    let create (repo: RepoRef) (number: int) : Result<PrRef, string> =
-        if number >= 1 then Ok { Repo = repo; Number = number }
-        else Error (sprintf "%d is not a pull request number" number)
-
-    /// The canonical rendering — "owner/repo#12" — used by notes, gates and queries alike.
-    let render (pr: PrRef) : string = sprintf "%s#%d" (RepoRef.value pr.Repo) pr.Number
-
 /// What OPENING a pull request needs said, before a provider has given it a number.
 /// Provider-lean like `PrRef`: every forge asks for these five, and none of them is an
 /// endpoint — the REST that turns one of these into a `PrRef` is the session host's
@@ -296,7 +282,7 @@ module PrWatched =
 
     /// What the watch SAYS on the timeline (see RepoFacts.fs for why prose lives beside
     /// the event).
-    let phrase (p: PrWatched) : Phrase = Phrase.text (sprintf "PR %s watched" (PrRef.render p.PwPr))
+    let phrase (p: PrWatched) : Phrase = [ Segment.Text "PR "; Segment.Ref (EntityRef.Pr p.PwPr); Segment.Text " watched" ]
 
     /// Where the waiting began, and what it began from: the state at the moment the watch
     /// started, said whole so a reader knows what the first transition will be from.
@@ -333,9 +319,9 @@ type PrTransitioned =
 
 module PrUnwatched =
 
-    let phrase (p: PrUnwatched) : Phrase = Phrase.text (sprintf "PR %s unwatched" (PrRef.render p.Pr))
+    let phrase (p: PrUnwatched) : Phrase = [ Segment.Text "PR "; Segment.Ref (EntityRef.Pr p.Pr); Segment.Text " unwatched" ]
 
 module PrTransitioned =
 
     let phrase (p: PrTransitioned) : Phrase =
-        Phrase.text (sprintf "PR %s %s" (PrRef.render p.Pr) (PrTransition.describe p.Transition))
+        [ Segment.Text "PR "; Segment.Ref (EntityRef.Pr p.Pr); Segment.Text (" " + PrTransition.describe p.Transition) ]

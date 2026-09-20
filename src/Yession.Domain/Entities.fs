@@ -28,6 +28,8 @@ type EntityRef =
     | Connection of ConnectionName
     /// A work sandbox, scope included: the session's own `dev`, or a repo's `octo/hello:dev`.
     | Sandbox of SandboxRef
+    /// A pull request, `owner/repo#12`.
+    | Pr of PrRef
 
 module EntityRef =
 
@@ -46,6 +48,8 @@ module EntityRef =
         | EntityRef.Repo repo -> "github:" + RepoRef.value repo
         | EntityRef.Connection name -> ConnectionName.value name
         | EntityRef.Sandbox sandbox -> SandboxRef.render sandbox
+        // `owner/repo#12`, as the gates, queries and notes have always spelled one.
+        | EntityRef.Pr pr -> PrRef.render pr
 
 /// One piece of a sentence: words, or a thing the words are about.
 [<RequireQualifiedAccess>]

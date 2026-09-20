@@ -252,6 +252,26 @@ module RepoRef =
     /// Where the checkout lives under the session's repos directory.
     let relativePath (RepoRef (o, r)) : string = sprintf "%s/%s" o r
 
+/// One pull request, named the way `add_repo` names a repo: owner/repo plus number. Beside
+/// `RepoRef` because it is an identity — a thing a sentence points at (`EntityRef.Pr`) —
+/// and the facts a watch records (`PrFacts.fs`) are built on it, not the other way round.
+/// Provider-lean like `RepoRef`: "pull request" is a term every forge speaks.
+type PrRef = { Repo : RepoRef; Number : int }
+
+module PrRef =
+
+    /// Numbers are provider-assigned and start at 1; zero or negative is a paste mistake
+    /// worth refusing before it becomes a watch that can never resolve.
+    let create (repo: RepoRef) (number: int) : Result<PrRef, string> =
+        if number >= 1 then Ok { Repo = repo; Number = number }
+        else Error (sprintf "%d is not a pull request number" number)
+
+    /// The canonical rendering — "owner/repo#12" — used by notes, gates and queries alike.
+    let render (pr: PrRef) : string = sprintf "%s#%d" (RepoRef.value pr.Repo) pr.Number
+
+    /// The pull request's page on its host: the one place that URL is spelled.
+    let url (pr: PrRef) : string = sprintf "https://github.com/%s/pull/%d" (RepoRef.value pr.Repo) pr.Number
+
 /// The name of a connection — an external-service credential a person signed in to from a
 /// session (`Yession.Domain.Access`): `github`, `claude`. It is what a sandbox declares it
 /// forwards, what a status stream reports on, and what a sentence in the timeline points at

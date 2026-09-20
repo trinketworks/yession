@@ -77,6 +77,7 @@ module Entity =
         | EntityRef.Repo _ -> "repo"
         | EntityRef.Connection _ -> "connection"
         | EntityRef.Sandbox _ -> "sandbox"
+        | EntityRef.Pr _ -> "pr"
 
     /// What a reference is called on a screen, in a sentence attributed to `by`. A person by
     /// the name the roster knows; a repo by `owner/repo` — the host is the mark's to say,
@@ -99,6 +100,7 @@ module Entity =
             | RepoOwned repo, ActorRef.Configured author when repo = author -> SandboxName.value (SandboxRef.name sandbox)
             | RepoOwned _, _ -> SandboxRef.render sandbox
             | SessionOwned, _ -> SandboxName.value (SandboxRef.name sandbox)
+        | EntityRef.Pr pr -> PrRef.render pr
 
     /// Where a reference leads, when it is somewhere a person can go. A repository is a page
     /// on its host; a person and a connection are not places. The one spelling of the URL
@@ -106,6 +108,7 @@ module Entity =
     let href (entity: EntityRef) : string option =
         match entity with
         | EntityRef.Repo repo -> Some (sprintf "https://github.com/%s" (RepoRef.value repo))
+        | EntityRef.Pr pr -> Some (PrRef.url pr)
         | EntityRef.Actor _
         | EntityRef.Connection _
         | EntityRef.Sandbox _ -> None
@@ -138,6 +141,7 @@ module Entity =
             | EntityRef.Connection connection ->
                 html $"""<span class="{Style.entityMark}" aria-hidden="true">{connectionMark connection}</span>"""
             | EntityRef.Sandbox _ -> html $"""<span class="{Style.entityMark}" aria-hidden="true">{Icon.sandboxSm}</span>"""
+            | EntityRef.Pr _ -> html $"""<span class="{Style.entityMark}" aria-hidden="true">{Icon.prSm}</span>"""
         let inner = html $"""{mark}<span class="{Style.entityName}">{spelled}</span>"""
         match href entity with
         | Some url ->

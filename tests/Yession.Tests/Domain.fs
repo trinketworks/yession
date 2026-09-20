@@ -1507,6 +1507,16 @@ let private prWatchTests =
                 [ PeerRef ada; PeerRef ada; PeerRef ada ]
                 "a transition wears the watcher's name, not System's"
             Expect.isTrue (proj.Items |> List.forall isAct) "all notes"
+            // The pull request is a REFERENCE in each: a screen draws the same PR the strip
+            // over the timeline draws, as a link to it, and the sentence alone cannot say so.
+            Expect.equal
+                (proj.Items
+                 |> List.collect (fun i ->
+                     match i.Content with
+                     | ItemContent.Act act -> Phrase.refs (Act.phrase act)
+                     | ItemContent.Message _ -> []))
+                (List.replicate 3 (EntityRef.Pr pr))
+                "each note points at the pull request"
 
         // Which acts arrive on the rail without anybody asking. Deliberately a short list:
         // a transcript where everything opens a chapter has none. A watch and its news do because
