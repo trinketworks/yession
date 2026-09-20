@@ -571,9 +571,9 @@ let create (deps: Deps) : Renderer =
                     match fieldOfKey key, sel with
                     | Some field, Some (a, h) -> sendFocus (Some { Field = field; Pos = { Anchor = a; Head = h } })
                     | _ -> sendFocus None
-                // Enter sends — but only from a DRAFT, which is the only body with a send.
+                // Ctrl+Enter sends — but only from a DRAFT, which is the only body with a send.
                 // A queued message is edited in place and has nothing to commit, so it
-                // keeps plain Enter (and Alt-Enter never has to be learned there).
+                // keeps plain Enter for the paragraph (and Mod-Enter never has to be learned there).
                 let onSubmit =
                     match fieldOfKey key with
                     | Some (DraftBody author) -> Some (fun () -> deps.Links.SendDraft author)

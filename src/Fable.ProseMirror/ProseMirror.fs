@@ -169,7 +169,7 @@ module ProseMirror =
     let exitCode : Command = jsNative
 
     /// A command that always handles the key by running an effect — how a keystroke reaches
-    /// the app (Enter sends). Returning `true` is what stops ProseMirror inserting anything.
+    /// the app (Ctrl+Enter sends). Returning `true` is what stops ProseMirror inserting anything.
     /// A `System.Func` because ProseMirror calls it with three arguments, not curried.
     let effectCommand (run: unit -> unit) : Command =
         box (System.Func<EditorState, obj, obj, bool>(fun _ _ _ -> run (); true))

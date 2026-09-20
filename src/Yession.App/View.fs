@@ -1490,7 +1490,7 @@ module View =
                   <div class="{Style.draftCommit}">
                     <span class="{Style.draftEditors}">{editors target}</span>
                     {discard}
-                    <button type="button" class="{sendClass}" aria-label="Send" aria-keyshortcuts="Enter"
+                    <button type="button" class="{sendClass}" aria-label="Send" aria-keyshortcuts="Control+Enter"
                             title="{Dom.Text.composerKeys}"
                             data-send-draft="{PeerId.value target}" @click={Ev(fun _ -> actions.SendDraft target)}>{Icon.send}</button>
                   </div>

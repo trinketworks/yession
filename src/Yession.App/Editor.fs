@@ -98,21 +98,25 @@ module Editor =
                 (editCommand (fun state ->
                     trScrollIntoView ((state.tr).replaceSelectionWith (nodeCreate br, false)))))
 
-    /// Base editing keys + list handling + Yjs-aware undo/redo, and Enter's three jobs.
+    /// Base editing keys + list handling + Yjs-aware undo/redo, and Enter's jobs.
     ///
-    /// Enter used to mean both "commit" and "new block", and nothing meant "new line". It now
-    /// means one thing per key:
+    /// Enter is a PROSE key here, not a send: it does what Enter always did in text, splitting
+    /// the list item when in one, else splitting the block, because a phone's return key has
+    /// no modifier to reach for, and a person who presses it is writing, not asking to send
+    /// half a thought. Sending is a deliberate second key or the visible Send control:
     ///
-    ///   Enter        — send, in a COMPOSER. What Enter does in every chat surface.
-    ///   Alt-Enter    — a new PARAGRAPH: exactly the behaviour Enter used to have (split the
-    ///                  list item, else split the block), read off `baseKeymap` rather than
-    ///                  rebuilt, so the two can never drift.
+    ///   Enter        — a new PARAGRAPH. Plain prose, the same as a plain textarea.
+    ///   Mod-Enter    — SEND, in a COMPOSER: Ctrl-Enter or Cmd-Enter, reachable without
+    ///                  letting go of the line just written, and never fired by a return key
+    ///                  alone.
     ///   Shift-Enter  — a LINE BREAK within the block. Bound in every body, composer or not:
-    ///                  it is an editing key, not part of the send bargain.
+    ///                  it is an editing key, not part of the send bargain — and stays even
+    ///                  though plain Enter now reaches the same result, because a shortcut a
+    ///                  person already has muscle memory for should not stop working under
+    ///                  them.
     ///
     /// A body with nothing to send (a queued message being edited in place) passes `None` for
-    /// `onSubmit` and keeps plain Enter as the paragraph: binding a send there would fire an
-    /// action that does not exist.
+    /// `onSubmit` and binds no send key: an action that does not exist gets no shortcut.
     let private editorKeymap (onSubmit: (unit -> unit) option) : obj =
         let keys = createObj []
         keys?("Mod-z") <- yUndo
@@ -136,11 +140,8 @@ module Editor =
             keys?("Mod-[") <- liftListItem li
             keys?("Mod-]") <- sinkListItem li)
         lineBreak () |> Option.iter (fun command -> keys?("Shift-Enter") <- command)
-        match onSubmit with
-        | Some submit ->
-            keys?("Enter") <- effectCommand submit
-            keys?("Alt-Enter") <- newParagraph
-        | None -> keys?("Enter") <- newParagraph
+        keys?("Enter") <- newParagraph
+        onSubmit |> Option.iter (fun submit -> keys?("Mod-Enter") <- effectCommand submit)
         keys
 
     // --- Presence: report the local selection, overlay remote ones -------------------------
