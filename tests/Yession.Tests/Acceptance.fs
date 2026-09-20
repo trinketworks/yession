@@ -2254,6 +2254,50 @@ let private semanticsTests =
             Expect.isTrue (html.Contains (Dom.hookText Dom.Hooks.displayName "warm-tern")) "and so does the roster"
             Expect.isFalse (html.Contains "a-stale-name-from-the-log") "the log's older name is nobody's current name"
 
+        // One person, one mark. A `UserRef` and a `PeerRef` are two ways an event can point
+        // at one human — the Session Process records the user when attribution knows one and
+        // the peer when it does not — and a mark seeded by whichever was recorded gave that
+        // human two checkers on one screen: one over their messages, another on the blocks
+        // they ran. What is pinned is the AGREEMENT, never which checker it is.
+        testCase "a person wears one mark whichever reference names them" <| fun () ->
+            let model =
+                { representativeModel with
+                    Attribution = { Attribution.empty with PeerUsers = Map.ofList [ bob, carol ]; UserPeers = Map.ofList [ carol, bob ] } }
+            Expect.equal
+                (Entity.actorMark model (PeerRef bob))
+                (Entity.actorMark model (UserRef carol))
+                "the peer bob joined as, and the user bob is, are one person and one mark"
+
+        // The other half of the same rule: the mark a surface draws is the one `Entity`
+        // answers, on every surface. The roster seeded its own by a different string from
+        // the chat's (`ActorRef.token` against `UserId.value`), so the two disagreed for
+        // every person on the page even before attribution entered into it.
+        testCase "the roster and the chat draw one person with one mark" <| fun () ->
+            let model =
+                { representativeModel with
+                    Peers = Map.ofList [ bob, "quiet-otter" ]
+                    Presence = Map.ofList [ PeerRef bob, { DisplayName = "quiet-otter"; Focus = { Field = Title; Pos = { Anchor = "AQI="; Head = "AwQ=" } } } ]
+                    Attribution = { Attribution.empty with PeerUsers = Map.ofList [ bob, carol ]; UserPeers = Map.ofList [ carol, bob ] }
+                    Conversation =
+                        { Items =
+                            [ { MessageId = MessageId.create "msg-carol" |> expect
+                                Author = UserRef carol
+                                Body = "on it"
+                                Status = Complete
+                                Kind = ConversationItemKind.Message
+                                Offset = EventOffset.create 1L |> expect
+                                Woke = None; Replying = None } ]
+                          ActiveAgentMessages = Map.empty; WokenTurn = None; TriggeredTurn = None }
+                    Timeline = TimelineProjection.empty }
+            let html = Support.render model
+            let mark = Entity.actorMark model (UserRef carol)
+            let rosterRow =
+                let start = html.IndexOf (Dom.attr Dom.Hooks.peerPresence (ActorRef.token (PeerRef bob)))
+                Expect.isTrue (start >= 0) "bob is on the roster"
+                html.Substring (start, html.IndexOf ("</div>", start) - start)
+            Expect.isTrue (rosterRow.Contains mark) "the roster row wears the person's mark"
+            Expect.isTrue ((messageMetaOfLabel (UserId.value carol) html).Contains mark) "and so does the chat's author line"
+
         // A destructive control offered over nothing is a live-looking button that does not do
         // anything, and the way a working one and a dead one come to look identical. Whether
         // it is a discard `x` at all, and what the send button WEARS while it waits, are
