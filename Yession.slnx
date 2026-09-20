@@ -21,6 +21,7 @@
     <Project Path="src/Fable.BrowserExtras/Fable.BrowserExtras.fsproj" />
     <Project Path="src/Fable.ProseMirror/Fable.ProseMirror.fsproj" />
     <Project Path="src/Fable.YjsExtras/Fable.YjsExtras.fsproj" />
+    <Project Path="src/Fable.YIndexeddb/Fable.YIndexeddb.fsproj" />
     <Project Path="src/Fable.Xterm/Fable.Xterm.fsproj" />
     <Project Path="src/Fable.AsciinemaPlayer/Fable.AsciinemaPlayer.fsproj" />
     <Project Path="src/Fable.ClaudeAgentSdk/Fable.ClaudeAgentSdk.fsproj" />

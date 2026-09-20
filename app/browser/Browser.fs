@@ -487,15 +487,6 @@ let private fetchMe (url: string) (deadlineMs: float) : Async<ProbeOutcome> =
 
 // --- Client-side doc persistence (Step 20): IndexedDB via y-indexeddb ------------------
 
-[<Import("IndexeddbPersistence", "y-indexeddb")>]
-let private indexeddbPersistence : obj = jsNative
-
-[<Emit("new ($0)($1, $2)")>]
-let private newPersistence (ctor: obj) (name: string) (doc: Y.Doc) : obj = jsNative
-
-[<Emit("new Promise((resolve) => $0.once('synced', resolve))")>]
-let private whenSynced (persistence: obj) : JS.Promise<unit> = jsNative
-
 /// A `<meta name>`'s content, or None when the tag is absent. A missing tag, a missing
 /// attribute and a BLANK one are all None — the last one deliberately, because a meta that
 /// names nothing names nothing.
@@ -1565,8 +1556,8 @@ let private start () =
         // Local-first: the doc persists in IndexedDB keyed by the session's address. Cold
         // loads render local state (drafts, queued messages) before — and without — the
         // network; on reconnect the full-state exchange reconciles.
-        let persistence = newPersistence indexeddbPersistence (persistenceKey ()) doc
-        do! whenSynced persistence |> Async.AwaitPromise
+        let persistence = Fable.YIndexeddb.create (persistenceKey ()) doc
+        do! persistence.whenSynced () |> Async.AwaitPromise
 
         // The replayed doc is state that did not arrive as a body change, so settle the rule
         // against it explicitly: a doc stored before publication followed the body can hold an

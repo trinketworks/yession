@@ -57,6 +57,7 @@
     <ProjectReference Include="..\..\src\Fable.BrowserExtras\Fable.BrowserExtras.fsproj" />
     <ProjectReference Include="..\..\src\Fable.ProseMirror\Fable.ProseMirror.fsproj" />
     <ProjectReference Include="..\..\src\Fable.YjsExtras\Fable.YjsExtras.fsproj" />
+    <ProjectReference Include="..\..\src\Fable.YIndexeddb\Fable.YIndexeddb.fsproj" />
     <ProjectReference Include="..\..\src\Fable.Xterm\Fable.Xterm.fsproj" />
     <ProjectReference Include="..\..\src\Fable.AsciinemaPlayer\Fable.AsciinemaPlayer.fsproj" />
     <ProjectReference Include="..\..\src\Yession.Domain\Yession.Domain.fsproj" />
