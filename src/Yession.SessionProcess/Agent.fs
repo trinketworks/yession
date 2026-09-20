@@ -30,6 +30,12 @@ module AgentTurn =
     /// work sandbox — because every tool description says how to reach either and none of
     /// them can say which to prefer.
     ///
+    /// It also says a language runtime is not assured in the default sandbox: python there
+    /// is a stub on a Mac without Xcode tools, and absent on a minimal host. An agent reaches
+    /// for one to make a structured edit and, finding a binary on PATH, does not learn it is
+    /// the wrong sandbox until the edit has failed several ways — so the prompt says not to
+    /// count on it, and to edit with the shell's own tools instead.
+    ///
     /// And where SCRATCH goes. Every sandbox sets `$TMPDIR` to a directory of the session's
     /// own — the srt backends bake the session's `tmp/` into it, the container backend names
     /// its private `/tmp` — but `/tmp` itself is three things across them: the container's
@@ -50,6 +56,9 @@ module AgentTurn =
         + "Read and edit the checkout in the default sandbox, with git, grep and sed, so the "
         + "people in the session see what you looked at and what you changed; use a work "
         + "sandbox for what needs its toolchain — building, tests, running the code. "
+        + "Do not count on a language runtime in the default sandbox — a python or node "
+        + "there may be missing or a stub; edit with sed and awk, and reach for a work "
+        + "sandbox when you need an interpreter. "
         + "Put temporary files — intermediate results, scripts, output that does not belong "
         + "in the checkout — under `$TMPDIR`, which every sandbox sets to a directory of this "
         + "session's own; `/tmp` and other system temp directories are not yours to write. "

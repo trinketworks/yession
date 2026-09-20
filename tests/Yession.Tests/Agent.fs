@@ -148,6 +148,12 @@ let private turnTests =
                     // operator's words never mention.
                     Expect.stringContains AgentTurn.systemPrompt "$TMPDIR" "the core names the scratch directory"
                     Expect.stringContains AgentTurn.systemPrompt "/tmp" "and names /tmp as not the agent's"
+                    // The default sandbox is not guaranteed a language runtime — python is a
+                    // stub on a Mac, absent on a minimal host — so the core says not to count
+                    // on one and to edit with the shell's own tools. Product-true on every
+                    // host; an agent that reached for python here lost turns to the stub.
+                    Expect.stringContains AgentTurn.systemPrompt "language runtime" "the core warns a runtime is not assured"
+                    Expect.stringContains AgentTurn.systemPrompt "sed and awk" "and names the tools to edit with instead"
                     Expect.isTrue (guided.StartsWith AgentTurn.systemPrompt) "the core comes first, whole"
                     Expect.isTrue (guided.EndsWith words) "the operator's words come last, whole"
                     Expect.isTrue
