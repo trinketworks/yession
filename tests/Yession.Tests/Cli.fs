@@ -29,7 +29,28 @@ open Yession.Host
 let private auth = Cli.value "auth" "rule" "how a request's subject is established"
 let private secrets = Cli.value "secrets" "mode" "whether secrets persist"
 let private webhook = Cli.values "webhook" "name" "a webhook endpoint to serve"
-let private spec = Cli.spec "yession-manager" [ auth; secrets; webhook ]
+
+/// An option with a vocabulary of its own, so these cases can ask what the PARSE makes of a
+/// value rather than what a caller would have made of it afterwards. Its own rather than the
+/// Manager's, because what is under test here is the mechanism; that the Manager's `--auth`
+/// is wired to it is pinned separately, against the real spec.
+let private colour =
+    Cli.parsedValue
+        "colour"
+        "name"
+        "which colour"
+        (function
+         | None -> Ok "unpainted"
+         | Some "red" -> Ok "red"
+         | Some "blue" -> Ok "blue"
+         | Some other -> Error (sprintf "unknown colour '%s' (expected red or blue)" other))
+
+let private spec =
+    Cli.spec "yession-manager"
+    |> Cli.accepts auth
+    |> Cli.accepts secrets
+    |> Cli.accepts webhook
+    |> Cli.accepts colour
 
 let private parse (args: string list) = Cli.parse spec (Array.ofList args)
 
@@ -94,7 +115,7 @@ let tests =
             // hand the relay a fragment of it.
             Expect.equal
                 (Cli.valueOf webhook (parsed [ "--webhook=shop@1=x-shop-hmac:base64" ]))
-                (Some "shop@1=x-shop-hmac:base64")
+                [ "shop@1=x-shop-hmac:base64" ]
                 "everything after the first ="
 
         testCase "a value that looks like an option is still the value" <| fun () ->
@@ -128,23 +149,19 @@ let tests =
         // one-value case every test writes first.
         testCase "a repeatable option collects every value, in order" <| fun () ->
             let p = parsed [ "--webhook"; "github"; "--webhook"; "shopify" ]
-            Expect.equal (Cli.valuesOf webhook p) [ "github"; "shopify" ] "both, in order"
+            Expect.equal (Cli.valueOf webhook p) [ "github"; "shopify" ] "both, in order"
             Expect.isTrue (Cli.isSet webhook p) "and it counts as given"
 
         testCase "a repeatable option given once is one value, and given none is empty" <| fun () ->
-            Expect.equal (Cli.valuesOf webhook (parsed [ "--webhook"; "github" ])) [ "github" ] "one"
-            Expect.equal (Cli.valuesOf webhook (parsed [])) [] "none"
+            Expect.equal (Cli.valueOf webhook (parsed [ "--webhook"; "github" ])) [ "github" ] "one"
+            Expect.equal (Cli.valueOf webhook (parsed [])) [] "none"
             Expect.isFalse (Cli.isSet webhook (parsed [])) "and does not count as given"
 
-        testCase "an option that takes one value reads back as a list of at most one" <| fun () ->
-            // Both readers answer for any option, off ONE parse, so a caller cannot pick the
-            // reader that disagrees with the declaration.
-            Expect.equal (Cli.valuesOf auth (parsed [ "--auth"; "localhost" ])) [ "localhost" ] "the one given"
-            Expect.equal (Cli.valuesOf auth (parsed [])) [] "or none"
-
-        testCase "a repeatable option's last value is what valueOf answers" <| fun () ->
-            let p = parsed [ "--webhook"; "github"; "--webhook"; "shopify" ]
-            Expect.equal (Cli.valueOf webhook p) (Some "shopify") "the last of them"
+        // Two cases used to live here, pinning that BOTH readers answered for every option —
+        // `valuesOf` over a single-value one, `valueOf` over a repeatable one giving its last.
+        // That was the looseness, not a guarantee: an option now reads back as the one thing
+        // its declaration says it is, and the type is what says so. There is no second reader
+        // to disagree with the first, so there is nothing left to pin.
 
         // The five refusals, one per way a command line can be wrong. Each was accepted
         // silently before, which is the defect: an ignored option is indistinguishable from
@@ -201,6 +218,35 @@ let tests =
         // `--port`, resolved beside the port it configures. `0` is the case worth pinning:
         // it is the one place an unpredictable address is deliberate, and refusing it broke
         // every smoke boot at once — a bin nothing could start, discovered by CI.
+        // The Manager's OWN options, wired to the vocabularies that used to be applied in
+        // `Main.fs`. What these pin is the wiring: that the spec this bin parses with is the
+        // one carrying those readers, which no test of the readers alone can say.
+        testCase "the Manager refuses an unknown --auth rule at the parse, not at the boot" <| fun () ->
+            match Cli.parse ManagerCli.spec [| "--auth"; "banana" |] with
+            | Error message ->
+                Expect.isTrue (message.Contains "banana") "names the rule it does not know"
+                Expect.isTrue (message.Contains "usage: yession-manager") "and carries the usage"
+            | Ok _ -> failwith "an unknown auth rule must refuse the command line"
+
+        testCase "the Manager reads --auth back as the strategy it means" <| fun () ->
+            match Cli.parse ManagerCli.spec [| "--auth"; "localhost" |] with
+            | Ok p -> Expect.equal (Cli.valueOf ManagerCli.authOption p).Name "localhost" "the strategy itself"
+            | Error e -> failwithf "expected a parse, got: %s" e
+
+        testCase "a secrets mode spells itself back the way an operator typed it" <| fun () ->
+            // The encode side `--check` needs: what a report prints must be what could be
+            // typed back, so `ofName (describe m) = Ok m` wherever `describe` answers at all.
+            for mode in [ ProcessManager.RequireDurable; ProcessManager.ForceEphemeral ] do
+                match ProcessManager.SecretsMode.describe mode with
+                | Some spelling ->
+                    Expect.equal (ProcessManager.SecretsMode.ofName (Some spelling)) (Ok mode) "round-trips"
+                | None -> failwithf "%A has no spelling, and only the defaulted mode may lack one" mode
+
+        testCase "the mode nobody can type is the one that says it was defaulted" <| fun () ->
+            // `--secrets` deliberately has no `auto` spelling, and absence is the only way to
+            // reach `AutoSecrets` — so a report can read "was this chosen?" off the mode.
+            Expect.equal (ProcessManager.SecretsMode.describe ProcessManager.AutoSecrets) None "no spelling"
+
         testCase "a port argument resolves, and 0 asks the OS for one" <| fun () ->
             Expect.equal (ProcessManager.ManagerPort.ofName None) (Ok ProcessManager.ManagerPort.Default) "absent = the default"
             Expect.equal (ProcessManager.ManagerPort.ofName (Some "9000")) (Ok 9000) "a port"
@@ -362,18 +408,59 @@ let tests =
             | Cli.Outcome.Refused complaint -> Expect.equal complaint (refused [ "--auht"; "localhost" ]) "the parse's complaint"
             | other -> failwithf "expected a refusal, got %A" other
 
-        testCase "a value the bin refuses complains in the same voice a parse failure does" <| fun () ->
-            // `--auth banana` parses: the shape was fine and the vocabulary is the bin's. What
-            // an operator hears must not depend on which half of the boundary said no, so the
-            // wording has one author — this — and the Host adds only the stopping.
-            let message = Cli.complaint spec "unknown auth rule: banana"
+        // What an option's own vocabulary buys. These four are the ones that used to be
+        // unreachable: the refusal lived in `Main.fs`, which is the composition root, and the
+        // cheap tier cannot build one.
+        testCase "a value the option's vocabulary does not know refuses the command line" <| fun () ->
+            let message = refused [ "--colour"; "banana" ]
+            Expect.isTrue (message.Contains "unknown colour 'banana'") "the vocabulary's own words"
+            Expect.isTrue (message.StartsWith "yession-manager: ") "in the parser's voice, naming the bin"
+            Expect.isTrue (message.Contains "usage: yession-manager") "and carrying the usage, as a typo does"
+
+        testCase "a value the vocabulary knows reads back as what it MEANS" <| fun () ->
+            // Not the text the operator typed: the point of a vocabulary is that what comes
+            // back has already been made sense of, so no caller can make different sense of it.
+            Expect.equal (Cli.valueOf colour (parsed [ "--colour"; "red" ])) "red" "what it came to"
+
+        testCase "an option answers for its own absence" <| fun () ->
+            // Absence is a value the vocabulary gives, never a default the caller remembers —
+            // which is what stopped `--auth` being deny-everything by whoever read it last.
+            Expect.equal (Cli.valueOf colour (parsed [])) "unpainted" "the vocabulary's answer for nothing"
+            Expect.isFalse (Cli.isSet colour (parsed [])) "while still not counting as given"
+
+        testCase "--version answers even beside a value this bin refuses" <| fun () ->
+            // `SessionMain.fs` promises `--version` and `--help` answer "before any
+            // configuration is read". Running the vocabularies inside the parse would have
+            // quietly broken that: a bin could no longer say what it is while misconfigured,
+            // which is exactly when somebody asks.
+            match Cli.outcome spec "1.2.3" [| "--colour"; "banana"; "--version" |] with
+            | Cli.Outcome.Answered text -> Expect.equal text "1.2.3" "still says what this bin is"
+            | other -> failwithf "expected the version, got %A" other
+
+        testCase "an option this spec never declared cannot be read off its parse" <| fun () ->
+            // A mistake in the program, not on the command line, so it says so rather than
+            // answering as though the operator had given nothing — which would read as a
+            // legitimate absence and be believed. Pinned because `valueOf` is total for every
+            // declared option, and this is the one way that promise can be asked of it wrongly.
+            let undeclared = Cli.value "nowhere" "x" "an option no spec here declares"
+            Expect.throws
+                (fun () -> Cli.valueOf undeclared (parsed []) |> ignore)
+                "reading an undeclared option is refused, not answered"
+
+        testCase "a rule spanning several options complains in the same voice a parse failure does" <| fun () ->
+            // A bad VALUE is the parse's to refuse now, because the option carries its own
+            // vocabulary. What is left for `complaint` is what no single option can say —
+            // `--detailed` needing `--check`, an environment still setting a variable that
+            // moved onto one. An operator must not hear a different voice for those, so the
+            // wording has one author, and the Host adds only the stopping.
+            let message = Cli.complaint spec "--detailed says what a --check report means, so it needs --check"
             Expect.isTrue (message.StartsWith "yession-manager: ") "names the bin, as a parse failure does"
-            Expect.isTrue (message.Contains "unknown auth rule: banana") "says what was wrong"
+            Expect.isTrue (message.Contains "it needs --check") "says what was wrong"
             Expect.isTrue (message.Contains "usage: yession-manager") "and carries the usage under it"
 
         testCase "a bin with no options of its own still answers version and help" <| fun () ->
             // `yession-session` and `yession-serial` take everything from the environment.
-            let bare = Cli.spec "yession-session" []
+            let bare = Cli.spec "yession-session"
             match Cli.parse bare [| "--version" |] with
             | Ok p -> Expect.isTrue (Cli.isSet Cli.version p) "version still parses"
             | Error e -> failwithf "expected a parse, got: %s" e

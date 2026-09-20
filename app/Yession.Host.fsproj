@@ -18,7 +18,6 @@
     <Compile Include="Http.fs" />
     <Compile Include="Assets.fs" />
     <Compile Include="Retirements.fs" />
-    <Compile Include="ManagerCli.fs" />
     <Compile Include="Sse.fs" />
     <Compile Include="WebRtc.fs" />
     <Compile Include="Ssr.fs" />
@@ -100,6 +99,12 @@
     <Compile Include="GitHubRepos.fs" />
     <Compile Include="Spawn.fs" />
     <Compile Include="ProcessManager.fs" />
+    <!-- What `yession-manager` accepts. Below ProcessManager.fs because its options carry
+         their own vocabularies: the port option is a ManagerPort and the secrets option a
+         SecretsMode, so a value this bin cannot make sense of is refused by the parse rather
+         than halfway down a boot. Nothing between here and the top of this list names this
+         file; only main/ and the suite do. -->
+    <Compile Include="ManagerCli.fs" />
     <Compile Include="ManagerUi.fs" />
     <Compile Include="Host.fs" />
     <Compile Include="Manager.fs" />
