@@ -1,6 +1,5 @@
 namespace Yession.App
 
-open Fable.Core
 open Fable.Core.JsInterop
 open Yjs
 open Fable.ProseMirror.ProseMirror
@@ -26,14 +25,48 @@ module Editor =
         { Dispose : unit -> unit
           PushPresences : RemoteBodyCursor list -> unit }
 
-    // Tiny boundary lambdas for the input-rule attribute/predicate callbacks (JS functions
-    // ProseMirror invokes with its match array). Kept minimal — the composition is in F#.
-    [<Emit("(m => ({ order: +m[1] }))")>]
-    let private orderedListAttrs : obj = jsNative
-    [<Emit("((m, node) => node.childCount + node.attrs.order === +m[1])")>]
-    let private orderedListJoin : obj = jsNative
-    [<Emit("(m => ({ level: m[1].length }))")>]
-    let private headingAttrs : obj = jsNative
+    // The attribute and predicate callbacks the block input rules below hand to ProseMirror,
+    // which invokes them with the regex match that fired the rule. They used to be JavaScript
+    // lambdas in `[<Emit>]` strings, and that was never a binding — a level counted off a
+    // match group and a predicate doing arithmetic over a node are LOGIC, and logic written
+    // where the compiler reads it as a literal is logic no type-check and no test can reach.
+    // The `getAttrs`/`join` shapes are typed next to the rules themselves, in
+    // `Fable.ProseMirror`, which is where a statement about somebody else's library belongs.
+
+    /// The number an ordered-list marker names — `7. ` opens a list counting from seven — and
+    /// nothing when those digits do not fit an `int`. The regex bounds the run to digits but
+    /// not to a length, and the two languages disagree about what a long one means: JavaScript
+    /// widens to a float, while an F# parse THROWS, and a throw inside a callback ProseMirror
+    /// runs on a keystroke would take the editor down mid-sentence. A number nobody can count
+    /// to is no list start, so it is an absence here and the schema's own default stands.
+    let private markerNumber (m: string[]) : int option =
+        match System.Int32.TryParse m.[1] with
+        | true, number -> Some number
+        | _ -> None
+
+    /// The list a typed marker opens starts at the number typed.
+    let private orderedListAttrs =
+        System.Func<string[], NodeAttrs>(fun m ->
+            match markerNumber m with
+            | Some order -> NodeAttrs.orderedList order
+            | None -> null)
+
+    /// Whether the marker just typed CONTINUES the list above it rather than opening a second
+    /// one below it: it does exactly when the number typed is the one that list has reached —
+    /// where it started, plus the items it already holds. A list whose start is missing
+    /// entirely joins nothing, which is what the JavaScript this replaced said too, though it
+    /// said it by arriving at `NaN` and comparing that to a number.
+    let private orderedListJoin =
+        System.Func<string[], Node, bool>(fun m node ->
+            match (nodeAttrs node).order, markerNumber m with
+            | Some order, Some typed -> nodeChildCount node + order = typed
+            | _ -> false)
+
+    /// A heading's level is how many hashes were typed, which the rule's own regex has already
+    /// bounded to the six the schema declares.
+    let private headingAttrs =
+        System.Func<string[], NodeAttrs>(fun m -> NodeAttrs.heading m.[1].Length)
+
     /// `event.clipboardData.getData(fmt)`, or `None` when the event carries no clipboard at
     /// all. ProseMirror hands `handlePaste` an untyped event; `Browser.Types` already says what
     /// one is, so the absence is answered in F# rather than by a ternary in a string — and it is
