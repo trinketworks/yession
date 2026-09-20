@@ -10,8 +10,6 @@ module Yession.Host.Ssr
 // parse5. The browser renders the same templates live; this is the first paint.
 
 open System.Text.RegularExpressions
-open Fable.Core
-open Fable.Core.JsInterop
 open Yession.Domain
 open Yession.App
 open Lit
@@ -38,13 +36,6 @@ let private bindingWithSpace = Regex "\\s*[@.?][A-Za-z0-9_-]+=\"?$"
 /// A static part ending in an attribute-value hole (`name=` or `name="`).
 let private attributeHole = Regex "=\"?$"
 
-/// Whether a value is iterable — a JS array, a Fable list, a lazy `seq`. The one question
-/// here that stays a macro: Fable cannot type-test `seq<_>` (`:? seq<obj>` compiles to a
-/// constant false), and the template-hole rule admits any `IEnumerable`, so a lazy sequence
-/// can reach a hole and has to render as its parts.
-[<Emit("typeof $0[Symbol.iterator] === 'function'")>]
-let private isIterable (v: obj) : bool = jsNative
-
 /// Public for the same reason `escapeAttr` is: the Manager's own standalone pages (Plan 11's
 /// `/open` landing page and its refusals) are sprintf'd rather than Lit-rendered, and they put
 /// a session id and a refusal's words into TEXT. One escaper each, shared with the renderer.
@@ -59,10 +50,12 @@ let escapeAttr (s: string) =
 /// One hole's value, as text. The cases are the renderable types the template-hole rule
 /// admits (`TemplateHoles.fs`) — text, a template, a sequence of them, a number, a bool — and
 /// then what a string cannot carry: a listener, lit's `nothing`/`noChange` sentinels, any
-/// other object, all of which render as nothing. Each JavaScript kind but one is named by the
-/// F# type test that compiles to it, where this used to ask `typeof` in a macro and hand a
-/// number to `String()`. The order is the guard: `null` before anything a property is read
-/// off, text before the iterable test a string would also pass.
+/// other object, all of which render as nothing. Every JavaScript kind is named by the F# type
+/// test that compiles to it, where this used to ask `typeof` in a macro and hand a number to
+/// `String()`. The order is the guard: `null` before anything a property is read off, text
+/// before the sequence arm — a string IS an `IEnumerable`, and that the probe the arm compiles
+/// to happens to answer no to one is a property of the library, not a rule. The position is
+/// the rule.
 let rec private renderValue (inAttr: bool) (v: obj) : string =
     match v with
     | null -> ""
@@ -71,8 +64,14 @@ let rec private renderValue (inAttr: bool) (v: obj) : string =
     | :? bool as b -> if b then "true" else "false"
     | candidate when (unbox<LitTemplate> candidate).``_$litType$``.IsSome ->
         renderTemplate (unbox<LitTemplate> candidate)
-    // JS arrays AND Fable's F# lists, which lit-html renders as a sequence of child parts.
-    | items when isIterable items -> unbox<obj seq> items |> Seq.map (renderValue false) |> String.concat ""
+    // A JS array, a Fable list, a lazy `seq` — everything lit-html renders as a run of child
+    // parts. The test is the NON-GENERIC `IEnumerable` deliberately: Fable refuses a test
+    // against `seq<_>` or `IEnumerable<_>` outright ("Cannot type test (evals to false)", a
+    // compile error rather than a silent false), while this one compiles to the library's own
+    // iterability probe — which, unlike a `Symbol.iterator` macro, does not answer yes to a
+    // string.
+    | :? System.Collections.IEnumerable as items ->
+        items |> Seq.cast<obj> |> Seq.map (renderValue false) |> String.concat ""
     | _ -> ""
 
 and private renderTemplate (template: LitTemplate) : string =
