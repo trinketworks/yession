@@ -723,6 +723,16 @@ type FileEditRequest =
 type EditFile = FileEditRequest -> Async<Result<CommandOutcome, string>>
 type WriteFile = SandboxRef -> string -> string -> Async<Result<CommandOutcome, string>>
 
+/// Search the files under a directory for a pattern (`grep -rn`): the sandbox, the pattern,
+/// where to look (`None` is where terminals start) and which file names to look in (a glob,
+/// `None` for all). Answers with the sandbox's own `path:line:text` lines, unbounded — the
+/// tool cuts them (`FileHits`). Looks, like `Read`.
+type SearchFiles = SandboxRef -> string -> string option -> string option -> Async<Result<string, string>>
+
+/// The files under a directory whose names match a glob (`find`): the sandbox, the glob,
+/// where to look. One path per line.
+type FindFiles = SandboxRef -> string -> string option -> Async<Result<string, string>>
+
 /// the files inside a sandbox, read and changed as text rather than through a shell line —
 /// so the record says WHICH file was read or changed, as a fact, where a command line only
 /// said `sed`.
@@ -730,7 +740,9 @@ type WriteFile = SandboxRef -> string -> string -> Async<Result<CommandOutcome, 
 type FileCapabilities =
     { Read : ReadFile
       Edit : EditFile
-      Write : WriteFile }
+      Write : WriteFile
+      Search : SearchFiles
+      Find : FindFiles }
 
 /// the session's read-only queries, and how to answer one.
 type QueryCapabilities =
@@ -817,7 +829,9 @@ module AgentCapabilities =
           Files =
             { FileCapabilities.Read = fun _ _ -> async { return Error "no file capability" }
               FileCapabilities.Edit = fun _ -> async { return Error "no file capability" }
-              FileCapabilities.Write = fun _ _ _ -> async { return Error "no file capability" } }
+              FileCapabilities.Write = fun _ _ _ -> async { return Error "no file capability" }
+              FileCapabilities.Search = fun _ _ _ _ -> async { return Error "no file capability" }
+              FileCapabilities.Find = fun _ _ _ -> async { return Error "no file capability" } }
           Queries =
             { Declared = []
               Read = fun _ -> async { return Error "no query capability" } }

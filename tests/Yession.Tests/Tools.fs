@@ -1021,4 +1021,77 @@ let private editTests =
         }
     ]
 
-let tests = testList "Tools" [ registryTests; sessionTests; fileTests; editTests; auditTests ]
+/// `search_files`/`find_files` against a capability that answers with exactly these lines
+/// and remembers what it was asked.
+let private searching (answer: string) =
+    let asked = ResizeArray<string * string option * string option> ()
+    let found = ResizeArray<string * string option> ()
+    let registry =
+        AgentTools.registry
+            { AgentCapabilities.none with
+                Files =
+                    { AgentCapabilities.none.Files with
+                        Search =
+                          fun _ pattern path glob ->
+                              async {
+                                  asked.Add ((pattern, path, glob))
+                                  return Ok answer
+                              }
+                        Find =
+                          fun _ glob path ->
+                              async {
+                                  found.Add ((glob, path))
+                                  return Ok answer
+                              } } }
+    (fun name (args: string) -> registry.Invoke (call "yession" name args)), asked, found
+
+let private searchTests =
+    testList "search_files and find_files" [
+
+        test "hits past the cap are cut, and the cut is said" {
+            let raw = List.init (FileHits.cap + 5) (sprintf "f:%d:x") |> String.concat "\n"
+            let said = FileHits.render "nothing" raw
+            Expect.equal ((said.Split '\n').Length) (FileHits.cap + 1) "the cap, plus the closing line"
+            Expect.stringContains said "5 more not shown" "how many were cut"
+        }
+
+        test "no hits is a sentence, not an empty answer" {
+            Expect.equal (FileHits.render "nothing matches x" "\n") "nothing matches x" "the caller's own sentence"
+        }
+
+        test "hits within the cap arrive whole, blank lines dropped" {
+            Expect.equal (FileHits.render "nothing" "a:1:x\n\nb:2:y\n") "a:1:x\nb:2:y" "the sandbox's lines"
+        }
+
+        testCaseAsync "search_files passes the pattern, place and glob through as given" <|
+            async {
+                let invoke, asked, _ = searching "src/A.fs:3:let x"
+                let! answer = invoke "search_files" """{"pattern":"let (x|y)","path":"src","glob":"*.fs"}"""
+                Expect.equal (List.ofSeq asked) [ "let (x|y)", Some "src", Some "*.fs" ] "untouched"
+                Expect.equal (expect answer).Text "src/A.fs:3:let x" "and the hits come back"
+            }
+
+        testCaseAsync "search_files without a place or glob asks for everything under where terminals start" <|
+            async {
+                let invoke, asked, _ = searching ""
+                let! answer = invoke "search_files" """{"pattern":"zzz"}"""
+                Expect.equal (List.ofSeq asked) [ "zzz", None, None ] "absence is absence, not an empty string"
+                Expect.stringContains (expect answer).Text "nothing matches zzz" "and no hit is said as such"
+            }
+
+        testCaseAsync "find_files passes the glob and place through as given" <|
+            async {
+                let invoke, _, found = searching "a/B.fs\nc/D.fs"
+                let! answer = invoke "find_files" """{"glob":"*.fs","path":"src"}"""
+                Expect.equal (List.ofSeq found) [ "*.fs", Some "src" ] "untouched"
+                Expect.equal (expect answer).Text "a/B.fs\nc/D.fs" "one path per line"
+            }
+
+        test "both declare themselves read-only" {
+            let registry = AgentTools.registry AgentCapabilities.none
+            for name in [ "search_files"; "find_files" ] do
+                Expect.isTrue (registry.Tools |> List.find (fun t -> t.Name = name)).ReadOnly (name + " is a look")
+        }
+    ]
+
+let tests = testList "Tools" [ registryTests; sessionTests; fileTests; editTests; searchTests; auditTests ]

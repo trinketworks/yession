@@ -113,6 +113,21 @@ module private ToolArgs =
                 get.Optional.Field "sandbox" Decode.string |> Option.filter (fun s -> s <> "")))
             json
 
+    /// `search_files`'s four: the pattern, where, which names, which sandbox.
+    let fileSearch (json: string) : Result<string * string option * string option * string option, string> =
+        let some (key: string) (get: Decode.IGetters) =
+            get.Optional.Field key Decode.string |> Option.filter (fun s -> s <> "")
+        read
+            (Decode.object (fun get ->
+                get.Required.Field "pattern" Decode.string, some "path" get, some "glob" get, some "sandbox" get))
+            json
+
+    /// `find_files`'s three: the glob, where, which sandbox.
+    let fileFind (json: string) : Result<string * string option * string option, string> =
+        let some (key: string) (get: Decode.IGetters) =
+            get.Optional.Field key Decode.string |> Option.filter (fun s -> s <> "")
+        read (Decode.object (fun get -> get.Required.Field "glob" Decode.string, some "path" get, some "sandbox" get)) json
+
     let two (first: string) (second: string) (json: string) : Result<string * string, string> =
         read
             (Decode.object (fun get ->
@@ -501,6 +516,30 @@ module AgentTools =
                 | Error e -> return sprintf "could not write %s: %s" path e
             })
 
+    let private searchFiles
+        (capabilities: AgentCapabilities)
+        (pattern: string)
+        (path: string option)
+        (glob: string option)
+        (sandbox: string option)
+        : Async<string> =
+        let raw = sandbox |> Option.defaultValue (SandboxRef.render SandboxRef.defaultRef)
+        withSandbox raw (fun name ->
+            async {
+                match! capabilities.Files.Search name pattern path glob with
+                | Ok hits -> return FileHits.render (sprintf "nothing matches %s" pattern) hits
+                | Error reason -> return sprintf "could not search: %s" reason
+            })
+
+    let private findFiles (capabilities: AgentCapabilities) (glob: string) (path: string option) (sandbox: string option) : Async<string> =
+        let raw = sandbox |> Option.defaultValue (SandboxRef.render SandboxRef.defaultRef)
+        withSandbox raw (fun name ->
+            async {
+                match! capabilities.Files.Find name glob path with
+                | Ok hits -> return FileHits.render (sprintf "no file is named like %s" glob) hits
+                | Error reason -> return sprintf "could not look: %s" reason
+            })
+
     let private setSecret (capabilities: AgentCapabilities) (name: string) (value: string) : Async<string> =
         async {
             match SecretName.create name with
@@ -801,6 +840,37 @@ module AgentTools =
                           match ToolArgs.fileRead args with
                           | Error e -> return Error e
                           | Ok (path, offset, limit, sandbox) -> return! ok (readFile capabilities path offset limit sandbox)
+                      })
+           { descriptor with ReadOnly = true }, body)
+
+          (let descriptor, body =
+              tool
+                  "search_files"
+                  "Search file contents for a pattern, recursively — `grep -rn` behind a typed door: the record says what you searched for and where. Prefer it over grep in execute_command. Answers `path:line:text` lines, at most 200, saying when more were cut. Extended regular expression (grep -E); `.git` is skipped, and binary files. Paths as read_file takes them."
+                  [ ToolField.required "pattern" "string" "an extended regular expression, e.g. \"let (private )?readFile\""
+                    ToolField.optional "path" "string" "the directory or file to search; omit for where terminals start"
+                    ToolField.optional "glob" "string" "only files whose NAME matches this glob, e.g. \"*.fs\""
+                    ToolField.optional "sandbox" "string" "the work sandbox to search in; omit for the default one" ]
+                  (fun args ->
+                      async {
+                          match ToolArgs.fileSearch args with
+                          | Error e -> return Error e
+                          | Ok (pattern, path, glob, sandbox) -> return! ok (searchFiles capabilities pattern path glob sandbox)
+                      })
+           { descriptor with ReadOnly = true }, body)
+
+          (let descriptor, body =
+              tool
+                  "find_files"
+                  "List the files whose names match a glob, recursively — `find` behind a typed door. Prefer it over find/ls in execute_command. One path per line, at most 200; `.git` is skipped. A glob without a slash matches file names anywhere below `path` (\"*.fsproj\"); one with a slash matches the path's tail (\"src/*/View.fs\"). Paths as read_file takes them."
+                  [ ToolField.required "glob" "string" "the name pattern, e.g. \"*.fs\" or \"tests/*/Main.fs\""
+                    ToolField.optional "path" "string" "the directory to look under; omit for where terminals start"
+                    ToolField.optional "sandbox" "string" "the work sandbox to look in; omit for the default one" ]
+                  (fun args ->
+                      async {
+                          match ToolArgs.fileFind args with
+                          | Error e -> return Error e
+                          | Ok (glob, path, sandbox) -> return! ok (findFiles capabilities glob path sandbox)
                       })
            { descriptor with ReadOnly = true }, body)
 
