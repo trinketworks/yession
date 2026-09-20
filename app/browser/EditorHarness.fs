@@ -920,7 +920,11 @@ let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
         Terminals =
             { Terminals =
                 [ { TerminalId = terminalId
-                    Title = TerminalTitle.fromProse "build"
+                    // The title the agent's terminals actually get: the sandbox in brackets,
+                    // then the reason it was opened, cut at `ProseLength`. Sixty characters
+                    // of caps is wider than a phone's column, and the chip that names this
+                    // terminal in the chat has to fit it in rather than let it out.
+                    Title = TerminalTitle.fromProse "[trinketworks/yession:dev] dotnet fsi tasks.fsx build 2>&1 | tail -30"
                     OpenedBy = PeerRef peerId
                     Sandbox = Some SandboxRef.defaultRef
                     Renewable = false

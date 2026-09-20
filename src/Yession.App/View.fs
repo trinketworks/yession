@@ -1595,7 +1595,7 @@ module View =
                     @click={Ev(fun _ -> dispatch (ShowInPaneMsg (Reading (TerminalTab entry.Terminal))); actions.FocusPane ())}>
               <span class="{Style.terminalPrompt}">$</span>
               <code class="{Style.chatChipCommand}" data-terminal-text="{BodyKey.terminalQueued entry.QueueId}"></code>
-              <span class="{Style.chatChipWho}" data-pending-subject="terminal:{TerminalId.value entry.Terminal}">{what}</span>
+              <span class="{Style.chatChipSubject}" data-pending-subject="terminal:{TerminalId.value entry.Terminal}">{what}</span>
               <span class="shrink-0">{statusLine}</span>
             </button>"""
 
