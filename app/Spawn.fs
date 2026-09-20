@@ -7,7 +7,6 @@ module Yession.Host.Spawn
 // passed through as logs.
 
 open Fable.Core
-open Fable.Core.JsInterop
 open Fable.NodeExtras
 
 #if FABLE_COMPILER
@@ -15,23 +14,6 @@ open Thoth.Json
 #else
 open Thoth.Json.Net
 #endif
-
-type [<AllowNullLiteral>] Child =
-    abstract pid : int
-    abstract kill : string -> bool
-    abstract on : string * (obj -> unit) -> Child
-    /// The readiness line arrives here. A `Readable`, so the stream can be told to decode —
-    /// which is how the chunks become text rather than being asked, one by one, whether they are.
-    abstract stdout : Readable
-
-[<Import("spawn", "node:child_process")>]
-let private spawnRaw : obj = jsNative
-
-// stdin is a pipe on purpose: the child watches it and exits when the Manager dies
-// (the kernel closes the pipe even on SIGKILL), so sessions never outlive their
-// Manager. stdout is parsed for the readiness line; stderr passes through.
-[<Emit("$0($1, $2, { env: { ...process.env, ...Object.fromEntries($3) }, stdio: ['pipe', 'pipe', 'inherit'] })")>]
-let private spawnWithEnv (spawn: obj) (command: string) (args: string array) (env: (string * string) array) : Child = jsNative
 
 /// The readiness line, as the spawn contract states it: `{"yession":"ready","port":N}`, and
 /// `version` from a bundle new enough to carry one. That field is optional and stays
@@ -129,23 +111,43 @@ let launch
     (timeoutMs: int)
     : Async<Result<LaunchedSession, string>> =
     Async.FromContinuations (fun (cont, _, _) ->
-        let child = spawnWithEnv spawnRaw command (Array.ofList args) (Array.ofList env)
+        // stdin is a pipe on purpose: the child watches it and exits when the Manager dies
+        // (the kernel closes the pipe even on SIGKILL), so sessions never outlive their
+        // Manager. stdout is parsed for the readiness line below; stderr is the parent's own
+        // handle, so whatever the session says for a person to read lands where the Manager's
+        // own output does rather than in a pipe this file would have to drain.
+        //
+        // `Adding` rather than `Replacing`: `env` carries the spawn contract's variables and
+        // nothing else, so a child given only those would have lost `PATH` — and a Node bundle
+        // that cannot find its own interpreter fails before it can say why.
+        let child =
+            ChildProcesses.spawn
+                command
+                args
+                { Cwd = None
+                  Env = ChildEnv.Adding (Map.ofList env)
+                  Streams = { Stdin = Stdio.Pipe; Stdout = Stdio.Pipe; Stderr = Stdio.Inherit }
+                  Detached = false }
+
+        let pid = int child.pid
 
         let mutable exited : int option option = None // Some code = exited (code option)
         let mutable exitWaiters : (int option -> unit) list = []
-        child.on ("exit", fun code ->
-            let code = if isNull code then None else Some (unbox<int> code)
+        // `exit` rather than `close`: a launch has to fail the moment the child is gone, and
+        // `close` waits for its stdout to drain as well — a stream this launch is reading and
+        // a crashing session may never have written to.
+        ChildProcessStreams.onExit child (fun code ->
             exited <- Some code
             let waiters = exitWaiters
             exitWaiters <- []
             // Registration order: the Manager's bookkeeping (registered at launch)
             // must observe the exit before any stop/wait continuation resumes.
-            waiters |> List.rev |> List.iter (fun w -> w code)) |> ignore
+            waiters |> List.rev |> List.iter (fun w -> w code))
 
         let running =
-            { Pid = child.pid
-              Terminate = fun () -> child.kill "SIGTERM" |> ignore
-              Kill = fun () -> child.kill "SIGKILL" |> ignore
+            { Pid = pid
+              Terminate = fun () -> child.kill "SIGTERM"
+              Kill = fun () -> child.kill "SIGKILL"
               OnExit =
                 fun waiter ->
                     match exited with
@@ -172,7 +174,7 @@ let launch
         // Accumulate stdout and scan complete lines for the readiness JSON; anything
         // else is a log line and passes through.
         let mutable buffer = ""
-        Readables.text child.stdout (fun chunk ->
+        Readables.text (ChildProcessStreams.stdout child) (fun chunk ->
             buffer <- buffer + chunk
             let parts = buffer.Split '\n'
             buffer <- parts.[parts.Length - 1]
@@ -193,4 +195,4 @@ let launch
                         running.Kill ()
                     | None -> settle (Ok { Child = running; Port = ready.Port; Build = build })
                 | None ->
-                    if line.Trim().Length > 0 then printfn "[session %d] %s" child.pid line))
+                    if line.Trim().Length > 0 then printfn "[session %d] %s" pid line))
