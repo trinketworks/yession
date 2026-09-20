@@ -33,10 +33,6 @@ open Microsoft.Playwright
 open Yession.Domain
 open Yession.Tests.Browser
 
-/// Its own port, away from the E2E's block: the benchmark and the gate can then run at the
-/// same time on one box without one binding the other's listener out from under it.
-let private BENCH_PORT = 8200
-
 /// The sweep. Small enough to be a short message, large enough to be a long one, and an order
 /// of magnitude between them so a linear cost is unmistakable in the ratio.
 let private sizes = [ 200; 2_000; 20_000 ]
@@ -249,7 +245,7 @@ let tests =
     testList "Client performance" [
         testCaseAsync "the editor, the collaboration path, the transcript read, the scroll and the open, swept by size" <|
             async {
-                let server = serveStatic harnessRoot BENCH_PORT
+                let server = serveStatic harnessRoot
                 let! pw = await (Playwright.CreateAsync ())
                 let! br =
                     await (pw.Chromium.LaunchAsync (
@@ -260,7 +256,7 @@ let tests =
 
                 let body =
                     reporting "Client performance" page evidence <| async {
-                        let! _ = await (page.GotoAsync (sprintf "http://127.0.0.1:%d/" BENCH_PORT))
+                        let! _ = await (page.GotoAsync (server.At "/"))
                         let! _ = await (page.WaitForSelectorAsync "#peer-b .ProseMirror")
 
                         let collected = ResizeArray<Series> ()
@@ -330,7 +326,7 @@ let tests =
                                     ViewportSize = ViewportSize (Width = fst phone, Height = snd phone),
                                     HasTouch = true)))
                         let! phonePage = await (phoneContext.NewPageAsync ())
-                        let! _ = await (phonePage.GotoAsync (sprintf "http://127.0.0.1:%d/" BENCH_PORT))
+                        let! _ = await (phonePage.GotoAsync (server.At "/"))
                         let! _ = await (phonePage.WaitForSelectorAsync "#shell [data-conversation]")
 
                         // The open, first and unthrottled: what it records is mostly counts

@@ -25,6 +25,7 @@ open System
 open System.IO
 open System.Net
 open System.Net.Http
+open System.Net.Sockets
 open System.Diagnostics
 open System.Text.Json
 open System.Threading
@@ -108,6 +109,62 @@ let internal chromiumPath () : string =
 // Task -> Async adapters (this whole file is CLR-only, so Async.AwaitTask is available).
 let internal await (t: Task<'a>) : Async<'a> = Async.AwaitTask t
 let internal awaitU (t: Task) : Async<unit> = Async.AwaitTask t
+
+// --- Loopback servers, on ports nobody chose ----------------------------------------------
+//
+// Nothing in this file names a port, and no case can ask for one. Hand-picked numbers are what
+// that replaces, and they had collided: the editor family took `EDITOR_PORT + n` per case with
+// five offsets used twice over, and every other constant here sat inside the block those 48
+// cases occupied. Two suites that bind one port cannot run at once, and the loser does not fail
+// legibly — it dies at `Start` with EADDRINUSE, or waits out a readiness line that never comes
+// and reports thirty seconds later as a timeout naming the wait rather than the fault. That is
+// this tier's worst failure mode, and it cost four separate runs an hour of diagnosis apiece.
+//
+// Renumbering would only have restocked the hat the next case picks from. So the rule instead:
+// whatever STARTS a server hands back the origin it came up on, and nothing else can name one.
+// There is then no number for two cases to share, and adding a case requires knowing nothing
+// about what any other case bound.
+
+/// A loopback port nothing is listening on: taken at `:0`, so the OS chooses it, and released.
+///
+/// Wanted only where a port has to be known BEFORE the thing that binds it has started — a
+/// Manager whose own origin is the OIDC issuer a booting session fetches discovery against, a
+/// Caddyfile that has to name its upstream. Everything else is told `0` and says where it
+/// landed. The race the release leaves is the narrowest one available, and it cannot produce a
+/// passing-but-wrong run: a collision fails the bind loudly.
+let private freeLoopbackPort () : int =
+    let probe = new TcpListener (IPAddress.Loopback, 0)
+    probe.Start ()
+    let port = (probe.LocalEndpoint :?> IPEndPoint).Port
+    probe.Stop ()
+    port
+
+/// A server this file started, and the origin it answers on — `http://127.0.0.1:<port>`, with
+/// no trailing slash. The two travel together because a caller holding one without the other is
+/// a caller that picked a port.
+type internal Serving =
+    { Listener : HttpListener
+      Origin : string }
+    /// This server's address for an absolute path (`"/"`, `"/s/mounted/"`).
+    member this.At (path: string) : string = this.Origin + path
+    member this.Stop () : unit = this.Listener.Stop ()
+
+/// Start an `HttpListener` on a loopback origin of its own.
+///
+/// There is no `:0` to hand it — a prefix names a port — so one is taken and released, and the
+/// window that leaves is closed by trying again rather than by anybody picking a number.
+let internal listenOnLoopback () : Serving =
+    let rec attempt (triesLeft: int) =
+        let origin = sprintf "http://127.0.0.1:%d" (freeLoopbackPort ())
+        let listener = new HttpListener ()
+        listener.Prefixes.Add (origin + "/")
+        try
+            listener.Start ()
+            { Listener = listener; Origin = origin }
+        with :? HttpListenerException when triesLeft > 1 ->
+            listener.Close ()
+            attempt (triesLeft - 1)
+    attempt 5
 
 // --- What the page saw (so a failure can say more than "timed out") ----------------------
 //
@@ -1097,16 +1154,14 @@ let tests =
 // exists, decoupled from the native node-datachannel addon. It guards exactly what the DOM-free
 // cheap tests cannot: the input-rule → live formatting → Markdown round-trip in a real browser.
 
-let private EDITOR_PORT = 8181
-let private editorBase = sprintf "http://127.0.0.1:%d/" EDITOR_PORT
 let internal harnessRoot = "tests/browser"
 
 /// A tiny read-only static file server over `HttpListener` (the harness page + its bundle).
-/// Returns the listener so the caller can stop it; requests are served on a background loop.
-let internal serveStatic (root: string) (port: int) : HttpListener =
-    let listener = new HttpListener ()
-    listener.Prefixes.Add (sprintf "http://127.0.0.1:%d/" port)
-    listener.Start ()
+/// Returns the server — the listener to stop, and the origin it came up on, which is the only
+/// place that origin is stated; requests are served on a background loop.
+let internal serveStatic (root: string) : Serving =
+    let served = listenOnLoopback ()
+    let listener = served.Listener
     let rec loop () =
         async {
             match! Async.Catch (listener.GetContextAsync () |> Async.AwaitTask) with
@@ -1131,7 +1186,7 @@ let internal serveStatic (root: string) (port: int) : HttpListener =
             | Choice2Of2 _ -> ()   // listener stopped
         }
     Async.Start (loop ())
-    listener
+    served
 
 /// One editor case: a served harness, a browser, a page that is being LISTENED to, and the
 /// teardown — so a case is its body and nothing else.
@@ -1141,19 +1196,22 @@ let internal serveStatic (root: string) (port: int) : HttpListener =
 /// saying only that a wait had not settled. A shell that died at load reported as eight
 /// anonymous timeouts, and the page had been naming the fault the whole time.
 ///
-/// Teardown runs whether the body throws or not, which is a fix rather than tidying: these
-/// cases deliberately re-use ports (`+ 8` and `+ 10` serve two each, and `+ 5`/`+ 7` collide
-/// with the mounted suite's), so a listener left bound by a failing case took the NEXT case
-/// with it — one failure, two red cases, and the second one a lie.
+/// The harness is served by the case, on an origin the case never names: a port is what the
+/// OS answers with here, never something a case knows. Cases used to take one by hand, `+ n`
+/// off a base, and five of those offsets were used twice over — so two of them could not run
+/// at once and the loser failed as an anonymous timeout.
+///
+/// Teardown runs whether the body throws or not, which is a fix rather than tidying: a
+/// listener left bound by a failing case used to take the NEXT case with it — one failure,
+/// two red cases, and the second one a lie.
 let private editorCaseOn
     (viewport: (int * int) option)
     (name: string)
-    (port: int)
     (body: IPage -> Async<unit>)
     =
     testCaseAsync name <|
         async {
-            let server = serveStatic harnessRoot port
+            let server = serveStatic harnessRoot
             let! pw = await (Playwright.CreateAsync ())
             let! br =
                 await (pw.Chromium.LaunchAsync (
@@ -1171,7 +1229,7 @@ let private editorCaseOn
                     }
             page.SetDefaultTimeout 15000.0f
             let evidence = watching page
-            let! _ = await (page.GotoAsync (sprintf "http://127.0.0.1:%d/" port))
+            let! _ = await (page.GotoAsync (server.At "/"))
             let! outcome = Async.Catch (reporting name page evidence (body page))
             do! awaitU (br.CloseAsync ())
             pw.Dispose ()
@@ -1203,7 +1261,7 @@ let [<Literal>] private groundSpare =
 
 let editorTests =
     testList "Editor rendering (browser)" [
-        editorCase "Markdown typed in the rich editor renders formatted and round-trips to Markdown" EDITOR_PORT <| fun page ->
+        editorCase "Markdown typed in the rich editor renders formatted and round-trips to Markdown" <| fun page ->
             async {
                 let! _ = await (page.WaitForSelectorAsync ".ProseMirror")
 
@@ -1229,7 +1287,7 @@ let editorTests =
                 Expect.stringContains md "* item one" "bullet serialized to markdown"
             }
 
-        editorCase "Ctrl+Enter sends, Shift+Enter breaks the line, Enter opens a paragraph" (EDITOR_PORT + 2) <| fun page ->
+        editorCase "Ctrl+Enter sends, Shift+Enter breaks the line, Enter opens a paragraph" <| fun page ->
             async {
                 let! _ = await (page.WaitForSelectorAsync ".ProseMirror")
 
@@ -1274,7 +1332,7 @@ let editorTests =
                 Expect.equal afterSend broken "Ctrl+Enter sent without touching the document"
             }
 
-        editorCase "a remote peer's selection renders as a caret widget, label, and highlight" (EDITOR_PORT + 1) <| fun page ->
+        editorCase "a remote peer's selection renders as a caret widget, label, and highlight" <| fun page ->
             async {
                 let! _ = await (page.WaitForSelectorAsync ".ProseMirror")
 
@@ -1314,7 +1372,7 @@ let editorTests =
         // runs `ySyncPlugin`'s `view.update` on every state update regardless, and that hook
         // reconciles the WHOLE document back into Yjs. Do it while content is still arriving
         // and the push races the words it is drawing over.
-        editorCase "a caret drawn on every frame never costs the mirror its content" (EDITOR_PORT + 11) <| fun page ->
+        editorCase "a caret drawn on every frame never costs the mirror its content" <| fun page ->
             async {
                 do! waitFor "both peers to mount" page "!!document.querySelector('#peer-a .ProseMirror') && !!document.querySelector('#peer-b .ProseMirror')"
 
@@ -1372,7 +1430,7 @@ let editorTests =
         // Counted from OUR side rather than by patching the library: Yjs updates on the
         // co-editor's doc whose origin is `ySyncPluginKey`, which is what that write-back tags
         // its transaction with. Real doc updates, not a hook we hoped was called.
-        editorCase "drawing a remote caret writes nothing to the shared document" (EDITOR_PORT + 12) <| fun page ->
+        editorCase "drawing a remote caret writes nothing to the shared document" <| fun page ->
             async {
                 do! waitFor "both peers to mount" page "!!document.querySelector('#peer-a .ProseMirror') && !!document.querySelector('#peer-b .ProseMirror')"
                 do! awaitU (page.EvaluateAsync "() => window.__caretStorm(true)")
@@ -1408,7 +1466,7 @@ let editorTests =
         // this: whether `asciinema-player`'s named export resolves through the bundle and
         // actually plays what was recorded. An import that silently failed would leave every
         // other test green and the feature dead in the browser.
-        editorCase "a recorded terminal replays in a real player, and prints what it printed" (EDITOR_PORT + 3) <| fun page ->
+        editorCase "a recorded terminal replays in a real player, and prints what it printed" <| fun page ->
             async {
                 // The player took the mount and built its own DOM there.
                 let! _ = await (page.WaitForSelectorAsync "#replay .ap-player")
@@ -1448,7 +1506,7 @@ let editorTests =
         // The arrangement is shared by the two cases below and lives in the harness
         // (`#replay-gappy`): thirty seconds of nothing between two commands, a chapter on each,
         // and a start position naming the far one. What each case asserts is its own.
-        editorCase "a chapter past a long idle gap still reaches the chapter list" (EDITOR_PORT + 13) <| fun page ->
+        editorCase "a chapter past a long idle gap still reaches the chapter list" <| fun page ->
             async {
                 let! _ = await (page.WaitForSelectorAsync "#replay-gappy .ap-player")
                 let! _ = await (page.WaitForSelectorAsync "#replay-gappy .ap-overlay-start")
@@ -1467,7 +1525,7 @@ let editorTests =
                 return ()
             }
 
-        editorCase "a watch that starts past a long idle gap lands there, not before it" (EDITOR_PORT + 14) <| fun page ->
+        editorCase "a watch that starts past a long idle gap lands there, not before it" <| fun page ->
             async {
                 let! _ = await (page.WaitForSelectorAsync "#replay-gappy .ap-overlay-start")
                 do! awaitU (page.ClickAsync "#replay-gappy .ap-overlay-start")
@@ -1490,7 +1548,7 @@ let editorTests =
         // Neither is visible to a rendered string, and both are the WCAG floor rather than a
         // nicety: a chip that opens a pane and leaves focus behind, or a close that strands
         // focus on a control it just removed, is exactly the failure the floor names.
-        editorCase "a chat chip opens a pane tab that plays, and the strip walks" (EDITOR_PORT + 4) <| fun page ->
+        editorCase "a chat chip opens a pane tab that plays, and the strip walks" <| fun page ->
             async {
                 // The chip the harness model's one block puts in the chat.
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-chat-block]")
@@ -1534,7 +1592,7 @@ let editorTests =
         // plan is about: the pane takes the whole column rather than sitting over the chat
         // as a dismissible overlay, and nothing overflows sideways — an overflow a phone
         // user cannot scroll away is a reachability bug, not a cosmetic one.
-        editorCaseIn 390 844 "on a phone the pane IS the column, the strip stays, and the chat is one control away" (EDITOR_PORT + 5) <| fun page ->
+        editorCaseIn 390 844 "on a phone the pane IS the column, the strip stays, and the chat is one control away" <| fun page ->
             async {
                 // Ground truth first: the viewport really is the width we asked for.
                 let! width = await (page.EvaluateAsync<int> "() => window.innerWidth")
@@ -1598,7 +1656,7 @@ let editorTests =
         // The document-level check the case above makes cannot see this: the timeline's own
         // scrollbox absorbs the overflow, so `documentElement.scrollWidth` stays honest while
         // the conversation is unreadable. What is asserted is the column, and only the column.
-        editorCaseIn 390 844 "a message no line break fits inside never scrolls the timeline sideways" (EDITOR_PORT + 10) <| fun page ->
+        editorCaseIn 390 844 "a message no line break fits inside never scrolls the timeline sideways" <| fun page ->
             async {
                 let! width = await (page.EvaluateAsync<int> "() => window.innerWidth")
                 Expect.equal width 390 "a true phone viewport, not a clamped window"
@@ -1620,7 +1678,7 @@ let editorTests =
         // its own. Photographed on iOS as the whole conversation shifted left under a header
         // that stayed put, with the chip's status cut off at the right edge. The body case
         // above cannot see it: its fixture is prose, and prose is where the fix for prose is.
-        editorCaseIn 390 844 "a queued command's terminal name never scrolls the timeline sideways" (EDITOR_PORT + 48) <| fun page ->
+        editorCaseIn 390 844 "a queued command's terminal name never scrolls the timeline sideways" <| fun page ->
             async {
                 let! width = await (page.EvaluateAsync<int> "() => window.innerWidth")
                 Expect.equal width 390 "a true phone viewport, not a clamped window"
@@ -1652,9 +1710,9 @@ let editorTests =
         // What is asserted is the COLUMN and nothing else: not the rules, not the tick's berth
         // in the gutter, not what the rows look like. Those are the design, and the design
         // changing is not a regression.
-        let askCardColumnCase width height port =
+        let askCardColumnCase width height =
             editorCaseIn width height
-                (sprintf "at %dpx the ask card's lines start where the conversation's words do" width) port <| fun page ->
+                (sprintf "at %dpx the ask card's lines start where the conversation's words do" width) <| fun page ->
                 async {
                     let! measured = await (page.EvaluateAsync<int> "() => window.innerWidth")
                     Expect.equal measured width "a true viewport, not a clamped window"
@@ -1710,8 +1768,8 @@ let editorTests =
                         (sprintf "every line of the ask card starts on the conversation's own column, these did not: %s"
                             (String.Join (" | ", adrift)))
                 }
-        askCardColumnCase 390 844 (EDITOR_PORT + 43)
-        askCardColumnCase 1440 900 (EDITOR_PORT + 44)
+        askCardColumnCase 390 844
+        askCardColumnCase 1440 900
         // What a control owes the card's edges, where every line owes the reading rail.
         //
         // Full width on a phone is what makes this visible and what makes it worth pinning:
@@ -1719,7 +1777,7 @@ let editorTests =
         // one edge and not the other is the whole shape of the thing. Symmetry rather than a
         // number — the margin is the card's to choose and a redesign may choose again, but
         // whatever it chooses is owed to both sides.
-        editorCaseIn 390 844 "the start button is centred in the card, not shoved along the reading rail" (EDITOR_PORT + 47) <| fun page ->
+        editorCaseIn 390 844 "the start button is centred in the card, not shoved along the reading rail" <| fun page ->
             async {
                 do! awaitU (page.EvaluateAsync "() => window.__launch(true)")
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-repo-picker] [data-repo-picker-start]")
@@ -1749,7 +1807,7 @@ let editorTests =
         //
         // Not asserted: how long it takes, what it eases on, whether the rows stagger. Those
         // are the design.
-        editorCaseIn 390 844 "the branch pane is off to the right until it is asked for, and out of reach until then" (EDITOR_PORT + 46) <| fun page ->
+        editorCaseIn 390 844 "the branch pane is off to the right until it is asked for, and out of reach until then" <| fun page ->
             async {
                 do! awaitU (page.EvaluateAsync "() => window.__launch(true)")
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-repo-picker] [data-repo-candidate]")
@@ -1793,7 +1851,7 @@ let editorTests =
         // a cursor exists, and every cheap tier reads markup that is right either way. And
         // the thing that watches is an `IntersectionObserver` bound after a render to a node
         // Lit drew, which is three things a rendered string does not have.
-        editorCaseIn 390 844 "the listing pages as the reader reaches its foot, without a press" (EDITOR_PORT + 45) <| fun page ->
+        editorCaseIn 390 844 "the listing pages as the reader reaches its foot, without a press" <| fun page ->
             async {
                 do! awaitU (page.EvaluateAsync "() => window.__launch(true)")
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-repo-picker] [data-repo-candidate]")
@@ -1837,7 +1895,7 @@ let editorTests =
         // reverted would pass the focus check, and one that kept the text with the keyboard
         // still over it would pass the value check. Only a browser can see either — focus and
         // a key event are not things a rendered string has.
-        editorCaseIn 390 844 "Enter in the session title lets go of the field and keeps what was typed" (EDITOR_PORT + 16) <| fun page ->
+        editorCaseIn 390 844 "Enter in the session title lets go of the field and keeps what was typed" <| fun page ->
             async {
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-session-title]")
                 do! awaitU (page.FocusAsync "#shell [data-session-title]")
@@ -1866,7 +1924,7 @@ let editorTests =
         //
         // Deliberately not asserted: the default width, the step size, the bounds. Those are
         // the design, and the design changing is not a regression.
-        editorCaseIn 1440 900 "the column divider moves from the keyboard, not only from a drag" (EDITOR_PORT + 8) <| fun page ->
+        editorCaseIn 1440 900 "the column divider moves from the keyboard, not only from a drag" <| fun page ->
             async {
                 // Waited for on the CONTROL, never on the panel: a shut pane is `w-0`, which
                 // Playwright reports as hidden, so waiting for the panel to be visible before
@@ -1960,7 +2018,7 @@ let editorTests =
         // into what a pty expects — printable characters as themselves, Ctrl-<key> as the
         // control code, the keys with no character at all as their escape sequences — is the
         // whole of what a terminal front end does with a keyboard.
-        editorCase "the holder types into the live screen, and the keys reach it as a pty expects" (EDITOR_PORT + 6) <| fun page ->
+        editorCase "the holder types into the live screen, and the keys reach it as a pty expects" <| fun page ->
             async {
                 // The column starts shut, as it does for a fresh client.
                 do! awaitU (page.ClickAsync "#shell [data-terminal-toggle='show']")
@@ -2015,7 +2073,7 @@ let editorTests =
         // lease landing replaces the command line with the lease bar — so what is under test
         // is where focus ends up after a DOM swap, which is not a fact any rendered string
         // holds.
-        editorCase "taking a terminal puts the keyboard in it" (EDITOR_PORT + 16) <| fun page ->
+        editorCase "taking a terminal puts the keyboard in it" <| fun page ->
             async {
                 // `term-harness` is the pane's opening tab, and it holds no lease: a terminal
                 // in block mode, which is where somebody who wants to type is standing. Not
@@ -2040,7 +2098,7 @@ let editorTests =
         // nobody pressing anything. Focus that SURVIVED that render is not stranded and must
         // not be taken — a terminal going full-screen three tabs away is not a reason to yank
         // somebody's caret out of the message they are writing.
-        editorCase "a terminal going live does not take the keyboard from what someone is writing" (EDITOR_PORT + 17) <| fun page ->
+        editorCase "a terminal going live does not take the keyboard from what someone is writing" <| fun page ->
             async {
                 do! awaitU (page.ClickAsync "#shell [data-terminal-toggle='show']")
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-terminal-take='term-harness']")
@@ -2066,7 +2124,7 @@ let editorTests =
         // A `KeyboardEvent` with modifiers on it is the part only a real browser has — the
         // combination is what carries the meaning, and there is no rendered string that holds
         // whether Alt was down when a key went by.
-        editorCase "word-navigation keys reach the pty as the escape sequences they are" (EDITOR_PORT + 20) <| fun page ->
+        editorCase "word-navigation keys reach the pty as the escape sequences they are" <| fun page ->
             async {
                 do! awaitU (page.ClickAsync "#shell [data-terminal-toggle='show']")
                 do! awaitU (page.ClickAsync "#shell [data-terminal-tab='term-live']")
@@ -2097,7 +2155,7 @@ let editorTests =
         // serializer answers with the gap it measured — `ESC[39C` on a 40-column screen,
         // `ESC[99C` on a 100-column one — so this reads the width straight off the rendered
         // line, and would have read 79 for both back when the snapshot carried no size.
-        editorCase "the live screen is the shape the process says it is" (EDITOR_PORT + 18) <| fun page ->
+        editorCase "the live screen is the shape the process says it is" <| fun page ->
             async {
                 do! awaitU (page.ClickAsync "#shell [data-terminal-toggle='show']")
                 do! awaitU (page.ClickAsync "#shell [data-terminal-tab='term-live']")
@@ -2138,7 +2196,7 @@ let editorTests =
         // lays its screen out to a width that stopped being true. Only a browser can answer
         // this: what is under test is a measurement of a real box, taken because the box moved
         // rather than because anything was dispatched.
-        editorCaseIn 1440 900 "a pane the reader resized tells the pty its new width" (EDITOR_PORT + 19) <| fun page ->
+        editorCaseIn 1440 900 "a pane the reader resized tells the pty its new width" <| fun page ->
             async {
                 do! awaitU (page.ClickAsync "#shell [data-terminal-toggle='show']")
                 do! awaitU (page.ClickAsync "#shell [data-terminal-tab='term-live']")
@@ -2165,7 +2223,7 @@ let editorTests =
         // at eighty columns is eighty-column text in the transcript for ever. Only a browser
         // can answer it: what is under test is that a pane showing BLOCKS is a measurable box
         // at all, and that the number follows the reader's own splitter.
-        editorCaseIn 1440 900 "a pane showing blocks measures itself, with no lease to report through" (EDITOR_PORT + 21) <| fun page ->
+        editorCaseIn 1440 900 "a pane showing blocks measures itself, with no lease to report through" <| fun page ->
             async {
                 do! awaitU (page.ClickAsync "#shell [data-terminal-toggle='show']")
                 let! _ =
@@ -2192,7 +2250,7 @@ let editorTests =
         // that it is where the document says — above the message it opens at, across the
         // reading column, and painted. Every cheap tier reads markup, and markup cannot tell a
         // rule standing over its message from one collapsed to nothing behind it.
-        editorCaseIn 1440 900 "a chapter's rule stands above the message it opens, across the column" (EDITOR_PORT + 22) <| fun page ->
+        editorCaseIn 1440 900 "a chapter's rule stands above the message it opens, across the column" <| fun page ->
             async {
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-chapter-rule='msg-filler-8']")
                 let! above =
@@ -2239,7 +2297,7 @@ let editorTests =
         // the cursor on it, or a keyboard reader is shown the message and stranded on the
         // control that scrolled away. Only a browser settles focus: `activeElement` is empty in
         // every cheap tier that reads markup.
-        editorCaseIn 1440 900 "the reply ref takes you to the message it answers, and lands the cursor on it" (EDITOR_PORT + 34) <| fun page ->
+        editorCaseIn 1440 900 "the reply ref takes you to the message it answers, and lands the cursor on it" <| fun page ->
             async {
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-reply-jump][data-reply-ref='msg-harness']")
                 // To the bottom, where the reply sits, so its source is off the top and the jump is real.
@@ -2269,7 +2327,7 @@ let editorTests =
         // it and moves the cursor there — a hook that stopped matching would leave a list of
         // buttons that quietly do nothing, which no rendered string can tell from one that
         // works.
-        editorCaseIn 1440 900 "a chapter in the contents takes you to it" (EDITOR_PORT + 38) <| fun page ->
+        editorCaseIn 1440 900 "a chapter in the contents takes you to it" <| fun page ->
             async {
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-chapters] [data-chapter-entry]")
                 // Away from it first, so the jump has a real scroll to make.
@@ -2299,7 +2357,7 @@ let editorTests =
         // wires no nav toggle; what is under test is the jump, not the chevron. The case reads
         // the cover BEFORE the tap as well as after, so an arrangement that stopped covering
         // anything would fail here rather than pass by vacuity.
-        editorCaseIn 390 844 "a chapter reached from the phone's contents is not left behind the drawer" (EDITOR_PORT + 39) <| fun page ->
+        editorCaseIn 390 844 "a chapter reached from the phone's contents is not left behind the drawer" <| fun page ->
             async {
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-chapters] [data-chapter-entry]")
                 let! covered =
@@ -2339,7 +2397,7 @@ let editorTests =
         // folds every page either way, and the render is the app's own count — so this
         // drives the harness's cold open, fifteen pages a round trip apart, well inside the
         // window a render is held for, and asks how many times the app drew.
-        editorCaseIn 390 844 "pages that leave the client behind are folded but not drawn" (EDITOR_PORT + 40) <| fun page ->
+        editorCaseIn 390 844 "pages that leave the client behind are folded but not drawn" <| fun page ->
             async {
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-conversation]")
                 // 60 items of streamed replies is ~1,500 events: fifteen pages of a hundred,
@@ -2365,7 +2423,7 @@ let editorTests =
         // `restoreSurfaceScroll`). Only a browser has a scroll in flight to take away, so
         // only a browser can watch it survive. Smooth rather than flung: the same in-flight
         // scroll, and one with a stated destination to check against.
-        editorCaseIn 390 844 "a scroll in progress is not taken away by the renders that land during it" (EDITOR_PORT + 42) <| fun page ->
+        editorCaseIn 390 844 "a scroll in progress is not taken away by the renders that land during it" <| fun page ->
             async {
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-conversation]")
                 // Two hundred items, a record a frame for four hundred frames — the scroll has
@@ -2404,7 +2462,7 @@ let editorTests =
         // into it and waits for what was typed to survive a render — which is the whole
         // round trip, from the field through `EditChapterNameMsg` and the session's own text
         // back to the value the view writes.
-        editorCaseIn 1440 900 "what you type on a chapter's rule is what the session calls it" (EDITOR_PORT + 29) <| fun page ->
+        editorCaseIn 1440 900 "what you type on a chapter's rule is what the session calls it" <| fun page ->
             async {
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-chapter-name='msg-filler-8']")
                 do! awaitU (page.ClickAsync "#shell [data-chapter-name='msg-filler-8']")
@@ -2431,7 +2489,7 @@ let editorTests =
         // it is in, at a non-zero height, and further right for a later index than an earlier
         // one. A reference image would fail on a font tweak, which is the coupling this tier
         // exists to avoid.
-        editorCaseIn 1440 900 "a collaborator's caret in a chapter's name stands in that name" (EDITOR_PORT + 40) <| fun page ->
+        editorCaseIn 1440 900 "a collaborator's caret in a chapter's name stands in that name" <| fun page ->
             async {
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-chapter-name='msg-filler-8']")
                 do! awaitU (page.EvaluateAsync "() => window.__chapterCaret('msg-filler-8', 3, 3)")
@@ -2474,7 +2532,7 @@ let editorTests =
         // the side of the sidebar taking the peer's name with it. Markup cannot see that: the
         // words are all present and correct in a string, and only a laid-out column knows they
         // did not fit in it.
-        editorCaseIn 1440 900 "where a peer is never runs off the side of the roster" (EDITOR_PORT + 41) <| fun page ->
+        editorCaseIn 1440 900 "where a peer is never runs off the side of the roster" <| fun page ->
             async {
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-chapter-name='msg-filler-8']")
                 // The chapter whose name nobody has written, so what the roster says is the
@@ -2501,7 +2559,7 @@ let editorTests =
         // First: the control has a BERTH. It is absolutely positioned over the item, so
         // nothing in the flow knows it is there — without a reserved strip the last words of a
         // wrapping line run underneath the dots, which is what shipped until this case existed.
-        editorCaseIn 1440 900 "an item's actions never sit on the words" (EDITOR_PORT + 31) <| fun page ->
+        editorCaseIn 1440 900 "an item's actions never sit on the words" <| fun page ->
             async {
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-conversation] [data-item-actions]")
                 do! awaitU (page.HoverAsync "#shell [data-conversation] [data-message-id='msg-filler-8']")
@@ -2519,7 +2577,7 @@ let editorTests =
         // Second: on a phone the ground is FULL BLEED. A 390px screen has no margin to spend
         // on making a surface look like a card, and a ground inset from both edges of a narrow
         // screen reads as a card rather than as the row it is.
-        editorCaseIn 390 844 "a message's ground reaches both edges of a phone screen" (EDITOR_PORT + 32) <| fun page ->
+        editorCaseIn 390 844 "a message's ground reaches both edges of a phone screen" <| fun page ->
             async {
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-conversation] [data-message-id]")
                 let! spare =
@@ -2532,7 +2590,7 @@ let editorTests =
         // Third: on a desktop it does NOT. The same measurement the other way round — what
         // bounds a message here is the reading column, and a ground that ran the width of a
         // 1440px window would be announcing a line of text nobody could read back.
-        editorCaseIn 1440 900 "a message's ground stops at the reading column, not the window" (EDITOR_PORT + 33) <| fun page ->
+        editorCaseIn 1440 900 "a message's ground stops at the reading column, not the window" <| fun page ->
             async {
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-conversation] [data-message-id]")
                 let! spare = await (page.EvaluateAsync<float> groundSpare)
@@ -2545,7 +2603,7 @@ let editorTests =
         // back — the failure the WCAG floor names, hit on the very first Escape, and one no
         // rendered string can see: the markup after a close is identical whether the cursor
         // landed on the control or nowhere at all.
-        editorCaseIn 1440 900 "Escape closes an item's menu and hands focus back to what opened it" (EDITOR_PORT + 23) <| fun page ->
+        editorCaseIn 1440 900 "Escape closes an item's menu and hands focus back to what opened it" <| fun page ->
             async {
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-conversation] [data-item-actions]")
                 do! awaitU (page.ClickAsync "#shell [data-conversation] [data-item-actions]")
@@ -2570,7 +2628,7 @@ let editorTests =
         // The other door out of the menu, and it strands focus the same way: choosing removes
         // the entry that was pressed. Escape is not this case — a menu can be left by either,
         // and only one of them was putting the cursor back.
-        editorCaseIn 1440 900 "choosing from an item's menu hands focus back to what opened it" (EDITOR_PORT + 25) <| fun page ->
+        editorCaseIn 1440 900 "choosing from an item's menu hands focus back to what opened it" <| fun page ->
             async {
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-conversation] [data-item-actions]")
                 do! awaitU (page.ClickAsync "#shell [data-conversation] [data-item-actions]")
@@ -2593,7 +2651,7 @@ let editorTests =
         // an unreachable control but an INVISIBLE one that is nonetheless the focused thing.
         // Tabbed to for real, because `:focus-visible` is exactly the rule that does not fire
         // for a programmatic `focus()`.
-        editorCaseIn 1440 900 "an item's actions show themselves to a keyboard that reaches them" (EDITOR_PORT + 24) <| fun page ->
+        editorCaseIn 1440 900 "an item's actions show themselves to a keyboard that reaches them" <| fun page ->
             async {
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-conversation] [data-item-actions]")
                 let mutable reached = false
@@ -2627,7 +2685,7 @@ let editorTests =
         // what separates them is whether the pixels are painted. So the count here is of marks
         // a person can SEE — hit-tested at their own centre, never `offsetParent` (null for
         // anything fixed) and never a non-zero rect (a clipped element keeps one).
-        editorCaseIn 390 844 "a turn in flight is stated on the screen exactly once" (EDITOR_PORT + 36) <| fun page ->
+        editorCaseIn 390 844 "a turn in flight is stated on the screen exactly once" <| fun page ->
             async {
                 // Measured with motion turned off, which is a real setting rather than a trick:
                 // a mark that ANIMATES is on the screen at one opacity or another depending on
@@ -2675,7 +2733,7 @@ let editorTests =
         // can: the composer. A turn starting must not push what a person types with off the
         // screen, or the one thing to do while the agent writes — queue the next message — is
         // gone exactly when it is wanted.
-        editorCaseIn 390 844 "a turn starting never costs the composer its line or its send" (EDITOR_PORT + 37) <| fun page ->
+        editorCaseIn 390 844 "a turn starting never costs the composer its line or its send" <| fun page ->
             async {
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-draft-editor]")
                 do! awaitU (page.EvaluateAsync "() => window.__agentTurn()")
@@ -2704,7 +2762,7 @@ let editorTests =
         // identical either way, and so is the row's own bounding box (clipping does not
         // resize a child). What separates them is what stands between the line and the
         // bottom of the band, which is a measurement.
-        editorCaseIn 390 844 "a composer at rest spends no height on verbs nobody can see" (EDITOR_PORT + 48) <| fun page ->
+        editorCaseIn 390 844 "a composer at rest spends no height on verbs nobody can see" <| fun page ->
             async {
                 // Measured with motion off for the reason every geometry case here is: a
                 // `max-height` mid-transition is neither of the two heights being compared.
@@ -2737,7 +2795,7 @@ let editorTests =
         // Both directions, because each alone has a wrong way to pass: a composer that never
         // grew would satisfy "still collapsed", and one that simply opened would satisfy
         // "shows there is more".
-        editorCaseIn 390 844 "a collapsed composer hints at the draft it cannot fit, without opening" (EDITOR_PORT + 49) <| fun page ->
+        editorCaseIn 390 844 "a collapsed composer hints at the draft it cannot fit, without opening" <| fun page ->
             async {
                 do! awaitU (page.EmulateMediaAsync (PageEmulateMediaOptions (ReducedMotion = ReducedMotion.Reduce)))
                 let line = """#shell [data-draft-input] .ProseMirror"""
@@ -2766,7 +2824,7 @@ let editorTests =
         // live TV, through the same mechanism" has to mean — that it lands ON the pinned
         // edge rather than at the recording's start, that focus survives the control swap,
         // and that playing off the pinned end catches the reader back up to live by itself.
-        editorCase "a live terminal rewinds to its pinned edge, and playing off it catches back up" (EDITOR_PORT + 7) <| fun page ->
+        editorCase "a live terminal rewinds to its pinned edge, and playing off it catches back up" <| fun page ->
             async {
                 do! awaitU (page.ClickAsync "#shell [data-terminal-toggle='show']")
                 do! awaitU (page.ClickAsync "#shell [data-terminal-tab='term-live']")
@@ -2814,7 +2872,7 @@ let editorTests =
         // browser can say whether it actually SCROLLED — and whether that scroll survives the
         // render which returns a freshly rendered scrollback to its end, the one thing this
         // could quietly lose to.
-        editorCase "showing a command in its terminal scrolls the history to it" (EDITOR_PORT + 15) <| fun page ->
+        editorCase "showing a command in its terminal scrolls the history to it" <| fun page ->
             async {
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-chat-block]")
                 do! awaitU (page.ClickAsync "#shell [data-chat-block]")
@@ -2852,7 +2910,7 @@ let editorTests =
         // that has bound it says the command. The second is the tap: the chip is the read,
         // the terminal's own card is where it is answered, and a read that could not reach
         // the answer would be the half of this that quietly does not work.
-        editorCase "a queued command says what it will run, and opens the terminal it waits in" (EDITOR_PORT + 40) <| fun page ->
+        editorCase "a queued command says what it will run, and opens the terminal it waits in" <| fun page ->
             async {
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-chat-pending]")
                 let! _ =
@@ -2878,7 +2936,7 @@ let editorTests =
         // removes that tab from the document, and focus has to land on what took its place
         // rather than on `body`. Same floor the DVR's control swap answers, in the surface a
         // keyboard user actually walks.
-        editorCase "a tab is kept by its pin and released from the keyboard, without stranding focus" (EDITOR_PORT + 9) <| fun page ->
+        editorCase "a tab is kept by its pin and released from the keyboard, without stranding focus" <| fun page ->
             async {
                 // A chip's tab arrives previewed — kept by nothing — and selected, since
                 // tapping the chip is what put it there.
@@ -2923,7 +2981,7 @@ let editorTests =
         // replaces the strip and the pane's body at once, so choosing a row removes the
         // control that was pressed, and focus has to land on what replaced it rather than
         // on `body`. That is the WCAG floor, not a nicety.
-        editorCase "the list opens a terminal and hands focus to the pane it replaced itself with" (EDITOR_PORT + 8) <| fun page ->
+        editorCase "the list opens a terminal and hands focus to the pane it replaced itself with" <| fun page ->
             async {
                 do! awaitU (page.ClickAsync "#shell [data-terminal-toggle='show']")
                 do! awaitU (page.ClickAsync "#shell [data-terminal-list-toggle='list']")
@@ -2960,7 +3018,7 @@ let editorTests =
         // disclosure now, and a line inside it has to be the same reachable, pressable thing
         // the chip was before it was grouped. Nothing here asserts the card's layout — that
         // is the design, and the design is what a card is FOR.
-        editorCase "a task card's lines stay real controls, reachable and pressable without a pointer" (EDITOR_PORT + 10) <| fun page ->
+        editorCase "a task card's lines stay real controls, reachable and pressable without a pointer" <| fun page ->
             async {
                 // A real `<details>`, so the disclosure is the browser's: keyboard-operable
                 // and announced without a handler or an ARIA role of our own.
@@ -2999,7 +3057,7 @@ let editorTests =
         // class and still have to append `touchType` themselves. This is the net under both:
         // whatever a person can focus on a phone, at whatever class got there, has to compute
         // to 16px or more, or this fails HERE rather than on somebody's phone.
-        editorCaseIn 390 844 "no field a phone can focus renders under 16px" (EDITOR_PORT + 43) <| fun page ->
+        editorCaseIn 390 844 "no field a phone can focus renders under 16px" <| fun page ->
             async {
                 let! _ = await (page.WaitForSelectorAsync "#shell")
                 // The model picker lives behind settings, and settings lives behind the
@@ -3041,8 +3099,6 @@ let editorTests =
 
 // --- A path-mounted session in a real browser --------------------------------------------
 
-let private MOUNT_PROXY_PORT = 8186
-let private MOUNT_MANAGER_PORT = 8188
 /// The session's own loopback port, learned from the readiness line. The PUBLIC address is
 /// `/s/<id>` on the proxy and does not contain it — which is the whole point of the shape
 /// under test, and why nothing here may pin it.
@@ -3062,10 +3118,9 @@ let private mountDataDir = "tests/browser/.data-mounted"
 /// `stalls` names the requests this front door accepts and never answers — a session whose
 /// upstream took the connection and went quiet, which is a shape a proxy produces and a
 /// killed host does not (that one answers 502 at once). Held until the listener stops.
-let private startStallingMountProxy (publicPort: int) (sessionPort: unit -> int) (stalls: string -> bool) : HttpListener =
-    let listener = new HttpListener ()
-    listener.Prefixes.Add (sprintf "http://127.0.0.1:%d/" publicPort)
-    listener.Start ()
+let private startStallingMountProxy (sessionPort: unit -> int) (stalls: string -> bool) : Serving =
+    let served = listenOnLoopback ()
+    let listener = served.Listener
     // No auto-redirect: a `Location` must reach the browser untouched, which is the
     // half of the flow that proves the session's redirects resolve against its mount.
     let client = new HttpClient (new HttpClientHandler (AllowAutoRedirect = false, UseCookies = false))
@@ -3116,23 +3171,23 @@ let private startStallingMountProxy (publicPort: int) (sessionPort: unit -> int)
             | Choice2Of2 _ -> ()   // listener stopped
         }
     Async.Start (loop ())
-    listener
-
-let private startMountProxy (publicPort: int) (sessionPort: unit -> int) : HttpListener =
-    startStallingMountProxy publicPort sessionPort (fun _ -> false)
+    served
 
 let mutable private mountedHost : Process = null
 
-/// The product entry, told it is fronted: the Manager at a loopback origin (which is also
-/// the OIDC issuer a session fetches discovery against, so it must resolve HERE), and
-/// sessions mounted under a path at the proxy's port.
-let private startMountedHost () : unit =
+/// The product entry, told it is fronted: the Manager at `managerOrigin` (which is also the
+/// OIDC issuer a session fetches discovery against, so it must resolve HERE), and sessions
+/// mounted under a path at `publicOrigin`, the proxy standing in front of it.
+///
+/// Both addresses are the deployment's, never this host's to choose — which is why they
+/// arrive as arguments and why a restart keeps them (`Mounted.Restart`).
+let private startMountedHost (publicOrigin: string) (managerOrigin: string) : unit =
     let psi = ProcessStartInfo "node"
     psi.ArgumentList.Add "app/out/Main.js"
     psi.ArgumentList.Add "--auth"
     psi.ArgumentList.Add "localhost"
     psi.ArgumentList.Add "--port"
-    psi.ArgumentList.Add (string MOUNT_MANAGER_PORT)
+    psi.ArgumentList.Add (string (Uri(managerOrigin).Port))
     psi.ArgumentList.Add "--default-session"
     psi.ArgumentList.Add MOUNT_SESSION
     psi.ArgumentList.Add "--data-dir"
@@ -3141,8 +3196,8 @@ let private startMountedHost () : unit =
     psi.RedirectStandardOutput <- true
     // The two ADDRESSES stay variables: a session inherits them and parses them the same way,
     // which is the whole reason they are not options.
-    psi.EnvironmentVariables.["YESSION_MANAGER_URL"] <- sprintf "http://127.0.0.1:%d" MOUNT_MANAGER_PORT
-    psi.EnvironmentVariables.["YESSION_SESSION_URL"] <- sprintf "http://127.0.0.1:%d/s/{id}" MOUNT_PROXY_PORT
+    psi.EnvironmentVariables.["YESSION_MANAGER_URL"] <- managerOrigin
+    psi.EnvironmentVariables.["YESSION_SESSION_URL"] <- publicOrigin + "/s/{id}"
     let p = new Process (StartInfo = psi)
     let ready = TaskCompletionSource<bool> ()
     p.OutputDataReceived.Add (fun e ->
@@ -3159,6 +3214,42 @@ let private startMountedHost () : unit =
     mountedHost <- p
     if not (ready.Task.Wait 30000) then failwith "mounted host never reported readiness"
     if mountSessionPort = 0 then failwith "the readiness line carried no session port"
+
+/// The mounted deployment a case runs against: a proxy on a public origin of its own, the
+/// product entry behind it, and the session's public address — which is all a case ever sees
+/// of any of it.
+///
+/// The Manager's origin is taken once and KEPT across a restart. A restart here is the session
+/// moving to a new loopback port behind an address that does not move, which is the whole point
+/// of path-mounting; a Manager that moved with it would be testing something else.
+type private Mounted =
+    { Proxy : Serving
+      /// The Manager's own origin — the OIDC issuer, and the page a session is opened from.
+      ManagerOrigin : string
+      /// The session's PUBLIC address, `/s/<id>` on the proxy. The browser knows no other.
+      PublicUrl : string }
+    /// Boot the host again on the same two addresses, after a case has killed it.
+    member this.Restart () : unit = startMountedHost this.Proxy.Origin this.ManagerOrigin
+    member this.Stop () : unit =
+        this.Proxy.Stop ()
+        try if mountedHost <> null then mountedHost.Kill true with _ -> ()
+
+/// A mounted deployment in a clean data dir, with `stalls` naming the requests its proxy
+/// accepts and never answers.
+///
+/// The proxy comes up FIRST, because the host is told where the deployment answers and a
+/// listener that is already bound is an address nothing can take in between.
+let private startMounted (stalls: string -> bool) : Mounted =
+    if Directory.Exists mountDataDir then Directory.Delete (mountDataDir, true)
+    let proxy = startStallingMountProxy (fun () -> mountSessionPort) stalls
+    // The one host here that cannot be told `--port 0`: its own origin is what it hands a
+    // session as the issuer, so it has to be known one line before it boots. Hence a port taken
+    // at `:0` and released, rather than a number somebody chose.
+    let managerOrigin = sprintf "http://127.0.0.1:%d" (freeLoopbackPort ())
+    startMountedHost proxy.Origin managerOrigin
+    { Proxy = proxy
+      ManagerOrigin = managerOrigin
+      PublicUrl = proxy.At (sprintf "/s/%s/" MOUNT_SESSION) }
 
 // --- Reopening a session that is gone (Plan 20, Plan 22) ---------------------------------
 // The arrangement every offline-reopen case shares: a mounted session behind a proxy, a
@@ -3261,13 +3352,11 @@ let private terminalPrinted =
 let private offlineReopen (name: string) (make: IPage -> Async<unit>) (check: IPage -> Async<unit>) =
     testCaseAsync name <|
         async {
-            if Directory.Exists mountDataDir then Directory.Delete (mountDataDir, true)
-            startMountedHost ()
-            let proxy = startMountProxy MOUNT_PROXY_PORT (fun () -> mountSessionPort)
+            let mounted = startMounted (fun _ -> false)
             let mutable browserToClose : IBrowser option = None
             let mutable playwrightToDispose : IPlaywright option = None
             try
-                let publicUrl = sprintf "http://127.0.0.1:%d/s/%s/" MOUNT_PROXY_PORT MOUNT_SESSION
+                let publicUrl = mounted.PublicUrl
                 let! pw = await (Playwright.CreateAsync ())
                 playwrightToDispose <- Some pw
                 let! br =
@@ -3315,25 +3404,22 @@ let private offlineReopen (name: string) (make: IPage -> Async<unit>) (check: IP
             finally
                 browserToClose |> Option.iter (fun b -> b.CloseAsync () |> ignore)
                 playwrightToDispose |> Option.iter (fun p -> p.Dispose ())
-                proxy.Stop ()
-                try mountedHost.Kill true with _ -> ()
+                mounted.Stop ()
         }
 
 let mountedTests =
     testList "Path-mounted session (browser)" [
         testCaseAsync "a session served under a path boots, signs in, and connects over WebRTC" <|
             async {
-                if Directory.Exists mountDataDir then Directory.Delete (mountDataDir, true)
-                startMountedHost ()
-                let proxy = startMountProxy MOUNT_PROXY_PORT (fun () -> mountSessionPort)
+                let mounted = startMounted (fun _ -> false)
                 // Teardown in `finally`: a failing assertion used to skip it and leave the
-                // Manager, its session child and the proxy holding ports 8186-8188, so one
-                // red run could poison whatever ran next (the failing CI run showed exactly
-                // that, as "Terminate orphan process" lines).
+                // Manager, its session child and the proxy holding their ports, so one red run
+                // could poison whatever ran next (the failing CI run showed exactly that, as
+                // "Terminate orphan process" lines).
                 let mutable browserToClose : IBrowser option = None
                 let mutable playwrightToDispose : IPlaywright option = None
                 try
-                    let publicUrl = sprintf "http://127.0.0.1:%d/s/%s/" MOUNT_PROXY_PORT MOUNT_SESSION
+                    let publicUrl = mounted.PublicUrl
                     let! pw = await (Playwright.CreateAsync ())
                     playwrightToDispose <- Some pw
                     let! br =
@@ -3420,7 +3506,7 @@ let mountedTests =
                     mountedHost.Kill true
                     mountedHost.WaitForExit ()
                     if Directory.Exists mountDataDir then Directory.Delete (mountDataDir, true)
-                    startMountedHost ()
+                    mounted.Restart ()
 
                     // The SAME url — the session came back on a different loopback port and
                     // the proxy followed it, which the browser never saw. So the origin is
@@ -3432,8 +3518,7 @@ let mountedTests =
                 finally
                     browserToClose |> Option.iter (fun b -> b.CloseAsync () |> ignore)
                     playwrightToDispose |> Option.iter (fun p -> p.Dispose ())
-                    proxy.Stop ()
-                    try mountedHost.Kill true with _ -> ()
+                    mounted.Stop ()
             }
 
         // THE bug report, and the last thing plan 20 owed: open a session you have read
@@ -3568,14 +3653,12 @@ let mountedTests =
         // answer this; the history stack is nothing the markup knows.
         testCaseAsync "back from a freshly opened session is the Manager, not a sign-in bounce" <|
             async {
-                if Directory.Exists mountDataDir then Directory.Delete (mountDataDir, true)
-                startMountedHost ()
-                let proxy = startMountProxy MOUNT_PROXY_PORT (fun () -> mountSessionPort)
+                let mounted = startMounted (fun _ -> false)
                 let mutable browserToClose : IBrowser option = None
                 let mutable playwrightToDispose : IPlaywright option = None
                 try
-                    let managerUrl = sprintf "http://127.0.0.1:%d/" MOUNT_MANAGER_PORT
-                    let publicUrl = sprintf "http://127.0.0.1:%d/s/%s/" MOUNT_PROXY_PORT MOUNT_SESSION
+                    let managerUrl = mounted.ManagerOrigin + "/"
+                    let publicUrl = mounted.PublicUrl
                     let! pw = await (Playwright.CreateAsync ())
                     playwrightToDispose <- Some pw
                     let! br =
@@ -3602,8 +3685,7 @@ let mountedTests =
                 finally
                     browserToClose |> Option.iter (fun b -> b.CloseAsync () |> ignore)
                     playwrightToDispose |> Option.iter (fun p -> p.Dispose ())
-                    proxy.Stop ()
-                    try mountedHost.Kill true with _ -> ()
+                    mounted.Stop ()
             }
 
         // phone with its tunnel not yet up, a proxy whose upstream accepted and stalled, a
@@ -3614,16 +3696,12 @@ let mountedTests =
         // answers 502 at once and the case is precisely an answer that never comes.
         testCaseAsync "a probe that never answers is answered for it, and the way back is offered" <|
             async {
-                if Directory.Exists mountDataDir then Directory.Delete (mountDataDir, true)
-                startMountedHost ()
                 let mutable stalling = false
-                let proxy =
-                    startStallingMountProxy MOUNT_PROXY_PORT (fun () -> mountSessionPort) (fun url ->
-                        stalling && url.EndsWith "/me")
+                let mounted = startMounted (fun url -> stalling && url.EndsWith "/me")
                 let mutable browserToClose : IBrowser option = None
                 let mutable playwrightToDispose : IPlaywright option = None
                 try
-                    let publicUrl = sprintf "http://127.0.0.1:%d/s/%s/" MOUNT_PROXY_PORT MOUNT_SESSION
+                    let publicUrl = mounted.PublicUrl
                     let! pw = await (Playwright.CreateAsync ())
                     playwrightToDispose <- Some pw
                     let! br =
@@ -3649,8 +3727,7 @@ let mountedTests =
                 finally
                     browserToClose |> Option.iter (fun b -> b.CloseAsync () |> ignore)
                     playwrightToDispose |> Option.iter (fun p -> p.Dispose ())
-                    proxy.Stop ()
-                    try mountedHost.Kill true with _ -> ()
+                    mounted.Stop ()
             }
 
         // Plan 22, and the other half of the bug report: the conversation came back offline
@@ -3696,8 +3773,6 @@ let mountedTests =
 // `text/plain` body, that is a message on a laptop and a file called `document.txt` on a
 // phone.
 
-let private FRONT_PORT = 8190
-let private FRONT_MANAGER_PORT = 8191
 let private FRONT_SESSION = "front-default"
 let private frontDataDir = "tests/browser/.data-front"
 
@@ -3709,10 +3784,9 @@ let private frontDataDir = "tests/browser/.data-front"
 /// go away again. Where each session actually listens is read off the Manager's registry
 /// stream, the same subscription an operator's proxy holds open, because a fixture that was
 /// TOLD the port would not be standing where the lag is.
-let private startFrontDoor (publicPort: int) (managerPort: int) (lag: int) : HttpListener =
-    let listener = new HttpListener ()
-    listener.Prefixes.Add (sprintf "http://127.0.0.1:%d/" publicPort)
-    listener.Start ()
+let private startFrontDoor (managerPort: int) (lag: int) : Serving =
+    let served = listenOnLoopback ()
+    let listener = served.Listener
     let client = new HttpClient (new HttpClientHandler (AllowAutoRedirect = false, UseCookies = false))
     let ports = System.Collections.Concurrent.ConcurrentDictionary<string, int> ()
     let asked = System.Collections.Concurrent.ConcurrentDictionary<string, int> ()
@@ -3812,28 +3886,34 @@ let private startFrontDoor (publicPort: int) (managerPort: int) (lag: int) : Htt
             | Choice2Of2 _ -> ()   // listener stopped
         }
     Async.Start (loop ())
-    listener
+    served
 
 let mutable private frontedHost : Process = null
 
-/// The product entry, told that its ONE public origin is the front door: the Manager at its
-/// root (which is also the OIDC issuer, so it must resolve there) and sessions under `/s/{id}`
-/// on the same origin.
-let private startFrontedHost () : unit =
+/// The product entry, told that its ONE public origin is the front door at `publicOrigin`: the
+/// Manager at its root (which is also the OIDC issuer, so it must resolve there) and sessions
+/// under `/s/{id}` on the same origin.
+///
+/// Both addresses arrive as arguments because neither is this host's to choose, and its own
+/// is the one a Manager behind a proxy cannot be told `0` for: it launches its default session
+/// while booting, that session fetches discovery through the door, and the door has to know
+/// where to forward that before the Manager has said anything at all. (It was tried the other
+/// way, and the session exited on a 502 from a door forwarding to port 0.)
+let private startFrontedHost (publicOrigin: string) (managerPort: int) : unit =
     let psi = ProcessStartInfo "node"
     psi.ArgumentList.Add "app/out/Main.js"
     psi.ArgumentList.Add "--auth"
     psi.ArgumentList.Add "localhost"
     psi.ArgumentList.Add "--port"
-    psi.ArgumentList.Add (string FRONT_MANAGER_PORT)
+    psi.ArgumentList.Add (string managerPort)
     psi.ArgumentList.Add "--default-session"
     psi.ArgumentList.Add FRONT_SESSION
     psi.ArgumentList.Add "--data-dir"
     psi.ArgumentList.Add frontDataDir
     psi.UseShellExecute <- false
     psi.RedirectStandardOutput <- true
-    psi.EnvironmentVariables.["YESSION_MANAGER_URL"] <- sprintf "http://127.0.0.1:%d" FRONT_PORT
-    psi.EnvironmentVariables.["YESSION_SESSION_URL"] <- sprintf "http://127.0.0.1:%d/s/{id}" FRONT_PORT
+    psi.EnvironmentVariables.["YESSION_MANAGER_URL"] <- publicOrigin
+    psi.EnvironmentVariables.["YESSION_SESSION_URL"] <- publicOrigin + "/s/{id}"
     let p = new Process (StartInfo = psi)
     let ready = TaskCompletionSource<bool> ()
     // The management UI's line, not the session's: this case drives the Manager, and that line
@@ -3852,11 +3932,16 @@ let frontDoorTests =
                 if Directory.Exists frontDataDir then Directory.Delete (frontDataDir, true)
                 // The door comes up first: the Manager's public origin IS this port, and its
                 // default session fetches OIDC discovery against it while booting.
-                let door = startFrontDoor FRONT_PORT FRONT_MANAGER_PORT 2
+                // The door first, and on a port of its own: the Manager's public origin IS
+                // this port, and its default session fetches OIDC discovery against it while
+                // booting. The Manager's own port is taken at `:0` and released, because the
+                // door is told where to forward before the Manager exists to be asked.
+                let frontManagerPort = freeLoopbackPort ()
+                let door = startFrontDoor frontManagerPort 2
                 let mutable browserToClose : IBrowser option = None
                 let mutable playwrightToDispose : IPlaywright option = None
                 try
-                    startFrontedHost ()
+                    startFrontedHost door.Origin frontManagerPort
                     let! pw = await (Playwright.CreateAsync ())
                     playwrightToDispose <- Some pw
                     let! br = await (pw.Chromium.LaunchAsync (BrowserTypeLaunchOptions (ExecutablePath = chromiumPath ())))
@@ -3866,7 +3951,7 @@ let frontDoorTests =
                     page.SetDefaultTimeout 30000.0f
                     let evidence = watching page
                     do! reporting "create behind a front door" page evidence <| async {
-                    let! _ = await (page.GotoAsync (sprintf "http://127.0.0.1:%d/" FRONT_PORT))
+                    let! _ = await (page.GotoAsync (door.At "/"))
 
                     // Pressed, not POSTed: the whole fault lives in what the browser does with
                     // the answer, so the browser has to be the thing that asks.
@@ -3931,8 +4016,6 @@ let frontDoorTests =
 // by hand before this case existed, and its identity translation has an ordering trap (the
 // README) that reads fine and strips the user — which only a run can see.
 
-let private FRONTED_PORT = 8192
-let private FRONTED_MANAGER_PORT = 8193
 let private frontedDataDir = "tests/browser/.data-fronted"
 let private frontedMapDir = frontedDataDir + "/proxy"
 
@@ -3946,13 +4029,27 @@ let private FRONTED_NAME = "Alice Example"
 type private Deployed =
     { Label: string
       Process: Process
+      /// The origin its readiness line carried, where it carried one. A piece told `--port 0`
+      /// states its address there and nowhere else, so this is the only thing that knows it.
+      Origin: string option
       Said: Text.StringBuilder }
+    /// Where it came up, for a caller that has to address it. A piece whose readiness line
+    /// named no address cannot be addressed, and says so rather than answering with a guess.
+    member this.At (path: string) : string =
+        match this.Origin with
+        | Some origin -> origin + path
+        | None -> failwithf "%s never said where it came up" this.Label
+    /// The port it came up on, for the rare assertion that is about the port itself.
+    member this.Port : int = Uri(this.At "/").Port
     member this.Stop () =
         try if not this.Process.HasExited then this.Process.Kill true with _ -> ()
 
 /// Spawn one piece of the deployment and wait for the line that says it is up. A piece that
 /// dies on its arguments fails here, naming itself, rather than as a wait downstream that
 /// never settles.
+///
+/// The URL in that line, where there is one, is the address it really came up on — which is
+/// what lets a piece be told `--port 0` and asked afterwards rather than assigned a number.
 let private deploy
     (label: string)
     (command: string)
@@ -3969,10 +4066,15 @@ let private deploy
     let p = new Process (StartInfo = psi)
     let said = Text.StringBuilder ()
     let up = TaskCompletionSource<bool> ()
+    // A `ref` rather than a `let mutable`, because `heard` is a closure and F# will not let one
+    // capture a mutable local.
+    let origin = ref None
     let heard (line: string) =
         if line <> null then
             lock said (fun () -> said.AppendLine line |> ignore)
-            if ready line then up.TrySetResult true |> ignore
+            if ready line then
+                origin.Value <- urlIn line |> Option.map (fun url -> url.TrimEnd '/')
+                up.TrySetResult true |> ignore
     p.OutputDataReceived.Add (fun e -> heard e.Data)
     p.ErrorDataReceived.Add (fun e -> heard e.Data)
     p.EnableRaisingEvents <- true
@@ -3980,27 +4082,41 @@ let private deploy
     p.Start () |> ignore
     p.BeginOutputReadLine ()
     p.BeginErrorReadLine ()
-    let deployed = { Label = label; Process = p; Said = said }
     if not (up.Task.Wait 60000) || not up.Task.Result then
-        deployed.Stop ()
+        try if not p.HasExited then p.Kill true with _ -> ()
         failwithf "%s never came up; it said:\n%s" label (string said)
-    deployed
+    // Read AFTER the wait: the readiness line is where the address is stated, so there is
+    // nothing to read until it has arrived.
+    { Label = label; Process = p; Origin = origin.Value; Said = said }
+
+/// The deployment, and the one address a person on the tailnet ever sees of it.
+type private Fronted =
+    { /// The public origin — caddy's, which is the Manager's origin too.
+      Origin : string
+      Pieces : Deployed list }
 
 /// The three processes, in the order a cold boot needs them: the proxy first, because the
 /// Manager's public origin IS the proxy and its default session runs OIDC discovery against
 /// it while booting; the Manager; then the map, which needs the Manager's stream to follow.
 /// Everything here is what the README says to run, with the README's own template.
-let private deployFronted () : Deployed list =
+///
+/// Both ports are taken at `:0` and released rather than chosen. Neither piece can be told
+/// `0` and asked afterwards: caddy is handed the Manager's address to reverse-proxy to, and
+/// the Manager is handed caddy's as its public origin, so each has to be known before either
+/// starts.
+let private deployFronted () : Fronted =
     if Directory.Exists frontedDataDir then Directory.Delete (frontedDataDir, true)
     Directory.CreateDirectory frontedMapDir |> ignore
-    let origin = sprintf "http://127.0.0.1:%d" FRONTED_PORT
+    let frontedPort = freeLoopbackPort ()
+    let frontedManagerPort = freeLoopbackPort ()
+    let origin = sprintf "http://127.0.0.1:%d" frontedPort
     let proxy =
         deploy
             "caddy"
             "caddy"
             [ "run"; "--config"; "examples/proxy/caddy/Caddyfile"; "--adapter"; "caddyfile"; "--watch" ]
-            [ "YESSION_PROXY_PORT", string FRONTED_PORT
-              "YESSION_PROXY_MANAGER", sprintf "127.0.0.1:%d" FRONTED_MANAGER_PORT
+            [ "YESSION_PROXY_PORT", string frontedPort
+              "YESSION_PROXY_MANAGER", sprintf "127.0.0.1:%d" frontedManagerPort
               // Absolute: an `import` glob is resolved against the Caddyfile's own directory,
               // and the map is written under this suite's, not the example's.
               "YESSION_PROXY_SESSIONS", Path.GetFullPath frontedMapDir + "/sessions*.caddy" ]
@@ -4010,7 +4126,7 @@ let private deployFronted () : Deployed list =
             "the Manager"
             "node"
             [ "app/out/Main.js"; "--auth"; "trusted-headers"; "--secrets"; "ephemeral"
-              "--port"; string FRONTED_MANAGER_PORT; "--data-dir"; frontedDataDir ]
+              "--port"; string frontedManagerPort; "--data-dir"; frontedDataDir ]
             [ "YESSION_MANAGER_URL", origin
               "YESSION_SESSION_URL", origin + "/s/{id}" ]
             (fun line -> line.Contains "management UI at")
@@ -4019,14 +4135,14 @@ let private deployFronted () : Deployed list =
             "sessions-map"
             "node"
             [ "examples/proxy/main.mjs"
-              "--manager"; sprintf "http://127.0.0.1:%d" FRONTED_MANAGER_PORT
+              "--manager"; sprintf "http://127.0.0.1:%d" frontedManagerPort
               "--as"; "proxy-map"
               "--out"; frontedMapDir + "/sessions.caddy"
               "--empty"; "# no running sessions"
               "--template"; "@s_{id} path /s/{id} /s/{id}/*\nhandle @s_{id} {\n\treverse_proxy 127.0.0.1:{port}\n}" ]
             []
             (fun line -> line.Contains " follows ")
-    [ proxy; manager; map ]
+    { Origin = origin; Pieces = [ proxy; manager; map ] }
 
 let frontedTests =
     testList "A fronted deployment, for real (browser)" [
@@ -4058,7 +4174,7 @@ let frontedTests =
                     // handed it, so read it rather than wait thirty seconds for a Create
                     // button a 401 page will never show. (The deletion-ordering trap in the
                     // Caddyfile fails exactly here: the Manager sees nobody.)
-                    let! landing = await (page.GotoAsync (sprintf "http://127.0.0.1:%d/" FRONTED_PORT))
+                    let! landing = await (page.GotoAsync (deployed.Origin + "/"))
                     if landing.Status <> 200 then
                         let! body = await (landing.TextAsync ())
                         failwithf
@@ -4110,7 +4226,7 @@ let frontedTests =
                                         Yession.App.Dom.Hooks.connection
                                         Yession.App.Dom.Hooks.displayName))
                         let said =
-                            deployed
+                            deployed.Pieces
                             |> List.map (fun d -> sprintf "--- %s said ---\n%s" d.Label (lock d.Said (fun () -> string d.Said)))
                             |> String.concat "\n"
                         failwithf
@@ -4122,7 +4238,7 @@ let frontedTests =
                     browserToClose |> Option.iter (fun b -> b.CloseAsync () |> ignore)
                     playwrightToDispose |> Option.iter (fun p -> p.Dispose ())
                     // Reverse order: the map and the Manager before the proxy they sit behind.
-                    for d in List.rev deployed do d.Stop ()
+                    for d in List.rev deployed.Pieces do d.Stop ()
             }
     ]
 
@@ -4135,7 +4251,6 @@ let frontedTests =
 // click, leaving Back to exit the page, while a `popstate` handler waited for an event no
 // click could produce.
 
-let private FILTERS_MANAGER_PORT = 8194
 let private filtersDataDir = "tests/browser/.data-filters"
 
 let filterTests =
@@ -4147,8 +4262,10 @@ let filterTests =
                     deploy
                         "the Manager"
                         "node"
+                        // `--port 0`: the OS chooses, and the readiness line says which, so
+                        // this suite knows nothing about any other's address.
                         [ "app/out/Main.js"; "--auth"; "localhost"; "--secrets"; "ephemeral"
-                          "--port"; string FILTERS_MANAGER_PORT; "--data-dir"; filtersDataDir ]
+                          "--port"; "0"; "--data-dir"; filtersDataDir ]
                         []
                         (fun line -> line.Contains "management UI at")
                 let mutable browserToClose : IBrowser option = None
@@ -4162,7 +4279,7 @@ let filterTests =
                     page.SetDefaultTimeout 30000.0f
                     let evidence = watching page
                     do! reporting "filter history" page evidence <| async {
-                    let! _ = await (page.GotoAsync (sprintf "http://127.0.0.1:%d/" FILTERS_MANAGER_PORT))
+                    let! _ = await (page.GotoAsync (manager.At "/"))
                     let archived = sprintf "[%s=\"show-archived\"]" Yession.App.Dom.Manager.filter
                     let! _ = await (page.WaitForSelectorAsync archived)
                     do! awaitU (page.ClickAsync archived)
@@ -4215,7 +4332,6 @@ let filterTests =
 // can be READ off it until then. So the case that reads answers the POST with a 204, which
 // is the one response a navigation can get that leaves the page where it was.
 
-let private PRESS_MANAGER_PORT = 8195
 let private pressDataDir = "tests/browser/.data-press"
 let private createButton = sprintf "[%s] button" Yession.App.Dom.Manager.createSession
 
@@ -4256,15 +4372,23 @@ let private push (page: IPage) ((x, y): float32 * float32) : Async<unit> =
 /// asked `aria-busy` only ever answered once the timer had released the navigation, and on a
 /// slow runner it answered "execution context was destroyed" instead, which is how master's
 /// release run for #736 went red on a case the product had passed.
-let private withHeldCreate (name: string) (release: Release) (body: IBrowser -> IPage -> Hold -> Async<unit>) : Async<unit> =
+let private withHeldCreate
+    (name: string)
+    (release: Release)
+    (body: Deployed -> IBrowser -> IPage -> Hold -> Async<unit>)
+    : Async<unit> =
     async {
         if Directory.Exists pressDataDir then Directory.Delete (pressDataDir, true)
         let manager =
             deploy
                 "the Manager"
                 "node"
+                // `--port 0`: the OS chooses, and the readiness line says which. The Manager is
+                // handed to the body because two of its cases have to address it — one of them
+                // about the browser having LEFT this port, which is the one thing here that is
+                // genuinely about a number.
                 [ "app/out/Main.js"; "--auth"; "localhost"; "--secrets"; "ephemeral"
-                  "--port"; string PRESS_MANAGER_PORT; "--data-dir"; pressDataDir ]
+                  "--port"; "0"; "--data-dir"; pressDataDir ]
                 []
                 (fun line -> line.Contains "management UI at")
         let mutable browserToClose : IBrowser option = None
@@ -4297,10 +4421,10 @@ let private withHeldCreate (name: string) (release: Release) (body: IBrowser -> 
                 do! awaitU (page.RouteAsync ("**/sessions", fun route ->
                         if route.Request.Method = "POST" then Async.Start (holding route)
                         else route.ContinueAsync () |> ignore))
-                let! _ = await (page.GotoAsync (sprintf "http://127.0.0.1:%d/" PRESS_MANAGER_PORT))
+                let! _ = await (page.GotoAsync (manager.At "/"))
                 let! _ = await (page.WaitForSelectorAsync createButton)
                 try
-                    do! body br page hold
+                    do! body manager br page hold
                 finally
                     hold.LetGo ()
             }
@@ -4313,7 +4437,7 @@ let private withHeldCreate (name: string) (release: Release) (body: IBrowser -> 
 let pressTests =
     testList "Pressing Create (browser)" [
         testCaseAsync "a second push before the first lands is refused: one session" <|
-            withHeldCreate "double create" LetThrough (fun _ page hold -> async {
+            withHeldCreate "double create" LetThrough (fun manager _ page hold -> async {
                 let posted = ResizeArray<string> ()
                 page.Request.Add (fun r -> if r.Method = "POST" && r.Url.EndsWith "/sessions" then posted.Add r.Url)
                 let! at = whereCreateIs page
@@ -4323,12 +4447,12 @@ let pressTests =
                 do! hold.Held
                 do! push page at
                 hold.LetGo ()
-                do! waitFor "the browser to have left for the new session" page (sprintf "location.port !== '%d'" PRESS_MANAGER_PORT)
+                do! waitFor "the browser to have left for the new session" page (sprintf "location.port !== '%d'" manager.Port)
                 Expect.equal posted.Count 1 (sprintf "two pushes, one session: %A" (List.ofSeq posted))
             })
 
         testCaseAsync "a rows frame under a held Create leaves it held, and under the same finger" <|
-            withHeldCreate "held through a frame" AnswerNothing (fun br page hold -> async {
+            withHeldCreate "held through a frame" AnswerNothing (fun manager br page hold -> async {
                 let! at = whereCreateIs page
                 do! push page at
                 do! hold.Held
@@ -4338,7 +4462,7 @@ let pressTests =
                 // is let go — answered with nothing, which leaves the page where it was — and
                 // the frame confirmed afterwards.)
                 let! other = await (br.NewPageAsync ())
-                let! _ = await (other.GotoAsync (sprintf "http://127.0.0.1:%d/" PRESS_MANAGER_PORT))
+                let! _ = await (other.GotoAsync (manager.At "/"))
                 do! awaitU (other.ClickAsync (sprintf "[%s]" Yession.App.Dom.Manager.archive))
                 hold.LetGo ()
                 do! waitFor "the frame to have landed here" page (sprintf "document.querySelector('[%s]') === null" Yession.App.Dom.Manager.archive)
