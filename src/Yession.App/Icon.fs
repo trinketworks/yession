@@ -99,6 +99,10 @@ module Icon =
     /// A sandbox: a box, drawn as the three faces its edges show — a confined place work
     /// runs in. The mark a sandbox wears wherever a sentence points at one.
     let private sandboxPath = "M2.5 5.5 L8 2.5 L13.5 5.5 L13.5 11 L8 14 L2.5 11 Z M2.5 5.5 L8 8.5 L13.5 5.5 M8 8.5 L8 14"
+    /// A pull request: a branch line with a commit square at each end, and a second line
+    /// bending into it — a change asking to join. The mark a PR wears wherever a sentence
+    /// points at one.
+    let private prPath = "M4.5 3.5 L4.5 12.5 M3 2 L6 2 L6 5 L3 5 Z M3 11 L6 11 L6 14 L3 14 Z M11.5 7 L11.5 12.5 M10 11 L13 11 L13 14 L10 14 Z M8 4.5 L11.5 4.5 L11.5 7"
 
     // --- The vocabulary ----------------------------------------------------------------------
     // 14px inside a 24px icon button; 12px where an icon rides a caps-label line.
@@ -158,6 +162,7 @@ module Icon =
     let repoSm = stroked "w-3.5 h-3.5 block" repoPath
     let keySm = stroked "w-3.5 h-3.5 block" keyPath
     let sandboxSm = stroked "w-3.5 h-3.5 block" sandboxPath
+    let prSm = stroked "w-3.5 h-3.5 block" prPath
 
     /// GitHub's mark, as GitHub draws it: the one FILLED shape in this file, and the one
     /// exception to its vocabulary, because a brand's mark is not ours to redraw in strokes

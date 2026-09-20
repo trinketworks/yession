@@ -1268,6 +1268,28 @@ let private uiChecklistTests =
             let text = System.Text.RegularExpressions.Regex.Replace(element.Substring (element.IndexOf ">" + 1), "<[^>]*>", "").Trim ()
             Expect.equal text (ConversationItem.said item) "whole, scope and backend included"
 
+        // A pull request a sentence points at leads to the pull request, like a repository
+        // leads to its page: a real link, reachable by keyboard.
+        testCase "a PR note's pull request is a reference that leads to it" <| fun () ->
+            let pr = PrRef.create (RepoRef.create "octo/hello" |> expect) 12 |> expect
+            let note : ConversationItem =
+                { MessageId = MessageId.create "msg-pr" |> expect
+                  Author = PeerRef ada
+                  Content =
+                    ItemContent.Act (Act.PrUnwatched { MessageId = MessageId.create "msg-pr" |> expect; Pr = pr; Actor = PeerRef ada })
+                  Status = Complete
+                  Offset = EventOffset.create 1L |> expect
+                  Woke = None; Replying = None }
+            let html =
+                Support.render
+                    { representativeModel with
+                        Conversation = { representativeModel.Conversation with Items = [ note ] } }
+            let start = html.IndexOf (Dom.attr "data-entity" (EntityRef.said (EntityRef.Pr pr)))
+            Expect.isTrue (start >= 0) "the pull request is its own element on the note"
+            let opened = html.LastIndexOf ("<a ", start)
+            let element = html.Substring (opened, html.IndexOf (">", start) - opened)
+            Expect.isTrue (element.Contains "href=\"https://github.com/octo/hello/pull/12\"") "and it leads to the pull request"
+
         // The other half, and the reason the detail is an option rather than an empty
         // string: an act that is already one clause must not grow a blank second line under
         // it, which reads as something withheld.
