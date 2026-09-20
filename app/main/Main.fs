@@ -26,14 +26,14 @@ open Yession.Host
 // points at a real option can be checked against the same list this parses.
 let private cli = ManagerCli.spec
 
-let private args = Cli.parseOrExit cli Version.current
+let private args = Interop.parseOrExit cli Version.current
 
 // Before anything is read: is the environment still setting something that moved onto the
 // command line above? Refused, and every one of them named at once — see Retirements for
 // why a moved setting must never be merely ignored.
 match Retirements.found Retirements.manager (fun name -> Interop.envOr name "") with
 | [] -> ()
-| stale -> Cli.rejectValue cli (Retirements.complaint stale)
+| stale -> Interop.rejectValue cli (Retirements.complaint stale)
 
 let private expect =
     function
@@ -52,7 +52,7 @@ let private dataDir = Cli.valueOf ManagerCli.dataDirOption args |> Option.defaul
 let private managerPort =
     match ProcessManager.ManagerPort.ofName (Cli.valueOf ManagerCli.portOption args) with
     | Ok port -> port
-    | Error e -> Cli.rejectValue cli e
+    | Error e -> Interop.rejectValue cli e
 
 // How long a session may go unused before the Manager stops it (Plan 11). Unset = never,
 // which is the default: reaping trades a launch on the next visit for everything an idle
@@ -67,7 +67,7 @@ let private idleTimeout =
     | Some given ->
         match Yession.Manager.IdleWindow.parse given with
         | Ok window -> window
-        | Error e -> Cli.rejectValue cli e
+        | Error e -> Interop.rejectValue cli e
 
 // Who the humans at this Manager are (Plan 07): `--auth localhost` trusts the
 // loopback interface (single-machine deployment), `--auth trusted-headers` trusts the
@@ -77,7 +77,7 @@ let private idleTimeout =
 let private strategy =
     match Yession.Oidc.Strategy.ofName (Cli.valueOf ManagerCli.authOption args) with
     | Ok s -> s
-    | Error e -> Cli.rejectValue cli e
+    | Error e -> Interop.rejectValue cli e
 
 // Whether secrets persist across restarts (`--secrets`). Only the NAME is settled here —
 // what it resolves to needs the host probed for a credential manager, which happens in the
@@ -86,7 +86,7 @@ let private strategy =
 let private secretsMode =
     match ProcessManager.SecretsMode.ofName (Cli.valueOf ManagerCli.secretsOption args) with
     | Ok m -> m
-    | Error e -> Cli.rejectValue cli e
+    | Error e -> Interop.rejectValue cli e
 
 // How this deployment is reached from outside (Plan 09). Parsed once, HERE, so a
 // combination that cannot work is a refused boot rather than links and redirect URIs that
@@ -95,7 +95,7 @@ let private secretsMode =
 let private publicAccess =
     match Interop.publicAccess () with
     | Ok access -> access
-    | Error e -> Cli.abort e
+    | Error e -> Interop.abort e
 
 let private nodePath : string = Node.Api.``process``.execPath
 
@@ -161,7 +161,7 @@ let private checkReport () =
 
 // `--detailed` alone does nothing, so it is refused rather than ignored.
 if Cli.isSet ManagerCli.detailedOption args && not (Cli.isSet ManagerCli.checkOption args) then
-    Cli.rejectValue cli "--detailed says what a --check report means, so it needs --check"
+    Interop.rejectValue cli "--detailed says what a --check report means, so it needs --check"
 
 if Cli.isSet ManagerCli.checkOption args then
     printfn "%s" (checkReport ())
@@ -190,7 +190,7 @@ Async.StartImmediate(
             // `--secrets durable` on a host with no credential manager. A configuration
             // refusal like the ones above, and reported the same way — it just could not be
             // decided until the host had been probed.
-            | Error e -> Cli.abort e
+            | Error e -> Interop.abort e
         let! manager =
             ProcessManager.createWithUi
                 { ProcessManager.Options.defaults dataDir sessionCommand sessionArgs with

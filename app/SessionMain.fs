@@ -23,7 +23,7 @@ open Yession.Host
 // Manager spawns it with. `--version` and `--help` still answer, before any configuration is
 // read: no data directory, no ports, no Manager. They are the only things a Session Process
 // will do without a session.
-Cli.parseOrExit (Cli.spec "yession-session" []) Version.current |> ignore
+Interop.parseOrExit (Cli.spec "yession-session" []) Version.current |> ignore
 
 /// The process's one clock. Everything here that asks the time or waits some of it out —
 /// the Host and all it composes, the provider polls below, the caches' freshness — is

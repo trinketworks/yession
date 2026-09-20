@@ -12,7 +12,8 @@ module Yession.Domain.Cli
 //     `strict`, `parseArgs` refuses instead.
 //   - A bad value threw at module init, inside Fable's async, and surfaced as
 //     `UnhandledPromiseRejection ... "[object Object]"` — technically a refused boot, but
-//     nothing an operator could act on. `parseOrExit` prints the reason and the usage.
+//     nothing an operator could act on. `outcome` answers with the reason and the usage
+//     instead, and the bin says it before it stops.
 //
 // Argu would be the F# answer on .NET and cannot be the answer here: Fable compiles from
 // F# SOURCE, so a package has to ship its source files to be usable at all, and Argu ships
@@ -73,26 +74,6 @@ type private ParsedArgs =
 
 [<Import("parseArgs", "node:util")>]
 let private parseArgs (config: obj) : ParsedArgs = jsNative
-
-/// The argv a bin was started with, its own executable and script dropped.
-[<Emit("process.argv.slice(2)")>]
-let private argv () : string array = jsNative
-
-/// Say what happened and stop. Typed as returning anything because it returns nothing —
-/// `process.exit` does not come back, and pretending otherwise is what forced the old
-/// `failwith`-at-module-init that produced the unreadable rejection.
-/// Its own rather than the Host's, which is the whole of what tied this file to `app/`: one
-/// call to `Interop.exit`, beside an abort that already emits `process.exit(2)` itself.
-[<Emit("process.exit($0)")>]
-let private exitWith (code: int) : unit = jsNative
-
-/// The abort's own exit. Generic, because it does not come back — see above.
-[<Emit("process.exit(2)")>]
-let private exitAborting () : 'a = jsNative
-
-let abort (message: string) : 'a =
-    JS.console.error message
-    exitAborting ()
 
 // --- declaring a command line ------------------------------------------------------------
 
@@ -176,14 +157,13 @@ let private configFor (spec: Spec) (args: string array) : obj =
           "allowPositionals", box false ]
 
 /// How every command-line complaint reads: which bin, what was wrong, then the usage.
-let private complaint (spec: Spec) (message: string) : string =
+///
+/// Public because a parse failure is not the only way a command line is wrong: a VALUE the
+/// parser accepted and the bin refused (`--auth banana`) is the same class of mistake to the
+/// operator who typed it, and `Interop.rejectValue` reports it in these words rather than
+/// inventing a second voice for it.
+let complaint (spec: Spec) (message: string) : string =
     sprintf "%s: %s\n\n%s" spec.Bin message (usage spec)
-
-/// Reject a VALUE the parser accepted but the domain refused — `--auth banana`. The shape
-/// was fine, so `parseArgs` had nothing to say; this is where the option's own vocabulary
-/// gets to. Reported identically to a parse failure, so an operator hears one voice for one
-/// class of mistake.
-let rejectValue (spec: Spec) (message: string) : 'a = abort (complaint spec message)
 
 /// Parse `args` against `spec`. Total — the failure is a message an operator can act on,
 /// carrying the parser's own complaint and the usage under it.
@@ -218,17 +198,31 @@ let parse (spec: Spec) (args: string array) : Result<Parsed, string> =
     with error ->
         Error (complaint spec error.Message)
 
-/// The whole boundary, in one call: parse, answer `--version` and `--help` (every bin
-/// answers them the same way), or report a bad command line and stop. Returns only when the
-/// process should carry on.
-let parseOrExit (spec: Spec) (currentVersion: string) : Parsed =
-    match parse spec (argv ()) with
-    | Error message -> abort message
+// --- what a command line asks of the process ----------------------------------------------
+
+/// What a command line means for the process it was typed at. A VALUE, because the three
+/// answers are a decision and the stopping is not: only two of them end the process, and
+/// ending one is the single thing F# cannot say — `process.exit` belongs to whoever owns the
+/// process, which is a bin and never the domain. Splitting it here is what makes the whole
+/// boundary readable by the cheap tier; `parseOrExit` could only ever be read by running a
+/// bin and watching it stop.
+[<RequireQualifiedAccess>]
+type Outcome =
+    /// Carry on, with this parse.
+    | Proceed of Parsed
+    /// `--version` or `--help`: say this on stdout and stop, having done what was asked.
+    | Answered of text: string
+    /// A command line that was wrong: say this on stderr and stop, having done nothing.
+    | Refused of complaint: string
+
+/// The whole boundary, in one call: parse, then answer `--version` and `--help` — every bin
+/// answers them identically, so answering them belongs to what a command line IS rather than
+/// to what each bin remembers to do. `--version` wins over `--help`, because a line carrying
+/// both asked two questions and only one process can answer.
+let outcome (spec: Spec) (currentVersion: string) (args: string array) : Outcome =
+    match parse spec args with
+    | Error message -> Outcome.Refused message
     | Ok parsed ->
-        if isSet version parsed then
-            printfn "%s" currentVersion
-            exitWith 0
-        if isSet help parsed then
-            printfn "%s" (usage spec)
-            exitWith 0
-        parsed
+        if isSet version parsed then Outcome.Answered currentVersion
+        elif isSet help parsed then Outcome.Answered (usage spec)
+        else Outcome.Proceed parsed

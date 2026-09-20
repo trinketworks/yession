@@ -329,7 +329,7 @@ module ProcessEnv =
 // --- This process ---------------------------------------------------------------------------
 
 /// What `Fable.Node`'s `process` leaves out. Everything it types — `execPath`, `platform`,
-/// `argv`, `exit`, `stdin`, the listeners — is used through `Node.Api.process` directly.
+/// `argv`, `stdin`, the listeners — is used through `Node.Api.process` directly.
 [<RequireQualifiedAccess>]
 module Processes =
 
@@ -337,6 +337,15 @@ module Processes =
     /// which is what a NEGATIVE id names, and how a detached child's tree is taken with one.
     [<Emit("process.kill($0, $1)")>]
     let kill (pid: int) (signal: string) : unit = jsNative
+
+    /// `process.exit(code)`, typed as the call it IS: one that does not come back. `Fable.Node`
+    /// types it `unit`, which is true of an exit written as a statement and useless to the
+    /// caller that has to answer with a value it will never produce — a command line refused
+    /// halfway down a boot, which is every `abort` in this repository. Answering `'a` is what
+    /// keeps those from being a `failwith` that Fable's async turns into an unhandled
+    /// rejection reading `[object Object]`.
+    [<Emit("process.exit($0)")>]
+    let exitWith (code: int) : 'a = jsNative
 
 // --- Child processes ------------------------------------------------------------------------
 

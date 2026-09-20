@@ -295,9 +295,48 @@ let envNames () : string array = ProcessEnv.names () |> Array.sort
 let publicAccess () : Result<Yession.Domain.Link.PublicAccess, string> =
     Yession.Domain.Link.PublicAccess.create (envOr "YESSION_MANAGER_URL" "") (envOr "YESSION_SESSION_URL" "")
 
-/// Terminate the Node process with an exit code.
-let exit (code: int) : unit = ``process``.exit code
+// --- this process's own beginning and end ---------------------------------------------------
+//
+// Reading the command line and stopping are the two halves of a bin's boundary, and both are
+// the HOST's: `process` is this repository's only handle on either, and a session or a
+// Manager is the thing that owns one. `Cli` (in the domain) decides what a command line MEANS
+// — the parse, the refusal's wording, whether `--version` was asked — and answers with a
+// value; everything below is that value applied to a process. The split is why the whole
+// boundary is readable by the cheap tier: what used to be `Cli.parseOrExit` could only be
+// read by starting a bin and watching it stop.
+//
+// It used to be the other way around, and the reason it moved is worth keeping: `Cli` emitted
+// `process.argv` and `process.exit` itself, in the one file the browser client also compiles.
 
-// Command-line reading lives in `Cli`, over Node's own `parseArgs`. There used to be a
-// `versionFlag` and an `argValue` here that scanned `process.argv` by hand; they could not
-// tell an unknown option from an absent one, so a typo ran the bin with the option missing.
+/// Terminate this process. Typed as returning ANYTHING because it does not return, which is
+/// what a refusal halfway down a boot needs: there is no value to answer with, and inventing
+/// one is what forced the old `failwith`-at-module-init whose rejection said `[object
+/// Object]`. The one reader of `process.exit` in this host.
+let exit (code: int) : 'a = Processes.exitWith code
+
+/// The argv this process was started with, its own executable and script dropped. Private,
+/// and the only reader of it: `Cli` takes its args as a VALUE, which is the whole reason the
+/// command-line boundary can be parsed in a test.
+let private argv () : string array = ``process``.argv |> Seq.skip 2 |> Seq.toArray
+
+/// Say what happened and stop, having done nothing — the exit code a bin refuses on. Generic
+/// for the reason `exit` is: its callers are expressions that have no answer to give.
+let abort (message: string) : 'a =
+    JS.console.error message
+    exit 2
+
+/// Reject a VALUE the parser accepted but this bin refused — `--auth banana`. The shape was
+/// fine, so `parseArgs` had nothing to say; this is where the option's own vocabulary gets
+/// to, wearing `Cli`'s words so an operator hears one voice for one class of mistake.
+let rejectValue (spec: Yession.Domain.Cli.Spec) (message: string) : 'a =
+    abort (Yession.Domain.Cli.complaint spec message)
+
+/// The command line, applied: the parse a bin carries on with, or a process that has said why
+/// it is stopping and stopped. Returns only when this process should carry on.
+let parseOrExit (spec: Yession.Domain.Cli.Spec) (currentVersion: string) : Yession.Domain.Cli.Parsed =
+    match Yession.Domain.Cli.outcome spec currentVersion (argv ()) with
+    | Yession.Domain.Cli.Outcome.Proceed parsed -> parsed
+    | Yession.Domain.Cli.Outcome.Answered text ->
+        printfn "%s" text
+        exit 0
+    | Yession.Domain.Cli.Outcome.Refused complaint -> abort complaint

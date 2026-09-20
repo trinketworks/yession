@@ -192,7 +192,7 @@ let private lineFor (timeline: TimelineProjection) (item: TimelineItem) : string
 
 let private run () =
     promise {
-        let args = Cli.parseOrExit spec (Yession.Host.Version.current)
+        let args = Yession.Host.Interop.parseOrExit spec (Yession.Host.Version.current)
         // Answered where they are absent rather than defaulted to a blank that reads like a
         // value: a probe with no Manager has nothing to do, and saying so beats connecting to
         // the empty string. `--say` is repeatable, so this is a list — an empty one is the
@@ -200,8 +200,8 @@ let private run () =
         let manager, says =
             match Cli.valueOf managerOption args, Cli.valuesOf sayOption args with
             | Some manager, (_ :: _ as says) -> manager.TrimEnd '/', says
-            | None, _ -> Cli.abort "yession-probe needs --manager: which Manager to join a session on"
-            | _, [] -> Cli.abort "yession-probe needs --say: what to send once it is connected"
+            | None, _ -> Yession.Host.Interop.abort "yession-probe needs --manager: which Manager to join a session on"
+            | _, [] -> Yession.Host.Interop.abort "yession-probe needs --say: what to send once it is connected"
         // Real seconds, not the tick count this once hid behind: a turn that builds a package
         // or runs a suite is minutes of few or no tool calls, and a ceiling counted in ticks
         // gave up on exactly the work worth watching.
@@ -229,7 +229,7 @@ let private run () =
             | Some named ->
                 match SessionId.create named with
                 | Ok id -> id
-                | Error reason -> Cli.abort (sprintf "--session %s: %s" named reason)
+                | Error reason -> Yession.Host.Interop.abort (sprintf "--session %s: %s" named reason)
             | None -> SessionId.mint ()
         let id = SessionId.value sessionId
 
