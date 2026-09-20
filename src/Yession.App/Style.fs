@@ -1688,6 +1688,13 @@ module Style =
     /// not a control, and the busy timeline is no place for another CTA-coloured chip.
     let actNoteCred =
         cls [ "inline-flex items-center gap-1 self-start"; "px-1.5 rounded"; "bg-surface-2"; "text-code-sm text-ink-dim" ]
+    /// What the agent was told, behind a disclosure under the facts. The notice disclosure's
+    /// own summary voice, so it reads as the same move everywhere: what you need is on the
+    /// surface, the mechanism is one keypress in. The sentence inside is the act's own
+    /// phrase, in the detail voice, so a reference in it is drawn as it is drawn above.
+    let actNoteSaid = "min-w-0"
+    let actNoteSaidSummary = detailSummary
+    let actNoteSaidBody = cls [ actNoteDetail; "block pt-1" ]
     /// A line this host could not honour exactly. One step brighter than the other
     /// particulars (`ink-dim`, not `ink-faint`), so the one fact that means "you did not get
     /// quite what you asked for" is the one the eye catches - without the line having to grow

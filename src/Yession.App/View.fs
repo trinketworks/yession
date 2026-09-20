@@ -2096,12 +2096,25 @@ module View =
                 match act with
                 | Act.SandboxStarted s -> [ sandboxStartFacts s ]
                 | _ -> actNoteParticulars act
+            // What the agent was told, under the facts and behind a disclosure. The facts
+            // above are a screen's arrangement of the act; this is the OTHER reader's, and a
+            // person is owed the ability to see it — a timeline that showed a layout the
+            // agent never saw, and hid the sentence it did, would be two accounts of one act
+            // with no way to compare them. The same phrase (`Act.sentence`) both readers
+            // collapse, so `data-act-said`'s text IS what the prompt carried, to the character.
+            let said =
+                html $"""
+                    <details class="{Style.actNoteSaid}" data-act-said>
+                      <summary class="{Style.actNoteSaidSummary}">{Dom.Text.actSaid}</summary>
+                      <span class="{Style.actNoteSaidBody}">{Entity.phrase model (Act.sentence act)}</span>
+                    </details>"""
             html $"""
                 <article class="{Style.actNote}" data-message-id="{MessageId.value item.MessageId}" tabindex="-1" data-act-note data-act-status="{messageStatusLabel item.Status}" data-message-author="{Entity.actorToken item.Author}">
                   {itemActions item}
                   {running}
                   <span class="{Style.actNoteText}">{Entity.phrase model (Act.phrase act)} {failedMark}</span>
                   {particulars}
+                  {said}
                 </article>"""
         let messageItem (item: ConversationItem) =
             // What was said. An act never reaches here (`actNoteItem` takes those), and its

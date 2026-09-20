@@ -453,6 +453,11 @@ module Dom =
         /// would read as a different kind of control.
         let details = "Details"
 
+        /// The disclosure on every act: the sentence the agent was handed for it. A person
+        /// sees the facts laid out by default and can always see what the agent read — the
+        /// same phrase, behind one keypress — which is the promise `Act` keeps.
+        let actSaid = "as told to the agent"
+
         // Where a peer is (presence, in the roster and on a terminal tab). The VALUE of
         // `data-peer-at` is one of these FIELD tokens — stable, one per collaborative field
         // — and the words beside it are for people, so they may name a terminal or a
