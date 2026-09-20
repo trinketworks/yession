@@ -415,6 +415,8 @@ let startFull
         // rather than the projection reached up for.
         let files =
             SessionFiles.create
+                log
+                mintMessageId
                 sandboxes.EnvironmentFor
                 (fun sandbox -> ShellProfileProjection.workingDirectory sandbox (terminals.Profiles ()))
                 TerminalShell.posix

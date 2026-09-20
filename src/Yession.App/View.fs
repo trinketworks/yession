@@ -8,6 +8,7 @@ open Yession.Domain.Terminals
 open Yession.Domain.Collab
 open Yession.Domain.Tools
 open Yession.Domain.Chat
+open Yession.Domain.Files
 open Yession.Domain.Prs
 open Fable.BrowserExtras
 open Lit
@@ -2086,6 +2087,29 @@ module View =
                   <summary class="{Style.actNoteSaidSummary}">{Dom.Text.details}</summary>
                   <div class="{Style.actNoteFacts}">{rows}</div>
                 </details>"""
+        // A file change (the file verbs), laid out the way a start is: the title on the line
+        // — which file, how much — and behind ONE disclosure the change itself, one row per
+        // `-`/`+` line, with the sentence the agent read as its last row. The edit a reader
+        // can SEE, where the same change used to be a heredoc in a terminal a reader had to
+        // parse. A write carries no diff and reads as its phrase like any other act.
+        let fileChangeFacts (act: Act) (diff: string) =
+            let lines =
+                diff.Split '\n'
+                |> List.ofArray
+                |> List.map (fun line ->
+                    let tone =
+                        if line.StartsWith "+" then Style.actNoteDiffAdd
+                        elif line.StartsWith "-" then Style.actNoteDiffDel
+                        else Style.actNoteDiffNote
+                    html $"""<span class="{tone}">{line}</span>""")
+            html $"""
+                <details class="{Style.actNoteSaid}" data-act-facts>
+                  <summary class="{Style.actNoteSaidSummary}">{Dom.Text.details}</summary>
+                  <div class="{Style.actNoteFacts}">
+                    <pre class="{Style.actNoteDiff}" data-act-fact="diff">{lines}</pre>
+                    {toldRow act}
+                  </div>
+                </details>"""
         // A repo note is something someone DID, not said - one quiet line, actor-attributed,
         // no avatar and no rich body (Plan 14, repos). It rides the same timeline slot a
         // message does (both are `ConversationItem`s at an offset); `Content` is what tells
@@ -2126,6 +2150,7 @@ module View =
                           <summary class="{Style.actNoteSaidSummary}">{Dom.Text.details}</summary>
                           <div class="{Style.actNoteFacts}">{toldRow act}</div>
                         </details>""" ]
+                | Act.FileChanged { FileChanged.Diff = Some diff } -> Act.phrase act, [ fileChangeFacts act diff ]
                 | _ ->
                     Act.phrase act,
                     actNoteParticulars by act

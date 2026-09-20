@@ -287,7 +287,7 @@ let tests =
                 let sandbox = SandboxRef.defaultRef
                 let files = host.Files
                 // A new file in a new directory: the directories are made on the way.
-                match! files.Write sandbox "src/a/One.fs" "let one = 1\nlet two = 2\n" with
+                match! files.Write ActorRef.Agent sandbox "src/a/One.fs" "let one = 1\nlet two = 2\n" with
                 | Error e -> failwithf "write refused: %s" e
                 | Ok () -> ()
                 Expect.isTrue (TestFiles.exists (workspace + "/src/a/One.fs")) "the write landed in the workspace"
@@ -296,6 +296,7 @@ let tests =
                 | Ok text -> Expect.equal text "let one = 1\nlet two = 2\n" "what was written is what is read"
                 match!
                     files.Edit
+                        ActorRef.Agent
                         { FileEditRequest.Sandbox = sandbox
                           FileEditRequest.Path = "src/a/One.fs"
                           FileEditRequest.OldText = "two = 2"
@@ -316,6 +317,20 @@ let tests =
                 match! files.Read sandbox "src/a/Missing.fs" with
                 | Ok _ -> failwith "a missing file read as something"
                 | Error reason -> Expect.stringContains reason "No such file" "cat's own words, without its name"
+                // The two changes are on the record as acts, after they landed: a write
+                // without a diff, an edit with the lines that moved.
+                let! page = host.Log.Read None 1000
+                let changes =
+                    page.Events
+                    |> List.choose (fun e ->
+                        match e.Event with
+                        | SessionEvent.FileChanged f -> Some (f.Path, f.Change, f.Diff)
+                        | _ -> None)
+                Expect.equal
+                    changes
+                    [ "src/a/One.fs", FileChange.Written 2, None
+                      "src/a/One.fs", FileChange.Edited (1, 1, 1), Some "-two = 2\n+two = 22" ]
+                    "one act per change, in order, saying what moved"
                 do! host.Stop ()
             })
 
