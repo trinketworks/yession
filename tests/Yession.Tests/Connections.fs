@@ -1546,7 +1546,7 @@ let private e2eTests =
                 a.Connection.SendDraft a.Hello.PeerId
                 do! a.Runner.WaitFor (fun m ->
                         m.Conversation.Items
-                        |> List.exists (fun i -> i.Status = Complete && i.Body.Contains "hello before sign-in"))
+                        |> List.exists (fun i -> i.Status = Complete && (ConversationItem.said i).Contains "hello before sign-in"))
                 // The status surface says so honestly: no agent in this session yet.
                 do! awaitClaudeStatus sessionUrl cookieA (fun body -> body.Contains "\"agent\":false")
 
@@ -1567,7 +1567,7 @@ let private e2eTests =
                 do! a.Runner.WaitFor (fun m ->
                         m.Conversation.Items
                         |> List.exists (fun i ->
-                            i.Author = ActorRef.Agent && i.Status = Complete && i.Body.Contains "credential: CLAUDE_CODE_OAUTH_TOKEN"))
+                            i.Author = ActorRef.Agent && i.Status = Complete && (ConversationItem.said i).Contains "credential: CLAUDE_CODE_OAUTH_TOKEN"))
                 // Exactly one agent item: the pre-sign-in message triggered no turn.
                 Expect.equal
                     ((a.Runner.Model ()).Conversation.Items |> List.filter (fun i -> i.Author = ActorRef.Agent) |> List.length)
@@ -1586,7 +1586,7 @@ let private e2eTests =
                 do! b.Runner.WaitFor (fun m ->
                         m.Conversation.Items
                         |> List.exists (fun i ->
-                            i.Author = ActorRef.Agent && i.Status = Complete && i.Body.Contains "credential: CLAUDE_CODE_OAUTH_TOKEN"))
+                            i.Author = ActorRef.Agent && i.Status = Complete && (ConversationItem.said i).Contains "credential: CLAUDE_CODE_OAUTH_TOKEN"))
                 // B's own status surface agrees, without B having asserted any identity.
                 let cookieB = cookieOf openedB.Jar
                 do! awaitClaudeStatus sessionUrl cookieB (fun body ->
@@ -1607,7 +1607,7 @@ let private e2eTests =
                 do! b.Runner.WaitFor (fun m ->
                         m.Conversation.Items
                         |> List.exists (fun i ->
-                            i.Author = ActorRef.Agent && i.Status = Complete && i.Body.Contains "credential: ANTHROPIC_API_KEY"))
+                            i.Author = ActorRef.Agent && i.Status = Complete && (ConversationItem.said i).Contains "credential: ANTHROPIC_API_KEY"))
 
                 // 5. Disconnect both; the status empties again.
                 let! _ =
@@ -1675,7 +1675,7 @@ let private e2eTests =
                 do! alice.Runner.WaitFor (fun m ->
                         m.Conversation.Items
                         |> List.exists (fun i ->
-                            i.Author = ActorRef.Agent && i.Status = Complete && i.Body.Contains "credential: CLAUDE_CODE_OAUTH_TOKEN"))
+                            i.Author = ActorRef.Agent && i.Status = Complete && (ConversationItem.said i).Contains "credential: CLAUDE_CODE_OAUTH_TOKEN"))
 
                 // Bob is a different verified human. Alice's credential is hers, not the
                 // deployment's, so his turn fails naming him rather than borrowing it.
@@ -1694,7 +1694,7 @@ let private e2eTests =
                         |> List.exists (fun i ->
                             i.Author = ActorRef.Agent
                             && i.Status = ConversationItemStatus.Failed
-                            && i.Body.Contains "no Claude account connected for bob@example.com"))
+                            && (ConversationItem.said i).Contains "no Claude account connected for bob@example.com"))
 
                 do! alice.Channel.Close ()
                 do! bob.Channel.Close ()

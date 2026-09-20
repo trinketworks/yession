@@ -77,9 +77,8 @@ let private asked = AgentTurn.FromMessage trigger
 let private triggerItem : ConversationItem =
     { MessageId = humanMessageId
       Author = PeerRef ada
-      Body = "hi agent"
+      Content = ItemContent.Message ("hi agent")
       Status = Complete
-      Kind = ConversationItemKind.Message
       Offset = EventOffset.zero
       Woke = None; Replying = None }
 
@@ -313,7 +312,7 @@ let private turnTests =
                   envelope 3L (AgentMessageDelta { AgentTurnId = turnId; MessageId = agentMessageId; Delta = "lo!" }) ]
             let streaming, highWater = ConversationProjection.applyEvents None events ConversationProjection.empty
             Expect.equal
-                (streaming.Items |> List.map (fun i -> i.Body, i.Status))
+                (streaming.Items |> List.map (fun i -> (ConversationItem.said i), i.Status))
                 [ "Hello!", Streaming ]
                 "deltas accumulate into a Streaming item"
 
@@ -323,7 +322,7 @@ let private turnTests =
                     [ envelope 4L (AgentMessageCompleted { AgentTurnId = turnId; MessageId = agentMessageId; Body = "Hello!" }) ]
                     streaming
             Expect.equal
-                (completed.Items |> List.map (fun i -> i.Author, i.Body, i.Status))
+                (completed.Items |> List.map (fun i -> i.Author, (ConversationItem.said i), i.Status))
                 [ (ActorRef.Agent, "Hello!", Complete) ]
                 "completion flips the item to Complete"
 
@@ -350,7 +349,7 @@ let private turnTests =
                       envelope 3L (AgentMessageDelta { AgentTurnId = turnId; MessageId = laterMessageId; Delta = "It finished." }) ]
                     ConversationProjection.empty
             Expect.equal
-                (projection.Items |> List.map (fun i -> i.Body, i.Status))
+                (projection.Items |> List.map (fun i -> (ConversationItem.said i), i.Status))
                 [ "Let me run it again.", Complete; "It finished.", Streaming ]
                 "the antecedent is complete at what it streamed; the follower is the one still streaming"
 
@@ -392,7 +391,7 @@ let private turnTests =
                       envelope 2L (AgentTurnInterrupted { AgentTurnId = turnId; RequestedBy = interruptedBy }) ]
                     ConversationProjection.empty
             Expect.equal
-                (projection.Items |> List.map (fun i -> i.Body, i.Status))
+                (projection.Items |> List.map (fun i -> (ConversationItem.said i), i.Status))
                 [ "partial", ConversationItemStatus.Interrupted ]
                 "the streaming item is interrupted in place, partial body kept"
             // A delta that raced past the interrupt cannot mutate the terminal item.
@@ -402,7 +401,7 @@ let private turnTests =
                     [ envelope 3L (AgentMessageDelta { AgentTurnId = turnId; MessageId = agentMessageId; Delta = " too late" }) ]
                     projection
             Expect.equal
-                (after.Items |> List.map (fun i -> i.Body, i.Status))
+                (after.Items |> List.map (fun i -> (ConversationItem.said i), i.Status))
                 [ "partial", ConversationItemStatus.Interrupted ]
                 "late deltas are ignored once the item left Streaming"
 
@@ -415,7 +414,7 @@ let private turnTests =
                       envelope 2L (AgentTurnFailed { AgentTurnId = turnId; Reason = "overloaded" }) ]
                     ConversationProjection.empty
             Expect.equal
-                (projection.Items |> List.map (fun i -> i.Body, i.Status))
+                (projection.Items |> List.map (fun i -> (ConversationItem.said i), i.Status))
                 [ "partial\n\noverloaded", ConversationItemStatus.Failed ]
                 "the streaming item fails in place"
 
@@ -431,7 +430,7 @@ let private turnTests =
                       envelope 1L (AgentTurnFailed { AgentTurnId = turnId; Reason = "agent run ended: error_during_execution" }) ]
                     ConversationProjection.empty
             Expect.equal
-                (projection.Items |> List.map (fun i -> i.Body, i.Status))
+                (projection.Items |> List.map (fun i -> (ConversationItem.said i), i.Status))
                 [ "agent run ended: error_during_execution", ConversationItemStatus.Failed ]
                 "the reason is the item's account of itself"
 
@@ -465,7 +464,7 @@ let private turnTests =
                       envelope 9L (AgentTurnFailed { AgentTurnId = turnId; Reason = "overloaded" }) ]
                     ConversationProjection.empty
             Expect.equal
-                (projection.Items |> List.map (fun i -> EventOffset.value i.Offset, i.Body))
+                (projection.Items |> List.map (fun i -> EventOffset.value i.Offset, (ConversationItem.said i)))
                 // Offset 2: where it SPOKE, not where it opened — the first word is the anchor.
                 [ 2L, "on it\n\noverloaded" ]
                 "the item stays where it was said, wearing the reason it stopped"
@@ -478,7 +477,7 @@ let private turnTests =
                       envelope 1L (AgentTurnFailed { AgentTurnId = turnId; Reason = "context build failed" }) ]
                     ConversationProjection.empty
             Expect.equal
-                (projection.Items |> List.map (fun i -> i.Author, i.Body, i.Status))
+                (projection.Items |> List.map (fun i -> i.Author, (ConversationItem.said i), i.Status))
                 [ (ActorRef.Agent, "context build failed", ConversationItemStatus.Failed) ]
                 "the failure is a Failed conversation item"
     ]
@@ -502,8 +501,8 @@ let private e2eTests =
                     fun context _capabilities _signal onChunk ->
                         async {
                             onChunk (AgentResponseChunk.Text "You said: ")
-                            onChunk (AgentResponseChunk.Text (context.CurrentMessage |> Option.map (fun m -> m.Body) |> Option.defaultValue ""))
-                            return AgentCompleted (sprintf "You said: %s" (context.CurrentMessage |> Option.map (fun m -> m.Body) |> Option.defaultValue ""), None)
+                            onChunk (AgentResponseChunk.Text (context.CurrentMessage |> Option.map ConversationItem.said |> Option.defaultValue ""))
+                            return AgentCompleted (sprintf "You said: %s" (context.CurrentMessage |> Option.map ConversationItem.said |> Option.defaultValue ""), None)
                         }
                 let! h = Host.startWith (Some scripted) e2eSessionId port
                 host <- Some h
@@ -518,9 +517,9 @@ let private e2eTests =
                 // The client's timeline gains the sent message and then the agent's
                 // completed response — all consumed as events.
                 do! a.Runner.WaitFor (fun m ->
-                        (m.Conversation.Items
-                         |> List.map (fun i -> i.Author, i.Body, i.Status)) = [ (PeerRef (peer "ada" "Ada").PeerId, "hi agent", Complete)
-                                                                                (ActorRef.Agent, "You said: hi agent", Complete) ]
+                        let said = m.Conversation.Items |> List.map (fun i -> (i.Author, ConversationItem.said i, i.Status))
+                        said = [ (PeerRef (peer "ada" "Ada").PeerId, "hi agent", Complete)
+                                 (ActorRef.Agent, "You said: hi agent", Complete) ]
                         && m.Agent.ActiveTurn = None)
 
                 // Exactly one turn per human MessageSent, with the full lifecycle.
@@ -622,7 +621,7 @@ let private liveTests =
 
                 do! a.Runner.WaitFor (fun model ->
                         model.Conversation.Items
-                        |> List.exists (fun i -> i.Author = ActorRef.Agent && i.Status = Complete && i.Body.Contains "42"))
+                        |> List.exists (fun i -> i.Author = ActorRef.Agent && i.Status = Complete && (ConversationItem.said i).Contains "42"))
 
                 // The command ran through the scoped capability, and its lifecycle is a
                 // TERMINAL BLOCK in the event log (Plan 13, stage 3b): the Step-13 command
@@ -667,7 +666,7 @@ let private liveTests =
                 TestFiles.write path nonce
                 let body = sprintf "Read the file at %s and reply with its exact contents." path
                 let probe = { trigger with Body = body }
-                let probeItem = { triggerItem with Body = body }
+                let probeItem = { triggerItem with Content = ItemContent.Message body }
                 let log = newLog ()
                 let mintLiveTurn () = AgentTurnId.create (string (Guid.NewGuid ())) |> expect
                 let mintLiveMessage () = MessageId.create (string (Guid.NewGuid ())) |> expect

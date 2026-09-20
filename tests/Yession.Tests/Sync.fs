@@ -102,9 +102,8 @@ let private codecTests =
                 { Items =
                     [ { MessageId = messageId
                         Author = ActorRef.System
-                        Body = "secret history"
+                        Content = ItemContent.Message ("secret history")
                         Status = Complete
-                        Kind = ConversationItemKind.Message
                         Offset = EventOffset.zero
                         Woke = None; Replying = None } ]
                   ActiveAgentMessages = Map.empty; WokenTurn = None; TriggeredTurn = None }
@@ -588,9 +587,8 @@ let private queueUnitTests =
                 projection.Items
                 [ { MessageId = message.MessageId
                     Author = PeerRef ada
-                    Body = "ship it"
+                    Content = ItemContent.Message ("ship it")
                     Status = Complete
-                    Kind = ConversationItemKind.Message
                     Offset = envelope.Offset
                     Woke = None; Replying = None } ]
                 "the sent message is a complete conversation item"
@@ -616,7 +614,7 @@ let private queueUnitTests =
                 |> ClientModel.update (EventsPageMsg page)
                 |> ClientModel.update (EventsPageMsg page)
             Expect.equal
-                (model.Conversation.Items |> List.map (fun i -> i.Body))
+                (model.Conversation.Items |> List.map (fun i -> (ConversationItem.said i)))
                 [ "once only" ]
                 "re-applying an overlapping page adds nothing"
             Expect.equal model.EventConsumer.LastProcessedOffset (Some EventOffset.zero) "progress recorded"
@@ -689,7 +687,7 @@ let private e2eTests =
                 let settled (m: ClientModel) =
                     Map.isEmpty m.Synced.Queue
                     && not (Map.containsKey ada m.Synced.Drafts)
-                    && (m.Conversation.Items |> List.map (fun i -> i.Body)) = [ "ship it" ]
+                    && (m.Conversation.Items |> List.map (fun i -> (ConversationItem.said i))) = [ "ship it" ]
                 do! a.Runner.WaitFor settled
                 do! b.Runner.WaitFor settled
 
@@ -729,7 +727,7 @@ let private e2eTests =
                 // Both consume the log so far (it already holds "ship it" from E2E-2).
                 let caughtUp (m: ClientModel) =
                     not m.EventConsumer.IsCatchingUp
-                    && (m.Conversation.Items |> List.exists (fun i -> i.Body = "ship it"))
+                    && (m.Conversation.Items |> List.exists (fun i -> (ConversationItem.said i) = "ship it"))
                 do! a.Runner.WaitFor caughtUp
                 do! b.Runner.WaitFor caughtUp
 
@@ -740,14 +738,14 @@ let private e2eTests =
                 do! compose a ada "while you were away"
                 a.Connection.SendDraft ada
                 do! a.Runner.WaitFor (fun m ->
-                        m.Conversation.Items |> List.exists (fun i -> i.Body = "while you were away"))
+                        m.Conversation.Items |> List.exists (fun i -> (ConversationItem.said i) = "while you were away"))
 
                 // Grace reconnects and catches up from her processed offset (E2E-4);
                 // the page size of 2 forces the catch-up across multiple reads.
                 let! b = reconnect b
                 do! b.Runner.WaitFor (fun m ->
                         not m.EventConsumer.IsCatchingUp
-                        && (m.Conversation.Items |> List.map (fun i -> i.Body)) = [ "ship it"; "while you were away" ])
+                        && (m.Conversation.Items |> List.map (fun i -> (ConversationItem.said i))) = [ "ship it"; "while you were away" ])
 
                 // E2E-7: unsent draft content lives in the draft, never in the timeline —
                 // the conversation comes from the projection alone.

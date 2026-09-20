@@ -41,9 +41,17 @@ let private sandbox (raw: string) = SandboxRef.parse raw |> expect
 /// site: the split is the thing under test in several cases here, and a case that has to
 /// destructure a union to ask its question reads as being about the union.
 let private noteDetail (item: ConversationItem) : string option =
-    match item.Kind with
-    | ConversationItemKind.ActNote facts -> facts.Detail
-    | ConversationItemKind.Message -> None
+    match item.Content with
+    | ItemContent.Act act ->
+        match Act.particulars act with
+        | [] -> None
+        | particulars -> Some (particulars |> List.map Phrase.said |> String.concat "; ")
+    | ItemContent.Message _ -> None
+
+let private isAct (item: ConversationItem) : bool =
+    match item.Content with
+    | ItemContent.Act _ -> true
+    | ItemContent.Message _ -> false
 
 /// The ask most of these cases make: nothing in particular about the sandbox, some
 /// credentials forwarded into it. The spec half has its own cases below.
@@ -825,18 +833,17 @@ let private timelineTests =
             let proj, _ = ConversationProjection.applyEvents None [ envelope ] ConversationProjection.empty
             match proj.Items with
             | [ item ] ->
-                Expect.equal item.Body "started sandbox test (srt)" "it reads as a sentence"
+                Expect.equal (ConversationItem.headline item) "started sandbox test (srt)" "it reads as a sentence"
                 // The sentence every reader that is not a screen gets still names the
                 // credential - and nobody, because a route is nobody's: whose credential
-                // went down it is said per push. `Detail` is empty precisely because the
-                // facts are carried typed, for a screen to arrange.
+                // went down it is said per push. The note carries the event's FACTS, for a
+                // screen to arrange; the sentence is a reader's, made on the way out.
                 Expect.stringContains (ConversationItem.said item) "forwarding github"
                     "what went in is on the note, and nobody's name"
-                match item.Kind with
-                | ConversationItemKind.ActNote facts ->
-                    Expect.isSome facts.SandboxStarted "the note carries the sandbox's typed facts, for a screen to arrange"
-                    Expect.isNone facts.Detail "and no pre-baked detail string beside them"
-                | _ -> failwith "a sandbox start is an act, not a message"
+                match item.Content with
+                | ItemContent.Act (Act.SandboxStarted s) ->
+                    Expect.equal s.Forwarded [ "github" ] "the note carries the sandbox's typed facts, for a screen to arrange"
+                | _ -> failwith "a sandbox start is an act carrying its facts, not a message"
                 Expect.equal item.Author ActorRef.Agent "attributed to whoever acted"
             | other -> failwithf "expected one note, got %A" other
 
@@ -861,9 +868,9 @@ let private timelineTests =
             let proj, _ = ConversationProjection.applyEvents None [ envelope ] ConversationProjection.empty
             match proj.Items with
             | [ item ] ->
-                Expect.equal item.Body "pushed to github:octo/hello on behalf of user:ada" "where, and for whom — the act first, the credential's owner after it"
+                Expect.equal (ConversationItem.headline item) "pushed to github:octo/hello on behalf of user:ada" "where, and for whom — the act first, the credential's owner after it"
                 Expect.equal item.Author ActorRef.Agent "by whoever's act the block was"
-                Expect.isTrue (match item.Kind with ConversationItemKind.ActNote _ -> true | _ -> false) "an act"
+                Expect.isTrue (isAct item) "an act"
             | other -> failwithf "expected one note, got %A" other
 
         // No block says what ran when the push was typed under a lease, so the line says
@@ -888,7 +895,7 @@ let private timelineTests =
             match proj.Items with
             | [ item ] ->
                 Expect.equal
-                    item.Body
+                    (ConversationItem.headline item)
                     "pushed to github:octo/hello on behalf of user:ada, holding the terminal"
                     "whose, where, and that it was typed rather than queued"
             | other -> failwithf "expected one note, got %A" other
@@ -912,7 +919,7 @@ let private timelineTests =
                           Actor = ada } }
             let proj, _ = ConversationProjection.applyEvents None [ envelope ] ConversationProjection.empty
             match proj.Items with
-            | [ item ] -> Expect.equal item.Body "started sandbox test (host)" "no forwarding clause"
+            | [ item ] -> Expect.equal (ConversationItem.headline item) "started sandbox test (host)" "no forwarding clause"
             | other -> failwithf "expected one note, got %A" other
 
         // The warning a person reads without going looking. A sandbox that came up holding
@@ -943,11 +950,11 @@ let private timelineTests =
                 // The grant a person did not get exactly is on the sentence they read, and in
                 // the typed realisation the screen shows as its own line.
                 let said = ConversationItem.said item
-                Expect.equal item.Body "started sandbox test (srt)" "still says what started"
+                Expect.equal (ConversationItem.headline item) "started sandbox test (srt)" "still says what started"
                 Expect.isTrue (said.Contains "/run/docker.sock") (sprintf "the grant is named, said: %s" said)
                 Expect.isTrue (said.Contains "any unix socket") (sprintf "and what it became, said: %s" said)
-                match item.Kind with
-                | ConversationItemKind.ActNote { SandboxStarted = Some s } ->
+                match item.Content with
+                | ItemContent.Act (Act.SandboxStarted s) ->
                     Expect.equal (List.length s.Realisation) 1 "and the note carries the realisation as a fact, not only as prose"
                 | _ -> failwith "a sandbox start is an act carrying its facts"
             | other -> failwithf "expected one note, got %A" other
@@ -973,13 +980,12 @@ let private timelineTests =
             let proj, _ = ConversationProjection.applyEvents None [ envelope ] ConversationProjection.empty
             match proj.Items with
             | [ item ] ->
-                Expect.equal item.Body "could not start sandbox test" "what failed"
+                Expect.equal (ConversationItem.headline item) "could not start sandbox test" "what failed"
                 Expect.equal
                     (noteDetail item)
                     (Some "YESSION_SESSION_WORK_NET is empty")
                     "and why, whole, in the words it already used"
-                Expect.isTrue (match item.Kind with ConversationItemKind.ActNote _ -> true | _ -> false)
-                    "an act, like the start it is the counterpart of"
+                Expect.isTrue (isAct item) "an act, like the start it is the counterpart of"
                 Expect.equal item.Author (ActorRef.Configured hello) "attributed to the file that asked"
             | other -> failwithf "expected one note, got %A" other
 
@@ -1004,7 +1010,7 @@ let private timelineTests =
             let proj, _ = ConversationProjection.applyEvents None [ envelope ] ConversationProjection.empty
             match proj.Items with
             | [ item ] ->
-                Expect.equal item.Body "yession.yaml in octo/hello: unknown key: workdirr" "said as it stands"
+                Expect.equal (ConversationItem.headline item) "yession.yaml in octo/hello: unknown key: workdirr" "said as it stands"
             | other -> failwithf "expected one note, got %A" other
 
         // The wire form, both ways. `sandbox` is the field that can be absent, and a note

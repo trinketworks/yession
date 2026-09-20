@@ -59,3 +59,14 @@ and ToolUseFinished =
       /// agent — the conversation projection ignores tool-use events, so this cannot
       /// double-feed a turn that already has the answer in its own transcript.
       Result : string option }
+
+module McpServerNoted =
+
+    /// Two sentences for one fact, because the fact is a direction: a server arriving and a
+    /// server leaving are said to the same reader, and the reader is the agent as much as
+    /// the person, so both say what the agent can do about it.
+    let available (m: McpServerNoted) : Phrase =
+        Phrase.text (sprintf "you can now use the %s tools" (McpServerName.value m.Name))
+
+    let unavailable (m: McpServerNoted) : Phrase =
+        Phrase.text (sprintf "the %s tools are no longer available" (McpServerName.value m.Name))

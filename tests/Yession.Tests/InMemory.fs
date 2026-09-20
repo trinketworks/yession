@@ -62,7 +62,7 @@ let tests =
                 a.Connection.SendDraft ada
                 let settled (m: ClientModel) =
                     Map.isEmpty m.Synced.Queue
-                    && (m.Conversation.Items |> List.map (fun i -> i.Body)) = [ "# ship it" ]
+                    && (m.Conversation.Items |> List.map (fun i -> (Yession.Domain.Chat.ConversationItem.said i))) = [ "# ship it" ]
                 do! a.Runner.WaitFor settled
                 do! b.Runner.WaitFor settled
                 do! host.Stop ()
@@ -84,7 +84,7 @@ let tests =
                 let ada = a.Hello.PeerId
                 do! compose a ada "ship it"
                 a.Connection.SendDraft ada
-                do! a.Runner.WaitFor (fun m -> m.Conversation.Items |> List.exists (fun i -> i.Body = "ship it"))
+                do! a.Runner.WaitFor (fun m -> m.Conversation.Items |> List.exists (fun i -> (Yession.Domain.Chat.ConversationItem.said i) = "ship it"))
                 let item = (a.Runner.Model ()).Conversation.Items |> List.head
                 // Ada divides the session here. The chapter is made wearing the guess, which
                 // is what the process finds and what it is allowed to replace.
@@ -116,7 +116,7 @@ let tests =
                 do! a.Runner.WaitFor (fun m -> Text.toString m.Synced.Title = "Titled by hand")
                 do! compose a ada "ship it"
                 a.Connection.SendDraft ada
-                do! a.Runner.WaitFor (fun m -> m.Conversation.Items |> List.exists (fun i -> i.Body = "ship it"))
+                do! a.Runner.WaitFor (fun m -> m.Conversation.Items |> List.exists (fun i -> (Yession.Domain.Chat.ConversationItem.said i) = "ship it"))
                 let item = (a.Runner.Model ()).Conversation.Items |> List.head
                 a.Runner.Dispatch (user (ToggleChapterMsg item.MessageId))
                 do! a.Runner.WaitFor (fun m -> Chat.Chapters.name m.Synced.Chapters item = "Where it was settled")
@@ -145,7 +145,7 @@ let tests =
                 let ada = a.Hello.PeerId
                 do! compose a ada "run tests"
                 a.Connection.SendDraft ada
-                do! a.Runner.WaitFor (fun m -> m.Conversation.Items |> List.exists (fun i -> i.Body = "run tests"))
+                do! a.Runner.WaitFor (fun m -> m.Conversation.Items |> List.exists (fun i -> (Yession.Domain.Chat.ConversationItem.said i) = "run tests"))
                 let item = (a.Runner.Model ()).Conversation.Items |> List.head
                 a.Runner.Dispatch (user (ToggleChapterMsg item.MessageId))
                 do! a.Runner.WaitFor (fun m -> Chat.Chapters.name m.Synced.Chapters item = "Name from 1")
@@ -178,7 +178,7 @@ let tests =
                 do! a.Runner.WaitFor (fun m -> Text.toString m.Synced.Title = "Titled by hand")
                 do! compose a ada "run tests"
                 a.Connection.SendDraft ada
-                do! a.Runner.WaitFor (fun m -> m.Conversation.Items |> List.exists (fun i -> i.Body = "run tests"))
+                do! a.Runner.WaitFor (fun m -> m.Conversation.Items |> List.exists (fun i -> (Yession.Domain.Chat.ConversationItem.said i) = "run tests"))
                 let item = (a.Runner.Model ()).Conversation.Items |> List.head
                 a.Runner.Dispatch (user (ToggleChapterMsg item.MessageId))
                 do! a.Runner.WaitFor (fun m -> Chat.Chapters.name m.Synced.Chapters item = "Where it was settled")
@@ -217,7 +217,7 @@ let tests =
                 do! a.Runner.WaitFor (fun m -> Text.toString m.Synced.Title = "Titled by hand")
                 do! compose a ada "run tests"
                 a.Connection.SendDraft ada
-                do! a.Runner.WaitFor (fun m -> m.Conversation.Items |> List.exists (fun i -> i.Body = "run tests"))
+                do! a.Runner.WaitFor (fun m -> m.Conversation.Items |> List.exists (fun i -> (Yession.Domain.Chat.ConversationItem.said i) = "run tests"))
                 let item = (a.Runner.Model ()).Conversation.Items |> List.head
                 a.Runner.Dispatch (user (ToggleChapterMsg item.MessageId))
                 do! a.Runner.WaitFor (fun m -> Chat.Chapters.name m.Synced.Chapters item = "Where it was settled")
@@ -246,7 +246,7 @@ let tests =
                 let ada = a.Hello.PeerId
                 do! compose a ada "ship it"
                 a.Connection.SendDraft ada
-                do! a.Runner.WaitFor (fun m -> m.Conversation.Items |> List.exists (fun i -> i.Body = "ship it"))
+                do! a.Runner.WaitFor (fun m -> m.Conversation.Items |> List.exists (fun i -> (Yession.Domain.Chat.ConversationItem.said i) = "ship it"))
                 let item = (a.Runner.Model ()).Conversation.Items |> List.head
                 a.Runner.Dispatch (user (ToggleChapterMsg item.MessageId))
                 // A caret of the session's own, in the field it is writing — seen BEFORE the
@@ -280,7 +280,7 @@ let tests =
                 let ada = a.Hello.PeerId
                 do! compose a ada "ship it"
                 a.Connection.SendDraft ada
-                do! a.Runner.WaitFor (fun m -> m.Conversation.Items |> List.exists (fun i -> i.Body = "ship it"))
+                do! a.Runner.WaitFor (fun m -> m.Conversation.Items |> List.exists (fun i -> (Yession.Domain.Chat.ConversationItem.said i) = "ship it"))
                 let item = (a.Runner.Model ()).Conversation.Items |> List.head
                 // Bob's caret goes into the chapter's name BEFORE the chapter is opened, so
                 // the pass that the opening wakes finds him already there. Ordered this way
@@ -318,7 +318,7 @@ let tests =
                 let ada = a.Hello.PeerId
                 do! compose a ada "ship it"
                 a.Connection.SendDraft ada
-                do! a.Runner.WaitFor (fun m -> m.Conversation.Items |> List.exists (fun i -> i.Body = "ship it"))
+                do! a.Runner.WaitFor (fun m -> m.Conversation.Items |> List.exists (fun i -> (Yession.Domain.Chat.ConversationItem.said i) = "ship it"))
                 let item = (a.Runner.Model ()).Conversation.Items |> List.head
                 let subject = Chat.NamingSubject.Chapter item.MessageId
                 a.Runner.Dispatch (user (ToggleChapterMsg item.MessageId))
@@ -369,7 +369,7 @@ let tests =
                 do! a.Runner.WaitFor (fun m -> Text.toString m.Synced.Title = "Friday deploy")
                 do! compose a ada "the auth middleware drops the refresh token"
                 a.Connection.SendDraft ada
-                do! a.Runner.WaitFor (fun m -> m.Conversation.Items |> List.exists (fun i -> i.Body.StartsWith "the auth"))
+                do! a.Runner.WaitFor (fun m -> m.Conversation.Items |> List.exists (fun i -> (Yession.Domain.Chat.ConversationItem.said i).StartsWith "the auth"))
                 Expect.equal (Text.toString (a.Runner.Model ()).Synced.Title) "Friday deploy" "theirs, and nothing wrote over it"
                 Expect.isFalse (asked |> Seq.exists (fun ask -> ask.Task.Contains "working session is currently called")) "and it was never even asked about"
                 do! host.Stop ()
@@ -385,7 +385,7 @@ let tests =
                 let ada = a.Hello.PeerId
                 do! compose a ada "ship it"
                 a.Connection.SendDraft ada
-                do! a.Runner.WaitFor (fun m -> m.Conversation.Items |> List.exists (fun i -> i.Body = "ship it"))
+                do! a.Runner.WaitFor (fun m -> m.Conversation.Items |> List.exists (fun i -> (Yession.Domain.Chat.ConversationItem.said i) = "ship it"))
                 let item = (a.Runner.Model ()).Conversation.Items |> List.head
                 a.Runner.Dispatch (user (ToggleChapterMsg item.MessageId))
                 do! a.Runner.WaitFor (fun m -> Chat.Chapters.opens m.Synced.Chapters item)
@@ -417,7 +417,7 @@ let tests =
                 let settled (m: ClientModel) =
                     Map.isEmpty m.Synced.Queue
                     && not (Map.containsKey ada m.Synced.Drafts)
-                    && (m.Conversation.Items |> List.map (fun i -> i.Body)) = [ "we should ask it to re-run the migration" ]
+                    && (m.Conversation.Items |> List.map (fun i -> (Yession.Domain.Chat.ConversationItem.said i))) = [ "we should ask it to re-run the migration" ]
                 do! a.Runner.WaitFor settled
                 do! b.Runner.WaitFor settled
                 let! page = host.Log.Read None System.Int32.MaxValue

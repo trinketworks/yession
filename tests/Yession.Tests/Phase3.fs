@@ -340,7 +340,7 @@ let private interruptTests =
                 a.Connection.SendDraft a.Hello.PeerId
                 do! a.Runner.WaitFor (fun m ->
                         m.Agent.ActiveTurn.IsSome
-                        && (m.Conversation.Items |> List.exists (fun i -> i.Status = Streaming && i.Body = "partial thoughts")))
+                        && (m.Conversation.Items |> List.exists (fun i -> i.Status = Streaming && (ConversationItem.said i) = "partial thoughts")))
                 let firstTurn = (a.Runner.Model ()).Agent.ActiveTurn.Value
 
                 // A second message queues behind the running turn (Cursor default);
@@ -354,14 +354,14 @@ let private interruptTests =
                 a.Connection.InterruptTurn firstTurn
                 do! a.Runner.WaitFor (fun m ->
                         (m.Conversation.Items
-                         |> List.exists (fun i -> i.Status = ConversationItemStatus.Interrupted && i.Body = "partial thoughts"))
-                        && (m.Conversation.Items |> List.exists (fun i -> i.Body = "queued behind"))
+                         |> List.exists (fun i -> i.Status = ConversationItemStatus.Interrupted && (ConversationItem.said i) = "partial thoughts"))
+                        && (m.Conversation.Items |> List.exists (fun i -> (ConversationItem.said i) = "queued behind"))
                         && (match m.Agent.ActiveTurn with Some t -> t <> firstTurn | None -> false))
 
                 release () // the successor turn completes normally
                 do! a.Runner.WaitFor (fun m ->
                         m.Agent.ActiveTurn = None
-                        && (m.Conversation.Items |> List.exists (fun i -> i.Body = "second turn done")))
+                        && (m.Conversation.Items |> List.exists (fun i -> (ConversationItem.said i) = "second turn done")))
 
                 // The event stream: the interrupt is terminal, single-flight holds,
                 // and the aborted runner's failure result was discarded.
@@ -386,7 +386,7 @@ let private interruptTests =
                 do! compose a a.Hello.PeerId "quick one"
                 a.Connection.SendDraft a.Hello.PeerId
                 do! a.Runner.WaitFor (fun m ->
-                        (m.Conversation.Items |> List.exists (fun i -> i.Body = "instant"))
+                        (m.Conversation.Items |> List.exists (fun i -> (ConversationItem.said i) = "instant"))
                         && m.Agent.ActiveTurn = None)
                 let! page = h.Log.Read None Int32.MaxValue
                 let turnId =

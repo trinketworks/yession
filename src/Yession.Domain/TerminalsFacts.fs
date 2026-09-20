@@ -259,3 +259,21 @@ and GitCredentialSpent =
       /// Who acted: the block's author, so an agent's push on Ada's turn reads as the
       /// agent's act spending Ada's credential, which is what happened.
       Actor : ActorRef }
+
+module GitCredentialSpent =
+
+    /// A push spent somebody's credential. The person whose it was finds out HERE, which is
+    /// the reason the event exists: the block that pushed is on the timeline already, but a
+    /// block says what ran, not whose key went out on it. The sentence leads with the act
+    /// and names the person it was done for, the way the actor column reads — "agent pushed
+    /// … on behalf of user:ada" — rather than with the credential, which is the mechanism.
+    /// "Pushed to" is the request that went out, not github.com's answer to it: a branch
+    /// protection or a rejected ref is git's to print, in the block.
+    let phrase (g: GitCredentialSpent) : Phrase =
+        match g.Block with
+        | Some _ -> Phrase.text (sprintf "pushed to github:%s on behalf of %s" g.Repo (CredentialFor.token g.Owner))
+        // Typed under a lease: no block on the timeline says what ran, so this line says
+        // where it was typed.
+        | None ->
+            Phrase.text (
+                sprintf "pushed to github:%s on behalf of %s, holding the terminal" g.Repo (CredentialFor.token g.Owner))

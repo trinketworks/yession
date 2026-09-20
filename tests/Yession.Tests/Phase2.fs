@@ -138,7 +138,7 @@ let private launchTests =
 
                 a.Connection.SendDraft a.Hello.PeerId
                 do! b.Runner.WaitFor (fun model ->
-                        model.Conversation.Items |> List.exists (fun i -> i.Body = "managed hello"))
+                        model.Conversation.Items |> List.exists (fun i -> (Yession.Domain.Chat.ConversationItem.said i) = "managed hello"))
 
                 do! a.Channel.Close ()
                 do! b.Channel.Close ()
@@ -1747,7 +1747,7 @@ let private lazyLifecycleTests =
                 do! compose a a.Hello.PeerId "what is a monad?"
                 a.Connection.SendDraft a.Hello.PeerId
                 do! a.Runner.WaitFor (fun model ->
-                        model.Conversation.Items |> List.exists (fun i -> i.Body = "just an answer"))
+                        model.Conversation.Items |> List.exists (fun i -> (Yession.Domain.Chat.ConversationItem.said i) = "just an answer"))
 
                 Expect.equal recorder.Created 0 "no sandbox created for a one-shot"
                 let! envEvents = environmentEventsOf managed.Host.Log
@@ -1786,7 +1786,7 @@ let private lazyLifecycleTests =
                 do! compose a a.Hello.PeerId "please run the tests"
                 a.Connection.SendDraft a.Hello.PeerId
                 do! a.Runner.WaitFor (fun model ->
-                        model.Conversation.Items |> List.exists (fun i -> i.Body = "environment is up")
+                        model.Conversation.Items |> List.exists (fun i -> (Yession.Domain.Chat.ConversationItem.said i) = "environment is up")
                         && (match model.Environment with EnvironmentRunning _ -> true | _ -> false))
 
                 // A SECOND need, from a different actor and against a different terminal:
@@ -2163,7 +2163,7 @@ let private acceptanceE2eTests =
                 do! compose a a.Hello.PeerId "do the work"
                 a.Connection.SendDraft a.Hello.PeerId
                 let caughtUp (model: ClientModel) =
-                    (model.Conversation.Items |> List.exists (fun i -> i.Body = "done"))
+                    (model.Conversation.Items |> List.exists (fun i -> (Yession.Domain.Chat.ConversationItem.said i) = "done"))
                     && (match model.Environment with EnvironmentRunning _ -> true | _ -> false)
                     // The agent's command is a terminal BLOCK now, not a command-log entry:
                     // that retirement is the point of stage 3b, and the catch-up property is
@@ -2231,7 +2231,7 @@ let private persistenceTests =
                 do! compose a a.Hello.PeerId "remember me"
                 a.Connection.SendDraft a.Hello.PeerId
                 do! a.Runner.WaitFor (fun model ->
-                        model.Conversation.Items |> List.exists (fun i -> i.Body = "remember me"))
+                        model.Conversation.Items |> List.exists (fun i -> (Yession.Domain.Chat.ConversationItem.said i) = "remember me"))
                 // Snapshot AFTER the host has fully observed the disconnect: with the
                 // deterministic teardown the peer's departure reliably lands as a
                 // PeerLeft event, and the session-end signal fires only after the peer
@@ -2257,7 +2257,7 @@ let private persistenceTests =
                 // new appends continue the offset sequence.
                 let! b = connectClient (managed2.BootstrapUri + "signal") (managed2.Host.MintPeerToken ()) "grace" "Grace"
                 do! b.Runner.WaitFor (fun model ->
-                        (model.Conversation.Items |> List.exists (fun i -> i.Body = "remember me"))
+                        (model.Conversation.Items |> List.exists (fun i -> (Yession.Domain.Chat.ConversationItem.said i) = "remember me"))
                         && not model.EventConsumer.IsCatchingUp)
                 let! page = managed2.Host.Log.Read None Int32.MaxValue
                 let offsets = page.Events |> List.map (fun e -> EventOffset.value e.Offset)

@@ -836,11 +836,11 @@ let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
             let person = (match filler with Lines -> true | Replies -> i % 2 = 1)
             { MessageId = MessageId.create (sprintf "msg-filler-%d" i) |> expect
               Author = if person then PeerRef peerId else ActorRef.Agent
-              Body =
-                if person then sprintf "and then line %d, which is here to make the column long" i
-                else replyBody i
+              Content =
+                ItemContent.Message (
+                    if person then sprintf "and then line %d, which is here to make the column long" i
+                    else replyBody i)
               Status = Complete
-              Kind = ConversationItemKind.Message
               Offset = offset (int64 (10 + i))
               Woke = None; Replying = None } ]
     { ClientModel.init { PeerId = peerId; DisplayName = "swift-heron" } with
@@ -880,16 +880,14 @@ let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
             { Items =
                 [ { MessageId = messageId
                     Author = PeerRef peerId
-                    Body = "ship it"
+                    Content = ItemContent.Message ("ship it")
                     Status = Complete
-                    Kind = ConversationItemKind.Message
                     Offset = offset 1L
                     Woke = None; Replying = None }
                   { MessageId = wideId
                     Author = ActorRef.Agent
-                    Body = wideBody
+                    Content = ItemContent.Message (wideBody)
                     Status = Complete
-                    Kind = ConversationItemKind.Message
                     Offset = offset 3L
                     Woke = None; Replying = None } ]
                 @ filler
@@ -899,9 +897,8 @@ let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
                 // pushed far from what it answers; the ref renders as a live jump control.
                 @ [ { MessageId = MessageId.create "msg-reply" |> expect
                       Author = ActorRef.Agent
-                      Body = "Rebased and pushed, as you asked up top."
+                      Content = ItemContent.Message ("Rebased and pushed, as you asked up top.")
                       Status = Complete
-                      Kind = ConversationItemKind.Message
                       Offset = offset 30L
                       Woke = None; Replying = Some messageId } ]
               ActiveAgentMessages = Map.empty; WokenTurn = None; TriggeredTurn = None }
