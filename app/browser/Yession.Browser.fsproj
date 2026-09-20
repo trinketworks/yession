@@ -55,6 +55,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Fable.BrowserExtras\Fable.BrowserExtras.fsproj" />
+    <ProjectReference Include="..\..\src\Fable.FetchExtras\Fable.FetchExtras.fsproj" />
     <ProjectReference Include="..\..\src\Fable.ProseMirror\Fable.ProseMirror.fsproj" />
     <ProjectReference Include="..\..\src\Fable.YjsExtras\Fable.YjsExtras.fsproj" />
     <ProjectReference Include="..\..\src\Fable.YIndexeddb\Fable.YIndexeddb.fsproj" />

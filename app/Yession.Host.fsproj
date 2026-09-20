@@ -143,6 +143,7 @@
          WebCrypto, `base64url`, and the two byte types it takes to get from one to the
          other. -->
     <ProjectReference Include="..\src\Fable.NodeExtras\Fable.NodeExtras.fsproj" />
+    <ProjectReference Include="..\src\Fable.FetchExtras\Fable.FetchExtras.fsproj" />
     <!-- The markdown parse the SSR timeline renders a message body through. -->
     <ProjectReference Include="..\src\Fable.ProseMirror\Fable.ProseMirror.fsproj" />
     <ProjectReference Include="..\src\Fable.Xterm\Fable.Xterm.fsproj" />

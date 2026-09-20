@@ -421,9 +421,10 @@ let private revealSettings () : unit =
 // (`Yession.Domain.MeProbe`) the Session Process encodes its answer with — rather than one
 // JS `Emit` string that encoded the branching itself. The fetch call itself goes through
 // `Fable.Fetch` (https://github.com/fable-compiler/fable-fetch), a typed binding, not a
-// hand-rolled Emit; `AbortSignal.timeout` is the one piece it does not cover and stays a
-// one-line Emit below. What the answer MEANS is this file's `ProbeOutcome` and the match
-// below, both type-checked.
+// hand-rolled Emit; `AbortSignal.timeout` is the one piece it does not cover and comes from
+// `Fable.FetchExtras`, which is a binding too — and one the host shares, because that signal
+// is a global in Node as well as here. What the answer MEANS is this file's `ProbeOutcome`
+// and the match below, both type-checked.
 //
 // The URL is a PARAMETER: every fetch below takes its URL from `Page.href`, so it stays
 // checked against the route table — and resolved against the base this page declared —
@@ -441,12 +442,6 @@ let private revealSettings () : unit =
 // turns into data a `match` must cover, rather than an exception a caller must remember to
 // catch.
 
-/// `Fetch.AbortSignal.timeout(...)` is the one piece `Fable.Fetch` does not bind (it is not
-/// part of the fetch surface itself), so this stays a one-line Emit, typed against the
-/// package's own `AbortSignal` so it slots straight into `RequestProperties.Signal` below.
-[<Emit("AbortSignal.timeout($0)")>]
-let private abortAfter (deadlineMs: float) : Fetch.Types.AbortSignal = jsNative
-
 /// The two axes `fetchMe` resolves to. A record of two independent bools (the shape this
 /// replaced) let a caller ask whether `reachable = false, authorized = true` — a
 /// combination that cannot actually happen; a case per real outcome makes it
@@ -460,7 +455,7 @@ let private fetchMe (url: string) (deadlineMs: float) : Async<ProbeOutcome> =
     async {
         let init =
             [ Fetch.Types.RequestProperties.Cache Fetch.Types.RequestCache.Nostore
-              Fetch.Types.RequestProperties.Signal(abortAfter deadlineMs) ]
+              Fetch.Types.RequestProperties.Signal(Fable.FetchExtras.timeoutSignal deadlineMs) ]
         // `fetchUnsafe`, not `fetch`: the plain binding throws on a non-2xx status, which
         // would fold the "refused" and "not there" axes back into one exception to
         // re-inspect. This wants the raw response so it can tell 401/403 (refused) apart
