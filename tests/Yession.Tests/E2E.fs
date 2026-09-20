@@ -20,7 +20,6 @@ let private expect =
     | Ok v -> v
     | Error e -> failwith e
 
-let private port = 8099
 let private sessionId = SessionId.create "e2e-session" |> expect
 let private peerId = PeerId.create "ada" |> expect
 let private joined = PeerJoined { PeerId = peerId; DisplayName = "Ada"; User = None }
@@ -34,20 +33,28 @@ let private eventsOf (host: Host.SessionHost) : Async<SessionEvent list> =
 
 // A single shared host for the whole E2E suite; the tests run sequentially.
 let mutable private host : Host.SessionHost option = None
-let private signalUrl = sprintf "http://127.0.0.1:%d/signal" port
+
+/// Where the host really came up. `Host.start` is given `0`, so the OS chooses and
+/// `SessionHost.Port` is the bound port rather than the requested one — which is what lets
+/// two runs of this suite exist at once. Read through the mutable slot because there is no
+/// address until the first case has started the host.
+let private signalUrl () =
+    match host with
+    | Some h -> sprintf "http://127.0.0.1:%d/signal" h.Port
+    | None -> failwith "host not started"
 
 let tests =
     testList "WebRTC E2E" [
         testCaseAsync "start the Session Process host" <|
             async {
-                let! h = Host.start sessionId port
+                let! h = Host.start sessionId 0
                 host <- Some h
             }
 
         testCaseAsync "a valid hello over a real data channel is accepted and appends PeerJoined" <|
             async {
                 let h = host.Value
-                let! channel = WebRtc.connect signalUrl
+                let! channel = WebRtc.connect (signalUrl ())
                 do! channel.Send (Control (PeerHello { PeerId = peerId; DisplayName = "Ada"; Token = h.MintPeerToken () }))
                 let! accepted = channel.Receive ()
                 match accepted with
@@ -71,7 +78,7 @@ let tests =
             async {
                 let h = host.Value
                 let rejectedEnded = h.WaitForNextSessionEnd ()
-                let! badChannel = WebRtc.connect signalUrl
+                let! badChannel = WebRtc.connect (signalUrl ())
                 // An unminted string — never handed out by this host, so always rejected.
                 do! badChannel.Send (Control (PeerHello { PeerId = peerId; DisplayName = "Mallory"; Token = "wrong-token" }))
                 let! rejected = badChannel.Receive ()

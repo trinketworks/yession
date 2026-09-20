@@ -494,21 +494,6 @@ let private processTests =
 // with a per-launch secret, and the Manager's registry still decides everything.
 // -----------------------------------------------------------------------------
 
-/// A port nothing is listening on, taken by binding :0 and releasing it. Needed where a
-/// Manager's PUBLIC origin has to be known BEFORE it starts: that origin is its OIDC
-/// issuer, and a launched session fetches discovery against it, so — exactly as in a real
-/// fronted deployment — it has to be a URL that resolves from this host. A collision after
-/// release fails the Manager's bind loudly; it can never produce a passing-but-wrong run.
-let private freePort () : Async<int> =
-    async {
-        let server = Interop.createServer (fun _ res -> res.``end`` "")
-        let! listening =
-            Async.FromContinuations (fun (cont, _, _) -> server.listen (0, "127.0.0.1", fun () -> cont server) |> ignore)
-        let port = Interop.serverPort listening
-        do! Async.FromContinuations (fun (cont, _, _) -> listening.close (fun _ -> cont ()))
-        return port
-    }
-
 /// Start a bare control server over the given secret→session table, plus the real
 /// notification and MCP hubs wired to their SSE routes, and the real hook relay over
 /// whatever endpoints the test declares. Returns the hubs and the relay so a test can push

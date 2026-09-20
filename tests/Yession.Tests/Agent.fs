@@ -487,11 +487,18 @@ let private turnTests =
 // The runner is scripted, so the flow is exercised end-to-end and stays repeatable.
 // -----------------------------------------------------------------------------
 
-let private port = 8102
 let private e2eSessionId = SessionId.create "agent-e2e-session" |> expect
-let private signalUrl = sprintf "http://127.0.0.1:%d/signal" port
 
 let mutable private host : Host.SessionHost option = None
+
+/// Where the host really came up. `Host.start` is given `0`, so the OS chooses and
+/// `SessionHost.Port` is the bound port rather than the requested one — which is what lets
+/// two runs of this suite exist at once. Read through the mutable slot because there is no
+/// address until the first case has started the host.
+let private signalUrl () =
+    match host with
+    | Some h -> sprintf "http://127.0.0.1:%d/signal" h.Port
+    | None -> failwith "host not started"
 
 let private e2eTests =
     testList "Agent E2E" [
@@ -504,13 +511,13 @@ let private e2eTests =
                             onChunk (AgentResponseChunk.Text (context.CurrentMessage |> Option.map ConversationItem.said |> Option.defaultValue ""))
                             return AgentCompleted (sprintf "You said: %s" (context.CurrentMessage |> Option.map ConversationItem.said |> Option.defaultValue ""), None)
                         }
-                let! h = Host.startWith (Some scripted) e2eSessionId port
+                let! h = Host.startWith (Some scripted) e2eSessionId 0
                 host <- Some h
             }
 
         testCaseAsync "a sent message yields a streamed agent response built from events (E2E-5)" <|
             async {
-                let! a = connectClient signalUrl (host.Value.MintPeerToken ()) "ada" "Ada"
+                let! a = connectClient (signalUrl ()) (host.Value.MintPeerToken ()) "ada" "Ada"
                 do! compose a a.Hello.PeerId "hi agent"
                 a.Connection.SendDraft a.Hello.PeerId
 

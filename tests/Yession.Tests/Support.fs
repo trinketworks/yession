@@ -36,6 +36,31 @@ let expect =
 
 let user msg = Ylmish.Program.Message.User msg
 
+// --- Ports, handed out rather than chosen ------------------------------------------------
+
+/// A loopback port nothing is listening on: bound at `:0`, so the OS chooses it, read back,
+/// and released.
+///
+/// Wanted only where a port has to be known BEFORE the thing that binds it starts — a
+/// Manager's public origin is its OIDC issuer, and a session it launches fetches discovery
+/// against it; `jmp run` refuses `0` outright. Everything else here is told `0` and asked
+/// afterwards (`SessionHost.Port` is the bound port, not the requested one).
+///
+/// The race the release leaves is the narrowest one available and it cannot produce a
+/// passing-but-wrong run: a collision fails the bind loudly. What it replaces is a suite
+/// picking a number by hand, which fails as EADDRINUSE or as a wait that never settles —
+/// and cannot be run twice at once at all.
+let freePort () : Async<int> =
+    async {
+        let server = Interop.createServer (fun _ res -> res.``end`` "")
+        let! listening =
+            Async.FromContinuations (fun (cont, _, _) ->
+                server.listen (0, "127.0.0.1", fun () -> cont server) |> ignore)
+        let port = Interop.serverPort listening
+        do! Async.FromContinuations (fun (cont, _, _) -> listening.close (fun _ -> cont ()))
+        return port
+    }
+
 // --- The sandbox seam's deterministic test double ----------------------------------------
 
 /// Counts sandbox lifecycle calls so tests can assert an operation happened (or was
