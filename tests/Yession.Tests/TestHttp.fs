@@ -9,29 +9,17 @@ module Yession.Tests.TestHttp
 // macro where nothing could read the decision, and two carried the same total-GET expression
 // character for character.
 //
-// The bindings below are one Fetch API member each. What was logic — choosing the request,
+// There are no bindings here at all now. The request is a list of `Fable.Fetch`'s own
+// `RequestProperties` rather than a JavaScript object literal, the answer is its `Response`,
+// and the one member that binding lacks — the whole set of headers an answer carried, which
+// `Headers` will iterate and Fable.Fetch never declares — is `Fable.NodeExtras`, beside the
+// response body it lacks for the same reason. What was logic — choosing the request,
 // defaulting a header, deciding whether an answer counts as success — is F#.
 
 open Fable.Core
-open Fable.Core.JsInterop
+open Fetch
+open Fable.NodeExtras
 open Yession.Host
-
-[<Emit("fetch($0, $1)")>]
-let private fetchWith (url: string) (init: obj) : JS.Promise<obj> = jsNative
-
-[<Emit("$0.status")>]
-let private statusOf (response: obj) : int = jsNative
-
-/// The URL the answer came from: the last one, where a redirect was followed.
-[<Emit("$0.url")>]
-let private urlOf (response: obj) : string = jsNative
-
-/// Every response header, as the pairs `Headers` iterates. Names arrive lowercased.
-[<Emit("[...$0.headers]")>]
-let private headerPairs (response: obj) : (string * string)[] = jsNative
-
-[<Emit("$0.text()")>]
-let private bodyOf (response: obj) : JS.Promise<string> = jsNative
 
 /// What one round trip answered.
 type Reply =
@@ -56,18 +44,26 @@ let requiredHeader (name: string) (reply: Reply) : string =
 /// The 2xx question `Response.ok` answers.
 let ok (reply: Reply) : bool = reply.Status >= 200 && reply.Status < 300
 
-let private headerObj (headers: (string * string) list) : obj =
-    Fable.Core.JsInterop.createObj [ for name, value in headers -> name, box value ]
+/// The headers a case names, as the request property that carries them. `Custom` is the
+/// case for a name Fable.Fetch does not enumerate, which is most of the ones a route of
+/// ours is asked about (`x-yession-*`), and it erases to the same pair a literal held.
+let private headersOf (headers: (string * string) list) : RequestProperties =
+    requestHeaders [ for name, value in headers -> HttpRequestHeaders.Custom (name, box value) ]
 
-let private send (init: (string * obj) list) (url: string) : Async<Reply> =
+/// `fetchUnsafe` rather than `fetch`, and the difference is the whole point of this helper:
+/// Fable.Fetch's `fetch` RAISES on a status outside 2xx, which is a reasonable default for a
+/// client that wanted the body and a wrong one for a suite whose subject IS the status. Half
+/// the cases here assert a 307, a 401 or a 404 — `ok` below is what asks the 2xx question,
+/// once, where a case can decide what the answer means.
+let private send (props: RequestProperties list) (url: string) : Async<Reply> =
     async {
-        let! response = fetchWith url (Fable.Core.JsInterop.createObj init) |> Interop.awaitPromise
-        let! body = bodyOf response |> Interop.awaitPromise
+        let! response = fetchUnsafe url props |> Interop.awaitPromise
+        let! body = response.text () |> Interop.awaitPromise
         return
-            { Status = statusOf response
+            { Status = response.Status
               Body = body
-              Url = urlOf response
-              Headers = Map.ofArray (headerPairs response) }
+              Url = response.Url
+              Headers = Map.ofArray (headerPairs response.Headers) }
     }
 
 /// A GET.
@@ -76,28 +72,29 @@ let get (url: string) : Async<Reply> = send [] url
 /// A GET with headers, and the runtime told not to answer from a kept copy: a case that
 /// asks twice means to ask twice.
 let getNoStore (headers: (string * string) list) (url: string) : Async<Reply> =
-    send [ "cache", box "no-store"; "headers", headerObj headers ] url
+    send [ RequestProperties.Cache RequestCache.Nostore; headersOf headers ] url
 
 /// A GET with a redirect left UNFOLLOWED, so the route's own answer is observable rather
 /// than the answer of whatever it points at.
-let getUnredirected (url: string) : Async<Reply> = send [ "redirect", box "manual" ] url
+let getUnredirected (url: string) : Async<Reply> =
+    send [ RequestProperties.Redirect RedirectMode.Manual ] url
 
 /// A POST under `contentType`, with whatever other headers the route requires.
 let post (headers: (string * string) list) (contentType: string) (body: string) (url: string) : Async<Reply> =
     send
-        [ "method", box "POST"
-          "headers", headerObj (("content-type", contentType) :: headers)
-          "body", box body ]
+        [ RequestProperties.Method HttpMethod.POST
+          headersOf (("content-type", contentType) :: headers)
+          RequestProperties.Body (BodyInit.Case3 body) ]
         url
 
 /// A POST with its redirect left UNFOLLOWED: where a route points a browser next is the
 /// contract, and an auto-following fetch would swallow it and assert the destination.
 let postUnredirected (contentType: string) (body: string) (url: string) : Async<Reply> =
     send
-        [ "method", box "POST"
-          "redirect", box "manual"
-          "headers", headerObj [ "content-type", contentType ]
-          "body", box body ]
+        [ RequestProperties.Method HttpMethod.POST
+          RequestProperties.Redirect RedirectMode.Manual
+          headersOf [ "content-type", contentType ]
+          RequestProperties.Body (BodyInit.Case3 body) ]
         url
 
 let postJson (body: string) (url: string) : Async<Reply> = post [] "application/json" body url
