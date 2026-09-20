@@ -12,6 +12,7 @@ open Fable.Core
 open Fable.Core.JsInterop
 open Fable.Pyxpecto
 open Fable.OpenTelemetry
+open Thoth.Json
 open Yession.Domain
 open Yession.Domain.Agent
 open Yession.Domain.Sandboxes
@@ -22,9 +23,68 @@ open Yession.Host
 // chain — the telemetry tests are pure in-memory / localhost and need none of the client harness.
 let private expect = function Ok v -> v | Error e -> failwith e
 
-/// Read a JS field by (possibly dotted) string key — attribute keys aren't F# identifiers.
-[<Emit("$0[$1]")>]
-let private field (o: obj) (key: string) : obj = jsNative
+/// What an emitted record carries, for a suite that asserts on one. OTel attribute keys are
+/// dotted, so they are not F# identifiers and cannot be a record's labels — naming them once
+/// in a decoder is what lets every case below read a field instead of a string key.
+type private Emitted =
+    { Body : string
+      SessionId : string
+      TurnId : string
+      InputTokens : int
+      OutputTokens : int
+      CacheReadTokens : int
+      CacheCreationTokens : int
+      /// Absent when no model ran, which is a case this suite asserts: a turn the runner
+      /// reported no model for carries no model KEY, not an empty one.
+      Model : string option }
+
+let private emitted : Decoder<Emitted> =
+    Decode.object (fun get ->
+        { Body = get.Required.Field "body" Decode.string
+          SessionId = get.Required.At [ "attributes"; "yession.session.id" ] Decode.string
+          TurnId = get.Required.At [ "attributes"; "yession.agent.turn.id" ] Decode.string
+          InputTokens = get.Required.At [ "attributes"; "gen_ai.usage.input_tokens" ] Decode.int
+          OutputTokens = get.Required.At [ "attributes"; "gen_ai.usage.output_tokens" ] Decode.int
+          CacheReadTokens = get.Required.At [ "attributes"; "anthropic.usage.cache_read_input_tokens" ] Decode.int
+          CacheCreationTokens = get.Required.At [ "attributes"; "anthropic.usage.cache_creation_input_tokens" ] Decode.int
+          Model = get.Optional.At [ "attributes"; "gen_ai.response.model" ] Decode.string })
+
+/// The per-model breakdown a turn that ran several carries. OTel attributes are flat, so N
+/// models cross as five arrays of N, aligned by index — this reads them back as the one thing
+/// they are, and a set whose lengths DISAGREE is a breakdown nothing can align, which says so
+/// rather than indexing past the end of the shorter one.
+let private breakdown (record: ReadableLogRecord) : (string * int * int * int * int) list =
+    let counts (suffix: string) : Decoder<int list> =
+        Decode.optional "attributes" (Decode.optional ("yession.agent.turn.models." + suffix) (Decode.list Decode.int))
+        |> Decode.map (Option.flatten >> Option.defaultValue [])
+    let decoder =
+        Decode.map5
+            (fun models input output cacheRead cacheCreation -> models, input, output, cacheRead, cacheCreation)
+            (Decode.optional "attributes" (Decode.optional "yession.agent.turn.models" (Decode.list Decode.string))
+             |> Decode.map (Option.flatten >> Option.defaultValue []))
+            (counts "input_tokens")
+            (counts "output_tokens")
+            (counts "cache_read_input_tokens")
+            (counts "cache_creation_input_tokens")
+    match Decode.fromString decoder (JS.JSON.stringify (createObj [ "attributes", record.attributes ])) with
+    | Error reason -> failwithf "the emitter emitted a breakdown this suite cannot read: %s" reason
+    | Ok (models, input, output, cacheRead, cacheCreation) ->
+        let n = List.length models
+        if [ input; output; cacheRead; cacheCreation ] |> List.exists (fun counts -> List.length counts <> n) then
+            failwithf
+                "the per-model arrays are not aligned: %d models, but %A counts"
+                n
+                (List.map List.length [ input; output; cacheRead; cacheCreation ])
+        List.init n (fun i -> models.[i], input.[i], output.[i], cacheRead.[i], cacheCreation.[i])
+
+/// A record the exporter finished, read as the shape the emitter promised. A record missing
+/// one of these, or carrying something other than a number where a count belongs, fails by
+/// name here — where `unbox<int>` off an `$0[$1]` would have compared `undefined` to the
+/// expected number and reported only that they differed.
+let private read (record: ReadableLogRecord) : Emitted =
+    match Decode.fromString emitted (JS.JSON.stringify (createObj [ "body", record.body; "attributes", record.attributes ])) with
+    | Ok emitted -> emitted
+    | Error reason -> failwithf "the emitter emitted a record this suite cannot read: %s" reason
 
 /// The ordinary turn: one model, and it spent all of it. Named so a fixture says which case
 /// it is — the interesting one is the turn that ran TWO, and it is built by hand.
@@ -86,15 +146,15 @@ let private emitterTests =
             let records = mem.getFinishedLogRecords ()
             Expect.equal records.Length 1 "one record emitted"
             let record = records.[0]
-            Expect.equal (unbox<string> (field record "body")) "agent turn usage" "body names the signal"
-            let attrs = field record "attributes"
-            Expect.equal (unbox<int> (field attrs "gen_ai.usage.input_tokens")) 11 "input tokens"
-            Expect.equal (unbox<int> (field attrs "gen_ai.usage.output_tokens")) 7 "output tokens"
-            Expect.equal (unbox<int> (field attrs "anthropic.usage.cache_read_input_tokens")) 3 "cache read tokens"
-            Expect.equal (unbox<int> (field attrs "anthropic.usage.cache_creation_input_tokens")) 5 "cache creation tokens"
-            Expect.equal (unbox<string> (field attrs "yession.session.id")) "sess-x" "session id (an identifier, not content)"
-            Expect.equal (unbox<string> (field attrs "yession.agent.turn.id")) "turn-1" "agent turn id"
-            Expect.equal (unbox<string> (field attrs "gen_ai.response.model")) "claude-opus-4-8" "model when the SDK reports it"
+            let emitted = read record
+            Expect.equal emitted.Body "agent turn usage" "body names the signal"
+            Expect.equal emitted.InputTokens 11 "input tokens"
+            Expect.equal emitted.OutputTokens 7 "output tokens"
+            Expect.equal emitted.CacheReadTokens 3 "cache read tokens"
+            Expect.equal emitted.CacheCreationTokens 5 "cache creation tokens"
+            Expect.equal emitted.SessionId "sess-x" "session id (an identifier, not content)"
+            Expect.equal emitted.TurnId "turn-1" "agent turn id"
+            Expect.equal emitted.Model (Some "claude-opus-4-8") "model when the SDK reports it"
 
         testCase "the model attribute is absent when the runner reports no model" <| fun () ->
             let logger, mem = inMemoryLogger ()
@@ -102,8 +162,7 @@ let private emitterTests =
             let turnId = AgentTurnId.create "turn-n" |> expect
             Telemetry.emitTo logger sessionId turnId
                 { InputTokens = 1; OutputTokens = 1; CacheReadTokens = 0; CacheCreationTokens = 0; Models = [] }
-            let attrs = field (mem.getFinishedLogRecords ()).[0] "attributes"
-            Expect.isTrue (isNull (field attrs "gen_ai.response.model")) "no model key when no model ran"
+            Expect.isNone (read (mem.getFinishedLogRecords ()).[0]).Model "no model key when no model ran"
 
         testCase "a turn that ran two models names neither as gen_ai.response.model" <| fun () ->
             // The convention's attribute names THE model that produced the response. A turn
@@ -115,8 +174,7 @@ let private emitterTests =
             Telemetry.emitTo logger sessionId turnId
                 { InputTokens = 30; OutputTokens = 3; CacheReadTokens = 0; CacheCreationTokens = 0
                   Models = [ ranAll "claude-opus-5" 10 1 0 0; ranAll "claude-haiku-4-5" 20 2 0 0 ] }
-            let attrs = field (mem.getFinishedLogRecords ()).[0] "attributes"
-            Expect.isTrue (isNull (field attrs "gen_ai.response.model")) "no single model is claimed"
+            Expect.isNone (read (mem.getFinishedLogRecords ()).[0]).Model "no single model is claimed"
 
         testCase "a turn that ran two models reports what each of them spent" <| fun () ->
             // Declining to name one must not lose the answer the provider did give: the
@@ -127,21 +185,11 @@ let private emitterTests =
             Telemetry.emitTo logger sessionId turnId
                 { InputTokens = 30; OutputTokens = 3; CacheReadTokens = 0; CacheCreationTokens = 0
                   Models = [ ranAll "claude-opus-5" 10 1 4 5; ranAll "claude-haiku-4-5" 20 2 6 7 ] }
-            let attrs = field (mem.getFinishedLogRecords ()).[0] "attributes"
             // Read back the way a collector would: the arrays are one breakdown, aligned by
             // index, so they are asserted as the one thing they are.
-            let counts (suffix: string) = unbox<int array> (field attrs ("yession.agent.turn.models." + suffix))
-            let reported =
-                unbox<string array> (field attrs "yession.agent.turn.models")
-                |> Array.mapi (fun i model ->
-                    model,
-                    (counts "input_tokens").[i],
-                    (counts "output_tokens").[i],
-                    (counts "cache_read_input_tokens").[i],
-                    (counts "cache_creation_input_tokens").[i])
             Expect.equal
-                reported
-                [| "claude-opus-5", 10, 1, 4, 5; "claude-haiku-4-5", 20, 2, 6, 7 |]
+                (breakdown (mem.getFinishedLogRecords ()).[0])
+                [ "claude-opus-5", 10, 1, 4, 5; "claude-haiku-4-5", 20, 2, 6, 7 ]
                 "every model that ran, in the order the provider reported them, with what each spent"
 
         testCase "a turn that ran one model reports it as the response model and nothing else" <| fun () ->
@@ -153,8 +201,7 @@ let private emitterTests =
             Telemetry.emitTo logger sessionId turnId
                 { InputTokens = 10; OutputTokens = 1; CacheReadTokens = 0; CacheCreationTokens = 0
                   Models = [ ranAll "claude-opus-5" 10 1 0 0 ] }
-            let attrs = field (mem.getFinishedLogRecords ()).[0] "attributes"
-            Expect.isTrue (isNull (field attrs "yession.agent.turn.models")) "no breakdown beside a single answer"
+            Expect.isEmpty (breakdown (mem.getFinishedLogRecords ()).[0]) "no breakdown beside a single answer"
 
         testCase "the disabled emitter is a no-op and never throws" <| fun () ->
             let turnId = AgentTurnId.create "turn-2" |> expect

@@ -15,6 +15,7 @@ open FSharp
 open Fable.Core
 open Fable.Core.JsInterop
 open Fable.Pyxpecto
+open Thoth.Json
 open Yession.App
 open Yession.Host
 
@@ -22,14 +23,31 @@ open Yession.Host
 /// double is an object carrying the three members `Assets.serve` uses.
 type private Reply =
     { mutable Status: int
-      mutable Headers: obj
+      mutable Headers: Map<string, string>
       mutable Body: string }
 
-/// What `String(x)` does: a Buffer or a string, said as a string. `end` takes whatever the
-/// caller had — the service passes bytes for a file and a sentence for a miss — so the double
-/// records it the way Node's own writable would read it.
-[<Emit("String($0)")>]
-let private asString (value: obj) : string = jsNative
+/// What `end` was handed, as text. The service passes exactly two things — the bytes of a
+/// file, and a sentence for a miss — so the double names both rather than asking `String()`
+/// to stringify whatever turned up.
+///
+/// The Buffer arm is an `unbox` with its reason beside it: `Buffer` is an interface, and Fable
+/// cannot type-test one (the test compiles to `false`), so the case that is not a string is
+/// read as the only other thing `Assets.serve` sends.
+let private asString (value: obj) : string =
+    match value with
+    | :? string as sentence -> sentence
+    | _ -> (unbox<Node.Buffer.Buffer> value).toString ()
+
+/// The headers `writeHead` was given. `Assets.serve` builds them as the plain object Node
+/// takes, so the double reads every pair it carries — once, as it arrives — rather than being
+/// asked for one name at a time and answering a miss with the empty string, which made
+/// "served with no content type" and "served as empty" the same answer.
+let private headersOf (headers: obj) : Map<string, string> =
+    if isNull headers then Map.empty
+    else
+        match Decode.fromString (Decode.keyValuePairs Decode.string) (JS.JSON.stringify headers) with
+        | Ok pairs -> Map.ofList pairs
+        | Error reason -> failwithf "a response was given headers this double cannot read: %s" reason
 
 /// The double itself: three members, each a real F# function, so what a call to it DOES is
 /// F# the compiler reads rather than statements inside a string. `Func` rather than a curried
@@ -40,17 +58,14 @@ let private responseInto (reply: Reply) : Interop.ServerResponse =
             [ "writeHead"
               ==> System.Func<int, obj, obj>(fun status headers ->
                   reply.Status <- status
-                  reply.Headers <- headers
+                  reply.Headers <- headersOf headers
                   null)
               "write" ==> System.Func<string, bool>(fun _ -> true)
               "end"
               ==> System.Func<obj, unit>(fun body -> reply.Body <- if isNull body then "" else asString body) ])
 
-[<Emit("($0 ?? {})[$1] ?? ''")>]
-let private headerOf (headers: obj) (name: string) : string = jsNative
-
 let private serveInto (assets: Assets.AssetSet) (build: string) (path: string) =
-    let reply = { Status = 0; Headers = null; Body = "" }
+    let reply = { Status = 0; Headers = Map.empty; Body = "" }
     Assets.serve assets build path (responseInto reply)
     reply
 
@@ -77,11 +92,11 @@ let tests =
             withAssets "types" (fun assets ->
                 let css = serveInto assets (buildOf assets) (AssetFile.path AssetFile.``app``)
                 Expect.equal css.Status 200 "the stylesheet serves"
-                Expect.equal (headerOf css.Headers "content-type") "text/css; charset=utf-8" "as a stylesheet"
+                Expect.equal (Map.tryFind "content-type" css.Headers) (Some "text/css; charset=utf-8") "as a stylesheet"
 
                 let face = serveInto assets (buildOf assets) (AssetFile.path AssetFile.``source-serif-350``)
                 Expect.equal face.Status 200 "the face serves"
-                Expect.equal (headerOf face.Headers "content-type") "font/woff2" "as a font")
+                Expect.equal (Map.tryFind "content-type" face.Headers) (Some "font/woff2") "as a font")
 
         testCase "a file the build did not declare has no address" <| fun () ->
             // The service answers from the DECLARATION, so a stray file in the directory is not
