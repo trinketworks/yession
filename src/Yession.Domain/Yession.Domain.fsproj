@@ -56,6 +56,10 @@
     <!-- Where a shell opened in a sandbox starts (Plan 25). After Environment.fs, which
          owns the sandbox's OWN working directory: this is the layer over a live one. -->
     <Compile Include="ShellProfile.fs" />
+    <!-- What a file read answers with: a numbered, bounded window. Strings in, strings out;
+         it knows nothing of sandboxes, and sits here only because the verbs are declared
+         after it. -->
+    <Compile Include="Files.fs" />
     <Compile Include="Secrets.fs" />
     <Compile Include="Connections.fs" />
     <Compile Include="Authorization.fs" />

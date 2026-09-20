@@ -695,6 +695,22 @@ type SandboxCapabilities =
       /// as the agent's — which is exactly the kind of act the gate exists for.
       SetShellProfile : SetShellProfile }
 
+/// Read one file inside a sandbox, whole: its text as it stands, or why not. Whole rather
+/// than a window, because the sandbox is asked ONCE and the file's length is part of every
+/// answer (`FileSlice.render`); the window is cut afterwards, from the text, where a test can
+/// reach the cut.
+///
+/// The path is in the sandbox's own vocabulary — as a terminal there would take it, relative
+/// to where terminals in that sandbox start, or absolute — never a host path. A file tool
+/// that took host paths would be the second door `execute_command` is the only one of.
+type ReadFile = SandboxRef -> string -> Async<Result<string, string>>
+
+/// the files inside a sandbox, read as text rather than through a shell line — so the
+/// record says WHICH file was read, as a fact, where a command line only said `sed`.
+[<RequireQualifiedAccess>]
+type FileCapabilities =
+    { Read : ReadFile }
+
 /// the session's read-only queries, and how to answer one.
 type QueryCapabilities =
       /// The session's read-only queries (Plan 15), declared once and surfaced to the
@@ -738,6 +754,7 @@ type AgentCapabilities =
       Secrets : SecretCapabilities
       Repos : RepoCapabilities
       Sandboxes : SandboxCapabilities
+      Files : FileCapabilities
       Queries : QueryCapabilities
       Tools : ToolCapabilities
       RunGated : RunGatedCommand }
@@ -776,6 +793,7 @@ module AgentCapabilities =
             { Start = fun _ _ -> async { return Error "no sandbox capability" }
               Stop = fun _ -> async { return Error "no sandbox capability" }
               SetShellProfile = fun _ _ -> async { return Error "no terminal capability" } }
+          Files = { FileCapabilities.Read = fun _ _ -> async { return Error "no file capability" } }
           Queries =
             { Declared = []
               Read = fun _ -> async { return Error "no query capability" } }
