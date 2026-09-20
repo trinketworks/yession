@@ -16,6 +16,7 @@ open Yession.Domain.Sandboxes
 
 open System
 open Yession.Domain.Prs
+open Yession.Domain.Files
 open Yession.Domain.Terminals
 open Yession.Domain.Tools
 
@@ -77,6 +78,17 @@ module private ToolArgs =
         read
             (Decode.object (fun get ->
                 get.Optional.Field "cwd" Decode.string,
+                get.Optional.Field "sandbox" Decode.string |> Option.filter (fun s -> s <> "")))
+            json
+
+    /// `read_file`'s four: the path, the window (`offset` a 1-based first line, `limit` a
+    /// count), and which sandbox. An absent or empty `sandbox` is the default one.
+    let fileRead (json: string) : Result<string * int option * int option * string option, string> =
+        read
+            (Decode.object (fun get ->
+                get.Required.Field "path" Decode.string,
+                get.Optional.Field "offset" Decode.int,
+                get.Optional.Field "limit" Decode.int,
                 get.Optional.Field "sandbox" Decode.string |> Option.filter (fun s -> s <> "")))
             json
 
@@ -415,6 +427,25 @@ module AgentTools =
                 else return sprintf "%s%s%s\n%s" where omitted waited tail.Text
         }
 
+    /// One file, one window of it, with the bounds said on every answer (`FileSlice.render`).
+    /// The sandbox is asked for the whole file and the window is cut here — so the length is
+    /// always known, and an `offset` past the end answers with how long the file is rather
+    /// than with nothing.
+    let private readFile
+        (capabilities: AgentCapabilities)
+        (path: string)
+        (offset: int option)
+        (limit: int option)
+        (sandbox: string option)
+        : Async<string> =
+        let raw = sandbox |> Option.defaultValue (SandboxRef.render SandboxRef.defaultRef)
+        withSandbox raw (fun name ->
+            async {
+                match! capabilities.Files.Read name path with
+                | Ok content -> return FileSlice.render path (FileSlice.ofContent content offset limit)
+                | Error reason -> return sprintf "could not read %s: %s" path reason
+            })
+
     let private setSecret (capabilities: AgentCapabilities) (name: string) (value: string) : Async<string> =
         async {
             match SecretName.create name with
@@ -698,6 +729,25 @@ module AgentTools =
                           | Error e -> return Error (sprintf "not a terminal id: %s" e)
                           | Ok id -> return! ok (readTerminal capabilities id from waitFor)
                   })
+
+          // Read-only, and says so in the descriptor: the one tool here that touches a file
+          // and is not an act. Its call is still on the record — the tool-use chip says which
+          // file, which is the whole point of it over `sed -n` in a terminal.
+          (let descriptor, body =
+              tool
+                  "read_file"
+                  "Read a file, or a window of it, numbered by line. Prefer this over cat/sed/head/tail in execute_command: it's on the record as a read of THIS file, and the people here see what you looked at. Paths are as a terminal in that sandbox would take them — relative to where its terminals start (the checkout, once add_repo and set_shell_profile have run), or absolute. Every answer says which lines it covers of how many; a long file comes back a page at a time, and the answer says which `offset` reads on. Lines longer than 2000 characters are cut."
+                  [ ToolField.required "path" "string" "the file, e.g. \"src/Program.fs\" or \"repos/octocat/hello-world/README.md\""
+                    ToolField.optional "offset" "integer" "the first line to read, 1-based; omit for the top"
+                    ToolField.optional "limit" "integer" "how many lines; omit for 2000"
+                    ToolField.optional "sandbox" "string" "the work sandbox whose files these are; omit for the default one" ]
+                  (fun args ->
+                      async {
+                          match ToolArgs.fileRead args with
+                          | Error e -> return Error e
+                          | Ok (path, offset, limit, sandbox) -> return! ok (readFile capabilities path offset limit sandbox)
+                      })
+           { descriptor with ReadOnly = true }, body)
 
           tool
               "set_secret"

@@ -407,6 +407,15 @@ let startFull
                 (replayedTerminals |> Projection.openTerminals |> List.map (fun t -> t.TerminalId))
                 replayedProfiles
 
+        // Files read by asking the sandbox, resolved where a terminal there would resolve
+        // them — the shell profile is the terminal manager's, so the lookup is passed down
+        // rather than the projection reached up for.
+        let files =
+            SessionFiles.create
+                sandboxes.EnvironmentFor
+                (fun sandbox -> ShellProfileProjection.workingDirectory sandbox (terminals.Profiles ()))
+                TerminalShell.posix
+
         // The agent's ONE execution path (Plan 13, stage 3b). It queues a command where
         // people can see it and then WAITS — bounded by the command timeout — so the agent
         // gets its answer back without a turn ever hanging.
@@ -669,6 +678,7 @@ let startFull
               Repos = AgentCapabilities.none.Repos
               Queries = AgentCapabilities.none.Queries
               Sandboxes = AgentCapabilities.none.Sandboxes
+              Files = { FileCapabilities.Read = files.Read }
               Tools =
                 { Record = toolUseLogFor turnId
                   // Snapshotted HERE, which is what makes a turn's tool list stable: a set

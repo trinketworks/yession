@@ -18,6 +18,7 @@ module Yession.Tests.Tools
 open Fable.Pyxpecto
 open Yession.Domain
 open Yession.Domain.Agent
+open Yession.Domain.Files
 open Yession.Domain.Prs
 open Yession.Domain.Terminals
 open Yession.Domain.Tools
@@ -860,4 +861,106 @@ let private auditTests =
             }
     ]
 
-let tests = testList "Tools" [ registryTests; sessionTests; auditTests ]
+/// `read_file` against a capability that holds exactly these files, and remembers what it
+/// was asked for.
+let private readingFiles (files: Map<string, string>) =
+    let asked = ResizeArray<SandboxRef * string> ()
+    let registry =
+        AgentTools.registry
+            { AgentCapabilities.none with
+                Files =
+                    { FileCapabilities.Read =
+                        fun sandbox path ->
+                            async {
+                                asked.Add ((sandbox, path))
+                                return
+                                    match Map.tryFind path files with
+                                    | Some content -> Ok content
+                                    | None -> Error "No such file or directory"
+                            } } }
+    (fun (args: string) -> registry.Invoke (call "yession" "read_file" args)), asked
+
+let private fileTests =
+    testList "read_file" [
+
+        // The window's shape: what the agent CLI's own read tool answers, so a model's habits
+        // carry over — numbered lines, 1-based, and a page that says where the next one is.
+        test "a window is numbered from its own first line" {
+            let slice = FileSlice.ofContent "a\nb\nc\nd\n" (Some 2) (Some 2)
+            Expect.equal slice.From 2 "starts where asked"
+            Expect.equal slice.Through 3 "and covers the count asked for"
+            Expect.equal slice.Total 4 "the trailing newline ends a line rather than starting one"
+            Expect.equal slice.Text "2\tb\n3\tc" "each line wears its own number"
+        }
+
+        test "an offset past the end is an empty window that still says how long the file is" {
+            let slice = FileSlice.ofContent "a\nb" (Some 10) None
+            Expect.equal slice.Text "" "nothing to show"
+            Expect.equal slice.Total 2 "but the length is known"
+            Expect.stringContains (FileSlice.render "f" slice) "has 2 lines; nothing at line 10" "and the answer says both"
+        }
+
+        test "a page that is not the end says which offset reads on" {
+            let content = List.init 10 (sprintf "line %d") |> String.concat "\n"
+            let said = FileSlice.render "f" (FileSlice.ofContent content None (Some 4))
+            Expect.stringContains said "lines 1-4 of 10" "the bounds are stated"
+            Expect.stringContains said "offset: 5" "and the next page is named"
+        }
+
+        test "the last page says nothing about reading on" {
+            let said = FileSlice.render "f" (FileSlice.ofContent "a\nb\nc" (Some 2) None)
+            Expect.stringContains said "lines 2-3 of 3" "the bounds are stated"
+            Expect.isFalse (said.Contains "offset:") "there is no next page to name"
+        }
+
+        test "a line longer than the cap is cut, and says so" {
+            let long = String.replicate (FileSlice.maxLineChars + 10) "x"
+            let slice = FileSlice.ofContent (long + "\nshort") None None
+            let first = (slice.Text.Split '\n').[0]
+            Expect.equal first.Length (2 + FileSlice.maxLineChars + 1) "number, tab, the cap, and the mark"
+            Expect.isTrue (first.EndsWith "…") "the cut is marked"
+        }
+
+        test "an empty file is said to be empty rather than shown as nothing" {
+            Expect.equal (FileSlice.render "f" (FileSlice.ofContent "" None None)) "f is empty" "one sentence"
+        }
+
+        // The tool over the capability: the path goes through untouched, in the sandbox
+        // named, and the answer is the rendered window.
+        testCaseAsync "read_file asks the named sandbox for the path as given" <|
+            async {
+                let read, asked = readingFiles (Map.ofList [ "src/Program.fs", "one\ntwo" ])
+                let! answer = read """{"path":"src/Program.fs","sandbox":"dev"}"""
+                Expect.equal (List.ofSeq asked |> List.map snd) [ "src/Program.fs" ] "the path is the sandbox's business, not rewritten here"
+                Expect.equal (fst (Seq.head asked) |> SandboxRef.render) "dev" "in the sandbox named"
+                let text = (expect answer).Text
+                Expect.stringContains text "lines 1-2 of 2" "the bounds"
+                Expect.stringContains text "1\tone\n2\ttwo" "and the numbered lines"
+            }
+
+        testCaseAsync "read_file without a sandbox reads the default one" <|
+            async {
+                let read, asked = readingFiles (Map.ofList [ "f", "x" ])
+                let! _ = read """{"path":"f"}"""
+                Expect.equal (fst (Seq.head asked)) SandboxRef.defaultRef "the sandbox every terminal starts in"
+            }
+
+        // A file that is not there is an ANSWER the model reads and acts on, not a protocol
+        // error it would retry another way.
+        testCaseAsync "a missing file is told to the model in the sandbox's words" <|
+            async {
+                let read, _ = readingFiles Map.empty
+                let! answer = read """{"path":"nope.fs"}"""
+                let text = (expect answer).Text
+                Expect.stringContains text "could not read nope.fs" "which file"
+                Expect.stringContains text "No such file" "and why, as the sandbox said it"
+            }
+
+        test "read_file declares itself read-only" {
+            let registry = AgentTools.registry AgentCapabilities.none
+            let tool = registry.Tools |> List.find (fun t -> t.Name = "read_file")
+            Expect.isTrue tool.ReadOnly "MCP's own readOnlyHint: this is a look, not an act"
+        }
+    ]
+
+let tests = testList "Tools" [ registryTests; sessionTests; fileTests; auditTests ]
