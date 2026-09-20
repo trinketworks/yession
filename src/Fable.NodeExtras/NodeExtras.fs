@@ -64,6 +64,16 @@ module Encodings =
 /// macros, with the same comment above them saying which four members were missing — four
 /// copies of one binding, each invisible to the others. They are imports rather than emits,
 /// which is what the members allow once the flag and the options object are F# values.
+/// One entry of a directory read `withFileTypes`: its name, and what KIND of thing it is,
+/// answered without a second call. That distinction is the point for a SYMLINK, whose `stat`
+/// answers about the thing it points at — so a walk that must not follow one has to be told
+/// by the read itself.
+[<AllowNullLiteral>]
+type DirectoryEntry =
+    abstract name : string
+    abstract isDirectory : unit -> bool
+    abstract isSymbolicLink : unit -> bool
+
 [<AutoOpen>]
 module Files =
 
@@ -72,6 +82,14 @@ module Files =
 
     [<Import("mkdirSync", "node:fs")>]
     let private mkdirSyncWithOptions (path: string) (options: obj) : unit = jsNative
+
+    [<Import("readdirSync", "node:fs")>]
+    let private readdirSyncWithOptions (path: string) (options: obj) : DirectoryEntry array = jsNative
+
+    /// What `dir` holds, each entry saying what it is. `Fable.Node`'s `readdirSync` answers
+    /// names alone, so a caller that needs the kinds either asks the filesystem again per
+    /// name — which for a symlink answers about its target — or reads them here.
+    let entries (dir: string) : DirectoryEntry array = readdirSyncWithOptions dir !!{| withFileTypes = true |}
 
     /// A descriptor on `path` for appending, creating the file when it is not there (`'a'`).
     /// `Fable.Node`'s `openSync` takes the path alone, which is `'r'` — a reader.
@@ -390,6 +408,52 @@ module ChildProcesses =
                  detached = options.Detached |}
 
         Node.Api.childProcess.spawn (command, ResizeArray arguments, js)
+
+// --- Synchronous children -------------------------------------------------------------------
+
+/// What a synchronous child answered, whole. `spawnSync` runs the child to completion and
+/// hands back everything it said at once, which is what a fixture wants: no streams to drain
+/// and no exit to await. `Fable.Node` types the result as `obj`.
+[<AllowNullLiteral>]
+type SyncResult =
+
+    /// The code the child exited with, and NOTHING for one a SIGNAL killed — Node reports
+    /// `null` there, and reading that as `0` would have a killed child report success.
+    abstract status : int option
+
+    /// What the child wrote to stdout, decoded. `None` for a child that could not be spawned
+    /// at all, which is a different answer from the empty string a child that ran and said
+    /// nothing writes.
+    abstract stdout : string option
+
+    /// What the child wrote to stderr, on the same terms.
+    abstract stderr : string option
+
+/// The options `spawnSync` is given here. `encoding` is not among them because this binding
+/// always asks for text: `stdout` and `stderr` above are typed as strings, and a run that did
+/// not name an encoding would hand back Buffers under those names.
+type SyncOptions =
+    { /// Text handed to the child on stdin, which is closed after. `None` gives it none.
+      Input : string option
+      /// How much output to keep, in bytes. Node's own default is 1 MiB and a child that
+      /// exceeds it is KILLED with its output truncated — so a caller that expects a large
+      /// answer says how large, rather than discovering the limit as a mysterious kill.
+      MaxBuffer : int option }
+
+[<AutoOpen>]
+module SyncChildProcesses =
+
+    [<Import("spawnSync", "node:child_process")>]
+    let private spawnSyncWith (command: string) (arguments: string array) (options: obj) : SyncResult = jsNative
+
+    /// Run `command` to completion and answer everything it said.
+    let spawnSync (command: string) (arguments: string list) (options: SyncOptions) : SyncResult =
+        spawnSyncWith
+            command
+            (Array.ofList arguments)
+            !!{| encoding = "utf8"
+                 input = options.Input
+                 maxBuffer = options.MaxBuffer |}
 
 // --- Crypto ---------------------------------------------------------------------------------
 

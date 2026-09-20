@@ -30,39 +30,28 @@ module Yession.Tests.NixSource
 open Fable.Core
 open Fable.Core.JsInterop
 open Fable.Pyxpecto
+open Fable.NodeExtras
 
-let private nodeFs: obj = importAll "node:fs"
-let private nodeChild: obj = importAll "node:child_process"
+/// `spawnSync`'s own limit is 1 MiB, and the source listing this suite reads is larger than
+/// that: a child killed for exceeding it would answer a truncated listing, which reads exactly
+/// like a filter that dropped the rest.
+let private roomForTheWholeListing = 32 * 1024 * 1024
 
-[<Emit("$0.readdirSync($1, { withFileTypes: true }).map(d => [d.name, d.isDirectory(), d.isSymbolicLink()])")>]
-let private readDir (fs: obj) (dir: string) : (string * bool * bool) array = jsNative
-
-[<Emit("$0.spawnSync($1, $2, { encoding: 'utf8', input: $3, maxBuffer: 33554432 })")>]
-let private spawnSync (cp: obj) (command: string) (args: string array) (input: string) : obj = jsNative
-
-/// `spawnSync` reports no status at all for a child that a signal killed rather than one that
-/// exited. `-1` says that, and says it where the alternative — reading `null` as `0` — would
-/// have a killed `nix eval` report success.
-[<Emit("$0.status")>]
-let private statusOf (result: obj) : int option = jsNative
-
-let private exitCode (result: obj) : int = statusOf result |> Option.defaultValue -1
-
-[<Emit("($0.stdout || '')")>]
-let private stdoutOf (result: obj) : string = jsNative
-
-[<Emit("($0.stderr || '')")>]
-let private stderrOf (result: obj) : string = jsNative
+/// What a child said, for a message about it going wrong. A stream that is `None` is not an
+/// empty answer: it is a child that never ran at all, and a message printing `""` for that
+/// would report the one failure this suite cannot otherwise see as silence.
+let private said (stream: string option) : string =
+    stream |> Option.defaultValue "(nothing — the child could not be spawned)"
 
 /// Every entry under `root`, as paths relative to it. A symlink is reported as itself and never
 /// descended into — in the failure this suite guards, `node_modules` is a symlink into the Nix
 /// store, and following it would walk that entire closure instead of finding the leak.
 let rec private entriesUnder (root: string) (rel: string) : string list =
-    readDir nodeFs (if rel = "" then root else root + "/" + rel)
+    Files.entries (if rel = "" then root else root + "/" + rel)
     |> Array.toList
-    |> List.collect (fun (name, isDirectory, isSymlink) ->
-        let path = if rel = "" then name else rel + "/" + name
-        if isDirectory && not isSymlink then path :: entriesUnder root path else [ path ])
+    |> List.collect (fun entry ->
+        let path = if rel = "" then entry.name else rel + "/" + entry.name
+        if entry.isDirectory () && not (entry.isSymbolicLink ()) then path :: entriesUnder root path else [ path ])
 
 /// The build source, materialised in the store exactly as `staged` unpacks it. `--file`
 /// evaluates nix/worktree.nix in place, so this is the WORKING TREE — the route CI never takes
@@ -72,14 +61,18 @@ let private buildSource =
     lazy
         (let result =
             spawnSync
-                nodeChild
                 "nix"
-                [| "--extra-experimental-features"; "nix-command"
-                   "eval"; "--raw"; "--file"; "nix/worktree.nix"; "staged.src" |]
-                ""
-         if exitCode result <> 0 then
-             failwithf "could not evaluate the build source: %s" (stderrOf result)
-         (stdoutOf result).Trim ())
+                [ "--extra-experimental-features"; "nix-command"
+                  "eval"; "--raw"; "--file"; "nix/worktree.nix"; "staged.src" ]
+                { Input = None; MaxBuffer = Some roomForTheWholeListing }
+         // `None` is a child a signal killed, which has no exit code to compare and is not a
+         // success: `-1` says so where reading the absent status as `0` would have a killed
+         // `nix eval` report an empty source as the answer.
+         if result.status |> Option.defaultValue -1 <> 0 then
+             failwithf "could not evaluate the build source: %s" (said result.stderr)
+         match result.stdout with
+         | Some source -> source.Trim ()
+         | None -> failwith "nix eval was never run, so there is no build source to read")
 
 let private entries = lazy (entriesUnder buildSource.Value "")
 
@@ -106,14 +99,22 @@ let tests =
     testList "the Nix build source" [
         testCase "carries nothing git ignores" <| fun () ->
             let listed = entries.Value
-            let result = spawnSync nodeChild "git" [| "check-ignore"; "--stdin" |] (String.concat "\n" listed)
+            let result =
+                spawnSync
+                    "git"
+                    [ "check-ignore"; "--stdin" ]
+                    { Input = Some (String.concat "\n" listed); MaxBuffer = Some roomForTheWholeListing }
+            let exitCode = result.status |> Option.defaultValue -1
             // check-ignore exits 1 when NOTHING matched — the passing outcome here. 0 means it
             // named at least one ignored path; anything else means git failed to answer, which
             // must not read as a pass.
             Expect.isTrue
-                (exitCode result = 0 || exitCode result = 1)
-                (sprintf "git check-ignore could not answer: %s" (stderrOf result))
-            let ignored = (stdoutOf result).Trim ()
+                (exitCode = 0 || exitCode = 1)
+                (sprintf "git check-ignore could not answer: %s" (said result.stderr))
+            let ignored =
+                match result.stdout with
+                | Some listed -> listed.Trim ()
+                | None -> failwith "git check-ignore was never run, so nothing was checked"
             // The message carries the offending paths: an equality assertion over the whole
             // listing reports "string was longer than expected", which names nothing.
             Expect.isTrue
