@@ -87,6 +87,11 @@ module Icon =
     /// L it shows past the front. Straight segments only, like everything here — the
     /// familiar glyph has rounded corners and this vocabulary has none.
     let private copyPath = "M6 6 L13 6 L13 13 L6 13 Z M3 10 L3 3 L10 3"
+    /// A repository: a closed book seen from the spine — the cover, and the spine's own
+    /// line down its left. The mark a repo wears wherever a sentence points at one
+    /// (`Entity.render`), so a reader learns one shape for "this is a repository" and the
+    /// host it lives on is the link's to say.
+    let private repoPath = "M4 2.5 L12.5 2.5 L12.5 13.5 L4 13.5 Z M6.5 2.5 L6.5 13.5"
 
     // --- The vocabulary ----------------------------------------------------------------------
     // 14px inside a 24px icon button; 12px where an icon rides a caps-label line.
@@ -140,3 +145,7 @@ module Icon =
     /// The mark a row wears when what it holds is a RECORDING rather than a terminal you
     /// can type into. Sits on the caps baseline beside the row's state, like the two above.
     let playSm = stroked "w-3 h-3 inline-block align-[-1px]" playPath
+    /// The repository mark at the size an entity wears inline in a sentence: the same box
+    /// as a person's small avatar, so a repo and a person referenced side by side sit on one
+    /// line at one height.
+    let repoSm = stroked "w-3.5 h-3.5 block" repoPath

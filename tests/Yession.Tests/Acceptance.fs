@@ -1113,6 +1113,38 @@ let private uiChecklistTests =
             let detail = article.Substring (article.IndexOf "data-act-detail")
             Expect.isTrue (detail.Contains "on branch main") "carrying what the headline left out"
 
+        // A repository a sentence points at is somewhere a person can go, and the reference
+        // is how they get there: a real link, reachable by keyboard like every action here.
+        // Which glyph marks it and how the link dresses are the design; that it LEADS to the
+        // repository is the promise.
+        testCase "a push's repository is a reference that leads to the repository" <| fun () ->
+            let hello = RepoRef.create "octo/hello" |> expect
+            let push : ConversationItem =
+                { MessageId = MessageId.create "msg-push" |> expect
+                  Author = ActorRef.Agent
+                  Content =
+                    ItemContent.Act (
+                        Act.CredentialSpent
+                            { MessageId = MessageId.create "msg-push" |> expect
+                              Sandbox = SandboxRef.defaultRef
+                              Terminal = TerminalId.create "term-1" |> expect
+                              Block = None
+                              Owner = CredentialFor.Person (Principal.Peer ada)
+                              Repo = hello
+                              Actor = ActorRef.Agent })
+                  Status = Complete
+                  Offset = EventOffset.create 1L |> expect
+                  Woke = None; Replying = None }
+            let model =
+                { representativeModel with
+                    Conversation = { representativeModel.Conversation with Items = [ push ] } }
+            let html = Support.render model
+            let start = html.IndexOf (Dom.attr "data-entity" (EntityRef.said (EntityRef.Repo hello)))
+            Expect.isTrue (start >= 0) "the repository is its own element on the push"
+            let opened = html.LastIndexOf ("<a ", start)
+            let element = html.Substring (opened, html.IndexOf (">", start) - opened)
+            Expect.isTrue (element.Contains "href=\"https://github.com/octo/hello\"") "and it leads to the repository on its host"
+
         // The other half, and the reason the detail is an option rather than an empty
         // string: an act that is already one clause must not grow a blank second line under
         // it, which reads as something withheld.
