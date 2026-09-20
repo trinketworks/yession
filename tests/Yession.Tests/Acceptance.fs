@@ -1687,6 +1687,60 @@ let private reconnectOfferTests =
                 "connected, with a manager known — still nothing to offer"
     ]
 
+/// The two templates the renderer's sequence arm is asked about, written where the `open Lit`
+/// they need cannot reach the rest of this file. One hole each, and the second one is the
+/// point: `string seq` is one static type over three different runtime shapes — a JS array,
+/// a Fable list, a lazy sequence — and only the renderer can tell them apart.
+module private Holes =
+
+    open Lit
+
+    let list (parts: string list) = html $"""<p>{parts}</p>"""
+
+    let sequence (parts: string seq) = html $"""<p>{parts}</p>"""
+
+// The renderer's sequence arm (`Ssr.renderValue`), which every surface reaches through and no
+// view test can tell apart from the markup around it. A view builds its sequences with
+// `List.map`, so the list shape is the only one the suite was exercising by accident — while
+// the template-hole rule admits any `seq`, and a lazy one reaching a hole renders through the
+// same arm. What is pinned here is that all three shapes render as their parts: this arm used
+// to be a `Symbol.iterator` macro, and what replaced it is a type test against the NON-generic
+// `System.Collections.IEnumerable` — the only one Fable compiles (a test against `seq<_>` or
+// `IEnumerable<_>` is a compile error, not a silent false).
+//
+// The ordering guard above it — text before the sequence arm — is deliberately NOT pinned
+// here: a string rendered as its characters would concatenate back to the same markup, because
+// escaping is per-character, so no assertion on the output can tell the two apart. It is
+// guarded by the arm's position and said in the comment there.
+let private templateHoleTests =
+    testList "Template holes" [
+        testCase "a list in a hole renders as its parts" <| fun () ->
+            Expect.equal
+                (Support.renderTemplate (Holes.list [ "alpha"; "beta" ]))
+                "<p>alphabeta</p>"
+                "a Fable list is a sequence of child parts, not one object"
+
+        testCase "an array in a hole renders as its parts" <| fun () ->
+            Expect.equal
+                (Support.renderTemplate (Holes.sequence [| "alpha"; "beta" |]))
+                "<p>alphabeta</p>"
+                "a JS array is the shape lit-html itself renders as child parts"
+
+        testCase "a lazy sequence in a hole renders as its parts" <| fun () ->
+            Expect.equal
+                (Support.renderTemplate (Holes.sequence (seq { yield "alpha"; yield "beta" })))
+                "<p>alphabeta</p>"
+                "a sequence that has not been forced is still a sequence"
+
+        // The parts go through the renderer, not a `String.concat` around it — so whatever a
+        // part holds is escaped exactly as a hole of its own would be.
+        testCase "a part of a sequence is escaped like any other text" <| fun () ->
+            Expect.equal
+                (Support.renderTemplate (Holes.sequence (seq { yield "<b>" })))
+                "<p>&lt;b&gt;</p>"
+                "an element is rendered, never interpolated raw"
+    ]
+
 // The bootstrap shell itself (`Ssr.page`), which had no Node-tier coverage. What matters
 // here is the manager meta tag's ABSENCE rule: the client's offer is gated on the value
 // being present, so a shell that emitted an empty one would turn a structural guarantee
@@ -2438,5 +2492,6 @@ let tests =
         chromeTests
         semanticsTests
         reconnectOfferTests
+        templateHoleTests
         shellTests
     ]
