@@ -142,6 +142,9 @@ let all =
         // are now `YES007` and `YES008`, read off the typed tree by `lint`.
         Tag.needs "Committed lock" [] (fun () -> LockSource.tests)
         Tag.needs "Declared setup" [] (fun () -> DeclaredSetup.tests)
+        // What may publish a release. `release.yml` runs on master alone, so this is the only
+        // reader of its gate that runs before a release has already gone out through a hole.
+        Tag.needs "Release gate" [] (fun () -> ReleaseGate.tests)
         // The rich editor rendering E2E stands alone: it needs a browser but NOT the native
         // WebRTC host, so it runs wherever Chromium exists ([Browser]). The full two-peer
         // convergence/persistence E2E spawns the real Session Process, so it also needs Native.

@@ -191,10 +191,19 @@ jobs:
     # steps inside bench.yml tolerate a failed measurement, but the JOB can still fail for
     # reasons that have nothing to do with a number — a runner it could not get, a cache it
     # could not reach — and a `needs` on a failed job skips this one silently. So the condition
-    # names what actually has to have worked: the package. Anything bench did or did not manage
+    # names what actually has to have worked: the packages. Anything bench did or did not manage
     # is read off `needs` by the download below, which is `continue-on-error` itself.
-    needs: [package-npm, bench]
-    if: ${{ !cancelled() && github.ref == 'refs/heads/master' && needs.package-npm.result == 'success' }}
+    #
+    # EVERY packaging channel, not just npm. `package-nix` was missing from both lines, so a
+    # release could be published over a channel that had failed to build — and was: the aarch64
+    # leg died on v12.21.2-beta.21 and the release went out anyway, announcing a
+    # `nix profile install` that no arm64 consumer could perform. A release is one claim about
+    # one commit; a channel that could not be built has to stop it.
+    #
+    # `package-nix` is a matrix, and `fail-fast: false` keeps both arches running — so its
+    # single `result` is `success` only when every arch built, which is the question here.
+    needs: [package-npm, package-nix, bench]
+    if: ${{ !cancelled() && github.ref == 'refs/heads/master' && needs.package-npm.result == 'success' && needs.package-nix.result == 'success' }}
     runs-on: ubuntu-latest
     env:
       # The versioning policy lives in tasks.fsx; the package:npm job computed it — reuse it here

@@ -116,6 +116,10 @@
     <!-- The setup this repository declares for its own work sandbox: a committed-file
          contract, like LockSource above, and cheap for the same reason. -->
     <Compile Include="DeclaredSetup.fs" />
+    <!-- What may publish a release: a committed-file contract like the two above, and the
+         only thing that can see a hole in release.yml's gate before a release goes out
+         through it. -->
+    <Compile Include="ReleaseGate.fs" />
     <Compile Include="Main.fs" />
   </ItemGroup>
 
