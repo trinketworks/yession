@@ -3,6 +3,7 @@ namespace Yession.Domain.Chat
 open Yession.Domain
 open Yession.Domain.Repos
 open Yession.Domain.Sandboxes
+open Yession.Domain.Files
 open Yession.Domain.Terminals
 open Yession.Domain.Tools
 open Yession.Domain.Prs
@@ -41,6 +42,7 @@ type Act =
     | SandboxStopped of WorkSandboxStopped
     | SandboxSetupQueued of SandboxSetupQueued
     | ShellProfileSet of ShellProfileSet
+    | FileChanged of FileChanged
     | CommandRefused of CommandRefused
     | GatedCommandFailed of GatedCommandFailed
     | CredentialSpent of GitCredentialSpent
@@ -68,6 +70,7 @@ module Act =
         | Act.SandboxStopped s -> WorkSandboxStopped.phrase s
         | Act.SandboxSetupQueued q -> SandboxSetupQueued.phrase q
         | Act.ShellProfileSet p -> ShellProfileSet.phrase p
+        | Act.FileChanged f -> FileChanged.phrase f
         | Act.CommandRefused c -> CommandRefused.phrase c
         | Act.GatedCommandFailed c -> GatedCommandFailed.phrase c
         | Act.CredentialSpent g -> GitCredentialSpent.phrase g
@@ -97,6 +100,9 @@ module Act =
         | Act.RepoCapabilitiesApproved _
         | Act.SandboxStopped _
         | Act.ShellProfileSet _
+        // The diff is not a phrase: a screen draws it as lines, and the agent already holds
+        // the texts it sent. The headline's counts are the whole of what prose says.
+        | Act.FileChanged _
         | Act.CredentialSpent _
         | Act.McpServerAvailable _
         | Act.McpServerUnavailable _
@@ -144,6 +150,7 @@ module Act =
         | Act.SandboxStartFailed _
         | Act.SandboxStopped _
         | Act.ShellProfileSet _
+        | Act.FileChanged _
         | Act.CommandRefused _
         | Act.GatedCommandFailed _
         | Act.CredentialSpent _

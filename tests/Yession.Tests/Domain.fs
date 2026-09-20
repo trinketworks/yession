@@ -10,6 +10,7 @@ open Yession.Domain.Link
 open Yession.Domain.Repos
 open Yession.Domain.Prs
 open Yession.Domain.Chat
+open Yession.Domain.Files
 open Yession.Domain.Hooks
 
 let private expect =
@@ -3059,6 +3060,69 @@ let private shellWordsTests =
             Expect.equal (ShellWords.split "trail \\") (Error "ends with a backslash that escapes nothing") "a trailing backslash"
     ]
 
+let private fileChangedTests =
+    let changed (change: FileChange) (diff: string option) : SessionEvent =
+        SessionEvent.FileChanged
+            { FileChanged.MessageId = MessageId.create "msg-1" |> expect
+              FileChanged.Sandbox = SandboxRef.defaultRef
+              FileChanged.Path = "src/A.fs"
+              FileChanged.Change = change
+              FileChanged.Diff = diff
+              FileChanged.Actor = ActorRef.Agent }
+    testList "A file changed (the file verbs)" [
+
+        testCase "a FileChanged on the wire is pinned, not round-tripped" <| fun () ->
+            // A literal, for the reason every durable event's is: a round-trip agrees with
+            // whatever the codec does today, and a log needs the codec not to move under it.
+            let pinned =
+                """{"type":"fileChanged","payload":{"messageId":"msg-1","sandbox":"default","path":"src/A.fs","change":{"kind":"edited","replaced":1,"linesRemoved":1,"linesAdded":2},"diff":"-a\n+b\n+c","actor":{"kind":"agent"}}}"""
+            Expect.equal
+                (Codec.fromString Codec.sessionEvent pinned |> expect)
+                (changed (FileChange.Edited (1, 1, 2)) (Some "-a\n+b\n+c"))
+                "the durable form decodes to the event"
+
+        testCase "a write on the wire carries no diff" <| fun () ->
+            let pinned =
+                """{"type":"fileChanged","payload":{"messageId":"msg-1","sandbox":"default","path":"src/A.fs","change":{"kind":"written","lines":12},"actor":{"kind":"agent"}}}"""
+            Expect.equal (Codec.fromString Codec.sessionEvent pinned |> expect) (changed (FileChange.Written 12) None) "absent is none"
+
+        testCase "an edit reads in the timeline as a sentence with its counts" <| fun () ->
+            let envelope : EventEnvelope<SessionEvent> =
+                { EventId = EventId.fresh ()
+                  SessionId = SessionId.create "session-1" |> expect
+                  Offset = EventOffset.create 1L |> expect
+                  Actor = ActorRef.Agent
+                  Timestamp = DateTimeOffset (2026, 9, 21, 0, 0, 0, TimeSpan.Zero)
+                  Event = changed (FileChange.Edited (1, 1, 2)) (Some "-a\n+b\n+c") }
+            let proj, _ = ConversationProjection.applyEvents None [ envelope ] ConversationProjection.empty
+            match proj.Items with
+            | [ item ] ->
+                Expect.equal (ConversationItem.headline item) "edited src/A.fs (−1 +2)" "which file, how much"
+                Expect.equal item.Author ActorRef.Agent "attributed to whoever changed it"
+            | items -> failwithf "expected one act, got %d" (List.length items)
+
+        testCase "several replacements and a write each say what they are" <| fun () ->
+            let dev = SandboxRef.create SessionOwned (SandboxName.create "dev" |> expect)
+            let phrase (path: string) (sandbox: SandboxRef) (change: FileChange) =
+                FileChanged.phrase
+                    { FileChanged.MessageId = MessageId.create "m" |> expect
+                      FileChanged.Sandbox = sandbox
+                      FileChanged.Path = path
+                      FileChanged.Change = change
+                      FileChanged.Diff = None
+                      FileChanged.Actor = ActorRef.Agent }
+                |> Phrase.said
+            Expect.equal (phrase "f" SandboxRef.defaultRef (FileChange.Edited (3, 3, 3))) "edited f in 3 places (−3 +3)" "the count when it is not one"
+            Expect.equal (phrase "f" dev (FileChange.Written 4)) "wrote f in dev (4 lines)" "a write, and the sandbox when it is not the default"
+
+        testCase "an edit's diff is its two texts as - and + lines, cut past the cap" <| fun () ->
+            Expect.equal (FileDiff.ofReplacement "a\nb" "c") "-a\n-b\n+c" "old out, new in"
+            let long = List.init (FileDiff.cap + 3) (sprintf "l%d") |> String.concat "\n"
+            let diff = FileDiff.ofReplacement long ""
+            Expect.equal ((diff.Split '\n').Length) (FileDiff.cap + 1) "the cap, then the closing line"
+            Expect.stringContains diff "3 more lines" "which says how much was cut"
+    ]
+
 let tests =
     testList "Domain" [
         identityTests
@@ -3078,5 +3142,6 @@ let tests =
         deliveryFilterTests
         deliveryDocumentTests
         shellProfileTests
+        fileChangedTests
         frameSerializationTests
     ]

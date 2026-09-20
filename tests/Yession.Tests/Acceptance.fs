@@ -24,6 +24,7 @@ open Yession.Domain.Prs
 open Yession.Domain.Chat
 open Yession.Domain.Tools
 open Yession.Domain.Chat
+open Yession.Domain.Files
 open Yession.App
 open Yession.Tests.Support
 
@@ -1112,6 +1113,64 @@ let private uiChecklistTests =
             Expect.isTrue (article.Contains "data-act-detail") "and the particulars are their own element"
             let detail = article.Substring (article.IndexOf "data-act-detail")
             Expect.isTrue (detail.Contains "on branch main") "carrying what the headline left out"
+
+        // A file change is the act the file verbs exist to put on the timeline. What is pinned
+        // is the promise, not the look: the change itself is THERE, under the headline, as
+        // its own element a reader can open — where the same change used to be a heredoc in a
+        // terminal. A write carries no diff, so it makes no such promise and draws no element.
+        testCase "an edit's diff is on its note, as its own disclosure" <| fun () ->
+            let edited : ConversationItem =
+                { MessageId = MessageId.create "msg-edit" |> expect
+                  Author = ActorRef.Agent
+                  Content =
+                    ItemContent.Act (
+                        Act.FileChanged
+                            { FileChanged.MessageId = MessageId.create "msg-edit" |> expect
+                              FileChanged.Sandbox = SandboxRef.defaultRef
+                              FileChanged.Path = "src/A.fs"
+                              FileChanged.Change = FileChange.Edited (1, 1, 1)
+                              FileChanged.Diff = Some "-let x = 1\n+let x = 2"
+                              FileChanged.Actor = ActorRef.Agent }
+                    )
+                  Status = Complete
+                  Offset = EventOffset.create 1L |> expect
+                  Woke = None; Replying = None }
+            let model =
+                { representativeModel with
+                    Conversation = { representativeModel.Conversation with Items = [ edited ] } }
+            let html = Support.render model
+            let noteStart = html.IndexOf "data-act-note"
+            let openedAt = html.LastIndexOf ("<article", noteStart)
+            let article = html.Substring (openedAt, html.IndexOf ("</article>", openedAt) - openedAt)
+            Expect.isTrue (article.Contains "edited src/A.fs") "the headline names the file"
+            Expect.isTrue (article.Contains "data-act-fact=\"diff\"") "and the change is its own element"
+            let diff = article.Substring (article.IndexOf "data-act-fact=\"diff\"")
+            Expect.isTrue (diff.Contains "+let x = 2") "carrying the line that came in"
+            Expect.isTrue (diff.Contains "-let x = 1") "and the one that went out"
+
+        testCase "a write's note carries no diff element" <| fun () ->
+            let written : ConversationItem =
+                { MessageId = MessageId.create "msg-write" |> expect
+                  Author = ActorRef.Agent
+                  Content =
+                    ItemContent.Act (
+                        Act.FileChanged
+                            { FileChanged.MessageId = MessageId.create "msg-write" |> expect
+                              FileChanged.Sandbox = SandboxRef.defaultRef
+                              FileChanged.Path = "src/B.fs"
+                              FileChanged.Change = FileChange.Written 3
+                              FileChanged.Diff = None
+                              FileChanged.Actor = ActorRef.Agent }
+                    )
+                  Status = Complete
+                  Offset = EventOffset.create 1L |> expect
+                  Woke = None; Replying = None }
+            let model =
+                { representativeModel with
+                    Conversation = { representativeModel.Conversation with Items = [ written ] } }
+            let html = Support.render model
+            Expect.isTrue (html.Contains "wrote src/B.fs") "the headline says it was written"
+            Expect.isFalse (html.Contains "data-act-fact=\"diff\"") "nothing pretends to be a diff"
 
         // A repository a sentence points at is somewhere a person can go, and the reference
         // is how they get there: a real link, reachable by keyboard like every action here.

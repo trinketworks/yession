@@ -28,10 +28,12 @@ module SessionFiles =
           Read : SandboxRef -> string -> Async<Result<string, string>>
           /// One exact-string edit (`FileEdit.apply`), read-apply-write as ONE verb: a caller
           /// that could write without having read is a caller that can put back a file
-          /// somebody else changed in between. The write happens only when the edit applied.
-          Edit : FileEditRequest -> Async<Result<Edited, string>>
-          /// The whole file, replaced — or created, along with the directories to it.
-          Write : SandboxRef -> string -> string -> Async<Result<unit, string>>
+          /// somebody else changed in between. The write happens only when the edit applied,
+          /// and the act is recorded (`FileChanged`, to the actor named) only when it landed.
+          Edit : ActorRef -> FileEditRequest -> Async<Result<Edited, string>>
+          /// The whole file, replaced — or created, along with the directories to it. Recorded
+          /// like an edit, without a diff.
+          Write : ActorRef -> SandboxRef -> string -> string -> Async<Result<unit, string>>
           /// `grep -rn` under a directory, the sandbox's own lines back; no match is `Ok ""`.
           Search : SandboxRef -> string -> string option -> string option -> Async<Result<string, string>>
           /// `find` under a directory for a name glob, one path per line, sorted.
@@ -39,8 +41,8 @@ module SessionFiles =
 
     let unavailable : SessionFiles =
         { SessionFiles.Read = fun _ _ -> async { return Error "this session has no sandboxes to read files in" }
-          SessionFiles.Edit = fun _ -> async { return Error "this session has no sandboxes to edit files in" }
-          SessionFiles.Write = fun _ _ _ -> async { return Error "this session has no sandboxes to write files in" }
+          SessionFiles.Edit = fun _ _ -> async { return Error "this session has no sandboxes to edit files in" }
+          SessionFiles.Write = fun _ _ _ _ -> async { return Error "this session has no sandboxes to write files in" }
           SessionFiles.Search = fun _ _ _ _ -> async { return Error "this session has no sandboxes to search in" }
           SessionFiles.Find = fun _ _ _ -> async { return Error "this session has no sandboxes to look in" } }
 
@@ -57,6 +59,10 @@ module SessionFiles =
           Err : string }
 
     let create
+        // Where a change is recorded (`FileChanged`), by the verb that made it — after the
+        // write landed, so the log never carries a change that did not happen.
+        (log: EventLog<SessionEvent>)
+        (mintMessageId: unit -> MessageId)
         (environmentFor: SandboxRef -> SessionEnvironment.SessionEnvironment)
         // Where a shell opened in each sandbox starts (Plan 25) — the directory a relative
         // path is meant against, because it is the one a terminal there would use.
@@ -137,7 +143,7 @@ module SessionFiles =
         /// `content` into `path`, whole. In place (`cat >`), so the file keeps its inode and
         /// mode — an executable stays executable — and the directories to it are made, so a
         /// new file in a new directory is one call rather than a refused one and a `mkdir`.
-        let write (sandbox: SandboxRef) (path: string) (content: string) : Async<Result<unit, string>> =
+        let put (sandbox: SandboxRef) (path: string) (content: string) : Async<Result<unit, string>> =
             async {
                 match!
                     run sandbox "a file was written" "mkdir -p -- \"$(dirname -- \"$1\")\" && cat > \"$1\"" [ path ] (Some content)
@@ -147,7 +153,31 @@ module SessionFiles =
                 | Ok said -> return Error (complaint "cat" sandbox said)
             }
 
-        let edit (request: FileEditRequest) : Async<Result<Edited, string>> =
+        let record (actor: ActorRef) (sandbox: SandboxRef) (path: string) (change: FileChange) (diff: string option) : Async<unit> =
+            async {
+                let! _ =
+                    log.Append
+                        actor
+                        (SessionEvent.FileChanged
+                            { FileChanged.MessageId = mintMessageId ()
+                              FileChanged.Sandbox = sandbox
+                              FileChanged.Path = path
+                              FileChanged.Change = change
+                              FileChanged.Diff = diff
+                              FileChanged.Actor = actor })
+                return ()
+            }
+
+        let write (actor: ActorRef) (sandbox: SandboxRef) (path: string) (content: string) : Async<Result<unit, string>> =
+            async {
+                match! put sandbox path content with
+                | Error reason -> return Error reason
+                | Ok () ->
+                    do! record actor sandbox path (FileChange.Written (List.length (FileSlice.lines content))) None
+                    return Ok ()
+            }
+
+        let edit (actor: ActorRef) (request: FileEditRequest) : Async<Result<Edited, string>> =
             async {
                 match! read request.Sandbox request.Path with
                 | Error reason -> return Error reason
@@ -155,9 +185,17 @@ module SessionFiles =
                     match FileEdit.apply content request.OldText request.NewText request.ReplaceAll with
                     | Error failure -> return Error (FileEdit.describe request.Path failure)
                     | Ok edited ->
-                        match! write request.Sandbox request.Path edited.Content with
+                        match! put request.Sandbox request.Path edited.Content with
                         | Error reason -> return Error reason
-                        | Ok () -> return Ok edited
+                        | Ok () ->
+                            do!
+                                record
+                                    actor
+                                    request.Sandbox
+                                    request.Path
+                                    (FileChange.Edited (edited.Replaced, edited.LinesRemoved, edited.LinesAdded))
+                                    (Some (FileDiff.ofReplacement request.OldText request.NewText))
+                            return Ok edited
             }
 
         /// `grep -rn`, extended patterns, binaries and `.git` skipped. Exit 1 is grep's "no

@@ -582,6 +582,7 @@ let dispatch (services: CommandServices) : CommandDispatch =
                     | Ok sandbox ->
                         match!
                             (services.Files ()).Edit
+                                (Authority.author invocation.Authority)
                                 { FileEditRequest.Sandbox = sandbox
                                   FileEditRequest.Path = path
                                   FileEditRequest.OldText = oldText
@@ -612,7 +613,7 @@ let dispatch (services: CommandServices) : CommandDispatch =
                     match SandboxRef.parse rawName with
                     | Error e -> return Error (sprintf "not a sandbox: %s" e)
                     | Ok sandbox ->
-                        match! (services.Files ()).Write sandbox path content with
+                        match! (services.Files ()).Write (Authority.author invocation.Authority) sandbox path content with
                         | Error reason -> return Error reason
                         | Ok () -> return Ok (sprintf "wrote %s (%d lines)" path (List.length (FileSlice.lines content)))
                 | other -> return Error (sprintf "write_file takes a sandbox, a path and the content, got %d arguments" (List.length other))

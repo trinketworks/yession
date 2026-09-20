@@ -2,6 +2,7 @@ namespace Yession.Domain
 
 open Yession.Domain.Chat
 open Yession.Domain.Sandboxes
+open Yession.Domain.Files
 open Yession.Domain.Repos
 open Yession.Domain.Prs
 open System
@@ -1453,6 +1454,49 @@ module Codec =
                   ShellProfileSet.WorkingDirectory = get.Optional.Field "workingDirectory" Decode.string
                   ShellProfileSet.Actor = get.Required.Field "actor" actor.Decode }) }
 
+    let private fileChanged : Codec<FileChanged> =
+        let change : Codec<FileChange> =
+            { Encode =
+                fun (c: FileChange) ->
+                    match c with
+                    | FileChange.Edited (replaced, removed, added) ->
+                        Encode.object
+                            [ "kind", Encode.string "edited"
+                              "replaced", Encode.int replaced
+                              "linesRemoved", Encode.int removed
+                              "linesAdded", Encode.int added ]
+                    | FileChange.Written lines -> Encode.object [ "kind", Encode.string "written"; "lines", Encode.int lines ]
+              Decode =
+                Decode.field "kind" Decode.string
+                |> Decode.andThen (fun kind ->
+                    match kind with
+                    | "edited" ->
+                        Decode.object (fun get ->
+                            FileChange.Edited (
+                                get.Required.Field "replaced" Decode.int,
+                                get.Required.Field "linesRemoved" Decode.int,
+                                get.Required.Field "linesAdded" Decode.int
+                            ))
+                    | "written" -> Decode.object (fun get -> FileChange.Written (get.Required.Field "lines" Decode.int))
+                    | other -> Decode.fail (sprintf "unknown file change kind '%s'" other)) }
+        { Encode =
+            fun (f: FileChanged) ->
+                Encode.object
+                    [ "messageId", messageId.Encode f.MessageId
+                      "sandbox", sandboxRef.Encode f.Sandbox
+                      "path", Encode.string f.Path
+                      "change", change.Encode f.Change
+                      "diff", Encode.option Encode.string f.Diff
+                      "actor", actor.Encode f.Actor ]
+          Decode =
+            Decode.object (fun get ->
+                { FileChanged.MessageId = get.Required.Field "messageId" messageId.Decode
+                  FileChanged.Sandbox = get.Required.Field "sandbox" sandboxRef.Decode
+                  FileChanged.Path = get.Required.Field "path" Decode.string
+                  FileChanged.Change = get.Required.Field "change" change.Decode
+                  FileChanged.Diff = get.Optional.Field "diff" Decode.string
+                  FileChanged.Actor = get.Required.Field "actor" actor.Decode }) }
+
     let private commandRefused : Codec<CommandRefused> =
         { Encode =
             fun (p: CommandRefused) ->
@@ -1654,6 +1698,8 @@ module Codec =
                           "payload", repoCapabilitiesApproved.Encode p ]
                 | ShellProfileSet p ->
                     Encode.object [ "type", Encode.string "shellProfileSet"; "payload", shellProfileSet.Encode p ]
+                | SessionEvent.FileChanged p ->
+                    Encode.object [ "type", Encode.string "fileChanged"; "payload", fileChanged.Encode p ]
                 | SessionEvent.CommandRefused p ->
                     Encode.object [ "type", Encode.string "commandRefused"; "payload", commandRefused.Encode p ]
                 | SessionEvent.GatedCommandFailed p ->
@@ -1729,6 +1775,7 @@ module Codec =
                     Decode.field "payload" repoCapabilitiesApproved.Decode |> Decode.map RepoCapabilitiesApproved
                 | "workSandboxStopped" -> Decode.field "payload" workSandboxStopped.Decode |> Decode.map WorkSandboxStopped
                 | "shellProfileSet" -> Decode.field "payload" shellProfileSet.Decode |> Decode.map ShellProfileSet
+                | "fileChanged" -> Decode.field "payload" fileChanged.Decode |> Decode.map SessionEvent.FileChanged
                 | "commandRefused" -> Decode.field "payload" commandRefused.Decode |> Decode.map SessionEvent.CommandRefused
                 | "gatedCommandFailed" -> Decode.field "payload" gatedCommandFailed.Decode |> Decode.map SessionEvent.GatedCommandFailed
                 | "toolUseStarted" -> Decode.field "payload" toolUseStarted.Decode |> Decode.map ToolUseStarted

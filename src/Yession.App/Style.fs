@@ -1695,6 +1695,14 @@ module Style =
     /// quite what you asked for" is the one the eye catches - without the line having to grow
     /// louder than the act it belongs to, which a red or a fill would.
     let actNoteRealisation = "text-small leading-5 text-ink-dim"
+    /// An edit's diff behind its disclosure (`View.fileChangeFacts`): mono, each `-`/`+`
+    /// line its own row and free to wrap as one, the two signs in the colours every diff
+    /// reader already knows — and no louder than that, since it sits under a faint act line.
+    let actNoteDiff = cls [ mono; "text-code-sm leading-5 whitespace-pre-wrap break-words flex flex-col mt-0.5 min-w-0" ]
+    let actNoteDiffAdd = "text-green"
+    let actNoteDiffDel = "text-err"
+    /// The closing line when the excerpt was cut ("… 12 more lines").
+    let actNoteDiffNote = "text-ink-faint"
 
     /// History this device does not hold, standing at the top of the timeline where it would
     /// have been. An act note's voice and column, because it is the same kind of line — a

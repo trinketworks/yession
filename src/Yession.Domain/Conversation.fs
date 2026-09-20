@@ -676,6 +676,9 @@ module ConversationProjection =
         // session-shaping act everyone is affected by — the next terminal a PERSON opens
         // lands there too — and the timeline is the only place they would learn it.
         | SessionEvent.ShellProfileSet p -> proj |> noted p.MessageId p.Actor (Act.ShellProfileSet p) envelope
+        // A file changed (the file verbs): the act the whole feature exists to put here — what
+        // the agent used to leave as a `head`/`tail`/`mv` line, as a fact with a diff.
+        | SessionEvent.FileChanged f -> proj |> noted f.MessageId f.Actor (Act.FileChanged f) envelope
         // A refusal reads in the timeline beside the acts that happened, attributed to the
         // person who said no rather than to the agent that asked (Plan 15, stage 3). Same
         // reason `BlockRejected` renders in the terminal: an act that simply vanishes is

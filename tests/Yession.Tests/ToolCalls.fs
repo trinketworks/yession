@@ -676,7 +676,7 @@ let private servicesEditing (seen: ResizeArray<FileEditRequest>) (edit: FileEdit
             fun () ->
                 { SessionFiles.unavailable with
                     Edit =
-                        fun request ->
+                        fun _ request ->
                             async {
                                 seen.Add request
                                 return edit request
@@ -744,7 +744,7 @@ let private fileTests =
                             fun () ->
                                 { SessionFiles.unavailable with
                                     Write =
-                                        fun sandbox path content ->
+                                        fun _ sandbox path content ->
                                             async {
                                                 written <- Some (sandbox, path, content)
                                                 return Ok ()

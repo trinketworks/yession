@@ -5,6 +5,7 @@ open Yession.Domain.Terminals
 open Yession.Domain.Agent
 open Yession.Domain.Chat
 open Yession.Domain.Sandboxes
+open Yession.Domain.Files
 open Yession.Domain.Tools
 open Yession.Domain.Link
 open Yession.Domain.Repos
@@ -127,6 +128,9 @@ type SessionEvent =
     // for set and for clear, because "what does a new terminal do" has one answer at a
     // time — a second verb would let the two disagree about which was last.
     | ShellProfileSet of ShellProfileSet
+    // A file changed through `edit_file` or `write_file` (the file verbs): which file, how
+    // much, and for an edit the change itself. Recorded after the write landed.
+    | FileChanged of FileChanged
     // The approval gate's refusal (Plan 15, stage 3). Only the refusal: an approval is
     // recorded on the event of the command it released.
     | CommandRefused of CommandRefused

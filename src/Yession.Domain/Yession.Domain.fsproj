@@ -32,6 +32,8 @@
     <Compile Include="LinkFacts.fs" />
     <Compile Include="ToolsFacts.fs" />
     <Compile Include="SandboxesFacts.fs" />
+    <!-- A file changed through the file verbs: the act, its phrase and its diff excerpt. -->
+    <Compile Include="FilesFacts.fs" />
     <Compile Include="ChatFacts.fs" />
     <Compile Include="AgentFacts.fs" />
     <Compile Include="TerminalsFacts.fs" />
