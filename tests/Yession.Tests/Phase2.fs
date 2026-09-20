@@ -485,6 +485,44 @@ let private sandboxPolicyTests =
                 |> expect
             Expect.equal (policy.Env |> Map.tryFind "TMPDIR") (Some "/tmp") "named, so the prompt's promise holds"
 
+        // The host/srt pty runs `/bin/sh -i` (readline-backed on macOS), and readline in a
+        // non-UTF-8 locale reads a typed em-dash's high bytes as Meta keybindings that displace
+        // the line — `text — split` submitted as `splittext`. Docker floors this from its own
+        // baseline (its image ships no locale); the host inherits the operator's, which on a Mac
+        // with LANG/LC_* unset is nothing at all, so the baseline seeds one. A repo agent typing
+        // an em-dash lost turns to this across four sessions before the floor was added.
+        testCase "a confined terminal gets a UTF-8 locale so typed multibyte input survives readline" <| fun () ->
+            for backend in [ SrtBackend; HostBackend ] do
+                let seeded =
+                    Sandboxes.policyFor
+                        backend (Sandboxes.limitsFor backend Node.Base.Platform.Darwin) (Map.ofList [ "PATH", "/usr/bin" ]) Map.empty None None None
+                        []
+                        Set.empty
+                        EnvironmentSpec.defaults
+                    |> expect
+                Expect.equal (seeded.Env |> Map.tryFind "LANG") (Some "C.UTF-8") (sprintf "%s: an absent locale is floored" (SandboxBackend.describe backend))
+                let inherited =
+                    Sandboxes.policyFor
+                        backend (Sandboxes.limitsFor backend Node.Base.Platform.Darwin) (Map.ofList [ "PATH", "/usr/bin"; "LANG", "en_US.UTF-8" ]) Map.empty None None None
+                        []
+                        Set.empty
+                        EnvironmentSpec.defaults
+                    |> expect
+                Expect.equal (inherited.Env |> Map.tryFind "LANG") (Some "en_US.UTF-8") (sprintf "%s: a UTF-8 locale the operator has is kept, not overwritten" (SandboxBackend.describe backend))
+
+        // The downstream half: a non-UTF-8 locale is DROPPED, not floored under, because in
+        // glibc LC_ALL and LC_CTYPE outrank LANG — a C.UTF-8 seeded beneath an inherited
+        // `LC_ALL=C` would never reach readline. Removing every non-UTF-8 locale var is what
+        // leaves a surviving UTF-8 one, or the floor, actually in charge.
+        testCase "a broken inherited locale is dropped so it cannot outrank the floor" <| fun () ->
+            let mixed = Sandboxes.localeForReadline (Map.ofList [ "PATH", "/usr/bin"; "LC_ALL", "C"; "LANG", "en_US.UTF-8" ])
+            Expect.equal (Map.tryFind "LC_ALL" mixed) None "the C LC_ALL that would have overridden is gone"
+            Expect.equal (Map.tryFind "LANG" mixed) (Some "en_US.UTF-8") "the UTF-8 LANG it was masking now stands"
+            Expect.equal (Map.tryFind "PATH" mixed) (Some "/usr/bin") "a non-locale variable is untouched"
+            let allBroken = Sandboxes.localeForReadline (Map.ofList [ "LANG", "C"; "LC_CTYPE", "POSIX" ])
+            Expect.equal (Map.tryFind "LANG" allBroken) (Some "C.UTF-8") "nothing UTF-8 survived, so LANG is floored"
+            Expect.equal (Map.tryFind "LC_CTYPE" allBroken) None "and the POSIX LC_CTYPE that would re-break it is gone"
+
         // What the container backend actually DOES with a grant. Until this, the policy
         // carried granted paths and sockets, `limitsFor` claimed docker scopes a socket
         // by path, and `DockerSandbox` dropped every one — a grant that read as held and
