@@ -9,6 +9,7 @@ module Yession.Tests.OtlpStub
 
 open Fable.Core
 open Fable.Core.JsInterop
+open Thoth.Json
 open Yession.Host
 
 // --- Decode (the narrow OTLP/HTTP JSON logs subset the emitter emits) ---------------------
@@ -27,85 +28,86 @@ type ReceivedLog =
       /// record-level one of the same name.
       Resource : Map<string, LogValue> }
 
-[<Emit("$0[$1]")>]
-let private prop (o: obj) (key: string) : obj = jsNative
+/// OTLP JSON encodes an int64 as a STRING, while the JS exporter emits a bare number for a
+/// small one. Both spellings are the same integer, so the decoder names both rather than
+/// asking `typeof` at the value and defaulting whatever it could not read to zero: a count
+/// this stub cannot read is a payload we do not understand, and it says so by name.
+let private otlpInt : Decoder<int> =
+    Decode.oneOf
+        [ Decode.int
+          // A whole number that arrived as a float — JSON has one number type, and the
+          // exporter's `1` and `1.0` are the same token to it.
+          Decode.float |> Decode.map int
+          Decode.string
+          |> Decode.andThen (fun text ->
+              match System.Int32.TryParse text with
+              | true, value -> Decode.succeed value
+              | _ -> Decode.fail (sprintf "an OTLP int64 is a number or a string of digits, not %s" text)) ]
 
-let private isArray (o: obj) : bool = JS.Constructors.Array.isArray o
+/// One attribute's value. OTLP tags a value with the type it is (`stringValue`, `intValue`),
+/// so the tag IS the case, and a value carrying neither is not an attribute this stub reads.
+let private logValue : Decoder<LogValue> =
+    Decode.oneOf
+        [ Decode.field "stringValue" Decode.string |> Decode.map StringValue
+          Decode.field "intValue" otlpInt |> Decode.map IntValue ]
 
-[<Emit("$0 == null")>]
-let private isNullish (o: obj) : bool = jsNative
+/// The attributes of whatever carries them — a record, or the resource it was emitted under.
+/// Absent is no attributes: a payload need not carry any, and that is not a malformed one.
+///
+/// An attribute whose value is a type this stub does not read is DROPPED rather than failing
+/// the payload, and that is the one lenience here: OTLP has `boolValue`, `doubleValue`,
+/// `arrayValue` and more, the emitter under test sends none of them, and a test asserting on
+/// the attributes it does send should not go red because some future record carried a bool.
+let private attributes : Decoder<Map<string, LogValue>> =
+    Decode.optional
+        "attributes"
+        (Decode.list (Decode.object (fun get -> get.Required.Field "key" Decode.string, get.Optional.Field "value" logValue)))
+    |> Decode.map (fun pairs ->
+        pairs
+        |> Option.defaultValue []
+        |> List.choose (fun (key, value) -> value |> Option.map (fun v -> key, v))
+        |> Map.ofList)
 
-[<Emit("typeof $0 === 'number'")>]
-let private isNumber (o: obj) : bool = jsNative
+/// A record's body, which this stub only ever reads as text.
+let private body : Decoder<string> =
+    Decode.optional "body" (Decode.optional "stringValue" Decode.string)
+    |> Decode.map (Option.flatten >> Option.defaultValue "")
 
-/// Truncated toward zero, which is what `| 0` says about a number that is already whole.
-[<Emit("$0 | 0")>]
-let private truncated (o: obj) : int = jsNative
+let private logRecord (resource: Map<string, LogValue>) : Decoder<ReceivedLog> =
+    Decode.map2
+        (fun body attributes -> { Body = body; Attributes = attributes; Resource = resource })
+        body
+        attributes
 
-/// `parseInt` on something that is not a number reads `NaN`, which is falsy — so is a parsed
-/// `0`, and the two answered alike before this was F#; they still do.
-[<Emit("(parseInt($0, 10) || undefined)")>]
-let private parsedInt (o: obj) : int option = jsNative
+/// A `resourceLogs` entry: the resource's own attributes, folded onto every record beneath it.
+let private resourceLogs : Decoder<ReceivedLog list> =
+    Decode.optional "resource" attributes
+    |> Decode.map (Option.defaultValue Map.empty)
+    |> Decode.andThen (fun resource ->
+        Decode.optional "scopeLogs" (Decode.list (Decode.optional "logRecords" (Decode.list (logRecord resource))))
+        |> Decode.map (fun scopes ->
+            scopes
+            |> Option.defaultValue []
+            |> List.collect (Option.defaultValue [])))
 
-let private parseJson (json: string) : obj = JS.JSON.parse json
+let private payload : Decoder<ReceivedLog list> =
+    Decode.optional "resourceLogs" (Decode.list resourceLogs)
+    |> Decode.map (Option.defaultValue [] >> List.concat)
 
-/// A field that is a JSON array, or nothing at all — an absent `scopeLogs` is no scopes, not
-/// a throw partway through decoding somebody else's payload.
-let private asArray (o: obj) : obj array = if isArray o then unbox o else [||]
-
-// OTLP JSON encodes int64 as a string; the JS exporter emits a bare number for small ints.
-let private asInt (o: obj) : int =
-    if isNumber o then truncated o else parsedInt o |> Option.defaultValue 0
-
-/// Nothing for a body that is not JSON: the stub answers a malformed POST with no records
-/// rather than throwing inside a request handler nobody is awaiting.
-let private tryParse (json: string) : obj option =
-    try Some (parseJson json) with _ -> None
-
-let private valueOf (value: obj) : LogValue option =
-    if isNullish value then None
-    else
-        let s = prop value "stringValue"
-        if not (isNullish s) then Some (StringValue (unbox<string> s))
-        else
-            let i = prop value "intValue"
-            if not (isNullish i) then Some (IntValue (asInt i))
-            else None
-
-let private attributesOf (holder: obj) : Map<string, LogValue> =
-    asArray (prop holder "attributes")
-    |> Array.fold
-        (fun acc kv ->
-            let key = prop kv "key"
-            match (if isNullish key then None else Some (unbox<string> key)), valueOf (prop kv "value") with
-            | Some k, Some v -> Map.add k v acc
-            | _ -> acc)
-        Map.empty
-
-let private logRecordOf (resource: Map<string, LogValue>) (lr: obj) : ReceivedLog =
-    let body =
-        let b = prop lr "body"
-        if isNullish b then ""
-        else
-            let s = prop b "stringValue"
-            if isNullish s then "" else unbox<string> s
-    { Body = body; Attributes = attributesOf lr; Resource = resource }
-
-/// Decode an OTLP/HTTP JSON logs payload into the flat list of records it carries, each carrying
-/// the attributes of the resource it was emitted under.
+/// Decode an OTLP/HTTP JSON logs payload into the flat list of records it carries, each
+/// carrying the attributes of the resource it was emitted under.
+///
+/// A body this cannot read is no records, NOT a throw: this runs inside a request handler
+/// nobody is awaiting, and the stub's contract is that a malformed POST is answered rather
+/// than crashing the suite. The reason goes to the console instead of being swallowed
+/// silently, because "the emitter sent something we do not understand" and "the emitter sent
+/// nothing" are different failures and a test that sees zero records cannot tell them apart.
 let decode (json: string) : ReceivedLog list =
-    match tryParse json with
-    | Some root when not (isNullish root) ->
-        asArray (prop root "resourceLogs")
-        |> Array.collect (fun rl ->
-            // A payload need not carry a resource block; that decodes to no attributes, not a throw.
-            let holder = prop rl "resource"
-            let resource = if isNullish holder then Map.empty else attributesOf holder
-            asArray (prop rl "scopeLogs")
-            |> Array.collect (fun sl -> asArray (prop sl "logRecords"))
-            |> Array.map (logRecordOf resource))
-        |> List.ofArray
-    | _ -> []
+    match Decode.fromString payload json with
+    | Ok records -> records
+    | Error reason ->
+        JS.console.debug ("OtlpStub: a POST body this stub cannot read: " + reason)
+        []
 
 // --- Accessors ---------------------------------------------------------------------------
 
