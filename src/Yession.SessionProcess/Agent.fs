@@ -21,20 +21,24 @@ module AgentTurn =
     /// lazy-lifecycle suite scripts its agent — so trimming these lines removes an invariant
     /// while every gate stays green.
     ///
-    /// The same goes for WHERE work runs. The default sandbox is the session's own view of the
-    /// checkout: what the agent reads and changes there with git, grep and sed is what the
-    /// people in the session see, and what the chat will render as reads and edits. A work
-    /// sandbox is a container with a toolchain in it, for the commands that need one, and its
-    /// terminal is a build log — an edit buried in one is on the record and read by nobody. So
-    /// the prompt names the split — look and edit in the default sandbox, build and test in a
-    /// work sandbox — because every tool description says how to reach either and none of
-    /// them can say which to prefer.
+    /// The same goes for HOW a file is read and changed. `read_file` and `edit_file` put the
+    /// path and the change on the record as facts; the same work as `sed -n` and a heredoc in
+    /// a terminal is on the record as shell text, which a reader has to parse to learn which
+    /// file was touched. The agent CLI's own prompt says the same of its built-ins — prefer
+    /// the dedicated tool over `cat`/`sed`/`grep` in the shell — and the model's habits are
+    /// tuned to that; this prompt used to say the opposite ("edit with sed and awk"), which
+    /// is why every file the agent changed reached the timeline as a `head`/`tail`/`mv` line.
+    /// The shell stays for what only a shell does: git, builds, tests, anything with a
+    /// toolchain. And WHERE that runs: the default sandbox for the checkout and small work,
+    /// a work sandbox — a container with a toolchain — for building and testing, because
+    /// every tool description says how to reach either and none of them can say which to
+    /// prefer.
     ///
     /// It also says a language runtime is not assured in the default sandbox: python there
     /// is a stub on a Mac without Xcode tools, and absent on a minimal host. An agent reaches
     /// for one to make a structured edit and, finding a binary on PATH, does not learn it is
     /// the wrong sandbox until the edit has failed several ways — so the prompt says not to
-    /// count on it, and to edit with the shell's own tools instead.
+    /// count on it, which is one more reason the edit goes through `edit_file`.
     ///
     /// And where SCRATCH goes. Every sandbox sets `$TMPDIR` to a directory of the session's
     /// own — the srt backends bake the session's `tmp/` into it, the container backend names
@@ -50,10 +54,14 @@ module AgentTurn =
         + "using the history as context. Be concise and concrete, and investigate with "
         + "high signal. You may answer without starting an environment; start one only to "
         + "run a command or touch the repo. "
-        + "Read and edit in the default sandbox with git, grep and sed, so the session sees "
-        + "what you looked at and changed; it is not assured a language runtime (a python or "
-        + "node there may be missing or a stub), so edit with sed and awk and use a work "
-        + "sandbox when you need an interpreter, and for building, tests and running the code. "
+        + "Read files with read_file and change them with edit_file (write_file for a whole "
+        + "file), not with cat, sed, awk, head, tail or heredocs in execute_command: the file "
+        + "tools put which file you read and what you changed on the record, where the session "
+        + "sees a read or an edit rather than shell text. execute_command is for what only a "
+        + "shell does — git, builds, tests, running the code — in the default sandbox for the "
+        + "checkout and small work, and in a work sandbox for what needs its toolchain. The "
+        + "default sandbox is not assured a language runtime (a python or node there may be "
+        + "missing or a stub); use a work sandbox when you need an interpreter. "
         + "Scratch goes under `$TMPDIR`, which every sandbox sets; `/tmp` is not yours to write. "
         + "Rewriting a file, write the new content before deleting the old — a delete-then-write "
         + "can be refused halfway, leaving the delete done. "
