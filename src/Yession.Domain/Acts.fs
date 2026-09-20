@@ -103,6 +103,21 @@ module Act =
         | Act.PrUnwatched _
         | Act.PrTransitioned _ -> []
 
+    /// The whole account as ONE sentence: headline, then the particulars after an em-dash,
+    /// semicolon-joined. This is the composition every reader that is not a screen gets
+    /// (`ConversationItem.said`), and the one a screen shows a person who asks what the
+    /// agent was told — the same phrase, so the two cannot drift by a character. The seam
+    /// is drawn here, once, rather than by each reader hunting for a punctuation mark.
+    let sentence (act: Act) : Phrase =
+        match particulars act with
+        | [] -> phrase act
+        | particulars ->
+            let joined =
+                particulars
+                |> List.mapi (fun i p -> if i = 0 then p else Segment.Text "; " :: p)
+                |> List.concat
+            phrase act @ (Segment.Text " — " :: joined)
+
     /// Whether this act opens a chapter BY NATURE — one nobody had to ask for.
     ///
     /// A rule over the act rather than a flag set at every fold arm, for the reason the

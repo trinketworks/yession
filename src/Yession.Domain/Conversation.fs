@@ -101,11 +101,7 @@ module ConversationItem =
     let said (item: ConversationItem) : string =
         match item.Content with
         | ItemContent.Message body -> body
-        | ItemContent.Act act ->
-            let headline = Phrase.said (Act.phrase act)
-            match Act.particulars act with
-            | [] -> headline
-            | particulars -> headline + " — " + (particulars |> List.map Phrase.said |> String.concat "; ")
+        | ItemContent.Act act -> Phrase.said (Act.sentence act)
 
     /// The headline alone — what a message said, or the one sentence an act leads with.
     /// For a reader that has its own way of showing the particulars, or none: a chapter's

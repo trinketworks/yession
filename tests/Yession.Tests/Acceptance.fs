@@ -1145,6 +1145,32 @@ let private uiChecklistTests =
             let element = html.Substring (opened, html.IndexOf (">", start) - opened)
             Expect.isTrue (element.Contains "href=\"https://github.com/octo/hello\"") "and it leads to the repository on its host"
 
+        // The human can always see what the agent was told. The facts above are the screen's
+        // arrangement of an act; the sentence behind the disclosure is the other reader's, and
+        // the two are the same phrase — so what a person finds there is what the prompt
+        // carried, to the character. Pinned as equality with `ConversationItem.said`, which is
+        // exactly the string the agent's context is built from (`Host.fs`).
+        testCase "what an act says behind its disclosure is what the agent was told" <| fun () ->
+            let note : ConversationItem =
+                { MessageId = MessageId.create "msg-said-note" |> expect
+                  Author = PeerRef ada
+                  Content = ItemContent.Act (repoAdded "octo/hello" "main")
+                  Status = Complete
+                  Offset = EventOffset.create 1L |> expect
+                  Woke = None; Replying = None }
+            let model =
+                { representativeModel with
+                    Conversation = { representativeModel.Conversation with Items = [ note ] } }
+            let html = Support.render model
+            let start = html.IndexOf "data-act-said"
+            Expect.isTrue (start >= 0) "every act offers what the agent was told"
+            let details = html.Substring (start, html.IndexOf ("</details>", start) - start)
+            // The words after the summary, with the markup taken out: what a reader READS.
+            let body = details.Substring (details.IndexOf "</summary>" + "</summary>".Length)
+            let text = System.Text.RegularExpressions.Regex.Replace(body, "<[^>]*>", "").Trim ()
+            Expect.equal text (ConversationItem.said note) "the disclosure reads exactly as the prompt did"
+            Expect.isTrue (text.Contains "on branch main") "particulars included, not the headline alone"
+
         // The other half, and the reason the detail is an option rather than an empty
         // string: an act that is already one clause must not grow a blank second line under
         // it, which reads as something withheld.
