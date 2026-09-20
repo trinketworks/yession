@@ -6,11 +6,16 @@ module Yession.Tests.Cli
 // answers `--version` or refuses a typo ends its process, and that half is the Host's
 // (`Interop.parseOrExit`) — one `match` over the value these cases pin.
 //
-// What these pin is that a MISUSE IS REFUSED. The parsing itself is Node's (`node:util`
-// parseArgs) and is not this repo's to test; what is this repo's is that a mistyped or
-// malformed command line stops the process instead of running it with the option missing.
-// The old hand-rolled `process.argv` scan could not tell "not given" from "given wrong", so
-// `yession-manager --auht localhost` booted a deny-everything Manager and looked like a hang.
+// What these pin is that a MISUSE IS REFUSED: a mistyped or malformed command line stops the
+// process instead of running it with the option missing. The old hand-rolled `process.argv`
+// scan could not tell "not given" from "given wrong", so `yession-manager --auht localhost`
+// booted a deny-everything Manager and looked like a hang.
+//
+// The tokenising is this repository's own, where it used to be `node:util`'s `parseArgs` —
+// which `Yession.Domain` could not name without binding a Node API in the one project the
+// browser client also compiles. So the grammar is pinned here too, by the cases a parser can
+// get wrong in silence: a short group, a value carrying an `=`, and a value that looks like an
+// option.
 
 open Fable.Core
 open Fable.Core.JsInterop
@@ -83,6 +88,22 @@ let tests =
             Expect.equal (Cli.valueOf auth (parsed [ "--auth=localhost" ])) (Some "localhost") "--name=value"
             Expect.equal (Cli.valueOf auth (parsed [ "--auth"; "localhost" ])) (Some "localhost") "--name value"
 
+        testCase "an inline value is split at the first =, so a value may carry its own" <| fun () ->
+            // `--webhook`'s own grammar spells a rotation and a signature scheme with `=`, so a
+            // name that ran to the LAST one would take a declaration this bin documents and
+            // hand the relay a fragment of it.
+            Expect.equal
+                (Cli.valueOf webhook (parsed [ "--webhook=shop@1=x-shop-hmac:base64" ]))
+                (Some "shop@1=x-shop-hmac:base64")
+                "everything after the first ="
+
+        testCase "a value that looks like an option is still the value" <| fun () ->
+            // The parser does not guess that a leading dash was a mistake: whether `--version`
+            // is a legitimate `--auth` is the option's own vocabulary to say, one line later
+            // and in its own words. Guessing here would make `--auth` unable to carry a value
+            // this parser happens to recognise elsewhere.
+            Expect.equal (Cli.valueOf auth (parsed [ "--auth"; "--version" ])) (Some "--version") "taken verbatim"
+
         testCase "an empty command line parses to nothing given" <| fun () ->
             let p = parsed []
             Expect.isFalse (Cli.isSet auth p) "no auth"
@@ -94,6 +115,13 @@ let tests =
             Expect.isTrue (Cli.isSet Cli.version (parsed [ "-v" ])) "-v"
             Expect.isTrue (Cli.isSet Cli.help (parsed [ "--help" ])) "--help"
             Expect.isTrue (Cli.isSet Cli.help (parsed [ "-h" ])) "-h"
+
+        testCase "a group of short switches is every switch in it" <| fun () ->
+            // `-vh` is `-v -h`. Nothing here is a short that takes a value — only `flag` mints
+            // a short — which is what lets a group expand without asking where a value would go.
+            let p = parsed [ "-vh" ]
+            Expect.isTrue (Cli.isSet Cli.version p) "the first"
+            Expect.isTrue (Cli.isSet Cli.help p) "and the second"
 
         // A repeatable option is configuration that is a SET, so what it pins is that every
         // value survives IN ORDER — a reader that took the last would look identical for the
@@ -126,11 +154,25 @@ let tests =
             Expect.isTrue (message.Contains "--auht") "says which option"
             Expect.isTrue (message.Contains "yession-manager") "and which bin"
 
+        testCase "an unknown short option is refused, and named" <| fun () ->
+            // A group is refused by its first unknown letter rather than in whole, so an
+            // operator is told which of the letters they typed this bin does not know.
+            let message = refused [ "-vq" ]
+            Expect.isTrue (message.Contains "-q") "says which letter"
+
         testCase "an option missing its value is refused" <| fun () ->
             (refused [ "--auth" ]) |> ignore
 
         testCase "a bare word is refused: no bin here takes a positional" <| fun () ->
             (refused [ "localhost" ]) |> ignore
+
+        testCase "-- is refused as the separator it is, not as an option nobody declared" <| fun () ->
+            // It introduces bare words, and no bin here takes one. Reporting it as an unknown
+            // option would send an operator looking for a flag spelled `--`, which is the one
+            // thing this module exists not to do: a refusal that names the wrong mistake costs
+            // the same boot cycle as the silent ignore it replaced.
+            let message = refused [ "--"; "localhost" ]
+            Expect.isFalse (message.Contains "unknown option") "not reported as an option this bin lacks"
 
         testCase "a value given to a switch is refused" <| fun () ->
             (refused [ "--version=1.2.3" ]) |> ignore
