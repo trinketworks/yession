@@ -21,6 +21,7 @@
          module that measures for it. -->
     <Compile Include="Style.fs" />
     <Compile Include="Icon.fs" />
+    <Compile Include="Entity.fs" />
     <Compile Include="Editor.fs" />
     <Compile Include="RichText.fs" />
     <!-- Editing a plain collaborative command line: needed by the view (which renders the

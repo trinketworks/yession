@@ -249,35 +249,6 @@ module View =
         | FeedRetrying _ -> Dom.Text.feedRetrying
         | FeedStalled _ -> Dom.Text.feedPaused
 
-    /// An actor as a TOKEN: stable, model-free, and what every `data-*` hook carries — which is
-    /// why it stays a total function of the actor alone and why the tests can assert it.
-    let private authorLabel =
-        function
-        | UserRef u -> UserId.value u
-        | PeerRef p -> PeerId.value p
-        | ActorRef.Agent -> Dom.Text.agent
-        | ActorRef.SessionProcess -> Dom.Text.sessionProcess
-        | ActorRef.System -> Dom.Text.system
-        | ActorRef.Configured repo -> RepoRef.value repo
-
-    /// The same actor, said to a person.
-    ///
-    /// A peer id is a fine token and a poor name — `PEER-129755065` is nobody — and the roster,
-    /// the draft summaries and the lease bar all resolve one through `nameOf` already. The chat
-    /// did not, so one human appeared under two identities on the one screen: the roster showed
-    /// a peer's rolled name while chat printed a `UserRef`'s raw subject, and neither was the
-    /// person's real name. Both now resolve through `Yession.App.ClientModel`, which folds
-    /// `UserRef` back to a peer's name through the same `Yession.Domain.Attribution` rule the
-    /// Session Process used to decide the author was a `UserRef` in the first place — so chat
-    /// and the sidebar can no longer show two names for one person. `Agent`/`System`/etc. are
-    /// already a word, so only a peer or a user resolves.
-    let private authorName (model: ClientModel) (actor: ActorRef) : string =
-        match actor with
-        | PeerRef peer -> ClientModel.nameOf peer model
-        | UserRef user -> ClientModel.userName user model
-        | ActorRef.Agent | ActorRef.SessionProcess | ActorRef.System | ActorRef.Configured _ ->
-            authorLabel actor
-
     /// The mechanism behind a notice, folded away under one word.
     ///
     /// Every surface that reports a fault has two things to say and they are not equals: what
@@ -322,16 +293,6 @@ module View =
         | EnvironmentRunning _ -> Dom.Text.envRunning
         | EnvironmentFailed _ -> Dom.Text.envFailed
         | EnvironmentDown -> Dom.Text.envStopped
-
-    let private authorAvatar =
-        function
-        | UserRef u -> Style.humanAvatar (UserId.value u)
-        | PeerRef p -> Style.humanAvatar (PeerId.value p)
-        | ActorRef.Agent -> Style.agentAvatar
-        | ActorRef.SessionProcess | ActorRef.System -> Style.humanAvatar "session"
-        // A repo's file is not a person and not the agent. Its own avatar, seeded by the
-        // repo, so two repos configuring one session are told apart on sight.
-        | ActorRef.Configured repo -> Style.humanAvatar (RepoRef.value repo)
 
     // --- Sidebar ------------------------------------------------------------------------
 
@@ -699,7 +660,7 @@ module View =
                 let token, words = whereIs model who field
                 html $"""
                     <div class="{Style.person}" data-peer-presence="{ActorRef.token who}">
-                      <span class="{Style.cls [ Style.avatar; Style.humanAvatar (ActorRef.token who); Style.personAvatar ]}"></span>
+                      <span class="{Style.cls [ Style.avatar; Entity.actorMark model who; Style.personAvatar ]}"></span>
                       <span class="truncate min-w-0">{name}</span>
                       <!-- The slot TRUNCATES rather than holding its width: where a peer is
                            used to be a word or two, and a chapter's name made it a line of
@@ -712,7 +673,7 @@ module View =
         html $"""
             <section class="{Style.cls [ Style.sideSection; Style.navLane1 ]}">
               <span class="{Style.label}">in this session</span>
-              <div class="{Style.person}"><span class="{Style.cls [ Style.avatar; Style.humanAvatar (PeerId.value model.Peer.PeerId); Style.personAvatar ]}"></span><span class="truncate" data-display-name>{model.Peer.DisplayName}</span><span class="{Style.label} ml-auto">you</span></div>
+              <div class="{Style.person}"><span class="{Style.cls [ Style.avatar; Entity.actorMark model (PeerRef model.Peer.PeerId); Style.personAvatar ]}"></span><span class="truncate" data-display-name>{model.Peer.DisplayName}</span><span class="{Style.label} ml-auto">you</span></div>
               {peerRows}
               {agentRow}
               {approvalPrompts}
@@ -1364,7 +1325,8 @@ module View =
               {catchUpBar model}
             </header>"""
 
-    let private queue (dispatch: ClientMsg -> unit) (synced: SyncedSessionState) : TemplateResult =
+    let private queue (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
+        let synced = model.Synced
         let entries = QueueOrder.sorted synced.Queue
         let head =
             match entries with
@@ -1377,7 +1339,7 @@ module View =
                 let id = entry.QueueId
                 html $"""
                     <article class="{Style.queueItem}" data-queue-id="{QueueId.value id}" data-queue-author="{PeerId.value entry.Author}" data-queue-order="{string entry.Order}">
-                      <span class="{Style.cls [ Style.avatarSm; Style.humanAvatar (PeerId.value entry.Author) ]}"></span>
+                      <span class="{Style.cls [ Style.avatarSm; Entity.actorMark model (PeerRef entry.Author) ]}"></span>
                       <div class="{Style.queueInput}" data-rich-body="{BodyKey.queued id}" data-rich-readonly="false" data-queue-input="{QueueId.value id}"></div>
                       <div class="{Style.queueTools}">
                         <button type="button" class="{Style.btnIconBare}" aria-label="Move up" data-queue-up="{QueueId.value id}" @click={Ev(fun _ -> match QueueOrder.moveUp synced.Queue id with Some o -> dispatch (ReorderQueuedMsg (id, o)) | None -> ())}>{Icon.up}</button>
@@ -1411,7 +1373,7 @@ module View =
                 <button type="button" class="{Style.draftSummary}" style="border-left-color:{EditorColour.ofEditor (ActorRef.PeerRef peerId)}"
                         data-draft-summary="{PeerId.value peerId}"
                         data-draft-expand="{PeerId.value peerId}" @click={Ev(fun _ -> dispatch (ExpandDraftMsg peerId))}>
-                  <span class="{Style.cls [ Style.avatarSm; Style.humanAvatar (PeerId.value peerId) ]}"></span>
+                  <span class="{Style.cls [ Style.avatarSm; Entity.actorMark model (PeerRef peerId) ]}"></span>
                   <span class="{Style.draftSummaryName}">{ClientModel.nameOf peerId model}</span>
                   <span class="{Style.draftSummaryBody}" data-rich-body="{BodyKey.draft peerId}" data-rich-readonly="true"></span>
                   <span class="{Style.draftEditors}">{editors peerId}</span>
@@ -1556,7 +1518,7 @@ module View =
         // Named, not merely absent. "rejected by nick" in line with the commands that ran
         // is the whole reason a refusal mints a block at all — so it is a NAME, resolved like
         // every other person on screen, not the id the hook carries.
-        | BlockRejected (by, _) -> html $"""<span class="{Style.statusErr}">rejected by {authorName model by}</span>"""
+        | BlockRejected (by, _) -> html $"""<span class="{Style.statusErr}">rejected by {Entity.actorName model by}</span>"""
 
     let private stretchEndLabel =
         function
@@ -1569,7 +1531,7 @@ module View =
     let private stretchEnding (model: ClientModel) =
         function
         | LeaseReleased -> html $"""<span class="{Style.statusFaint}">handed back</span>"""
-        | LeaseStolen by -> html $"""<span class="{Style.statusFaint}">taken over by {authorName model by}</span>"""
+        | LeaseStolen by -> html $"""<span class="{Style.statusFaint}">taken over by {Entity.actorName model by}</span>"""
         | LeaseHolderGone -> html $"""<span class="{Style.statusFaint}">holder left</span>"""
         | LeaseIdle -> html $"""<span class="{Style.statusFaint}">went idle</span>"""
 
@@ -2120,7 +2082,7 @@ module View =
                 | Some s -> sandboxStartFacts s
                 | None -> actNoteDetail facts
             html $"""
-                <article class="{Style.actNote}" data-message-id="{MessageId.value item.MessageId}" tabindex="-1" data-act-note data-act-status="{messageStatusLabel item.Status}" data-message-author="{authorLabel item.Author}">
+                <article class="{Style.actNote}" data-message-id="{MessageId.value item.MessageId}" tabindex="-1" data-act-note data-act-status="{messageStatusLabel item.Status}" data-message-author="{Entity.actorToken item.Author}">
                   {itemActions item}
                   {running}
                   <span class="{Style.actNoteText}">{item.Body} {failedMark}</span>
@@ -2209,7 +2171,7 @@ module View =
                               <span class="{Style.replyRefQuote}">{Dom.Text.replyRefMissing}</span>
                             </div>"""
             html $"""
-                <article class="{Style.messageItem}" data-message-id="{MessageId.value item.MessageId}" tabindex="-1" data-message-author="{authorLabel item.Author}" data-message-status="{messageStatusLabel item.Status}">
+                <article class="{Style.messageItem}" data-message-id="{MessageId.value item.MessageId}" tabindex="-1" data-message-author="{Entity.actorToken item.Author}" data-message-status="{messageStatusLabel item.Status}">
                   {itemActions item}
                   {meta}
                   {replyRef}
@@ -2453,10 +2415,10 @@ module View =
         let group (actor: ActorRef) (members: TemplateResult list) =
             let whoClass = if actor = ActorRef.Agent then Style.whoAgent else Style.who
             html $"""
-                <section class="{Style.messageGroup}" data-message-author="{authorLabel actor}">
+                <section class="{Style.messageGroup}" data-message-author="{Entity.actorToken actor}">
                   <header class="{Style.messageGroupHead}">
-                    <span class="{Style.cls [ Style.avatar; authorAvatar actor ]}"></span>
-                    <span class="{whoClass}">{authorName model actor}</span>
+                    <span class="{Style.cls [ Style.avatar; Entity.actorMark model actor ]}"></span>
+                    <span class="{whoClass}">{Entity.actorName model actor}</span>
                   </header>
                   {members}
                 </section>"""
@@ -2593,8 +2555,8 @@ module View =
             if who = ActorRef.PeerRef model.Peer.PeerId then Lit.nothing
             else
                 html $"""
-                    <span class="{Style.cls [ Style.avatarSm; authorAvatar who ]}" title="{authorName model who}"
-                          data-terminal-block-author="{authorLabel who}"></span>"""
+                    <span class="{Style.cls [ Style.avatarSm; Entity.actorMark model who ]}" title="{Entity.actorName model who}"
+                          data-terminal-block-author="{Entity.actorToken who}"></span>"""
         // The facts that used to have nowhere to go, or nowhere better than a status beside
         // the command: who ran it, who let it through, and how it ended. Behind a
         // disclosure, because a scrollback is read for its OUTPUT and who was behind it is what
@@ -2607,10 +2569,10 @@ module View =
             | BlockFinished (CommandFailed code) -> [ fact (sprintf "exit %d" code) ]
             | BlockFinished CommandTimedOut -> [ fact "timed out" ]
             | BlockFinished (CommandExecutionFailed reason) -> [ fact (sprintf "did not run — %s" reason) ]
-            | BlockRejected (by, _) -> [ fact (sprintf "refused by %s" (authorName model by)) ]
+            | BlockRejected (by, _) -> [ fact (sprintf "refused by %s" (Entity.actorName model by)) ]
             | BlockRunning -> []
         let facts =
-            [ fact (sprintf "ran by %s" (authorName model (Authority.author block.Authority)))
+            [ fact (sprintf "ran by %s" (Entity.actorName model (Authority.author block.Authority)))
               yield! exitFact ]
         html $"""
             <article class="{Style.terminalBlock}" data-terminal-block="{BlockId.value block.BlockId}"
@@ -2668,7 +2630,7 @@ module View =
               {body}
               <div class="{Style.terminalQueuedRow}">
                 {statusLine}
-                <span class="{Style.small}">{authorName model (Authority.author entry.Authority)}</span>
+                <span class="{Style.small}">{Entity.actorName model (Authority.author entry.Authority)}</span>
                 <div class="ml-auto flex items-center gap-2">
                   {ordering}
                 </div>
@@ -2688,11 +2650,11 @@ module View =
         // The hook keeps the stable token (a test asserting WHO holds a lease should not have
         // to know what this client happens to have learned about their name); the words get
         // the name, like every other person on screen.
-        let label = authorLabel holder
+        let label = Entity.actorToken holder
         // Who holds it, said the way the roster says who is here: the square avatar and the
         // name. The pulsing "live" is the state; the button is what changes it; a sentence
         // ("X is using this terminal") restated all three.
-        let who = if holder = mine then "you" else authorName model holder
+        let who = if holder = mine then "you" else Entity.actorName model holder
         let control =
             if holder = mine then
                 html $"""
@@ -2708,7 +2670,7 @@ module View =
         html $"""
             <div class="{Style.terminalBandRow}" data-terminal-lease="{label}" aria-live="polite">
               <span class="{Style.statusRun}"><span class="{Style.statusDotPulse}"></span>live</span>
-              <span class="{Style.cls [ Style.avatarSm; authorAvatar holder ]}"></span>
+              <span class="{Style.cls [ Style.avatarSm; Entity.actorMark model holder ]}"></span>
               <span class="{Style.small}">{who}</span>
               <div class="ml-auto flex items-center gap-2">{control}</div>
             </div>"""
@@ -2756,7 +2718,7 @@ module View =
         else
             html $"""
                 <div class="{Style.terminalScreen}" data-terminal-screen="{id}"
-                     role="region" aria-live="off" aria-label="Live terminal, {authorName model holder} is typing">{body}</div>"""
+                     role="region" aria-live="off" aria-label="Live terminal, {Entity.actorName model holder} is typing">{body}</div>"""
 
     /// The terminal composer: your command line, and everyone else's as they type them.
     let private terminalComposer (actions: ViewActions) (dispatch: ClientMsg -> unit) (model: ClientModel) (terminal: TerminalId) : TemplateResult =
@@ -3126,7 +3088,7 @@ module View =
             <section class="{Style.paneBody}">
               <div class="{Style.paneFacts}" data-pane-stretch="{TerminalStretch.key stretch}">
                 <div class="{Style.terminalQueuedRow}">
-                  <span class="{Style.chatChipWho}">{authorName model stretch.Holder}</span>
+                  <span class="{Style.chatChipWho}">{Entity.actorName model stretch.Holder}</span>
                   <span class="{Style.small}">typed in {stretch.Title} for {length}</span>
                   <span class="ml-auto shrink-0">{stretchEnding model stretch.End}</span>
                 </div>
@@ -3169,9 +3131,9 @@ module View =
                     // tabs wear, so one person is one mark on every surface at once.
                     | Some (PeerRef peer) ->
                         html $"""<span class="{Style.syncDot}" style="background:{EditorColour.ofEditor (ActorRef.PeerRef peer)}"
-                                       title="{authorName model (PeerRef peer)}"></span>"""
+                                       title="{Entity.actorName model (PeerRef peer)}"></span>"""
                     | Some holder ->
-                        html $"""<span class="{Style.statusRun}" title="{authorName model holder}"><span class="{Style.statusDot}"></span></span>"""
+                        html $"""<span class="{Style.statusRun}" title="{Entity.actorName model holder}"><span class="{Style.statusDot}"></span></span>"""
                     | None -> html $"""<span class="{Style.statusFaint}"><span class="{Style.statusDot}"></span></span>"""
             let peers =
                 ClientModel.editorsInTerminal view.TerminalId model
@@ -3290,7 +3252,7 @@ module View =
                 |> Option.bind (fun v -> v.Blocks |> List.tryFind (fun b -> b.BlockId = blockId))
                 |> Option.map (fun b -> b.Command)
                 |> Option.defaultValue (BlockId.value blockId)
-            | StretchTab stretch -> sprintf "%s · %s" (authorName model stretch.Holder) stretch.Title
+            | StretchTab stretch -> sprintf "%s · %s" (Entity.actorName model stretch.Holder) stretch.Title
         let readonlyTabButton (activate: unit -> unit) (pinMark: TemplateResult) (pinnedAttr: string) (hint: string) (tab: PaneTab) =
             let on = isOn tab
             let label = tabLabel tab
@@ -3593,7 +3555,7 @@ module View =
               {signInPrompt actions model}
               {chat actions dispatch model}
               {if ClientModel.launchOffered model then askCard actions dispatch model else Lit.nothing}
-              {queue dispatch model.Synced}
+              {queue dispatch model}
               {drafts actions dispatch model}
             </div>
             {terminals actions dispatch model}
