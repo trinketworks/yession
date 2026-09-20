@@ -1260,6 +1260,9 @@ do
     let mutable dispatchRef : ClientMsg -> unit = ignore
     let shellDoc = Y.Doc.Create ()
     let shellTexts = TextRegistry shellDoc
+    // Bound once rather than built inline at the render, because the draft-slot rule below
+    // has to watch the same bodies the composer writes into.
+    let shellRegistry = BodyRegistry shellDoc
     // The queued command's own text. The model holds the ENTRY; what it will run is a `Y.Text`
     // root every peer may edit until it drains, so a fixture that only put the act in the
     // queue would render a chip with nothing in it — and a case reading the command off that
@@ -1268,7 +1271,7 @@ do
     let renderer =
         Render.create
             { Doc = shellDoc
-              Registry = BodyRegistry shellDoc
+              Registry = shellRegistry
               Texts = shellTexts
               PeerId = shellModel.Peer.PeerId
               Root = shellHost
@@ -1303,6 +1306,13 @@ do
         renderTimes |> Option.iter (fun times -> times.Add (now () - started))
     and render () = renderer.SetState model
     dispatchRef <- dispatch
+    // The publication rule the real client runs (`Browser.fs`), because without it this page
+    // renders a composer that can never reach the states a composer actually has: a slot is
+    // what says a draft EXISTS, and Send's weight, Clear's existence and the verbs' row are
+    // all read from it. A harness that never publishes one shows the empty composer forever
+    // and calls the typed one green — which is how a Send nobody could press stayed
+    // invisible to this tier.
+    DraftSlot.follow shellDoc shellRegistry shellModel.Peer.PeerId (fun msg -> dispatchRef msg) |> ignore
     takeRef <-
         fun id ->
             let taken =

@@ -2753,16 +2753,17 @@ let editorTests =
                 return ()
             }
         // The composer's promise is that it gives the conversation back the room it is not
-        // using, and on a phone the verbs are the room: they leave the line, sit below it,
-        // and are shown only once somebody is typing. `opacity-0` kept every pixel of that
-        // row while hiding it — 44px of invisible buttons, plus the clearance meant to land
-        // under them — so two thirds of a collapsed composer was band holding nothing.
+        // using, and on a phone the verbs are the room: they leave the line and sit below it,
+        // standing only once there is a draft for them to act on. `opacity-0` kept every
+        // pixel of that row while hiding it — 44px of invisible buttons, plus the clearance
+        // meant to land under them — so two thirds of an empty composer was band holding
+        // nothing.
         //
         // Only a browser can tell that from a composer that is simply padded: the markup is
         // identical either way, and so is the row's own bounding box (clipping does not
         // resize a child). What separates them is what stands between the line and the
         // bottom of the band, which is a measurement.
-        editorCaseIn 390 844 "a composer at rest spends no height on verbs nobody can see" <| fun page ->
+        editorCaseIn 390 844 "a composer with nothing to send spends no height on its verbs" <| fun page ->
             async {
                 // Measured with motion off for the reason every geometry case here is: a
                 // `max-height` mid-transition is neither of the two heights being compared.
@@ -2778,13 +2779,56 @@ let editorTests =
                          const line = document.querySelector('#shell [data-draft-input]')
                          return band.getBoundingClientRect().bottom - line.getBoundingClientRect().bottom
                        }"""
+                let! empty = await (page.EvaluateAsync<float> below)
                 do! awaitU (page.ClickAsync line)
-                let! opened = await (page.EvaluateAsync<float> below)
-                do! awaitU (page.EvaluateAsync "() => document.activeElement.blur()")
-                let! rest = await (page.EvaluateAsync<float> below)
+                do! awaitU (page.Keyboard.TypeAsync "something to send")
+                // Clear exists exactly while the draft does, so its arrival is the rule
+                // having settled — the one signal here that is not a guess at a duration.
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-discard-draft]")
+                let! drafted = await (page.EvaluateAsync<float> below)
                 Expect.isTrue
-                    (rest < opened && rest <= 24.0)
-                    (sprintf "at rest the band ends under its line (%fpx below it, %fpx open)" rest opened)
+                    (empty < drafted && empty <= 24.0)
+                    (sprintf "an empty composer ends under its line (%fpx below it, %fpx with a draft)" empty drafted)
+                return ()
+            }
+        // THE bug, and the reason the row above follows the draft rather than the composer's
+        // focus. `focus-within` is false the moment focus leaves the composer, and pressing a
+        // button is how focus leaves: where a button takes no focus from a tap — iOS Safari,
+        // and any press the editor's blur beats — the row went `pointer-events-none` under
+        // the finger and the press landed on the timeline behind it. What a person saw was
+        // Send doing nothing and the composer collapsing.
+        //
+        // No markup test can see this: the button is rendered, it has a hook, it has a
+        // non-zero box, and its `@click` is bound. What decides it is which element answers
+        // at the point the finger is on, once focus has gone — and only a browser can be
+        // asked that.
+        editorCaseIn 390 844 "the composer's verbs survive the press that reaches for them" <| fun page ->
+            async {
+                do! awaitU (page.EmulateMediaAsync (PageEmulateMediaOptions (ReducedMotion = ReducedMotion.Reduce)))
+                let line = """#shell [data-draft-input] .ProseMirror"""
+                let! _ = await (page.WaitForSelectorAsync line)
+                do! awaitU (page.ClickAsync line)
+                do! awaitU (page.Keyboard.TypeAsync "something to send")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-discard-draft]")
+                // The shell into the viewport first: this harness page stacks its mounts and
+                // the shell is not the top of it, so the composer sits below the fold and a
+                // hit-test in VIEWPORT coordinates answers null for a reason this case is
+                // not about. (Measured: without it, `elementFromPoint` said `nothing` while
+                // the row was standing exactly where it should.)
+                do! awaitU (page.EvaluateAsync "() => document.querySelector('#shell').scrollIntoView()")
+                // The blur IS the gesture under test: it is what a tap on a button does
+                // first, on every browser that does not focus one.
+                do! awaitU (page.EvaluateAsync "() => document.activeElement.blur()")
+                let! answered =
+                    await (page.EvaluateAsync<string>
+                            """() => {
+                                 const send = document.querySelector('#shell [data-send-draft]')
+                                 const b = send.getBoundingClientRect()
+                                 const at = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2)
+                                 if (at === null) return 'nothing'
+                                 return send.contains(at) ? 'send' : at.tagName + '.' + (at.getAttribute('class') ?? '')
+                               }""")
+                Expect.equal answered "send" "a press at Send's own centre reaches Send once the editor has let focus go"
                 return ()
             }
         // A collapsed composer holding a long draft used to stop dead at its padding: a hard
