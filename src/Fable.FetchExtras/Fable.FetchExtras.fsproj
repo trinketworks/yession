@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Fable bindings to the parts of the fetch surface `Fable.Fetch` does not cover: today, the
+    abort signal a request is given a deadline with. Fable-only, like app/Yession.Host.fsproj:
+    `dotnet build` only type-checks it; the runnable JS comes from Fable. It references
+    Fable.Fetch rather than re-declaring the types it needs, so what comes out of here is the
+    package's own `AbortSignal` and slots straight into its `RequestProperties.Signal`.
+
+    One project serves BOTH the host and the browser client, which is unusual among these
+    bindings and is the whole reason this one exists: what it binds are platform globals
+    present in Node and in browsers alike, so neither consumer needs a runtime the other
+    lacks. Like Fable.BrowserExtras these are globals rather than an npm package, so there is
+    nothing to install and nothing in package.json to keep them in step with.
+
+    The bar for adding to this file is that `Fable.Fetch` genuinely lacks it AND both runtimes
+    have it — anything true of only one of them belongs in Fable.BrowserExtras or
+    Fable.NodeExtras, where the runtime it assumes is named on the tin.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="FetchExtras.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Fable.Core" />
+    <PackageReference Include="Fable.Fetch" />
+  </ItemGroup>
+
+</Project>
