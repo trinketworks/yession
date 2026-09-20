@@ -19,6 +19,7 @@ namespace Fable.BrowserExtras
 // on any other pass, so a second source for it could only disagree.
 
 open Fable.Core
+open Fable.Core.JsInterop
 open Browser.Types
 
 [<AllowNullLiteral>]
@@ -266,12 +267,77 @@ module CacheStorage =
         /// The stored body, decoded as text.
         abstract text : unit -> JS.Promise<string>
 
-    /// `cache.match(url)` — the answer kept for one address, or null.
+    /// One request a store kept an answer for. Its address is the whole of what a reader here
+    /// asks of it — the store is a bag of addresses, and what was kept AT one is read through
+    /// `cacheMatch` below.
+    [<AllowNullLiteral>]
+    type CachedRequest =
+        abstract url : string
+
+    /// A response built HERE to be kept — never the one that came off the network, because a
+    /// response carrying `redirected = true` is a known trap in the Cache API, and re-wrapping
+    /// also keeps the store free of anything about how its bytes were obtained. Opaque: a
+    /// caller builds one and hands it straight to `put`, and reads it back as a
+    /// `CachedResponse` above.
+    [<AllowNullLiteral>]
+    type KeptResponse =
+        interface
+        end
+
+    [<Emit("new Response($0, { headers: $1 })")>]
+    let private responseCarrying (body: string) (headers: obj) : KeptResponse = jsNative
+
+    /// `body`, as a response to keep, carrying `headers` — which the Cache API round-trips
+    /// for nothing, and is where a caller puts what the bytes alone cannot say.
+    let keptResponse (body: string) (headers: (string * string) list) : KeptResponse =
+        responseCarrying body (createObj [ for name, value in headers -> name ==> value ])
+
+    /// One named store.
     ///
-    /// The cache is `obj` rather than a type of its own: nothing here ever asks a `Cache`
-    /// anything except this, so a type would carry one member and a name for it.
+    /// This used to be `obj`, on the grounds that nothing ever asked a `Cache` anything but
+    /// `match`. The browser client's kept history asks it four things, so it is a type now,
+    /// and what a reader must know about each is written where the member is rather than at
+    /// whichever call site learned it.
+    [<AllowNullLiteral>]
+    type Cache =
+
+        /// Every address this store holds an answer for.
+        ///
+        /// In INSERTION order, which is not log order: `put` of an address already kept
+        /// deletes the entry and appends the new one, so an answer two tabs both fetched moves
+        /// to the end. A caller that needs an order sorts by what the answers hold.
+        abstract keys : unit -> JS.Promise<CachedRequest array>
+
+        /// Keep `response` as the answer for `url`, replacing whatever was there.
+        abstract put : url: string * response: KeptResponse -> JS.Promise<unit>
+
+    /// The page's named stores.
+    [<AllowNullLiteral>]
+    type Stores =
+
+        /// The store called `name`, made if this page has none by that name.
+        [<Emit("$0.open($1)")>]
+        abstract openStore : name: string -> JS.Promise<Cache>
+
+        /// The names of every store this page holds.
+        [<Emit("$0.keys()")>]
+        abstract names : unit -> JS.Promise<string array>
+
+    /// The page's stores, or nothing where this page has none: a document served insecurely
+    /// has no `caches` at all, and reading the property would throw rather than answer.
+    /// `globalThis` rather than `window`, because a bundle that also evaluates where there is
+    /// no window must be able to ASK without the asking being the thing that fails.
+    [<Emit("(typeof globalThis !== 'undefined' && globalThis.caches) ? globalThis.caches : undefined")>]
+    let caches () : Stores option = jsNative
+
+    /// Whether this document is a secure context — the condition every storage API here is
+    /// gated on, asked the same defensive way for the same reason.
+    [<Emit("(typeof globalThis !== 'undefined' && globalThis.isSecureContext === true)")>]
+    let isSecureContext () : bool = jsNative
+
+    /// `cache.match(url)` — the answer kept for one address, or null.
     [<Emit("$0.match($1)")>]
-    let cacheMatch (cache: obj) (url: string) : JS.Promise<CachedResponse> = jsNative
+    let cacheMatch (cache: Cache) (url: string) : JS.Promise<CachedResponse> = jsNative
 
     /// One header off a kept response, or null when the stored response carries none — which
     /// is a store outliving the build that filled it, not an error.

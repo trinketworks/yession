@@ -563,8 +563,17 @@ let private httpGet : Client.HttpGet =
 // cursor's redirect is the range, whose bounds never move. That is what makes an answer
 // keepable, and the client never has to construct one.
 
-[<Emit("(typeof window !== 'undefined' && window.isSecureContext === true && !!window.caches)")>]
-let private canKeepHistory () : bool = jsNative
+/// What a kept answer is, and where the line it starts on rides. Named here because a writer
+/// and the reader below must agree on both, and a header spelled twice is a store the next
+/// build cannot read.
+let private ndjson = "application/x-ndjson; charset=utf-8"
+
+let private firstSeqHeader = "x-yession-first-seq"
+
+/// Whether this client can keep anything at all: a secure context WITH a cache storage. Both
+/// halves are asked defensively in the binding, because a bundle that evaluates where there is
+/// no window must be able to ask without the asking being what fails.
+let private canKeepHistory () : bool = isSecureContext () && (caches ()).IsSome
 
 // The cache is named for the SESSION, which closes inside the client what a URL-keyed cache
 // could not: the zero-config deployment addresses sessions as `127.0.0.1:{port}` and ports are
@@ -572,24 +581,36 @@ let private canKeepHistory () : bool = jsNative
 // doc store's key rather than spelled again — one rule for what identifies a session's storage.
 let private historyCacheName () = persistenceKey () + "/events"
 
-[<Emit("window.caches.open($0)")>]
-let private openCache (name: string) : JS.Promise<obj> = jsNative
+/// The named store. Only ever called behind `canKeepHistory`, which is what says there is a
+/// storage to open one in — so a page with none is a case that does not reach here, rather
+/// than one answered with a store that cannot keep anything.
+let private openCache (name: string) : JS.Promise<Cache> =
+    match caches () with
+    | Some stores -> stores.openStore name
+    | None -> failwith "this page has no cache storage, so there is no store to open"
 
 // `keys()` answers in insertion order, and insertion order is NOT log order: `put` of an
 // address already kept deletes the entry and appends the new one, so an answer two tabs both
 // fetched moves to the end of the enumeration. The replay orders by what the answers hold
 // (`Client.EventFetch.replay`); this is a bag of addresses and promises nothing about their order.
-[<Emit("$0.keys().then(rs => rs.map(r => r.url))")>]
-let private cacheKeys (cache: obj) : JS.Promise<string array> = jsNative
+let private cacheKeys (cache: Cache) : JS.Promise<string array> =
+    cache.keys () |> Promise.map (Array.map (fun request -> request.url))
 
-[<Emit("$0.match($1).then(r => r ? r.text() : null)")>]
-let private cacheRead (cache: obj) (url: string) : JS.Promise<string option> = jsNative
+/// What the store kept for `url`, or nothing for an address it never held — which is an
+/// answer rather than a fault, and is why `cacheMatch` is typed nullable.
+let private cacheRead (cache: Cache) (url: string) : JS.Promise<string option> =
+    cacheMatch cache url
+    |> Promise.bind (fun kept ->
+        if isNull kept then Promise.lift None else kept.text () |> Promise.map Some)
 
 // A FRESH Response, never the one that came off the network: a response carrying
 // `redirected = true` is a known trap in the Cache API, and re-wrapping also keeps the store
 // free of anything about how the bytes were obtained.
-[<Emit("$0.put($1, new Response($2, { headers: { 'content-type': 'application/x-ndjson; charset=utf-8' } })).catch(() => undefined)")>]
-let private cacheWrite (cache: obj) (url: string) (body: string) : JS.Promise<unit> = jsNative
+let private cacheWrite (cache: Cache) (url: string) (body: string) : JS.Promise<unit> =
+    // Swallowed on purpose: a store that refuses a write (out of quota, evicted mid-flight)
+    // costs this client a cold open and nothing else, and there is no caller to tell.
+    cache.put (url, keptResponse body [ "content-type", ndjson ])
+    |> Promise.catch (fun _ -> ())
 
 /// Register the worker that makes a cold open possible with no network (Plan 20).
 ///
@@ -639,15 +660,21 @@ let private transcriptCachePrefix () = persistenceKey () + "/terminals/"
 
 let private transcriptCacheName (terminal: TerminalId) = transcriptCachePrefix () + TerminalId.value terminal
 
-[<Emit("window.caches.keys()")>]
-let private cacheNames () : JS.Promise<string array> = jsNative
+/// Every store this page holds. Behind `canKeepHistory` like `openCache`, for the same
+/// reason: a page with no storage has no names to walk rather than an empty walk.
+let private cacheNames () : JS.Promise<string array> =
+    match caches () with
+    | Some stores -> stores.names ()
+    | None -> failwith "this page has no cache storage, so there are no stores to name"
 
 // The line an answer starts on, kept BESIDE the bytes rather than parsed back out of the
 // address: a transcript line cannot carry its own index, and the address is the one thing this
 // client is never allowed to read meaning out of. It rides a header on the stored `Response`,
 // which the Cache API round-trips for nothing.
-[<Emit("""$0.put($1, new Response($3, { headers: { 'content-type': 'application/x-ndjson; charset=utf-8', 'x-yession-first-seq': String($2) } })).catch(() => undefined)""")>]
-let private transcriptWrite (cache: obj) (url: string) (firstSeq: int) (body: string) : JS.Promise<unit> = jsNative
+let private transcriptWrite (cache: Cache) (url: string) (firstSeq: int) (body: string) : JS.Promise<unit> =
+    // Swallowed for the reason `cacheWrite` gives: a refused write costs a cold open.
+    cache.put (url, keptResponse body [ "content-type", ndjson; firstSeqHeader, string firstSeq ])
+    |> Promise.catch (fun _ -> ())
 
 /// One cached transcript window: the sequence its first line carries, and the lines
 /// themselves.
@@ -657,13 +684,13 @@ let private transcriptWrite (cache: obj) (url: string) (firstSeq: int) (body: st
 /// lines whose first sequence is unknown cannot be folded into anything. A header that is
 /// present and not a number is that same store, read by a build that cannot understand what
 /// wrote it.
-let private transcriptRead (cache: obj) (url: string) : Async<(int * string) option> =
+let private transcriptRead (cache: Cache) (url: string) : Async<(int * string) option> =
     async {
         let! kept = cacheMatch cache url |> Async.AwaitPromise
         if isNullOrUndefined kept then
             return None
         else
-            let first = cachedHeader kept "x-yession-first-seq"
+            let first = cachedHeader kept firstSeqHeader
             if isNullOrUndefined first then
                 return None
             else
