@@ -868,6 +868,17 @@ type BoundAddress =
 type Listening =
     abstract address : unit -> BoundAddress option
 
+/// A connection somebody made to a server listening here — the serving side of one, which is
+/// all this repository holds. What a probe's listener does with a connection is say one thing
+/// and let it go, so that is the whole of what is declared.
+[<AllowNullLiteral>]
+type NetConnection =
+
+    /// Say this, then close. `end` rather than `write`: a probe's answer is complete when it
+    /// is written, and leaving the connection open would have the far side waiting for more.
+    [<Emit("$0.end($1)")>]
+    abstract close : said: string -> unit
+
 [<AllowNullLiteral>]
 type NetServer =
     inherit Listening
@@ -876,11 +887,22 @@ type NetServer =
     /// particular port, a probe would be racing whoever else wanted that one.
     abstract listen : port: int * host: string * onListening: (unit -> unit) -> unit
 
+    /// Bind a UNIX SOCKET at `path`. No callback, and no port to be told: the path is the
+    /// address, chosen by the caller rather than by the OS, so there is nothing to learn
+    /// once it is bound.
+    abstract listen : path: string -> unit
+
     /// Stop listening, and call back once the socket is released — before which the port is
     /// still this process's, and a child told to bind it would be refused. Node hands this
     /// callback an error when the server was not open, which is not a case a probe can be in:
     /// it closes one server, once, having just watched it listen.
     abstract close : onClosed: (unit -> unit) -> unit
+
+    /// Stop listening, without waiting to be told it has stopped. For a caller tearing a
+    /// fixture down after its verdict is already in: Node THROWS here for a server that never
+    /// bound or has already closed, so a caller that cannot know which state it is in catches
+    /// rather than letting a fixture's fault replace the answer the case reached.
+    abstract close : unit -> unit
 
 [<AutoOpen>]
 module NetServers =
@@ -889,6 +911,13 @@ module NetServers =
     /// is for is holding a port long enough to be told which one it got.
     [<Import("createServer", "node:net")>]
     let createNetServer () : NetServer = jsNative
+
+    /// A server that ANSWERS, for the probe whose question is whether a connection can be made
+    /// at all: a refused connect and a denied connect are both failures, and only a successful
+    /// one says a grant reached the kernel — which needs something on the other end to succeed
+    /// against.
+    [<Import("createServer", "node:net")>]
+    let createNetServerAnswering (onConnection: NetConnection -> unit) : NetServer = jsNative
 
     /// The port a LISTENING server was given. Asked of one that is not listening, this is a
     /// fault at the caller — a port read outside the listen/close window is not a port — and
