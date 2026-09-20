@@ -272,13 +272,6 @@ let private connectChannel (signalUrl: string) : Async<Result<FrameChannel<strin
 
 let private appRoot () : Browser.Types.HTMLElement = Browser.Dom.document.getElementById "app"
 
-// lit-html's `render` inserts its content AFTER a container's existing children rather
-// than replacing them, so the server-rendered shell (first paint) would linger beside the
-// live one. Clear it once before the client's first render so Lit owns `#app` outright.
-/// `replaceChildren()` with no arguments, which `Fable.Browser.Dom` does not type.
-[<Emit("$0.replaceChildren()")>]
-let private clearChildren (el: Browser.Types.Element) : unit = jsNative
-
 /// Put text on the system clipboard, and say whether the browser let us. Asynchronous
 /// because the write may be a permission prompt, and refusable for reasons the page cannot
 /// see coming — an insecure context has no `navigator.clipboard` at all, which is the
@@ -512,9 +505,12 @@ let private persistenceKey () : string =
     | None -> "yession/" + Browser.Dom.window.location.host + Browser.Dom.window.location.pathname
 
 // Resolved against the shell's `<base href>`, so a session mounted under a path signals
-// to its own prefix rather than the origin root.
-[<Emit("new URL($0, document.baseURI).href")>]
-let private absolute (relative: string) : string = jsNative
+// to its own prefix rather than the origin root. `document.baseURI` IS that base, or the
+// document's own address where the shell declared none — and naming it here rather than
+// inside the binding is the point: which base an address resolves against is this client's
+// decision about its own document, and `Urls.resolve` resolves against whichever it is told.
+let private absolute (relative: string) : string =
+    Urls.resolve relative Browser.Dom.document.baseURI
 
 // `location.replace` resolves against the DOCUMENT's URL, not `<base href>` — the one place
 // relative resolution does not follow the base — so it is handed an address already resolved
@@ -1061,18 +1057,12 @@ let private fetchPullHead (repo: RepoRef) (number: int) : Async<Result<PullHead,
 // is nothing to re-probe on, because a value arrives when it changes rather than when
 // somebody looks.
 
-[<Emit("new EventSource($0)")>]
-let private newEventSource (url: string) : obj = jsNative
-
-[<Emit("$0.onmessage = $1")>]
-let private onEventSourceMessage (source: obj) (handler: Browser.Types.MessageEvent -> unit) : unit = jsNative
-
 /// The stream, with the handler already on it: opened, subscribed, handed back. The caller
-/// keeps nothing — it never closes this — so what comes back is the source itself rather than
-/// anything this client would have to remember how to undo.
-let private openQueryStream (url: string) (onFrame: string -> unit) : obj =
-    let source = newEventSource url
-    onEventSourceMessage source (fun message -> onFrame (string message.data))
+/// keeps nothing — it never closes this, per the paragraph above — so what comes back is the
+/// source itself rather than anything this client would have to remember how to undo.
+let private openQueryStream (url: string) (onFrame: string -> unit) : EventSource =
+    let source = EventSource.create url
+    source.onmessage <- fun message -> onFrame (string message.data)
     source
 
 // --- Entry -----------------------------------------------------------------------------
@@ -1508,8 +1498,11 @@ let private start () =
               FocusItemActions = fun id -> PaneShell.toItemActions (MessageId.value id) }
 
         let el = appRoot ()
-        // Take over the server-rendered shell (see `clearChildren`): from here Lit owns it.
-        clearChildren el
+        // Take over the server-rendered shell: from here Lit owns it. lit-html's `render`
+        // inserts its content AFTER a container's existing children rather than replacing
+        // them, so the first paint the server rendered would linger beside the live one —
+        // clearing once, before the client's first render, is what stops that.
+        Elements.clearChildren el
 
         // The render, composed here and run by Elmish on every model change. What it needs of
         // the session it is handed as links, because the connection is wired later — and

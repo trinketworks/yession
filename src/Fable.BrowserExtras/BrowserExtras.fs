@@ -227,6 +227,39 @@ module Nodes =
     [<Emit("$0.isConnected")>]
     let isConnected (node: Node) : bool = jsNative
 
+/// What `Fable.Browser.Dom` leaves off `Element`.
+module Elements =
+
+    /// Empty an element of its children, in the one call the browser does it in:
+    /// `replaceChildren()` with NO arguments, which the upstream bindings do not type at all —
+    /// not the replacing form either, so there is nothing here to narrow.
+    ///
+    /// The alternative is a loop removing the last child until there is none, which reaches the
+    /// same end state through one mutation per child — every one of them a chance for anything
+    /// watching the tree to observe a half-emptied element. That the browser can be told to
+    /// empty it once is the whole reason to bind this rather than write the loop.
+    [<Emit("$0.replaceChildren()")>]
+    let clearChildren (element: Element) : unit = jsNative
+
+/// Resolving one address against another: what the `URL` constructor is for, and what string
+/// concatenation cannot be made to do. A reference may be absolute, rooted at the origin, or
+/// relative to the base's DIRECTORY, and which of those it is decides how much of the base
+/// survives — a question with an answer in the URL standard and no answer in an `if`.
+///
+/// `Fable.Browser.Dom` stops short of `URL`; `ObjectUrls` above is the other half of that same
+/// absence, and says why the upstream package is not worth the closure moving for.
+module Urls =
+
+    /// `relative`, resolved against `baseAddress`, as an absolute address.
+    ///
+    /// The base is a parameter because WHICH base an address resolves against is a decision
+    /// about the document, not a fact about resolution: a page may resolve against its own
+    /// location, against a `<base href>` its shell declared, or against an address it was
+    /// handed. A binding that reached for one of those itself would be answering a question it
+    /// was not asked, in the one place no test can see the answer.
+    [<Emit("new URL($0, $1).href")>]
+    let resolve (relative: string) (baseAddress: string) : string = jsNative
+
 /// One end of a `MessageChannel`.
 [<AllowNullLiteral>]
 type MessagePort =
@@ -246,6 +279,34 @@ module MessageChannel =
 
     [<Emit("new MessageChannel()")>]
     let create () : MessageChannel = jsNative
+
+/// The browser's own Server-Sent Events client: a GET held open, its answer arriving as frames
+/// for as long as it lives, reconnected by the browser itself when it drops and carrying the
+/// page's cookies the way any same-origin request does. `Fable.Browser.Dom` stops at the DOM;
+/// `EventSource` belongs to the HTML bindings this repository does not otherwise need.
+///
+/// Only the slice a reader of a stream uses is declared. `onerror`, `onopen` and `readyState`
+/// describe the state of the connection, which nothing here acts on: the browser's own
+/// reconnection IS the recovery story, so a handler layered over it could only duplicate what
+/// it does or race it.
+[<AllowNullLiteral>]
+type EventSource =
+    /// Called once per frame whose producer named no event type — which is every frame this
+    /// repository's routes send. Settable rather than a `subscribe`, because that is the shape
+    /// the API has: one handler, replaced by assigning another.
+    abstract onmessage : (MessageEvent -> unit) with get, set
+    /// Stop the connection, and stop the browser reopening it. A stream nobody closes lives as
+    /// long as its document does, so whether this is called says something about the caller's
+    /// lifetime rather than about the stream.
+    abstract close : unit -> unit
+
+module EventSource =
+
+    /// `new EventSource(url)`. The connection is opened by the construction, not by a later
+    /// call, so a caller with nowhere to put the frames yet is a caller that should not have
+    /// made one yet.
+    [<Emit("new EventSource($0)")>]
+    let create (url: string) : EventSource = jsNative
 
 /// The slice of the Cache API that a READ goes through. `Fable.Browser.Dom` types none of it —
 /// it stops at the DOM, and a `Cache` belongs to the service-worker bindings this repository
