@@ -1002,6 +1002,24 @@ module SessionTerminals =
             match linesTyped.TryGetValue key with
             | true, n -> n
             | _ -> 0
+        /// Which block's line each terminal's shell was last handed, and when — what the
+        /// integration detector and a late start mark both need to say how late is late.
+        /// Per terminal rather than per block, because there is one line at a time in a
+        /// shell's editor and a block that was typed is the one whose marks are awaited.
+        let typedBlock = Collections.Generic.Dictionary<string, BlockId * DateTimeOffset> ()
+        /// What the shell printed behind `awaitingStart` — the window in which nothing is
+        /// recorded. Kept so the detector can SAY what it saw when it fires: nothing, or the
+        /// line's echo with the command's output under it, which are two different faults.
+        /// Bounded, because a shell that is rendering rather than running prints a line or
+        /// two, and one that has gone on past that is already telling its own story.
+        let rendering = Collections.Generic.Dictionary<string, Text.StringBuilder> ()
+        let renderingCap = 512
+        /// Control bytes escaped, so what the shell said cannot carry a mark or an escape
+        /// into a fact that is read back on every screen.
+        let legible (text: string) =
+            text
+            |> Seq.map (fun c -> if Char.IsControl c then sprintf "\\x%02x" (int c) else string c)
+            |> String.concat ""
         /// What each open terminal's source declared it can do (Plan 16, part D). Consulted
         /// where a capability is actually USED — before running a block, before resizing —
         /// rather than being re-derived from whether a rearmer happens to exist.
@@ -1364,7 +1382,13 @@ module SessionTerminals =
                                 // the command's output, and it is not recorded — the other
                                 // half of `Marks.lineFor`, which is where the reasons are.
                                 | Printed clean ->
-                                    if clean <> "" && ready.Value && not (awaitingStart.Contains key) then record clean
+                                    if clean <> "" && ready.Value then
+                                        if not (awaitingStart.Contains key) then record clean
+                                        else
+                                            match rendering.TryGetValue key with
+                                            | true, said when said.Length < renderingCap ->
+                                                said.Append (clean.Substring (0, min clean.Length (renderingCap - said.Length))) |> ignore
+                                            | _ -> ()
                                 | Marked MarkPromptStart ->
                                     ready.Value <- true
                                     atPrompt.Add key |> ignore
@@ -1386,7 +1410,21 @@ module SessionTerminals =
                                     // handed — a block's, or the one a lease typed in — and
                                     // what it prints from here is output again.
                                     awaitingStart.Remove key |> ignore
-                                    if pending.ContainsKey key then sawCommandStart.Add key |> ignore
+                                    if pending.ContainsKey key then
+                                        sawCommandStart.Add key |> ignore
+                                        // A start mark on a terminal already declared lost is
+                                        // the detector having been wrong about THIS block, and
+                                        // the record says so beside the loss rather than
+                                        // leaving a lost terminal completing a block with an
+                                        // exit code to explain itself.
+                                        if Set.contains key lost then
+                                            match typedBlock.TryGetValue key with
+                                            | true, (blockId, writtenAt) ->
+                                                Async.StartImmediate (
+                                                    append
+                                                        (SessionEvent.TerminalMarkedLate
+                                                            { TerminalId = id; BlockId = blockId; WrittenAt = writtenAt }))
+                                            | _ -> ()
                                 | Marked (MarkCommandDone code) ->
                                     match pending.TryGetValue key with
                                     | true, (complete, _, _) when sawCommandStart.Contains key ->
@@ -1405,10 +1443,7 @@ module SessionTerminals =
                     // bytes a prompt is made of) escaped, so a notice cannot itself carry a
                     // mark or an escape into the transcript.
                     let said () =
-                        let text =
-                            overture.ToString ()
-                            |> Seq.map (fun c -> if System.Char.IsControl c then sprintf "\\x%02x" (int c) else string c)
-                            |> String.concat ""
+                        let text = legible (overture.ToString ())
                         if text = "" then "nothing" else text
                     // The profile's directory is the FIRST line the shell is handed, as its
                     // own `cd`, and the spawn itself starts where the sandbox puts a shell.
@@ -1989,6 +2024,9 @@ module SessionTerminals =
                                             // mark is the block's (`Marks.lineFor`).
                                             linesTyped.[key] <- typedSoFar key + 1
                                             awaitingStart.Add key |> ignore
+                                            let writtenAt = clock.Now ()
+                                            typedBlock.[key] <- (blockId, writtenAt)
+                                            rendering.[key] <- Text.StringBuilder ()
                                             pty.Write (writeFor (Marks.lineFor terminal.Spec.Name stdin lent command))
                                             // The integration detector (Plan 13, stage 2f), armed
                                             // beside the block rather than awaited: a lost shell
@@ -2012,10 +2050,20 @@ module SessionTerminals =
                                                       // output either; from here whatever it
                                                       // prints is recorded, wrapper and all.
                                                       awaitingStart.Remove key |> ignore
+                                                      let said =
+                                                          match rendering.TryGetValue key with
+                                                          | true, said -> legible (BlockEnv.redact lent (said.ToString ()))
+                                                          | _ -> ""
                                                       do!
                                                           append
                                                               (SessionEvent.TerminalIntegrationLost
-                                                                  { TerminalId = terminalId; BlockId = Some blockId })
+                                                                  { TerminalId = terminalId
+                                                                    BlockId = Some blockId
+                                                                    Evidence =
+                                                                      Some
+                                                                          { WrittenAt = writtenAt
+                                                                            Due = writtenAt + integrationWindow
+                                                                            Said = said } })
                                                       reDrain ()
                                               }))
                                     return result

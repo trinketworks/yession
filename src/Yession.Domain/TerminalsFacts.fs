@@ -1,5 +1,6 @@
 namespace Yession.Domain.Terminals
 
+open System
 open Yession.Domain
 
 /// The facts a terminal records — opening and closing, who holds its stdin, the blocks it ran, and what its transcript could not keep.
@@ -217,7 +218,45 @@ and TerminalIntegrationLost =
       /// The block that was open when it happened, if one was. It stays open — its `ToSeq`
       /// and exit code are exactly what was lost — and naming it here is what lets a reader
       /// tell an unbounded block from a running one.
-      BlockId : BlockId option }
+      BlockId : BlockId option
+      /// What the detector had in hand when it fired. `None` only for a log written before
+      /// it said — there is no honest value to invent for a moment nobody recorded.
+      Evidence : LostEvidence option }
+
+/// What was known at the moment a terminal was declared lost — enough to say, off the log
+/// alone, which side was silent. The fact without it read the same for a shell that had
+/// been replaced and one that answered ten seconds late over a container's stream while
+/// this process was itself late to look: both said *lost*, one of them wrongly, and the
+/// diagnosis took the cast file, the event log and a stopwatch.
+
+and LostEvidence =
+    { /// When the block's line was handed to the pty.
+      WrittenAt : DateTimeOffset
+      /// When the start mark was due — the write plus the window. The envelope's own
+      /// timestamp is when the detector actually ran, so the gap between the two is THIS
+      /// process's lateness, and it is the one number that separates a shell that was slow
+      /// from a process that was slow to notice.
+      Due : DateTimeOffset
+      /// What the shell printed between the write and the detector firing, control bytes
+      /// escaped and the whole bounded. Empty says the shell had not answered at all; the
+      /// line's echo with the command's output under it says it ran the command and marked
+      /// nothing — which is the shell that needs re-arming.
+      Said : string }
+
+/// A start mark that arrived AFTER its terminal was declared lost. The shell does mark; it
+/// — or this process — was slow, and the block it starts will end with a `D` the drain can
+/// act on. Recorded because the log otherwise shows a lost terminal completing a block with
+/// an exit code and says nothing about the contradiction.
+///
+/// It does not clear the loss. Only a person re-arming does (`TerminalIntegrationRestored`),
+/// and whether a late mark should is a decision this fact exists to inform, not to take.
+
+and TerminalMarkedLate =
+    { TerminalId : TerminalId
+      BlockId : BlockId
+      /// When the block's line was handed to the pty; the envelope's timestamp is when the
+      /// mark arrived, so the difference is how late the shell answered.
+      WrittenAt : DateTimeOffset }
 /// Marking is back (Plan 13, stage 2f): a peer used the re-arm control and the shell that is
 /// actually there now answered our instrumentation.
 

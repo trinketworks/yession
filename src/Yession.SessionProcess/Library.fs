@@ -44,6 +44,7 @@ module Bootstrap =
         | SessionEvent.TerminalCommandRejected _ -> "terminal-command-rejected"
         | SessionEvent.TerminalIntegrationLost _ -> "terminal-integration-lost"
         | SessionEvent.TerminalIntegrationRestored _ -> "terminal-integration-restored"
+        | SessionEvent.TerminalMarkedLate _ -> "terminal-marked-late"
         | SessionEvent.TerminalTranscriptTruncated _ -> "terminal-transcript-truncated"
         | SessionEvent.RepoAdded _ -> "repo-added"
         | SessionEvent.RepoRemoved _ -> "repo-removed"

@@ -952,16 +952,46 @@ module Codec =
                 | "idle" -> Decode.succeed LeaseIdle
                 | other -> Decode.fail (sprintf "Unknown lease end: %s" other)) }
 
+    let private lostEvidence : Codec<LostEvidence> =
+        { Encode =
+            fun (e: LostEvidence) ->
+                Encode.object
+                    [ "writtenAt", timestamp.Encode e.WrittenAt
+                      "due", timestamp.Encode e.Due
+                      "said", Encode.string e.Said ]
+          Decode =
+            Decode.object (fun get ->
+                { LostEvidence.WrittenAt = get.Required.Field "writtenAt" timestamp.Decode
+                  LostEvidence.Due = get.Required.Field "due" timestamp.Decode
+                  LostEvidence.Said = get.Required.Field "said" Decode.string }) }
+
     let private terminalIntegrationLost : Codec<TerminalIntegrationLost> =
         { Encode =
             fun (p: TerminalIntegrationLost) ->
                 Encode.object
                     [ "terminalId", terminalId.Encode p.TerminalId
-                      "blockId", Encode.option blockId.Encode p.BlockId ]
+                      "blockId", Encode.option blockId.Encode p.BlockId
+                      "evidence", Encode.option lostEvidence.Encode p.Evidence ]
           Decode =
             Decode.object (fun get ->
                 { TerminalIntegrationLost.TerminalId = get.Required.Field "terminalId" terminalId.Decode
-                  TerminalIntegrationLost.BlockId = get.Optional.Field "blockId" blockId.Decode }) }
+                  TerminalIntegrationLost.BlockId = get.Optional.Field "blockId" blockId.Decode
+                  // Optional on the wire because a log written before the detector said
+                  // what it saw has no evidence to read, not because a new one may omit it.
+                  TerminalIntegrationLost.Evidence = get.Optional.Field "evidence" lostEvidence.Decode }) }
+
+    let private terminalMarkedLate : Codec<TerminalMarkedLate> =
+        { Encode =
+            fun (p: TerminalMarkedLate) ->
+                Encode.object
+                    [ "terminalId", terminalId.Encode p.TerminalId
+                      "blockId", blockId.Encode p.BlockId
+                      "writtenAt", timestamp.Encode p.WrittenAt ]
+          Decode =
+            Decode.object (fun get ->
+                { TerminalMarkedLate.TerminalId = get.Required.Field "terminalId" terminalId.Decode
+                  TerminalMarkedLate.BlockId = get.Required.Field "blockId" blockId.Decode
+                  TerminalMarkedLate.WrittenAt = get.Required.Field "writtenAt" timestamp.Decode }) }
 
     let private terminalIntegrationRestored : Codec<TerminalIntegrationRestored> =
         { Encode = fun (p: TerminalIntegrationRestored) -> Encode.object [ "terminalId", terminalId.Encode p.TerminalId ]
@@ -1586,6 +1616,8 @@ module Codec =
                     Encode.object
                         [ "type", Encode.string "terminalIntegrationRestored"
                           "payload", terminalIntegrationRestored.Encode p ]
+                | SessionEvent.TerminalMarkedLate p ->
+                    Encode.object [ "type", Encode.string "terminalMarkedLate"; "payload", terminalMarkedLate.Encode p ]
                 | TerminalLeaseTaken p ->
                     Encode.object [ "type", Encode.string "terminalLeaseTaken"; "payload", terminalLeaseTaken.Encode p ]
                 | TerminalLeaseReleased p ->
@@ -1676,6 +1708,7 @@ module Codec =
                     Decode.field "payload" terminalIntegrationLost.Decode |> Decode.map TerminalIntegrationLost
                 | "terminalIntegrationRestored" ->
                     Decode.field "payload" terminalIntegrationRestored.Decode |> Decode.map TerminalIntegrationRestored
+                | "terminalMarkedLate" -> Decode.field "payload" terminalMarkedLate.Decode |> Decode.map TerminalMarkedLate
                 | "terminalLeaseTaken" -> Decode.field "payload" terminalLeaseTaken.Decode |> Decode.map TerminalLeaseTaken
                 | "terminalLeaseReleased" -> Decode.field "payload" terminalLeaseReleased.Decode |> Decode.map TerminalLeaseReleased
                 | "terminalTranscriptTruncated" ->

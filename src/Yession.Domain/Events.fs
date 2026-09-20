@@ -84,6 +84,7 @@ type SessionEvent =
     | TerminalCommandRejected of TerminalCommandRejected
     | TerminalIntegrationLost of TerminalIntegrationLost
     | TerminalIntegrationRestored of TerminalIntegrationRestored
+    | TerminalMarkedLate of TerminalMarkedLate
     | TerminalTranscriptTruncated of TerminalTranscriptTruncated
     // Repos (Plan 14): durable facts about the session's repos directory — who brought
     // which repo in, removed it, or moved its checkout to another branch. The agent's
