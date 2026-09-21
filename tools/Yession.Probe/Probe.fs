@@ -20,97 +20,103 @@ module Yession.Probe
 // settled. Only a session this probe MINTED is stopped on the way out — a named one belongs
 // to whoever lent it.
 
+open System
+open System.Text.RegularExpressions
 open Fable.Core
+open Fable.BrowserExtras
 open Yession.Domain
+open Yession.Domain.Access
 open Yession.Domain.Chat
 open Yession.Domain.Tools
 open Yession.App
 open Yession.Peer
 
-[<Emit("fetch($0, $1)")>]
-let private fetch (url: string) (init: obj) : JS.Promise<obj> = jsNative
-
-[<Emit("$0.status")>]
-let private statusOf (response: obj) : int = jsNative
-
-[<Emit("$0.text()")>]
-let private textOf (response: obj) : JS.Promise<string> = jsNative
-
-[<Emit("!!$0.headers.getSetCookie")>]
-let private hasGetSetCookie (response: obj) : bool = jsNative
-
-[<Emit("$0.headers.getSetCookie()")>]
-let private getSetCookie (response: obj) : string array = jsNative
-
 /// Every `set-cookie` the response carried, kept apart. `Headers.getSetCookie` is the only
 /// thing that can tell several of them apart, and a runtime old enough not to have it has
 /// nothing to offer instead — so the jar stays empty rather than half-filled from a joined
-/// header. A real function, so the response is read once: the macro this replaced named
-/// `$0` twice and would have re-evaluated whatever expression the caller passed.
-let private setCookies (response: obj) : string array =
-    if hasGetSetCookie response then getSetCookie response else [||]
+/// header. Which is the whole of the decision here: `FetchExtras` answers "this runtime
+/// cannot say" with `None`, and this is the caller that says an empty jar is what that means.
+let private setCookies (response: Fetch.Types.Response) : string array =
+    Fable.FetchExtras.setCookies response.Headers |> Option.defaultValue [||]
 
-[<Emit("$0.headers.get('location')")>]
-let private locationOf (response: obj) : string = jsNative
-
-[<Emit("new URL($1, $0).toString()")>]
-let private resolveUrl (baseUrl: string) (relative: string) : string = jsNative
-
-[<Emit("({ redirect: $1, headers: $0 })")>]
-let private getInit (headers: obj) (redirect: string) : obj = jsNative
-
-[<Emit("({ method: 'POST', redirect: 'manual', headers: $0, body: new URLSearchParams($1) })")>]
-let private postInit (headers: obj) (body: obj) : obj = jsNative
-
-/// The headers a hop carries. WHICH headers there are is the decision here: a jar with
+/// The headers a GET hop carries. WHICH headers there are is the decision here: a jar with
 /// nothing in it sends no `cookie:` at all, the way a browser's first request does, rather
 /// than a header whose value is blank.
-let private headersFor (cookie: string option) : obj =
-    cookie |> Option.map (fun jar -> "cookie", box jar) |> Option.toList |> JsInterop.createObj
+///
+/// Each list is written out where it stands rather than assembled, here and below, because
+/// `Fetch.requestHeaders` folds a LITERAL list into an object as it compiles and honours each
+/// case's `[<CompiledName>]` doing it. Handed a list built at run time it falls back to the
+/// F# case name, and `ContentType` is not `content-type`.
+let private getHeaders (cookie: string option) : Fetch.Types.RequestProperties list =
+    match cookie with
+    | Some jar -> [ Fetch.requestHeaders [ Fetch.Types.HttpRequestHeaders.Cookie jar ] ]
+    | None -> []
 
-let private request (cookie: string option) (redirect: string) : obj = getInit (headersFor cookie) redirect
+/// The headers a POST carries: the form's content type, and the jar when there is one. The
+/// content type is stated rather than left to the platform — `URLSearchParams` as a body used
+/// to set it, and a body that is a plain string sets nothing.
+let private postHeaders (cookie: string option) : Fetch.Types.RequestProperties =
+    match cookie with
+    | Some jar ->
+        Fetch.requestHeaders
+            [ Fetch.Types.HttpRequestHeaders.ContentType "application/x-www-form-urlencoded"
+              Fetch.Types.HttpRequestHeaders.Cookie jar ]
+    | None ->
+        Fetch.requestHeaders
+            [ Fetch.Types.HttpRequestHeaders.ContentType "application/x-www-form-urlencoded" ]
 
-let private post (cookie: string option) (body: obj) : obj = postInit (headersFor cookie) body
+/// A GET that does not follow its own redirects — `get` below follows them by hand.
+let private request (cookie: string option) : Fetch.Types.RequestProperties list =
+    Fetch.Types.RequestProperties.Redirect Fetch.Types.RedirectMode.Manual :: getHeaders cookie
 
-[<Emit("({ id: $0 })")>]
-let private idBody (id: string) : obj = jsNative
-
-/// `||` rather than a plain field read: a `peerToken` spelled `null` or left empty is no
-/// token, which is the same nothing as a field that is not there.
-[<Emit("($0.peerToken || undefined)")>]
-let private peerTokenField (parsed: obj) : string option = jsNative
-
-let private parsedPeerToken (json: string) : string option =
-    peerTokenField (JS.JSON.parse json)
+/// A form POST of `fields`, written by the Domain's own writer for the format the Manager's
+/// routes read with (`Access.Form`) — so the one side of that wire this file is on is spelled
+/// by the same code as the other.
+let private post (cookie: string option) (fields: (string * string) list) : Fetch.Types.RequestProperties list =
+    [ Fetch.Types.RequestProperties.Method Fetch.Types.HttpMethod.POST
+      Fetch.Types.RequestProperties.Redirect Fetch.Types.RedirectMode.Manual
+      postHeaders cookie
+      Fetch.Types.RequestProperties.Body (Fetch.Types.BodyInit.Case3 (Form.encode fields)) ]
 
 /// The token in a `/me` body, if there is one. That route answers JSON once the session is
-/// reachable and an error page while it is not, so a body that will not parse is a session
-/// still coming up rather than a failure — and so is one that parsed with no token in it.
+/// reachable and an error page while it is not, so a body that will not decode is a session
+/// still coming up rather than a failure — and so is one that decoded with no token in it.
 /// Absent all the way to the caller: the retry loop is what decides what no token means.
+///
+/// `MeProbe` is the Session Process's OWN codec for that route, so the shape is stated once,
+/// on the side that writes it. It is stricter than the `($0.peerToken || undefined)` this
+/// replaced in both directions worth naming: a body missing `sub` or `attributed`, or holding
+/// a `peerToken` that is not a string, is now no token rather than a token read out of a
+/// payload nobody promised — and a `peerToken` spelled `""` is now a TOKEN, because a session
+/// mints a random secret and never an empty one, so a blank there is a fault to fail on rather
+/// than a state to sit in a retry loop over.
 let private peerTokenIn (json: string) : string option =
-    try parsedPeerToken json with _ -> None
+    match MeProbe.ofJson json with
+    | Ok me -> Some me.PeerToken
+    | Error _ -> None
 
-[<Emit("$0.match(new RegExp($1))")>]
-let private matchesOf (text: string) (pattern: string) : string array option = jsNative
+/// The session's own address, as the Manager's `/open` page links it.
+let private sessionAddress = Regex @"https?://[^""'<>\s]*/s/[0-9A-Z]+/"
 
-/// The first thing in `text` the pattern matches. `String.match` answers null when nothing
-/// did, which is an absence rather than an empty match, and it stays one all the way to the
-/// caller for the same reason `peerTokenIn` does.
-let private firstMatch (text: string) (pattern: string) : string option =
-    matchesOf text pattern |> Option.bind Array.tryHead
+/// The first thing in `text` the pattern matches. No match is an absence rather than an empty
+/// match, and it stays one all the way to the caller for the same reason `peerTokenIn` does.
+let private firstMatch (pattern: Regex) (text: string) : string option =
+    let found = pattern.Match text
+    if found.Success then Some found.Value else None
 
-[<Emit("new Promise(resolve => setTimeout(resolve, $0))")>]
-let private delay (ms: int) : JS.Promise<unit> = jsNative
+/// Waiting, through the Domain's clock. `Clock` is the one port both this and the wall-clock
+/// reading below go through (`Clock.fs`) — a probe that also reached for `setTimeout` would
+/// have two, and the second is the one nothing can turn.
+let private clock = Clock.system
+
+let private delay (ms: int) : JS.Promise<unit> =
+    clock.After (TimeSpan.FromMilliseconds (float ms)) |> Async.StartAsPromise
 
 let private say (line: string) : unit = JS.console.log line
 
 // The peer connection keeps Node's event loop alive after the watch is over, so a probe that
 // merely returned would sit there until killed — and did, three of them, until this.
 let private exitWith (code: int) : unit = Node.Api.``process``.exit code
-
-// Wall-clock, for deadlines a caller sets in seconds rather than in polling ticks.
-[<Emit("Date.now()")>]
-let private now () : float = jsNative
 
 // --- what it accepts ----------------------------------------------------------------------
 
@@ -146,7 +152,7 @@ let private cookie () : string option =
     | 0 -> None
     | _ -> jar |> Seq.map (fun kv -> sprintf "%s=%s" kv.Key kv.Value) |> String.concat "; " |> Some
 
-let private keep (response: obj) =
+let private keep (response: Fetch.Types.Response) =
     for raw in setCookies response do
         let pair = raw.Split ';' |> Array.head
         match pair.IndexOf '=' with
@@ -157,13 +163,15 @@ let private keep (response: obj) =
 /// and drop the cookies the bounce depends on.
 let rec private get (url: string) (hops: int) : JS.Promise<string> =
     promise {
-        let! response = fetch url (request (cookie ()) "manual")
+        let! response = Fetch.fetchUnsafe url (request (cookie ()))
         keep response
-        let status = statusOf response
-        if status >= 300 && status < 400 && hops > 0 then
-            return! get (resolveUrl url (locationOf response)) (hops - 1)
-        else
-            return! textOf response
+        // `Location` is an option on the way in, which is stricter than the bare header read
+        // this replaced: a 3xx that names nowhere to go is a response to READ, not a hop to
+        // follow, where resolving a missing header gave a plausible address to fetch again.
+        match response.Status, response.Headers.Location with
+        | status, Some location when status >= 300 && status < 400 && hops > 0 ->
+            return! get (Urls.resolve location url) (hops - 1)
+        | _ -> return! response.text ()
     }
 
 // --- the trace ------------------------------------------------------------------------------
@@ -246,9 +254,9 @@ let private run () =
         while session.IsNone && attempts < 30 do
             attempts <- attempts + 1
             try
-                let! _ = fetch (ManagerRoute.at manager ManagerRoute.CreateSession) (post (cookie ()) (idBody id))
+                let! _ = Fetch.fetchUnsafe (ManagerRoute.at manager ManagerRoute.CreateSession) (post (cookie ()) [ "id", id ])
                 let! opened = get (ManagerRoute.at manager (ManagerRoute.OpenSession sessionId)) 10
-                session <- firstMatch opened "https?://[^\"'<>\\s]*/s/[0-9A-Z]+/"
+                session <- firstMatch sessionAddress opened
             with _ -> ()
             if session.IsNone then do! delay 2000
         let session =
@@ -308,7 +316,7 @@ let private run () =
             let turnAtSend = (client.Runner.Model ()).Agent.ActiveTurn
             do! compose client client.Hello.PeerId message |> Async.StartAsPromise
             client.Connection.SendDraft client.Hello.PeerId
-            let sentAt = now ()
+            let sentAt = clock.Now ()
             // A turn is watched by its state, not its messages: `ActiveTurn` rising to a new id
             // is ours starting, and its fall back to `None` is that turn ending. A completed
             // message is NOT the signal — most complete mid-turn, closed by the next message,
@@ -339,7 +347,7 @@ let private run () =
                 shown <- at
                 let active = model.Agent.ActiveTurn
                 if Option.isSome active && active <> turnAtSend then sawOurTurn <- true
-                let elapsed = now () - sentAt
+                let elapsed = (clock.Now () - sentAt).TotalMilliseconds
                 match stopAfter with
                 | Some cap when calls >= cap ->
                     say (sprintf "# stop-after %d tool calls reached" cap)
@@ -361,11 +369,12 @@ let private run () =
         say (sprintf "# %d tool calls" calls)
         // Only a session this probe MINTED is stopped here: a named one was borrowed and its
         // owner may be coming back to it, and `--keep` holds even a minted one open.
-        let! _ =
-            if minted && not keep then
-                fetch (ManagerRoute.at manager (ManagerRoute.Session (sessionId, SessionVerb.Stop))) (post (cookie ()) (idBody id))
-            else
-                promise { return box () }
+        if minted && not keep then
+            let! _ =
+                Fetch.fetchUnsafe
+                    (ManagerRoute.at manager (ManagerRoute.Session (sessionId, SessionVerb.Stop)))
+                    (post (cookie ()) [ "id", id ])
+            ()
         // Non-zero only when a turn did not finish in time, so a caller can tell "the agent
         // answered" from "I stopped waiting"; a stop-after cap or a clean finish is a 0.
         exitWith (if failed then 1 else 0)
