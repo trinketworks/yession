@@ -671,3 +671,35 @@ so vertical edges stay straight, the greens keep their sides, and the far corner
 highest point, drops most; `pressed-soft` at six hundredths; `pressed-foot` centred on the stem's
 foot so nothing below moves, where the fork pays instead (vertical compression at the junction
 flattens the arms).
+
+## Twenty-third pass: jelly, not glass
+
+`jelly/` cuts the foot cylinder down until the blocks read as cubes, then dresses the result as a
+material: acrylic, or agar jelly — semi-translucent, never glass. Built by `gen25.py`.
+
+- **The height** — the cylinder about the foot (`pressed-foot`'s lens: 1.4× squeeze, barrel
+  0.02 about the stem's foot) on shorter blocks. A block reads as a cube when the green's full
+  face is square, which under the squeeze is at 0.75× the footprint: `cube` (stem : visible arm
+  0.76, the letter's own is 0.62; `cube-y` with the letter over), `cube-tall` (0.9×, still a
+  tall block), `cube-low` (0.62×, a tile). The press and the fork (48°) are unchanged by the
+  height because the cylinder is scaled to the stem. A 16-cell grid over stretch × press × height
+  was judged on a sheet; barrel 0.04 folds the top at any height.
+- **The material, built up** — one mechanism per rung, each keeping the ones below: `j0` body
+  (tops sweep hot to hue, sides deepen downward), `j1` + bloom (the glow, kept), `j2` + rim
+  (each piece's edges brightened from inside in its own hot colour — the layer that says jelly:
+  light entering a turbid body leaves at the nearest edge, so edges are brighter than the middle,
+  which is the opposite of glass), `j3` + sheen (one broad soft highlight per top toward the
+  light; a hard reflection would say glass), `j4` + depth (the hidden edges through the body and
+  the cube's near faces leaking blue through the panels, blurred at a fifth — crisp they read as
+  wireframe), `j5` + inner light (the kerfs' halo and core from the neon ladder, wider, dimmer
+  and clipped to the object with a spill at the junction: the light is in the block, not on it),
+  `j6` + turbidity (fine noise overlaid into the body at a fifth; felt above 64px, not seen; the
+  first attempt overlaid a constant mid-grey, which is the identity — the noise must carry the
+  luminance), `j7` + ground (a reflection under the foot, fading fast).
+- **The top of the ladder** — `jelly`, every layer but the ground, for the lockup and the
+  favicon; `j7` with it, for presentation.
+
+Findings: the rim is the material and everything above it refines; the mark survives to 16px
+with the rim and bloom alone doing the work there. Each piece is rendered as one filtered group,
+which is sound here because the cube sits wholly behind both panels in depth and the panels do
+not overlap on screen.
