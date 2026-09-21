@@ -13,7 +13,10 @@ namespace Fable.NodeExtras
 // what depends on it.
 //
 // Only the slice actually used is declared, and the bar for adding is that `Fable.Node` (or a
-// sibling already referenced) genuinely lacks it. What Fable.Node already covers and nothing
+// sibling already referenced) genuinely lacks it. `Errors.errno` is the one member here that
+// is not a binding at all: `Fable.Node` types `ErrnoException` and stops, and what two callers
+// were each writing out beside it — a throw that handed over something that is not an object,
+// an errno spelled `''` — is a decision, so it is taken once. What Fable.Node already covers and nothing
 // here re-declares: `node:events`, `createHash`/`createHmac`/`randomBytes` from `node:crypto`,
 // and `Buffer`'s `from`/`toString`/`concat`/`alloc`.
 //
@@ -53,6 +56,33 @@ module Encodings =
     /// stopped checking, and the failure mode of a mistyped one is not an error but
     /// `Buffer.from(s, undefined)` silently reading utf8.
     let base64url : BufferEncoding = unbox "base64url"
+
+// --- The errno on a thrown error ----------------------------------------------------------
+
+/// What a caller can ask about an error Node threw.
+[<RequireQualifiedAccess>]
+module Errors =
+
+    /// The errno this error carries (`ENOENT`, `EACCES`, `EPERM`), or nothing for a failure
+    /// that is not one of Node's.
+    ///
+    /// `Fable.Node` types the shape — `ErrnoException` — and stops there, which leaves the
+    /// two things a reader has to get right written out at each call site instead: that a
+    /// `throw` can hand over something that is not an object at all, and that an errno spelled
+    /// `''` names no more of a fault than a missing one does. Both were being said with
+    /// `($0.code || undefined)`, a macro that folds them together by accident rather than by
+    /// decision, and folds `0` and `false` in with them for good measure.
+    ///
+    /// An option rather than `""`, because the two absences — a throw with no error at all,
+    /// and an error naming no errno — are both "this fault has no errno", and a reader that
+    /// has to tell an errno from a hole must be given one it cannot mistake.
+    let errno (error: exn) : string option =
+        if isNullOrUndefined (box error) then
+            None
+        else
+            match (unbox<Node.Base.ErrnoException> (box error)).code with
+            | None | Some "" -> None
+            | code -> code
 
 // --- The synchronous file calls a durable append is made of -------------------------------
 
