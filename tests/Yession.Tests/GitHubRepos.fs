@@ -16,7 +16,7 @@ module Yession.Tests.GitHubRepos
 //   * the door is shut: which repos a person can see is for the people in the session.
 //
 // Ports for the lookups and the route, because both ARE HTTP conversations; the decoders
-// alone run in the cheap tier.
+// and the cursor run in the cheap tier, being this session's own JSON either way.
 
 open Fable.Core
 open Fable.Pyxpecto
@@ -113,6 +113,56 @@ let private decoderTests =
             Expect.isError (Decode.fromString GitHubPrs.pullHeadDecoder pr) "refused rather than pointed at nothing"
     ]
 
+// --- the cursor, which is this session's own JSON ----------------------------------------------
+
+let private cursorTests =
+    testList "the listing cursor" [
+        // The cursor is what the browser carries back to ask for the next page, and the whole
+        // of its contract is that this side reads it and the other side does not. What must
+        // hold: it round-trips what this file needs to re-ask its own question, and anything
+        // that is not one of ours is page one rather than an error — because the browser can
+        // send whatever it likes, and a cursor that could name a URL is the shape of every
+        // server-side request forgery there has ever been.
+        testCase "a cursor round-trips the question, and anything else is page one" <| fun () ->
+            let listing = [ 1 .. GitHubRepos.pageSize ] |> List.map (fun n -> candidateOf (sprintf "octo/repo-%d" n))
+            let minted = GitHubRepos.nextCursor (Some "in:name hello") 1 listing
+            Expect.equal
+                (minted |> Option.bind GitHubRepos.readCursor)
+                (Some (Some "in:name hello", 2))
+                "a full page's cursor round-trips the text and the page after this one"
+            Expect.isFalse
+                (minted |> Option.exists (fun c -> c.Contains "hello"))
+                "and says nothing to a reader of the query string"
+            Expect.equal (GitHubRepos.readCursor "https://evil.example/x") None "a url is not a cursor"
+            Expect.equal (GitHubRepos.readCursor "") None "nor is nothing"
+            Expect.equal (GitHubRepos.readCursor "bm90LWEtY3Vyc29y") None "nor base64 of something else"
+
+        // A cursor already in a browser's hands is a cursor this session must still read, so
+        // what it mints is pinned rather than described: a key that moved, or an absence
+        // spelled by dropping the key instead of writing null, would strand every page but
+        // the first with nothing to say why.
+        testCase "a search's cursor is the bytes a browser was handed before" <| fun () ->
+            let full = [ 1 .. GitHubRepos.pageSize ] |> List.map (fun n -> candidateOf (sprintf "octo/repo-%d" n))
+            Expect.equal
+                (GitHubRepos.nextCursor (Some "hello") 1 full)
+                (Some "eyJxIjoiaGVsbG8iLCJwYWdlIjoyfQ")
+                """base64url of {"q":"hello","page":2}"""
+
+        testCase "\"my repos\" spells its absent question null, in the same bytes" <| fun () ->
+            let full = [ 1 .. GitHubRepos.pageSize ] |> List.map (fun n -> candidateOf (sprintf "octo/repo-%d" n))
+            Expect.equal
+                (GitHubRepos.nextCursor None 1 full)
+                (Some "eyJxIjpudWxsLCJwYWdlIjoyfQ")
+                """base64url of {"q":null,"page":2}"""
+
+        testCase "a listing stops offering pages when it runs short, and when it runs long" <| fun () ->
+            let full = [ 1 .. GitHubRepos.pageSize ] |> List.map (fun n -> candidateOf (sprintf "octo/repo-%d" n))
+            let short = full |> List.truncate (GitHubRepos.pageSize - 1)
+            Expect.equal (GitHubRepos.nextCursor None 1 short) None "a page that came back short is the last one"
+            Expect.isSome (GitHubRepos.nextCursor None 1 full) "a full one is not"
+            Expect.equal (GitHubRepos.nextCursor None GitHubRepos.pageLimit full) None "and the ceiling is a stop, not a 502 at the foot of a scroll"
+    ]
+
 // --- a stand-in for api.github.com ------------------------------------------------------------
 
 /// The three endpoints, recording how each was asked. `/user/repos` and `/search` both
@@ -185,33 +235,6 @@ let private lookupTests =
                 let! missing = GitHubRepos.searchOver api.Url None "octo/gone" 1
                 Expect.equal (missing |> Result.map List.length) (Ok 0) "and one nobody can see is nothing found, as a search would say"
             }
-
-        // The cursor is what the browser carries back to ask for the next page, and the whole
-        // of its contract is that this side reads it and the other side does not. What must
-        // hold: it round-trips what this file needs to re-ask its own question, and anything
-        // that is not one of ours is page one rather than an error — because the browser can
-        // send whatever it likes, and a cursor that could name a URL is the shape of every
-        // server-side request forgery there has ever been.
-        testCase "a cursor round-trips the question, and anything else is page one" <| fun () ->
-            let listing = [ 1 .. GitHubRepos.pageSize ] |> List.map (fun n -> candidateOf (sprintf "octo/repo-%d" n))
-            let cursor = GitHubRepos.nextCursor (Some "in:name hello") 1 listing
-            Expect.equal
-                (cursor |> Option.bind GitHubRepos.readCursor)
-                (Some (Some "in:name hello", 2))
-                "a full page's cursor round-trips the text and the page after this one"
-            Expect.isFalse
-                (cursor |> Option.exists (fun c -> c.Contains "hello"))
-                "and says nothing to a reader of the query string"
-            Expect.equal (GitHubRepos.readCursor "https://evil.example/x") None "a url is not a cursor"
-            Expect.equal (GitHubRepos.readCursor "") None "nor is nothing"
-            Expect.equal (GitHubRepos.readCursor "bm90LWEtY3Vyc29y") None "nor base64 of something else"
-
-        testCase "a listing stops offering pages when it runs short, and when it runs long" <| fun () ->
-            let full = [ 1 .. GitHubRepos.pageSize ] |> List.map (fun n -> candidateOf (sprintf "octo/repo-%d" n))
-            let short = full |> List.truncate (GitHubRepos.pageSize - 1)
-            Expect.equal (GitHubRepos.nextCursor None 1 short) None "a page that came back short is the last one"
-            Expect.isSome (GitHubRepos.nextCursor None 1 full) "a full one is not"
-            Expect.equal (GitHubRepos.nextCursor None GitHubRepos.pageLimit full) None "and the ceiling is a stop, not a 502 at the foot of a scroll"
 
         testCaseAsync "a dead credential, a missing repo and a spent allowance are told apart" <|
             async {
@@ -387,7 +410,7 @@ let private routeTests =
     ]
 
 let tests =
-    testList "GitHubRepos" [ decoderTests ]
+    testList "GitHubRepos" [ decoderTests; cursorTests ]
 
 let portsTests =
     testList "GitHubRepos over HTTP" [ lookupTests; routeTests ]
