@@ -193,6 +193,7 @@ let private representativeModel : ClientModel =
       Pane = None
       TerminalsOpen = true
       ItemMenu = None
+      OpenActs = Set.empty
       Copied = None
       // The pane shows a TAB by default; the list is what the cases below turn on.
       Claude =
@@ -1226,12 +1227,64 @@ let private uiChecklistTests =
             let html = Support.render model
             let start = html.IndexOf "data-act-said"
             Expect.isTrue (start >= 0) "every act offers what the agent was told"
-            let details = html.Substring (start, html.IndexOf ("</details>", start) - start)
-            // The words after the summary, with the markup taken out: what a reader READS.
-            let body = details.Substring (details.IndexOf "</summary>" + "</summary>".Length)
-            let text = System.Text.RegularExpressions.Regex.Replace(body, "<[^>]*>", "").Trim ()
+            // The element's words with the markup taken out: what a reader READS.
+            let element = html.Substring (start, html.IndexOf ("</div>", start) - start)
+            let text = System.Text.RegularExpressions.Regex.Replace(element.Substring (element.IndexOf ">" + 1), "<[^>]*>", "").Trim ()
             Expect.equal text (ConversationItem.said note) "the disclosure reads exactly as the prompt did"
             Expect.isTrue (text.Contains "on branch main") "particulars included, not the headline alone"
+
+        // The fold is a CONTROL, and says which way it is: a real button carrying its
+        // expanded state, so a keyboard reaches it and a screen reader hears it — and the
+        // particulars it fronts say the same thing, so a test (or a stylesheet) reading
+        // either cannot be told two stories. Folded by default: a timeline is read as its
+        // titles. Which glyph the control wears, and how the fold moves, are the design.
+        testCase "an act's particulars unfold from a control that says whether it is open" <| fun () ->
+            let note : ConversationItem =
+                { MessageId = MessageId.create "msg-fold-note" |> expect
+                  Author = PeerRef ada
+                  Content = ItemContent.Act (repoAdded "octo/hello" "main")
+                  Status = Complete
+                  Offset = EventOffset.create 1L |> expect
+                  Woke = None; Replying = None }
+            let folded =
+                { representativeModel with
+                    Conversation = { representativeModel.Conversation with Items = [ note ] } }
+            let control (html: string) =
+                let at = html.IndexOf (Dom.attr "data-act-fold" "msg-fold-note")
+                Expect.isTrue (at >= 0) "the act offers a fold"
+                let opened = html.LastIndexOf ("<button", at)
+                html.Substring (opened, html.IndexOf (">", at) - opened)
+            let shut = Support.render folded
+            Expect.isTrue ((control shut).Contains "aria-expanded=\"false\"") "folded by default, and the control says so"
+            Expect.isTrue (shut.Contains (Dom.attr "data-act-facts-open" "no")) "and the particulars agree"
+            let open' = Support.render (ClientModel.update (ToggleActMsg note.MessageId) folded)
+            Expect.isTrue ((control open').Contains "aria-expanded=\"true\"") "one press unfolds it, and the control says so"
+            Expect.isTrue (open'.Contains (Dom.attr "data-act-facts-open" "yes")) "and the particulars agree"
+
+        // An act still in flight is not one to unfold — its account is about to change under
+        // the reader, and the gutter is where its pulse sits — so it offers no fold until it
+        // settles. The pulse is pinned elsewhere; here, that the two cues never share a spot.
+        testCase "an act in flight offers no fold" <| fun () ->
+            let running : ConversationItem =
+                { MessageId = MessageId.create "msg-running" |> expect
+                  Author = ActorRef.Agent
+                  Content =
+                    ItemContent.Act (
+                        Act.SandboxStarting
+                            { MessageId = MessageId.create "msg-running" |> expect
+                              Sandbox = SandboxRef.defaultRef
+                              Backend = "srt"
+                              Description = None
+                              Actor = ActorRef.Agent })
+                  Status = ConversationItemStatus.Running
+                  Offset = EventOffset.create 1L |> expect
+                  Woke = None; Replying = None }
+            let html =
+                Support.render
+                    { representativeModel with
+                        Conversation = { representativeModel.Conversation with Items = [ running ] } }
+            Expect.isFalse (html.Contains (Dom.attr "data-act-fold" "msg-running")) "no fold while it runs"
+            Expect.isTrue (html.Contains "data-act-status=\"running\"") "the pulse has the gutter"
 
         // A connection a sandbox forwards is drawn as the connection — the same reference
         // every other sentence gives it — not as a badge that happens to carry the word.

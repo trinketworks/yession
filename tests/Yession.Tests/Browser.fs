@@ -1571,6 +1571,49 @@ let editorTests =
                 Expect.isTrue (drift < 0.5) (sprintf "the name's baseline is the line's, it was %.2fpx off" drift)
             }
 
+        // The fold's arrow sits on the dead centre of the act's gutter — the margin the title
+        // clears — and of the title's own line, whatever width the platform gives the gutter.
+        // Geometry, which only a rendered page can settle; pinned as a distance from the
+        // centre, never as coordinates, so a wider gutter or a taller line does not move it.
+        editorCase "a fold's arrow is centred in the act's gutter and on its title line" <| fun page ->
+            async {
+                do! awaitU (page.EvaluateAsync "() => window.__acts()")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-act-note] [data-act-fold]")
+                let! off =
+                    await (page.EvaluateAsync<float[]> """() => {
+                        const note = document.querySelector('#shell [data-act-note]')
+                        const arrow = note.querySelector('[data-act-fold] svg').getBoundingClientRect()
+                        const box = note.getBoundingClientRect()
+                        const gutter = parseFloat(getComputedStyle(note).paddingLeft)
+                        // The title's FIRST line box, not its whole box: a title that wraps
+                        // is two lines tall, and the arrow belongs on the first.
+                        const line = note.querySelector('[data-act-fold] ~ span').getClientRects()[0]
+                        return [ (arrow.left + arrow.width / 2) - (box.left + gutter / 2),
+                                 (arrow.top + arrow.height / 2) - (line.top + line.height / 2) ]
+                    }""")
+                Expect.isTrue (abs off.[0] < 1.0) (sprintf "across the gutter, it was %.2fpx off centre" off.[0])
+                Expect.isTrue (abs off.[1] < 1.0) (sprintf "down the title's line, it was %.2fpx off centre" off.[1])
+            }
+
+        // Unfolding shows the particulars and folding takes them off the page — not merely
+        // out of sight but out of the accessibility tree and the tab order, which is what
+        // `visibility` settles and a rendered string cannot see. Waited for, because the
+        // fold MOVES: the settled state is the promise, the motion is the design.
+        editorCase "unfolding an act shows its particulars, and folding hides them" <| fun page ->
+            async {
+                do! awaitU (page.EvaluateAsync "() => window.__acts()")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-act-note] [data-act-fold]")
+                let visibility = "getComputedStyle(document.querySelector('#shell [data-act-note] [data-act-facts]')).visibility"
+                do! waitFor "the particulars to start hidden" page (visibility + " === 'hidden'")
+                do! awaitU (page.ClickAsync "#shell [data-act-note] [data-act-fold]")
+                do! waitFor "the particulars to show once unfolded" page (visibility + " === 'visible'")
+                let! shown =
+                    await (page.EvaluateAsync<float> "() => document.querySelector('#shell [data-act-note] [data-act-said]').getBoundingClientRect().height")
+                Expect.isTrue (shown > 0.0) "and what the agent was told has height on the page"
+                do! awaitU (page.ClickAsync "#shell [data-act-note] [data-act-fold]")
+                do! waitFor "the particulars to hide once folded" page (visibility + " === 'hidden'")
+            }
+
         // Terminal work in the chat, and the pane's tabs (Plan 14, stages 1-2). Host-free,
         // like the editor and the replay beside it: what needs a real browser here is not the
         // Session Process but the DOM swaps — where FOCUS goes when a chip in the chat opens

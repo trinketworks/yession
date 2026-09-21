@@ -142,14 +142,13 @@ module Entity =
                 html $"""<span class="{Style.entityMark}" aria-hidden="true">{connectionMark connection}</span>"""
             | EntityRef.Sandbox _ -> html $"""<span class="{Style.entityMark}" aria-hidden="true">{Icon.sandboxSm}</span>"""
             | EntityRef.Pr _ -> html $"""<span class="{Style.entityMark}" aria-hidden="true">{Icon.prSm}</span>"""
-        let inner = html $"""{mark}<span class="{Style.entityName}">{spelled}</span>"""
         match href entity with
         | Some url ->
             html
-                $"""<a class="{Style.entityLink}" href="{url}" target="_blank" rel="noopener" title="{EntityRef.said entity}" data-entity-kind="{kind entity}" data-entity="{EntityRef.said entity}">{inner}</a>"""
+                $"""<a class="{Style.entityLink}" href="{url}" target="_blank" rel="noopener" title="{EntityRef.said entity}" data-entity-kind="{kind entity}" data-entity="{EntityRef.said entity}">{mark}<span class="{Style.entityLinkName}">{spelled}</span></a>"""
         | None ->
             html
-                $"""<span class="{Style.entity}" title="{EntityRef.said entity}" data-entity-kind="{kind entity}" data-entity="{EntityRef.said entity}">{inner}</span>"""
+                $"""<span class="{Style.entity}" title="{EntityRef.said entity}" data-entity-kind="{kind entity}" data-entity="{EntityRef.said entity}">{mark}<span class="{Style.entityName}">{spelled}</span></span>"""
 
     let render (model: ClientModel) (by: ActorRef) (entity: EntityRef) : TemplateResult =
         draw model (name model by entity) entity
