@@ -120,6 +120,10 @@
          only thing that can see a hole in release.yml's gate before a release goes out
          through it. -->
     <Compile Include="ReleaseGate.fs" />
+    <!-- That the release gate, spread over one runner per capability tier, still runs every
+         suite this assembly declares. Reads the tiers verify.yml reads and the declarations
+         `Tag.needs` recorded, so neither side of it is a copy. -->
+    <Compile Include="VerifyTiers.fs" />
     <Compile Include="LiveConnections.fs" />
     <Compile Include="Main.fs" />
   </ItemGroup>

@@ -24,7 +24,7 @@ on:
   workflow_call:
     inputs:
       capabilities:
-        description: Capability tier to run. Blank runs the whole gate.
+        description: One capability tier to run, in one job. Blank runs the whole gate, as its declared tiers.
         type: string
         default: ""
       only:
@@ -35,7 +35,7 @@ on:
   workflow_dispatch:
     inputs:
       capabilities:
-        description: 'Capabilities, space-separated (e.g. "LiveAgent Ports Native Srt"). Blank runs the whole gate.'
+        description: 'Capabilities, space-separated (e.g. "LiveAgent Ports Native Srt"), run as ONE job. Blank runs the whole gate, as its declared tiers.'
         type: string
         default: ""
       only:
@@ -47,12 +47,69 @@ on:
 # real Docker daemon, so two runs of it on one runner pool are two runs contending for the same
 # machine-wide resources. A dispatch supersedes its own earlier dispatch on the same ref;
 # release.yml's own `release` group is what serialises master, and it does not cancel.
+#
+# The tiers below run at the same time and this says nothing about them: each is a job, and a job
+# is its own ephemeral VM. What must not overlap is two runs on one MACHINE, which is a different
+# question from two jobs on two.
 concurrency:
   group: verify-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  # Which tiers this run is. One job apiece, so the gate's three independent halves stop queueing
+  # behind each other: the Node suites, the .NET CLR (browser) suites, and the Nix build share no
+  # output — each re-compiles what it needs — and ran sequentially in one job for no reason beyond
+  # `verify` being one word. Measured on 94a72ba: 76s solution build, 42s browser client, 71s
+  # stage, 83s suite compile, 208s Node suites, 178s browser suites, 249s Nix build — 15m21s of
+  # strictly serial work, where the widest tier is under 10 minutes.
+  #
+  # The tiers live in `.github/verify-tiers.json` rather than here because splitting a gate is how
+  # a gate quietly stops being one: a tier is a list of capability names, and a suite whose needs
+  # no tier satisfies runs NOWHERE and reports nothing, leaving a green run indistinguishable from
+  # a complete one. `Verify tiers` (cheap tier, `tests/Yession.Tests/VerifyTiers.fs`) reads that
+  # same file against every suite the test assembly declares and refuses the hole on every pull
+  # request. One declaration, two readers, and neither of them a copy.
+  #
+  # A dispatch that names capabilities collapses to ONE tier running exactly those: somebody
+  # asking for `check Docker Dogfood` wants that run, not three with two of them refusing.
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.tiers.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: tiers
+        env:
+          # Read as data rather than interpolated into the script, for the reason the gate step
+          # below gives: a dispatch input is a string somebody typed.
+          CAPABILITIES: ${{ inputs.capabilities }}
+        # A whole `matrix` object rather than a list for `include:`, because `matrix:
+        # ${{ fromJSON(…) }}` is the form GitHub documents for a matrix computed by a job, and a
+        # matrix that does not parse is a startup_failure with no log to read. The file stays a
+        # plain array — that is what a reader (and `Verify tiers`) wants — and the wrapping happens
+        # here, where the shape is a fact about Actions rather than about the gate.
+        #
+        # `jq -c`, so the output is one line; `--arg`, so a capability list carrying a quote is
+        # encoded rather than pasted. Captured into a variable before it is echoed, because a
+        # command substitution's exit status is discarded when it is an argument (tasks.fsx's
+        # version policy tells that story at length), and `-e` would never see the failure.
+        run: |
+          set -euo pipefail
+          if [ -n "$CAPABILITIES" ]; then
+            matrix="$(jq -cn --arg caps "$CAPABILITIES" '{ include: [ { tier: "dispatch", capabilities: $caps } ] }')"
+          else
+            matrix="$(jq -ce '{ include: . }' .github/verify-tiers.json)"
+          fi
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
   verify:
+    needs: plan
+    name: ${{ matrix.tier }}
+    strategy:
+      # Every tier reports. A tier that fails must not take the others' verdicts with it: the
+      # whole point of splitting was to learn three things per run instead of the first one.
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -87,9 +144,14 @@ jobs:
         uses: ./.github/actions/devenv-warm
       # The Docker integration suite talks to the daemon (dockerode over the local socket). This
       # job runs on the VM host (no `container:` key), so the preinstalled daemon is reachable
-      # directly — and `verify` asks for Docker, so an unreachable one fails the gate rather
-      # than skipping. `verify` (check … Browser) provisions Chromium itself, so no separate
-      # Chromium step is needed either.
+      # directly — and the `node` tier asks for Docker, so an unreachable one fails that tier
+      # rather than skipping. The `browser` tier's `check Browser` provisions Chromium itself, so
+      # no separate Chromium step is needed either.
+      #
+      # Every step here runs for every tier, deliberately: which tier this job is, is a matrix
+      # value read at the gate step, and a per-tier setup would be three arrangements to keep in
+      # step with one file's worth of reasons. A daemon the `nix` tier never asks for costs it
+      # nothing.
       # The confining sandbox backend needs a NESTED user namespace for its strict profile, and
       # Ubuntu 24.04's `kernel.apparmor_restrict_unprivileged_userns=1` forbids one — without
       # this the release gate drops the `Srt` capability and the escape probes never run. The
@@ -102,24 +164,26 @@ jobs:
           # CLAUDE_CODE_OAUTH_TOKEN, which is not a secret this repository has, so the variable
           # arrived empty — and back when an unavailable capability was silently dropped, that
           # meant every release up to v5.0.0-beta.0 shipped green with the live agent suite
-          # skipped. `verify` asks for LiveAgent, so an empty credential now fails the gate.
+          # skipped. The `node` tier asks for LiveAgent, so an empty credential fails it.
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           # Read as data rather than interpolated into the script: a dispatch input is a string
           # somebody typed, and the one place it must not land is inside the shell this composes.
-          CAPABILITIES: ${{ inputs.capabilities }}
+          # The tier's capabilities take the same route, because on a dispatch they ARE that
+          # string.
+          CAPABILITIES: ${{ matrix.capabilities }}
           ONLY: ${{ inputs.only }}
         # On this headless runner `check` self-wraps in a private D-Bus session +
         # gnome-keyring (both provided by devenv) to stand in for a desktop Secret
         # Service, so the OS-credential-manager suite runs for real.
+        #
+        # Always `check <capabilities>`, never the bare `verify` verb: a tier is a subset of the
+        # gate by construction, and the tasks.fsx verb means every capability at once — which is
+        # still what a laptop runs, and is what `Verify tiers` holds these tiers to the sum of.
         run: |
-          if [ -n "$CAPABILITIES" ]; then
-            # Deliberately unquoted: the input is a space-separated list of capability names,
-            # and `check` takes them as separate arguments.
-            # shellcheck disable=SC2086
-            set -- check $CAPABILITIES
-          else
-            set -- verify
-          fi
+          # Deliberately unquoted: the value is a space-separated list of capability names,
+          # and `check` takes them as separate arguments.
+          # shellcheck disable=SC2086
+          set -- check $CAPABILITIES
           if [ -n "$ONLY" ]; then
             set -- "$@" --only "$ONLY"
           fi

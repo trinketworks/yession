@@ -145,6 +145,11 @@ let all =
         // What may publish a release. `release.yml` runs on master alone, so this is the only
         // reader of its gate that runs before a release has already gone out through a hole.
         Tag.needs "Release gate" [] (fun () -> ReleaseGate.tests)
+        // That the gate, spread over one runner per capability tier, still runs everything
+        // declared in this very list. A suite whose needs no tier satisfies runs nowhere and
+        // says nothing about it, which is the one failure a green gate cannot distinguish
+        // itself from — so it is refused here, on a pull request.
+        Tag.needs "Verify tiers" [] (fun () -> VerifyTiers.tests)
         // The rich editor rendering E2E stands alone: it needs a browser but NOT the native
         // WebRTC host, so it runs wherever Chromium exists ([Browser]). The full two-peer
         // convergence/persistence E2E spawns the real Session Process, so it also needs Native.
