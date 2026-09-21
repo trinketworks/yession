@@ -2056,17 +2056,13 @@ let private shellTests =
                 ((pageWith None false).Contains Dom.ephemeralStorageMetaName)
                 "absence is the good case, so the client reads false"
 
-        // The shell is a NEW ORIGIN every launch, so its stylesheet is never cached, and
-        // WebKit shows its canvas from the navigation's commit until that sheet arrives. The
-        // head's `color-scheme` meta tag is the one statement the parser reads before any
-        // fetch (Phase4 pins the same order on the Manager's documents; the reasoning is on
-        // `Style.headTags`).
-        testCase "the shell says its colour scheme before it asks for its stylesheet" <| fun () ->
-            let html = page None
-            let scheme = html.IndexOf "<meta name=\"color-scheme\" content=\"dark\">"
-            let sheet = html.IndexOf "<link rel=\"stylesheet\""
-            Expect.isTrue (scheme >= 0) "the shell declares its colour scheme in the head"
-            Expect.isTrue (scheme < sheet) "before the stylesheet the browser will wait for"
+        // Same promise as the Manager's documents make (Phase4): the browser's own paintwork
+        // on the shell — scrollbars, form-control defaults — is drawn for a dark scheme,
+        // because the shell said so in its head.
+        testCase "the shell declares its colour scheme" <| fun () ->
+            Expect.isTrue
+                ((page None).Contains "<meta name=\"color-scheme\" content=\"dark\">")
+                "the shell declares its colour scheme in the head"
 
         // The terminals column's open state lives on `<html>`, outside the mount the client
         // re-renders, so the client cannot paint it — only the shell can, and if it does not,

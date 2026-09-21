@@ -2642,23 +2642,13 @@ module Style =
     /// Takes the URL rather than building it: the stylesheet is addressed by a digest of its
     /// own bytes, which only the serving process (having read them) can know.
     ///
-    /// The colour scheme is said HERE, in a meta tag AHEAD of the link, and not only in the
-    /// sheet (`tailwind.css` paints the ground on `html`). The sheet governs the document once
-    /// it has arrived; the interval before that is the browser's, painted in its canvas
-    /// colour — and WebKit commits a navigation by tearing the old page down and showing that
-    /// canvas until the new document's first paint, which a render-blocking stylesheet holds
-    /// back for as long as it takes to fetch. A canvas the sheet is going to make black is
-    /// white until the sheet is there to say so. The meta tag is parsed with the head, before
-    /// any fetch, so it is the one statement that reaches the canvas in time: with it, every
-    /// document is dark from commit. Photographed on iOS Safari as a white screen between
-    /// pressing Create and the session's own address — the `/open` page, a new origin for
-    /// the shell, each with its sheet still on the wire.
-    ///
-    /// One place, because there is one interval and it happens on every document: the
-    /// Manager page used to carry this tag itself, and it was taken out as a duplicate of the
-    /// sheet's `color-scheme` (#127) — which it is not, for exactly the milliseconds that
-    /// matter. Beside the link it precedes, it cannot be dropped from one page and kept on
-    /// another.
+    /// The colour scheme rides here too, as a meta tag, so every document says it — the
+    /// browser's own paintwork (scrollbars, form-control defaults) is dark on each of them
+    /// because none can forget to. It was first put here on the belief that it also colours
+    /// the canvas WebKit shows between committing a navigation and the new document's first
+    /// paint; it does not — photographed on WebKit, that canvas is white with the tag in
+    /// place. What holds the screen across a navigation is the view transition in
+    /// `tailwind.css`, which is where that story is told.
     let headTags (styleSheetUrl: string) =
         sprintf "<meta name=\"color-scheme\" content=\"dark\"><link rel=\"stylesheet\" href=\"%s\">" styleSheetUrl
 
