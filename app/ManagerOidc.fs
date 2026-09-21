@@ -25,37 +25,26 @@ open Yession.Host.Interop
 
 let private urlEncode (s: string) : string = JS.encodeURIComponent s
 
-/// One entry of the JWKS document: the public key's parameters, with the id and algorithm
-/// this Manager signs under written beside them. Named field by field rather than spread
-/// from the exported JWK, so the entry carries exactly what is listed here: a parameter the
-/// public key does not have is absent (`None` is not serialised), and a private one could
-/// not be copied through even if a key ever exported it.
-[<RequireQualifiedAccess>]
-type private SigningKey =
-    { kty : string
-      crv : string option
-      x : string option
-      y : string option
-      n : string option
-      e : string option
-      kid : string
-      alg : string
-      ``use`` : string }
-
-/// The JWKS document: the public JWK annotated with its id and algorithm. Only ever
-/// called with the PUBLIC key — exporting the private key would throw (non-extractable).
+/// The JWKS document this Manager publishes: what jose exported, annotated with the id and
+/// the algorithm it signs under. Only ever called with the PUBLIC key — exporting the
+/// private key would throw (non-extractable).
+///
+/// The mapping is here and the document's shape is in `Wire`, beside the three other
+/// documents this endpoint serves: jose is the adapter's to know, and the bytes are the
+/// provider's wire contract.
 let private jwksJson (publicJwk: Fable.Jose.Jwk) (kid: string) : string =
-    let key =
-        { SigningKey.kty = publicJwk.kty
-          SigningKey.crv = publicJwk.crv
-          SigningKey.x = publicJwk.x
-          SigningKey.y = publicJwk.y
-          SigningKey.n = publicJwk.n
-          SigningKey.e = publicJwk.e
-          SigningKey.kid = kid
-          SigningKey.alg = "EdDSA"
-          SigningKey.``use`` = "sig" }
-    JS.JSON.stringify {| keys = [| key |] |}
+    Wire.toString
+        Wire.jwks
+        { Jwks.Keys =
+            [ { JwksKey.Kty = publicJwk.kty
+                JwksKey.Crv = publicJwk.crv
+                JwksKey.X = publicJwk.x
+                JwksKey.Y = publicJwk.y
+                JwksKey.N = publicJwk.n
+                JwksKey.E = publicJwk.e
+                JwksKey.Kid = kid
+                JwksKey.Alg = "EdDSA"
+                JwksKey.Use = "sig" } ] }
 
 let private respond (res: ServerResponse) (status: int) (contentType: string) (body: string) =
     res.writeHead (status, createObj [ "content-type", box contentType; "cache-control", box "no-store" ]) |> ignore
