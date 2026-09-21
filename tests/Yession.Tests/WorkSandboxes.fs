@@ -103,39 +103,45 @@ let private fakeEnvironmentFailing (reason: string) : SessionEnvironment.Session
 let private registryWithSpecs (log: EventLog<SessionEvent>) (credentials: WorkSandboxes.CredentialSource list) =
     let built = ResizeArray<string * WorkSandboxes.Provision> ()
     let specs = ResizeArray<string * string option> ()
-    let sandboxes =
-        WorkSandboxes.create
-            { Backend = fun _ -> "fake"
-              Describe = fun _ -> None
-              Checkout = fun _ -> None
-              Credentials = credentials
-              Create =
-                fun name spec provision ->
-                    built.Add (SandboxRef.render name, provision)
-                    specs.Add (SandboxRef.render name, spec.WorkingDirectory)
-                    Ok (fakeEnvironment ())
-              Log = log
-              Clock = fixedClock }
-        |> expect
-    sandboxes, built, specs
+    async {
+        let! created =
+            WorkSandboxes.create
+                { Backend = fun _ -> "fake"
+                  Describe = fun _ -> None
+                  Checkout = fun _ -> None
+                  Credentials = credentials
+                  Create =
+                    fun name spec provision ->
+                        built.Add (SandboxRef.render name, provision)
+                        specs.Add (SandboxRef.render name, spec.WorkingDirectory)
+                        Ok (fakeEnvironment ())
+                  Log = log
+                  Clock = fixedClock }
+        return expect created, built, specs
+    }
 
 /// A registry whose sandboxes all come up holding something wider than they asked for —
 /// what a host that could not scope a grant hands back.
 let private registryHolding (log: EventLog<SessionEvent>) (realisation: string list) =
-    WorkSandboxes.create
-        { Backend = fun _ -> "fake"
-          Describe = fun _ -> None
-          Checkout = fun _ -> None
-          Credentials = []
-          Create = fun _ _ _ -> Ok (fakeEnvironmentHolding realisation)
-          Log = log
-          Clock = fixedClock }
-    |> expect
+    async {
+        let! created =
+            WorkSandboxes.create
+                { Backend = fun _ -> "fake"
+                  Describe = fun _ -> None
+                  Checkout = fun _ -> None
+                  Credentials = []
+                  Create = fun _ _ _ -> Ok (fakeEnvironmentHolding realisation)
+                  Log = log
+                  Clock = fixedClock }
+        return expect created
+    }
 
 /// The same, for the cases that only care about the environment a sandbox was built with.
 let private registry (log: EventLog<SessionEvent>) (credentials: WorkSandboxes.CredentialSource list) =
-    let sandboxes, built, _ = registryWithSpecs log credentials
-    sandboxes, built
+    async {
+        let! sandboxes, built, _ = registryWithSpecs log credentials
+        return sandboxes, built
+    }
 
 let private caller : ActorRef = ActorRef.Agent
 
@@ -227,7 +233,7 @@ let private ensureTests =
         testCaseAsync "a sandbox coming up records starting before started, under one id" <|
             async {
                 let log = newLog ()
-                let sandboxes, _ = registry log []
+                let! sandboxes, _ = registry log []
                 let! _ = sandboxes.Ensure caller (sandbox "test") (forwarding [])
                 let! events = eventsOf log
                 match lifecycleOf events with
@@ -241,7 +247,7 @@ let private ensureTests =
         testCaseAsync "a sandbox that cannot come up records starting then failed, and no start" <|
             async {
                 let log = newLog ()
-                let sandboxes =
+                let! created =
                     WorkSandboxes.create
                         { Backend = fun _ -> "fake"
                           Describe = fun _ -> None
@@ -250,7 +256,7 @@ let private ensureTests =
                           Create = fun _ _ _ -> Ok (fakeEnvironmentFailing "the docker daemon is not reachable")
                           Log = log
                           Clock = fixedClock }
-                    |> expect
+                let sandboxes = expect created
                 match! sandboxes.Ensure caller (sandbox "test") (forwarding []) with
                 | Error reason -> Expect.equal reason "the docker daemon is not reachable" "the ask fails with why"
                 | Ok _ -> failwith "a sandbox whose environment cannot come up must not report success"
@@ -266,7 +272,7 @@ let private ensureTests =
         testCaseAsync "a sandbox that was described says so where it started" <|
             async {
                 let log = newLog ()
-                let sandboxes =
+                let! created =
                     WorkSandboxes.create
                         { Backend = fun _ -> "fake"
                           Describe = fun _ -> Some "day-to-day work"
@@ -275,7 +281,7 @@ let private ensureTests =
                           Create = fun _ _ _ -> Ok (fakeEnvironment ())
                           Log = log
                           Clock = fixedClock }
-                    |> expect
+                let sandboxes = expect created
                 let! _ = sandboxes.Ensure caller (sandbox "test") (forwarding [])
                 let! events = eventsOf log
                 match startedEvents events with
@@ -290,7 +296,7 @@ let private ensureTests =
         testCaseAsync "a repo's sandbox says where it sees the checkout" <|
             async {
                 let log = newLog ()
-                let sandboxes =
+                let! created =
                     WorkSandboxes.create
                         { Backend = fun _ -> "fake"
                           Describe = fun _ -> None
@@ -299,7 +305,7 @@ let private ensureTests =
                           Create = fun _ _ _ -> Ok (fakeEnvironment ())
                           Log = log
                           Clock = fixedClock }
-                    |> expect
+                let sandboxes = expect created
                 let! _ = sandboxes.Ensure caller (sandbox "test") (forwarding [])
                 let! events = eventsOf log
                 match startedEvents events with
@@ -341,7 +347,7 @@ let private ensureTests =
             async {
                 let log = newLog ()
                 let described = ref (Some "as first written")
-                let sandboxes =
+                let! created =
                     WorkSandboxes.create
                         { Backend = fun _ -> "fake"
                           Describe = fun _ -> described.Value
@@ -350,7 +356,7 @@ let private ensureTests =
                           Create = fun _ _ _ -> Ok (fakeEnvironment ())
                           Log = log
                           Clock = fixedClock }
-                    |> expect
+                let sandboxes = expect created
                 let! _ = sandboxes.Ensure caller (sandbox "test") (forwarding [])
                 described.Value <- Some "as somebody later put it"
                 match! sandboxes.Ensure caller (sandbox "test") (forwarding []) with
@@ -366,7 +372,7 @@ let private ensureTests =
         testCaseAsync "the same ask twice is the same sandbox, recorded once" <|
             async {
                 let log = newLog ()
-                let sandboxes, built = registry log []
+                let! sandboxes, built = registry log []
                 let! first = sandboxes.Ensure caller (sandbox "test") (forwarding [])
                 let! second = sandboxes.Ensure caller (sandbox "test") (forwarding [])
                 let one = expect first
@@ -394,7 +400,7 @@ let private ensureTests =
         testCaseAsync "an equivalent forwarding list is the same ask" <|
             async {
                 let log = newLog ()
-                let sandboxes, _ = registry log [ githubCredential "tok" ]
+                let! sandboxes, _ = registry log [ githubCredential "tok" ]
                 let! _ = sandboxes.Ensure caller (sandbox "test") (forwarding [ "github" ])
                 let! again = sandboxes.Ensure caller (sandbox "test") (forwarding [ " GitHub "; "github" ])
                 Expect.isTrue (Result.isOk again) "it is not a configuration change"
@@ -407,7 +413,7 @@ let private ensureTests =
         testCaseAsync "a different forwarding is refused, naming both sides" <|
             async {
                 let log = newLog ()
-                let sandboxes, built = registry log [ githubCredential "tok" ]
+                let! sandboxes, built = registry log [ githubCredential "tok" ]
                 let! _ = sandboxes.Ensure caller (sandbox "test") (forwarding [])
                 match! sandboxes.Ensure caller (sandbox "test") (forwarding [ "github" ]) with
                 | Ok _ -> failwith "expected a refusal"
@@ -427,7 +433,7 @@ let private ensureTests =
         testCaseAsync "a different spec is refused too, naming which part differs" <|
             async {
                 let log = newLog ()
-                let sandboxes, built = registry log []
+                let! sandboxes, built = registry log []
                 let! _ = sandboxes.Ensure caller (sandbox "test") (workingIn "/a")
                 match! sandboxes.Ensure caller (sandbox "test") (workingIn "/b") with
                 | Ok _ -> failwith "expected a refusal"
@@ -446,7 +452,7 @@ let private ensureTests =
         testCaseAsync "the spec that was asked for is what the sandbox is built from" <|
             async {
                 let log = newLog ()
-                let sandboxes, _, specs = registryWithSpecs log []
+                let! sandboxes, _, specs = registryWithSpecs log []
                 let! _ = sandboxes.Ensure caller (sandbox "test") (workingIn "/somewhere")
                 Expect.equal
                     (specs |> Seq.filter (fun (name, _) -> name = "test") |> Seq.map snd |> List.ofSeq)
@@ -458,7 +464,7 @@ let private ensureTests =
         testCaseAsync "stopping releases the name, and the next start may differ" <|
             async {
                 let log = newLog ()
-                let sandboxes, _ = registry log [ githubCredential "tok" ]
+                let! sandboxes, _ = registry log [ githubCredential "tok" ]
                 let! _ = sandboxes.Ensure caller (sandbox "test") (forwarding [])
                 let! stopped = sandboxes.Stop caller (sandbox "test")
                 Expect.isTrue (Result.isOk stopped) "it stops"
@@ -476,7 +482,7 @@ let private ensureTests =
         testCaseAsync "stopping default keeps the name reachable" <|
             async {
                 let log = newLog ()
-                let sandboxes, _ = registry log []
+                let! sandboxes, _ = registry log []
                 let! _ = sandboxes.Ensure caller SandboxRef.defaultRef (forwarding [])
                 let! _ = sandboxes.Stop caller SandboxRef.defaultRef
                 match! (sandboxes.EnvironmentFor SandboxRef.defaultRef).Ensure None "a terminal was opened" with
@@ -487,7 +493,7 @@ let private ensureTests =
         testCaseAsync "stopping a sandbox the session does not have is an error, not a no-op" <|
             async {
                 let log = newLog ()
-                let sandboxes, _ = registry log []
+                let! sandboxes, _ = registry log []
                 match! sandboxes.Stop caller (sandbox "nope") with
                 | Ok () -> failwith "expected an error"
                 | Error e -> Expect.isTrue (e.Contains "nope") "it names what was asked for"
@@ -499,7 +505,7 @@ let private ensureTests =
         testCaseAsync "an unknown name resolves to an environment that refuses with the reason" <|
             async {
                 let log = newLog ()
-                let sandboxes, _ = registry log []
+                let! sandboxes, _ = registry log []
                 match! (sandboxes.EnvironmentFor (sandbox "ghost")).Ensure None "a terminal was opened" with
                 | EnvironmentAvailable -> failwith "expected a refusal"
                 | EnvironmentUnavailable reason ->
@@ -512,7 +518,7 @@ let private ensureTests =
         testCaseAsync "a bare name finds the one repo sandbox that carries it" <|
             async {
                 let log = newLog ()
-                let sandboxes, _ = registry log []
+                let! sandboxes, _ = registry log []
                 let! _ = sandboxes.Ensure caller (sandbox "octo/hello:dev") SandboxRequest.defaults
                 match! (sandboxes.EnvironmentFor (sandbox "dev")).Ensure None "a terminal was opened" with
                 | EnvironmentAvailable -> ()
@@ -522,7 +528,7 @@ let private ensureTests =
         testCaseAsync "a bare name two repos both carry is refused, naming both" <|
             async {
                 let log = newLog ()
-                let sandboxes, _ = registry log []
+                let! sandboxes, _ = registry log []
                 let! _ = sandboxes.Ensure caller (sandbox "octo/hello:dev") SandboxRequest.defaults
                 let! _ = sandboxes.Ensure caller (sandbox "octo/world:dev") SandboxRequest.defaults
                 match! (sandboxes.EnvironmentFor (sandbox "dev")).Ensure None "a terminal was opened" with
@@ -538,7 +544,7 @@ let private ensureTests =
         testCaseAsync "an unknown name is refused naming the sandboxes that exist" <|
             async {
                 let log = newLog ()
-                let sandboxes, _ = registry log []
+                let! sandboxes, _ = registry log []
                 let! _ = sandboxes.Ensure caller (sandbox "octo/hello:gate") SandboxRequest.defaults
                 match! (sandboxes.EnvironmentFor (sandbox "dev")).Ensure None "a terminal was opened" with
                 | EnvironmentAvailable -> failwith "expected a refusal"
@@ -553,7 +559,7 @@ let private ensureTests =
         testCaseAsync "a bare name stops the one repo sandbox that carries it" <|
             async {
                 let log = newLog ()
-                let sandboxes, _ = registry log []
+                let! sandboxes, _ = registry log []
                 let! _ = sandboxes.Ensure caller (sandbox "octo/hello:dev") SandboxRequest.defaults
                 let! stopped = sandboxes.Stop caller (sandbox "dev")
                 expect stopped
@@ -569,7 +575,7 @@ let private ensureTests =
         testCaseAsync "a start records where this host could not give what the sandbox asked for" <|
             async {
                 let log = newLog ()
-                let sandboxes = registryHolding log [ "the socket at /run/docker.sock — this host cannot scope that, so the sandbox gets any unix socket on this host" ]
+                let! sandboxes = registryHolding log [ "the socket at /run/docker.sock — this host cannot scope that, so the sandbox gets any unix socket on this host" ]
                 let! _ = sandboxes.Ensure caller (sandbox "test") SandboxRequest.defaults
                 let! events = eventsOf log
                 match startedEvents events with
@@ -593,7 +599,7 @@ let private credentialTests =
         testCaseAsync "the provision reaches the sandbox env, and the event carries names only" <|
             async {
                 let log = newLog ()
-                let sandboxes, built = registry log [ githubCredential "ghp_secret" ]
+                let! sandboxes, built = registry log [ githubCredential "ghp_secret" ]
                 let! started = sandboxes.Ensure caller (sandbox "test") (forwarding [ "github" ])
                 Expect.equal
                     (WorkSandboxes.SandboxOutcome.sandbox (expect started)).Request.Forward
@@ -616,6 +622,30 @@ let private credentialTests =
                 Expect.isFalse (rendered.Contains "ghp_secret") "no rendering of the log contains the value"
             }
 
+        // The default sandbox forwards everything the session can forward, so its git reaches
+        // the gateway rather than github.com unauthenticated. Provisioned at CONSTRUCTION —
+        // a terminal opened without naming a sandbox lands in the default through
+        // `EnvironmentFor`, which never runs the provisioning `ensure`, so the route has to
+        // be baked into the default's environment before any of that. Three sessions ran
+        // `git pull` in the default and got a bare exit 1 because it was not.
+        testCaseAsync "the default sandbox is built with the session's forward, from boot" <|
+            async {
+                let log = newLog ()
+                let! _, built, _ = registryWithSpecs log [ githubCredential "ghp_secret" ]
+                let _, provision = built |> Seq.find (fun (name, _) -> name = "default")
+                Expect.equal (Map.tryFind "GITHUB_ROUTE" provision.Env) (Some "ghp_secret") "the default carries the route"
+            }
+
+        // The negative that regresses it: forward nothing, and the default is built with
+        // nothing — the provisioning is the session's credentials, not a constant.
+        testCaseAsync "the default sandbox forwards nothing when the session forwards nothing" <|
+            async {
+                let log = newLog ()
+                let! _, built, _ = registryWithSpecs log []
+                let _, provision = built |> Seq.find (fun (name, _) -> name = "default")
+                Expect.equal provision.Env Map.empty "nothing forwarded, nothing baked"
+            }
+
         // A repo's file asking at boot asks for nobody, and the agent asking on a turn
         // asks for somebody who may have nothing connected. Neither is a reason not to
         // come up: the route is the sandbox's, and whose credential goes down it is each
@@ -623,7 +653,7 @@ let private credentialTests =
         testCaseAsync "a sandbox that forwards github starts with nobody's credential named" <|
             async {
                 let log = newLog ()
-                let sandboxes, built = registry log [ githubCredential "route" ]
+                let! sandboxes, built = registry log [ githubCredential "route" ]
                 let repo = RepoRef.create "octo/hello" |> expect
                 let! started = sandboxes.Ensure (ActorRef.Configured repo) (sandbox "octo/hello:dev") (forwarding [ "github" ])
                 match started with
@@ -644,7 +674,7 @@ let private credentialTests =
             async {
                 let log = newLog ()
                 let source, revoked = githubSource "tok"
-                let sandboxes, _ = registry log [ source ]
+                let! sandboxes, _ = registry log [ source ]
                 let! _ = sandboxes.Ensure caller (sandbox "test") (forwarding [ "github" ])
                 Expect.equal (List.ofSeq revoked) [] "nothing taken back while it runs"
                 let! stopped = sandboxes.Stop caller (sandbox "test")
@@ -656,7 +686,7 @@ let private credentialTests =
             async {
                 let log = newLog ()
                 let source, revoked = githubSource "tok"
-                let sandboxes =
+                let! created =
                     WorkSandboxes.create
                         { Backend = fun _ -> "fake"
                           Describe = fun _ -> None
@@ -665,7 +695,7 @@ let private credentialTests =
                           Create = fun name _ _ -> if name = SandboxRef.defaultRef then Ok (fakeEnvironment ()) else Error "no room"
                           Log = log
                           Clock = fixedClock }
-                    |> expect
+                let sandboxes = expect created
                 match! sandboxes.Ensure caller (sandbox "test") (forwarding [ "github" ]) with
                 | Ok _ -> failwith "expected the build to refuse"
                 | Error e -> Expect.equal e "no room" "the build's own reason"
@@ -683,7 +713,7 @@ let private credentialTests =
                       Revoke = ignore
                       Lend = fun _ _ _ _ -> async { return BlockEnv.none }
                       Retire = ignore }
-                let sandboxes, built = registry log [ source ]
+                let! sandboxes, built = registry log [ source ]
                 match! sandboxes.Ensure caller (sandbox "test") (forwarding [ "github" ]) with
                 | Ok _ -> failwith "expected a refusal"
                 | Error e -> Expect.equal e "no route from here" "the source's own words"
@@ -693,7 +723,7 @@ let private credentialTests =
         testCaseAsync "a credential this session does not know is refused, naming the ones it does" <|
             async {
                 let log = newLog ()
-                let sandboxes, _ = registry log [ githubCredential "tok" ]
+                let! sandboxes, _ = registry log [ githubCredential "tok" ]
                 match! sandboxes.Ensure caller (sandbox "test") (forwarding [ "gitlab" ]) with
                 | Ok _ -> failwith "expected a refusal"
                 | Error e ->
@@ -712,7 +742,7 @@ let private queryTests =
         testCaseAsync "reports process truth, and the forwarding by name" <|
             async {
                 let log = newLog ()
-                let sandboxes, _ = registry log [ githubCredential "ghp_secret" ]
+                let! sandboxes, _ = registry log [ githubCredential "ghp_secret" ]
                 let registration = WorkSandboxes.query (fun () -> sandboxes)
 
                 match! registration.Read () with
@@ -743,7 +773,7 @@ let private queryTests =
         testCaseAsync "a repo's sandbox says which repo declared it, and the session's says nothing" <|
             async {
                 let log = newLog ()
-                let sandboxes, _ = registry log []
+                let! sandboxes, _ = registry log []
                 let registration = WorkSandboxes.query (fun () -> sandboxes)
                 let declared =
                     SandboxRef.inScope (RepoRef.create "octo/hello" |> expect) (SandboxName.create "dev" |> expect)
@@ -766,7 +796,7 @@ let private queryTests =
         testCaseAsync "a running sandbox says in the listing where it holds more than was asked" <|
             async {
                 let log = newLog ()
-                let sandboxes = registryHolding log [ "the socket at /run/docker.sock — this host cannot scope that, so the sandbox gets any unix socket on this host" ]
+                let! sandboxes = registryHolding log [ "the socket at /run/docker.sock — this host cannot scope that, so the sandbox gets any unix socket on this host" ]
                 let registration = WorkSandboxes.query (fun () -> sandboxes)
                 let! _ = sandboxes.Ensure caller (sandbox "test") SandboxRequest.defaults
                 match! registration.Read () with
@@ -786,7 +816,7 @@ let private queryTests =
         testCaseAsync "a sandbox that has not started claims no widening" <|
             async {
                 let log = newLog ()
-                let sandboxes = registryHolding log [ "the socket at /run/docker.sock — this host cannot scope that, so the sandbox gets any unix socket on this host" ]
+                let! sandboxes = registryHolding log [ "the socket at /run/docker.sock — this host cannot scope that, so the sandbox gets any unix socket on this host" ]
                 let registration = WorkSandboxes.query (fun () -> sandboxes)
                 match! registration.Read () with
                 | Error e -> failwithf "the query failed: %s" e
@@ -801,7 +831,7 @@ let private queryTests =
         testCaseAsync "the answer fits the shape the query declares" <|
             async {
                 let log = newLog ()
-                let sandboxes, _ = registry log []
+                let! sandboxes, _ = registry log []
                 let registration = WorkSandboxes.query (fun () -> sandboxes)
                 match! registration.Read () with
                 | Error e -> failwithf "the query failed: %s" e
@@ -1210,7 +1240,7 @@ let private lentTests =
         testCaseAsync "a block in a sandbox that forwards github is lent for its act's credential, not the starter's" <|
             async {
                 let log = newLog ()
-                let sandboxes, _ = registry log [ githubCredential "route" ]
+                let! sandboxes, _ = registry log [ githubCredential "route" ]
                 let! _ = sandboxes.Ensure caller (sandbox "test") (forwarding [ "github" ])
                 let! lent = sandboxes.Loans.Lend (sandbox "test") terminal (Some block) (Authority.agentFor bob)
                 Expect.equal
@@ -1222,7 +1252,7 @@ let private lentTests =
         testCaseAsync "a sandbox that forwards nothing lends nothing" <|
             async {
                 let log = newLog ()
-                let sandboxes, _ = registry log [ githubCredential "route" ]
+                let! sandboxes, _ = registry log [ githubCredential "route" ]
                 let! _ = sandboxes.Ensure caller (sandbox "test") SandboxRequest.defaults
                 let! lent = sandboxes.Loans.Lend (sandbox "test") terminal (Some block) (Authority.agentFor bob)
                 Expect.equal lent BlockEnv.none "a source the sandbox does not forward is not asked"
@@ -1231,9 +1261,23 @@ let private lentTests =
         testCaseAsync "a name the session does not have lends nothing" <|
             async {
                 let log = newLog ()
-                let sandboxes, _ = registry log [ githubCredential "route" ]
+                let! sandboxes, _ = registry log [ githubCredential "route" ]
                 let! lent = sandboxes.Loans.Lend (sandbox "nope") terminal (Some block) (Authority.agentFor bob)
                 Expect.equal lent BlockEnv.none "its environment refuses the spawn; the loan has nothing to add"
+            }
+
+        // The default forwards github from boot, so a block there is lent its act's
+        // credential with nobody having started anything — which is what makes `git push`
+        // in the default work at all.
+        testCaseAsync "a block in the default sandbox is lent github, unstarted" <|
+            async {
+                let log = newLog ()
+                let! sandboxes, _ = registry log [ githubCredential "route" ]
+                let! lent = sandboxes.Loans.Lend SandboxRef.defaultRef terminal (Some block) (Authority.agentFor bob)
+                Expect.equal
+                    lent.Vars
+                    [ "LENT_TO", Some (Principal.token bob) ]
+                    "the default lends the block's act, though no one started it"
             }
     ]
 

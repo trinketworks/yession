@@ -102,13 +102,16 @@ let hostOver
     (name: string)
     : Async<Host.SessionHost> =
     let makeSandboxes (log: Yession.SessionProcess.EventLog<SessionEvent>) =
-        Yession.SessionProcess.SessionEnvironment.create
-            log
-            createSandbox
-            (fun () -> async { return Ok policy })
-            name
-            name
-        |> WorkSandboxes.singleton name
+        async {
+            return
+                Yession.SessionProcess.SessionEnvironment.create
+                    log
+                    createSandbox
+                    (fun () -> async { return Ok policy })
+                    name
+                    name
+                |> WorkSandboxes.singleton name
+        }
     Host.startWithEnvironment None (Some makeSandboxes) None (SessionId.create name |> expect) 0
 
 /// A deterministic in-memory sandbox: creations/disposals are counted, spawns are

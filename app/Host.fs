@@ -128,7 +128,7 @@ let startFull
     // fact about this log: the session's creator. That is known here and nowhere above here,
     // so a thunk that decided on its own could only have decided on somebody else's behalf.
     (summarize: CredentialFor -> Summarize option)
-    (makeSandboxes: (EventLog<SessionEvent> -> WorkSandboxes.WorkSandboxes) option)
+    (makeSandboxes: (EventLog<SessionEvent> -> Async<WorkSandboxes.WorkSandboxes>) option)
     // Secrets (Plan 06): the Manager-granted, session-scoped secrets surface
     // (write/list/delete — never read). None = turns see the `none` denials.
     (secretsCapabilities: ControlClient.SessionSecretsCapabilities option)
@@ -313,10 +313,10 @@ let startFull
         // entry lazily created on first need. `default` is the one every session has had,
         // so a Host composed without sandboxes still answers every question — its default
         // environment records needs as unavailable, exactly as before.
-        let sandboxes =
+        let! sandboxes =
             match makeSandboxes with
             | Some make -> make log
-            | None -> WorkSandboxes.unavailable
+            | None -> async { return WorkSandboxes.unavailable }
         let environment = sandboxes.EnvironmentFor SandboxRef.defaultRef
 
         let mintTurnId () =
@@ -1156,7 +1156,7 @@ let startFull
 /// mint peer tokens from the host handle.
 let startWithEnvironment
     (runAgent: RunAgent option)
-    (makeSandboxes: (EventLog<SessionEvent> -> WorkSandboxes.WorkSandboxes) option)
+    (makeSandboxes: (EventLog<SessionEvent> -> Async<WorkSandboxes.WorkSandboxes>) option)
     (baseLog: EventLog<SessionEvent> option)
     (sessionId: SessionId)
     (port: int)

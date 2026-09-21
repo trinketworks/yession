@@ -201,258 +201,292 @@ let private missing (reason: string) : SessionEnvironment.SessionEnvironment =
       Shell = fun () -> None
       Realisation = fun () -> [] }
 
-let create (config: WorkSandboxesConfig) : Result<WorkSandboxes, string> =
-    // `default` exists from boot, because it is the sandbox every session has always had:
-    // a terminal opened without naming one lands here, and nothing about a pre-Plan-15
-    // session changes. It is created eagerly and started lazily, exactly as before.
-    config.Create SandboxRef.defaultRef SandboxRequest.defaults.Spec Provision.empty
-    |> Result.map (fun defaultEnvironment ->
-
-    // Keyed by the ref itself: it is a structural value, so a lookup is an equality rather
-    // than a rendered string two call sites have to agree on how to spell.
-    let mutable entries : (SandboxRef * RunningSandbox) list =
-        [ SandboxRef.defaultRef,
-          { Ref = SandboxRef.defaultRef
-            Backend = config.Backend SandboxRef.defaultRef
-            Request = SandboxRequest.defaults
-            StartedBy = None
-            StartedAt = None
-            Environment = defaultEnvironment } ]
-
-    let find (name: SandboxRef) =
-        entries |> List.tryFind (fun (key, _) -> key = name) |> Option.map snd
-
-    /// A bare name, when the session has no sandbox of its own by it but exactly one repo
-    /// declares one: that one. `dev` for `octo/hello:dev` is what an agent writes after
-    /// reading "started sandbox octo/hello:dev", and there is nothing else it could mean.
-    /// Two repos both declaring `dev` is ambiguous and stays a refusal that names both.
-    let resolve (name: SandboxRef) : RunningSandbox option =
-        match find name, SandboxRef.scope name with
-        | Some entry, _ -> Some entry
-        | None, SessionOwned ->
-            match
-                entries
-                |> List.filter (fun (key, _) -> SandboxRef.scope key <> SessionOwned && SandboxRef.name key = SandboxRef.name name)
-            with
-            | [ _, only ] -> Some only
-            | _ -> None
-        | None, RepoOwned _ -> None
-
-    let mintMessageId () : MessageId =
-        match MessageId.create (string (Guid.NewGuid ())) with
-        | Ok id -> id
-        | Error e -> failwithf "message id invariant violated: %s" e
-
-    let append (actor: ActorRef) (event: SessionEvent) : Async<unit> =
-        async {
-            let! _ = config.Log.Append actor event
-            return ()
-        }
-
-    /// Take back every provision a sandbox was given — the half of forwarding that a stop
-    /// owes, without which a route outlives the sandbox it was minted for.
-    let revoke (name: SandboxRef) (names: ConnectionName list) : unit =
-        for credential in names do
-            config.Credentials
-            |> List.tryFind (fun source -> source.Name = credential)
-            |> Option.iter (fun source -> source.Revoke name)
-
-    /// Provision every named credential's route into one sandbox, or say which one could
-    /// not be — revoking whatever was provisioned before the one that refused.
-    let provisionForward (name: SandboxRef) (names: ConnectionName list) : Async<Result<Provision, string>> =
-        async {
-            let mutable provisioned = Provision.empty
-            let mutable failure = None
+let create (config: WorkSandboxesConfig) : Async<Result<WorkSandboxes, string>> =
+    async {
+        // Take back every provision a sandbox was given — the half of forwarding that a stop
+        // owes, without which a route outlives the sandbox it was minted for. Hoisted above
+        // the default's creation because the default is provisioned before its environment
+        // exists, and a failed create has to give the route back.
+        let revoke (name: SandboxRef) (names: ConnectionName list) : unit =
             for credential in names do
-                match failure with
-                | Some _ -> ()
-                | None ->
-                    match config.Credentials |> List.tryFind (fun source -> source.Name = credential) with
-                    | None ->
-                        let known =
-                            match config.Credentials |> List.map (fun s -> ConnectionName.value s.Name) with
-                            | [] -> "this session forwards none"
-                            | available -> "this session knows: " + String.concat ", " available
-                        failure <-
-                            Some (
-                                sprintf
-                                    "there is no credential called '%s' (%s)"
-                                    (ConnectionName.value credential)
-                                    known)
-                    | Some source ->
-                        match! source.Provision name with
-                        | CredentialForwarding.Unforwardable reason -> failure <- Some reason
-                        | CredentialForwarding.Forwarded provision ->
-                            provisioned <- Provision.merge provisioned provision
-            match failure with
-            | Some e ->
-                revoke name names
-                return Error e
-            | None -> return Ok provisioned
-        }
+                config.Credentials
+                |> List.tryFind (fun source -> source.Name = credential)
+                |> Option.iter (fun source -> source.Revoke name)
 
-    let ensure (actor: ActorRef) (name: SandboxRef) (request: SandboxRequest) : Async<Result<SandboxOutcome, string>> =
-        async {
-            // Already normalised by construction (`SandboxRequest.Forward` is a
-            // `ConnectionName list`), so two asks that mean the same thing compare equal.
-            let wanted = request
-            match find name with
-            | Some existing when existing.Request = wanted ->
-                // The idempotent case. Make sure it is actually up (the environment is
-                // lazy, and a stopped one recreates here), and record NOTHING — a second
-                // ask changed nothing, so the timeline should not claim it did.
-                match! existing.Environment.Ensure None (sprintf "sandbox '%s' was asked for" (SandboxRef.render name)) with
-                | EnvironmentUnavailable reason -> return Error reason
-                | EnvironmentAvailable -> return Ok (SandboxAlreadyRunning existing)
-            | Some existing ->
-                // Say what differs, never recreate. `differences` is total over unequal
-                // requests, so this branch always has something to say — which is why the
-                // idempotence above is an equality on the same value rather than a second,
-                // looser rule that could disagree with it.
-                return
-                    Error (
-                        sprintf
-                            "sandbox '%s' is already running and %s — stop_work_sandbox it first if you want to change that (anything running in it dies with it)"
-                            (SandboxRef.render name)
-                            (SandboxRequest.differences existing.Request wanted |> String.concat "; "))
-            | None ->
-                match! provisionForward name wanted.Forward with
-                | Error e -> return Error e
-                | Ok provision ->
-                    match config.Create name wanted.Spec provision with
-                    | Error e ->
-                        revoke name wanted.Forward
-                        return Error e
-                    | Ok environment ->
-                        // One id for the whole coming-up: the RUNNING act this opens is the
-                        // same item `WorkSandboxStarted`/`WorkSandboxStartFailed` below resolve
-                        // in place. Emitted BEFORE `environment.Ensure` — creating, starting
-                        // and verifying the container — so the timeline shows the sandbox
-                        // coming up rather than dead air until it is already up. A provision or
-                        // create failure above never reached here, so it opens no running act.
-                        let messageId = mintMessageId ()
+        // Provision every named credential's route into one sandbox, or say which one could
+        // not be — revoking whatever was provisioned before the one that refused.
+        let provisionForward (name: SandboxRef) (names: ConnectionName list) : Async<Result<Provision, string>> =
+            async {
+                let mutable provisioned = Provision.empty
+                let mutable failure = None
+                for credential in names do
+                    match failure with
+                    | Some _ -> ()
+                    | None ->
+                        match config.Credentials |> List.tryFind (fun source -> source.Name = credential) with
+                        | None ->
+                            let known =
+                                match config.Credentials |> List.map (fun s -> ConnectionName.value s.Name) with
+                                | [] -> "this session forwards none"
+                                | available -> "this session knows: " + String.concat ", " available
+                            failure <-
+                                Some (
+                                    sprintf
+                                        "there is no credential called '%s' (%s)"
+                                        (ConnectionName.value credential)
+                                        known)
+                        | Some source ->
+                            match! source.Provision name with
+                            | CredentialForwarding.Unforwardable reason -> failure <- Some reason
+                            | CredentialForwarding.Forwarded provision ->
+                                provisioned <- Provision.merge provisioned provision
+                match failure with
+                | Some e ->
+                    revoke name names
+                    return Error e
+                | None -> return Ok provisioned
+            }
+
+        // The default sandbox forwards everything this session knows how to forward, so its
+        // git carries the same route and per-block loan a repo's sandbox does — git in
+        // `default` reaches this session's gateway rather than github.com unauthenticated.
+        // The set is the session's credentials, not a Domain constant: no github source,
+        // nothing forwarded, exactly as before.
+        //
+        // Provisioned LENIENTLY, unlike an explicit `ensure`: a credential that cannot route
+        // into the default (an `Unforwardable` backend) is skipped, not fatal — `default` is
+        // the sandbox every session has and a terminal that names nothing must still find it,
+        // so it comes up with whatever forwarded and no more. An explicit `start_work_sandbox`
+        // still refuses in words, because someone asked for that credential by name.
+        let mutable defaultProvision = Provision.empty
+        let mutable defaultForwarded = []
+        for source in config.Credentials do
+            match! source.Provision SandboxRef.defaultRef with
+            | CredentialForwarding.Forwarded provision ->
+                defaultProvision <- Provision.merge defaultProvision provision
+                defaultForwarded <- defaultForwarded @ [ source.Name ]
+            | CredentialForwarding.Unforwardable _ -> ()
+        let defaultForwarded = List.distinct defaultForwarded
+        let defaultRequest = { SandboxRequest.defaults with Forward = defaultForwarded }
+
+        // `default` exists from boot: created eagerly, started lazily. Its forward is baked
+        // in HERE, before its environment, because a terminal reaches it through
+        // `EnvironmentFor().Ensure`, which never runs the provisioning `ensure` below.
+        match config.Create SandboxRef.defaultRef defaultRequest.Spec defaultProvision with
+        | Error e ->
+            revoke SandboxRef.defaultRef defaultForwarded
+            return Error e
+        | Ok defaultEnvironment ->
+
+            // Keyed by the ref itself: it is a structural value, so a lookup is an equality
+            // rather than a rendered string two call sites have to agree on how to spell.
+            let mutable entries : (SandboxRef * RunningSandbox) list =
+                [ SandboxRef.defaultRef,
+                  { Ref = SandboxRef.defaultRef
+                    Backend = config.Backend SandboxRef.defaultRef
+                    Request = defaultRequest
+                    StartedBy = None
+                    StartedAt = None
+                    Environment = defaultEnvironment } ]
+
+            let find (name: SandboxRef) =
+                entries |> List.tryFind (fun (key, _) -> key = name) |> Option.map snd
+
+            /// A bare name, when the session has no sandbox of its own by it but exactly one
+            /// repo declares one: that one. `dev` for `octo/hello:dev` is what an agent
+            /// writes after reading "started sandbox octo/hello:dev", and there is nothing
+            /// else it could mean. Two repos both declaring `dev` is ambiguous and stays a
+            /// refusal that names both.
+            let resolve (name: SandboxRef) : RunningSandbox option =
+                match find name, SandboxRef.scope name with
+                | Some entry, _ -> Some entry
+                | None, SessionOwned ->
+                    match
+                        entries
+                        |> List.filter (fun (key, _) -> SandboxRef.scope key <> SessionOwned && SandboxRef.name key = SandboxRef.name name)
+                    with
+                    | [ _, only ] -> Some only
+                    | _ -> None
+                | None, RepoOwned _ -> None
+
+            let mintMessageId () : MessageId =
+                match MessageId.create (string (Guid.NewGuid ())) with
+                | Ok id -> id
+                | Error e -> failwithf "message id invariant violated: %s" e
+
+            let append (actor: ActorRef) (event: SessionEvent) : Async<unit> =
+                async {
+                    let! _ = config.Log.Append actor event
+                    return ()
+                }
+
+            let ensure (actor: ActorRef) (name: SandboxRef) (request: SandboxRequest) : Async<Result<SandboxOutcome, string>> =
+                async {
+                    // Already normalised by construction (`SandboxRequest.Forward` is a
+                    // `ConnectionName list`), so two asks that mean the same thing compare equal.
+                    let wanted = request
+                    match find name with
+                    | Some existing when existing.Request = wanted ->
+                        // The idempotent case. Make sure it is actually up (the environment
+                        // is lazy, and a stopped one recreates here), and record NOTHING — a
+                        // second ask changed nothing, so the timeline should not claim it did.
+                        match! existing.Environment.Ensure None (sprintf "sandbox '%s' was asked for" (SandboxRef.render name)) with
+                        | EnvironmentUnavailable reason -> return Error reason
+                        | EnvironmentAvailable -> return Ok (SandboxAlreadyRunning existing)
+                    | Some existing ->
+                        // Say what differs, never recreate. `differences` is total over
+                        // unequal requests, so this branch always has something to say —
+                        // which is why the idempotence above is an equality on the same value
+                        // rather than a second, looser rule that could disagree with it.
+                        return
+                            Error (
+                                sprintf
+                                    "sandbox '%s' is already running and %s — stop_work_sandbox it first if you want to change that (anything running in it dies with it)"
+                                    (SandboxRef.render name)
+                                    (SandboxRequest.differences existing.Request wanted |> String.concat "; "))
+                    | None ->
+                        match! provisionForward name wanted.Forward with
+                        | Error e -> return Error e
+                        | Ok provision ->
+                            match config.Create name wanted.Spec provision with
+                            | Error e ->
+                                revoke name wanted.Forward
+                                return Error e
+                            | Ok environment ->
+                                // One id for the whole coming-up: the RUNNING act this opens
+                                // is the same item `WorkSandboxStarted`/`WorkSandboxStartFailed`
+                                // below resolve in place. Emitted BEFORE `environment.Ensure`
+                                // — creating, starting and verifying the container — so the
+                                // timeline shows the sandbox coming up rather than dead air
+                                // until it is already up. A provision or create failure above
+                                // never reached here, so it opens no running act.
+                                let messageId = mintMessageId ()
+                                do!
+                                    append
+                                        actor
+                                        (SessionEvent.WorkSandboxStarting
+                                            { MessageId = messageId
+                                              Sandbox = name
+                                              Backend = config.Backend name
+                                              Description = config.Describe name
+                                              Actor = actor })
+                                match! environment.Ensure None (sprintf "sandbox '%s' was started" (SandboxRef.render name)) with
+                                | EnvironmentUnavailable reason ->
+                                    do!
+                                        append
+                                            actor
+                                            (SessionEvent.WorkSandboxStartFailed
+                                                { MessageId = messageId
+                                                  Sandbox = name
+                                                  Reason = reason
+                                                  Actor = actor })
+                                    return Error reason
+                                | EnvironmentAvailable ->
+                                    let startedAt = config.Clock ()
+                                    let entry =
+                                        { Ref = name
+                                          Backend = config.Backend name
+                                          Request = wanted
+                                          StartedBy = Some actor
+                                          StartedAt = Some startedAt
+                                          Environment = environment }
+                                    entries <- entries @ [ name, entry ]
+                                    do!
+                                        append
+                                            actor
+                                            (SessionEvent.WorkSandboxStarted
+                                                { MessageId = messageId
+                                                  Sandbox = name
+                                                  Backend = config.Backend name
+                                                  Description = config.Describe name
+                                                  Checkout = config.Checkout name
+                                                  Forwarded = wanted.Forward
+                                                  // Asked of the environment that just came
+                                                  // up, not computed here: what a sandbox
+                                                  // holds is settled by the policy it was
+                                                  // built from, and this manager never sees
+                                                  // one.
+                                                  Realisation = environment.Realisation ()
+                                                  Actor = actor })
+                                    return Ok (SandboxStarted entry)
+                }
+
+            let stop (actor: ActorRef) (name: SandboxRef) : Async<Result<unit, string>> =
+                async {
+                    match resolve name with
+                    | None -> return Error (unknownSandbox name (entries |> List.map fst))
+                    | Some entry ->
+                        let name = entry.Ref
+                        do! entry.Environment.Stop ()
+                        revoke name entry.Request.Forward
+                        // `default` keeps its ENTRY — it is the sandbox every session has,
+                        // and a terminal that names nothing must still find it — but resets
+                        // to its own configuration, which forwards the session's credentials
+                        // like it did at boot. Any other name leaves entirely, which is what
+                        // makes "stop it first, then start it with different forwarding" work.
+                        if name = SandboxRef.defaultRef then
+                            entries <-
+                                entries
+                                |> List.map (fun (key, existing) ->
+                                    if key = name then
+                                        key, { existing with Request = defaultRequest; StartedBy = None; StartedAt = None }
+                                    else key, existing)
+                        else
+                            entries <- entries |> List.filter (fun (key, _) -> key <> name)
                         do!
                             append
                                 actor
-                                (SessionEvent.WorkSandboxStarting
-                                    { MessageId = messageId
-                                      Sandbox = name
-                                      Backend = config.Backend name
-                                      Description = config.Describe name
-                                      Actor = actor })
-                        match! environment.Ensure None (sprintf "sandbox '%s' was started" (SandboxRef.render name)) with
-                        | EnvironmentUnavailable reason ->
-                            do!
-                                append
-                                    actor
-                                    (SessionEvent.WorkSandboxStartFailed
-                                        { MessageId = messageId
-                                          Sandbox = name
-                                          Reason = reason
-                                          Actor = actor })
-                            return Error reason
-                        | EnvironmentAvailable ->
-                            let startedAt = config.Clock ()
-                            let entry =
-                                { Ref = name
-                                  Backend = config.Backend name
-                                  Request = wanted
-                                  StartedBy = Some actor
-                                  StartedAt = Some startedAt
-                                  Environment = environment }
-                            entries <- entries @ [ name, entry ]
-                            do!
-                                append
-                                    actor
-                                    (SessionEvent.WorkSandboxStarted
-                                        { MessageId = messageId
-                                          Sandbox = name
-                                          Backend = config.Backend name
-                                          Description = config.Describe name
-                                          Checkout = config.Checkout name
-                                          Forwarded = wanted.Forward
-                                          // Asked of the environment that just came up, not
-                                          // computed here: what a sandbox holds is settled by
-                                          // the policy it was built from, and this manager
-                                          // never sees one.
-                                          Realisation = environment.Realisation ()
-                                          Actor = actor })
-                            return Ok (SandboxStarted entry)
-        }
+                                (SessionEvent.WorkSandboxStopped
+                                    { MessageId = mintMessageId (); Sandbox = name; Actor = actor })
+                        return Ok ()
+                }
 
-    let stop (actor: ActorRef) (name: SandboxRef) : Async<Result<unit, string>> =
-        async {
-            match resolve name with
-            | None -> return Error (unknownSandbox name (entries |> List.map fst))
-            | Some entry ->
-                let name = entry.Ref
-                do! entry.Environment.Stop ()
-                revoke name entry.Request.Forward
-                // `default` keeps its ENTRY — it is the sandbox every session has, and a
-                // terminal that names nothing must still find it — but loses its
-                // configuration, so a later start may forward something different. Any
-                // other name leaves entirely, which is what makes "stop it first, then
-                // start it with different forwarding" work.
-                if name = SandboxRef.defaultRef then
-                    entries <-
-                        entries
-                        |> List.map (fun (key, existing) ->
-                            if key = name then
-                                key, { existing with Request = SandboxRequest.defaults; StartedBy = None; StartedAt = None }
-                            else key, existing)
-                else
-                    entries <- entries |> List.filter (fun (key, _) -> key <> name)
-                do!
-                    append
-                        actor
-                        (SessionEvent.WorkSandboxStopped
-                            { MessageId = mintMessageId (); Sandbox = name; Actor = actor })
-                return Ok ()
-        }
+            let environmentFor (name: SandboxRef) : SessionEnvironment.SessionEnvironment =
+                match resolve name with
+                | Some entry -> entry.Environment
+                | None -> missing (unknownSandbox name (entries |> List.map fst))
 
-    let environmentFor (name: SandboxRef) : SessionEnvironment.SessionEnvironment =
-        match resolve name with
-        | Some entry -> entry.Environment
-        | None -> missing (unknownSandbox name (entries |> List.map fst))
+            let stopAll () : Async<unit> =
+                async {
+                    for name, entry in entries do
+                        do! entry.Environment.Stop ()
+                        revoke name entry.Request.Forward
+                }
 
-    let stopAll () : Async<unit> =
-        async {
-            for name, entry in entries do
-                do! entry.Environment.Stop ()
-                revoke name entry.Request.Forward
-        }
+            /// What a block in `name` is lent for its act: each forwarded source's answer for
+            /// the act's credential, merged. Nothing for a sandbox that forwards nothing, and
+            /// nothing for a name this session does not have — its environment refuses the
+            /// spawn anyway, with the reason.
+            let lend (name: SandboxRef) (terminal: TerminalId) (block: BlockId option) (authority: Authority) : Async<BlockEnv> =
+                async {
+                    match resolve name with
+                    | None -> return BlockEnv.none
+                    | Some entry ->
+                        let mutable lent = BlockEnv.none
+                        for forwarded in entry.Request.Forward do
+                            match config.Credentials |> List.tryFind (fun source -> source.Name = forwarded) with
+                            | None -> ()
+                            | Some source ->
+                                let! given = source.Lend authority entry.Ref terminal block
+                                lent <- BlockEnv.merge lent given
+                        return lent
+                }
 
-    /// What a block in `name` is lent for its act: each forwarded source's answer for the
-    /// act's credential, merged. Nothing for a sandbox that forwards nothing, and nothing
-    /// for a name this session does not have — its environment refuses the spawn anyway,
-    /// with the reason.
-    let lend (name: SandboxRef) (terminal: TerminalId) (block: BlockId option) (authority: Authority) : Async<BlockEnv> =
-        async {
-            match resolve name with
-            | None -> return BlockEnv.none
-            | Some entry ->
-                let mutable lent = BlockEnv.none
-                for forwarded in entry.Request.Forward do
-                    match config.Credentials |> List.tryFind (fun source -> source.Name = forwarded) with
-                    | None -> ()
-                    | Some source ->
-                        let! given = source.Lend authority entry.Ref terminal block
-                        lent <- BlockEnv.merge lent given
-                return lent
-        }
+            /// Every source, because a loan is a fact about a terminal and this manager does
+            /// not keep which sandbox a terminal is in — the sources do, by what they lent.
+            let retire (terminal: TerminalId) : unit =
+                for source in config.Credentials do
+                    source.Retire terminal
 
-    /// Every source, because a loan is a fact about a terminal and this manager does not
-    /// keep which sandbox a terminal is in — the sources do, by what they lent.
-    let retire (terminal: TerminalId) : unit =
-        for source in config.Credentials do
-            source.Retire terminal
-
-    { Ensure = ensure
-      Stop = stop
-      EnvironmentFor = environmentFor
-      Loans = { Lend = lend; Retire = retire }
-      Listed = fun () -> entries |> List.map snd
-      StopAll = stopAll })
+            return
+                Ok
+                    { Ensure = ensure
+                      Stop = stop
+                      EnvironmentFor = environmentFor
+                      Loans = { Lend = lend; Retire = retire }
+                      Listed = fun () -> entries |> List.map snd
+                      StopAll = stopAll }
+    }
 
 /// A registry over ONE already-built environment, under the `default` name: the shape
 /// every session had before Plan 15. Starting or stopping a second one is refused, because
