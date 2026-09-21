@@ -182,6 +182,23 @@ type QueryFrame =
     /// What one query says now — the opening snapshot for each, and every later change.
     | QueryValued of QueryName * QueryValue
 
+/// One frame of the session's READ STREAM: everything a browser is told rather than asks
+/// for.
+///
+/// The queries were the first read model on it and the connection panels are the second,
+/// here for the reason `QueryFrame` above gives for multiplexing the queries in the first
+/// place — one connection carries every read model there will ever be, rather than a stream
+/// apiece or a fetch beside a stream. The panels arrived by fetch: a browser probed on
+/// open, and again after each of its own commands, which meant reading a write it had just
+/// made off a cache the Manager had not finished filling. Being TOLD has no such race.
+///
+/// Not `SessionFrame` — that is the WebRTC data channel's, and this is the other leg.
+type ReadFrame =
+    | Queried of QueryFrame
+    /// Both panels together, because they are one answer to one question a person has open
+    /// — what can this session reach — and the drawer shows them side by side.
+    | Panels of Access.ClaudePanel * Access.GitHubPanel
+
 module QueryShape =
 
     let columns (shape: QueryShape) : QueryColumn list =

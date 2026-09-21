@@ -465,11 +465,22 @@ let commitIdentity (profile: Profile) : string * string =
 /// (the same Manager connection stream that feeds /claude — a stored `github` entry
 /// appears there with no Manager changes, because status is envelope-shape detection).
 /// Composes into `Signalling.start` extra routes beside the Claude handler.
+/// This session's GitHub panel, for one browser identity. Pushed on the read stream, for
+/// the Claude panel's reason and in the same shape.
+let panelFor
+    (sessionId: SessionId)
+    (statusOf: SecretId -> ConnectionStatus option)
+    (identity: CookieIdentity)
+    : GitHubPanel =
+    let owner = ownerOf identity
+    { SessionCredential = CredentialRow.ofStatus (statusOf { Scope = SessionScope sessionId; Name = secretName })
+      MineCredential = CredentialRow.ofStatus (statusOf { Scope = CredentialOwner.scope owner; Name = secretName })
+      Owner = Some (match owner with UserOwner _ -> "user" | LocalOwner -> "local") }
+
 let routes
     (sessionId: SessionId)
     (auth: SessionAuth.Auth)
     (connections: ControlClient.SessionConnections)
-    (statusOf: SecretId -> ConnectionStatus option)
     (post: GitHubPost)
     (mount: string)
     : IncomingMessage -> ServerResponse -> bool =
@@ -480,7 +491,6 @@ let routes
     fun req res ->
         let routeOf () = SessionRoute.parseUnder mount req.``method`` (req.url.Split('?').[0])
         match routeOf () with
-        | Some GitHubStatus
         | Some (GitHub _) ->
             match auth.IdentityOf req with
             | None -> respondText res 401 "unauthorized"
@@ -488,17 +498,6 @@ let routes
                 let handle (body: GitHubRequestBody) : unit =
                     let owner = ownerOf identity
                     match routeOf () with
-                    | Some GitHubStatus ->
-                        // The same two rows the Claude panel shows, written by the same
-                        // codec the browser reads (`Codec.githubPanel`). This file used to
-                        // carry its own copy of the row encoder.
-                        let sessionTarget : SecretId = { Scope = SessionScope sessionId; Name = secretName }
-                        let mineTarget : SecretId = { Scope = CredentialOwner.scope owner; Name = secretName }
-                        let panel : GitHubPanel =
-                            { SessionCredential = CredentialRow.ofStatus (statusOf sessionTarget)
-                              MineCredential = CredentialRow.ofStatus (statusOf mineTarget)
-                              Owner = Some (match owner with UserOwner _ -> "user" | LocalOwner -> "local") }
-                        respondJson res 200 (Codec.toString Codec.githubPanel panel)
                     | Some (GitHub action) ->
                         match targetFor sessionId owner body.Scope with
                         | Error e -> respondText res 400 e

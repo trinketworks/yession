@@ -2497,6 +2497,30 @@ module Codec =
                   Access.GitHubPanel.MineCredential = get.Optional.Field "mine" credentialRow.Decode
                   Access.GitHubPanel.Owner = get.Optional.Field "owner" Decode.string }) }
 
+    /// One frame of the session's read stream. Tagged, for `queryFrame`'s reason: one
+    /// connection carries every read model, and a client folds each frame by what it is.
+    let readFrame : Codec<Tools.ReadFrame> =
+        { Encode =
+            (fun frame ->
+                match frame with
+                | Tools.Queried inner ->
+                    Encode.object [ "kind", Encode.string "query"; "frame", queryFrame.Encode inner ]
+                | Tools.Panels (claude, github) ->
+                    Encode.object
+                        [ "kind", Encode.string "panels"
+                          "claude", claudePanel.Encode claude
+                          "github", githubPanel.Encode github ])
+          Decode =
+            Decode.field "kind" Decode.string
+            |> Decode.andThen (function
+                | "query" -> Decode.field "frame" queryFrame.Decode |> Decode.map Tools.Queried
+                | "panels" ->
+                    Decode.map2
+                        (fun claude github -> Tools.Panels (claude, github))
+                        (Decode.field "claude" claudePanel.Decode)
+                        (Decode.field "github" githubPanel.Decode)
+                | other -> Decode.fail (sprintf "unknown read frame '%s'" other)) }
+
     let private repoCandidate : Codec<Repos.RepoCandidate> =
         { Encode =
             fun (candidate: Repos.RepoCandidate) ->

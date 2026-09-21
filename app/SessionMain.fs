@@ -1016,6 +1016,12 @@ Async.StartImmediate (
         // The connection-status stream (Plan 08): each frame replaces the whole cache
         // (snapshot semantics), flipping the agent gate and the /claude status as
         // credentials connect and disconnect. Best-effort like the other reverse legs.
+        //
+        // The panel feed is composed below (it needs the status cache this stream fills), so
+        // the way to tell it is held by a ref — the same forward reference the Manager's own
+        // broadcast uses, and for the same reason: the subscription is opened before the
+        // thing it notifies exists.
+        let panelsChanged : (unit -> unit) ref = ref ignore
         match controlChannel with
         | Some (url, secret) ->
             ControlClient.subscribeConnections url secret (fun list ->
@@ -1045,23 +1051,34 @@ Async.StartImmediate (
                     // to lose every forwarding sandbox until a repo verb happened to run.
                     // Before the fold exists (this stream opens ahead of the Host) the
                     // frame is only kept, and the boot fold below reads who is here.
-                    Async.StartImmediate (foldFor arrived))
+                    Async.StartImmediate (foldFor arrived)
+                    // And every open drawer is told, which is the whole of what the panels
+                    // used to be probed for.
+                    panelsChanged.Value ())
             |> ignore
         | None -> ()
-        // The browser-facing Claude connection surface: only meaningful with both a
-        // login surface (cookie identity) and a control channel to broker through.
-        let claudeRoutes =
-            match auth, connectionsClient with
-            | Some a, Some client ->
-                Some (
-                    ClaudeConnection.routes
+        // The connection panels as a read model, pushed on the read stream. Both builders
+        // read the same status cache the Manager's stream fills, and `panelFeed.Changed`
+        // below is what a frame landing there calls — so a browser is TOLD, rather than
+        // probing a cache that may not have caught up with its own command yet.
+        let panelFeed =
+            match connectionsClient with
+            | Some _ ->
+                Queries.panels
+                    (ClaudeConnection.panelFor
                         sessionId
-                        a
-                        client
                         (fun target -> Map.tryFind target connectionStatus)
                         (fun () -> envCreds || connectedSomewhere ())
-                        listModels
-                        sessionMount)
+                        listModels)
+                    (GitHubConnection.panelFor sessionId (fun target -> Map.tryFind target connectionStatus))
+            | None -> Queries.noPanels
+        panelsChanged.Value <- panelFeed.Changed
+        // The browser-facing Claude connection surface: only meaningful with both a
+        // login surface (cookie identity) and a control channel to broker through. Commands
+        // only — the panel it used to answer for is pushed.
+        let claudeRoutes =
+            match auth, connectionsClient with
+            | Some a, Some client -> Some (ClaudeConnection.routes sessionId a client sessionMount)
             | _ -> None
         // The GitHub connection surface (Plan 14) rides the same status cache and control
         // channel; the two panel handlers compose into the one extra-routes seam, each
@@ -1075,7 +1092,6 @@ Async.StartImmediate (
                             sessionId
                             a
                             client
-                            (fun target -> Map.tryFind target connectionStatus)
                             // The resilience for this resource is composed HERE and nowhere
                             // else, per "composition at the top": the routes are handed a leg
                             // that has already spent its deadline and its retries, so they
@@ -1083,13 +1099,14 @@ Async.StartImmediate (
                             (GitHubConnection.resilient Resilience.Policy.sleep Interop.random GitHubConnection.posting)
                             sessionMount)
                 | _ -> None
-            // The read surface (Plan 15): one SSE stream carrying every registered query.
-            // This replaced the Repos panel's `/repos*` routes — the listing became a
-            // query and the write actions were retired, so a human asks the agent and
-            // watches the timeline instead of driving a second interface.
+            // The read surface (Plan 15): one SSE stream carrying every registered query and
+            // both connection panels. This replaced the Repos panel's `/repos*` routes — the
+            // listing became a query and the write actions were retired, so a human asks the
+            // agent and watches the timeline instead of driving a second interface — and
+            // then the panels' own status routes, for the race a fetch could not avoid.
             let queryRoutes =
                 match auth with
-                | Some a -> Some (Queries.routes a queryRegistry sessionMount)
+                | Some a -> Some (Queries.routes a queryRegistry panelFeed sessionMount)
                 | None -> None
             // What a person chooses a repo FROM: the provider's listing, on the caller's
             // credential by the same precedence a repo verb spends, against the same API

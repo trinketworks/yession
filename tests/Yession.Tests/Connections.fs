@@ -1812,10 +1812,9 @@ let private stored (kind: ConnectionKind) (health: ConnectionHealth) (id: Secret
 let private startGitHubRoutesOver
     (post: GitHubConnection.GitHubPost)
     (connections: ControlClient.SessionConnections)
-    (statusOf: SecretId -> ConnectionStatus option)
     =
     async {
-        let route = GitHubConnection.routes sessionA (stubAuth ()) connections statusOf post ""
+        let route = GitHubConnection.routes sessionA (stubAuth ()) connections post ""
         let handler (req: Interop.IncomingMessage) (res: Interop.ServerResponse) =
             if not (route req res) then
                 res.writeHead (404, Fable.Core.JsInterop.createObj [ "content-type", box "text/plain" ]) |> ignore
@@ -1826,8 +1825,18 @@ let private startGitHubRoutesOver
         return sprintf "http://127.0.0.1:%d" (Interop.serverPort listening)
     }
 
-let private startGitHubRoutes (connections: ControlClient.SessionConnections) (statusOf: SecretId -> ConnectionStatus option) =
-    startGitHubRoutesOver GitHubConnection.posting connections statusOf
+let private startGitHubRoutes (connections: ControlClient.SessionConnections) =
+    startGitHubRoutesOver GitHubConnection.posting connections
+
+/// One browser's identity, as the panel builders take it. The panels are per-IDENTITY —
+/// "mine" is a different credential for different people — so a case about scoping asks
+/// `panelFor` rather than a route: there is no status route any more, and the invariant was
+/// never about HTTP.
+let private identityOf (who: string) (attribution: Yession.SessionProcess.PeerAttribution) : Yession.SessionProcess.CookieIdentity =
+    { Subject = who; DisplayName = None; Attribution = attribution }
+
+let private githubPanelFor (statusOf: SecretId -> ConnectionStatus option) (identity: Yession.SessionProcess.CookieIdentity) =
+    GitHubConnection.panelFor sessionA statusOf identity
 
 /// Point the module at the stub for the duration of one test, and put the environment back
 /// afterwards — these are process-wide and the suite runs beside others.
@@ -1844,14 +1853,14 @@ let private githubRouteTests =
             async {
                 let! stub = startStubGitHub ()
                 let recorder = recordingConnections ()
-                let! url = startGitHubRoutes recorder.Client (fun _ -> None)
+                let! url = startGitHubRoutes recorder.Client
                 do! withStubGitHub stub (Some "Iv1.test") (fun () ->
                     async {
                         // No cookie: every route is 401 before it looks at anything else. The
                         // begin route reaches github.com, so an unauthenticated caller getting
                         // past this door would make the session an open device-flow proxy.
-                        let! status = getWithCookie (url + "/github") ""
-                        Expect.equal status.Status 401 "status is gated"
+                        // (What a panel SAYS is behind the read stream's door, pinned there:
+                        // there is no status route here any more.)
                         let! began = postJsonWithCookie (url + "/github/begin") "" """{"scope":"mine"}"""
                         Expect.equal began.Status 401 "begin is gated"
                         Expect.equal stub.TokenRequests.Count 0 "nothing reached github.com"
@@ -1879,39 +1888,41 @@ let private githubRouteTests =
                 // and every new value stranded the last one's credential.
                 let recorder = recordingConnections ()
                 let storedTargets = ResizeArray<SecretId> ()
-                let! url =
-                    startGitHubRoutes recorder.Client (fun target ->
-                        if storedTargets.Contains target then Some (stored StaticConnection ConnectionUsable target) else None)
+                let! url = startGitHubRoutes recorder.Client
 
                 let! connected =
                     postJsonWithCookie (url + "/github/token") "who=anon" """{"scope":"mine","token":"ghp_abc"}"""
-                   
+
                 Expect.equal connected.Status 200 "unattributed access can connect"
                 Expect.equal recorder.Puts.Count 1 "one credential stored"
                 let target, _ = recorder.Puts.[0]
                 Expect.equal target.Scope LocalScope "owned by the deployment, not by any browser"
                 storedTargets.Add target
 
+                let statusOf target =
+                    if storedTargets.Contains target then Some (stored StaticConnection ConnectionUsable target) else None
+
                 // A DIFFERENT browser — no shared storage, no shared id, nothing carried over
                 // but the same deployment. Before this change it saw `"mine":null` and was
                 // shown a Connect button.
-                let! elsewhere = getWithCookie (url + "/github") "who=anon"
-                Expect.equal elsewhere.Status 200 "readable"
-                Expect.isTrue (connectedAt "mine" elsewhere.Body) "already connected, from a browser that never connected anything"
-                Expect.isTrue (elsewhere.Body.Contains "\"owner\":\"local\"") "and says whose it is: the deployment's"
+                let elsewhere = githubPanelFor statusOf (identityOf "anon" Yession.SessionProcess.UnattributedAccess)
+                Expect.isTrue
+                    elsewhere.MineCredential.IsSome
+                    "already connected, from a browser that never connected anything"
+                Expect.equal elsewhere.Owner (Some "local") "and says whose it is: the deployment's"
 
                 // An attributed user is untouched by any of it — they own their own, and the
                 // deployment's credential is not theirs to see.
-                let! alicesView = getWithCookie (url + "/github") "who=alice"
-                Expect.isTrue (notConnectedAt "mine" alicesView.Body) "an attributed user does not inherit it"
-                Expect.isTrue (alicesView.Body.Contains "\"owner\":\"user\"") "and owns by user"
+                let alicesView = githubPanelFor statusOf (identityOf "alice" (Yession.SessionProcess.AttributedUser alice))
+                Expect.isNone alicesView.MineCredential "an attributed user does not inherit it"
+                Expect.equal alicesView.Owner (Some "user") "and owns by user"
             }
 
         testCaseAsync "begin hands the browser the user code and keeps the device code; poll paces, then connects" <|
             async {
                 let! stub = startStubGitHub ()
                 let recorder = recordingConnections ()
-                let! url = startGitHubRoutes recorder.Client (fun _ -> None)
+                let! url = startGitHubRoutes recorder.Client
                 do! withStubGitHub stub (Some "Iv1.test") (fun () ->
                     async {
                         let! began = postJsonWithCookie (url + "/github/begin") "who=alice" """{"scope":"mine"}"""
@@ -1987,7 +1998,7 @@ let private githubRouteTests =
                                 return Error (GitHubConnection.GitHubUnreachable "socket hang up")
                             else return! GitHubConnection.posting (url, body)
                         }
-                let! url = startGitHubRoutesOver flaky recorder.Client (fun _ -> None)
+                let! url = startGitHubRoutesOver flaky recorder.Client
                 do! withStubGitHub stub (Some "Iv1.test") (fun () ->
                     async {
                         let! _ = postJsonWithCookie (url + "/github/begin") "who=alice" """{"scope":"mine"}"""
@@ -2013,7 +2024,7 @@ let private githubRouteTests =
                 let recorder = recordingConnections ()
                 let unreachable : GitHubConnection.GitHubPost =
                     fun _ -> async { return Error (GitHubConnection.GitHubUnreachable "getaddrinfo ENOTFOUND github.com") }
-                let! url = startGitHubRoutesOver unreachable recorder.Client (fun _ -> None)
+                let! url = startGitHubRoutesOver unreachable recorder.Client
                 do! withStubGitHub stub (Some "Iv1.test") (fun () ->
                     async {
                         let! began = postJsonWithCookie (url + "/github/begin") "who=alice" """{"scope":"mine"}"""
@@ -2026,7 +2037,7 @@ let private githubRouteTests =
             async {
                 let! stub = startStubGitHub ()
                 let recorder = recordingConnections ()
-                let! url = startGitHubRoutes recorder.Client (fun _ -> None)
+                let! url = startGitHubRoutes recorder.Client
                 do! withStubGitHub stub (Some "Iv1.test") (fun () ->
                     async {
                         // Alice begins for herself. Bob is signed in too, and github.com is
@@ -2061,7 +2072,7 @@ let private githubRouteTests =
             async {
                 let! stub = startStubGitHub ()
                 let recorder = recordingConnections ()
-                let! url = startGitHubRoutes recorder.Client (fun _ -> None)
+                let! url = startGitHubRoutes recorder.Client
                 do! withStubGitHub stub None (fun () ->
                     async {
                         // No client id: the operator has registered no App. The route says so
@@ -2085,31 +2096,24 @@ let private githubRouteTests =
                     })
             }
 
-        testCaseAsync "status reports both scopes, and reports them per caller" <|
-            async {
-                let! stub = startStubGitHub ()
-                let recorder = recordingConnections ()
-                let aliceTarget = githubTarget (UserScope alice)
-                let connected = Map.ofList [ aliceTarget, stored StaticConnection ConnectionUsable aliceTarget ]
-                let! url = startGitHubRoutes recorder.Client (fun target -> Map.tryFind target connected)
-                do! withStubGitHub stub (Some "Iv1.test") (fun () ->
-                    async {
-                        let! forAlice = getWithCookie (url + "/github") "who=alice"
-                        Expect.equal forAlice.Status 200 "alice sees her own"
-                        Expect.isTrue (connectedAt "mine" forAlice.Body) "alice is connected"
-                        Expect.isTrue
-                            (forAlice.Body.Contains """"signInRequired":null""")
-                            "and nothing says otherwise"
-                        Expect.isTrue (notConnectedAt "session" forAlice.Body) "the session is not"
-                        Expect.isTrue (forAlice.Body.Contains "\"owner\":\"user\"") "as a user"
+        testCase "a panel reports both scopes, and reports them per caller" <| fun () ->
+            let aliceTarget = githubTarget (UserScope alice)
+            let connected = Map.ofList [ aliceTarget, stored StaticConnection ConnectionUsable aliceTarget ]
+            let statusOf target = Map.tryFind target connected
 
-                        // The same session, a different human: status is computed from the
-                        // caller's identity, so bob does not learn he is signed in because
-                        // alice is.
-                        let! forBob = getWithCookie (url + "/github") "who=bob"
-                        Expect.isTrue (notConnectedAt "mine" forBob.Body) "bob is not connected"
-                    })
-            }
+            let forAlice = githubPanelFor statusOf (identityOf "alice" (Yession.SessionProcess.AttributedUser alice))
+            Expect.isTrue forAlice.MineCredential.IsSome "alice is connected"
+            Expect.equal
+                (forAlice.MineCredential |> Option.bind (fun row -> row.SignInRequired))
+                None
+                "and nothing says otherwise"
+            Expect.isNone forAlice.SessionCredential "the session is not"
+            Expect.equal forAlice.Owner (Some "user") "as a user"
+
+            // The same session, a different human: the panel is computed from the caller's
+            // identity, so bob does not learn he is signed in because alice is.
+            let forBob = githubPanelFor statusOf (identityOf "bob" (Yession.SessionProcess.AttributedUser bob))
+            Expect.isNone forBob.MineCredential "bob is not connected"
     ]
 
 // --- watched pull requests (the poller, and the two endpoints under it) -------------------

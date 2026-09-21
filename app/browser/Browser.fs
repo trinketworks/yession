@@ -18,6 +18,7 @@ open Yession.Domain.Link
 open Yession.Domain.Repos
 open Yession.Domain.Terminals
 open Yession.Domain.Collab
+open Yession.Domain.Tools
 open Fable.ProseMirror
 open Yession.App
 open Lit
@@ -861,35 +862,6 @@ let private urlEncode (value: string) : string = JS.encodeURIComponent value
 /// epoch, because `Pending`'s deadline is an elapsed time and nothing here needs a date.
 let private nowMillis () : int64 = System.DateTimeOffset.UtcNow.ToUnixTimeMilliseconds ()
 
-/// How often a panel re-asks the status while a command of ours is still on its way into
-/// it. Short, because the frame it is waiting for is milliseconds behind the command and
-/// the whole point is not to miss it by having asked once, too early; bounded by
-/// `Pending.deadlineMillis`, which is what ends the asking.
-[<Literal>]
-let private pollLandedMillis = 200
-
-/// A status round-trip that answers only when it HAS an answer. A fetch that never arrived, a
-/// session that refused, and a reply this build cannot read are one outcome with one remedy:
-/// say nothing, so the panel keeps showing what it last knew rather than blanking on a blip.
-let private fetchStatusAt (decoder: Decoder<'reply>) (url: string) : Async<'reply option> =
-    async {
-        let init = [ Fetch.Types.RequestProperties.Cache Fetch.Types.RequestCache.Nostore ]
-        // `fetchUnsafe`, not `fetch`: a refusal is a response to read the status off, not an
-        // exception to catch (`fetchMe` above carries the rest of why).
-        let! attempt = Fetch.fetchUnsafe url init |> Async.AwaitPromise |> Async.Catch
-        match attempt with
-        | Choice2Of2 _ -> return None
-        | Choice1Of2 response when not response.Ok -> return None
-        | Choice1Of2 response ->
-            let! body = response.text () |> Async.AwaitPromise
-            match Decode.fromString decoder body with
-            | Ok reply -> return Some reply
-            | Error _ -> return None
-    }
-
-let private fetchClaudeStatus () =
-    fetchStatusAt Codec.claudePanel.Decode (Page.href ClaudeStatus)
-
 /// A JSON POST: the one write shape both connection panels use. Every route they post to
 /// decodes its body as JSON, so the content-type is stated once here rather than at each of
 /// the six call sites — one of which would eventually be written without it.
@@ -938,9 +910,6 @@ let private panelInput (selector: string) : string =
 // --- GitHub connection panel round-trips (Plan 14) ---------------------------------------
 // Same fetch shapes as the Claude panel's; the flow differs (device code) so the two
 // extra parsers below read the begin/poll replies.
-
-let private fetchGitHubStatus () =
-    fetchStatusAt Codec.githubPanel.Decode (Page.href GitHubStatus)
 
 let private githubBody (scope: string) (token: string) : string =
     JS.JSON.stringify {| scope = scope; token = sentIfGiven token |}
@@ -1141,51 +1110,17 @@ let private start () =
                 SyncedStateSync.chapterNameText doc (MessageId.value messageId) |> Option.map box
             | DraftBody _ | QueueBody _ | TerminalDraftBody _ | TerminalQueuedBody _ -> None
 
-        // The Claude connection panel's round-trips (Plan 08). Status is polled: once
-        // after connect-probe, after every action, and every few seconds while a flow
-        // awaits its callback (completion happens in the claude.ai tab, landing at the
-        // Manager — this tab learns of it only by asking).
-        let refreshClaude () =
+        // The connection panels are TOLD, on the read stream below — nothing here fetches a
+        // status. What is left is the one thing a push cannot report: a stream that never
+        // delivers. `armDeadline` is that net, and it is a single tick rather than a poll,
+        // because what it is waiting for is the clock and not an answer.
+        let armDeadline () =
             Async.StartImmediate (
                 async {
-                    match! fetchClaudeStatus () with
-                    | None -> ()
-                    // One message, because it is one answer: the picker's supply arrives
-                    // inside the status it is a fact about, and what to do with a reply that
-                    // does not mention it is `ClaudeStatus.keeping`'s to say.
-                    | Some status -> dispatchRef (ClaudeStatusMsg status)
+                    do! Async.Sleep (int Pending.deadlineMillis)
+                    dispatchRef (PendingWaitedMsg (nowMillis ()))
                 })
-        let rec pollClaudeWhileAwaiting () =
-            Async.StartImmediate (
-                async {
-                    do! Async.Sleep 3000
-                    match latestModel.Claude.Flow with
-                    | ClaudeAwaitingCode _ ->
-                        refreshClaude ()
-                        pollClaudeWhileAwaiting ()
-                    | _ -> ()
-                })
-        // A wait for a status this panel has not been shown yet, kept asking until the
-        // status shows it or `Pending` gives up. The probe fired the moment the command
-        // answered is the one that almost always settles it; this is what makes "almost"
-        // stop mattering, because the status the command moved arrives on a stream of its
-        // own and nothing orders the two (`Pending`'s own doc has the whole account).
-        let rec pollClaudeUntilLanded () =
-            Async.StartImmediate (
-                async {
-                    do! Async.Sleep pollLandedMillis
-                    match latestModel.Claude.Pending with
-                    | Pending.Awaiting _ ->
-                        // The deadline is the model's rule, not this loop's: the loop only
-                        // says what time it is.
-                        dispatchRef (PendingWaitedMsg (nowMillis ()))
-                        match latestModel.Claude.Pending with
-                        | Pending.Awaiting _ ->
-                            refreshClaude ()
-                            pollClaudeUntilLanded ()
-                        | _ -> ()
-                    | _ -> ()
-                })
+
         /// One shape for every panel action: sending → the command answers → either it is
         /// refused, or it opened an authorize tab (nothing for the status to show yet), or
         /// it was ACCEPTED and `expect` names what the status has to show before this panel
@@ -1201,16 +1136,16 @@ let private start () =
                     match! run () with
                     | Error reason -> dispatchRef (ClaudePendingMsg (Pending.Refused reason))
                     | Ok (Some authorizeUrl) ->
+                        // Nothing for the panel to show yet: the credential arrives when the
+                        // human finishes in the tab this opens, and the stream says so.
                         dispatchRef (ClaudePendingMsg Pending.Ready)
                         dispatchRef (ClaudeFlowMsg (ClaudeAwaitingCode (authorizeUrl, scope)))
-                        pollClaudeWhileAwaiting ()
                     | Ok None ->
                         match expect with
                         | Some expect ->
                             dispatchRef (ClaudePendingMsg (Pending.Awaiting (expect, nowMillis ())))
-                            pollClaudeUntilLanded ()
+                            armDeadline ()
                         | None -> dispatchRef (ClaudePendingMsg Pending.Ready)
-                        refreshClaude ()
                 })
         let postClaudeAction
             (route: string)
@@ -1236,15 +1171,9 @@ let private start () =
 
         // The GitHub panel's round-trips (Plan 14). Device flow: begin puts the user
         // code on screen, then this tab drives the session's poll at GitHub's stated
-        // interval until the grant lands (a status probe then flips the flow to idle),
-        // the human cancels, or the flow dies.
-        let refreshGitHub () =
-            Async.StartImmediate (
-                async {
-                    match! fetchGitHubStatus () with
-                    | None -> ()
-                    | Some status -> dispatchRef (GitHubStatusMsg status)
-                })
+        // interval until the grant lands (the pushed panel then flips the flow to idle),
+        // the human cancels, or the flow dies. That poll is a COMMAND — it is what makes
+        // GitHub hand the grant over — and is the one loop here that is not a status probe.
         let rec pollGitHubWhileAwaiting () =
             Async.StartImmediate (
                 async {
@@ -1275,7 +1204,9 @@ let private start () =
                         else
                             let outcome = parseDevicePoll reply.Body
                             match outcome.status with
-                            | Some "connected" -> refreshGitHub ()
+                            // The grant landed. Nothing to ask: the Manager's frame reaches
+                            // this session, and the session tells every open drawer.
+                            | Some "connected" -> ()
                             | _ ->
                                 if outcome.interval > interval then
                                     dispatchRef (GitHubFlowMsg (GitHubAwaitingApproval (userCode, verificationUri, scope, outcome.interval)))
@@ -1292,30 +1223,18 @@ let private start () =
         // the seconds before the login bounce navigates away. Nobody is waiting on a frame
         // that cannot arrive, and the console it was filling is the one anybody debugging a
         // real authorization fault has to read.
-        let subscribeQueries () =
+        let subscribeRead () =
             openQueryStream
                 (Page.href SessionRoute.Queries)
                 (fun data ->
-                    match Codec.fromString Codec.queryFrame data with
-                    | Ok frame -> dispatchRef (QueryFrameMsg frame)
+                    match Codec.fromString Codec.readFrame data with
+                    | Ok (Queried frame) -> dispatchRef (QueryFrameMsg frame)
+                    | Ok (Panels (claude, github)) ->
+                        dispatchRef (ClaudeStatusMsg claude)
+                        dispatchRef (GitHubStatusMsg github)
                     | Error _ -> ())
             |> ignore
 
-        // The GitHub panel's own wait, for the Claude panel's reason and by the same rule.
-        let rec pollGitHubUntilLanded () =
-            Async.StartImmediate (
-                async {
-                    do! Async.Sleep pollLandedMillis
-                    match latestModel.GitHub.Pending with
-                    | Pending.Awaiting _ ->
-                        dispatchRef (PendingWaitedMsg (nowMillis ()))
-                        match latestModel.GitHub.Pending with
-                        | Pending.Awaiting _ ->
-                            refreshGitHub ()
-                            pollGitHubUntilLanded ()
-                        | _ -> ()
-                    | _ -> ()
-                })
         let githubAction
             (run: unit -> Async<Result<GitHubFlowState option, string>>)
             (expect: ConnectionExpectation option)
@@ -1333,9 +1252,8 @@ let private start () =
                         match expect with
                         | Some expect ->
                             dispatchRef (GitHubPendingMsg (Pending.Awaiting (expect, nowMillis ())))
-                            pollGitHubUntilLanded ()
+                            armDeadline ()
                         | None -> dispatchRef (GitHubPendingMsg Pending.Ready)
-                        refreshGitHub ()
                 })
 
         // The copied mark is a moment, so it is one deadline: re-armed by each copy, and the
@@ -1350,21 +1268,11 @@ let private start () =
               DiscardDraft = fun peer -> connectionRef |> Option.iter (fun c -> c.DiscardDraft peer)
               Interrupt = fun turn -> connectionRef |> Option.iter (fun c -> c.InterruptTurn turn)
               ToggleNav = toggleNav
-              ToggleSettings =
-                fun () ->
-                    // Open (or close) the drawer AND re-probe, so it always shows the
-                    // current truth the moment it appears.
-                    // The connection panels are PROBED on open (they have no push leg);
-                    // the query surface needs no re-probe, because its stream has been
-                    // pushing since start.
-                    toggleSettings ()
-                    refreshClaude ()
-                    refreshGitHub ()
-              RevealSettings =
-                fun () ->
-                    revealSettings ()
-                    refreshClaude ()
-                    refreshGitHub ()
+              // Opening the drawer shows what the stream has already said. There is nothing
+              // to re-probe: the panels have a push leg now, exactly as the query surface
+              // always did, so opening is a view change and not a round trip.
+              ToggleSettings = toggleSettings
+              RevealSettings = revealSettings
               ReportFieldSelection =
                 fun field sel ->
                     // A collaborative input's caret, turned into relative positions over the
@@ -1686,10 +1594,9 @@ let private start () =
             dispatchRef (ConnectFailedMsg (Client.ChannelFault.describe (Client.ChannelUnreachable detail)))
         | ProbeUnauthorized -> renavigateTo (Page.href Login)
         | ProbeAuthorized me ->
-            // Authenticated: the Claude panel's status is knowable now, and the read
-            // surface's stream has a cookie that will be accepted.
-            refreshClaude ()
-            subscribeQueries ()
+            // Authenticated: the read stream has a cookie that will be accepted, and its
+            // opening frames are what fill the panels and the query surface alike.
+            subscribeRead ()
             // `me.DisplayName` is the attributed user's real name, when `/me` had one
             // (see `Signalling.fs`) — carried into OUR OWN `PeerHello` instead of the
             // random one so the durable `PeerJoined` this join appends records the name a

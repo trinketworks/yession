@@ -125,26 +125,75 @@ let empty : QueryRegistry =
     | Ok registry -> registry
     | Error e -> failwithf "empty query registry: %s" e
 
-// --- the browser-facing /queries route (Plan 15) ------------------------------------------
+// --- the browser-facing read stream (Plan 15) ---------------------------------------------
 // ONE route, and it is the stream. There is no snapshot fetch beside it because there is
 // nothing a snapshot fetch would answer that the stream's opening burst does not — and a
 // second mechanism nobody exercises is a second mechanism that rots.
+//
+// It carries the connection panels as well as the queries now, for the same reason the
+// queries are multiplexed rather than a stream each. The panels used to be fetched, which
+// made a browser read its own write off a cache the Manager had not finished filling.
 
 open Fable.Core.JsInterop
 open Yession.App
 open Yession.Host.Interop
+open Yession.SessionProcess
 
 let private respondText (res: ServerResponse) (status: int) (text: string) =
     res.writeHead (status, createObj [ "content-type", box "text/plain"; "cache-control", box "no-store" ]) |> ignore
     res.``end`` text
 
-/// Build the `/queries` route handler over a registry. Cookie-gated like the connection
-/// panels: reading session state is for the people in the session. Per-query
-/// authorization is deliberately not here (stated in the plan) — every member reads every
-/// query, exactly as every member already reads the timeline the commands land in.
+/// The connection panels as a read model: the pair for one identity now, and the pair
+/// again whenever this session's connection status moves.
+///
+/// Per IDENTITY, which is what a broadcast could not be: "mine" is a different credential
+/// for different people, so there is no one value to send everybody. `Changed` is called
+/// where the Manager's status stream lands — a command is the only thing that moves this,
+/// exactly as `Invalidate` says for a query.
+type PanelFeed =
+    { Subscribe : CookieIdentity -> Subscribe<Access.ClaudePanel * Access.GitHubPanel>
+      Changed : unit -> unit }
+
+/// A feed over the two panel builders. Holds its subscribers as the query registry holds
+/// its sinks, and for the same reasons.
+let panels
+    (claudeFor: CookieIdentity -> Async<Access.ClaudePanel>)
+    (githubFor: CookieIdentity -> Access.GitHubPanel)
+    : PanelFeed =
+    let mutable sinks : (int * (unit -> unit)) list = []
+    let mutable nextSink = 0
+    { Subscribe =
+        fun identity sink ->
+            let push () =
+                Async.StartImmediate (
+                    async {
+                        let! claude = claudeFor identity
+                        sink (claude, githubFor identity)
+                    })
+            let id = nextSink
+            nextSink <- nextSink + 1
+            sinks <- sinks @ [ id, push ]
+            // The pair at once, so a drawer opened on a cold stream renders what is true
+            // rather than what it had. This opening send IS the snapshot.
+            push ()
+            Subscription.ofStop (fun () -> sinks <- sinks |> List.filter (fun (existing, _) -> existing <> id))
+      Changed = fun () -> sinks |> List.iter (fun (_, push) -> push ()) }
+
+/// A feed nobody feeds — the composition's fallback where a session has no connection
+/// broker to have panels about.
+let noPanels : PanelFeed =
+    { Subscribe = fun _ _ -> Subscription.ofStop ignore
+      Changed = ignore }
+
+/// Build the read-stream route over a registry and the panel feed. Cookie-gated: reading
+/// session state is for the people in the session, and the panels are per-identity besides.
+/// Per-query authorization is deliberately not here (stated in the plan) — every member
+/// reads every query, exactly as every member already reads the timeline the commands land
+/// in.
 let routes
     (auth: SessionAuth.Auth)
     (registry: QueryRegistry)
+    (feed: PanelFeed)
     (mount: string)
     : IncomingMessage -> ServerResponse -> bool =
     fun req res ->
@@ -152,7 +201,16 @@ let routes
         | Some SessionRoute.Queries ->
             match auth.IdentityOf req with
             | None -> respondText res 401 "unauthorized"
-            | Some _ -> Sse.stream req res (Codec.toString Codec.queryFrame) registry.Subscribe |> ignore
+            | Some identity ->
+                // Two read models, one stream, one sink: `Sse.stream` opens the response and
+                // hands back the sink both subscriptions write into.
+                let sink = Sse.stream req res (Codec.toString Codec.readFrame) (fun sink ->
+                    let queries = registry.Subscribe (Queried >> sink)
+                    let panels = feed.Subscribe identity (Panels >> sink)
+                    Subscription.ofStop (fun () ->
+                        queries.Stop ()
+                        panels.Stop ()))
+                ignore sink
             true
         | Some _
         | None -> false
