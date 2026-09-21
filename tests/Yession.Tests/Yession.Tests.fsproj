@@ -120,6 +120,7 @@
          only thing that can see a hole in release.yml's gate before a release goes out
          through it. -->
     <Compile Include="ReleaseGate.fs" />
+    <Compile Include="LiveConnections.fs" />
     <Compile Include="Main.fs" />
   </ItemGroup>
 

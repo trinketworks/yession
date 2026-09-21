@@ -115,16 +115,19 @@ let tests =
                 Expect.equal model.Connection Reconnecting "dropped connection moves model to Reconnecting"
             }
 
+        // Teardown, and nothing else — it asserts nothing, which is why it must not also be
+        // the place a library is torn down. It used to call `Interop.cleanup ()` here, on the
+        // stated grounds that by this point libdatachannel owned no live objects. The grounds
+        // were sound and the call was not: `cleanup()` closes every connection ITSELF before
+        // it waits (node-datachannel, `src/cpp/rtc-wrapper.cpp`), so what this suite had
+        // closed never decided anything, and its ten-second timeout threw twice — failing a
+        // case that had nothing to do with whatever libdatachannel was waiting for. What the
+        // closes are actually worth is said on `Live connections`, which asks the question
+        // this ritual could not answer: is anything still open, and who opened it.
         testCaseAsync "stop the Session Process host" <|
             async {
                 match host with
                 | Some h -> do! h.Stop ()
                 | None -> ()
-                // Deterministic teardown (no sleeps): the client's `channel.Close ()`
-                // above waited for ITS PeerConnection to report closed, and `h.Stop ()`
-                // drains every host-side PeerConnection the same way — so by here
-                // libdatachannel owns no live objects and the global cleanup cannot race
-                // a close callback (the SIGSEGV of verify run 30137017551).
-                Interop.cleanup ()
             }
     ]
