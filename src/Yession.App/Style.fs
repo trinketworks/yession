@@ -642,7 +642,9 @@ module Style =
     /// pixels below the baseline so a filled square sits on the descender line like a letter
     /// with one, and a stroked glyph — whose lowest vertex is ~2px above its box's bottom —
     /// lands on the baseline itself. A gap to the name, since inline content has no `gap`.
-    let entitySeat = "inline-block align-[-2px] mr-1"
+    /// `inline-grid`, not `inline-block`: the agent's mark draws its inner square as a grid
+    /// child (`agentAvatar`), and a seat that overrode the display left it an empty box.
+    let entitySeat = "inline-grid place-items-center align-[-2px] mr-1"
     /// A person's mark on that seat: the checker, sized as the small avatar is everywhere.
     let entityAvatar = cls [ avatarSm; entitySeat ]
     /// A non-person reference's mark on that seat: an icon in a step fainter ink than the
@@ -1750,6 +1752,18 @@ module Style =
     let actNoteFoldBodyOpen = cls [ Motion.unfold; Motion.unfolded ]
     let actNoteFoldBodyShut = cls [ Motion.unfold; Motion.folded ]
     let actNoteFoldInner = cls [ Motion.unfoldInner; "flex flex-col gap-1 pt-1" ]
+    /// The sentence the agent was told, QUOTED: typographic marks either side, drawn by the
+    /// stylesheet rather than written into the row, so what the element SAYS stays exactly
+    /// what the prompt carried (`data-act-said`'s text is `ConversationItem.said`, to the
+    /// character, and a test reads it so). The marks are a step fainter and a touch larger
+    /// than the words they hold, the way a pull quote's are — they frame, they do not speak.
+    let actNoteTold =
+        cls [ "before:content-['“'] after:content-['”']"
+              "before:text-ink-faint after:text-ink-faint before:text-[1.15em] after:text-[1.15em]"
+              "before:mr-px after:ml-px" ]
+    /// The row that holds it reads as ONE line of prose — `agent told “…”` — wrapping where
+    /// the words do, rather than a key column with the quote parked beneath it.
+    let actNoteToldRow = cls [ actNoteFactVal; "text-ink-faint" ]
     /// A line this host could not honour exactly. One step brighter than the other
     /// particulars (`ink-dim`, not `ink-faint`), so the one fact that means "you did not get
     /// quite what you asked for" is the one the eye catches - without the line having to grow

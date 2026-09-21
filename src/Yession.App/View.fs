@@ -2021,10 +2021,7 @@ module View =
         // text IS what the prompt carried, to the character.
         let toldRow (act: Act) =
             html $"""
-                <div class="{Style.actNoteFactRow}">
-                  <span class="{Style.actNoteFactKey}">{Dom.Text.actSaid}</span>
-                  <span class="{Style.actNoteFactVal}" data-act-said>{Entity.told model (Act.sentence act)}</span>
-                </div>"""
+                <div class="{Style.actNoteToldRow}">{Entity.render model ActorRef.Agent (EntityRef.Actor ActorRef.Agent)} {Dom.Text.actSaid} <span class="{Style.actNoteTold}" data-act-said>{Entity.told model (Act.sentence act)}</span></div>"""
         // A sandbox start shows its TITLE and nothing else on the line: which sandbox, drawn
         // as a reference (under the repo that declared it, that is the bare `dev`). Everything
         // the sentence also carries — the backend, what it is for, where the checkout sits,
