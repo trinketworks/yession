@@ -590,11 +590,17 @@ module View =
         // fail on. The status word follows the credential's health; the gate does not, so
         // the no-agent prompt keeps meaning "nothing is connected" rather than doubling up.
         let claudeNeedsSignIn =
-            [ model.Claude.Status.MineCredential; model.Claude.Status.SessionCredential ]
-            |> List.exists (fun credential ->
-                credential |> Option.map (fun c -> c.SignInRequired.IsSome) |> Option.defaultValue false)
+            match model.Claude.Status with
+            | Some panel ->
+                [ panel.MineCredential; panel.SessionCredential ]
+                |> List.exists (fun credential ->
+                    credential |> Option.map (fun c -> c.SignInRequired.IsSome) |> Option.defaultValue false)
+            | None -> false
         let agentRow =
-            match model.Claude.Status.AgentAvailable with
+            // `None` is the stream not having said yet, which is the one state this row has
+            // nothing to say in — it was a third case of a `bool option` and is the absence
+            // of the panel now.
+            match model.Claude.Status |> Option.map (fun panel -> panel.AgentAvailable) with
             | Some true when claudeNeedsSignIn ->
                 html $"""<div class="{Style.person}" data-agent-presence="live"><span class="{Style.cls [ Style.avatar; Style.agentAvatar; Style.personAvatar ]}"></span>agent<span class="{Style.statusErr} ml-auto"><span class="{Style.statusDot}"></span>{Dom.Text.signInAgainStatus}</span></div>"""
             | Some true ->
@@ -705,11 +711,18 @@ module View =
     /// attributes its users it is that person's own; on one that attributes nobody
     /// (`--auth localhost`) it is EVERYONE who can reach this Manager, and calling that
     /// "mine" would be the panel promising something the deployment cannot keep.
-    /// Unknown until the first status probe answers — say the cautious thing meanwhile.
-    let private sharedScopeLabel (owner: string option) : string =
+    /// Unknown until the panel arrives — say the cautious thing meanwhile.
+    ///
+    /// BOTH panels call this. The GitHub section used to write "All my sessions" outright,
+    /// which under `--auth localhost` claimed as one person's a credential the whole
+    /// deployment shares — the promise the line above says a panel must not make. It could
+    /// only be written that way while the owner was a string nothing obliged a renderer to
+    /// read; a `SharedOwner` makes the match exhaustive.
+    let private sharedScopeLabel (owner: SharedOwner option) : string =
         match owner with
-        | Some "user" -> "All my sessions"
-        | _ -> "All sessions"
+        | Some OwnedByUser -> "All my sessions"
+        | Some OwnedByDeployment
+        | None -> "All sessions"
 
     /// How a connected credential reads on a panel row: green and its kind, or the fault
     /// style and the words that name the fix. ONE function, because both connection panels
@@ -776,7 +789,7 @@ module View =
                 html $"""
                     <label class="{Style.label}" for="claude-scope">sign in for</label>
                     <select id="claude-scope" class="{Style.field}" data-claude-scope aria-label="Sign-in scope">
-                      <option value="mine">{sharedScopeLabel claude.Status.Owner}</option>
+                      <option value="mine">{sharedScopeLabel (claude.Status |> Option.map (fun panel -> panel.Owner))}</option>
                       <option value="session">This session only</option>
                     </select>
                     <button type="button" class="{Style.btnPrimary}" data-claude-connect @click={Ev(fun _ -> actions.ClaudeConnect ())}>Connect Claude</button>
@@ -790,8 +803,11 @@ module View =
         html $"""
             <section class="{Style.cls [ Style.sideSection; Style.settingsLane1 ]}" data-claude-panel>
               <span class="{Style.label}">claude</span>
-              {connectedRow ((sharedScopeLabel claude.Status.Owner).ToLowerInvariant ()) "mine" claude.Status.MineCredential}
-              {connectedRow "this session" "session" claude.Status.SessionCredential}
+              {connectedRow
+                 ((sharedScopeLabel (claude.Status |> Option.map (fun panel -> panel.Owner))).ToLowerInvariant ())
+                 "mine"
+                 (claude.Status |> Option.bind (fun panel -> panel.MineCredential))}
+              {connectedRow "this session" "session" (claude.Status |> Option.bind (fun panel -> panel.SessionCredential))}
               {error}
               {controls}
             </section>"""
@@ -810,10 +826,11 @@ module View =
     let private modelSection (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
         let chosen = model.Synced.Model
         let offered =
-            match model.Claude.Status.Models with
-            | ModelsLoaded models -> ModelCatalogue.ordered models
-            | ModelsUnknown
-            | ModelsUnavailable _ -> []
+            match model.Claude.Status |> Option.map (fun panel -> panel.Models) with
+            | Some (ModelsLoaded models) -> ModelCatalogue.ordered models
+            | Some ModelsUnknown
+            | Some (ModelsUnavailable _)
+            | None -> []
         // The chosen model, when the catalogue does not carry it: shown by its id, which is
         // the only name anything here has for it.
         let orphan =
@@ -829,12 +846,15 @@ module View =
         // explain. A lookup that failed is almost always "no account connected here yet",
         // and the panel above this one is the way out of that.
         let note =
-            match model.Claude.Status.Models with
-            | ModelsUnknown -> html $"""<span class="{Style.small}" data-model-note="pending">…</span>"""
-            | ModelsLoaded [] ->
+            // A panel that has not arrived reads as the pending note, which is what it is:
+            // nothing has said what this session can run on.
+            match model.Claude.Status |> Option.map (fun panel -> panel.Models) with
+            | None
+            | Some ModelsUnknown -> html $"""<span class="{Style.small}" data-model-note="pending">…</span>"""
+            | Some (ModelsLoaded []) ->
                 html $"""<span class="{Style.small}" data-model-note="empty">this provider offered no models</span>"""
-            | ModelsLoaded _ -> Lit.nothing
-            | ModelsUnavailable reason ->
+            | Some (ModelsLoaded _) -> Lit.nothing
+            | Some (ModelsUnavailable reason) ->
                 html $"""<span class="{Style.small}" data-model-note="unavailable">{reason}</span>"""
         html $"""
             <section class="{Style.cls [ Style.sideSection; Style.settingsLane1 ]}" data-model-panel>
@@ -899,7 +919,7 @@ module View =
                 html $"""
                     <label class="{Style.label}" for="github-scope">sign in for</label>
                     <select id="github-scope" class="{Style.field}" data-github-scope aria-label="GitHub sign-in scope">
-                      <option value="mine">All my sessions</option>
+                      <option value="mine">{sharedScopeLabel (github.Status |> Option.map (fun panel -> panel.Owner))}</option>
                       <option value="session">This session only</option>
                     </select>
                     <button type="button" class="{Style.btnPrimary}" data-github-connect @click={Ev(fun _ -> actions.GitHubConnect ())}>Connect GitHub</button>
@@ -913,8 +933,11 @@ module View =
         html $"""
             <section class="{Style.cls [ Style.sideSection; Style.settingsLane1 ]}" data-github-panel>
               <span class="{Style.label}">github</span>
-              {connectedRow "all my sessions" "mine" github.Status.MineCredential}
-              {connectedRow "this session" "session" github.Status.SessionCredential}
+              {connectedRow
+                 ((sharedScopeLabel (github.Status |> Option.map (fun panel -> panel.Owner))).ToLowerInvariant ())
+                 "mine"
+                 (github.Status |> Option.bind (fun panel -> panel.MineCredential))}
+              {connectedRow "this session" "session" (github.Status |> Option.bind (fun panel -> panel.SessionCredential))}
               {error}
               {controls}
             </section>"""
@@ -1252,7 +1275,7 @@ module View =
     /// the one prompt would be one a phone never sees; the CSS in `Style.headerNoAgent` makes the
     /// two mutually exclusive, so it is never said twice.
     let private agentAbsence (actions: ViewActions) (claude: ClaudeViewState) : TemplateResult =
-        match claude.Status.AgentAvailable with
+        match claude.Status |> Option.map (fun panel -> panel.AgentAvailable) with
         | Some false ->
             html $"""<button type="button" class="{Style.headerNoAgent}" data-settings-toggle="prompt" @click={Ev(fun _ -> actions.ToggleSettings ())}>no agent</button>"""
         | _ -> Lit.nothing

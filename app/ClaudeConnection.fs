@@ -495,9 +495,10 @@ let panelFor
             { SessionCredential = CredentialRow.ofStatus (statusOf sessionTarget)
               MineCredential = CredentialRow.ofStatus (statusOf mineTarget)
               // What "mine" MEANS here, so the panel can say it honestly: one person's
-              // credential, or this whole deployment's.
-              Owner = Some (match owner with UserOwner _ -> "user" | LocalOwner -> "local")
-              AgentAvailable = Some (agentAvailable ())
+              // credential, or this whole deployment's. The rule is `SharedOwner`'s — it
+              // was this `match`, spelled the same way in the GitHub handler too.
+              Owner = SharedOwner.ofCredentialOwner owner
+              AgentAvailable = agentAvailable ()
               Models =
                 match catalogue with
                 | Ok models -> ModelsLoaded models

@@ -123,15 +123,15 @@ module ConnectionExpectation =
 /// `Yession.Domain.Access.ClaudePanel` — one shape the session encodes and this reads.
 module ClaudePanel =
 
-    /// A status as it should be FOLDED over the one this client already had.
+    /// A panel as it should be FOLDED over the one this client already had — which, the
+    /// first time, is none.
     ///
-    /// A reply that says nothing about models — an older session process, a lookup still in
-    /// flight — must not blank a picker that has a list. Everything else is replaced: the
-    /// arriving status IS the answer, and a row it stopped naming is a credential that is
-    /// gone.
-    let keeping (known: ClaudePanel) (arrived: ClaudePanel) : ClaudePanel =
-        match arrived.Models with
-        | ModelsUnknown -> { arrived with Models = known.Models }
+    /// A panel that says nothing about models — a lookup still in flight — must not blank a
+    /// picker that has a list. Everything else is replaced: the arriving panel IS the
+    /// answer, and a row it stopped naming is a credential that is gone.
+    let keeping (known: ClaudePanel option) (arrived: ClaudePanel) : ClaudePanel =
+        match arrived.Models, known with
+        | ModelsUnknown, Some known -> { arrived with Models = known.Models }
         | _ -> arrived
 
     /// This panel's wait rule, beside the status it reads, so no caller composes it.
@@ -140,7 +140,10 @@ module ClaudePanel =
 
 [<RequireQualifiedAccess>]
 type ClaudeViewState =
-    { Status : ClaudePanel
+    { /// The panel as the session last said it, or `None` while the read stream has not
+      /// said anything yet. ONE case for "not told", rather than an option per field that
+      /// every reader had to answer for separately.
+      Status : ClaudePanel option
       Flow : ClaudeFlowState
       /// A command of ours on its way into `Status`, modelled rather than assumed.
       Pending : Pending<ConnectionExpectation> }
@@ -181,7 +184,8 @@ module GitHubPanel =
 
 [<RequireQualifiedAccess>]
 type GitHubViewState =
-    { Status : GitHubPanel
+    { /// As Claude's, for its reason.
+      Status : GitHubPanel option
       Flow : GitHubFlowState
       /// A command of ours on its way into `Status`, modelled rather than assumed.
       Pending : Pending<ConnectionExpectation> }
@@ -928,16 +932,11 @@ module ClientModel =
           OpenFolds = Set.empty
           Copied = None
           Claude =
-            { Status =
-                { SessionCredential = None
-                  MineCredential = None
-                  Owner = None
-                  AgentAvailable = None
-                  Models = ModelsUnknown }
+            { Status = None
               Flow = ClaudeIdle
               Pending = Pending.Ready }
           GitHub =
-            { Status = { SessionCredential = None; MineCredential = None; Owner = None }
+            { Status = None
               Flow = GitHubIdle
               Pending = Pending.Ready }
           Queries = { Declared = []; Values = Map.empty } }
@@ -1477,10 +1476,14 @@ module ClientModel =
             match credential with
             | Some view -> view.SignInRequired |> Option.map (fun reason -> provider, reason)
             | None -> None
-        [ needing "claude" model.Claude.Status.MineCredential
-          needing "claude" model.Claude.Status.SessionCredential
-          needing "github" model.GitHub.Status.MineCredential
-          needing "github" model.GitHub.Status.SessionCredential ]
+        // A panel nobody has been told about owes nothing: a prompt to sign in again is a
+        // statement about a credential, and there is no credential to speak of yet.
+        let rows (panel: 'panel option) (mine: 'panel -> CredentialRow option) (session: 'panel -> CredentialRow option) =
+            match panel with
+            | Some panel -> [ mine panel; session panel ]
+            | None -> []
+        [ yield! rows model.Claude.Status (fun p -> p.MineCredential) (fun p -> p.SessionCredential) |> List.map (needing "claude")
+          yield! rows model.GitHub.Status (fun p -> p.MineCredential) (fun p -> p.SessionCredential) |> List.map (needing "github") ]
         |> List.choose id
 
     /// Everyone whose caret is somewhere right now, except you. Actors rather than peers,
@@ -1914,7 +1917,7 @@ module ClientModel =
             let status = ClaudePanel.keeping model.Claude.Status status
             { model with
                 Claude =
-                  { Status = status
+                  { Status = Some status
                     Flow = flow
                     Pending = model.Claude.Pending |> Pending.observed ClaudePanel.landed status } }
         | ClaudeFlowMsg flow ->
@@ -1930,7 +1933,7 @@ module ClientModel =
                 | flow, _ -> flow
             { model with
                 GitHub =
-                  { Status = status
+                  { Status = Some status
                     Flow = flow
                     Pending = model.GitHub.Pending |> Pending.observed GitHubPanel.landed status } }
         | GitHubFlowMsg flow ->

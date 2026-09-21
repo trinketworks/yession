@@ -2448,6 +2448,25 @@ module Codec =
                     get.Required.Field "kind" Decode.string |> Access.ConnectionKind.ofLabel
                   Access.CredentialRow.SignInRequired = get.Optional.Field "signInRequired" Decode.string }) }
 
+    /// Who the shared scope belongs to, as the wire spells it. The words are the ones this
+    /// surface has always used; what changed is that a reader must now answer for both.
+    let private sharedOwner : Codec<Access.SharedOwner> =
+        { Encode =
+            (fun owner ->
+                Encode.string (
+                    match owner with
+                    | Access.OwnedByUser -> "user"
+                    | Access.OwnedByDeployment -> "local"))
+          Decode =
+            Decode.string
+            |> Decode.andThen (function
+                | "user" -> Decode.succeed Access.OwnedByUser
+                | "local" -> Decode.succeed Access.OwnedByDeployment
+                // Not defaulted to either: one of them promises a credential is private
+                // and the other that it is shared, and a build that cannot tell which must
+                // not pick. The panel is refused; the drawer keeps what it had.
+                | other -> Decode.fail (sprintf "unknown shared-scope owner '%s'" other)) }
+
     /// The Claude panel as the session serves it.
     ///
     /// `models` is decoded as a value and run through `modelCatalogue` SEPARATELY, rather
@@ -2461,8 +2480,8 @@ module Codec =
                 Encode.object
                     [ "session", Encode.option credentialRow.Encode panel.SessionCredential
                       "mine", Encode.option credentialRow.Encode panel.MineCredential
-                      "owner", Encode.option Encode.string panel.Owner
-                      "agent", Encode.option Encode.bool panel.AgentAvailable
+                      "owner", sharedOwner.Encode panel.Owner
+                      "agent", Encode.bool panel.AgentAvailable
                       "models",
                       (match panel.Models with
                        | Access.ModelsLoaded models -> modelCatalogue.Encode models
@@ -2477,11 +2496,11 @@ module Codec =
             Decode.object (fun get ->
                 { Access.ClaudePanel.SessionCredential = get.Optional.Field "session" credentialRow.Decode
                   Access.ClaudePanel.MineCredential = get.Optional.Field "mine" credentialRow.Decode
-                  Access.ClaudePanel.Owner = get.Optional.Field "owner" Decode.string
-                  // Carried as the `option` the field is, rather than read as "no agent"
-                  // when a reply does not mention one: the "no agent" prompt must never
-                  // flash at a client that has not been told either way.
-                  Access.ClaudePanel.AgentAvailable = get.Optional.Field "agent" Decode.bool
+                  // Required, both: a panel says these or it is not a panel. "Not told yet"
+                  // is the absence of a panel, which a client spells by holding one as an
+                  // option — never by a panel that arrived saying nothing.
+                  Access.ClaudePanel.Owner = get.Required.Field "owner" sharedOwner.Decode
+                  Access.ClaudePanel.AgentAvailable = get.Required.Field "agent" Decode.bool
                   Access.ClaudePanel.Models =
                     match get.Optional.Field "models" Decode.value with
                     | Some raw ->
@@ -2502,12 +2521,12 @@ module Codec =
                 Encode.object
                     [ "session", Encode.option credentialRow.Encode panel.SessionCredential
                       "mine", Encode.option credentialRow.Encode panel.MineCredential
-                      "owner", Encode.option Encode.string panel.Owner ]
+                      "owner", sharedOwner.Encode panel.Owner ]
           Decode =
             Decode.object (fun get ->
                 { Access.GitHubPanel.SessionCredential = get.Optional.Field "session" credentialRow.Decode
                   Access.GitHubPanel.MineCredential = get.Optional.Field "mine" credentialRow.Decode
-                  Access.GitHubPanel.Owner = get.Optional.Field "owner" Decode.string }) }
+                  Access.GitHubPanel.Owner = get.Required.Field "owner" sharedOwner.Decode }) }
 
     /// One frame of the session's read stream. Tagged, for `queryFrame`'s reason: one
     /// connection carries every read model, and a client folds each frame by what it is.

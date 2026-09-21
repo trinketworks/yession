@@ -199,15 +199,16 @@ let private representativeModel : ClientModel =
       // The pane shows a TAB by default; the list is what the cases below turn on.
       Claude =
         { Status =
-            { SessionCredential = None
-              MineCredential = None
-              Owner = None
-              AgentAvailable = Some false
-              Models = ModelsLoaded offeredModels }
+            Some
+                { SessionCredential = None
+                  MineCredential = None
+                  Owner = OwnedByUser
+                  AgentAvailable = false
+                  Models = ModelsLoaded offeredModels }
           Flow = ClaudeIdle
           Pending = Pending.Ready }
       GitHub =
-        { Status = { SessionCredential = None; MineCredential = None; Owner = None }
+        { Status = Some { SessionCredential = None; MineCredential = None; Owner = OwnedByUser }
           Flow = GitHubIdle
           Pending = Pending.Ready }
       // The generated read surface (Plan 15), with all three shapes declared at once, so
@@ -253,6 +254,18 @@ let private representativeModel : ClientModel =
                           "dirty", CellFlag true ] ]
                   "work_environment",
                   FieldsOf [ "backend", CellText "srt"; "state", CellStatus ("running", ToneBusy) ] ] } }
+
+/// The representative model with its Claude panel adjusted.
+///
+/// A panel is an OPTION now — the read stream may not have said anything yet — and every
+/// case below is about one that HAS arrived, so they say so through here rather than each
+/// spelling the `Option.map` again.
+let private withClaudePanel (change: ClaudePanel -> ClaudePanel) (model: ClientModel) : ClientModel =
+    { model with Claude = { model.Claude with Status = model.Claude.Status |> Option.map change } }
+
+/// The same for the GitHub panel.
+let private withGitHubPanel (change: GitHubPanel -> GitHubPanel) (model: ClientModel) : ClientModel =
+    { model with GitHub = { model.GitHub with Status = model.GitHub.Status |> Option.map change } }
 
 /// A session with watched pull requests, as the `pull_requests` query reports them — the
 /// only shape a browser has of them, and so the only shape the header strip can read.
@@ -406,6 +419,7 @@ let private namelessButtons (html: string) : string list =
             elif ch = '>' then depth <- max 0 (depth - 1)
             elif depth = 0 then kept.Append ch |> ignore
         kept.ToString().Trim ()
+
     let rec scan (from: int) (found: string list) =
         let start = html.IndexOf ("<button", from)
         if start < 0 then List.rev found
@@ -603,16 +617,9 @@ let private uiChecklistTests =
             let needing = Some { Kind = StaticConnection; SignInRequired = Some reason }
             match provider with
             | "claude" ->
-                { representativeModel with
-                    Claude =
-                        { representativeModel.Claude with
-                            Status =
-                                { representativeModel.Claude.Status with
-                                    MineCredential = needing
-                                    AgentAvailable = Some true } } }
-            | _ ->
-                { representativeModel with
-                    GitHub = { representativeModel.GitHub with Status = { representativeModel.GitHub.Status with MineCredential = needing } } }
+                representativeModel
+                |> withClaudePanel (fun panel -> { panel with MineCredential = needing; AgentAvailable = true })
+            | _ -> representativeModel |> withGitHubPanel (fun panel -> { panel with MineCredential = needing })
 
         // The one derivation every surface reads, so they cannot disagree about whether
         // anything is wrong. Ordered, not a map's iteration: what the prompt names first
@@ -620,13 +627,9 @@ let private uiChecklistTests =
         testCase "what needs signing in is derived once, in a settled order" <| fun () ->
             let needing reason = Some { Kind = StaticConnection; SignInRequired = Some reason }
             let both =
-                { representativeModel with
-                    Claude =
-                        { representativeModel.Claude with
-                            Status = { representativeModel.Claude.Status with MineCredential = needing "claude said no" } }
-                    GitHub =
-                        { representativeModel.GitHub with
-                            Status = { representativeModel.GitHub.Status with MineCredential = needing "github said no" } } }
+                representativeModel
+                |> withClaudePanel (fun panel -> { panel with MineCredential = needing "claude said no" })
+                |> withGitHubPanel (fun panel -> { panel with MineCredential = needing "github said no" })
             Expect.equal
                 (ClientModel.signInRequired both)
                 [ "claude", "claude said no"; "github", "github said no" ]
@@ -646,12 +649,9 @@ let private uiChecklistTests =
 
         testCase "a healthy credential's row says nothing about signing in" <| fun () ->
             let healthy =
-                { representativeModel with
-                    GitHub =
-                        { representativeModel.GitHub with
-                            Status =
-                                { representativeModel.GitHub.Status with
-                                    MineCredential = Some { Kind = OAuthConnection; SignInRequired = None } } } }
+                representativeModel
+                |> withGitHubPanel (fun panel ->
+                    { panel with MineCredential = Some { Kind = OAuthConnection; SignInRequired = None } })
             let html = Support.render healthy
             Expect.isTrue (html.Contains "data-github-connected=\"mine\"") "it is still shown as connected"
             Expect.isFalse (html.Contains Dom.Hooks.githubSignInRequired) "and nothing asks for a sign-in"
@@ -737,16 +737,43 @@ let private uiChecklistTests =
             Expect.equal (occurrences Dom.Hooks.signInAgain) 1 "one button, not one per surface that mentions it"
 
         // Two dead credentials are still one instruction, and the panel it opens shows both.
+        // A panel offers a SHARED scope, and on a deployment that attributes nobody that
+        // scope is everyone who can reach the Manager. Both panels have to say which, and
+        // the GitHub one used to say "all my sessions" outright — a promise about privacy
+        // that `--auth localhost` cannot keep. It was only writable that way while the
+        // owner was a string a renderer was under no obligation to read.
+        testCase "a shared scope owned by the deployment is not called mine, on either panel" <| fun () ->
+            let shared =
+                representativeModel
+                |> withClaudePanel (fun panel -> { panel with Owner = OwnedByDeployment })
+                |> withGitHubPanel (fun panel -> { panel with Owner = OwnedByDeployment })
+                |> Support.render
+            Expect.isFalse
+                (shared.Contains "all my sessions" || shared.Contains "All my sessions")
+                "nothing claims as one person's what the whole deployment shares"
+            Expect.isTrue (shared.Contains "All sessions") "it is offered as what it is"
+
+        testCase "a shared scope owned by one person is called theirs, on either panel" <| fun () ->
+            let connected = Some { Kind = StaticConnection; SignInRequired = None }
+            let mine =
+                representativeModel
+                |> withClaudePanel (fun panel -> { panel with Owner = OwnedByUser; MineCredential = connected })
+                |> withGitHubPanel (fun panel -> { panel with Owner = OwnedByUser; MineCredential = connected })
+                |> Support.render
+            // Twice: the Claude section's connected row and the GitHub one, which read the
+            // same answer the same way now. The count is the point — one of them used to
+            // assert it instead of asking.
+            Expect.equal
+                ((mine.Split "all my sessions" |> Array.length) - 1)
+                2
+                "both panels label the connected row from the owner they were told"
+
         testCase "two credentials needing a sign-in are still one prompt" <| fun () ->
             let needing reason = Some { Kind = StaticConnection; SignInRequired = Some reason }
             let both =
-                { representativeModel with
-                    Claude =
-                        { representativeModel.Claude with
-                            Status = { representativeModel.Claude.Status with MineCredential = needing "claude said no" } }
-                    GitHub =
-                        { representativeModel.GitHub with
-                            Status = { representativeModel.GitHub.Status with MineCredential = needing "github said no" } } }
+                representativeModel
+                |> withClaudePanel (fun panel -> { panel with MineCredential = needing "claude said no" })
+                |> withGitHubPanel (fun panel -> { panel with MineCredential = needing "github said no" })
             let html = Support.render both
             let occurrences (needle: string) = (html.Split needle |> Array.length) - 1
             Expect.equal (occurrences Dom.Hooks.signInRequired) 1 "one prompt"
@@ -1049,11 +1076,7 @@ let private uiChecklistTests =
                 (html.IndexOf Dom.Hooks.noAgentConnect < html.IndexOf Dom.Hooks.conversation)
                 "the prompt is in the sidebar's membership section, not over the composer"
             // A session WITH an agent asks for nothing at all.
-            let connected =
-                { representativeModel with
-                    Claude =
-                        { representativeModel.Claude with
-                            Status = { representativeModel.Claude.Status with AgentAvailable = Some true } } }
+            let connected = representativeModel |> withClaudePanel (fun panel -> { panel with AgentAvailable = true })
             let connectedHtml = Support.render connected
             Expect.isFalse (connectedHtml.Contains Dom.Hooks.noAgent) "nothing asks for a connection once there is one"
 
@@ -2338,17 +2361,16 @@ let private chromeTests =
         // reach cannot serve its feed either, and the report says one problem — so a stalled
         // feed is only ever reported over a session that is otherwise fine.
         let stoppedShell =
-            Support.render
-                { representativeModel with
-                    Connection = Disconnected (Some "the session did not answer")
-                    Manager = Some "http://127.0.0.1:8321"
-                    CanKeepHistory = false
-                    EphemeralStorage = true
-                    GitHub =
-                        { representativeModel.GitHub with
-                            Status =
-                                { representativeModel.GitHub.Status with
-                                    MineCredential = Some { Kind = StaticConnection; SignInRequired = Some "github rejected this credential" } } } }
+            { representativeModel with
+                Connection = Disconnected (Some "the session did not answer")
+                Manager = Some "http://127.0.0.1:8321"
+                CanKeepHistory = false
+                EphemeralStorage = true }
+            |> withGitHubPanel (fun panel ->
+                { panel with
+                    MineCredential =
+                        Some { Kind = StaticConnection; SignInRequired = Some "github rejected this credential" } })
+            |> Support.render
         let stalledShell =
             Support.render
                 { representativeModel with
