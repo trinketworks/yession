@@ -712,3 +712,16 @@ and strokes nothing. `wide-ground` adds the reflection, which under this lens ha
 the object's lowest point on screen rather than the stem's foot — the panels' near corners sit
 below it. Built by `gen26.py`, whose material is written against a projector so the pinhole
 needed one adapter: a face is visible when it faces the eye, not one view direction.
+
+Clearer, with pizazz. `clear` draws the body at 0.72 opaque over its own back faces at 0.35, in
+the deep colour, so the far edges of each piece show through it — lowering opacity alone only
+darkens a body against black; what reads as see-through is the hidden geometry underneath.
+`clearer` is 0.6 over 0.45 with a heavier rim, the far end of the range. On the clearer body,
+one at a time: `clear-lit` adds three points of light on the corners that face the light (the
+apex and the two outer corners; one on every corner read as an effect), each hue thrown into
+the other across the kerfs (green in the blue across the arms, blue in the greens across the
+stem — the pieces colour each other where they meet), and a wet gleam across the blue top as a
+band twice as wide and twice as blurred as the first attempt, which read as the core line
+coming back; `clear-caustic` pools each piece's colour on the ground under it, the one layer
+that shows the material without touching the object; `clear-ground` adds the reflection to
+that. Built by `gen27.py`.
