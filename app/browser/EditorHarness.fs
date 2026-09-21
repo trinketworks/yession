@@ -902,7 +902,7 @@ let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
                   // that it stands at the end of the work and not under the words.
                   { MessageId = MessageId.create "msg-stopped" |> expect
                     Author = ActorRef.Agent
-                    Content = ItemContent.Stopped "the session was restarted while this turn was running"
+                    Content = ItemContent.Stopped (TurnStop.Failed "the session was restarted while this turn was running")
                     Status = ConversationItemStatus.Failed
                     Offset = offset 6L
                     Woke = None; Replying = None } ]
@@ -916,7 +916,15 @@ let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
                       Content = ItemContent.Message ("Rebased and pushed, as you asked up top.")
                       Status = Complete
                       Offset = offset 30L
-                      Woke = None; Replying = Some messageId } ]
+                      Woke = None; Replying = Some messageId }
+                    // The other way a turn stops: a person's hand. Its signpost names them
+                    // — resolved to a name the way every person on this screen is.
+                    { MessageId = MessageId.create "msg-interrupted" |> expect
+                      Author = ActorRef.Agent
+                      Content = ItemContent.Stopped (TurnStop.Interrupted peerId)
+                      Status = Complete
+                      Offset = offset 31L
+                      Woke = None; Replying = None } ]
               ActiveAgentMessages = Map.empty; WokenTurn = None; TriggeredTurn = None }
         Timeline =
             { TimelineProjection.empty with

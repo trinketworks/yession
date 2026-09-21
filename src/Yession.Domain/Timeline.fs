@@ -522,8 +522,7 @@ module TimelineProjection =
                 | ConversationItemStatus.Running -> Some TaskRunning
                 | ConversationItemStatus.Failed -> Some TaskFailed
                 | ConversationItemStatus.Complete
-                | ConversationItemStatus.Streaming
-                | ConversationItemStatus.Interrupted -> None
+                | ConversationItemStatus.Streaming -> None
             // A stop is the turn's ending, not a task of the turn's: a card counts what the
             // turn did, and this is where it stopped doing it.
             | ItemContent.Message _

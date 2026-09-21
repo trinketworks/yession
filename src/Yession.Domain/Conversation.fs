@@ -13,8 +13,6 @@ type ConversationItemStatus =
     | Complete
     | Streaming
     | Failed
-    /// The turn was explicitly interrupted; the partial body streamed so far is kept.
-    | Interrupted
     /// An ACT that is under way — work that takes time and has not finished, like a sandbox
     /// coming up. It is to an act what `Streaming` is to a message: the item holds its place
     /// while the work runs, and a later event with the same `MessageId` resolves it to
@@ -34,15 +32,40 @@ type ConversationItemStatus =
 /// style a note without parsing anything — and every act lands in one case, because the
 /// timeline is how a human sees what was done on their behalf, and a kind per capability
 /// would be a renderer per capability.
+/// How a turn came to stop short of finishing. Two ways, and no third: the process could
+/// not carry it on, or a person stopped it. Structured rather than a sentence because the
+/// second names a person, and a person is drawn by name on a screen and spelled by
+/// reference to a reader that is not one (`phrase`) — never as the id the event carries.
+///
+/// Qualified access, because `Failed` and `Interrupted` are also words the status vocabulary
+/// beside this uses, and a bare case that resolved to whichever type was declared last is
+/// how a construction quietly changes meaning.
+[<RequireQualifiedAccess>]
+type TurnStop =
+    /// The process's account of why the turn could not go on: a model error, a credential
+    /// that was not there, the session restarted under it.
+    | Failed of reason: string
+    /// A person stopped it.
+    | Interrupted of by: PeerId
+
+module TurnStop =
+
+    /// What the stop says, as segments: the reason's own words, or the person who stopped
+    /// it as a reference the screen resolves to a name.
+    let phrase (stop: TurnStop) : Phrase =
+        match stop with
+        | TurnStop.Failed reason -> Phrase.text reason
+        | TurnStop.Interrupted by -> [ Segment.Text "interrupted by "; Segment.Ref (EntityRef.Actor (PeerRef by)) ]
+
 [<RequireQualifiedAccess>]
 type ItemContent =
     | Message of body: string
     | Act of Act
-    /// The turn this item belongs to stopped here, and why — the process's account, never
+    /// The turn this item belongs to stopped here, and how — the process's account, never
     /// the agent's words. Its own kind rather than a message carrying the reason as a body,
     /// because a reason drawn in the agent's voice was read as something the agent said,
     /// and a reader cannot be expected to know which paragraph of a reply was the machine's.
-    | Stopped of reason: string
+    | Stopped of TurnStop
 
 type ConversationItem =
     { MessageId : MessageId
@@ -107,7 +130,7 @@ module ConversationItem =
         match item.Content with
         | ItemContent.Message body -> body
         | ItemContent.Act act -> Phrase.said (Act.sentence act)
-        | ItemContent.Stopped reason -> reason
+        | ItemContent.Stopped stop -> Phrase.said (TurnStop.phrase stop)
 
     /// The headline alone — what a message said, or the one sentence an act leads with.
     /// For a reader that has its own way of showing the particulars, or none: a chapter's
@@ -116,7 +139,7 @@ module ConversationItem =
         match item.Content with
         | ItemContent.Message body -> body
         | ItemContent.Act act -> Phrase.said (Act.phrase act)
-        | ItemContent.Stopped reason -> reason
+        | ItemContent.Stopped stop -> Phrase.said (TurnStop.phrase stop)
 
     /// Whether this act opens a chapter by nature. A message never does.
     let notable (item: ConversationItem) : bool =
@@ -555,6 +578,66 @@ module ConversationProjection =
             | _ -> Some trigger
         | _ -> None
 
+    /// A turn stopping short — failed, or interrupted by a person — is an item of its own,
+    /// ANCHORED WHERE IT STOPPED: after every command and call the turn made, because that
+    /// is where it stopped, and whatever the turn had said stays where it said it.
+    ///
+    /// It used to be a status on what the turn had said, and for a failure a paragraph
+    /// under it. That put the account of the ending ABOVE the work the ending ended — an
+    /// agent message is created when the turn starts, and most turns then call tools for a
+    /// while — so a reader saw "the session was restarted while this turn was running" as
+    /// the agent's own closing sentence, three commands before anything went wrong; and a
+    /// turn interrupted while it was calling tools rather than speaking left no trace at
+    /// all. The message is left as what it said, complete: the turn ending is not a fact
+    /// about those words, and late deltas still cannot reach an item that is not streaming.
+    ///
+    /// A turn's first message opens BEFORE the model has spoken, so a tool-only turn holds
+    /// an empty item at the top of its own work. That placeholder is dropped rather than
+    /// left standing empty over the stop — and the stop then carries the reply ref and the
+    /// wake reason the placeholder would have, because a turn that stopped before saying
+    /// anything is still a reply to what asked for it, and still a turn nobody asked for if
+    /// it was woken. One that spoke carries both on what it said.
+    let private stopTurn
+        (envelope: EventEnvelope<SessionEvent>)
+        (turnId: AgentTurnId)
+        (stop: TurnStop)
+        (status: ConversationItemStatus)
+        (proj: ConversationProjection)
+        : ConversationProjection =
+        let stopped (attributed: bool) =
+            let messageId =
+                match MessageId.create (sprintf "agent-turn-%s-stopped" (AgentTurnId.value turnId)) with
+                | Ok id -> id
+                | Error e -> failwithf "derived message id invariant violated: %s" e
+            { MessageId = messageId
+              Author = ActorRef.Agent
+              Content = ItemContent.Stopped stop
+              Status = status
+              Offset = envelope.Offset
+              Woke = (if attributed then wokeBy turnId proj else None)
+              Replying = (if attributed then replyingTo turnId proj else None) }
+        let closed = Map.remove turnId proj.ActiveAgentMessages
+        let spoke =
+            Map.tryFind turnId proj.ActiveAgentMessages
+            |> Option.bind (fun messageId ->
+                proj.Items
+                |> List.tryFind (fun item -> item.MessageId = messageId)
+                |> Option.map (fun item -> messageId, (ConversationItem.said item).Trim () <> ""))
+        match spoke with
+        | Some (messageId, true) ->
+            { proj with
+                Items = (proj.Items |> updateItem messageId (fun item -> { item with Status = Complete })) @ [ stopped false ]
+                ActiveAgentMessages = closed }
+        | Some (messageId, false) ->
+            { proj with
+                Items = (proj.Items |> List.filter (fun item -> item.MessageId <> messageId)) @ [ stopped true ]
+                ActiveAgentMessages = closed }
+        | None ->
+            // The turn stopped before its message started: same item, same derivation —
+            // there was simply never a placeholder to drop.
+            { proj with Items = proj.Items @ [ stopped true ]; ActiveAgentMessages = closed }
+
+
     /// Fold one event into the projection. The match is total over `SessionEvent`, so
     /// adding a case forces this projection to account for it.
     let private applyEvent (proj: ConversationProjection) (envelope: EventEnvelope<SessionEvent>) : ConversationProjection =
@@ -771,71 +854,8 @@ module ConversationProjection =
                             Status = Complete
                             Offset = if not spoken && a.Body <> "" then envelope.Offset else item.Offset })
                 ActiveAgentMessages = Map.remove a.AgentTurnId proj.ActiveAgentMessages }
-        | AgentTurnInterrupted a ->
-            match Map.tryFind a.AgentTurnId proj.ActiveAgentMessages with
-            | Some messageId ->
-                // The streaming item keeps its partial body; the status records the
-                // explicit interrupt. Late deltas for it no longer apply (not Streaming).
-                { proj with
-                    Items = proj.Items |> updateItem messageId (fun item -> { item with Status = Interrupted })
-                    ActiveAgentMessages = Map.remove a.AgentTurnId proj.ActiveAgentMessages }
-            | None ->
-                // Interrupted before any message started: nothing to show — the turn
-                // simply never produced an item.
-                { proj with ActiveAgentMessages = Map.remove a.AgentTurnId proj.ActiveAgentMessages }
-        | AgentTurnFailed a ->
-            // Why a turn stopped is an item of its own, ANCHORED WHERE IT STOPPED — after
-            // every command and call the turn made, because that is where it stopped, and
-            // whatever the turn had said stays where it said it.
-            //
-            // It used to join what the turn had said, as a paragraph under it. That put the
-            // account of a failure ABOVE the work the failure ended — an agent message is
-            // created when the turn starts, and most turns then call tools for a while — so
-            // a reader saw "the session was restarted while this turn was running" as the
-            // agent's own closing sentence, three commands before anything went wrong. The
-            // message is left as what it said, complete: the turn ending is not a fact about
-            // those words, and late deltas still cannot reach an item that is not streaming.
-            //
-            // A turn's first message opens BEFORE the model has spoken, so a tool-only turn
-            // holds an empty item at the top of its own work. That placeholder is dropped
-            // rather than left standing empty over the stop.
-            let stopped (attributed: bool) =
-                let messageId =
-                    match MessageId.create (sprintf "agent-turn-%s-failed" (AgentTurnId.value a.AgentTurnId)) with
-                    | Ok id -> id
-                    | Error e -> failwithf "derived message id invariant violated: %s" e
-                { MessageId = messageId
-                  Author = ActorRef.Agent
-                  Content = ItemContent.Stopped a.Reason
-                  Status = Failed
-                  Offset = envelope.Offset
-                  // A turn that stopped before saying anything is still a reply to what
-                  // asked for it, and still a turn nobody asked for if it was woken — the
-                  // refs ride its only item. One that spoke carries both on what it said.
-                  Woke = (if attributed then wokeBy a.AgentTurnId proj else None)
-                  Replying = (if attributed then replyingTo a.AgentTurnId proj else None) }
-            let closed = Map.remove a.AgentTurnId proj.ActiveAgentMessages
-            let spoke =
-                Map.tryFind a.AgentTurnId proj.ActiveAgentMessages
-                |> Option.bind (fun messageId ->
-                    proj.Items
-                    |> List.tryFind (fun item -> item.MessageId = messageId)
-                    |> Option.map (fun item -> messageId, (ConversationItem.said item).Trim () <> ""))
-            match spoke with
-            | Some (messageId, true) ->
-                { proj with
-                    Items =
-                        (proj.Items |> updateItem messageId (fun item -> { item with Status = Complete }))
-                        @ [ stopped false ]
-                    ActiveAgentMessages = closed }
-            | Some (messageId, false) ->
-                { proj with
-                    Items = (proj.Items |> List.filter (fun item -> item.MessageId <> messageId)) @ [ stopped true ]
-                    ActiveAgentMessages = closed }
-            | None ->
-                // The turn failed before its message started: same item, same derivation —
-                // there was simply never a placeholder to drop.
-                { proj with Items = proj.Items @ [ stopped true ]; ActiveAgentMessages = closed }
+        | AgentTurnInterrupted a -> stopTurn envelope a.AgentTurnId (TurnStop.Interrupted a.RequestedBy) Complete proj
+        | AgentTurnFailed a -> stopTurn envelope a.AgentTurnId (TurnStop.Failed a.Reason) Failed proj
 
     /// Fold ordered event envelopes into a conversation projection.
     ///

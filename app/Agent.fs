@@ -476,6 +476,14 @@ let private promptOf (context: AgentContextPack) : string =
     let transcript =
         context.Conversation
         |> List.filter (fun item -> item.Status = Complete)
+        // A stop is the process's account of how a turn ended, filed under the agent's name
+        // because it is the agent's turn. Read back under that name it would be the agent
+        // saying "interrupted by ada" — words nobody said.
+        |> List.filter (fun item ->
+            match item.Content with
+            | ItemContent.Stopped _ -> false
+            | ItemContent.Message _
+            | ItemContent.Act _ -> true)
         // `said`, never `Body`: an act note's body is its headline, and a transcript built
         // from headlines would tell the agent a sandbox started without telling it whose
         // credential went in — the particulars are exactly what a next turn has to act on.
