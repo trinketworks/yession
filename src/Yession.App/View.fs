@@ -291,7 +291,6 @@ module View =
         | Streaming -> Dom.Text.streaming
         | ConversationItemStatus.Running -> Dom.Text.running
         | ConversationItemStatus.Failed -> Dom.Text.failed
-        | ConversationItemStatus.Interrupted -> Dom.Text.interrupted
 
     let private environmentLabel =
         function
@@ -2137,12 +2136,12 @@ module View =
                 match item.Status with
                 | ConversationItemStatus.Running ->
                     html $"""<span class="{Style.actNoteRunning}"><span class="{Style.actNoteRunningDot}"></span><span class="{Style.srOnly}">{Dom.Text.running}</span></span>"""
-                | Complete | Streaming | ConversationItemStatus.Failed | ConversationItemStatus.Interrupted -> Lit.nothing
+                | Complete | Streaming | ConversationItemStatus.Failed -> Lit.nothing
             let failedMark =
                 match item.Status with
                 | ConversationItemStatus.Failed ->
                     html $"""<span class="{Style.statusErr}">{Icon.crossSm} {Dom.Text.failed}</span>"""
-                | Complete | Streaming | ConversationItemStatus.Running | ConversationItemStatus.Interrupted -> Lit.nothing
+                | Complete | Streaming | ConversationItemStatus.Running -> Lit.nothing
             // The title, what shows beneath it, and what FOLDS beneath that. A screen lays
             // out the acts it can — a sandbox coming up or up, a file changed — with a title
             // of its own and every fact in the fold; the rest read as their phrase with their
@@ -2167,7 +2166,7 @@ module View =
             let arrow =
                 match item.Status with
                 | ConversationItemStatus.Running -> Lit.nothing
-                | Complete | Streaming | ConversationItemStatus.Failed | ConversationItemStatus.Interrupted ->
+                | Complete | Streaming | ConversationItemStatus.Failed ->
                     html $"""
                         <button type="button" class="{Style.actNoteFold}"
                                 aria-expanded="{if opened then "true" else "false"}" aria-controls="{foldId}"
@@ -2196,11 +2195,19 @@ module View =
         // actions; and not an act — nobody did it — so no fold and no attribution of its own
         // beyond the author line of the turn it ends. `data-turn-stopped` is the hook a
         // test reads a stop by, wherever the design puts the mark.
-        let stoppedItem (reason: string) (item: ConversationItem) =
+        //
+        // The mark's colour is the one state it carries: the error red for a turn the process
+        // could not carry on, the faint ink for one a person stopped — a hand on the stop is
+        // not a fault. The hook's value says which, for a test that cannot see colour.
+        let stoppedItem (stop: TurnStop) (item: ConversationItem) =
+            let mark, how =
+                match stop with
+                | TurnStop.Failed _ -> Style.turnStopMarkFailed, Dom.Text.failed
+                | TurnStop.Interrupted _ -> Style.turnStopMarkInterrupted, Dom.Text.interrupted
             html $"""
-                <article class="{Style.turnStop}" data-message-id="{MessageId.value item.MessageId}" tabindex="-1" data-turn-stopped data-message-author="{Entity.actorToken item.Author}">
-                  <span class="{Style.turnStopMark}">{Icon.stopSm}<span class="{Style.srOnly}">{Dom.Text.turnStopped}</span></span>
-                  <span class="{Style.turnStopText}">{reason}</span>
+                <article class="{Style.turnStop}" data-message-id="{MessageId.value item.MessageId}" tabindex="-1" data-turn-stopped="{how}" data-message-author="{Entity.actorToken item.Author}">
+                  <span class="{mark}">{Icon.stopSm}<span class="{Style.srOnly}">{Dom.Text.turnStopped}</span></span>
+                  <span class="{Style.turnStopText}">{Entity.phrase model item.Author (TurnStop.phrase stop)}</span>
                 </article>"""
         let messageItem (item: ConversationItem) =
             // What was said. An act never reaches here (`actNoteItem` takes those), and its
@@ -2237,7 +2244,6 @@ module View =
                 // but the match is total, so it reads with the other quiet cases.
                 | Complete | Streaming | ConversationItemStatus.Running -> Lit.nothing
                 | ConversationItemStatus.Failed -> html $"""<span class="{Style.statusErr}">failed</span>"""
-                | ConversationItemStatus.Interrupted -> html $"""<span class="{Style.statusFaint}">interrupted</span>"""
             let bodyClass, caret =
                 match item.Status with
                 | Streaming ->
@@ -2247,13 +2253,14 @@ module View =
                 | _ -> Style.messageBody, Lit.nothing
             let bodyClass = Style.cls [ bodyClass; Style.messageVoice isAgent ]
             // The author line is the GROUP's to say (see `group` below); a message's own meta
-            // line exists only while it has news of its own — failed, interrupted, woken
-            // unasked. Not streaming: that is the caret's, and a line that appeared to say it
+            // line exists only while it has news of its own — failed, woken unasked. How
+            // the TURN ended is not the message's news: that is the stop signpost's
+            // (`stoppedItem`), where the turn ended. Not streaming: that is the caret's, and a line that appeared to say it
             // and then vanished would move the body under the reader mid-sentence.
             let hasStatusNews =
                 match item.Status with
                 | Complete | Streaming | ConversationItemStatus.Running -> false
-                | ConversationItemStatus.Failed | ConversationItemStatus.Interrupted -> true
+                | ConversationItemStatus.Failed -> true
             let meta =
                 if item.Woke.IsSome || hasStatusNews then
                     html $"""<div class="{Style.messageMeta}">{wokeInner}{statusInner}</div>"""
@@ -2478,7 +2485,7 @@ module View =
                     match item.Content with
                     | ItemContent.Act act -> Some (Some item.Author, actNoteItem act item)
                     | ItemContent.Message _ -> Some (Some item.Author, messageItem item)
-                    | ItemContent.Stopped reason -> Some (Some item.Author, stoppedItem reason item)
+                    | ItemContent.Stopped stop -> Some (Some item.Author, stoppedItem stop item)
                 | RowItem (TimelineBlock (_, terminalId, blockId)) ->
                     // Both folds read the same page, so a chip without its block is a page
                     // boundary, not a bug: the next page brings it.

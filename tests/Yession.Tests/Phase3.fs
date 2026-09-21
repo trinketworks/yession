@@ -349,12 +349,16 @@ let private interruptTests =
                 do! compose a a.Hello.PeerId "queued behind"
                 a.Connection.SendDraft a.Hello.PeerId
 
-                // Interrupt: partial body kept (Interrupted status), and the queued
-                // message drains immediately into a NEW turn.
+                // Interrupt: the partial body is kept as said, the stop names who stopped
+                // it, and the queued message drains immediately into a NEW turn.
                 a.Connection.InterruptTurn firstTurn
                 do! a.Runner.WaitFor (fun m ->
-                        (m.Conversation.Items
-                         |> List.exists (fun i -> i.Status = ConversationItemStatus.Interrupted && (ConversationItem.said i) = "partial thoughts"))
+                        (m.Conversation.Items |> List.exists (fun i -> (ConversationItem.said i) = "partial thoughts"))
+                        && (m.Conversation.Items
+                            |> List.exists (fun i ->
+                                match i.Content with
+                                | ItemContent.Stopped (TurnStop.Interrupted by) -> by = a.Hello.PeerId
+                                | _ -> false))
                         && (m.Conversation.Items |> List.exists (fun i -> (ConversationItem.said i) = "queued behind"))
                         && (match m.Agent.ActiveTurn with Some t -> t <> firstTurn | None -> false))
 

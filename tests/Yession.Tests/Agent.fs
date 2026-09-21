@@ -370,8 +370,10 @@ let private turnTests =
                     ConversationProjection.empty
             Expect.equal
                 (projection.Items |> List.map (fun i -> i.MessageId, i.Status))
-                [ agentMessageId, Complete; laterMessageId, ConversationItemStatus.Interrupted ]
-                "the interrupt marks the follower, and the antecedent keeps the close it already had"
+                // The follower had said nothing, so it is dropped and the stop stands in
+                // its place; the antecedent keeps the close it already had.
+                [ agentMessageId, Complete; MessageId.create (sprintf "agent-turn-%s-stopped" (AgentTurnId.value turnId)) |> expect, Complete ]
+                "the interrupt lands on the turn's open message, and the antecedent keeps the close it already had"
 
         testCase "only the turn's first message says why the turn ran" <| fun () ->
             let projection, _ =
@@ -387,7 +389,11 @@ let private turnTests =
                 [ Some CommandFinished; None ]
                 "the reason is attribution for the turn, said once where the turn begins"
 
-        testCase "an interrupt marks the streaming item Interrupted (partial body kept); late deltas no longer apply" <| fun () ->
+        // An interrupt is the other way a turn stops, and it takes the same signpost as a
+        // failure: what the turn said stays said, and who stopped it stands where it stopped.
+        // It used to be a STATUS on the words — "interrupted" over prose that was fine — and
+        // a turn interrupted while calling tools rather than speaking left no trace at all.
+        testCase "an interrupt keeps what the turn said and says who stopped it, as its own item" <| fun () ->
             let interruptedBy = PeerId.create "ada" |> expect
             let projection, highWater =
                 ConversationProjection.applyEvents
@@ -397,19 +403,42 @@ let private turnTests =
                       envelope 2L (AgentTurnInterrupted { AgentTurnId = turnId; RequestedBy = interruptedBy }) ]
                     ConversationProjection.empty
             Expect.equal
-                (projection.Items |> List.map (fun i -> (ConversationItem.said i), i.Status))
-                [ "partial", ConversationItemStatus.Interrupted ]
-                "the streaming item is interrupted in place, partial body kept"
-            // A delta that raced past the interrupt cannot mutate the terminal item.
+                (projection.Items |> List.map (fun i -> i.Content, i.Status))
+                [ ItemContent.Message "partial", Complete
+                  ItemContent.Stopped (TurnStop.Interrupted interruptedBy), Complete ]
+                "the words stand as words; the stop names the hand"
+            // A delta that raced past the interrupt cannot reach what was said.
             let after, _ =
                 ConversationProjection.applyEvents
                     highWater
                     [ envelope 3L (AgentMessageDelta { AgentTurnId = turnId; MessageId = agentMessageId; Delta = " too late" }) ]
                     projection
             Expect.equal
-                (after.Items |> List.map (fun i -> (ConversationItem.said i), i.Status))
-                [ "partial", ConversationItemStatus.Interrupted ]
+                (after.Items |> List.head |> ConversationItem.said)
+                "partial"
                 "late deltas are ignored once the item left Streaming"
+
+        testCase "a turn interrupted before it spoke still says who stopped it, where they did" <| fun () ->
+            let interruptedBy = PeerId.create "ada" |> expect
+            let projection, _ =
+                ConversationProjection.applyEvents
+                    None
+                    [ envelope 1L (AgentMessageStarted { AgentTurnId = turnId; MessageId = agentMessageId; Antecedent = None })
+                      envelope 9L (AgentTurnInterrupted { AgentTurnId = turnId; RequestedBy = interruptedBy }) ]
+                    ConversationProjection.empty
+            Expect.equal
+                (projection.Items |> List.map (fun i -> EventOffset.value i.Offset, i.Content))
+                [ 9L, ItemContent.Stopped (TurnStop.Interrupted interruptedBy) ]
+                "the stop is the turn's whole account, at the offset it happened at"
+
+        // The person is a REFERENCE, not an id: a screen draws them by name, and a reader
+        // that is not a screen gets the spelling every other reference gets.
+        testCase "who interrupted is said as a reference to them" <| fun () ->
+            let interruptedBy = PeerId.create "ada" |> expect
+            Expect.equal
+                (TurnStop.phrase (TurnStop.Interrupted interruptedBy) |> Phrase.refs)
+                [ EntityRef.Actor (PeerRef interruptedBy) ]
+                "the phrase points at the person"
 
         // Why a turn stopped is an item of its OWN — `ItemContent.Stopped` — and never a
         // paragraph under what the turn said. Joined to the prose, the reason read as the
@@ -426,7 +455,7 @@ let private turnTests =
             Expect.equal
                 (projection.Items |> List.map (fun i -> i.Content, i.Status))
                 [ ItemContent.Message "partial", ConversationItemStatus.Complete
-                  ItemContent.Stopped "overloaded", ConversationItemStatus.Failed ]
+                  ItemContent.Stopped (TurnStop.Failed "overloaded"), ConversationItemStatus.Failed ]
                 "the words stand as words; the stop is the machine's, and marked as such"
             // A delta that raced past the failure cannot reach what was said.
             let after, _ =
@@ -452,7 +481,7 @@ let private turnTests =
                     ConversationProjection.empty
             Expect.equal
                 (projection.Items |> List.map (fun i -> i.Content, i.Status))
-                [ ItemContent.Stopped "agent run ended: error_during_execution", ConversationItemStatus.Failed ]
+                [ ItemContent.Stopped (TurnStop.Failed "agent run ended: error_during_execution"), ConversationItemStatus.Failed ]
                 "the stop is the turn's whole account, and the empty placeholder is gone"
 
         // Placement, which the body alone cannot pin. An agent message is created when the
@@ -500,7 +529,7 @@ let private turnTests =
                     ConversationProjection.empty
             Expect.equal
                 (projection.Items |> List.map (fun i -> i.Author, i.Content, i.Status))
-                [ (ActorRef.Agent, ItemContent.Stopped "context build failed", ConversationItemStatus.Failed) ]
+                [ (ActorRef.Agent, ItemContent.Stopped (TurnStop.Failed "context build failed"), ConversationItemStatus.Failed) ]
                 "the failure is the turn's stop, under the agent's name"
     ]
 

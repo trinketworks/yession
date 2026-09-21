@@ -1569,10 +1569,12 @@ module Style =
     /// the turn did, and the last. Drawn as prose it was read as the agent's closing
     /// sentence; the mark is what says "this is the machine's account".
     let turnStop = cls [ "w-full"; readingColumn; "flex items-baseline gap-2 pl-[32px] py-0.5" ]
-    /// The mark: a stop, in the error colour a failed chip's status wears. Colour is what
-    /// carries the state in this set; the screen-reader word beside it carries it for
-    /// anything that cannot see colour.
-    let turnStopMark = "shrink-0 text-err"
+    /// The mark: a stop. Colour is what carries the state in this set — the error colour a
+    /// failed chip's status wears for a turn the process could not carry on, the faint ink
+    /// for one a person stopped — and the screen-reader word beside it carries "stopped"
+    /// for anything that cannot see colour.
+    let turnStopMarkFailed = "shrink-0 text-err"
+    let turnStopMarkInterrupted = "shrink-0 text-ink-faint"
     /// The reason, in the quiet small voice — and WRAPPING, unlike a chip's one line: a
     /// reason is the one thing here a reader must not lose the end of.
     let turnStopText = "font-light text-small text-ink-dim min-w-0"
