@@ -67,9 +67,9 @@ let private getEnv (name: string) : string =
 // first substitutes, which is tens of minutes buying a proof the gate already has piecewise —
 // it is asked for by name (`check Docker Dogfood`, or a `verify.yml` dispatch naming both) when
 // the container environment story changes.
-let private allNeeds = [ Browser; Ports; Native; Docker; LiveAgent; Keyring; Nix; Srt; Pty; Serial; Jumpstarter; Caddy ]
+let allNeeds = [ Browser; Ports; Native; Docker; LiveAgent; Keyring; Nix; Srt; Pty; Serial; Jumpstarter; Caddy ]
 
-let private parseNeed (s: string) : Need option =
+let parseNeed (s: string) : Need option =
     match s.Trim().ToLowerInvariant () with
     | "browser"   -> Some Browser
     | "ports"     -> Some Ports
@@ -182,6 +182,25 @@ let narrowed (suite: TestCase) : TestCase =
             printfn "tests: narrowed to '%s' — nothing here matches (check the spelling, or it may live on the other runtime)" only
             TestList ("narrowed", [], Normal)
 
+/// Every suite declared through `needs`, recorded as it is declared.
+///
+/// The release gate is spread over several runners, one per capability tier (`.github/verify-tiers.json`),
+/// and a tier is just a list of capability names — so a suite whose needs no tier satisfies runs
+/// NOWHERE, reports nothing, and leaves a green gate that looks exactly like a complete one. That
+/// is the shape of silence this repository has paid for twice (a `LiveAgent` tier skipped for
+/// eleven releases; a `verify` that printed `383 passed, 0 ignored` with no daemon). `VerifyTiers`
+/// reads this list against those tiers and refuses it, in the cheap tier, on every pull request.
+///
+/// Recording happens on the DECLARATION, not the run: a suite that skips still declares itself,
+/// and both runtimes construct the same declarations — the thunk is what a runtime withholds — so
+/// either one can answer for the whole gate.
+let mutable private registry : (string * Need list) list = []
+
+/// What this assembly declared, in declaration order. Complete by the time any case body runs,
+/// because `Main.fs` builds the whole tree before the runner walks it.
+let declaredSuites () : (string * Need list) list = List.rev registry
+
 let needs (label: string) (need: Need list) (suite: unit -> TestCase) : TestCase =
+    registry <- (label, need) :: registry
     if canRun need then suite ()
     else testList label [ ptestCase (sprintf "skipped: %s" (reason need)) <| fun () -> () ]

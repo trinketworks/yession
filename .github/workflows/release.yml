@@ -51,16 +51,27 @@ jobs:
   #
   # `continue-on-error` cannot go on a job that `uses:` a reusable workflow, so the tolerance
   # lives on the STEPS inside bench.yml, keyed off `guard`: when nothing is being guarded,
-  # nothing there is allowed to fail the run. `needs` carries package-npm only for the version
-  # to record this measurement as.
+  # nothing there is allowed to fail the run.
+  #
+  # It waits for `verify` and nothing else, so it measures BESIDE the packaging channels rather
+  # than after them. It used to wait for package-npm as well — for the version string alone —
+  # and that one `needs` put its whole 7m39s on the critical path, of which 42s was measurement:
+  # the release could not publish until a chart that cannot block it had been drawn. The label is
+  # now computed where every other version is, by `bench-publish` out of tasks.fsx's own policy
+  # (`defaultVersion`), which is the same number package-npm computes because it is the same
+  # function over the same commit — and one fewer job that has to have run for a picture.
+  #
+  # It keeps waiting for `verify`, though, and that is not laziness: `record: true` appends to the
+  # `bench` branch, and a history carrying a commit whose gate then failed is a chart claiming a
+  # release that never happened. The measurement is cheap to postpone by ten minutes; the history
+  # is not cheap to un-say.
   bench:
-    needs: [verify, package-npm]
+    needs: verify
     if: github.ref == 'refs/heads/master'
     uses: ./.github/workflows/bench.yml
     with:
       guard: false
       record: true
-      label: ${{ needs.package-npm.outputs.version }}
     secrets: inherit
 
   # One of the two parallel packaging channels (both only need `verify`): the npm tarball.

@@ -30,10 +30,6 @@ on:
         description: Append this measurement to the `bench` branch and redraw the chart.
         type: boolean
         default: false
-      label:
-        description: What to record this measurement as (a version).
-        type: string
-        default: ""
   # Run by hand, against whatever ref is being worked on — the same argument verify.yml makes.
   # Measuring a change before merging it is the whole point of having a number.
   workflow_dispatch:
@@ -71,11 +67,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # The baseline is read with `git show bench:history.jsonl`, so the branch has to be
-          # here. Fetching it by name rather than deepening the whole clone.
-          fetch-depth: 1
-      - name: Fetch the recorded history (absent on the very first run)
-        run: git fetch origin bench:bench --depth=50 || echo "no bench branch yet — this run records the first point"
+          # The history IS the version, and `bench-publish` computes the label it records from it
+          # (tasks.fsx's policy, the same function package:npm calls) — which refuses a shallow
+          # clone rather than emitting a number computed from a truncated log. This used to be
+          # depth 1, because the label arrived as a string from the caller and nothing here had to
+          # know what a version was.
+          #
+          # The `bench` branch that holds the recorded history is no longer fetched here either:
+          # every verb that reads it fetches it (tasks.fsx `fetchBenchHistory`), which is where the
+          # need is. A step here did it with `--depth=50` — and a shallow fetch of any ref marks the
+          # whole repository shallow, which is exactly what the version computation refuses.
+          fetch-depth: 0
       - uses: cachix/install-nix-action@v30
         with:
           extra_nix_config: |
@@ -121,17 +123,20 @@ jobs:
       # Only what was actually measured is recorded: when the measurement was tolerated into
       # failing (the release's case), there is no `dist/bench.json` to append and a history that
       # skips a release is honest, while one carrying a run that did not happen is not.
+      # The label is `bench-publish`'s own to compute, out of the version policy in tasks.fsx, for
+      # the reason every other version in this repository is computed there: a second reader is a
+      # second answer, and the caller that used to pass one down could pass an EMPTY one — which
+      # is why this step carried a refusal of its own. The computation cannot produce an empty
+      # string (it refuses a shallow clone and an unreadable tag instead), so there is one
+      # mechanism at one point again rather than a guard standing in for a caller's mistake.
       - name: Record and redraw
         if: inputs.record && steps.measure.outcome == 'success'
         continue-on-error: ${{ !inputs.guard }}
-        env:
-          LABEL: ${{ inputs.label }}
         run: |
           set -euo pipefail
-          [ -n "$LABEL" ] || { echo "record was asked for without a label to record it as"; exit 1; }
           git config user.name "yession-bench"
           git config user.email "bench@yession.invalid"
-          devenv shell -- bench-publish "$LABEL"
+          devenv shell -- bench-publish
       - uses: actions/upload-artifact@v4
         # Always, so a guard failure still leaves the numbers that caused it behind to read.
         if: always()

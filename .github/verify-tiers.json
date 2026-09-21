@@ -1,0 +1,14 @@
+[
+  {
+    "tier": "node",
+    "capabilities": "Ports Native Docker LiveAgent Keyring Srt Pty Serial Jumpstarter"
+  },
+  {
+    "tier": "browser",
+    "capabilities": "Browser Native Srt Caddy"
+  },
+  {
+    "tier": "nix",
+    "capabilities": "Nix"
+  }
+]

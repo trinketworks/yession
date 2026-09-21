@@ -905,12 +905,19 @@ let private requireCapabilities (caps: string list) =
 // Ports/Native/Srt on this box) for the same reason `waitForTimeoutMs` is 30s against sub-9s
 // waits — this is a hang detector, and the sharp instruments are elsewhere.
 //
-// `Browser` and `Nix` buy nothing: the browser suite is a separate .NET CLR run and the Nix
-// build happens after this process has exited. A capability that adds no Node suite adds no
-// time here, and one added later that does carries its own allowance in.
+// `Browser` buys nothing: the browser suite is a separate .NET CLR run. A capability that adds no
+// Node suite adds no time here, and one added later that does carries its own allowance in.
+//
+// `Nix` bought nothing either, on the reasoning that the build happens after this process has
+// exited — which was true while `Nix` only ever rode along with every other capability, and stopped
+// being true when the gate was split into tiers: `check Nix` is now a job of its own, so its Node
+// run is `NixSource` and the cheap tier alone, against the base allowance alone. `NixSource`
+// EVALUATES derivations (that is the contract it reads), which is tens of seconds a laptop's 57s
+// cheap tier never included, so it carries its own allowance like everything else that runs.
 let private nodeBudgetMs (caps: Set<string>) =
     let allowing (name: string) (ms: int) = if caps.Contains name then ms else 0
     150_000
+    + allowing "Nix" 90_000
     + allowing "Ports" 90_000
     + allowing "Native" 30_000
     + allowing "Srt" 45_000
@@ -950,26 +957,39 @@ let private buildNixPackage () =
 // from "wedged"; the stages the caps skip never announce themselves.
 let private progress (label: string) = printfn "check: %s" label
 
-/// Compile everything the Node suite needs for these capabilities, host-side, and hand back
-/// its entry point. Shared by `check` (which runs it here) and `vm-check` (which runs the same
-/// JS on a Linux target): the compiled JS is portable, so only `node_modules` is
-/// platform-specific — and that is the target's to provide, not this compile's.
-let private buildNodeSuite (capSet: Set<string>) : string =
+/// Compile the PRODUCT these capabilities need, host-side: whatever the suites will drive, as
+/// opposed to the suites themselves. Split out because a measuring run needs all of this and
+/// none of the suite compile below it.
+let private buildProduct (capSet: Set<string>) =
     progress "building the solution"
     exec "dotnet" [ "build"; "Yession.slnx" ]
 
     // Browser output feeds both the host-spawning Node suites and the editor Browser E2E.
-    if hasAny capSet [ "Ports"; "Native"; "Docker"; "LiveAgent"; "Browser" ] then
+    //
+    // `Nix` is in both lists for a different reason, and it is the subtle one: `NixSource` asserts
+    // that the derivation's source carries nothing git ignores, and an artefact that is not in the
+    // tree cannot be leaked by a filter that has stopped excluding it. `app/out` and `dist/npm` are
+    // two of the four leaks that contract exists for, so a run that builds neither is asking a
+    // narrower question while printing the same green. That cost nothing while `Nix` only ever rode
+    // along with every other capability; once `check Nix` became a tier of its own, it had to say so
+    // itself. The tree a developer has is the subject, and a developer has built and staged.
+    if hasAny capSet [ "Ports"; "Native"; "Docker"; "LiveAgent"; "Browser"; "Nix" ] then
         progress "compiling the browser client"
         fable false "app/browser/Yession.Browser.fsproj" "app/out/browser"
 
     // Host-spawning Node suites drive the assembled npm package — stage it (compile + bundle).
     // `test` names what this build is; the suites assert the bins report it back.
-    if hasAny capSet [ "Ports"; "Native"; "Docker"; "LiveAgent" ] then
+    if hasAny capSet [ "Ports"; "Native"; "Docker"; "LiveAgent"; "Nix" ] then
         progress "staging the npm package"
         stage "test"
 
-    // The Node (Fable/JS) path — always runs; self-skips suites whose caps/runtime don't match.
+/// Compile everything the Node suite needs for these capabilities, host-side, and hand back
+/// its entry point. Shared by `check` (which runs it here) and `vm-check` (which runs the same
+/// JS on a Linux target): the compiled JS is portable, so only `node_modules` is
+/// platform-specific — and that is the target's to provide, not this compile's.
+let private buildNodeSuite (capSet: Set<string>) : string =
+    buildProduct capSet
+    // The Node (Fable/JS) path — self-skips suites whose caps/runtime don't match.
     progress "compiling the suite"
     fable false "tests/Yession.Tests/Yession.Tests.fsproj" "tests/Yession.Tests/out"
     "tests/Yession.Tests/out/Main.js"
@@ -985,9 +1005,19 @@ let private runCheckOnce (requested: string list) =
     // runner down later (`Support.settledWithin`).
     Environment.SetEnvironmentVariable ("YESSION_TEST_BUDGET_MS", string budgetMs)
     progress (sprintf "capabilities: %s" (if List.isEmpty caps then "none (cheap tier)" else String.concat " " caps))
-    let mainJs = buildNodeSuite capSet
-    progress (sprintf "running the Node suite (budget %ds)" (budgetMs / 1000))
-    runNodeSuite mainJs caps budgetMs
+
+    // A MEASURING run (`Bench`) exercises the browser runtime alone. Every timing suite needs a
+    // real browser to time a render, so `Bench` is always declared beside `Browser` — which
+    // `Tag`'s own suite refuses to let drift, so this is a fact about the suite rather than a
+    // hope about it. Compiling the Node suite for it cost 84 seconds of Fable and bought a Node
+    // process with nothing in it to execute: the cheap-tier suites the run does not want (it is
+    // narrowed to one browser suite) and not one case that measures anything.
+    if capSet.Contains "Bench" then
+        buildProduct capSet
+    else
+        let mainJs = buildNodeSuite capSet
+        progress (sprintf "running the Node suite (budget %ds)" (budgetMs / 1000))
+        runNodeSuite mainJs caps budgetMs
 
     // The .NET CLR (Playwright) path — only when a Browser-tagged suite is enabled.
     if capSet.Contains "Browser" then
@@ -1327,9 +1357,25 @@ let private readMetrics (json: string) : Map<string, float> =
     |> Seq.map (fun e -> e.GetProperty("name").GetString (), e.GetProperty("value").GetDouble ())
     |> Map.ofSeq
 
+/// Make the recorded history readable here: the branch is not in a fresh clone, and every verb
+/// below reads it. It lives with the read rather than in the caller, because a caller that forgot
+/// it gets an EMPTY history and no error — `bench-guard` then judges against no baseline and says
+/// so, which reads exactly like a repository that has never recorded a point.
+///
+/// Never with `--depth`, and that is the whole reason this is a function: bench.yml fetched this
+/// branch shallow (`--depth=50`, to avoid deepening a clone it had taken at depth 1), and a shallow
+/// fetch of ANY ref writes `.git/shallow`, which makes `git rev-parse --is-shallow-repository`
+/// answer true for the repository. `bench-publish` computes the version it records, that computation
+/// refuses a shallow clone, and on the release path the step is `continue-on-error` — so the whole
+/// chart would have stopped being recorded, loudly in one step's log and nowhere else. The history
+/// is a few hundred one-line commits on an orphan branch; there was never anything to save here.
+let private fetchBenchHistory () =
+    tryRun "git" [ "fetch"; "origin"; sprintf "%s:%s" benchBranch benchBranch ] |> ignore
+
 /// Every point recorded so far, oldest first. Read with `git show` rather than a checkout, so
 /// this never disturbs the working tree it is being run from.
 let private benchHistory () : BenchPoint list =
+    fetchBenchHistory ()
     match tryRun "git" [ "show"; sprintf "%s:%s" benchBranch benchHistoryFile ] with
     | None -> []
     | Some text ->
@@ -1608,8 +1654,7 @@ let benchPublish (label: string) =
     // A worktree rather than a checkout: this runs in a tree that has just built, and a branch
     // switch under it would be a surprise to everything else in the job.
     let work = Path.Combine (Path.GetTempPath (), sprintf "yession-bench-%s" (Path.GetRandomFileName ()))
-    tryRun "git" [ "fetch"; "origin"; sprintf "%s:%s" benchBranch benchBranch ] |> ignore
-    let existing = benchHistory ()
+    let existing = benchHistory ()   // which is what fetches the branch this is about to add a worktree for
     if tryRun "git" [ "rev-parse"; "--verify"; benchBranch ] |> Option.isSome then
         exec "git" [ "worktree"; "add"; work; benchBranch ]
     else
