@@ -124,6 +124,36 @@ module Act =
                 |> List.concat
             phrase act @ (Segment.Text " — " :: joined)
 
+    /// How a run of work counts this act: the verb, and the noun once and many times over —
+    /// "edited 1 file", "edited 3 files". A run that holds tool calls and acts together
+    /// says what it holds by kind (`WorkRun.summary`), and the kind is the act's to name:
+    /// a file edited and a file written are two counts, because a reader asks about them
+    /// separately, while every sandbox start is one.
+    let counted (act: Act) : string * string * string =
+        match act with
+        | Act.RepoAdded _ -> "added", "repo", "repos"
+        | Act.RepoRemoved _ -> "removed", "repo", "repos"
+        | Act.RepoBranchSwitched _ -> "switched", "branch", "branches"
+        | Act.RepoCapabilitiesChanged _ -> "changed", "repo's capabilities", "repos' capabilities"
+        | Act.RepoCapabilitiesApproved _ -> "approved", "repo's capabilities", "repos' capabilities"
+        | Act.RepoConfigRefused _ -> "refused", "repo config", "repo configs"
+        | Act.SandboxStarting _
+        | Act.SandboxStarted _ -> "started", "sandbox", "sandboxes"
+        | Act.SandboxStartFailed _ -> "failed to start", "sandbox", "sandboxes"
+        | Act.SandboxStopped _ -> "stopped", "sandbox", "sandboxes"
+        | Act.SandboxSetupQueued _ -> "queued", "setup", "setups"
+        | Act.ShellProfileSet _ -> "set", "shell profile", "shell profiles"
+        | Act.FileChanged { Change = FileChange.Edited _ } -> "edited", "file", "files"
+        | Act.FileChanged { Change = FileChange.Written _ } -> "wrote", "file", "files"
+        | Act.CommandRefused _ -> "refused", "command", "commands"
+        | Act.GatedCommandFailed _ -> "failed", "command", "commands"
+        | Act.CredentialSpent _ -> "spent", "credential", "credentials"
+        | Act.McpServerAvailable _
+        | Act.McpServerUnavailable _ -> "noted", "server", "servers"
+        | Act.PrWatched _ -> "watched", "pull request", "pull requests"
+        | Act.PrUnwatched _ -> "unwatched", "pull request", "pull requests"
+        | Act.PrTransitioned _ -> "noted", "pull request", "pull requests"
+
     /// Whether this act opens a chapter BY NATURE — one nobody had to ask for.
     ///
     /// A rule over the act rather than a flag set at every fold arm, for the reason the
