@@ -91,9 +91,10 @@ let frameChannel (dc: DataChannel) : FrameChannel<string> =
 
 /// Close a peer connection and resolve once libdatachannel reports it CLOSED — the
 /// library's own signal that its threads are finished with the object. This is the
-/// deterministic teardown primitive: after it resolves, a global `Interop.cleanup ()`
-/// cannot race a callback into this connection. The waiter registers eagerly (the
-/// state callback is a single slot, and nothing else claims it on these connections —
+/// deterministic teardown primitive: a caller that awaits it knows the connection is gone
+/// rather than going, which is what makes "nothing this run opened is still open" a
+/// question with an answer (`Interop.liveConnectionNames`). The waiter registers eagerly
+/// (the state callback is a single slot, and nothing else claims it on these connections —
 /// gathering uses the separate onGatheringStateChange slot).
 let closePeerConnection (pc: PeerConnection) : Async<unit> =
     let mutable closed = false
@@ -105,13 +106,14 @@ let closePeerConnection (pc: PeerConnection) : Async<unit> =
             | Some w -> waiter <- None; w ()
             | None -> ())
     if pc.state () = "closed" then
-        async { () }
+        async { Interop.forgetPeerConnection pc }
     else
         async {
             pc.close ()
-            return!
+            do!
                 Async.FromContinuations (fun (cont, _, _) ->
                     if closed then cont () else waiter <- Some cont)
+            Interop.forgetPeerConnection pc
         }
 
 /// Await the data channel `open` event. Registers the callback eagerly (at call time) so
@@ -181,8 +183,8 @@ let connect (signalUrl: string) : Async<FrameChannel<string>> =
         do! opened
         // The client owns this side's PeerConnection: closing the channel also closes
         // the connection and WAITS for libdatachannel to report it closed, so a caller
-        // that has awaited `Close` may safely reach `Interop.cleanup ()` with no live
-        // native objects behind it (deterministic — no sleeps).
+        // that has awaited `Close` has left nothing of this connection behind
+        // (deterministic — no sleeps).
         // Supervised like every other end of this transport: a Node peer whose link dies
         // silently must learn it the same way a browser one does.
         let channel = Link.supervise Link.LinkPolicy.shipped (frameChannel dc)

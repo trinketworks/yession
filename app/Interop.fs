@@ -107,8 +107,35 @@ let private ndc () : Fable.NodeDataChannel.Exports =
         nodeDataChannel <- unbox<Fable.NodeDataChannel.Exports> (require "node-datachannel")
     nodeDataChannel
 
-/// libdatachannel's global teardown; lazy like the constructor (loads the addon on demand).
-let cleanup () : unit = (ndc ()).cleanup ()
+// --- What this process has open --------------------------------------------------------
+//
+// A peer connection is a port, a thread and a callback slot, held until it is closed. One
+// left open outlives the code that made it, and whatever trips over it later is never that
+// code — which is how a ten-second timeout in an unrelated teardown came to be read, three
+// times, as "something was still open", with nothing able to say what.
+//
+// Created in one place and closed in one place, so the set of open connections is knowable:
+// this is where it is kept. The suite reads it (`Live connections`) to hold every case to
+// closing what it opened; the answer is only interesting because nothing else can give it.
+
+let private livePeerConnections = ResizeArray<Fable.NodeDataChannel.PeerConnection * string> ()
+
+/// How many have been created, so a name is unique for the life of the process — the set
+/// shrinks, and two connections that shared an ordinal would be one name for two makers.
+let mutable private nextPeerConnection = 0
+
+/// The connections open right now, by the name each was created under and the order it was
+/// created in — a leak names its maker.
+let liveConnectionNames () : string list =
+    livePeerConnections |> Seq.map snd |> List.ofSeq
+
+/// Record a connection as closed. Called where a close has been AWAITED to completion
+/// (`WebRtc.closePeerConnection`), never where one was merely asked for, so the set says
+/// what libdatachannel has finished with rather than what somebody intended.
+let forgetPeerConnection (pc: Fable.NodeDataChannel.PeerConnection) : unit =
+    match livePeerConnections |> Seq.tryFindIndex (fun (p, _) -> System.Object.ReferenceEquals (p, pc)) with
+    | Some i -> livePeerConnections.RemoveAt i
+    | None -> ()
 
 /// Create a peer connection. Empty `iceServers` means no STUN and no TURN: gathering stops at
 /// host candidates. Those are gathered on EVERY interface, not just loopback — so a session on
@@ -117,7 +144,10 @@ let cleanup () : unit = (ndc ()).cleanup ()
 /// access, and why it needs a network whose addresses route directly; narrowing this to
 /// loopback would silently take remote sessions with it.
 let createPeerConnection (name: string) : Fable.NodeDataChannel.PeerConnection =
-    (ndc ()).PeerConnection.Create (name, { Fable.NodeDataChannel.PeerConnectionConfig.iceServers = [||] })
+    let pc = (ndc ()).PeerConnection.Create (name, { Fable.NodeDataChannel.PeerConnectionConfig.iceServers = [||] })
+    livePeerConnections.Add (pc, sprintf "%s#%d" name nextPeerConnection)
+    nextPeerConnection <- nextPeerConnection + 1
+    pc
 
 // --- node:http ---------------------------------------------------------------
 

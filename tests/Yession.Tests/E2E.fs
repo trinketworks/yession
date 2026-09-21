@@ -88,10 +88,12 @@ let tests =
                 do! rejectedEnded
                 let! events = eventsOf h
                 Expect.equal events [ joined; left ] "a rejected peer must not append events"
-                // Close the rejected peer's connection too: a client PeerConnection that
-                // outlives its suite is a live libdatachannel object, and the global
-                // `Interop.cleanup ()` a later suite runs then waits on it until it times
-                // out ("cleanup timeout (possible deadlock)").
+                // Close the rejected peer's connection too. Not for the reason first written
+                // here — that a global `Interop.cleanup ()` would later wait on it, which
+                // `cleanup()` never did, since it closes everything itself — but because a
+                // connection this case opened is this case's to close: one left open holds a
+                // port and a thread for the rest of the process, and the suite that trips
+                // over it is never the one that left it. `Live connections` is what says so.
                 do! badChannel.Close ()
             }
 

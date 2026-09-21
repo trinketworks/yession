@@ -305,8 +305,11 @@ let tests =
         // A session can end in the middle of a name. Typing takes time, and a pass in flight
         // is parked on the clock with a caret out on every connection — while the host's
         // shutdown waits for exactly those connections to report themselves closed. A writer
-        // that went on writing into them is a shutdown that does not finish, which is how
-        // this arrived: as a libdatachannel cleanup deadlock in the release gate.
+        // that went on writing into them is a shutdown that does not finish. It arrived as a
+        // "libdatachannel cleanup deadlock" in the release gate and was recorded as one; that
+        // reading was wrong (the library's cleanup closes its own connections and never waited
+        // on ours), but a shutdown that cannot finish is a real fault and this case is its
+        // guard — the red to read here is `host.Stop ()` never returning.
         testCaseAsync "stopping the session stops the typing, and keeps what it had written" <|
             async {
                 let summarize : Summarize =
