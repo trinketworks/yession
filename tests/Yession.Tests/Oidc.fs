@@ -289,6 +289,44 @@ let private wireTests =
             Expect.equal (Wire.toString Wire.tokenResponse tokens |> Wire.fromString Wire.tokenResponse) (Ok tokens) "token response"
             Expect.equal (Wire.toString Wire.tokenError "invalid_grant" |> Wire.fromString Wire.tokenError) (Ok "invalid_grant") "error body"
 
+        // The JWKS is the one document here whose reader is outside this repository: an RP
+        // fetches it from `jwks_uri` and verifies ID tokens against it. So its bytes are
+        // pinned rather than described — a parameter that moved, or one written `null`
+        // instead of left out, is a change to a published contract and reads as one.
+        testCase "the JWKS document is published byte for byte as RFC 7517 orders a key's parameters" <| fun () ->
+            let document =
+                { Jwks.Keys =
+                    [ { JwksKey.Kty = "OKP"
+                        JwksKey.Crv = Some "Ed25519"
+                        JwksKey.X = Some "USfW29tO0mZG-gzkSke8Oaw3vyz8t1zvL3u6S6-WIek"
+                        JwksKey.Y = None
+                        JwksKey.N = None
+                        JwksKey.E = None
+                        JwksKey.Kid = "f59e8b8b-d09c-41a4-a929-c09c01be5a93"
+                        JwksKey.Alg = "EdDSA"
+                        JwksKey.Use = "sig" } ] }
+            Expect.equal
+                (Wire.toString Wire.jwks document)
+                """{"keys":[{"kty":"OKP","crv":"Ed25519","x":"USfW29tO0mZG-gzkSke8Oaw3vyz8t1zvL3u6S6-WIek","kid":"f59e8b8b-d09c-41a4-a929-c09c01be5a93","alg":"EdDSA","use":"sig"}]}"""
+                "the parameters this key does not have are absent, not null"
+
+        testCase "a key set round-trips every parameter a key type can carry" <| fun () ->
+            // Ed25519 is what this Manager signs with, but the shape is RFC 7517's and an
+            // EC or RSA key fills different parameters — the decoder reads whichever the
+            // encoder wrote.
+            let document =
+                { Jwks.Keys =
+                    [ { JwksKey.Kty = "RSA"
+                        JwksKey.Crv = None
+                        JwksKey.X = None
+                        JwksKey.Y = None
+                        JwksKey.N = Some "0vx7agoebGcQSu"
+                        JwksKey.E = Some "AQAB"
+                        JwksKey.Kid = "rsa-1"
+                        JwksKey.Alg = "RS256"
+                        JwksKey.Use = "sig" } ] }
+            Expect.equal (Wire.toString Wire.jwks document |> Wire.fromString Wire.jwks) (Ok document) "key set"
+
         testCase "the discovery document carries the OIDC Discovery §3 REQUIRED fields and the supported profiles" <| fun () ->
             let doc =
                 { Issuer = "http://127.0.0.1:8321"
@@ -382,7 +420,10 @@ let private opTests =
                 Expect.equal decoded.Issuer issuer "issuer matches the serving origin"
                 Expect.equal decoded.JwksUri (issuer + "/jwks") "jwks_uri points at the endpoint"
                 let! jwks = OidcHttp.getWithJar jar decoded.JwksUri
-                Expect.isTrue (jwks.Body.Contains "\"OKP\"" && jwks.Body.Contains "\"Ed25519\"" && jwks.Body.Contains "\"x\"") "an Ed25519 public JWK"
+                let published = Wire.fromString Wire.jwks jwks.Body |> expect
+                let signing = List.exactlyOne published.Keys
+                Expect.equal (signing.Kty, signing.Crv, signing.Alg) ("OKP", Some "Ed25519", "EdDSA") "an Ed25519 public JWK"
+                Expect.isSome signing.X "carrying the public parameter a verifier needs"
                 Expect.isFalse (jwks.Body.Contains "\"d\"") "the private key parameter must NEVER appear"
 
                 let authorizeUrl () =
