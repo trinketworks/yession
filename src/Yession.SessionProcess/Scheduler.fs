@@ -49,7 +49,20 @@ module Scheduler =
           /// drain is: the answer lives in the log, a doc update cannot move it, and reading
           /// the whole log on every keystroke somebody types into a draft would be a poll
           /// with a nicer name.
-          Wake : unit -> unit }
+          Wake : unit -> unit
+          /// Close the turn a previous process died under (the restart case). A turn is
+          /// `AgentTurnStarted` in the log and nothing after it until it ends, and a process
+          /// that is killed mid-turn — a deploy, a crash, the machine — appends nothing on the
+          /// way out. So the log says a turn is running that no process is running, every
+          /// client folds that into a caret that never stops and an interrupt control that
+          /// answers "turn already finished", and the person who asked waits on an agent that
+          /// is not there. This process knows it is running nothing, and the log's turn is
+          /// therefore over: it is ended here, as a failure that names the restart, ANCHORED
+          /// WHERE IT STOPPED — the same shape a turn that fails on its own leaves behind.
+          ///
+          /// Called once at boot, BEFORE the first drain: a message queued behind the dead
+          /// turn would otherwise start a second turn beside one the log still holds open.
+          ReconcileAtBoot : unit -> Async<unit> }
 
     /// Create the scheduler for one session. `initialConsumed` seeds the log-anchored
     /// dedup set (every QueueId already named by a `MessageSent` in the durable log —
@@ -289,7 +302,31 @@ module Scheduler =
                 Ok ()
             | _ -> Error "turn already finished"
 
+        /// The turn the log says is running, folded the way the process model folds it — a
+        /// started turn is running until its message completes, it is interrupted, or it
+        /// fails. Read at boot only: from then on `running` is this process's own record.
+        let reconcileAtBoot () : Async<unit> =
+            async {
+                match running with
+                | Some _ -> ()
+                | None ->
+                    let! page = log.Read None System.Int32.MaxValue
+                    let model = ProcessModel.applyEvents page.Events (ProcessModel.initial sessionId)
+                    match model.Agent with
+                    | AgentRuntimeState.Running turnId ->
+                        let! _ =
+                            log.Append
+                                ActorRef.SessionProcess
+                                (AgentTurnFailed
+                                    { AgentTurnId = turnId
+                                      Reason = "the session was restarted while this turn was running" })
+                        ()
+                    | AgentRuntimeState.Idle
+                    | AgentRuntimeState.Failed _ -> ()
+            }
+
         { Drain = drain
           RequestInterrupt = requestInterrupt
           RunningTurn = fun () -> running |> Option.map (fun t -> t.TurnId)
-          Wake = wake }
+          Wake = wake
+          ReconcileAtBoot = reconcileAtBoot }

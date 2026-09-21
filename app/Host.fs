@@ -909,6 +909,9 @@ let startFull
         // reads the projection — and before the terminal drain, which must not try to run a
         // command in a terminal that is gone.
         do! terminals.ReconcileAtBoot ()
+        // And the turn that process was running, for the same reason: the log still holds it
+        // open, and nothing else will ever close it.
+        do! scheduler.ReconcileAtBoot ()
         // The boot half of the same arm: a completion the previous process never acted on is
         // still owed, and the wake re-derives it from the log rather than losing it.
         scheduler.Wake ()
