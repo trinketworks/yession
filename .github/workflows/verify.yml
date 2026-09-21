@@ -43,16 +43,29 @@ on:
         type: string
         default: ""
 
-# One at a time per ref. The gate spawns real child processes, binds real ports and talks to a
-# real Docker daemon, so two runs of it on one runner pool are two runs contending for the same
-# machine-wide resources. A dispatch supersedes its own earlier dispatch on the same ref;
-# release.yml's own `release` group is what serialises master, and it does not cancel.
+# One gate per COMMIT, and the sha is the whole point of the group — it used to be the ref alone,
+# and that was a release-killer hiding behind another lock.
+#
+# `github.ref` is `refs/heads/master` for every master push, so two release runs both called this
+# workflow into ONE group with `cancel-in-progress: true`, and the newer cancelled the older's
+# gate mid-run. It could not bite while release.yml serialised the whole workflow, because two
+# master gates could never overlap; the moment that lock was narrowed to the tag cut, the very
+# first overlapping pair proved it — run 35603572519 (711cfa4) had `node` and `browser` green and
+# `nix` still running when the next push arrived, and `nix` was cancelled 51 seconds later. Every
+# job downstream skipped and that commit was never released.
+#
+# So the group is per-commit. A dispatch still supersedes its own earlier dispatch of the same
+# commit, which is what that was for; a dispatch after a new push is a different gate over
+# different source and has no business cancelling the one before it.
+#
+# `Release gate` (cheap tier) holds every workflow release.yml calls to this, because the fault is
+# invisible until two pushes happen to overlap and then reads as an unexplained cancellation.
 #
 # The tiers below run at the same time and this says nothing about them: each is a job, and a job
 # is its own ephemeral VM. What must not overlap is two runs on one MACHINE, which is a different
 # question from two jobs on two.
 concurrency:
-  group: verify-${{ github.ref }}
+  group: verify-${{ github.ref }}-${{ github.sha }}
   cancel-in-progress: true
 
 jobs:

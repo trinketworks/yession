@@ -53,7 +53,8 @@ let private repoRoot () : string option =
 type private Job =
     { Needs : string list
       Condition : string option
-      Serialised : Concurrency option }
+      Serialised : Concurrency option
+      Calls : string option }
 
 /// A job's `concurrency`. The shorthand form is a bare group name, which means the default
 /// `cancel-in-progress: false` — so both spellings decode to the same answer and a reader here
@@ -80,7 +81,13 @@ let private job : Decoder<Job> =
     Decode.object (fun get ->
         { Job.Needs = get.Optional.Field "needs" needs |> Option.defaultValue []
           Condition = get.Optional.Field "if" Decode.string
-          Serialised = get.Optional.Field "concurrency" concurrency })
+          Serialised = get.Optional.Field "concurrency" concurrency
+          Calls = get.Optional.Field "uses" Decode.string })
+
+/// A workflow's own top-level `concurrency`, which is the one that decides whether a run of it can
+/// be cancelled by the next one.
+let private workflowConcurrency : Decoder<Concurrency option> =
+    Decode.object (fun get -> get.Optional.Field "concurrency" concurrency)
 
 let private jobs : Decoder<(string * Job) list> =
     Decode.object (fun get ->
@@ -99,6 +106,26 @@ let private releaseJobs () : (string * Job) list =
     match repoRoot () |> Option.bind (fun root -> try Some (TestFiles.read (root + "/.github/workflows/release.yml")) with _ -> None) with
     | Some text -> jobsIn text
     | None -> []
+
+/// The workflows release.yml CALLS, as `.github/workflows/<name>` paths, derived from the file
+/// rather than listed here — one added tomorrow is one the rule already covers. A `uses:` naming
+/// another repository is not ours to read and is left out.
+let private calledWorkflows (jobs: (string * Job) list) =
+    jobs
+    |> List.choose (fun (_, job) -> job.Calls)
+    |> List.filter (fun path -> path.StartsWith "./")
+    |> List.map (fun path -> path.Substring 2)
+    |> List.distinct
+
+/// A workflow's top-level concurrency, read from the repository. `None` for a file this cannot
+/// find or parse, which the population case below is what speaks for.
+let private concurrencyOf (path: string) : Concurrency option =
+    match repoRoot () |> Option.bind (fun root -> try Some (TestFiles.read (root + "/" + path)) with _ -> None) with
+    | None -> None
+    | Some text ->
+        match Decode.fromString workflowConcurrency (JS.JSON.stringify (Fable.Yaml.parse text)) with
+        | Error reason -> failwithf "%s is not a document this file can read: %s" path reason
+        | Ok found -> found
 
 /// The job that publishes, which is the subject of half the rules below. A file this cannot read
 /// answers `None` here exactly as it answers an empty list above, so the population case is what
@@ -191,4 +218,42 @@ let tests =
                     (sprintf
                         "the release job's concurrency group `%s` cancels in progress, so a run that has already built and packaged a commit can be killed before it publishes it"
                         serialised.Group)
+
+        // The one that cost a release. Both workflows this one calls grouped per `github.ref`,
+        // which is `refs/heads/master` for EVERY push, with `cancel-in-progress: true` — so once
+        // the workflow-level lock came off and two runs could overlap, the newer one cancelled the
+        // older one's gate where it stood. Run 35603572519 had two of three tiers green and `nix`
+        // still running when the next push arrived; `nix` died 51 seconds later, every job
+        // downstream skipped, and 711cfa4 was never released.
+        //
+        // A group per COMMIT is what makes a called workflow safe to overlap, and naming the sha is
+        // how a group says it is one. The rule asks that rather than asking for a literal spelling,
+        // so `github.sha`, `github.event.pull_request.head.sha` and a run id all satisfy it — what
+        // it refuses is a group that two different commits can land in while it cancels.
+        testCase "a workflow this one calls cannot be cancelled by the next push" <| fun () ->
+            let jobs = releaseJobs ()
+            for path in calledWorkflows jobs do
+                match concurrencyOf path with
+                | None -> ()   // no group at all: nothing can cancel it
+                | Some serialised ->
+                    let perCommit =
+                        [ "github.sha"; "head.sha"; "github.run_id" ]
+                        |> List.exists serialised.Group.Contains
+                    Expect.isTrue
+                        (perCommit || not serialised.CancelInProgress)
+                        (sprintf
+                            "%s groups as `%s` and cancels in progress, so two pushes to one ref land in one group and the newer kills the older's run — which skips this release entirely. Put the commit in the group, or stop cancelling."
+                            path
+                            serialised.Group)
+
+        // The population for the rule above, asserted separately so its silence cannot pass for a
+        // verdict: a `uses:` spelling this cannot read, or a file it cannot find, would make that
+        // loop run over nothing and report a clean gate.
+        testCase "the release workflow still calls workflows this can read" <| fun () ->
+            let called = calledWorkflows (releaseJobs ())
+            Expect.isNonEmpty called "release.yml calls at least one workflow in this repository"
+            for path in called do
+                Expect.isTrue
+                    (repoRoot () |> Option.map (fun root -> TestFiles.exists (root + "/" + path)) |> Option.defaultValue false)
+                    (sprintf "release.yml names %s, which is not a file in this repository" path)
     ]
