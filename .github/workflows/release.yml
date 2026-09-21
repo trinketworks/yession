@@ -10,21 +10,48 @@ on:
   push:
     branches: [master]
 
-# ONE release at a time. The version is computed from the tags reachable at that moment
-# (`tasks.fsx`), and the tag that claims it is cut minutes later, at the end of the run — so
-# two overlapping runs both read the same "latest tag", compute the same number, and the
-# second one takes it. That happened twice: v6.5.0-beta.1 and v6.5.0-beta.4 each landed on
-# the LATER of an overlapping pair, leaving the earlier commit untagged, and a `+semver:
-# minor` marker was computed against a base that had not been tagged yet and was lost.
+# NO workflow-level concurrency, and the reason is worth keeping, because there was one here for
+# six weeks and it was guarding a fault that had already been fixed three pull requests later.
 #
-# `cancel-in-progress: false`, so a run in flight always finishes and publishes. GitHub keeps
-# at most one run PENDING per group, so a third push while one is queued supersedes the
-# queued one — those commits are not lost, they are carried by the next release, whose
-# version range still spans their messages. That is the right trade for continuous delivery:
-# a marker can no longer be lost, and the newest master state is what ships.
-concurrency:
-  group: release
-  cancel-in-progress: false
+# What it said: "the version is computed from the tags reachable at that moment, and the tag that
+# claims it is cut minutes later, so two overlapping runs both read the same latest tag, compute
+# the same number, and the second one takes it. That happened twice: v6.5.0-beta.1 and
+# v6.5.0-beta.4 each landed on the LATER of an overlapping pair, leaving the earlier commit
+# untagged."
+#
+# The tell is in its own sentence. "Leaving the earlier commit untagged" is not what computing a
+# number twice does — it is what tagging the DEFAULT BRANCH instead of the commit you built does,
+# and that is the bug `fix: a release tags the commit it built` (#138) fixed with
+# `target_commitish` below. This lock landed in #135, three pull requests and a few hours EARLIER,
+# written before anybody had found the cause. Nothing revisited it once they had.
+#
+# Two overlapping runs do not compute the same number, because `count` is measured from the shared
+# base tag to EACH RUN'S OWN HEAD (`tasks.fsx` `computeVersion`), so a later commit always lands
+# higher. Measured on the two commits either side of this change, with both their tags excluded to
+# stand in for a run that has not tagged yet:
+#
+#     A on f2edb41 -> 12.24.2-beta.3   [base=v12.24.2-beta.2 count=1]
+#     B on dcf2e2a -> 12.24.2-beta.4   [base=v12.24.2-beta.2 count=2]
+#
+# which is exactly what the two of them were published as. A marker behaves the same way: both
+# runs see it in their range, both bump the triple, and the counter still restarts at the marker,
+# so it cannot be "lost" by a run that read an untagged base.
+#
+# What the lock cost, meanwhile, was the whole pipeline. A second push waited out all of the first
+# — 30m24s of queue on run 35562512187, against 20m of work — and, because GitHub keeps at most
+# ONE run pending per group, a third push while one was queued DROPPED the queued one. That is why
+# 2844e14 and 6e4cdf5 carry no tag: their release runs were superseded, so those commits were never
+# released at all. Every push now gets its own run, and its own tag.
+#
+# What still needs serialising is the one thing that genuinely races: creating the tag. That is a
+# group on the `release` job alone (see it there), which is twelve seconds of work rather than
+# twenty minutes.
+#
+# One consequence to know rather than rediscover: bench.yml locks per REF with
+# `cancel-in-progress: true`, so two overlapping master runs cancel each other's measurement and
+# the newer one wins. The release still publishes — its condition is `!cancelled()` and the chart
+# download is `continue-on-error` — so the cost is a gap in the chart, which bench.yml already
+# calls the honest outcome for a measurement that did not happen.
 
 permissions:
   contents: write
@@ -215,6 +242,22 @@ jobs:
     # single `result` is `success` only when every arch built, which is the question here.
     needs: [package-npm, package-nix, bench]
     if: ${{ !cancelled() && github.ref == 'refs/heads/master' && needs.package-npm.result == 'success' && needs.package-nix.result == 'success' }}
+    # The residual lock, and all that is left of the workflow-level one this file's header
+    # describes: creating a tag is the one step in a release that two runs can genuinely race, and
+    # this is the only job that creates one. Twelve seconds of work, so serialising it costs
+    # nothing, where serialising the whole run cost half an hour a push.
+    #
+    # It is a guard rather than the mechanism: the numbers two overlapping runs compute are already
+    # distinct (the header shows the measurement), and the two steps below already refuse an empty
+    # version and one that is taken. This is what makes those refusals unreachable instead of
+    # load-bearing — the difference between an invariant and a convention with a good reputation.
+    #
+    # `cancel-in-progress: false`, always: a run that has built and packaged a commit must go on to
+    # publish it. Cancelling here is the one thing that WOULD leave a commit released by nothing,
+    # which is the fault the original lock was reaching for.
+    concurrency:
+      group: release-publish
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     env:
       # The versioning policy lives in tasks.fsx; the package:npm job computed it — reuse it here
