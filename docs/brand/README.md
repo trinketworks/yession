@@ -703,3 +703,12 @@ Findings: the rim is the material and everything above it refines; the mark surv
 with the rim and bloom alone doing the work there. Each piece is rendered as one filtered group,
 which is sound here because the cube sits wholly behind both panels in depth and the panels do
 not overlap on screen.
+
+The wide lens, in jelly. `wide-jelly` is the lens pass's pinhole build (eye two block-widths
+away, aimed two above centre, fork 41° with every line straight) given the material whole, with
+the neon ladder's core line cut from the lighting: the kerfs are lit by the halo, a wide soft
+stroke clipped into the object, and the spill at the junction. `wide-spill` drops the halo too
+and strokes nothing. `wide-ground` adds the reflection, which under this lens has to anchor on
+the object's lowest point on screen rather than the stem's foot — the panels' near corners sit
+below it. Built by `gen26.py`, whose material is written against a projector so the pinhole
+needed one adapter: a face is visible when it faces the eye, not one view direction.
