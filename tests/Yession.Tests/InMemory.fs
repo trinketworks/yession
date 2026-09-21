@@ -568,15 +568,18 @@ let tests =
                       Shell = fun () -> None
                       Realisation = fun () -> [] }
                 let makeSandboxes log =
-                    WorkSandboxes.create
-                        { Backend = fun _ -> "scripted"
-                          Describe = fun _ -> None
-                          Checkout = fun _ -> None
-                          Credentials = []
-                          Create = fun name _ _ -> Ok (environmentNamed (SandboxRef.render name))
-                          Log = log
-                          Clock = fun () -> System.DateTimeOffset (2026, 1, 1, 0, 0, 0, System.TimeSpan.Zero) }
-                    |> expect
+                    async {
+                        let! created =
+                            WorkSandboxes.create
+                                { Backend = fun _ -> "scripted"
+                                  Describe = fun _ -> None
+                                  Checkout = fun _ -> None
+                                  Credentials = []
+                                  Create = fun name _ _ -> Ok (environmentNamed (SandboxRef.render name))
+                                  Log = log
+                                  Clock = fun () -> System.DateTimeOffset (2026, 1, 1, 0, 0, 0, System.TimeSpan.Zero) }
+                        return expect created
+                    }
                 let! host = Host.startWithEnvironment None (Some makeSandboxes) None (sid ()) 0
 
                 let caller = ActorRef.Agent
@@ -625,7 +628,7 @@ let tests =
                       CurrentRef = fun () -> Some "scripted"
                       Shell = fun () -> None
                       Realisation = fun () -> [] }
-                let! host = Host.startWithEnvironment None (Some (fun _ -> WorkSandboxes.singleton "scripted" environment)) None (sid ()) 0
+                let! host = Host.startWithEnvironment None (Some (fun _ -> async { return WorkSandboxes.singleton "scripted" environment })) None (sid ()) 0
                 let! a = connectInMemoryClient host "ada" "Ada"
                 let! b = connectInMemoryClient host "bob" "Bob"
 
@@ -712,7 +715,7 @@ let tests =
                       CurrentRef = fun () -> Some "scripted"
                       Shell = fun () -> None
                       Realisation = fun () -> [] }
-                let! host = Host.startWithEnvironment None (Some (fun _ -> WorkSandboxes.singleton "scripted" environment)) None (sid ()) 0
+                let! host = Host.startWithEnvironment None (Some (fun _ -> async { return WorkSandboxes.singleton "scripted" environment })) None (sid ()) 0
                 // No terminal is open, so the FIRST call opens the agent's own — titled with
                 // what it is for, and in `AutoRun`, which is what keeps the agent's autonomy
                 // exactly what it was before the tool changed.
@@ -786,7 +789,7 @@ let tests =
                       CurrentRef = fun () -> Some "scripted"
                       Shell = fun () -> None
                       Realisation = fun () -> [] }
-                let! host = Host.startWithEnvironment None (Some (fun _ -> WorkSandboxes.singleton "scripted" environment)) None (sid ()) 0
+                let! host = Host.startWithEnvironment None (Some (fun _ -> async { return WorkSandboxes.singleton "scripted" environment })) None (sid ()) 0
                 let! held = host.Terminals.OpenAgentTerminal SandboxRef.defaultRef "holds"
                 let! frees = host.Terminals.OpenAgentTerminal SandboxRef.defaultRef "frees"
                 let holds = held |> expect
@@ -845,7 +848,7 @@ let tests =
                       CurrentRef = fun () -> Some "scripted"
                       Shell = fun () -> None
                       Realisation = fun () -> [] }
-                let! host = Host.startWithEnvironment None (Some (fun _ -> WorkSandboxes.singleton "scripted" environment)) None (sid ()) 0
+                let! host = Host.startWithEnvironment None (Some (fun _ -> async { return WorkSandboxes.singleton "scripted" environment })) None (sid ()) 0
                 let! a = connectInMemoryClient host "ada" "Ada"
                 a.Connection.OpenTerminal "build"
                 do! a.Runner.WaitFor (fun m -> not (List.isEmpty (Projection.openTerminals m.Terminals)))

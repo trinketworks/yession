@@ -112,18 +112,20 @@ let createFull
                                             })
                                         (Sandboxes.summaryFor HostBackend spec)
                                         (sprintf "env-%s-%s" (SessionId.value request.SessionId) (SandboxRef.render name)))
-                            match WorkSandboxes.create
-                                    { Backend = fun _ -> SandboxBackend.describe HostBackend
-                                      // This composition reads no repo files, so nothing here
-                                      // has a description to give.
-                                      Describe = fun _ -> None
-                                      Checkout = fun _ -> None
-                                      Credentials = []
-                                      Create = create
-                                      Log = log
-                                      Clock = fun () -> DateTimeOffset.UtcNow } with
-                            | Ok sandboxes -> sandboxes
-                            | Error e -> failwithf "work sandboxes: %s" e)
+                            async {
+                                match! WorkSandboxes.create
+                                        { Backend = fun _ -> SandboxBackend.describe HostBackend
+                                          // This composition reads no repo files, so nothing here
+                                          // has a description to give.
+                                          Describe = fun _ -> None
+                                          Checkout = fun _ -> None
+                                          Credentials = []
+                                          Create = create
+                                          Log = log
+                                          Clock = fun () -> DateTimeOffset.UtcNow } with
+                                | Ok sandboxes -> return sandboxes
+                                | Error e -> return failwithf "work sandboxes: %s" e
+                            })
                 let baseLog = makeLog |> Option.map (fun make -> make request.SessionId)
                 let docStore = makeDocStore |> Option.map (fun make -> make request.SessionId)
                 // In-process sessions run without an HTTP auth gate (there is no OIDC
