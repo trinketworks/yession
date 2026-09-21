@@ -1,6 +1,7 @@
 namespace Yession.App
 
 open Yession.Domain
+open Yession.Domain.Access
 open Yession.Domain.Sandboxes
 open Yession.Domain.Agent
 open Yession.Domain.Link
@@ -718,10 +719,10 @@ module View =
     /// The health is a STATUS here, not a second call to action. Each panel's own Connect
     /// control is already directly below this row and IS the remedy; the one new button for
     /// this lives over the timeline, where somebody who never opens settings will meet it.
-    let private credentialStatus (label: string) (credential: ConnectionView) : TemplateResult =
+    let private credentialStatus (label: string) (credential: CredentialRow) : TemplateResult =
         match credential.SignInRequired with
         | None ->
-            html $"""<span class="{Style.statusOk}"><span class="{Style.statusDot}"></span>{label} ({credential.Kind})</span>"""
+            html $"""<span class="{Style.statusOk}"><span class="{Style.statusDot}"></span>{label} ({ConnectionKind.label credential.Kind})</span>"""
         | Some _ ->
             html $"""<span class="{Style.statusErr}"><span class="{Style.statusDot}"></span>{label} — {Dom.Text.signInAgainStatus}</span>"""
 
@@ -729,7 +730,7 @@ module View =
     /// it says what a person could not have guessed — "the refresh token has expired" and
     /// "github rejected this credential" send them to the same button knowing different
     /// things about how they got here.
-    let private credentialReason (hook: string) (scopeChoice: string) (credential: ConnectionView) : TemplateResult =
+    let private credentialReason (hook: string) (scopeChoice: string) (credential: CredentialRow) : TemplateResult =
         match credential.SignInRequired with
         | None -> Lit.nothing
         | Some reason ->
@@ -747,7 +748,7 @@ module View =
     /// sign-in scope, the OAuth flow (approve on claude.ai → paste the shown code), and
     /// the paste-a-token fallback.
     let private claudeSection (actions: ViewActions) (dispatch: ClientMsg -> unit) (claude: ClaudeViewState) : TemplateResult =
-        let connectedRow (label: string) (scopeChoice: string) (credential: ConnectionView option) =
+        let connectedRow (label: string) (scopeChoice: string) (credential: CredentialRow option) =
             match credential with
             | Some credential ->
                 html $"""
@@ -859,7 +860,7 @@ module View =
         (copied: string option)
         (github: GitHubViewState)
         : TemplateResult =
-        let connectedRow (label: string) (scopeChoice: string) (credential: ConnectionView option) =
+        let connectedRow (label: string) (scopeChoice: string) (credential: CredentialRow option) =
             match credential with
             | Some credential ->
                 html $"""

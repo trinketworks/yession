@@ -2418,6 +2418,85 @@ module Codec =
         { Encode = (fun models -> Encode.object [ "models", Encode.list (models |> List.map agentModel.Encode) ])
           Decode = Decode.field "models" (Decode.list agentModel.Decode) }
 
+    /// One connection as a panel row reads it. The kind crosses as the word a person is
+    /// shown, which is `ConnectionKind`'s to say — here and on the screen alike.
+    let private credentialRow : Codec<Access.CredentialRow> =
+        { Encode =
+            fun (row: Access.CredentialRow) ->
+                Encode.object
+                    [ "kind", Encode.string (Access.ConnectionKind.label row.Kind)
+                      "signInRequired", Encode.option Encode.string row.SignInRequired ]
+          Decode =
+            Decode.object (fun get ->
+                // REQUIRED, and the distinction is the rule's: a row with no `kind` at all is
+                // a malformed row and fails, while a kind this build does not KNOW is a word
+                // `ofLabel` has an answer for. Defaulting the missing one to `""` made the
+                // two the same thing and called it static.
+                { Access.CredentialRow.Kind =
+                    get.Required.Field "kind" Decode.string |> Access.ConnectionKind.ofLabel
+                  Access.CredentialRow.SignInRequired = get.Optional.Field "signInRequired" Decode.string }) }
+
+    /// The Claude panel as the session serves it.
+    ///
+    /// `models` is decoded as a value and run through `modelCatalogue` SEPARATELY, rather
+    /// than inline where its failure would fail the whole reply: a catalogue this build
+    /// cannot read is a reason to show in the picker, and it must not also take the
+    /// connection rows down with it. `modelsUnavailable` is why there is none — the same
+    /// null-or-reason shape as `signInRequired`, and never both.
+    let claudePanel : Codec<Access.ClaudePanel> =
+        { Encode =
+            fun (panel: Access.ClaudePanel) ->
+                Encode.object
+                    [ "session", Encode.option credentialRow.Encode panel.SessionCredential
+                      "mine", Encode.option credentialRow.Encode panel.MineCredential
+                      "owner", Encode.option Encode.string panel.Owner
+                      "agent", Encode.option Encode.bool panel.AgentAvailable
+                      "models",
+                      (match panel.Models with
+                       | Access.ModelsLoaded models -> modelCatalogue.Encode models
+                       | Access.ModelsUnknown
+                       | Access.ModelsUnavailable _ -> Encode.nil)
+                      "modelsUnavailable",
+                      (match panel.Models with
+                       | Access.ModelsUnavailable reason -> Encode.string reason
+                       | Access.ModelsUnknown
+                       | Access.ModelsLoaded _ -> Encode.nil) ]
+          Decode =
+            Decode.object (fun get ->
+                { Access.ClaudePanel.SessionCredential = get.Optional.Field "session" credentialRow.Decode
+                  Access.ClaudePanel.MineCredential = get.Optional.Field "mine" credentialRow.Decode
+                  Access.ClaudePanel.Owner = get.Optional.Field "owner" Decode.string
+                  // Carried as the `option` the field is, rather than read as "no agent"
+                  // when a reply does not mention one: the "no agent" prompt must never
+                  // flash at a client that has not been told either way.
+                  Access.ClaudePanel.AgentAvailable = get.Optional.Field "agent" Decode.bool
+                  Access.ClaudePanel.Models =
+                    match get.Optional.Field "models" Decode.value with
+                    | Some raw ->
+                        match Decode.fromValue "$.models" modelCatalogue.Decode raw with
+                        | Ok models -> Access.ModelsLoaded models
+                        | Error reason -> Access.ModelsUnavailable reason
+                    | None ->
+                        match get.Optional.Field "modelsUnavailable" Decode.string with
+                        | Some reason -> Access.ModelsUnavailable reason
+                        // Neither: a session process answering the rows alone.
+                        | None -> Access.ModelsUnknown }) }
+
+    /// The GitHub panel as the session serves it: the same two rows, and nothing this
+    /// provider has no answer for.
+    let githubPanel : Codec<Access.GitHubPanel> =
+        { Encode =
+            fun (panel: Access.GitHubPanel) ->
+                Encode.object
+                    [ "session", Encode.option credentialRow.Encode panel.SessionCredential
+                      "mine", Encode.option credentialRow.Encode panel.MineCredential
+                      "owner", Encode.option Encode.string panel.Owner ]
+          Decode =
+            Decode.object (fun get ->
+                { Access.GitHubPanel.SessionCredential = get.Optional.Field "session" credentialRow.Decode
+                  Access.GitHubPanel.MineCredential = get.Optional.Field "mine" credentialRow.Decode
+                  Access.GitHubPanel.Owner = get.Optional.Field "owner" Decode.string }) }
+
     let private repoCandidate : Codec<Repos.RepoCandidate> =
         { Encode =
             fun (candidate: Repos.RepoCandidate) ->

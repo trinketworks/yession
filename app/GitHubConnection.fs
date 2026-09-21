@@ -487,35 +487,18 @@ let routes
             | Some identity ->
                 let handle (body: GitHubRequestBody) : unit =
                     let owner = ownerOf identity
-                    let kindLabel kind = match kind with OAuthConnection -> "oauth" | StaticConnection -> "static"
                     match routeOf () with
                     | Some GitHubStatus ->
-                        // One connection as the panel reads it: which kind of credential it
-                        // is, and — when something has established that it no longer works —
-                        // why a person has to sign in again. `null` for a scope with nothing
-                        // connected. The GitHub panel reads the same shape from its own route;
-                        // both are pinned by their route suites.
-                        let statusJson (target: SecretId) =
-                            match statusOf target with
-                            | None -> "null"
-                            | Some (status: ConnectionStatus) ->
-                                let signInRequired =
-                                    match status.Health with
-                                    | ConnectionUsable -> "null"
-                                    | SignInRequired reason -> jsonString reason
-                                sprintf
-                                    """{"kind":%s,"signInRequired":%s}"""
-                                    (jsonString (kindLabel status.Kind))
-                                    signInRequired
+                        // The same two rows the Claude panel shows, written by the same
+                        // codec the browser reads (`Codec.githubPanel`). This file used to
+                        // carry its own copy of the row encoder.
                         let sessionTarget : SecretId = { Scope = SessionScope sessionId; Name = secretName }
                         let mineTarget : SecretId = { Scope = CredentialOwner.scope owner; Name = secretName }
-                        let ownerLabel =
-                            match owner with
-                            | UserOwner _ -> "user"
-                            | LocalOwner -> "local"
-                        respondJson res 200
-                            (sprintf """{"session":%s,"mine":%s,"owner":"%s"}"""
-                                (statusJson sessionTarget) (statusJson mineTarget) ownerLabel)
+                        let panel : GitHubPanel =
+                            { SessionCredential = CredentialRow.ofStatus (statusOf sessionTarget)
+                              MineCredential = CredentialRow.ofStatus (statusOf mineTarget)
+                              Owner = Some (match owner with UserOwner _ -> "user" | LocalOwner -> "local") }
+                        respondJson res 200 (Codec.toString Codec.githubPanel panel)
                     | Some (GitHub action) ->
                         match targetFor sessionId owner body.Scope with
                         | Error e -> respondText res 400 e

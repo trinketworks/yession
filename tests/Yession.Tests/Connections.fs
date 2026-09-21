@@ -3651,9 +3651,9 @@ open Yession.App
 // the point of the expectation being DATA and the rule being a parameter: the wait a browser
 // case can only observe by racing it is settled here, in the cheap tier, by stating it.
 
-let private connected : ConnectionView = { Kind = "static"; SignInRequired = None }
+let private connected : CredentialRow = { Kind = StaticConnection; SignInRequired = None }
 
-let private claudeStatus session mine : ClaudeStatus =
+let private claudeStatus session mine : ClaudePanel =
     { SessionCredential = session
       MineCredential = mine
       Owner = Some "user"
@@ -3663,8 +3663,8 @@ let private claudeStatus session mine : ClaudeStatus =
 let private offered =
     [ AgentModel.create (ModelId.create "example-large" |> expect) "Example Large" ]
 
-let private githubStatus session mine : GitHubStatus =
-    { SessionCredential = session; MineCredential = mine }
+let private githubStatus session mine : GitHubPanel =
+    { SessionCredential = session; MineCredential = mine; Owner = Some "user" }
 
 /// Connecting the shared credential — the command the browser case drives.
 let private connectMine : ConnectionExpectation = { Scope = "mine"; Connected = true }
@@ -3676,39 +3676,39 @@ let private panelTests =
     testList "a command waiting on the query that will show it" [
         testCase "a status that has not caught up leaves the wait standing" <| fun () ->
             Expect.equal
-                (awaitingMine |> Pending.observed ClaudeStatus.landed (claudeStatus None None))
+                (awaitingMine |> Pending.observed ClaudePanel.landed (claudeStatus None None))
                 awaitingMine
                 "the probe answered before the credential reached the status — not a refusal"
 
         testCase "the status showing what was asked for ends the wait" <| fun () ->
             Expect.equal
-                (awaitingMine |> Pending.observed ClaudeStatus.landed (claudeStatus None (Some connected)))
+                (awaitingMine |> Pending.observed ClaudePanel.landed (claudeStatus None (Some connected)))
                 Pending.Ready
                 "the shared credential is there, which is what the command asked for"
 
         testCase "a credential under another scope leaves the wait standing" <| fun () ->
             Expect.equal
-                (awaitingMine |> Pending.observed ClaudeStatus.landed (claudeStatus (Some connected) None))
+                (awaitingMine |> Pending.observed ClaudePanel.landed (claudeStatus (Some connected) None))
                 awaitingMine
                 "this session's own credential is not the one the command connected"
 
         testCase "a disconnect waits for the credential to GO" <| fun () ->
             Expect.equal
                 (Pending.Awaiting (disconnectMine, 1_000L)
-                 |> Pending.observed ClaudeStatus.landed (claudeStatus None (Some connected)))
+                 |> Pending.observed ClaudePanel.landed (claudeStatus None (Some connected)))
                 (Pending.Awaiting (disconnectMine, 1_000L))
                 "the credential is still on the status, so the disconnect has not landed"
 
         testCase "a disconnect lands when the status stops showing it" <| fun () ->
             Expect.equal
                 (Pending.Awaiting (disconnectMine, 1_000L)
-                 |> Pending.observed ClaudeStatus.landed (claudeStatus None None))
+                 |> Pending.observed ClaudePanel.landed (claudeStatus None None))
                 Pending.Ready
                 "the credential is gone, which is what the disconnect asked for"
 
         testCase "the same rule reads the GitHub panel's own status" <| fun () ->
             Expect.equal
-                (awaitingMine |> Pending.observed GitHubStatus.landed (githubStatus None (Some connected)))
+                (awaitingMine |> Pending.observed GitHubPanel.landed (githubStatus None (Some connected)))
                 Pending.Ready
                 "one wait, two panels — the expectation is about a scope, not about a provider"
 
@@ -3744,28 +3744,98 @@ let private panelTests =
 /// The picker's supply is a fact about the credential, so it arrives INSIDE the status. The
 /// one thing that cannot simply be replaced is a status that does not mention it — which is
 /// why the rule is here, on the status, rather than at whoever dispatches one.
+/// The panel wire, which is now ONE shape rather than an encoder here and a decoder there.
+/// The literal is what a browser of a different build actually receives, so it is pinned as
+/// a literal: a round trip alone would agree with itself however both halves moved.
+let private panelWireTests =
+    testList "the panel wire" [
+        testCase "a claude panel is written as the browser reads it" <| fun () ->
+            let panel : ClaudePanel =
+                { SessionCredential = None
+                  MineCredential = Some { Kind = OAuthConnection; SignInRequired = Some "expired" }
+                  Owner = Some "user"
+                  AgentAvailable = Some true
+                  Models = ModelsLoaded offered }
+            Expect.equal
+                (Codec.toString Codec.claudePanel panel)
+                ("""{"session":null,"mine":{"kind":"oauth","signInRequired":"expired"},"owner":"user","""
+                 + """"agent":true,"models":{"models":[{"id":"example-large","name":"Example Large"}]},"""
+                 + """"modelsUnavailable":null}""")
+                "the shape both sides read"
+
+        testCase "a claude panel round-trips" <| fun () ->
+            let panel : ClaudePanel =
+                { SessionCredential = Some { Kind = StaticConnection; SignInRequired = None }
+                  MineCredential = None
+                  Owner = Some "local"
+                  AgentAvailable = Some false
+                  Models = ModelsUnavailable "no account connected" }
+            Expect.equal
+                (Codec.toString Codec.claudePanel panel |> Codec.fromString Codec.claudePanel |> expect)
+                panel
+                "identical"
+
+        testCase "a github panel round-trips" <| fun () ->
+            let panel : GitHubPanel =
+                { SessionCredential = None
+                  MineCredential = Some { Kind = StaticConnection; SignInRequired = None }
+                  Owner = Some "local" }
+            Expect.equal
+                (Codec.toString Codec.githubPanel panel |> Codec.fromString Codec.githubPanel |> expect)
+                panel
+                "identical"
+
+        testCase "a reply that mentions no models is a picker that has not been told" <| fun () ->
+            let panel =
+                Codec.fromString Codec.claudePanel """{"session":null,"mine":null,"owner":"user","agent":true}"""
+                |> expect
+            Expect.equal panel.Models ModelsUnknown "not an empty menu — `keeping` is what does not blank it"
+
+        testCase "a catalogue of the wrong shape does not take the rows with it" <| fun () ->
+            let panel =
+                Codec.fromString
+                    Codec.claudePanel
+                    """{"session":null,"mine":{"kind":"static","signInRequired":null},"models":{"models":"not a list"}}"""
+                |> expect
+            Expect.equal
+                panel.MineCredential
+                (Some { Kind = StaticConnection; SignInRequired = None })
+                "the row survives a catalogue it could not read"
+            Expect.isTrue
+                (match panel.Models with ModelsUnavailable _ -> true | _ -> false)
+                "and the picker is told why it has no list"
+
+        testCase "a kind this build does not know reads as static" <| fun () ->
+            let panel =
+                Codec.fromString Codec.claudePanel """{"mine":{"kind":"passkey","signInRequired":null}}""" |> expect
+            Expect.equal
+                (panel.MineCredential |> Option.map (fun row -> row.Kind))
+                (Some StaticConnection)
+                "a credential this build cannot classify behaves as one it hands over and cannot refresh"
+    ]
+
 let private catalogueTests =
     let known = { claudeStatus None (Some connected) with Models = ModelsLoaded offered }
     testList "the picker's supply, inside the status" [
         testCase "a status that says nothing about models keeps the list the picker had" <| fun () ->
-            let arrived = ClaudeStatus.keeping known (claudeStatus None (Some connected))
+            let arrived = ClaudePanel.keeping known (claudeStatus None (Some connected))
             Expect.equal arrived.Models (ModelsLoaded offered) "silence is not an empty menu"
 
         testCase "a status naming a catalogue replaces the one before it" <| fun () ->
             let arrived =
-                ClaudeStatus.keeping known { claudeStatus None None with Models = ModelsLoaded [] }
+                ClaudePanel.keeping known { claudeStatus None None with Models = ModelsLoaded [] }
             Expect.equal arrived.Models (ModelsLoaded []) "the provider answered, and it offers nothing"
 
         testCase "a status saying why there is no catalogue replaces it too" <| fun () ->
             let arrived =
-                ClaudeStatus.keeping known { claudeStatus None None with Models = ModelsUnavailable "no account" }
+                ClaudePanel.keeping known { claudeStatus None None with Models = ModelsUnavailable "no account" }
             Expect.equal
                 arrived.Models
                 (ModelsUnavailable "no account")
                 "a reason IS an answer — the picker has to say it, not go on offering a stale list"
 
         testCase "everything else on an arriving status replaces what was known" <| fun () ->
-            let arrived = ClaudeStatus.keeping known (claudeStatus None None)
+            let arrived = ClaudePanel.keeping known (claudeStatus None None)
             Expect.equal arrived.MineCredential None "the credential it stopped naming is gone"
 
         testCase "the fold keeps the picker's list across a status that omits it" <| fun () ->
@@ -3814,6 +3884,7 @@ let tests =
     testList "Connections" [
         panelTests
         panelFoldTests
+        panelWireTests
         catalogueTests
         codecTests
         flowTests

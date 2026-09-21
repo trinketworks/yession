@@ -857,46 +857,6 @@ let private urlEncode (value: string) : string = JS.encodeURIComponent value
 // origin-partitioned localStorage, so it changed under the person holding it and stranded
 // the credential behind every new one; ownership now comes off the cookie, Manager-side.
 
-/// One scope's connection as the session states it, and as the panel's row reads it. A scope
-/// with nothing connected is `null` on the wire, which is the absent FIELD's answer here —
-/// `Optional.Field` reads a null as nothing, so the row is an `option` for the one reason it
-/// has always been one.
-let private connectionRow : Decoder<ConnectionView> =
-    Decode.object (fun get ->
-        { Kind = get.Required.Field "kind" Decode.string
-          SignInRequired = get.Optional.Field "signInRequired" Decode.string })
-
-/// The `/claude` status reply, read by the same codec the session encoded it with.
-///
-/// The picker's supply rides this reply rather than a route of its own, so it can never be
-/// a statement about a credential the panel beside it has moved on from — and it decodes
-/// INTO the status, where it is a fact about that credential rather than one beside it.
-///
-/// `models` is decoded as a value and handed to `Codec.modelCatalogue` SEPARATELY, rather than
-/// inline where its failure would fail the whole reply: a catalogue this build cannot read is
-/// a reason to show in the picker, and it must not also take the connection rows down with it.
-let private claudeReply : Decoder<ClaudeStatus> =
-    Decode.object (fun get ->
-        { SessionCredential = get.Optional.Field "session" connectionRow
-          MineCredential = get.Optional.Field "mine" connectionRow
-          Owner = get.Optional.Field "owner" Decode.string
-          // Carried as the `option` the field is, rather than read as "no agent" when a
-          // reply does not mention one: the "no agent" prompt must never flash at a
-          // client that has not been told either way.
-          AgentAvailable = get.Optional.Field "agent" Decode.bool
-          Models =
-            match get.Optional.Field "models" Decode.value with
-            | Some raw ->
-                match Decode.fromValue "$.models" Codec.modelCatalogue.Decode raw with
-                | Ok models -> ModelsLoaded models
-                | Error reason -> ModelsUnavailable reason
-            | None ->
-                match get.Optional.Field "modelsUnavailable" Decode.string with
-                | Some reason -> ModelsUnavailable reason
-                // Neither: an older session process, answering the status alone.
-                // `ClaudeStatus.keeping` is what stops that blanking the picker.
-                | None -> ModelsUnknown })
-
 /// The clock the connection panels' waits are measured against. Milliseconds since the
 /// epoch, because `Pending`'s deadline is an elapsed time and nothing here needs a date.
 let private nowMillis () : int64 = System.DateTimeOffset.UtcNow.ToUnixTimeMilliseconds ()
@@ -928,7 +888,7 @@ let private fetchStatusAt (decoder: Decoder<'reply>) (url: string) : Async<'repl
     }
 
 let private fetchClaudeStatus () =
-    fetchStatusAt claudeReply (Page.href ClaudeStatus)
+    fetchStatusAt Codec.claudePanel.Decode (Page.href ClaudeStatus)
 
 /// A JSON POST: the one write shape both connection panels use. Every route they post to
 /// decodes its body as JSON, so the content-type is stated once here rather than at each of
@@ -979,15 +939,8 @@ let private panelInput (selector: string) : string =
 // Same fetch shapes as the Claude panel's; the flow differs (device code) so the two
 // extra parsers below read the begin/poll replies.
 
-/// The `/github` status reply: the same two rows the Claude panel reads, off the route that
-/// answers for the other credential.
-let private githubStatus : Decoder<GitHubStatus> =
-    Decode.object (fun get ->
-        { SessionCredential = get.Optional.Field "session" connectionRow
-          MineCredential = get.Optional.Field "mine" connectionRow })
-
 let private fetchGitHubStatus () =
-    fetchStatusAt githubStatus (Page.href GitHubStatus)
+    fetchStatusAt Codec.githubPanel.Decode (Page.href GitHubStatus)
 
 let private githubBody (scope: string) (token: string) : string =
     JS.JSON.stringify {| scope = scope; token = sentIfGiven token |}

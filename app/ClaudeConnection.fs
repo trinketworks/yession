@@ -525,23 +525,11 @@ let routes
                     let kindLabel kind = match kind with OAuthConnection -> "oauth" | StaticConnection -> "static"
                     match routeOf () with
                     | Some ClaudeStatus ->
-                        // One connection as the panel reads it: which kind of credential it
-                        // is, and — when something has established that it no longer works —
-                        // why a person has to sign in again. `null` for a scope with nothing
-                        // connected. The GitHub panel reads the same shape from its own route;
-                        // both are pinned by their route suites.
-                        let statusJson (target: SecretId) =
-                            match statusOf target with
-                            | None -> "null"
-                            | Some (status: ConnectionStatus) ->
-                                let signInRequired =
-                                    match status.Health with
-                                    | ConnectionUsable -> "null"
-                                    | SignInRequired reason -> jsonString reason
-                                sprintf
-                                    """{"kind":%s,"signInRequired":%s}"""
-                                    (jsonString (kindLabel status.Kind))
-                                    signInRequired
+                        // One panel, one codec: the shape the browser reads is the shape
+                        // this writes (`Codec.claudePanel`). It used to be a `sprintf` here
+                        // and a hand-written decoder there — two lists of field names that
+                        // nothing checked against each other, with the GitHub panel keeping
+                        // a third copy of the row encoder.
                         let sessionTarget : SecretId = { Scope = SessionScope sessionId; Name = secretName }
                         let mineTarget : SecretId = { Scope = CredentialOwner.scope owner; Name = secretName }
                         // What "mine" MEANS here, so the panel can say it honestly:
@@ -550,37 +538,31 @@ let routes
                             match owner with
                             | UserOwner _ -> "user"
                             | LocalOwner -> "local"
-                        // The catalogue rides the status rather than answering on a route
-                        // of its own. It is the same question one line further on — what
-                        // can a turn run on here — and `agent` beside it is already the
-                        // first line of that answer. Split across two routes with two
-                        // refresh triggers, the second one drifted: the picker sat on a
-                        // refusal computed before the account it named existed, because
-                        // signing in re-probed the status and nothing re-asked for the
-                        // models. One reply cannot disagree with itself.
-                        //
-                        // `models` is the list or null, and `modelsUnavailable` the reason
-                        // it is null — the same null-or-reason shape as `signInRequired`
-                        // above, and never both. "This provider offers nothing" and
-                        // "nobody has connected an account" are different facts, and a
-                        // picker that could not tell them apart would show an empty menu
-                        // with no way to fix it.
+                        // The catalogue rides the panel rather than answering on a route of
+                        // its own. It is the same question one line further on — what can a
+                        // turn run on here — and `agent` beside it is already the first line
+                        // of that answer. Split across two routes with two refresh triggers,
+                        // the second one drifted: the picker sat on a refusal computed before
+                        // the account it named existed, because signing in re-probed the
+                        // status and nothing re-asked for the models. One reply cannot
+                        // disagree with itself.
                         Async.StartImmediate (
                             async {
                                 let! catalogue = list (actorOf identity)
-                                let models, unavailable =
-                                    match catalogue with
-                                    | Ok models -> Codec.toString Codec.modelCatalogue models, "null"
-                                    | Error reason -> "null", jsonString reason
-                                respondJson res 200
-                                    (sprintf
-                                        """{"session":%s,"mine":%s,"owner":"%s","agent":%b,"models":%s,"modelsUnavailable":%s}"""
-                                        (statusJson sessionTarget)
-                                        (statusJson mineTarget)
-                                        ownerLabel
-                                        (agentAvailable ())
-                                        models
-                                        unavailable)
+                                let panel : ClaudePanel =
+                                    { SessionCredential = CredentialRow.ofStatus (statusOf sessionTarget)
+                                      MineCredential = CredentialRow.ofStatus (statusOf mineTarget)
+                                      Owner = Some ownerLabel
+                                      AgentAvailable = Some (agentAvailable ())
+                                      Models =
+                                        match catalogue with
+                                        | Ok models -> ModelsLoaded models
+                                        // "This provider offers nothing" and "nobody has
+                                        // connected an account" are different facts, and a
+                                        // picker that could not tell them apart would show an
+                                        // empty menu with no way to fix it.
+                                        | Error reason -> ModelsUnavailable reason }
+                                respondJson res 200 (Codec.toString Codec.claudePanel panel)
                             })
                     | Some (Claude action) ->
                         match targetFor sessionId owner body.Scope with

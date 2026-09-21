@@ -81,6 +81,9 @@
          lookup runs on an actor's authority) and before Agent.fs, which carries the
          session's choice into a turn. -->
     <Compile Include="Models.fs" />
+    <!-- The settings drawer's connection panels as they cross the wire: below Models.fs,
+         which is where the picker's catalogue comes from. -->
+    <Compile Include="ConnectionPanels.fs" />
     <Compile Include="Summaries.fs" />
     <!-- Something a party DID, as the facts of it: one case per act event, and the prose
          readers that dispatch to each event's own words. Before Conversation.fs, whose

@@ -57,6 +57,23 @@ type ConnectionKind =
     | OAuthConnection
     | StaticConnection
 
+module ConnectionKind =
+
+    /// The word for a kind — on the wire and on the screen, which are the same word for the
+    /// same reason: a panel row shows it to a person, so it has to read as one. One place,
+    /// because it had been three (each panel's encoder, and the row that renders it).
+    let label (kind: ConnectionKind) : string =
+        match kind with
+        | OAuthConnection -> "oauth"
+        | StaticConnection -> "static"
+
+    /// The kind a word names. Anything else reads as static, which is how a credential this
+    /// build cannot classify behaves: a value it hands over and cannot refresh.
+    let ofLabel (word: string) : ConnectionKind =
+        match word with
+        | "oauth" -> OAuthConnection
+        | _ -> StaticConnection
+
 /// Whether a stored connection can still be used, as far as anything has been able to
 /// tell. Value-free like the rest of the status: a health cannot leak a credential
 /// because the type cannot carry one.
