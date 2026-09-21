@@ -1877,6 +1877,49 @@ let private schemaTests =
                 "an empty shape"
     ]
 
+// -----------------------------------------------------------------------------
+// …and what the SDK hands back when the model calls one. An object is the whole of the
+// contract: the SDK enforces the declared shape before the handler runs, and every reader
+// of `ToolCall.Arguments` — the audit record's redaction, the tool body's own decoder —
+// reads key/value pairs.
+// -----------------------------------------------------------------------------
+
+/// What `JSON.stringify` writes, which is what the arguments were carried as before they
+/// went through a decoder.
+[<Emit("JSON.stringify($0)")>]
+let private stringified (value: obj) : string = Fable.Core.Util.jsNative
+
+let private argumentTests =
+    testList "A tool call's arguments" [
+        testCase "an object is carried on in the bytes it arrived as" <| fun () ->
+            let args =
+                createObj
+                    [ "cwd" ==> "repos/octocat/hello-world"
+                      "tags" ==> [| "a"; "b" |]
+                      "depth" ==> 3
+                      "force" ==> false ]
+            Expect.equal
+                (Yession.Host.Agent.toolArguments args)
+                (Ok (stringified args))
+                "key order and all"
+
+        testCase "a call carrying no arguments is an empty object" <| fun () ->
+            // Which is how the SDK delivers one: an empty raw shape registers as
+            // `z.object({})`, and `{}` is what parses out of it.
+            Expect.equal (Yession.Host.Agent.toolArguments (createObj [])) (Ok "{}") "an object with nothing in it"
+
+        testCase "what is not an object at all is refused, not read as an empty call" <| fun () ->
+            // `{}` would be a valid call to every tool whose arguments are all optional, so
+            // inventing one would run the tool on nothing and say so nowhere.
+            let refused (value: obj) =
+                match Yession.Host.Agent.toolArguments value with
+                | Error _ -> true
+                | Ok _ -> false
+            Expect.isTrue (refused (box "cwd=/")) "a string"
+            Expect.isTrue (refused (box [| 1; 2 |])) "an array"
+            Expect.isTrue (refused noArgument) "nothing at all"
+    ]
+
 let tests =
     testList "Agent" [
         turnTests
@@ -1886,6 +1929,7 @@ let tests =
         bodyTests
         spendTests
         schemaTests
+        argumentTests
         failureReasonTests
         wakeTests
         modelChoiceTests
