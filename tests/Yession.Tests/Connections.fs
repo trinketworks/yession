@@ -3654,7 +3654,14 @@ open Yession.App
 let private connected : ConnectionView = { Kind = "static"; SignInRequired = None }
 
 let private claudeStatus session mine : ClaudeStatus =
-    { SessionCredential = session; MineCredential = mine; Owner = Some "user"; AgentAvailable = Some true }
+    { SessionCredential = session
+      MineCredential = mine
+      Owner = Some "user"
+      AgentAvailable = Some true
+      Models = ModelsUnknown }
+
+let private offered =
+    [ AgentModel.create (ModelId.create "example-large" |> expect) "Example Large" ]
 
 let private githubStatus session mine : GitHubStatus =
     { SessionCredential = session; MineCredential = mine }
@@ -3734,6 +3741,42 @@ let private panelTests =
                 "the status has shown it; the panel is done"
     ]
 
+/// The picker's supply is a fact about the credential, so it arrives INSIDE the status. The
+/// one thing that cannot simply be replaced is a status that does not mention it — which is
+/// why the rule is here, on the status, rather than at whoever dispatches one.
+let private catalogueTests =
+    let known = { claudeStatus None (Some connected) with Models = ModelsLoaded offered }
+    testList "the picker's supply, inside the status" [
+        testCase "a status that says nothing about models keeps the list the picker had" <| fun () ->
+            let arrived = ClaudeStatus.keeping known (claudeStatus None (Some connected))
+            Expect.equal arrived.Models (ModelsLoaded offered) "silence is not an empty menu"
+
+        testCase "a status naming a catalogue replaces the one before it" <| fun () ->
+            let arrived =
+                ClaudeStatus.keeping known { claudeStatus None None with Models = ModelsLoaded [] }
+            Expect.equal arrived.Models (ModelsLoaded []) "the provider answered, and it offers nothing"
+
+        testCase "a status saying why there is no catalogue replaces it too" <| fun () ->
+            let arrived =
+                ClaudeStatus.keeping known { claudeStatus None None with Models = ModelsUnavailable "no account" }
+            Expect.equal
+                arrived.Models
+                (ModelsUnavailable "no account")
+                "a reason IS an answer — the picker has to say it, not go on offering a stale list"
+
+        testCase "everything else on an arriving status replaces what was known" <| fun () ->
+            let arrived = ClaudeStatus.keeping known (claudeStatus None None)
+            Expect.equal arrived.MineCredential None "the credential it stopped naming is gone"
+
+        testCase "the fold keeps the picker's list across a status that omits it" <| fun () ->
+            let peer : PeerState = { PeerId = PeerId.create "catalogue-peer" |> expect; DisplayName = "Ada" }
+            let model =
+                ClientModel.init peer
+                |> fun model -> { model with Claude = { model.Claude with Status = known } }
+                |> ClientModel.update (ClaudeStatusMsg (claudeStatus None (Some connected)))
+            Expect.equal model.Claude.Status.Models (ModelsLoaded offered) "the picker is not blanked by a probe"
+    ]
+
 /// The same two rules where they actually run: folded into the client model. This is the
 /// regression the browser tier could only catch by winning a race — the probe that arrives
 /// before the status has caught up used to end the wait anyway, and the panel then sat on
@@ -3771,6 +3814,7 @@ let tests =
     testList "Connections" [
         panelTests
         panelFoldTests
+        catalogueTests
         codecTests
         flowTests
         wireTests

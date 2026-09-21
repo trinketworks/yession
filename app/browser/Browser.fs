@@ -866,30 +866,24 @@ let private connectionRow : Decoder<ConnectionView> =
         { Kind = get.Required.Field "kind" Decode.string
           SignInRequired = get.Optional.Field "signInRequired" Decode.string })
 
-/// What one `/claude` status reply says: the panel's two rows, and the picker's supply.
-///
-/// The supply rides the same reply rather than a route of its own, so it can never be a
-/// statement about a credential the panel beside it has moved on from — and the decoder is
-/// where that reply becomes the two things the shell dispatches.
-type private ClaudeReply =
-    { Status : ClaudeStatus
-      Models : ModelCatalogueState }
-
 /// The `/claude` status reply, read by the same codec the session encoded it with.
+///
+/// The picker's supply rides this reply rather than a route of its own, so it can never be
+/// a statement about a credential the panel beside it has moved on from — and it decodes
+/// INTO the status, where it is a fact about that credential rather than one beside it.
 ///
 /// `models` is decoded as a value and handed to `Codec.modelCatalogue` SEPARATELY, rather than
 /// inline where its failure would fail the whole reply: a catalogue this build cannot read is
 /// a reason to show in the picker, and it must not also take the connection rows down with it.
-let private claudeReply : Decoder<ClaudeReply> =
+let private claudeReply : Decoder<ClaudeStatus> =
     Decode.object (fun get ->
-        { Status =
-            { SessionCredential = get.Optional.Field "session" connectionRow
-              MineCredential = get.Optional.Field "mine" connectionRow
-              Owner = get.Optional.Field "owner" Decode.string
-              // Carried as the `option` the field is, rather than read as "no agent" when a
-              // reply does not mention one: the "no agent" prompt must never flash at a
-              // client that has not been told either way.
-              AgentAvailable = get.Optional.Field "agent" Decode.bool }
+        { SessionCredential = get.Optional.Field "session" connectionRow
+          MineCredential = get.Optional.Field "mine" connectionRow
+          Owner = get.Optional.Field "owner" Decode.string
+          // Carried as the `option` the field is, rather than read as "no agent" when a
+          // reply does not mention one: the "no agent" prompt must never flash at a
+          // client that has not been told either way.
+          AgentAvailable = get.Optional.Field "agent" Decode.bool
           Models =
             match get.Optional.Field "models" Decode.value with
             | Some raw ->
@@ -900,6 +894,7 @@ let private claudeReply : Decoder<ClaudeReply> =
                 match get.Optional.Field "modelsUnavailable" Decode.string with
                 | Some reason -> ModelsUnavailable reason
                 // Neither: an older session process, answering the status alone.
+                // `ClaudeStatus.keeping` is what stops that blanking the picker.
                 | None -> ModelsUnknown })
 
 /// The clock the connection panels' waits are measured against. Milliseconds since the
@@ -1202,18 +1197,10 @@ let private start () =
                 async {
                     match! fetchClaudeStatus () with
                     | None -> ()
-                    | Some reply ->
-                        dispatchRef (ClaudeStatusMsg reply.Status)
-                        // The picker's supply, off the same reply — so it can never be a
-                        // statement about a credential the panel beside it has moved on
-                        // from. It had a probe of its own with one trigger against this
-                        // one's four, and the sign-in flow (which runs with the drawer
-                        // already open) fired the four.
-                        match reply.Models with
-                        // The reply said nothing about models. What the picker already knows
-                        // is better than blanking it.
-                        | ModelsUnknown -> ()
-                        | said -> dispatchRef (ModelCatalogueMsg said)
+                    // One message, because it is one answer: the picker's supply arrives
+                    // inside the status it is a fact about, and what to do with a reply that
+                    // does not mention it is `ClaudeStatus.keeping`'s to say.
+                    | Some status -> dispatchRef (ClaudeStatusMsg status)
                 })
         let rec pollClaudeWhileAwaiting () =
             Async.StartImmediate (
