@@ -75,6 +75,7 @@ module Yession.Frames
 // `--keep`; a `--session` given is left as it was found. And it measures one load on one
 // machine: what it says is where the jumps come from, never how long they take.
 
+open System
 open Fable.Core
 open Fable.Core.JsInterop
 open Yession.Domain
@@ -88,20 +89,19 @@ let private nodePath : obj = importAll "node:path"
 let private childProcess : obj = importAll "node:child_process"
 let private crypto : obj = importAll "node:crypto"
 
-[<Emit("fetch($0, $1)")>]
-let private fetch (url: string) (init: obj) : JS.Promise<obj> = jsNative
+/// A screencast frame's bytes. CDP hands them over base64 in the JSON, and what `writeFileSync`
+/// wants is a Buffer — `Fable.Node`'s own `Buffer.from`, rather than the global spelled again.
+let private bytesOfBase64 (data: string) : Node.Buffer.Buffer =
+    Node.Api.buffer.Buffer.from (data, Node.Buffer.BufferEncoding.Base64)
 
-[<Emit("new URL($0).pathname")>]
-let private pathnameOf (url: string) : string = jsNative
+/// Time, through the Domain's one port for it (`Clock.fs`): the waits between polls and the
+/// wall-clock the landing window is measured against are the same question asked twice, and a
+/// camera that answered one with `setTimeout` and the other with `Date.now` would have two
+/// clocks, only one of which anything can turn.
+let private clock = Clock.system
 
-[<Emit("Buffer.from($0, 'base64')")>]
-let private bytesOfBase64 (data: string) : obj = jsNative
-
-[<Emit("new WebSocket($0)")>]
-let private webSocket (url: string) : obj = jsNative
-
-[<Emit("new Promise(resolve => setTimeout(resolve, $0))")>]
-let private delay (ms: int) : JS.Promise<unit> = jsNative
+let private delay (ms: int) : JS.Promise<unit> =
+    clock.After (TimeSpan.FromMilliseconds (float ms)) |> Async.StartAsPromise
 
 let private env (name: string) : string =
     match Fable.NodeExtras.ProcessEnv.get name with
@@ -126,7 +126,6 @@ let private pretty (value: obj) : string = JS.JSON.stringify (value, space = 1)
 
 let private say (line: string) : unit = JS.console.log line
 
-let private now () : float = JS.Constructors.Date.now ()
 
 let private joinTwo (a: string) (b: string) : string = nodePath?join (a, b) |> unbox
 let private writeFile (path: string) (content: obj) : unit = fs?writeFileSync (path, content) |> ignore
@@ -178,7 +177,7 @@ type private Cdp =
 
 let private connect (url: string) : JS.Promise<Cdp> =
     Promise.create (fun resolve _ ->
-        let ws = webSocket url
+        let ws = Fable.NodeExtras.WebSockets.connect url
         let pending = System.Collections.Generic.Dictionary<int, obj -> unit> ()
         let events = ResizeArray<string * obj> ()
         let mutable nextId = 1
@@ -187,22 +186,28 @@ let private connect (url: string) : JS.Promise<Cdp> =
                 let id = nextId
                 nextId <- nextId + 1
                 pending.[id] <- ok
-                ws?send (JS.JSON.stringify (createObj [ "id" ==> id; "method" ==> methodName; "params" ==> parameters ])) |> ignore)
-        ws?onmessage <- fun (e: obj) ->
-            let msg = JS.JSON.parse (e?data |> unbox)
-            match msg?id |> unbox<int option> with
-            | Some id when pending.ContainsKey id ->
-                let ok = pending.[id]
-                pending.Remove id |> ignore
-                ok (msg?result)
-            | _ ->
-                match msg?``method`` |> unbox<string option> with
-                | Some name ->
-                    if name = "Page.screencastFrame" then
-                        send "Page.screencastFrameAck" (createObj [ "sessionId" ==> msg?``params``?sessionId ]) |> ignore
-                    events.Add (name, msg?``params``)
-                | None -> ()
-        ws?onopen <- fun () -> resolve { Send = send; Events = events; Close = fun () -> ws?close () |> ignore })
+                ws.sendText (JS.JSON.stringify (createObj [ "id" ==> id; "method" ==> methodName; "params" ==> parameters ])))
+        // CDP is a TEXT protocol, and the frame type says so rather than a cast: a binary
+        // frame on this wire is not a message that failed to parse, it is a wire that is not
+        // CDP, and `JSON.parse` over `$0.data` could not have told the difference.
+        ws.onMessage (fun frame ->
+            match Fable.NodeExtras.WebSockets.payload frame with
+            | Fable.NodeExtras.Frame.Binary _ -> ()
+            | Fable.NodeExtras.Frame.Text data ->
+                let msg = JS.JSON.parse data
+                match msg?id |> unbox<int option> with
+                | Some id when pending.ContainsKey id ->
+                    let ok = pending.[id]
+                    pending.Remove id |> ignore
+                    ok (msg?result)
+                | _ ->
+                    match msg?``method`` |> unbox<string option> with
+                    | Some name ->
+                        if name = "Page.screencastFrame" then
+                            send "Page.screencastFrameAck" (createObj [ "sessionId" ==> msg?``params``?sessionId ]) |> ignore
+                        events.Add (name, msg?``params``)
+                    | None -> ())
+        ws.onOpen (fun () -> resolve { Send = send; Events = events; Close = ws.close }))
 
 /// A headless Chromium on a debugging port of the OS's choosing, read back from the file it
 /// writes into its profile directory — no port to collide on.
@@ -232,8 +237,8 @@ let private launch (executable: string) (width: int) (height: int) : JS.Promise<
         waited <- 0
         while target = "" && waited < 50 do
             try
-                let! listed = fetch (sprintf "http://127.0.0.1:%s/json/list" port) (createObj [])
-                let! json = listed?json () |> unbox<JS.Promise<obj array>>
+                let! listed = Fetch.fetchUnsafe (sprintf "http://127.0.0.1:%s/json/list" port) []
+                let! json = listed.json<obj array> ()
                 match json |> Array.tryFind (fun t -> t?``type`` = "page") with
                 | Some page -> target <- page?webSocketDebuggerUrl |> unbox
                 | None -> ()
@@ -435,13 +440,21 @@ let private run () =
                 match Cli.valueOf sessionOption args with
                 | Some given -> return given, false
                 | None ->
+                    // The form the Create button submits, with nothing in it: the Manager
+                    // mints the id when a submission names none, and what comes back is the
+                    // `/open` page's address in a `Location` this does NOT follow — the camera
+                    // wants to navigate Chromium there, not fetch it here.
                     let! r =
-                        fetch (ManagerRoute.at manager ManagerRoute.CreateSession)
-                            (createObj [ "method" ==> "POST"; "redirect" ==> "manual"; "headers" ==> createObj [ "content-type" ==> "application/x-www-form-urlencoded" ]; "body" ==> "" ])
-                    let status : int = r?status |> unbox
-                    let location : string = r?headers?get "location" |> unbox
-                    if status <> 303 || isNull location then failwithf "creating a session: %d" status
-                    return (sprintf "%s%s" manager location), true
+                        Fetch.fetchUnsafe
+                            (ManagerRoute.at manager ManagerRoute.CreateSession)
+                            [ Fetch.Types.RequestProperties.Method Fetch.Types.HttpMethod.POST
+                              Fetch.Types.RequestProperties.Redirect Fetch.Types.RedirectMode.Manual
+                              Fetch.requestHeaders
+                                  [ Fetch.Types.HttpRequestHeaders.ContentType "application/x-www-form-urlencoded" ]
+                              Fetch.Types.RequestProperties.Body (Fetch.Types.BodyInit.Case3 "") ]
+                    match r.Status, r.Headers.Location with
+                    | 303, Some location -> return (sprintf "%s%s" manager location), true
+                    | status, _ -> return failwithf "creating a session: %d" status
             }
         say (sprintf "open %s" openUrl)
 
@@ -455,11 +468,11 @@ let private run () =
             ()
         let! installed = cdp.Send "Page.addScriptToEvaluateOnNewDocument" (createObj [ "source" ==> instrument ])
         let! _ = cdp.Send "Page.startScreencast" (createObj [ "format" ==> "png"; "everyNthFrame" ==> 1; "maxWidth" ==> width * 2; "maxHeight" ==> height * 2 ])
-        let navigatedAt = now ()
+        let navigatedAt = clock.Now ()
         let! _ = cdp.Send "Page.navigate" (createObj [ "url" ==> openUrl ])
         let mutable landed = false
-        let mutable since = now ()
-        while now () - since < float (if landed then seconds else 60) * 1000.0 do
+        let mutable since = clock.Now ()
+        while (clock.Now () - since).TotalMilliseconds < float (if landed then seconds else 60) * 1000.0 do
             do! delay 250
             // Landed = the document is the session shell, wherever the deployment mounts it
             // (a path under the Manager, a port of its own): the shell is the one document
@@ -468,8 +481,8 @@ let private run () =
             let href : string = match unbox href with | null -> "" | s -> s
             if not landed && href <> "" then
                 landed <- true
-                since <- now ()
-                say (sprintf "landed %s after %.0f ms" href (now () - navigatedAt))
+                since <- clock.Now ()
+                say (sprintf "landed %s after %.0f ms" href (clock.Now () - navigatedAt).TotalMilliseconds)
         if not landed then say "the shell never landed; the frames are of whatever the tab showed"
         let! _ = cdp.Send "Page.stopScreencast" (createObj [])
         let! origin = evaluate cdp "__origin"
@@ -625,11 +638,14 @@ let private run () =
             // through the same parser the Manager routes it by, so a route that moves moves
             // both ends of this at once.
             let id =
-                match ManagerRoute.parse "GET" (pathnameOf openUrl) with
+                match ManagerRoute.parse "GET" (Fable.BrowserExtras.Urls.pathname openUrl) with
                 | Ok (ManagerRoute.OpenSession id) -> id
                 | _ -> failwithf "not an /open address: %s" openUrl
-            let! stopped = fetch (ManagerRoute.at manager (ManagerRoute.Session (id, SessionVerb.Stop))) (createObj [ "method" ==> "POST" ])
-            say (sprintf "stop %s %d" (SessionId.value id) (unbox<int> stopped?status))
+            let! stopped =
+                Fetch.fetchUnsafe
+                    (ManagerRoute.at manager (ManagerRoute.Session (id, SessionVerb.Stop)))
+                    [ Fetch.Types.RequestProperties.Method Fetch.Types.HttpMethod.POST ]
+            say (sprintf "stop %s %d" (SessionId.value id) stopped.Status)
         exitWith 0
     }
 
