@@ -1677,8 +1677,7 @@ let private e2eTests =
                 let! alice = connectClient (sessionUrl + "/signal") openedAlice.PeerToken "browser-alice" "Alice"
 
                 // The launch was attributed, so it holds no deployment credential at all.
-                let! aliceStatus = getWithCookie (sessionUrl + "/claude") cookieAlice
-                Expect.isTrue (aliceStatus.Body.Contains "\"owner\":\"user\"") "an attributed deployment owns by user"
+                do! awaitClaudePanel sessionUrl cookieAlice (fun panel -> panel.Owner = Some "user")
 
                 let! putMine =
                     postJsonWithCookie
@@ -1701,8 +1700,7 @@ let private e2eTests =
                 let! openedBob = OidcHttp.openSessionVia (asUser "bob@example.com") "/login" sessionUrl
                 let cookieBob = cookieOf openedBob.Jar
                 let! bob = connectClient (sessionUrl + "/signal") openedBob.PeerToken "browser-bob" "Bob"
-                let! bobStatus = getWithCookie (sessionUrl + "/claude") cookieBob
-                Expect.isTrue (bobStatus.Body.Contains "\"mine\":null") "bob does not inherit alice's"
+                do! awaitClaudePanel sessionUrl cookieBob (notConnectedAt "mine")
 
                 do! compose bob bob.Hello.PeerId "bob without a credential"
                 bob.Connection.SendDraft bob.Hello.PeerId
