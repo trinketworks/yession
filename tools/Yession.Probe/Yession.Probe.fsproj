@@ -8,7 +8,13 @@
        The peer it joins with is `Yession.Peer`, shared with the test suite, so the wiring a
        browser uses has exactly one copy. It cannot reference the suite itself: that project
        carries the test runner entry point, and Fable requires an entry point to be the last
-       declaration in the last file it compiles. -->
+       declaration in the last file it compiles.
+
+       The rest are the platform it signs in over, declared here rather than arrived at
+       through the peer: `Fable.Fetch` and `Fable.FetchExtras` for the redirect chain and the
+       `set-cookie`s each hop of it sets, and `Fable.BrowserExtras` for resolving each hop's
+       `Location` against the address it came from — `URL` being a global on Node as much as
+       in a browser. -->
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <OutputType>Exe</OutputType>
@@ -20,9 +26,12 @@
 
   <ItemGroup>
     <PackageReference Include="Fable.Node" />
+    <PackageReference Include="Fable.Fetch" />
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="../../src/Fable.BrowserExtras/Fable.BrowserExtras.fsproj" />
+    <ProjectReference Include="../../src/Fable.FetchExtras/Fable.FetchExtras.fsproj" />
     <ProjectReference Include="../../src/Yession.Peer/Yession.Peer.fsproj" />
   </ItemGroup>
 

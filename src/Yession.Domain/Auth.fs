@@ -45,7 +45,8 @@ module Cookies =
     let sessionCookieName (sessionId: SessionId) : string =
         "yession_auth_" + SessionId.value sessionId
 
-/// `application/x-www-form-urlencoded` body parsing (the token-endpoint request format).
+/// `application/x-www-form-urlencoded` bodies, read and written (the token-endpoint request
+/// format, and the shape every form this repository posts arrives in).
 module Form =
 
     let parse (body: string) : Map<string, string> =
@@ -58,3 +59,19 @@ module Form =
                 Some (decode (pair.Substring (0, index)), decode (pair.Substring (index + 1)))
             | _ -> None)
         |> Map.ofList
+
+    /// The same format, written — beside the reader because the two are each other's inverse,
+    /// and a format read here and written somewhere else is a format with two authors. It had
+    /// two: the broker escaped its own parameters into a query string, and the probe reached
+    /// past F# for the platform's `URLSearchParams` in an `[<Emit>]` nothing could contradict.
+    ///
+    /// Names are escaped as well as values, which the broker's copy did not bother with — its
+    /// names are the standard ones and escape to themselves — because a writer that only
+    /// escapes half of a pair is a writer whose next caller supplies the other half.
+    ///
+    /// `EscapeDataString` spells a space `%20` rather than `+`; `parse` reads either.
+    let encode (fields: (string * string) list) : string =
+        fields
+        |> List.map (fun (name, value) ->
+            sprintf "%s=%s" (Uri.EscapeDataString name) (Uri.EscapeDataString value))
+        |> String.concat "&"

@@ -2,7 +2,8 @@
 
   <!--
     Fable bindings to the parts of the fetch surface `Fable.Fetch` does not cover: today, the
-    abort signal a request is given a deadline with. Fable-only, like app/Yession.Host.fsproj:
+    abort signal a request is given a deadline with, and the one header member that can tell
+    several `set-cookie`s apart. Fable-only, like app/Yession.Host.fsproj:
     `dotnet build` only type-checks it; the runnable JS comes from Fable. It references
     Fable.Fetch rather than re-declaring the types it needs, so what comes out of here is the
     package's own `AbortSignal` and slots straight into its `RequestProperties.Signal`.

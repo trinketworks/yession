@@ -313,6 +313,14 @@ let private wireTests =
             Expect.equal name "yession_auth_op-session" "namespaced by session id (127.0.0.1 cookies are not port-scoped)"
             Expect.isTrue ((Cookies.set name "" "v").Contains "HttpOnly") "cookies are HttpOnly"
             Expect.equal (Form.parse "a=1&b=hello+world&c=%2Fpath&broken") (Map.ofList [ "a", "1"; "b", "hello world"; "c", "/path" ]) "urlencoded decode"
+
+        // The writer's own invariant, and the reason it lives beside the reader rather than in
+        // whichever caller needed a body: whatever `encode` writes, `parse` reads back as the
+        // fields it was given. Every character this names is one the format would otherwise
+        // eat — the separator, the pair's own `=`, a space, an empty value.
+        testCase "a form-encoded body parses back to the fields it was written from" <| fun () ->
+            let fields = [ "id", "01K9"; "name", "hello world"; "url", "/a=b&c"; "blank", "" ]
+            Expect.equal (Form.parse (Form.encode fields)) (Map.ofList fields) "encode, then parse, is the identity"
     ]
 
 // --- Key non-extractability (the mechanism the provider relies on) ------------------
