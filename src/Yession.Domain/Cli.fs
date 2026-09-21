@@ -177,6 +177,23 @@ let parsedValue
           Help = help
           Resolve = fun given -> read (given |> Option.bind List.tryLast) |> Result.map box } }
 
+/// `parsedValue`'s repeatable counterpart: an option given any number of times, whose VALUES
+/// TOGETHER are one thing. `read` is handed every one in order (empty when the option was not
+/// given), because what they come to is a fact about the whole set rather than about each —
+/// two `--webhook` declarations of one endpoint disagree about its secret, and only a reader
+/// that sees both can say so.
+let parsedValues
+    (long: string)
+    (placeholder: string)
+    (help: string)
+    (read: string list -> Result<'a, string>)
+    : Opt<'a> =
+    { Declared =
+        { Long = long
+          Takes = AValue (placeholder, true)
+          Help = help
+          Resolve = fun given -> read (defaultArg given []) |> Result.map box } }
+
 /// Every bin answers these two identically, so they belong to what a spec IS rather than to
 /// what each bin remembers to declare — `all` is where they join.
 let version : Opt<bool> = flag "version" (Some "v") "print the version and exit"

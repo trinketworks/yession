@@ -174,7 +174,7 @@ type Options =
       /// The hook endpoints this deployment serves, as declared (`--webhook`, once per
       /// endpoint). Empty = none, and the relay is inert: an endpoint is an inbound door,
       /// so it exists only where an operator asked for one by name.
-      Webhooks : string list }
+      Webhooks : WebhookRelay.EndpointSpec list }
 
 /// How the secret store is keyed on this host — the RESOLVED outcome, after the host has
 /// been probed for a credential manager.

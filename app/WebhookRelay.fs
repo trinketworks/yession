@@ -343,27 +343,28 @@ let tryHandle (relay: Relay) (req: Interop.IncomingMessage) (res: Interop.Server
 /// the operator a secret to paste into a provider that stops working at the next restart —
 /// silently, and only for inbound deliveries. Better to refuse at boot and say why.
 let compose
-    (declarations: string list)
+    (specs: EndpointSpec list)
     (kek: unit -> Async<Result<string option, string>>)
     (notify: string -> SessionNotification -> unit)
     (mintId: unit -> string)
     : Async<Result<Relay, string>> =
     async {
-        match declarations |> List.filter (fun raw -> raw.Trim () <> "") with
+        // Already decoded: `--webhook` carries `EndpointSpec.decodeAll` as its vocabulary, so a
+        // declaration this bin cannot read refused the command line rather than arriving here
+        // to be thrown inside an async nobody catches. What is left for this module is the
+        // rule that IS its own — a derived secret needs a durable key.
+        match specs with
         | [] -> return Ok Relay.none
-        | declared ->
-            match EndpointSpec.decodeAll declared with
-            | Error e -> return Error e
-            | Ok specs ->
-                match! kek () with
-                | Error e -> return Error (sprintf "the signing key could not be read: %s" e)
-                | Ok None ->
-                    return
-                        Error
-                            "--webhook needs a durable secret store, because each endpoint's \
-                             signing secret is derived from the key that seals it. This deployment \
-                             has an ephemeral store, so the key — and every secret an operator \
-                             pasted into a provider — would be different after a restart. Run with \
-                             a usable OS credential manager, or declare no endpoints."
-                | Ok (Some payload) -> return Ok (create (endpointsFor payload specs) notify mintId)
+        | specs ->
+            match! kek () with
+            | Error e -> return Error (sprintf "the signing key could not be read: %s" e)
+            | Ok None ->
+                return
+                    Error
+                        "--webhook needs a durable secret store, because each endpoint's \
+                         signing secret is derived from the key that seals it. This deployment \
+                         has an ephemeral store, so the key — and every secret an operator \
+                         pasted into a provider — would be different after a restart. Run with \
+                         a usable OS credential manager, or declare no endpoints."
+            | Ok (Some payload) -> return Ok (create (endpointsFor payload specs) notify mintId)
     }

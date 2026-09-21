@@ -65,8 +65,19 @@ let spawnBinOption =
 /// Repeatable, because endpoints are a SET rather than a choice: one per service, each with
 /// its own rotation and signature scheme, and a separator inside a single option would be a
 /// grammar this parser had to invent. `WebhookRelay.EndpointSpec` owns the one it does have.
+/// Decoded by the parse, so a declaration this bin cannot read refuses the command line with
+/// the reason and the usage. It used to be decoded twice and refused neither time usefully:
+/// `--check` swallowed the failure with `Result.defaultValue []` and reported "none declared"
+/// for endpoints an operator had just asked for, while the boot threw inside Fable's async and
+/// surfaced as `UnhandledPromiseRejection ... "[object Object]"` — after saying "manager
+/// started". `decodeAll` reads the whole set because that is the scope of its rules: a name
+/// declared twice is a disagreement no single declaration can see.
 let webhookOption =
-    Cli.values "webhook" "name[@rotation][=header:encoding[:prefix]]" "serve a hook endpoint at /hooks/<name>"
+    Cli.parsedValues
+        "webhook"
+        "name[@rotation][=header:encoding[:prefix]]"
+        "serve a hook endpoint at /hooks/<name>"
+        WebhookRelay.EndpointSpec.decodeAll
 
 /// Resolve everything and say what it came to, then stop — launching nothing, writing
 /// nothing, binding no port.
