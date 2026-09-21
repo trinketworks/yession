@@ -526,15 +526,23 @@ open Yession.Domain.Access
 let private anyone : CookieIdentity =
     { Subject = "ada"; DisplayName = None; Attribution = AttributedUser (UserId.create "ada" |> expect) }
 
-let private panelOf (who: string) : ClaudePanel =
+/// A stub panel that says WHOSE it is — carried on the credential's `SignInRequired`,
+/// which is the one per-identity string a panel has. `Owner` cannot do that job any more,
+/// and should not: it answers which of two scopes, never which person.
+let private panelFor (who: string) : ClaudePanel =
     { SessionCredential = None
-      MineCredential = None
-      Owner = Some who
-      AgentAvailable = Some true
+      MineCredential = Some { Kind = StaticConnection; SignInRequired = Some who }
+      Owner = OwnedByUser
+      AgentAvailable = true
       Models = ModelsUnknown }
 
-let private githubOf (who: string) : GitHubPanel =
-    { SessionCredential = None; MineCredential = None; Owner = Some who }
+let private githubFor (who: string) : GitHubPanel =
+    { SessionCredential = None
+      MineCredential = Some { Kind = StaticConnection; SignInRequired = Some who }
+      Owner = OwnedByUser }
+
+let private toldAbout (panel: ClaudePanel) : string option =
+    panel.MineCredential |> Option.bind (fun row -> row.SignInRequired)
 
 /// The panels are the second read model on this stream, and the reason they are ON it is
 /// that a fetch could not be ordered against the command that moved them. What these pin is
@@ -544,7 +552,8 @@ let private panelFeedTests =
     testList "the connection panels on the stream" [
 
         testCaseAsync "a subscriber is told the panels without asking" <| async {
-            let feed = Queries.panels (fun identity -> async { return panelOf identity.Subject }) (fun i -> githubOf i.Subject)
+            let feed =
+                Queries.panels (fun identity -> async { return panelFor identity.Subject }) (fun i -> githubFor i.Subject)
             let seen = ResizeArray<ClaudePanel * GitHubPanel> ()
             let subscription = feed.Subscribe anyone seen.Add
             do! settle ()
@@ -553,20 +562,24 @@ let private panelFeedTests =
         }
 
         testCaseAsync "a change tells every open subscriber again" <| async {
-            let mutable owner = "user"
-            let feed = Queries.panels (fun _ -> async { return panelOf owner }) (fun _ -> githubOf owner)
+            let mutable owner = OwnedByUser
+            let feed =
+                Queries.panels
+                    (fun _ -> async { return { panelFor "ada" with Owner = owner } })
+                    (fun _ -> { githubFor "ada" with Owner = owner })
             let seen = ResizeArray<ClaudePanel * GitHubPanel> ()
             let subscription = feed.Subscribe anyone seen.Add
             do! settle ()
-            owner <- "local"
+            owner <- OwnedByDeployment
             feed.Changed ()
             do! settle ()
-            Expect.equal (seen |> Seq.last |> fst).Owner (Some "local") "the frame carries what is true NOW"
+            Expect.equal (seen |> Seq.last |> fst).Owner OwnedByDeployment "the frame carries what is true NOW"
             subscription.Stop ()
         }
 
         testCaseAsync "each subscriber is told what is true for its own identity" <| async {
-            let feed = Queries.panels (fun identity -> async { return panelOf identity.Subject }) (fun i -> githubOf i.Subject)
+            let feed =
+                Queries.panels (fun identity -> async { return panelFor identity.Subject }) (fun i -> githubFor i.Subject)
             let alice = ResizeArray<ClaudePanel * GitHubPanel> ()
             let bob = ResizeArray<ClaudePanel * GitHubPanel> ()
             let a = feed.Subscribe { anyone with Subject = "alice" } alice.Add
@@ -574,14 +587,14 @@ let private panelFeedTests =
             do! settle ()
             feed.Changed ()
             do! settle ()
-            Expect.isTrue (alice |> Seq.forall (fun (c, _) -> c.Owner = Some "alice")) "alice is told about alice"
-            Expect.isTrue (bob |> Seq.forall (fun (c, _) -> c.Owner = Some "bob")) "and bob about bob"
+            Expect.isTrue (alice |> Seq.forall (fun (c, _) -> toldAbout c = Some "alice")) "alice is told about alice"
+            Expect.isTrue (bob |> Seq.forall (fun (c, _) -> toldAbout c = Some "bob")) "and bob about bob"
             a.Stop ()
             b.Stop ()
         }
 
         testCaseAsync "a subscriber that left is not told" <| async {
-            let feed = Queries.panels (fun _ -> async { return panelOf "user" }) (fun _ -> githubOf "user")
+            let feed = Queries.panels (fun _ -> async { return panelFor "ada" }) (fun _ -> githubFor "ada")
             let seen = ResizeArray<ClaudePanel * GitHubPanel> ()
             let subscription = feed.Subscribe anyone seen.Add
             do! settle ()
@@ -592,7 +605,7 @@ let private panelFeedTests =
         }
 
         testCase "a read frame says which read model it carries" <| fun () ->
-            let frame = Panels (panelOf "user", githubOf "user")
+            let frame = Panels (panelFor "ada", githubFor "ada")
             Expect.equal (Codec.toString Codec.readFrame frame |> Codec.fromString Codec.readFrame) (Ok frame) "panels round-trip"
             let queried = Queried (QueriesDeclared [])
             Expect.equal (Codec.toString Codec.readFrame queried |> Codec.fromString Codec.readFrame) (Ok queried) "and so do queries"
@@ -607,11 +620,11 @@ let private panelRouteTests =
         testCaseAsync "the queries and the panels arrive on the same stream" <|
             async {
                 let registry = Queries.create [ constant "leases" Value (ValueOf (CellText "none")) ] |> expect
-                let mutable owner = "user"
+                let mutable owner = OwnedByUser
                 let feed =
                     Queries.panels
-                        (fun _ -> async { return { panelOf owner with Owner = Some owner } })
-                        (fun _ -> githubOf owner)
+                        (fun _ -> async { return { panelFor "ada" with Owner = owner } })
+                        (fun _ -> { githubFor "ada" with Owner = owner })
                 let! url = startQueryRoutes registry feed
                 let frames = ResizeArray<ReadFrame> ()
                 let subscription =
@@ -631,11 +644,11 @@ let private panelRouteTests =
                     awaitReadFrames frames (fun fs -> hasPanels fs && hasQueries fs)
 
                 // And a change reaches the SAME connection, which is what being told means.
-                owner <- "local"
+                owner <- OwnedByDeployment
                 feed.Changed ()
                 let! _ =
                     awaitReadFrames frames (fun fs ->
-                        fs |> List.exists (function Panels (claude, _) -> claude.Owner = Some "local" | _ -> false))
+                        fs |> List.exists (function Panels (claude, _) -> claude.Owner = OwnedByDeployment | _ -> false))
                 subscription.Stop ()
             }
     ]

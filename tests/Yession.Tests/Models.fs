@@ -268,7 +268,7 @@ let private catalogueTests =
                 // it had already shown as connected; one value cannot disagree with itself,
                 // which is a stronger promise than one reply.
                 let! panel = panelFor (fun _ -> async { return Error "no Claude account connected" }) ada
-                Expect.equal panel.Owner (Some "user") "the panel says whose the shared scope is"
+                Expect.equal panel.Owner OwnedByUser "the panel says whose the shared scope is"
                 Expect.equal
                     panel.Models
                     (ModelsUnavailable "no Claude account connected")

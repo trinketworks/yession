@@ -41,6 +41,33 @@ module CredentialRow =
                 | ConnectionUsable -> None
                 | SignInRequired reason -> Some reason })
 
+/// Who the shared sign-in scope belongs to where this session runs.
+///
+/// A panel offers two scopes, and on a deployment that attributes nobody (`--auth
+/// localhost`) the shared one is EVERYONE who can reach this Manager. Calling that "mine"
+/// is the panel promising something the deployment cannot keep, so which it is rides the
+/// wire as a case rather than being the renderer's to assume.
+///
+/// It was `string option` — `"user"` or `"local"`, computed identically in two route
+/// handlers, and read by neither panel under any obligation. The GitHub section wrote
+/// "All my sessions" outright and never asked, which under `--auth localhost` was exactly
+/// the promise this comment forbids. A DU makes the match exhaustive, and an exhaustive
+/// match is what a label cannot be wrong through.
+type SharedOwner =
+    /// One signed-in human's own credential, and nobody else's.
+    | OwnedByUser
+    /// The whole deployment's: everyone who can reach this Manager.
+    | OwnedByDeployment
+
+module SharedOwner =
+
+    /// The scope's owner as a panel states it. One place, because it was two — each route
+    /// handler spelling the same `match` for its own panel.
+    let ofCredentialOwner (owner: CredentialOwner) : SharedOwner =
+        match owner with
+        | UserOwner _ -> OwnedByUser
+        | LocalOwner -> OwnedByDeployment
+
 /// What the picker knows about the models it can offer. Three states and no fourth,
 /// because a picker has exactly three honest things to say: I have not looked yet, here is
 /// the list, or here is why there is no list. A single `AgentModel list` could not tell the
@@ -54,18 +81,22 @@ type ModelCatalogueState =
     | ModelsUnavailable of reason: string
 
 /// The Claude panel (Plan 08), per sign-in scope.
+///
+/// `Owner` and `AgentAvailable` are not options, and that is the point: the session always
+/// knows both, and a panel only exists once it has been said. Their `None` used to mean
+/// "the client has not been told yet" — one fact, spelled twice, in the type of the answer
+/// rather than in whether there IS one. A client holds the panel itself as an option now,
+/// so "not told yet" is one case in one place and the view matches it once. What stays
+/// optional is a credential, whose `None` means something else entirely: nothing connected.
 type ClaudePanel =
     { SessionCredential : CredentialRow option
       MineCredential : CredentialRow option
-      /// Who the "all my sessions" scope would belong to here: `"user"` (this signed-in
-      /// human alone) or `"local"` (the whole deployment — everyone who can reach this
-      /// Manager, under `--auth localhost`). The panel must not promise "mine" for a
-      /// credential everybody shares. `None` until the first answer arrives.
-      Owner : string option
-      /// Whether THIS session currently has an agent at all (any connected credential
-      /// or the host's ambient one). `None` until the first answer arrives — the
-      /// "no agent" prompt must never flash before the client actually knows.
-      AgentAvailable : bool option
+      /// Who the shared scope belongs to here. The panel must not promise "mine" for a
+      /// credential everybody shares.
+      Owner : SharedOwner
+      /// Whether THIS session has an agent at all: any connected credential, or the host's
+      /// ambient one.
+      AgentAvailable : bool
       /// What the picker has to choose from — IN the panel, because it is a fact about
       /// this credential and not a fact beside it.
       Models : ModelCatalogueState }
@@ -76,12 +107,6 @@ type ClaudePanel =
 type GitHubPanel =
     { SessionCredential : CredentialRow option
       MineCredential : CredentialRow option
-      /// Who the shared scope belongs to, exactly as the Claude panel states it.
-      ///
-      /// The session has always sent it and the panel has never read it: the GitHub section
-      /// labels that row "all my sessions" outright, where Claude's asks this. Under
-      /// `--auth localhost` that label is wrong in the way `ClaudePanel.Owner`'s comment
-      /// says a panel must not be — the credential is the whole deployment's. Carried
-      /// rather than dropped because the fix is to USE it, and that is a change to what a
-      /// person reads rather than to how it is written.
-      Owner : string option }
+      /// Who the shared scope belongs to, exactly as the Claude panel states it — and now
+      /// read the same way, by the same label.
+      Owner : SharedOwner }

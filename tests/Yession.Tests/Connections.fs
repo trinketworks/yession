@@ -1567,7 +1567,7 @@ let private e2eTests =
                         m.Conversation.Items
                         |> List.exists (fun i -> i.Status = Complete && (ConversationItem.said i).Contains "hello before sign-in"))
                 // The status surface says so honestly: no agent in this session yet.
-                do! awaitClaudePanel sessionUrl cookieA (fun panel -> panel.AgentAvailable = Some false)
+                do! awaitClaudePanel sessionUrl cookieA (fun panel -> not panel.AgentAvailable)
 
                 // 2. A pastes a setup token for "all my sessions" through the session's
                 //    /claude surface; the gate flips without a relaunch.
@@ -1579,7 +1579,7 @@ let private e2eTests =
                    
                 Expect.equal putMine.Status 200 (sprintf "the paste stores: %s" putMine.Body)
                 do! awaitClaudePanel sessionUrl cookieA (fun panel ->
-                        connectedAt "mine" panel && panel.AgentAvailable = Some true)
+                        connectedAt "mine" panel && panel.AgentAvailable)
 
                 do! compose a a.Hello.PeerId "hello after sign-in"
                 a.Connection.SendDraft a.Hello.PeerId
@@ -1609,7 +1609,7 @@ let private e2eTests =
                 // B's own status surface agrees, without B having asserted any identity.
                 let cookieB = cookieOf openedB.Jar
                 do! awaitClaudePanel sessionUrl cookieB (fun panel ->
-                        connectedAt "mine" panel && panel.Owner = Some "local")
+                        connectedAt "mine" panel && panel.Owner = OwnedByDeployment)
 
                 // 4. A stores a SESSION-scoped api key: it overrides for every actor —
                 //    Bob's next turn now runs on it.
@@ -1677,7 +1677,7 @@ let private e2eTests =
                 let! alice = connectClient (sessionUrl + "/signal") openedAlice.PeerToken "browser-alice" "Alice"
 
                 // The launch was attributed, so it holds no deployment credential at all.
-                do! awaitClaudePanel sessionUrl cookieAlice (fun panel -> panel.Owner = Some "user")
+                do! awaitClaudePanel sessionUrl cookieAlice (fun panel -> panel.Owner = OwnedByUser)
 
                 let! putMine =
                     postJsonWithCookie
@@ -1926,13 +1926,13 @@ let private githubRouteTests =
                 Expect.isTrue
                     elsewhere.MineCredential.IsSome
                     "already connected, from a browser that never connected anything"
-                Expect.equal elsewhere.Owner (Some "local") "and says whose it is: the deployment's"
+                Expect.equal elsewhere.Owner OwnedByDeployment "and says whose it is: the deployment's"
 
                 // An attributed user is untouched by any of it — they own their own, and the
                 // deployment's credential is not theirs to see.
                 let alicesView = githubPanelFor statusOf (identityOf "alice" (Yession.SessionProcess.AttributedUser alice))
                 Expect.isNone alicesView.MineCredential "an attributed user does not inherit it"
-                Expect.equal alicesView.Owner (Some "user") "and owns by user"
+                Expect.equal alicesView.Owner OwnedByUser "and owns by user"
             }
 
         testCaseAsync "begin hands the browser the user code and keeps the device code; poll paces, then connects" <|
@@ -2125,7 +2125,7 @@ let private githubRouteTests =
                 None
                 "and nothing says otherwise"
             Expect.isNone forAlice.SessionCredential "the session is not"
-            Expect.equal forAlice.Owner (Some "user") "as a user"
+            Expect.equal forAlice.Owner OwnedByUser "as a user"
 
             // The same session, a different human: the panel is computed from the caller's
             // identity, so bob does not learn he is signed in because alice is.
@@ -3677,15 +3677,15 @@ let private connected : CredentialRow = { Kind = StaticConnection; SignInRequire
 let private claudeStatus session mine : ClaudePanel =
     { SessionCredential = session
       MineCredential = mine
-      Owner = Some "user"
-      AgentAvailable = Some true
+      Owner = OwnedByUser
+      AgentAvailable = true
       Models = ModelsUnknown }
 
 let private offered =
     [ AgentModel.create (ModelId.create "example-large" |> expect) "Example Large" ]
 
 let private githubStatus session mine : GitHubPanel =
-    { SessionCredential = session; MineCredential = mine; Owner = Some "user" }
+    { SessionCredential = session; MineCredential = mine; Owner = OwnedByUser }
 
 /// Connecting the shared credential — the command the browser case drives.
 let private connectMine : ConnectionExpectation = { Scope = "mine"; Connected = true }
@@ -3774,8 +3774,8 @@ let private panelWireTests =
             let panel : ClaudePanel =
                 { SessionCredential = None
                   MineCredential = Some { Kind = OAuthConnection; SignInRequired = Some "expired" }
-                  Owner = Some "user"
-                  AgentAvailable = Some true
+                  Owner = OwnedByUser
+                  AgentAvailable = true
                   Models = ModelsLoaded offered }
             Expect.equal
                 (Codec.toString Codec.claudePanel panel)
@@ -3788,8 +3788,8 @@ let private panelWireTests =
             let panel : ClaudePanel =
                 { SessionCredential = Some { Kind = StaticConnection; SignInRequired = None }
                   MineCredential = None
-                  Owner = Some "local"
-                  AgentAvailable = Some false
+                  Owner = OwnedByDeployment
+                  AgentAvailable = false
                   Models = ModelsUnavailable "no account connected" }
             Expect.equal
                 (Codec.toString Codec.claudePanel panel |> Codec.fromString Codec.claudePanel |> expect)
@@ -3800,7 +3800,7 @@ let private panelWireTests =
             let panel : GitHubPanel =
                 { SessionCredential = None
                   MineCredential = Some { Kind = StaticConnection; SignInRequired = None }
-                  Owner = Some "local" }
+                  Owner = OwnedByDeployment }
             Expect.equal
                 (Codec.toString Codec.githubPanel panel |> Codec.fromString Codec.githubPanel |> expect)
                 panel
@@ -3816,7 +3816,7 @@ let private panelWireTests =
             let panel =
                 Codec.fromString
                     Codec.claudePanel
-                    """{"session":null,"mine":{"kind":"static","signInRequired":null},"models":{"models":"not a list"}}"""
+                    """{"session":null,"mine":{"kind":"static","signInRequired":null},"owner":"user","agent":true,"models":{"models":"not a list"}}"""
                 |> expect
             Expect.equal
                 panel.MineCredential
@@ -3838,7 +3838,7 @@ let private panelWireTests =
             let panel =
                 Codec.fromString
                     Codec.claudePanel
-                    """{"session":null,"mine":{"kind":"static","signInRequired":null},"models":{"models":[{"nope":1}]}}"""
+                    """{"session":null,"mine":{"kind":"static","signInRequired":null},"owner":"user","agent":true,"models":{"models":[{"nope":1}]}}"""
                 |> expect
             Expect.equal
                 panel.MineCredential
@@ -3860,7 +3860,7 @@ let private panelWireTests =
 
         testCase "a kind this build does not know reads as static" <| fun () ->
             let panel =
-                Codec.fromString Codec.claudePanel """{"mine":{"kind":"passkey","signInRequired":null}}""" |> expect
+                Codec.fromString Codec.claudePanel """{"mine":{"kind":"passkey","signInRequired":null},"owner":"user","agent":true}""" |> expect
             Expect.equal
                 (panel.MineCredential |> Option.map (fun row -> row.Kind))
                 (Some StaticConnection)
@@ -3870,34 +3870,42 @@ let private panelWireTests =
 let private catalogueTests =
     let known = { claudeStatus None (Some connected) with Models = ModelsLoaded offered }
     testList "the picker's supply, inside the status" [
+        testCase "the first panel to arrive is kept whole" <| fun () ->
+            // `keeping` folds over what this client HAD, which the first time is nothing.
+            let arrived = ClaudePanel.keeping None (claudeStatus None (Some connected))
+            Expect.equal arrived.Models ModelsUnknown "there is no list to keep, and none is invented"
+
         testCase "a status that says nothing about models keeps the list the picker had" <| fun () ->
-            let arrived = ClaudePanel.keeping known (claudeStatus None (Some connected))
+            let arrived = ClaudePanel.keeping (Some known) (claudeStatus None (Some connected))
             Expect.equal arrived.Models (ModelsLoaded offered) "silence is not an empty menu"
 
         testCase "a status naming a catalogue replaces the one before it" <| fun () ->
             let arrived =
-                ClaudePanel.keeping known { claudeStatus None None with Models = ModelsLoaded [] }
+                ClaudePanel.keeping (Some known) { claudeStatus None None with Models = ModelsLoaded [] }
             Expect.equal arrived.Models (ModelsLoaded []) "the provider answered, and it offers nothing"
 
         testCase "a status saying why there is no catalogue replaces it too" <| fun () ->
             let arrived =
-                ClaudePanel.keeping known { claudeStatus None None with Models = ModelsUnavailable "no account" }
+                ClaudePanel.keeping (Some known) { claudeStatus None None with Models = ModelsUnavailable "no account" }
             Expect.equal
                 arrived.Models
                 (ModelsUnavailable "no account")
                 "a reason IS an answer — the picker has to say it, not go on offering a stale list"
 
         testCase "everything else on an arriving status replaces what was known" <| fun () ->
-            let arrived = ClaudePanel.keeping known (claudeStatus None None)
+            let arrived = ClaudePanel.keeping (Some known) (claudeStatus None None)
             Expect.equal arrived.MineCredential None "the credential it stopped naming is gone"
 
         testCase "the fold keeps the picker's list across a status that omits it" <| fun () ->
             let peer : PeerState = { PeerId = PeerId.create "catalogue-peer" |> expect; DisplayName = "Ada" }
             let model =
                 ClientModel.init peer
-                |> fun model -> { model with Claude = { model.Claude with Status = known } }
+                |> fun model -> { model with Claude = { model.Claude with Status = Some known } }
                 |> ClientModel.update (ClaudeStatusMsg (claudeStatus None (Some connected)))
-            Expect.equal model.Claude.Status.Models (ModelsLoaded offered) "the picker is not blanked by a probe"
+            Expect.equal
+                (model.Claude.Status |> Option.map (fun panel -> panel.Models))
+                (Some (ModelsLoaded offered))
+                "the picker is not blanked by a panel that omits it"
     ]
 
 /// The same two rules where they actually run: folded into the client model. This is the

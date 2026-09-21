@@ -466,7 +466,7 @@ let panelFor
     let owner = ownerOf identity
     { SessionCredential = CredentialRow.ofStatus (statusOf { Scope = SessionScope sessionId; Name = secretName })
       MineCredential = CredentialRow.ofStatus (statusOf { Scope = CredentialOwner.scope owner; Name = secretName })
-      Owner = Some (match owner with UserOwner _ -> "user" | LocalOwner -> "local") }
+      Owner = SharedOwner.ofCredentialOwner owner }
 
 let routes
     (sessionId: SessionId)
