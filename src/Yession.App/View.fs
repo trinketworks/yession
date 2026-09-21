@@ -804,7 +804,7 @@ module View =
     let private modelSection (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
         let chosen = model.Synced.Model
         let offered =
-            match model.Models with
+            match model.Claude.Status.Models with
             | ModelsLoaded models -> ModelCatalogue.ordered models
             | ModelsUnknown
             | ModelsUnavailable _ -> []
@@ -823,7 +823,7 @@ module View =
         // explain. A lookup that failed is almost always "no account connected here yet",
         // and the panel above this one is the way out of that.
         let note =
-            match model.Models with
+            match model.Claude.Status.Models with
             | ModelsUnknown -> html $"""<span class="{Style.small}" data-model-note="pending">…</span>"""
             | ModelsLoaded [] ->
                 html $"""<span class="{Style.small}" data-model-note="empty">this provider offered no models</span>"""

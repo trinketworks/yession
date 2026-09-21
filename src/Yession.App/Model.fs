@@ -129,6 +129,18 @@ module ConnectionExpectation =
         let credential = if expect.Scope = "session" then sessionCredential else mineCredential
         credential.IsSome = expect.Connected
 
+/// What the picker knows about the models it can offer. Three states and no fourth,
+/// because a picker has exactly three honest things to say: I have not looked yet, here is
+/// the list, or here is why there is no list. A single `AgentModel list` could not tell the
+/// first from a provider that genuinely offers nothing, and the difference is what decides
+/// whether a person waits or goes and connects an account.
+type ModelCatalogueState =
+    /// Nothing has been asked for yet, or an answer is in flight.
+    | ModelsUnknown
+    | ModelsLoaded of AgentModel list
+    /// The lookup answered, and what it said was why it could not.
+    | ModelsUnavailable of reason: string
+
 /// What the /claude status probe reported, per sign-in scope, when connected.
 type ClaudeStatus =
     { SessionCredential : ConnectionView option
@@ -141,7 +153,31 @@ type ClaudeStatus =
       /// Whether THIS session currently has an agent at all (any connected credential
       /// or the host's ambient one). `None` until the first probe answers — the
       /// "no agent" prompt must never flash before the client actually knows.
-      AgentAvailable : bool option }
+      AgentAvailable : bool option
+      /// What the picker has to choose from — IN the status, because it is a fact about
+      /// this credential and not a fact beside it. The session answers both on one reply
+      /// for that reason; holding them apart in the model left the two able to disagree by
+      /// exactly the route the reply had closed, and left the rule that keeps them
+      /// agreeing ("say nothing rather than blank it") at a caller who had to remember it.
+      /// It is `keeping`'s now, below.
+      Models : ModelCatalogueState }
+
+module ClaudeStatus =
+
+    /// A status as it should be FOLDED over the one this client already had.
+    ///
+    /// A reply that says nothing about models — an older session process, a lookup still in
+    /// flight — must not blank a picker that has a list. Everything else is replaced: the
+    /// arriving status IS the answer, and a row it stopped naming is a credential that is
+    /// gone.
+    let keeping (known: ClaudeStatus) (arrived: ClaudeStatus) : ClaudeStatus =
+        match arrived.Models with
+        | ModelsUnknown -> { arrived with Models = known.Models }
+        | _ -> arrived
+
+    /// This panel's wait rule, beside the status it reads, so no caller composes it.
+    let landed (expect: ConnectionExpectation) (status: ClaudeStatus) : bool =
+        ConnectionExpectation.landed expect status.SessionCredential status.MineCredential
 
 [<RequireQualifiedAccess>]
 type ClaudeViewState =
@@ -150,11 +186,6 @@ type ClaudeViewState =
       /// A command of ours on its way into `Status`, modelled rather than assumed.
       Pending : Pending<ConnectionExpectation> }
 
-module ClaudeStatus =
-
-    /// This panel's wait rule, beside the status it reads, so no caller composes it.
-    let landed (expect: ConnectionExpectation) (status: ClaudeStatus) : bool =
-        ConnectionExpectation.landed expect status.SessionCredential status.MineCredential
 
 /// Where the GitHub sign-in flow is (Plan 14). Device flow: the panel shows a user
 /// code, the human approves it on github.com in their own tab, and the browser polls
@@ -199,18 +230,6 @@ module GitHubStatus =
     /// This panel's wait rule, beside the status it reads, so no caller composes it.
     let landed (expect: ConnectionExpectation) (status: GitHubStatus) : bool =
         ConnectionExpectation.landed expect status.SessionCredential status.MineCredential
-
-/// What the picker knows about the models it can offer. Three states and no fourth,
-/// because a picker has exactly three honest things to say: I have not looked yet, here is
-/// the list, or here is why there is no list. A single `AgentModel list` could not tell the
-/// first from a provider that genuinely offers nothing, and the difference is what decides
-/// whether a person waits or goes and connects an account.
-type ModelCatalogueState =
-    /// Nothing has been asked for yet, or an answer is in flight.
-    | ModelsUnknown
-    | ModelsLoaded of AgentModel list
-    /// The lookup answered, and what it said was why it could not.
-    | ModelsUnavailable of reason: string
 
 /// The generated read surface's state (Plan 15), folded from the `/queries` stream.
 ///
@@ -650,11 +669,6 @@ type ClientModel =
       Claude        : ClaudeViewState
       /// The GitHub connection panel's state (Plan 14), driven by the /github routes.
       GitHub        : GitHubViewState
-      /// What the picker has to choose from, fetched from /models. View state and NOT
-      /// synced: the catalogue is the same for everybody, so syncing it would be a second
-      /// copy of a fact the session already holds — the CHOICE is what collaborates, and
-      /// that lives in `Synced.Model`.
-      Models        : ModelCatalogueState
       /// The generated read surface (Plan 15), driven by the /queries stream.
       Queries       : QueriesViewState
       /// Repos whose sensitive capability set is waiting on somebody here (Plan 27).
@@ -766,8 +780,6 @@ type ClientMsg =
     /// The clock, for every panel waiting on a query at once: one tick, because a deadline
     /// is about elapsed time and not about which panel is watching it.
     | PendingWaitedMsg of now: int64
-    /// What /models answered: the catalogue, or why there isn't one.
-    | ModelCatalogueMsg of ModelCatalogueState
     /// The launch surface moved (typed, listed, chose, sent, answered, failed, dismissed).
     | LaunchMsg of LaunchMsg
     /// The session answered a command this client sent. Uncorrelated for every command but
@@ -935,14 +947,18 @@ module ClientModel =
           OpenActs = Set.empty
           Copied = None
           Claude =
-            { Status = { SessionCredential = None; MineCredential = None; Owner = None; AgentAvailable = None }
+            { Status =
+                { SessionCredential = None
+                  MineCredential = None
+                  Owner = None
+                  AgentAvailable = None
+                  Models = ModelsUnknown }
               Flow = ClaudeIdle
               Pending = Pending.Ready }
           GitHub =
             { Status = { SessionCredential = None; MineCredential = None }
               Flow = GitHubIdle
               Pending = Pending.Ready }
-          Models = ModelsUnknown
           Queries = { Declared = []; Values = Map.empty } }
 
     /// Advance the latest-known offset and recompute the catch-up indicator. "Slow" is a
@@ -1905,6 +1921,10 @@ module ClientModel =
             // shows what the command asked for, and only then. A probe that has not caught
             // up leaves the wait standing, which is the difference between eventual
             // consistency and a coin flip.
+            // `keeping` rather than the status bare: a reply that says nothing about models
+            // must not blank a picker that has a list, and that rule lives with the status
+            // so no caller can forget it (it used to be a `match` at the one dispatch site).
+            let status = ClaudeStatus.keeping model.Claude.Status status
             { model with
                 Claude =
                   { Status = status
@@ -2116,7 +2136,6 @@ module ClientModel =
                     { model.Synced with
                         Pending = Map.add queueId { entry with Order = order } model.Synced.Pending }
             | None -> model
-        | ModelCatalogueMsg catalogue -> { model with Models = catalogue }
         | LaunchMsg msg -> { model with Launch = Launch.update msg model.Launch }
         | CommandAnsweredMsg (request, result) ->
             { model with Launch = Launch.update (LaunchAnswered (request, result)) model.Launch }
