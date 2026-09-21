@@ -126,6 +126,36 @@ module Style =
     let private focusRingFar =
         "focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue focus-visible:outline-offset-4"
 
+    // --- Motion (one vocabulary, so every surface that moves moves the same way) ---------
+    // Zune's signature: things arrive by sliding a little and fading in, fast, eased out,
+    // and leave the way they came. The settings drawer's lanes, the ask card's panes and an
+    // act's unfolding particulars all compose these rather than each spelling a duration.
+    // `motion-reduce:transition-none` rides every one, so a reader who asked for no motion
+    // gets the end state at once.
+    module Motion =
+
+        /// The pace: 200ms out-eased. What a lane, a fold and a turning arrow all take.
+        let pace = "duration-200 ease-out motion-reduce:transition-none"
+        /// A whole pane crossing the width of its track takes a beat longer.
+        let paceLong = "duration-300 ease-out motion-reduce:transition-none"
+        /// Slide-and-fade, for content that ARRIVES: it starts a little off and clear, and
+        /// settles into place opaque. The opposite state is what it leaves through.
+        let slideFade = cls [ "transition-[translate,opacity]"; pace ]
+        /// Content UNFOLDING beneath a line: it grows from nothing (the grid trick — a row of
+        /// `0fr` to `1fr` is the one height animation CSS will run without a measured pixel
+        /// value), slides down a touch, and fades in; folding runs it back. `visibility` is
+        /// in the list so the folded content leaves the tab order and the accessibility tree
+        /// — and is transitioned, so it stays visible for the whole fold on the way out.
+        let unfold = cls [ "grid transition-[grid-template-rows,translate,opacity,visibility]"; pace ]
+        let folded = "grid-rows-[0fr] -translate-y-1 opacity-0 invisible"
+        let unfolded = "grid-rows-[1fr] translate-y-0 opacity-100 visible"
+        /// What sits inside an unfolding grid: the one row, clipped while it is short.
+        let unfoldInner = "min-h-0 overflow-hidden"
+        /// A mark that TURNS to say which way a fold is: a chevron pointing on at rest, down
+        /// when what it fronts is unfolded.
+        let turn = cls [ "transition-[rotate]"; pace ]
+        let turned = "rotate-90"
+
     // --- Typography (the ramp lives as `--text-*` tokens in app/tailwind.css) -----------
     // Each `text-<step>` utility sets size AND line-height together, so a size can never
     // drift off its 4px line box; `leading-*` composes over a step where a context needs
@@ -601,10 +631,13 @@ module Style =
     // kin sit beside a status word. `whitespace-nowrap` keeps mark and name on one line.
     let entity = "inline whitespace-nowrap"
     let entityName = "text-ink"
-    /// A reference that is somewhere to go — a repository, on its host — is a real link, and
-    /// says so the way the rest of the page does: the underline arrives on hover, so a
-    /// sentence with two references in it does not read as two underlined phrases at rest.
-    let entityLink = cls [ entity; "hover:underline underline-offset-2"; focusRing ]
+    /// A reference that is somewhere to go — a repository, a pull request, on their host — is
+    /// a real link and LOOKS like the links in the transcript's prose: blue, underlined, a
+    /// step brighter under the pointer (`proseLink`, the one hyperlink face on this page).
+    /// The mark inherits the blue, since it is part of the same link.
+    let entityLink = cls [ entity; "text-blue underline decoration-1 underline-offset-2 hover:text-blue-bright"; focusRing ]
+    /// The name inside a link inherits the link's ink rather than wearing `text-ink`.
+    let entityLinkName = ""
     /// The mark's seat on the line: an inline box the small avatar's size, its bottom two
     /// pixels below the baseline so a filled square sits on the descender line like a letter
     /// with one, and a stroked glyph — whose lowest vertex is ~2px above its box's bottom —
@@ -683,7 +716,7 @@ module Style =
     /// `opacity-0` alone would leave focusable controls behind an invisible panel.
     let private paneBase =
         "absolute inset-y-0 left-0 w-side max-md:w-[min(var(--spacing-side),84vw)] flex flex-col px-6 pb-5 "
-        + "overflow-y-auto transition-[opacity,visibility] duration-200 ease-out motion-reduce:transition-none"
+        + "overflow-y-auto transition-[opacity,visibility] " + Motion.pace
 
     let navPane = paneBase + " [.settings-open_&]:opacity-0 [.settings-open_&]:invisible"
 
@@ -701,8 +734,7 @@ module Style =
     // `translate` property, so a transition list naming `transform` animates nothing and the
     // rows would jump into place. (Measured on the live page — computed `transform` stayed
     // `none` through the whole toggle.)
-    let private laneBase =
-        "transition-[translate,opacity] duration-200 ease-out motion-reduce:transition-none"
+    let private laneBase = Motion.slideFade
 
     let private navLaneOut = " [.settings-open_&]:-translate-x-6 [.settings-open_&]:opacity-0 [.settings-open_&]:delay-0"
     /// The nav's rows, in arrival order (they return staggered and leave together).
@@ -1333,7 +1365,7 @@ module Style =
     /// with the one you land on - two buttons where there is one, the same seam `Launch.anchor`
     /// closed for the card itself.
     let private askPaneBase =
-        "min-w-0 flex flex-col max-h-[60vh] transition-transform duration-300 ease-out motion-reduce:transition-none"
+        cls [ "min-w-0 flex flex-col max-h-[60vh] transition-transform"; Motion.paceLong ]
     /// The list, and the only thing in a pane that scrolls. `min-h-0` is what lets it: a flex
     /// child's floor is its content, so without it the column grows past its own `max-h` and
     /// the pane scrolls instead of the list inside it.
@@ -1673,7 +1705,6 @@ module Style =
     /// the same faint voice `actNoteDetail` uses, so the group still reads as one act under
     /// the headline - what changed is that a screen arranges the parts, and labels them,
     /// rather than chaining them into prose.
-    let actNoteFacts = "flex flex-col gap-1 mt-0.5"
     /// One fact: its label and its value on a line, wrapping onto the next when the value is
     /// a run of badges too wide for the column. `items-baseline` so a one-word label sits on
     /// the value's first line rather than centred against a stack.
@@ -1697,13 +1728,28 @@ module Style =
     /// A path inside a fact line - the checkout, when it is worth showing. Mono, because it
     /// is an identifier and reads as one, and dim enough to sit inside the faint line around it.
     let actNotePath = cls [ mono; "text-code-sm text-ink-dim" ]
-    /// What the agent was told, behind a disclosure under the facts. The notice disclosure's
-    /// own summary voice, so it reads as the same move everywhere: what you need is on the
-    /// surface, the mechanism is one keypress in. The sentence inside is the act's own
-    /// phrase, in the detail voice, so a reference in it is drawn as it is drawn above.
-    let actNoteSaid = "min-w-0"
-    let actNoteSaidSummary = detailSummary
-    let actNoteSaidBody = cls [ actNoteDetail; "block pt-1" ]
+    /// The fold an act's particulars sit behind, and the arrow that opens it.
+    ///
+    /// The arrow lives in the LEFT gutter, on the dead centre of the margin the text clears
+    /// and of the headline's own line — the box `actNoteRunning` uses for its dot, so the two
+    /// cues an act can wear sit on one spot. A real button, so it is a Tab stop with a ring
+    /// and a name; faint at rest, because a column of acts should read as its titles, and
+    /// brighter under the pointer or the keyboard, since it is the only way in. The chevron
+    /// points ON at rest and turns DOWN when the particulars are open, at the page's one pace.
+    let actNoteFold =
+        cls [ "absolute left-0 top-2 h-5 w-8 max-md:w-12"
+              "flex items-center justify-center cursor-pointer bg-transparent border-0 p-0"
+              "text-ink-faint hover:text-ink transition-colors"; focusRing ]
+    let actNoteFoldMark = cls [ "block"; Motion.turn ]
+    let actNoteFoldMarkOpen = cls [ actNoteFoldMark; Motion.turned ]
+    /// The particulars, unfolding beneath the title: grown, slid and faded in as one, at the
+    /// page's pace, and folded back the same way. Inside, the rows the act lays out and —
+    /// last — what the agent was told, in the detail voice, so a reference in it is drawn as
+    /// it is drawn above.
+    let actNoteFoldBody = Motion.unfold
+    let actNoteFoldBodyOpen = cls [ Motion.unfold; Motion.unfolded ]
+    let actNoteFoldBodyShut = cls [ Motion.unfold; Motion.folded ]
+    let actNoteFoldInner = cls [ Motion.unfoldInner; "flex flex-col gap-1 pt-1" ]
     /// A line this host could not honour exactly. One step brighter than the other
     /// particulars (`ink-dim`, not `ink-faint`), so the one fact that means "you did not get
     /// quite what you asked for" is the one the eye catches - without the line having to grow
@@ -1749,6 +1795,8 @@ module Style =
     /// which rule was doing the work.
     let prosePre = "font-terminal text-code leading-5 bg-surface-2 text-ink p-3 [&:not(:first-child)]:mt-2 whitespace-pre-wrap"
     let proseQuote = Stroke.lead + " " + Stroke.hair + " pl-3 text-ink-dim [&:not(:first-child)]:mt-2"
+    /// The one hyperlink face: prose links and the references that lead somewhere
+    /// (`entityLink`) compose the same words, so a link is a link wherever it stands.
     let proseLink = "text-blue underline decoration-1 underline-offset-2 hover:text-blue-bright"
     let proseHr = "border-0 " + Stroke.dividerTop + " my-3"
 

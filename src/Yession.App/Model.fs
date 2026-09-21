@@ -585,6 +585,11 @@ type ClientModel =
       /// open, because opening one is writing this. Two open menus would be two popovers
       /// over one column with one Escape between them.
       ItemMenu      : MessageId option
+      /// Which acts have their particulars UNFOLDED. View state like the menu above — what
+      /// one person opened to read is nobody else's — but a set rather than one slot: two
+      /// acts open at once are two things being read, not two popovers fighting over an
+      /// Escape. Empty is every act folded to its title, which is how a timeline is read.
+      OpenActs      : Set<MessageId>
       /// What this client has just put on the clipboard, named by the hook of the box it
       /// came out of (`Dom.Hooks.githubUserCode` and whatever joins it). View state, local
       /// and transient for the same reason the menu above is: copying is one person's act
@@ -794,6 +799,9 @@ type ClientMsg =
     /// rather than an open, because the control that sends it is the same control either
     /// way — pressing the ellipsis a second time has to put the menu away.
     | ToggleItemMenuMsg of MessageId
+    /// Unfold this act's particulars, or fold them if they are open. One toggle for the one
+    /// control, as with the menu.
+    | ToggleActMsg of MessageId
     /// Shut whatever menu is open. Everything that dismisses one sends this: Escape, a
     /// press outside it, and choosing something from it.
     | CloseItemMenuMsg
@@ -869,6 +877,7 @@ module ClientModel =
           Pane = None
           TerminalsOpen = false
           ItemMenu = None
+          OpenActs = Set.empty
           Copied = None
           Claude =
             { Status = { SessionCredential = None; MineCredential = None; Owner = None; AgentAvailable = None }
@@ -1940,6 +1949,11 @@ module ClientModel =
             let next = if model.ItemMenu = Some messageId then None else Some messageId
             { model with ItemMenu = next }
         | CloseItemMenuMsg -> { model with ItemMenu = None }
+        | ToggleActMsg messageId ->
+            let next =
+                if Set.contains messageId model.OpenActs then Set.remove messageId model.OpenActs
+                else Set.add messageId model.OpenActs
+            { model with OpenActs = next }
         | CopiedMsg copied -> { model with Copied = copied }
         | ToggleTerminalListMsg ->
             // Going to the list KEEPS the read it covers, so coming back resumes it — a

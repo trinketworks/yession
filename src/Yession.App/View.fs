@@ -2031,7 +2031,7 @@ module View =
         // Which facts show is decided from the event's typed fields, never by reading the
         // sentence back: `checkout` only when it is NOT the conventional /repos/<owner>/<repo>
         // every reader can already assume; `forwarding` a reference per connection.
-        let sandboxStartFacts (by: ActorRef) (act: Act) (s: WorkSandboxStarted) =
+        let sandboxStartFacts (by: ActorRef) (act: Act) (s: WorkSandboxStarted) : TemplateResult list =
             let row (key: string) (fact: string) (value: TemplateResult) =
                 html $"""
                     <div class="{Style.actNoteFactRow}" data-act-fact="{fact}">
@@ -2081,18 +2081,13 @@ module View =
                           <span class="{Style.actNoteFactKey}">{Dom.Text.sandboxFactAdjusted}</span>
                           <div class="{Style.actNoteFactStack}">{vals}</div>
                         </div>""" ]
-            let rows = List.concat [ describedAs; backend; checkout; forwarded; realisation; [ toldRow act ] ]
-            html $"""
-                <details class="{Style.actNoteSaid}" data-act-facts>
-                  <summary class="{Style.actNoteSaidSummary}">{Dom.Text.details}</summary>
-                  <div class="{Style.actNoteFacts}">{rows}</div>
-                </details>"""
+            List.concat [ describedAs; backend; checkout; forwarded; realisation; [ toldRow act ] ]
         // A file change (the file verbs), laid out the way a start is: the title on the line
         // — which file, how much — and behind ONE disclosure the change itself, one row per
         // `-`/`+` line, with the sentence the agent read as its last row. The edit a reader
         // can SEE, where the same change used to be a heredoc in a terminal a reader had to
         // parse. A write carries no diff and reads as its phrase like any other act.
-        let fileChangeFacts (act: Act) (diff: string) =
+        let fileChangeFacts (act: Act) (diff: string) : TemplateResult list =
             let lines =
                 diff.Split '\n'
                 |> List.ofArray
@@ -2102,14 +2097,8 @@ module View =
                         elif line.StartsWith "-" then Style.actNoteDiffDel
                         else Style.actNoteDiffNote
                     html $"""<span class="{tone}">{line}</span>""")
-            html $"""
-                <details class="{Style.actNoteSaid}" data-act-facts>
-                  <summary class="{Style.actNoteSaidSummary}">{Dom.Text.details}</summary>
-                  <div class="{Style.actNoteFacts}">
-                    <pre class="{Style.actNoteDiff}" data-act-fact="diff">{lines}</pre>
-                    {toldRow act}
-                  </div>
-                </details>"""
+            [ html $"""<pre class="{Style.actNoteDiff}" data-act-fact="diff">{lines}</pre>"""
+              toldRow act ]
         // A repo note is something someone DID, not said - one quiet line, actor-attributed,
         // no avatar and no rich body (Plan 14, repos). It rides the same timeline slot a
         // message does (both are `ConversationItem`s at an offset); `Content` is what tells
@@ -2135,36 +2124,52 @@ module View =
                 | ConversationItemStatus.Failed ->
                     html $"""<span class="{Style.statusErr}">{Icon.crossSm} {Dom.Text.failed}</span>"""
                 | Complete | Streaming | ConversationItemStatus.Running | ConversationItemStatus.Interrupted -> Lit.nothing
-            // The title, and what sits under it. A screen lays out the acts it can — a
-            // sandbox coming up or up — with a title of its own and every fact behind one
-            // disclosure; the rest read as their phrase, particulars visible, and the
-            // sentence the agent got behind a disclosure of its own.
-            let title, under =
+            // The title, what shows beneath it, and what FOLDS beneath that. A screen lays
+            // out the acts it can — a sandbox coming up or up, a file changed — with a title
+            // of its own and every fact in the fold; the rest read as their phrase with their
+            // particulars visible, and only the sentence the agent got in the fold.
+            let title, shown, folded =
                 match act with
                 | Act.SandboxStarted s ->
-                    [ Segment.Text "started sandbox "; Segment.Ref (EntityRef.Sandbox s.Sandbox) ], [ sandboxStartFacts by act s ]
+                    [ Segment.Text "started sandbox "; Segment.Ref (EntityRef.Sandbox s.Sandbox) ], [], sandboxStartFacts by act s
                 | Act.SandboxStarting s ->
-                    [ Segment.Text "starting sandbox "; Segment.Ref (EntityRef.Sandbox s.Sandbox) ],
-                    [ html $"""
-                        <details class="{Style.actNoteSaid}" data-act-facts>
-                          <summary class="{Style.actNoteSaidSummary}">{Dom.Text.details}</summary>
-                          <div class="{Style.actNoteFacts}">{toldRow act}</div>
-                        </details>""" ]
-                | Act.FileChanged { FileChanged.Diff = Some diff } -> Act.phrase act, [ fileChangeFacts act diff ]
-                | _ ->
-                    Act.phrase act,
-                    actNoteParticulars by act
-                    @ [ html $"""
-                          <details class="{Style.actNoteSaid}" data-act-said-disclosure>
-                            <summary class="{Style.actNoteSaidSummary}">{Dom.Text.actSaid}</summary>
-                            <span class="{Style.actNoteSaidBody}" data-act-said>{Entity.told model (Act.sentence act)}</span>
-                          </details>""" ]
+                    [ Segment.Text "starting sandbox "; Segment.Ref (EntityRef.Sandbox s.Sandbox) ], [], [ toldRow act ]
+                | Act.FileChanged { FileChanged.Diff = Some diff } -> Act.phrase act, [], fileChangeFacts act diff
+                | _ -> Act.phrase act, actNoteParticulars by act, [ toldRow act ]
+            // The fold: an arrow on the dead centre of the gutter and the title's line, and
+            // the particulars unfolding beneath — grown, slid and faded at the page's one
+            // pace (`Style.Motion`), and folded back the same way. Its own state per act
+            // (`OpenActs`), so two can be open at once; a real button with its expanded state
+            // said, so a keyboard and a screen reader get what a pointer gets. While the act
+            // is still RUNNING the gutter holds the pulse instead: an act in flight is not
+            // one to unfold, and its account is about to change under the reader anyway.
+            let opened = Set.contains item.MessageId model.OpenActs
+            let foldId = "act-fold-" + MessageId.value item.MessageId
+            let arrow =
+                match item.Status with
+                | ConversationItemStatus.Running -> Lit.nothing
+                | Complete | Streaming | ConversationItemStatus.Failed | ConversationItemStatus.Interrupted ->
+                    html $"""
+                        <button type="button" class="{Style.actNoteFold}"
+                                aria-expanded="{if opened then "true" else "false"}" aria-controls="{foldId}"
+                                aria-label="{Dom.Text.details}" data-act-fold="{MessageId.value item.MessageId}"
+                                @click={Ev(fun _ -> dispatch (ToggleActMsg item.MessageId))}>
+                          <span class="{if opened then Style.actNoteFoldMarkOpen else Style.actNoteFoldMark}">{Icon.right}</span>
+                        </button>"""
+            let fold =
+                html $"""
+                    <div id="{foldId}" class="{if opened then Style.actNoteFoldBodyOpen else Style.actNoteFoldBodyShut}"
+                         data-act-facts data-act-facts-open="{if opened then "yes" else "no"}">
+                      <div class="{Style.actNoteFoldInner}">{folded}</div>
+                    </div>"""
             html $"""
                 <article class="{Style.actNote}" data-message-id="{MessageId.value item.MessageId}" tabindex="-1" data-act-note data-act-status="{messageStatusLabel item.Status}" data-message-author="{Entity.actorToken item.Author}">
                   {itemActions item}
                   {running}
+                  {arrow}
                   <span class="{Style.actNoteText}">{Entity.phrase model by title} {failedMark}</span>
-                  {under}
+                  {shown}
+                  {fold}
                 </article>"""
         let messageItem (item: ConversationItem) =
             // What was said. An act never reaches here (`actNoteItem` takes those), and its
