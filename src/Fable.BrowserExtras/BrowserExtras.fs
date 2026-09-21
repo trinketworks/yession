@@ -260,6 +260,17 @@ module Urls =
     [<Emit("new URL($0, $1).href")>]
     let resolve (relative: string) (baseAddress: string) : string = jsNative
 
+    /// The path of an absolute address — everything after the authority, before any query or
+    /// fragment.
+    ///
+    /// Absolute, and no base, because that is the question: a caller with a relative address
+    /// wants `resolve` first, and one that has an absolute one has already decided what it is
+    /// relative to. THROWS on an address `URL` cannot parse, which is what makes it a fact
+    /// rather than a guess — a parser that answered `""` for a string that is not an address
+    /// would hand a router something it would route.
+    [<Emit("new URL($0).pathname")>]
+    let pathname (address: string) : string = jsNative
+
 /// One end of a `MessageChannel`.
 [<AllowNullLiteral>]
 type MessagePort =
