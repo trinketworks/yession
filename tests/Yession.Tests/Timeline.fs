@@ -12,6 +12,8 @@ open Yession.Domain.Tools
 open Yession.Domain.Terminals
 open Yession.Domain.Collab
 open Yession.Domain.Chat
+open Yession.Domain.Sandboxes
+open Yession.Domain.Files
 open Yession.App
 
 let private expect =
@@ -1123,7 +1125,7 @@ let private drawn (events: EventEnvelope<SessionEvent> list) : string list =
     TimelineProjection.rows conversation timeline
     |> List.map (function
         | RowItem item -> List.head (shapes [ item ])
-        | RowToolRun (t, items) -> sprintf "run:%s:%d" (AgentTurnId.value t) (List.length items)
+        | RowWorkRun (t, items) -> sprintf "run:%s:%d" (AgentTurnId.value t) (List.length items)
         | RowTaskCard (t, items) -> sprintf "card:%s:%d" (AgentTurnId.value t) (List.length items))
 
 let private toolTests =
@@ -1266,10 +1268,76 @@ let private toolTests =
                   at 2L 1.0 (sent "1" "hold on")
                   at 3L 2.0 (used "2" "a" "repo_log")
                   at 4L 3.0 (used "3" "b" "repo_diff") ]
+            // Each lone call is its own row rather than a run of one: a run forms on the
+            // second item, like a task card, because a fold around one thing is a fold over
+            // a fold.
             Expect.equal
                 (drawn events)
-                [ "run:turn-a:1"; "said:m-1"; "run:turn-a:1"; "run:turn-b:1" ]
+                [ "used:t-1"; "said:m-1"; "used:t-2"; "used:t-3" ]
                 "the message splits the run, and a new turn starts another"
+
+        // A run is a turn's WORK, not only its calls: the act a call made — the write behind
+        // `write_file`, the sandbox behind `start_work_sandbox` — lands in the run beside the
+        // call, in order, and the line counts what the run holds by kind. An act joins a
+        // run; it never starts one, because alone it cannot say whose it is. A person's act
+        // ends the run, as a message does.
+        testCase "the agent's acts between its calls join the run, in order, and are counted by kind" <| fun () ->
+            let wrote (n: string) (path: string) =
+                SessionEvent.FileChanged
+                    { FileChanged.MessageId = MessageId.create ("f-" + n) |> expect
+                      FileChanged.Sandbox = SandboxRef.defaultRef
+                      FileChanged.Path = path
+                      FileChanged.Change = FileChange.Written 3
+                      FileChanged.Diff = None
+                      FileChanged.Actor = ActorRef.Agent }
+            let edited (n: string) (path: string) =
+                SessionEvent.FileChanged
+                    { FileChanged.MessageId = MessageId.create ("f-" + n) |> expect
+                      FileChanged.Sandbox = SandboxRef.defaultRef
+                      FileChanged.Path = path
+                      FileChanged.Change = FileChange.Edited (1, 1, 1)
+                      FileChanged.Diff = Some "-a\n+b"
+                      FileChanged.Actor = ActorRef.Agent }
+            let events =
+                [ at 1L 0.0 (used "1" "a" "write_file")
+                  at 2L 1.0 (wrote "1" "a.txt")
+                  at 3L 2.0 (used "2" "a" "read_file")
+                  at 4L 3.0 (used "3" "a" "edit_file")
+                  at 5L 4.0 (edited "2" "a.txt") ]
+            Expect.equal (drawn events) [ "run:turn-a:5" ] "one row, the call and the act it made both in it"
+            let conversation, _ = ConversationProjection.applyEvents None events ConversationProjection.empty
+            let timeline, _ = TimelineProjection.applyEvents None events TimelineProjection.empty
+            match TimelineProjection.rows conversation timeline with
+            | [ RowWorkRun (_, items) ] ->
+                Expect.equal (WorkRun.summary items) "used 3 tools, wrote 1 file, edited 1 file" "counted by kind, each where it first appeared"
+                Expect.equal (WorkRun.summary (List.truncate 2 items)) "used 1 tool, wrote 1 file" "and singular when it is one"
+            | rows -> failwithf "expected one run, got %A" rows
+
+        testCase "an act alone does not start a run, and a person's act ends one" <| fun () ->
+            let agentWrote =
+                SessionEvent.FileChanged
+                    { FileChanged.MessageId = MessageId.create "f-1" |> expect
+                      FileChanged.Sandbox = SandboxRef.defaultRef
+                      FileChanged.Path = "a.txt"
+                      FileChanged.Change = FileChange.Written 1
+                      FileChanged.Diff = None
+                      FileChanged.Actor = ActorRef.Agent }
+            let personSet =
+                SessionEvent.ShellProfileSet
+                    { ShellProfileSet.MessageId = MessageId.create "p-1" |> expect
+                      ShellProfileSet.Sandbox = SandboxRef.defaultRef
+                      ShellProfileSet.WorkingDirectory = Some "/repos/x"
+                      ShellProfileSet.Actor = PeerRef ada }
+            let events =
+                [ at 1L 0.0 agentWrote
+                  at 2L 1.0 (used "1" "a" "read_file")
+                  at 3L 2.0 (used "2" "a" "read_file")
+                  at 4L 3.0 personSet
+                  at 5L 4.0 (used "3" "a" "read_file") ]
+            Expect.equal
+                (drawn events)
+                [ "said:f-1"; "run:turn-a:2"; "said:p-1"; "used:t-3" ]
+                "the lone act stands; the person's act closes the run; the call after it stands alone"
 
         testCase "an id minted for a call is a handle a link can carry" <| fun () ->
             // Why it is MINTED rather than derived: a fact that will be addressed must not be

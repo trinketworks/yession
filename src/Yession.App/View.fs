@@ -2400,32 +2400,43 @@ module View =
                   </div>
                   {body}
                 </div>"""
-        // A turn's calls on the same gutter every act's arrow sits on — the fold is the one
-        // control, wherever it is. A run of ONE call is that call, on the rail: "used
-        // yession/x", its outcome, and its fold opening straight onto input and output — a
-        // run around a single call was a fold over a fold, two presses to reach one thing.
-        // A run of SEVERAL is the aggregate: two chevrons on the rail, and inside it each
-        // call is a fold of its own on the SAME rail, not a gutter further in — the two
-        // chevrons over the one is what says which line holds the others, and an indent on
-        // top of that was a second way of saying it.
-        let toolRun (turn: AgentTurnId) (uses: ToolUse list) =
-            let named (use': ToolUse) = html $"""<code class="{Style.chatToolName}">{ToolUse.label use'}</code>"""
-            match uses with
-            | [ one ] ->
-                toolCall
-                    Style.chatToolRun
-                    (html $"""<span class="{Style.chatToolRunText}">used</span> {named one}""")
-                    one
-            | many ->
-                let key = FoldKey.ToolRun (List.head many).ToolUseId
-                let arrow = foldArrow key Icon.rights Dom.Text.details
-                let body = foldBody key Style.chatToolRunInner (many |> List.map (fun use' -> toolCall Style.chatToolItem (named use') use'))
-                html $"""
-                    <div class="{Style.chatToolRun}" data-chat-tool-run="{AgentTurnId.value turn}">
-                      {arrow}
-                      <span class="{Style.chatToolRunText}">used {List.length many} tools</span>
-                      {body}
-                    </div>"""
+        // One call on the rail: "used yession/x", its outcome, and its fold opening straight
+        // onto input and output. A lone call was once wrapped in a run of one — a fold over a
+        // fold, two presses to reach one thing — and `rows` no longer makes one.
+        let named (use': ToolUse) = html $"""<code class="{Style.chatToolName}">{ToolUse.label use'}</code>"""
+        let loneCall (use': ToolUse) =
+            toolCall Style.chatToolRun (html $"""<span class="{Style.chatToolRunText}">used</span> {named use'}""") use'
+        // A turn's WORK, folded to one line on the same gutter every act's arrow sits on —
+        // the fold is the one control, wherever it is. The line counts what the run holds by
+        // kind, each where it first appeared (`WorkRun.summary`), so a reader watching a
+        // turn work sees "used 2 tools" become "used 3 tools, wrote 1 file" with nothing
+        // moving. Two chevrons: the mark of several folded here. Inside, the items as they
+        // happened — each call a fold of its own, each act the note it always was — on the
+        // SAME rail, not a gutter further in: the two chevrons over the one already say
+        // which line holds the others, and an indent on top of that was a second way of
+        // saying it.
+        let workRun (turn: AgentTurnId) (items: TimelineItem list) =
+            let entries =
+                items
+                |> List.choose (fun item ->
+                    match item with
+                    | TimelineToolUse (_, id) ->
+                        TimelineProjection.toolUse id model.Timeline
+                        |> Option.map (fun use' -> toolCall Style.chatToolItem (named use') use')
+                    | TimelineMessage ({ Content = ItemContent.Act act } as note) -> Some (actNoteItem act note)
+                    | _ -> None)
+            let key =
+                match items with
+                | TimelineToolUse (_, id) :: _ -> FoldKey.ToolRun id
+                | _ -> FoldKey.ToolRun (ToolUseId.create (AgentTurnId.value turn) |> Result.defaultWith failwith)
+            let arrow = foldArrow key Icon.rights Dom.Text.details
+            let body = foldBody key Style.chatToolRunInner entries
+            html $"""
+                <div class="{Style.chatToolRun}" data-chat-tool-run="{AgentTurnId.value turn}">
+                  {arrow}
+                  <span class="{Style.chatToolRunText}">{WorkRun.summary items}</span>
+                  {body}
+                </div>"""
         // One agent burst: the commands one turn ran, in one row (Plan 20, stage 4). The
         // lines ARE block chips — same element, same click, same hooks — so a chip does not
         // change what it is by being grouped, and nothing here has to be kept in step with
@@ -2519,22 +2530,16 @@ module View =
                     |> Option.map (fun block ->
                         Some (Authority.author block.Authority), blockChip terminalId block)
                 | RowItem (TimelineStretch stretch) -> Some (Some stretch.Holder, stretchItem stretch)
-                // `rows` never puts a tool use in a bare row, and never a run of anything
-                // else — but both are `TimelineItem`s, so the types cannot say so.
-                | RowItem (TimelineToolUse _) -> None
+                // A lone call: `rows` leaves one call as its own row, and it draws as one.
+                | RowItem (TimelineToolUse (_, id)) ->
+                    TimelineProjection.toolUse id model.Timeline
+                    |> Option.map (fun use' -> Some ActorRef.Agent, loneCall use')
                 // Nor a thought: `rows` drops the kind outright, because reasoning was never
                 // said to anyone. Here for the same reason as the line above — the filter is
                 // a rule the type cannot hold — and this is the line that changes on the day
                 // somebody decides a screen should show it.
                 | RowItem (TimelineThought _) -> None
-                | RowToolRun (turn, calls) ->
-                    let uses =
-                        calls
-                        |> List.choose (function
-                            | TimelineToolUse (_, id) -> TimelineProjection.toolUse id model.Timeline
-                            | _ -> None)
-                    if List.isEmpty uses then None
-                    else Some (Some ActorRef.Agent, toolRun turn uses)
+                | RowWorkRun (turn, items) -> Some (Some ActorRef.Agent, workRun turn items)
                 | RowTaskCard (turn, items) ->
                     let blocks =
                         items

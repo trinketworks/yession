@@ -6,6 +6,7 @@ open Yession.Domain
 open Yession.Domain.Agent
 open Yession.Domain.Tools
 open Yession.Domain.Terminals
+open Yession.Domain.Chat
 
 #if FABLE_COMPILER
 open Thoth.Json
@@ -217,24 +218,53 @@ module ToolUse =
             | Ok value -> Encode.toString 2 value
             | Error _ -> raw)
 
-/// One DRAWN row of the chat. A row is usually one item; a run of consecutive tool calls
-/// from one turn is one row holding several, so the chat costs a line per turn rather than
-/// a line per call. A burst of commands from one turn groups the same way, into a task card.
+/// One DRAWN row of the chat. A row is usually one item; a run of consecutive WORK from one
+/// turn — its tool calls, and the acts it did between them — is one row holding several, so
+/// the chat costs a line per turn rather than a line per call. A burst of commands from one
+/// turn groups the same way, into a task card.
 type TimelineRow =
     | RowItem of TimelineItem
-    | RowToolRun of AgentTurnId * TimelineItem list
+    /// A turn's work, in the order it happened: `TimelineToolUse`s of the turn and the
+    /// agent's act notes among them. Two or more, always — one item is a row of its own.
+    | RowWorkRun of AgentTurnId * TimelineItem list
     /// One agent burst: consecutive blocks the same turn started, across whichever of the
     /// agent's terminals they ran in (Plan 20, stage 4). Never one block — a card around a
     /// single chip is a disclosure over nothing — and never a human's, because grouping is
     /// for work nobody is hand-driving.
     | RowTaskCard of AgentTurnId * TimelineItem list
 
+/// A run of work, said in one line: "used 2 tools, edited 1 file, wrote 1 file".
+module WorkRun =
+
+    /// What one item counts as: a verb, and its noun once and many times over.
+    let private counted (item: TimelineItem) : (string * string * string) option =
+        match item with
+        | TimelineToolUse _ -> Some ("used", "tool", "tools")
+        | TimelineMessage { Content = ItemContent.Act act } -> Some (Act.counted act)
+        | _ -> None
+
+    /// Each kind counted, in the order it FIRST appeared — so as a turn works, a count
+    /// grows where it stands and a new kind joins at the end, and nothing on the line moves
+    /// under a reader watching it. "used 2 tools, edited 1 file" stays "used 3 tools, edited
+    /// 1 file, wrote 1 file", never "wrote 1 file, used 3 tools, …".
+    let summary (items: TimelineItem list) : string =
+        items
+        |> List.choose counted
+        |> List.fold
+            (fun (tally: ((string * string * string) * int) list) kind ->
+                if tally |> List.exists (fun (k, _) -> k = kind) then
+                    tally |> List.map (fun (k, n) -> if k = kind then k, n + 1 else k, n)
+                else tally @ [ kind, 1 ])
+            []
+        |> List.map (fun ((verb, one, many), n) -> sprintf "%s %d %s" verb n (if n = 1 then one else many))
+        |> String.concat ", "
+
 module TimelineRow =
 
     let offset =
         function
         | RowItem item -> TimelineItem.offset item
-        | RowToolRun (_, items)
+        | RowWorkRun (_, items)
         | RowTaskCard (_, items) ->
             items |> List.tryHead |> Option.map TimelineItem.offset |> Option.defaultValue EventOffset.zero
 
@@ -464,6 +494,15 @@ module TimelineProjection =
             match item with
             | TimelineToolUse (_, id) -> toolUse id proj |> Option.map (fun u -> u.AgentTurnId)
             | _ -> None
+        // An act the AGENT did carries no turn of its own, but one that lands while a turn's
+        // run is open is that turn's work — the write a `write_file` call made, the sandbox
+        // a `start_work_sandbox` started — and belongs in the run beside the call, in
+        // order. It joins a run; it never starts one, because alone it cannot say whose it
+        // is. Anything said, and anything a person did, ends the run.
+        let agentAct item =
+            match item with
+            | TimelineMessage { Content = ItemContent.Act _; Author = ActorRef.Agent } -> true
+            | _ -> false
         let burstOf item =
             match item with
             | TimelineBlock (_, _, id) -> blockTurn id proj
@@ -477,9 +516,17 @@ module TimelineProjection =
         |> List.fold
             (fun rows item ->
                 match turnOf item, burstOf item, rows with
-                | Some turn, _, RowToolRun (previous, earlier) :: rest when previous = turn ->
-                    RowToolRun (turn, earlier @ [ item ]) :: rest
-                | Some turn, _, _ -> RowToolRun (turn, [ item ]) :: rows
+                | Some turn, _, RowWorkRun (previous, earlier) :: rest when previous = turn ->
+                    RowWorkRun (turn, earlier @ [ item ]) :: rest
+                // The run forms on the SECOND item, like the card: one call from a turn is
+                // its own row, and a run around it would be a fold over a fold.
+                | Some turn, _, RowItem (TimelineToolUse _ as first) :: rest when turnOf first = Some turn ->
+                    RowWorkRun (turn, [ first; item ]) :: rest
+                | Some _, _, _ -> RowItem item :: rows
+                | None, _, RowWorkRun (turn, earlier) :: rest when agentAct item ->
+                    RowWorkRun (turn, earlier @ [ item ]) :: rest
+                | None, _, RowItem (TimelineToolUse _ as first) :: rest when agentAct item ->
+                    RowWorkRun ((turnOf first).Value, [ first; item ]) :: rest
                 | _, Some turn, RowTaskCard (previous, earlier) :: rest when previous = turn ->
                     RowTaskCard (turn, earlier @ [ item ]) :: rest
                 // The card forms on the SECOND command, not the first: one command from a

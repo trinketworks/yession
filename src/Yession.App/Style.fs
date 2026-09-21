@@ -1603,8 +1603,10 @@ module Style =
     /// went, and everything else is under it. The act's rhythm (`-my-1.5 py-2`), so the
     /// arrow `fold` places at `top-2` lands on the line.
     let chatToolItem = "relative -my-1.5 py-2 pl-[32px] max-md:pl-12 flex flex-col gap-0.5"
-    /// The call's line: tool, then outcome.
-    let chatToolCall = "flex items-center gap-2 text-ink-dim"
+    /// The call's line: tool, then outcome. On the BASELINE, like a block chip's line: a
+    /// prose "used" and a mono name have different line boxes, and centring them set the
+    /// name a couple of pixels above the word beside it.
+    let chatToolCall = "flex items-baseline gap-2 text-ink-dim"
     /// `namespace/name` — mono, because it is an identifier and reads as one.
     let chatToolName = "font-terminal text-code-sm text-ink-dim truncate min-w-0 flex-1"
 
