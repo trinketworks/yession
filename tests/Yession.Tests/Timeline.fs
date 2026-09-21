@@ -1187,8 +1187,8 @@ let private toolTests =
         // answer takes — not on the line beside the name, truncated. A two-hundred-character
         // `old_string` on the line was a row that said nothing; under it, opened on tap, it is
         // the edit a reader can check. What is pinned is the split: the input is its own
-        // element, and the line does not carry it.
-        testCase "a call's input is under its line, as its own element, not on it" <| fun () ->
+        // element in the call's fold, and the line does not carry it.
+        testCase "a call's input is in its fold, as its own element, not on its line" <| fun () ->
             let args = """{"path":"src/A.fs","old_string":"let x = 1"}"""
             let events =
                 [ at 1L 0.0 (SessionEvent.ToolUseStarted { ToolUseId = toolUse "1"; AgentTurnId = turn "a"; Namespace = "yession"; Name = "edit_file"; Arguments = Some args })
@@ -1196,16 +1196,50 @@ let private toolTests =
             let html = Support.render (clientOf events)
             let callAt = html.IndexOf (Dom.attr Dom.Hooks.chatTool "t-1")
             Expect.isTrue (callAt >= 0) "the call is drawn"
-            let summaryEnd = html.IndexOf ("</summary>", callAt)
-            let line = html.Substring (callAt, summaryEnd - callAt)
-            Expect.isFalse (line.Contains "old_string") "the line carries the tool and its outcome, not its arguments"
-            let inputAt = html.IndexOf ("data-chat-tool-input=\"t-1\"", callAt)
-            Expect.isTrue (inputAt > summaryEnd) "the input is its own element, under the line"
+            let bodyAt = html.IndexOf (Dom.attr "data-fold-body" "call-t-1", callAt)
+            Expect.isTrue (bodyAt > callAt) "the call has a fold of its own"
+            let line = html.Substring (callAt, bodyAt - callAt)
+            Expect.isTrue (line.Contains "edit_file") "the line names the tool"
+            Expect.isFalse (line.Contains "old_string") "and carries its outcome, not its arguments"
+            let inputAt = html.IndexOf ("data-chat-tool-input=\"t-1\"", bodyAt)
+            Expect.isTrue (inputAt > bodyAt) "the input is its own element, in the fold"
             let input = html.Substring (inputAt, html.IndexOf ("</pre>", inputAt) - inputAt)
             Expect.isTrue (input.Contains "old_string") "carrying what the call was given"
             Expect.isTrue (input.Contains "\n") "laid out a field per line, not as one row of JSON"
             let outputAt = html.IndexOf ("data-chat-tool-result=\"t-1\"", inputAt)
             Expect.isTrue (outputAt > inputAt) "and the answer follows it, in the same place"
+
+        // A run is a fold like an act's — the same control, the same state — and each run is
+        // its OWN: a turn that spoke between two runs of calls has two rows, and opening one
+        // must not open the other. Keyed by the run's first call for exactly that reason.
+        testCase "two runs of one turn fold independently" <| fun () ->
+            let events =
+                [ at 1L 0.0 (used "1" "a" "read_file")
+                  at 2L 1.0 (used "2" "a" "read_file")
+                  at 3L 2.0 (sent "1" "reading…")
+                  at 4L 3.0 (used "3" "a" "edit_file")
+                  at 5L 4.0 (used "4" "a" "read_file") ]
+            let shut = clientOf events
+            let html = Support.render shut
+            Expect.isTrue (html.Contains (Dom.attr "data-fold-body" "run-t-1")) "the first run has a fold"
+            Expect.isTrue (html.Contains (Dom.attr "data-fold-body" "run-t-3")) "and the second its own"
+            Expect.isFalse (html.Contains (Dom.attr "data-fold-open" "yes")) "both folded to their line"
+            let opened = Support.render (ClientModel.update (ToggleFoldMsg (FoldKey.ToolRun (toolUse "3"))) shut)
+            let at (key: string) = opened.IndexOf (Dom.attr "data-fold-body" key)
+            let openState (key: string) =
+                let from = at key
+                opened.Substring (from, opened.IndexOf (">", from) - from)
+            Expect.isTrue ((openState "run-t-3").Contains "data-fold-open=\"yes\"") "the one pressed unfolds"
+            Expect.isTrue ((openState "run-t-1").Contains "data-fold-open=\"no\"") "the other stays folded"
+
+        // The aggregate is for aggregates. A run of ONE call is that call on the rail — its
+        // own fold opening straight onto input and output — not a fold over a fold that took
+        // two presses to reach one thing.
+        testCase "a run of one call is the call, with no aggregate around it" <| fun () ->
+            let events = [ at 1L 0.0 (used "1" "a" "read_file") ]
+            let html = Support.render (clientOf events)
+            Expect.isTrue (html.Contains (Dom.attr "data-fold-body" "call-t-1")) "the call has its fold"
+            Expect.isFalse (html.Contains "data-fold-body=\"run-") "and nothing folds around it"
 
         testCase "arguments are laid out for reading, and the record is untouched" <| fun () ->
             let use' : ToolUse =

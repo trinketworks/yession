@@ -1578,16 +1578,16 @@ let editorTests =
         editorCase "a fold's arrow is centred in the act's gutter and on its title line" <| fun page ->
             async {
                 do! awaitU (page.EvaluateAsync "() => window.__acts()")
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-act-note] [data-act-fold]")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-act-note] [data-fold]")
                 let! off =
                     await (page.EvaluateAsync<float[]> """() => {
                         const note = document.querySelector('#shell [data-act-note]')
-                        const arrow = note.querySelector('[data-act-fold] svg').getBoundingClientRect()
+                        const arrow = note.querySelector('[data-fold] svg').getBoundingClientRect()
                         const box = note.getBoundingClientRect()
                         const gutter = parseFloat(getComputedStyle(note).paddingLeft)
                         // The title's FIRST line box, not its whole box: a title that wraps
                         // is two lines tall, and the arrow belongs on the first.
-                        const line = note.querySelector('[data-act-fold] ~ span').getClientRects()[0]
+                        const line = note.querySelector('[data-fold] ~ span').getClientRects()[0]
                         return [ (arrow.left + arrow.width / 2) - (box.left + gutter / 2),
                                  (arrow.top + arrow.height / 2) - (line.top + line.height / 2) ]
                     }""")
@@ -1602,15 +1602,15 @@ let editorTests =
         editorCase "unfolding an act shows its particulars, and folding hides them" <| fun page ->
             async {
                 do! awaitU (page.EvaluateAsync "() => window.__acts()")
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-act-note] [data-act-fold]")
-                let visibility = "getComputedStyle(document.querySelector('#shell [data-act-note] [data-act-facts]')).visibility"
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-act-note] [data-fold]")
+                let visibility = "getComputedStyle(document.querySelector('#shell [data-act-note] [data-fold-body]')).visibility"
                 do! waitFor "the particulars to start hidden" page (visibility + " === 'hidden'")
-                do! awaitU (page.ClickAsync "#shell [data-act-note] [data-act-fold]")
+                do! awaitU (page.ClickAsync "#shell [data-act-note] [data-fold]")
                 do! waitFor "the particulars to show once unfolded" page (visibility + " === 'visible'")
                 let! shown =
                     await (page.EvaluateAsync<float> "() => document.querySelector('#shell [data-act-note] [data-act-said]').getBoundingClientRect().height")
                 Expect.isTrue (shown > 0.0) "and what the agent was told has height on the page"
-                do! awaitU (page.ClickAsync "#shell [data-act-note] [data-act-fold]")
+                do! awaitU (page.ClickAsync "#shell [data-act-note] [data-fold]")
                 do! waitFor "the particulars to hide once folded" page (visibility + " === 'hidden'")
             }
 

@@ -193,7 +193,7 @@ let private representativeModel : ClientModel =
       Pane = None
       TerminalsOpen = true
       ItemMenu = None
-      OpenActs = Set.empty
+      OpenFolds = Set.empty
       Copied = None
       // The pane shows a TAB by default; the list is what the cases below turn on.
       Claude =
@@ -1271,16 +1271,16 @@ let private uiChecklistTests =
                 { representativeModel with
                     Conversation = { representativeModel.Conversation with Items = [ note ] } }
             let control (html: string) =
-                let at = html.IndexOf (Dom.attr "data-act-fold" "msg-fold-note")
+                let at = html.IndexOf (Dom.attr "data-fold" "act-msg-fold-note")
                 Expect.isTrue (at >= 0) "the act offers a fold"
                 let opened = html.LastIndexOf ("<button", at)
                 html.Substring (opened, html.IndexOf (">", at) - opened)
             let shut = Support.render folded
             Expect.isTrue ((control shut).Contains "aria-expanded=\"false\"") "folded by default, and the control says so"
-            Expect.isTrue (shut.Contains (Dom.attr "data-act-facts-open" "no")) "and the particulars agree"
-            let open' = Support.render (ClientModel.update (ToggleActMsg note.MessageId) folded)
+            Expect.isTrue (shut.Contains (Dom.attr "data-fold-open" "no")) "and the particulars agree"
+            let open' = Support.render (ClientModel.update (ToggleFoldMsg (FoldKey.Act note.MessageId)) folded)
             Expect.isTrue ((control open').Contains "aria-expanded=\"true\"") "one press unfolds it, and the control says so"
-            Expect.isTrue (open'.Contains (Dom.attr "data-act-facts-open" "yes")) "and the particulars agree"
+            Expect.isTrue (open'.Contains (Dom.attr "data-fold-open" "yes")) "and the particulars agree"
 
         // An act still in flight is not one to unfold — its account is about to change under
         // the reader, and the gutter is where its pulse sits — so it offers no fold until it
@@ -1304,7 +1304,7 @@ let private uiChecklistTests =
                 Support.render
                     { representativeModel with
                         Conversation = { representativeModel.Conversation with Items = [ running ] } }
-            Expect.isFalse (html.Contains (Dom.attr "data-act-fold" "msg-running")) "no fold while it runs"
+            Expect.isFalse (html.Contains (Dom.attr "data-fold" "act-msg-running")) "no fold while it runs"
             Expect.isTrue (html.Contains "data-act-status=\"running\"") "the pulse has the gutter"
 
         // A connection a sandbox forwards is drawn as the connection — the same reference

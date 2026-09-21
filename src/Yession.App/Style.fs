@@ -1579,45 +1579,39 @@ module Style =
     /// reason is the one thing here a reader must not lose the end of.
     let turnStopText = "font-light text-small text-ink-dim min-w-0"
 
-    /// A turn's tool calls (Plan 16): a `<details>` on the same content column as the chips,
-    /// so a chatty turn reads as one quiet line until somebody wants the detail. A NAMED
-    /// group (`group/run`), because each call inside it is a disclosure of its own with a
-    /// mark of its own, and an unnamed `group-open:` on the inner mark would turn it the
-    /// moment the run opened — before its own call had.
-    let chatToolRun = cls [ "group/run w-full pl-[32px] py-0.5"; readingColumn ]
-    /// Its summary. A real `<summary>` rather than a button, so the disclosure is the
-    /// browser's and arrives keyboard-operable and correctly announced.
-    let chatToolSummary =
-        cls [ "flex items-center gap-2 cursor-pointer list-none"
-              "text-ink-dim hover:text-ink transition-colors duration-150 ease-out"
-              focusRing ]
-    /// The run's mark: two chevrons when the run holds several calls, one when it holds one
-    /// — so the line says there are SEVERAL acts folded here, not merely that it opens. Turns
-    /// to point down while the run is open.
-    let chatToolRunMark =
-        "shrink-0 text-ink-faint transition-transform duration-150 ease-out motion-reduce:transition-none "
-        + "group-open/run:rotate-90"
+    /// A turn's tool calls (Plan 16): the same ground, column and gutter an act note has
+    /// (`actNote`), because it IS the same thing on the timeline — one line with a fold on
+    /// the gutter — and the two used to sit on different rails, the run a gutter further in
+    /// than the act above it. `itemGround` gives it the act's rhythm and the phone's full
+    /// bleed; the gutter is where `fold` puts the arrow.
+    let chatToolRun =
+        cls [ itemGround; readingColumn; "pl-[32px] max-md:pl-12"; "flex flex-col gap-0.5" ]
+    /// "used n tools" — the chip voice, on its line; also the "used" before a lone call's
+    /// name.
+    let chatToolRunText = "font-light text-small text-ink-dim truncate min-w-0"
+    /// The calls, unfolding beneath the run's line. Steps back out of the run's gutter
+    /// (`-ml-[32px]`) so the calls can lay their own and put their arrows on the SAME rail
+    /// — here, on the clipping box itself, because an unfolding body clips (`overflow-hidden`
+    /// is what makes the grow animate) and a call that stepped out on its own would have its
+    /// arrow cut off.
+    let chatToolRunInner = cls [ Motion.unfoldInner; "flex flex-col pt-1 -ml-[32px] max-md:-ml-12" ]
 
-    /// One call inside an expanded run: its own `<details>`, so its input and output are a
-    /// tap away rather than crammed onto the line — the line is the tool and how it went,
-    /// and everything else is under it.
-    let chatToolItem = "group/call w-full"
-    /// The call's summary line: mark, tool, outcome.
-    let chatToolCall =
-        cls [ "flex items-center gap-2 py-0.5 cursor-pointer list-none"
-              "hover:text-ink transition-colors duration-150 ease-out"
-              focusRing ]
-    /// One chevron: this disclosure is over one thing. Turns with its own call only.
-    let chatToolCallMark =
-        "shrink-0 text-ink-faint transition-transform duration-150 ease-out motion-reduce:transition-none "
-        + "group-open/call:rotate-90"
+    /// One call inside an unfolded run: a fold of its own on the SAME rail as the run — the
+    /// run's body has stepped back out of the gutter, and this lays its own, so its arrow
+    /// sits where every other arrow does and its line where the run's does. Its input and output
+    /// are a tap away rather than crammed onto the line — the line is the tool and how it
+    /// went, and everything else is under it. The act's rhythm (`-my-1.5 py-2`), so the
+    /// arrow `fold` places at `top-2` lands on the line.
+    let chatToolItem = "relative -my-1.5 py-2 pl-[32px] max-md:pl-12 flex flex-col gap-0.5"
+    /// The call's line: tool, then outcome.
+    let chatToolCall = "flex items-center gap-2 text-ink-dim"
     /// `namespace/name` — mono, because it is an identifier and reads as one.
     let chatToolName = "font-terminal text-code-sm text-ink-dim truncate min-w-0 flex-1"
 
-    /// What the call was given and what it answered, under its line and indented past the
-    /// mark: two labelled blocks in the same shape, because they are the same kind of thing —
-    /// text that crossed the tool boundary, one way and then the other.
-    let chatToolIo = "flex flex-col gap-1.5 pl-[22px] pb-1.5"
+    /// What the call was given and what it answered, unfolding under its line: two labelled
+    /// blocks in the same shape, because they are the same kind of thing — text that crossed
+    /// the tool boundary, one way and then the other.
+    let chatToolIo = cls [ Motion.unfoldInner; "flex flex-col gap-1.5 pt-1 pb-1.5" ]
     /// "input" / "output" — the same faint label the rest of these chips use.
     let chatToolIoLabel = label
     /// The text itself: mono, wrapped, dim, and bounded — a preview that scrolls rather than
@@ -1811,19 +1805,22 @@ module Style =
     /// and a name; faint at rest, because a column of acts should read as its titles, and
     /// brighter under the pointer or the keyboard, since it is the only way in. The chevron
     /// points ON at rest and turns DOWN when the particulars are open, at the page's one pace.
-    let actNoteFold =
+    ///
+    /// THE fold, not the act's: a tool run and each call in it wear the same control on the
+    /// same gutter (`View.foldArrow`), which is what makes the timeline's disclosures one
+    /// thing a reader learns once.
+    let fold =
         cls [ "absolute left-0 top-2 h-5 w-8 max-md:w-12"
               "flex items-center justify-center cursor-pointer bg-transparent border-0 p-0"
               "text-ink-faint hover:text-ink transition-colors"; focusRing ]
-    let actNoteFoldMark = cls [ "block"; Motion.turn ]
-    let actNoteFoldMarkOpen = cls [ actNoteFoldMark; Motion.turned ]
+    let foldMark = cls [ "block"; Motion.turn ]
+    let foldMarkOpen = cls [ foldMark; Motion.turned ]
+    let foldBodyOpen = cls [ Motion.unfold; Motion.unfolded ]
+    let foldBodyShut = cls [ Motion.unfold; Motion.folded ]
     /// The particulars, unfolding beneath the title: grown, slid and faded in as one, at the
     /// page's pace, and folded back the same way. Inside, the rows the act lays out and —
     /// last — what the agent was told, in the detail voice, so a reference in it is drawn as
     /// it is drawn above.
-    let actNoteFoldBody = Motion.unfold
-    let actNoteFoldBodyOpen = cls [ Motion.unfold; Motion.unfolded ]
-    let actNoteFoldBodyShut = cls [ Motion.unfold; Motion.folded ]
     let actNoteFoldInner = cls [ Motion.unfoldInner; "flex flex-col gap-1 pt-1" ]
     /// The sentence the agent was told, QUOTED: typographic marks either side, drawn by the
     /// stylesheet rather than written into the row, so what the element SAYS stays exactly
