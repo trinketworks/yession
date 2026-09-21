@@ -47,10 +47,20 @@ let private repoRoot () : string option =
 /// different things to say about a gate, and the whole subject here is what the gate demands.
 /// `Needs` does not need the same care: a job that waits for nothing genuinely waits for an
 /// empty list of jobs, and nothing is lost by writing it as one.
+/// `Serialised` is the job's own `concurrency`, and an `option` for the same reason `Condition`
+/// is: a job with no group and a job with one are different things to say about a release.
 [<RequireQualifiedAccess>]
 type private Job =
     { Needs : string list
-      Condition : string option }
+      Condition : string option
+      Serialised : Concurrency option }
+
+/// A job's `concurrency`. The shorthand form is a bare group name, which means the default
+/// `cancel-in-progress: false` — so both spellings decode to the same answer and a reader here
+/// never has to know which was written.
+and [<RequireQualifiedAccess>] private Concurrency =
+    { Group : string
+      CancelInProgress : bool }
 
 /// `needs:` is one job or a list of them, and the file writes it both ways.
 let private needs : Decoder<string list> =
@@ -58,10 +68,19 @@ let private needs : Decoder<string list> =
         [ Decode.string |> Decode.map List.singleton
           Decode.list Decode.string ]
 
+let private concurrency : Decoder<Concurrency> =
+    Decode.oneOf
+        [ Decode.string |> Decode.map (fun group -> { Concurrency.Group = group; CancelInProgress = false })
+          Decode.object (fun get ->
+            { Concurrency.Group = get.Required.Field "group" Decode.string
+              CancelInProgress =
+                get.Optional.Field "cancel-in-progress" Decode.bool |> Option.defaultValue false }) ]
+
 let private job : Decoder<Job> =
     Decode.object (fun get ->
         { Job.Needs = get.Optional.Field "needs" needs |> Option.defaultValue []
-          Condition = get.Optional.Field "if" Decode.string })
+          Condition = get.Optional.Field "if" Decode.string
+          Serialised = get.Optional.Field "concurrency" concurrency })
 
 let private jobs : Decoder<(string * Job) list> =
     Decode.object (fun get ->
@@ -80,6 +99,12 @@ let private releaseJobs () : (string * Job) list =
     match repoRoot () |> Option.bind (fun root -> try Some (TestFiles.read (root + "/.github/workflows/release.yml")) with _ -> None) with
     | Some text -> jobsIn text
     | None -> []
+
+/// The job that publishes, which is the subject of half the rules below. A file this cannot read
+/// answers `None` here exactly as it answers an empty list above, so the population case is what
+/// speaks for both and no rule has to say it twice.
+let private releaseJob () : Job option =
+    releaseJobs () |> List.tryFind (fun (id, _) -> id = "release") |> Option.map snd
 
 /// The packaging channels, derived from the file rather than listed here: a channel added
 /// tomorrow is one this rule already covers, which a hand-kept list would not be.
@@ -134,4 +159,36 @@ let tests =
                             (match release.Condition with
                              | Some written -> written
                              | None -> "it carries no condition at all"))
+
+        // A version is claimed by exactly one commit, and creating the tag is the one step of a
+        // release that two runs can race. The workflow used to serialise ENTIRELY — half an hour of
+        // gate and packaging per push — on a rationale that turned out to describe a different bug
+        // (`target_commitish`, #138, landing three pull requests after the lock). Taking that off
+        // is only safe while the thing it was reaching for stays covered, so these two are what
+        // keep it covered.
+        //
+        // Read off the JOB rather than the workflow deliberately. A group at the top would satisfy
+        // a rule that only asked "is anything serialised?" while costing what the old one cost, and
+        // the whole finding was that those are different things.
+        testCase "the job that publishes a release is serialised" <| fun () ->
+            match releaseJob () with
+            | None -> ()   // the population case above is what says this
+            | Some release ->
+                Expect.isSome
+                    release.Serialised
+                    "the release job declares no `concurrency` group, so two overlapping runs can reach the tag cut at once. A version is claimed by one commit, and the steps that refuse an empty or an already-taken version are the second line of that, not the first."
+
+        // Its own case, because its red means something entirely different from the one above: not
+        // "two runs can tag at once" but "a run that has already built and packaged a commit can be
+        // killed on the doorstep", which leaves that commit released by nothing at all. Cancelling
+        // is the one thing the original lock was right to refuse.
+        testCase "a release in flight is never cancelled by the next one" <| fun () ->
+            match releaseJob () |> Option.bind (fun release -> release.Serialised) with
+            | None -> ()   // the case above is what says this
+            | Some serialised ->
+                Expect.isFalse
+                    serialised.CancelInProgress
+                    (sprintf
+                        "the release job's concurrency group `%s` cancels in progress, so a run that has already built and packaged a commit can be killed before it publishes it"
+                        serialised.Group)
     ]
