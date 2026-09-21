@@ -667,6 +667,9 @@ module Dom =
         let running = "running"
         let failed = "failed"
         let interrupted = "interrupted"
+        /// The screen-reader name of a turn stop's mark (`View.stoppedItem`): the word the
+        /// stop glyph says to anyone who cannot see it.
+        let turnStopped = "stopped"
         // A sandbox-start act note's fact labels (`View.sandboxStartFacts`). One quiet word
         // each: the screen labels the parts the sentence would have chained into prose.
         let sandboxFactFor = "for"

@@ -962,7 +962,13 @@ module ClientModel =
     /// `Launch.offered`'s own doc for why these two and nothing wider.
     let private launchBegun (model: ClientModel) : bool =
         not (List.isEmpty model.Repos.Repos)
-        || model.Conversation.Items |> List.exists (fun item -> match item.Content with ItemContent.Message _ -> true | ItemContent.Act _ -> false)
+        || model.Conversation.Items
+           |> List.exists (fun item ->
+               match item.Content with
+               | ItemContent.Message _ -> true
+               // A stop is a turn's, and a turn follows a message: never the first thing.
+               | ItemContent.Act _
+               | ItemContent.Stopped _ -> false)
 
     /// Whether the launch surface stands at the head of the timeline. Reads the anchor
     /// `reconcileLaunch` keeps decided, not the live connection - `Launch.offered`'s doc,

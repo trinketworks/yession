@@ -1520,6 +1520,20 @@ module Style =
     /// A stretch item's sentence — prose, not mono: nothing was typed that we recorded.
     let chatChipText = "font-light text-small text-ink-dim truncate min-w-0 flex-1"
 
+    /// Where a turn stopped, and why: a SIGNPOST, not a message. It stands on the chip
+    /// column — the same rail the `$` chips and the tool runs stand on — with the mark in
+    /// the slot the prompt glyph takes, because it is one more line in the record of what
+    /// the turn did, and the last. Drawn as prose it was read as the agent's closing
+    /// sentence; the mark is what says "this is the machine's account".
+    let turnStop = cls [ "w-full"; readingColumn; "flex items-baseline gap-2 pl-[32px] py-0.5" ]
+    /// The mark: a stop, in the error colour a failed chip's status wears. Colour is what
+    /// carries the state in this set; the screen-reader word beside it carries it for
+    /// anything that cannot see colour.
+    let turnStopMark = "shrink-0 text-err"
+    /// The reason, in the quiet small voice — and WRAPPING, unlike a chip's one line: a
+    /// reason is the one thing here a reader must not lose the end of.
+    let turnStopText = "font-light text-small text-ink-dim min-w-0"
+
     /// A turn's tool calls (Plan 16): a `<details>` on the same content column as the chips,
     /// so a chatty turn reads as one quiet line until somebody wants the detail.
     let chatToolRun = cls [ "w-full pl-[32px] py-0.5"; readingColumn ]

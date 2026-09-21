@@ -586,7 +586,8 @@ let startFull
                                     item.Author <> ActorRef.Agent
                                     && (match item.Content with
                                         | Yession.Domain.Chat.ItemContent.Act _ -> true
-                                        | Yession.Domain.Chat.ItemContent.Message _ -> false))
+                                        | Yession.Domain.Chat.ItemContent.Message _
+                                        | Yession.Domain.Chat.ItemContent.Stopped _ -> false))
                                 |> List.map Yession.Domain.Chat.ConversationItem.said
                     } }
 

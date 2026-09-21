@@ -896,6 +896,15 @@ let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
                     Content = ItemContent.Message (wideBody)
                     Status = Complete
                     Offset = offset 3L
+                    Woke = None; Replying = None }
+                  // Where that turn stopped, and why — AFTER the burst of commands it ran
+                  // (offsets 3–5), which is where a turn stops: the signpost's whole point is
+                  // that it stands at the end of the work and not under the words.
+                  { MessageId = MessageId.create "msg-stopped" |> expect
+                    Author = ActorRef.Agent
+                    Content = ItemContent.Stopped "the session was restarted while this turn was running"
+                    Status = ConversationItemStatus.Failed
+                    Offset = offset 6L
                     Woke = None; Replying = None } ]
                 @ filler
                 // A detached reply at the BOTTOM whose source is the very first message — the
