@@ -1,5 +1,6 @@
 namespace Yession.App
 
+open Yession.Domain.Access
 open Yession.Domain
 open Yession.Domain.Sandboxes
 open Yession.Domain.Agent
@@ -92,17 +93,6 @@ type ClaudeFlowState =
     /// so a pasted-code completion targets the same credential slot.
     | ClaudeAwaitingCode of authorizeUrl: string * scope: string
 
-/// One connected credential as a panel row reads it.
-///
-/// `SignInRequired` carries the REASON rather than a flag, because a row that says only
-/// "broken" sends somebody to guess. "the refresh token has expired" and "github rejected
-/// this credential" lead a person to the same button but tell them different things about
-/// why they are pressing it. `None` means nothing has established otherwise — not a promise
-/// that it works, which is a thing no side of this can honestly make about a static token.
-type ConnectionView =
-    { Kind : string
-      SignInRequired : string option }
-
 /// What the status query must SHOW for a connection command to have landed.
 ///
 /// Data rather than a predicate: it lives in the model, so the model stays comparable and a
@@ -123,46 +113,15 @@ module ConnectionExpectation =
     /// same default the command was sent under.
     let landed
         (expect: ConnectionExpectation)
-        (sessionCredential: ConnectionView option)
-        (mineCredential: ConnectionView option)
+        (sessionCredential: CredentialRow option)
+        (mineCredential: CredentialRow option)
         : bool =
         let credential = if expect.Scope = "session" then sessionCredential else mineCredential
         credential.IsSome = expect.Connected
 
-/// What the picker knows about the models it can offer. Three states and no fourth,
-/// because a picker has exactly three honest things to say: I have not looked yet, here is
-/// the list, or here is why there is no list. A single `AgentModel list` could not tell the
-/// first from a provider that genuinely offers nothing, and the difference is what decides
-/// whether a person waits or goes and connects an account.
-type ModelCatalogueState =
-    /// Nothing has been asked for yet, or an answer is in flight.
-    | ModelsUnknown
-    | ModelsLoaded of AgentModel list
-    /// The lookup answered, and what it said was why it could not.
-    | ModelsUnavailable of reason: string
-
-/// What the /claude status probe reported, per sign-in scope, when connected.
-type ClaudeStatus =
-    { SessionCredential : ConnectionView option
-      MineCredential : ConnectionView option
-      /// Who the "all my sessions" scope would belong to here: `"user"` (this signed-in
-      /// human alone) or `"local"` (the whole deployment — everyone who can reach this
-      /// Manager, under `--auth localhost`). The panel must not promise "mine" for a
-      /// credential everybody shares. `None` until the first probe answers.
-      Owner : string option
-      /// Whether THIS session currently has an agent at all (any connected credential
-      /// or the host's ambient one). `None` until the first probe answers — the
-      /// "no agent" prompt must never flash before the client actually knows.
-      AgentAvailable : bool option
-      /// What the picker has to choose from — IN the status, because it is a fact about
-      /// this credential and not a fact beside it. The session answers both on one reply
-      /// for that reason; holding them apart in the model left the two able to disagree by
-      /// exactly the route the reply had closed, and left the rule that keeps them
-      /// agreeing ("say nothing rather than blank it") at a caller who had to remember it.
-      /// It is `keeping`'s now, below.
-      Models : ModelCatalogueState }
-
-module ClaudeStatus =
+/// The Claude panel's client-side rules, beside the state they govern. The panel itself is
+/// `Yession.Domain.Access.ClaudePanel` — one shape the session encodes and this reads.
+module ClaudePanel =
 
     /// A status as it should be FOLDED over the one this client already had.
     ///
@@ -170,18 +129,18 @@ module ClaudeStatus =
     /// flight — must not blank a picker that has a list. Everything else is replaced: the
     /// arriving status IS the answer, and a row it stopped naming is a credential that is
     /// gone.
-    let keeping (known: ClaudeStatus) (arrived: ClaudeStatus) : ClaudeStatus =
+    let keeping (known: ClaudePanel) (arrived: ClaudePanel) : ClaudePanel =
         match arrived.Models with
         | ModelsUnknown -> { arrived with Models = known.Models }
         | _ -> arrived
 
     /// This panel's wait rule, beside the status it reads, so no caller composes it.
-    let landed (expect: ConnectionExpectation) (status: ClaudeStatus) : bool =
-        ConnectionExpectation.landed expect status.SessionCredential status.MineCredential
+    let landed (expect: ConnectionExpectation) (panel: ClaudePanel) : bool =
+        ConnectionExpectation.landed expect panel.SessionCredential panel.MineCredential
 
 [<RequireQualifiedAccess>]
 type ClaudeViewState =
-    { Status : ClaudeStatus
+    { Status : ClaudePanel
       Flow : ClaudeFlowState
       /// A command of ours on its way into `Status`, modelled rather than assumed.
       Pending : Pending<ConnectionExpectation> }
@@ -213,23 +172,19 @@ module GitHubFlow =
     /// than throwing away a code the human may already have approved.
     let ended (status: int) : bool = status >= 400 && status < 500
 
-/// What the /github status probe reported, per sign-in scope, when connected.
-type GitHubStatus =
-    { SessionCredential : ConnectionView option
-      MineCredential : ConnectionView option }
+/// The GitHub panel's client-side rule, for Claude's reason.
+module GitHubPanel =
+
+    /// This panel's wait rule, beside the status it reads, so no caller composes it.
+    let landed (expect: ConnectionExpectation) (panel: GitHubPanel) : bool =
+        ConnectionExpectation.landed expect panel.SessionCredential panel.MineCredential
 
 [<RequireQualifiedAccess>]
 type GitHubViewState =
-    { Status : GitHubStatus
+    { Status : GitHubPanel
       Flow : GitHubFlowState
       /// A command of ours on its way into `Status`, modelled rather than assumed.
       Pending : Pending<ConnectionExpectation> }
-
-module GitHubStatus =
-
-    /// This panel's wait rule, beside the status it reads, so no caller composes it.
-    let landed (expect: ConnectionExpectation) (status: GitHubStatus) : bool =
-        ConnectionExpectation.landed expect status.SessionCredential status.MineCredential
 
 /// The generated read surface's state (Plan 15), folded from the `/queries` stream.
 ///
@@ -765,14 +720,14 @@ type ClientMsg =
     /// becomes an event.
     | DeleteQueuedMsg of QueueId
     /// A fresh /claude status probe result (Plan 08).
-    | ClaudeStatusMsg of ClaudeStatus
+    | ClaudeStatusMsg of ClaudePanel
     /// The Claude sign-in flow moved (the authorize tab opened, or the person cancelled).
     | ClaudeFlowMsg of ClaudeFlowState
     /// A Claude connection command moved (sent, accepted and now awaiting the status that
     /// will show it, or refused).
     | ClaudePendingMsg of Pending<ConnectionExpectation>
     /// A fresh /github status probe result (Plan 14).
-    | GitHubStatusMsg of GitHubStatus
+    | GitHubStatusMsg of GitHubPanel
     /// The GitHub sign-in flow moved (the code came up, or the person cancelled).
     | GitHubFlowMsg of GitHubFlowState
     /// A GitHub connection command moved, exactly as Claude's does.
@@ -956,7 +911,7 @@ module ClientModel =
               Flow = ClaudeIdle
               Pending = Pending.Ready }
           GitHub =
-            { Status = { SessionCredential = None; MineCredential = None }
+            { Status = { SessionCredential = None; MineCredential = None; Owner = None }
               Flow = GitHubIdle
               Pending = Pending.Ready }
           Queries = { Declared = []; Values = Map.empty } }
@@ -1492,7 +1447,7 @@ module ClientModel =
     /// wrong. The view stays a total function of the model, and the cheap tier can ask this
     /// question without rendering anything.
     let signInRequired (model: ClientModel) : (string * string) list =
-        let needing (provider: string) (credential: ConnectionView option) =
+        let needing (provider: string) (credential: CredentialRow option) =
             match credential with
             | Some view -> view.SignInRequired |> Option.map (fun reason -> provider, reason)
             | None -> None
@@ -1930,12 +1885,12 @@ module ClientModel =
             // `keeping` rather than the status bare: a reply that says nothing about models
             // must not blank a picker that has a list, and that rule lives with the status
             // so no caller can forget it (it used to be a `match` at the one dispatch site).
-            let status = ClaudeStatus.keeping model.Claude.Status status
+            let status = ClaudePanel.keeping model.Claude.Status status
             { model with
                 Claude =
                   { Status = status
                     Flow = flow
-                    Pending = model.Claude.Pending |> Pending.observed ClaudeStatus.landed status } }
+                    Pending = model.Claude.Pending |> Pending.observed ClaudePanel.landed status } }
         | ClaudeFlowMsg flow ->
             { model with Claude = { model.Claude with Flow = flow } }
         | ClaudePendingMsg pending ->
@@ -1951,7 +1906,7 @@ module ClientModel =
                 GitHub =
                   { Status = status
                     Flow = flow
-                    Pending = model.GitHub.Pending |> Pending.observed GitHubStatus.landed status } }
+                    Pending = model.GitHub.Pending |> Pending.observed GitHubPanel.landed status } }
         | GitHubFlowMsg flow ->
             { model with GitHub = { model.GitHub with Flow = flow } }
         | GitHubPendingMsg pending ->

@@ -14,6 +14,7 @@ module Yession.Tests.Acceptance
 open System
 open Fable.Pyxpecto
 open Yession.Domain
+open Yession.Domain.Access
 open Yession.Domain.Sandboxes
 open Yession.Domain.Agent
 open Yession.Domain.Link
@@ -206,7 +207,7 @@ let private representativeModel : ClientModel =
           Flow = ClaudeIdle
           Pending = Pending.Ready }
       GitHub =
-        { Status = { SessionCredential = None; MineCredential = None }
+        { Status = { SessionCredential = None; MineCredential = None; Owner = None }
           Flow = GitHubIdle
           Pending = Pending.Ready }
       // The generated read surface (Plan 15), with all three shapes declared at once, so
@@ -599,7 +600,7 @@ let private uiChecklistTests =
 
         /// The representative client, with one connection needing a sign-in.
         let private' (provider: string) (reason: string) =
-            let needing = Some { Kind = "static"; SignInRequired = Some reason }
+            let needing = Some { Kind = StaticConnection; SignInRequired = Some reason }
             match provider with
             | "claude" ->
                 { representativeModel with
@@ -617,7 +618,7 @@ let private uiChecklistTests =
         // anything is wrong. Ordered, not a map's iteration: what the prompt names first
         // must not change between renders of an unchanged model.
         testCase "what needs signing in is derived once, in a settled order" <| fun () ->
-            let needing reason = Some { Kind = "static"; SignInRequired = Some reason }
+            let needing reason = Some { Kind = StaticConnection; SignInRequired = Some reason }
             let both =
                 { representativeModel with
                     Claude =
@@ -650,7 +651,7 @@ let private uiChecklistTests =
                         { representativeModel.GitHub with
                             Status =
                                 { representativeModel.GitHub.Status with
-                                    MineCredential = Some { Kind = "oauth"; SignInRequired = None } } } }
+                                    MineCredential = Some { Kind = OAuthConnection; SignInRequired = None } } } }
             let html = Support.render healthy
             Expect.isTrue (html.Contains "data-github-connected=\"mine\"") "it is still shown as connected"
             Expect.isFalse (html.Contains Dom.Hooks.githubSignInRequired) "and nothing asks for a sign-in"
@@ -737,7 +738,7 @@ let private uiChecklistTests =
 
         // Two dead credentials are still one instruction, and the panel it opens shows both.
         testCase "two credentials needing a sign-in are still one prompt" <| fun () ->
-            let needing reason = Some { Kind = "static"; SignInRequired = Some reason }
+            let needing reason = Some { Kind = StaticConnection; SignInRequired = Some reason }
             let both =
                 { representativeModel with
                     Claude =
@@ -2336,7 +2337,7 @@ let private chromeTests =
                         { representativeModel.GitHub with
                             Status =
                                 { representativeModel.GitHub.Status with
-                                    MineCredential = Some { Kind = "static"; SignInRequired = Some "github rejected this credential" } } } }
+                                    MineCredential = Some { Kind = StaticConnection; SignInRequired = Some "github rejected this credential" } } } }
         let stalledShell =
             Support.render
                 { representativeModel with
