@@ -797,6 +797,21 @@ let private uiChecklistTests =
                 ((Support.render { empty with HistoryRead = true }).Contains "data-timeline-empty")
                 "an empty one still says so"
 
+        testCase "the way back to the latest message is rendered, named, and the chat's" <| fun () ->
+            // Whether the float can be SEEN is a scroll distance the document holds — nothing a
+            // string render can settle (`Render.syncJumpToLatest` is what toggles it). What
+            // markup owns is the rest, and it is the half that breaks silently: an icon-only
+            // control with no accessible name is a button that says nothing to a screen reader,
+            // and one rendered outside the conversation would scroll the wrong column.
+            let html = Support.render representativeModel
+            Expect.isTrue (html.Contains Dom.Hooks.jumpToLatest) "the control is in the document"
+            Expect.isTrue
+                (html.Contains Dom.Text.jumpToLatest)
+                "carrying a name, since a chevron on its own says nothing"
+            Expect.isTrue
+                (html.IndexOf Dom.Hooks.conversation < html.IndexOf Dom.Hooks.jumpToLatest)
+                "and it floats over the conversation, not over a terminal"
+
         testCase "a client that cannot keep history says so; one that can says nothing" <| fun () ->
             // The availability invariant, not the wording: a client whose context denies it a
             // store keeps no history, and the alternative to saying so is a session that

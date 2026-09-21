@@ -216,6 +216,16 @@ let revealMessage (messageId: string) : unit =
             // all — focusable on purpose, never a Tab stop.
             item.focus ()))
 
+/// Scroll the conversation to its own tail, for the "jump to latest" float's press. Plain
+/// `scrollTop`, not `scrollIntoView`: there is no element AT the end to scroll one of into
+/// view (a caret still blinking, a message mid-stream), and this is the same position
+/// `restoreSurfaceScroll` (Render.fs) already treats as "the end" — landing there is what
+/// lets that render-time restore see the reader as still pinned, rather than fight the jump
+/// the moment the next message arrives.
+let scrollToLatest () : unit =
+    find "[data-conversation]"
+    |> Option.iter (fun conversation -> conversation.scrollTop <- conversation.scrollHeight)
+
 /// Put focus back on one item's actions control, once the menu it opened has gone.
 ///
 /// A frame later like every act here, and for the sharper reason: the control is what the

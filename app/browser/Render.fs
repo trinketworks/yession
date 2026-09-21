@@ -146,6 +146,31 @@ let private restoreSurfaceScroll (selector: string) (positions: Map<string, Surf
         | Some AtEnd | None -> if not (atEnd el) then el.scrollTop <- el.scrollHeight
         | Some (ScrolledTo position) -> if el.scrollTop <> position then el.scrollTop <- position
 
+/// How far from the tail is far enough for "you have scrolled away from the
+/// latest message" to become true, rather than "you just scrolled past the last line by a
+/// pixel or two" — the same slack `atEnd` reads at the OTHER end of the same question,
+/// widened because this is a whole control appearing, not a diff quietly staying pinned.
+let [<Literal>] private JumpToLatestSlack = 200.0
+
+/// Show or hide the chat's floating "jump to latest" against how far the reader actually is
+/// from the tail, in pixels — read straight off the surface rather than carried in the
+/// model, because it is a fact about ONE scroll position and the model has no business
+/// re-rendering the whole page every time somebody nudges a wheel. Run after every render
+/// (a message can grow the surface out from under a reader who was not at the end) and on
+/// every scroll of the surface itself (a reader moving with nothing new arriving) — see
+/// `keepSurfacesPinned` and `render` below.
+let private syncJumpToLatest () : unit =
+    match surfaces "[data-conversation]" with
+    | [] -> ()
+    | conversation :: _ ->
+        match Browser.Dom.document.querySelector "[data-jump-to-latest]" with
+        | null -> ()
+        | slot ->
+            let slot = slot :?> Browser.Types.HTMLElement
+            let away = conversation.scrollHeight - conversation.clientHeight - conversation.scrollTop
+            if away < JumpToLatestSlack then slot.classList.add [| "hidden" |]
+            else slot.classList.remove [| "hidden" |]
+
 /// A RENDER is not the only thing that moves the end of one of those surfaces away from the
 /// reader — a RESIZE does it too, and on a phone the viewport is not a constant: the
 /// browser's toolbars come and go, the device turns. The shell is the visible viewport's
@@ -169,7 +194,11 @@ let private keepSurfacesPinned (selector: string) : unit =
             let node = unbox<Browser.Types.Node> event.target
             if node.nodeType = node.ELEMENT_NODE then
                 let el = unbox<Browser.Types.HTMLElement> event.target
-                if el.matches selector then pinned.set (el, atEnd el) |> ignore),
+                if el.matches selector then pinned.set (el, atEnd el) |> ignore
+                // The chat is one of the two surfaces this selector matches, and the float
+                // is its own: a reader scrolling a terminal's scrollback has no "jump to
+                // latest" to show or hide.
+                if el.matches "[data-conversation]" then syncJumpToLatest ()),
         true)
     Browser.Dom.window.addEventListener (
         "resize",
@@ -898,6 +927,11 @@ let create (deps: Deps) : Renderer =
         let scroll = surfaceScroll PinnedSurfaces
         Lit.render (unbox deps.Root) (View.view deps.Actions model dispatch)
         restoreSurfaceScroll PinnedSurfaces scroll
+        // A message can arrive below a reader who is not pinned to the tail (that is the
+        // whole reason `restoreSurfaceScroll` above leaves them where they were), which is
+        // exactly the moment the float has to appear, so this runs on every render, not
+        // only on a scroll of the chat itself.
+        syncJumpToLatest ()
         // Mount/dispose the rich editors on their body hosts (bound to live fragments), then
         // overlay collaborators' cursors: remote carets in each body editor, and title carets
         // measured against the just-rendered input.

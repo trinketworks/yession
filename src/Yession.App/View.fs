@@ -157,6 +157,11 @@ type ViewActions =
       /// back there". Imperative for the reason `RevealBlock` is: the model says where the
       /// chapters are, and only the document can scroll to one.
       RevealMessage : MessageId -> unit
+      /// Scroll the conversation to its own tail — the "jump to latest" float's press.
+      /// Imperative for the same reason its siblings above are: how far the reader has
+      /// scrolled is a fact the document holds, not the model (`Render.fs` watches it and
+      /// shows or hides the float accordingly), so reaching the end is a document act too.
+      ScrollToLatest : unit -> unit
       /// Put focus back on one item's actions control, after the menu it opened has gone.
       /// Imperative for the reason every focus move here is: the model says the menu is
       /// shut, and only the document knows where the cursor went. Without it, dismissing a
@@ -225,6 +230,7 @@ module ViewActions =
           FocusWatch = ignore
           RevealBlock = fun _ _ -> ()
           RevealMessage = fun _ -> ()
+          ScrollToLatest = ignore
           FocusItemActions = fun _ -> () }
 
 module View =
@@ -2496,7 +2502,14 @@ module View =
                     // MEANS is not readable from the mark, and these two mean opposite things.
                     [ html $"""<div class="{Style.timelineIdle}" data-timeline-empty aria-hidden="true"><span class="{Style.caretIdle}"></span></div>""" ]
             | _ -> Option.toList missing @ items
-        html $"""<section class="{Style.timeline}" data-conversation>{body}</section>"""
+        html $"""
+            <div class="{Style.chatRegion}">
+              <section class="{Style.timeline}" data-conversation>{body}</section>
+              <div class="{Style.chatJumpToLatestSlot}" data-jump-to-latest>
+                <button type="button" class="{Style.chatJumpToLatest}" aria-label="{Dom.Text.jumpToLatest}"
+                        @click={Ev(fun _ -> actions.ScrollToLatest ())}>{Icon.down}</button>
+              </div>
+            </div>"""
 
     /// Everything a block printed, as TEXT — the cheap read of the same bytes the recording
     /// holds, and the one both surfaces that show a block are made of.

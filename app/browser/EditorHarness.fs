@@ -1244,6 +1244,7 @@ do
             FocusWatch = PaneShell.toWatchToggle
             RevealBlock = fun id blockId -> PaneShell.revealBlock (TerminalId.value id) (BlockId.value blockId)
             RevealMessage = fun id -> PaneShell.revealMessage (MessageId.value id)
+            ScrollToLatest = PaneShell.scrollToLatest
             FocusItemActions = fun id -> PaneShell.toItemActions (MessageId.value id)
             TakeTerminal = fun id -> takeRef id
             // The listing's next page, answered here because this harness has no session to
