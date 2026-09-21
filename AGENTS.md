@@ -321,6 +321,43 @@ Do not keep a bridging alias, a second constructor, or an `option` "for now" to 
 build go green with fewer edits. The build going red at every site is the tool working; a
 bridge is the fault coming back with a name that says it is fine.
 
+## Type safety
+
+F# is the type system; JavaScript is only what it compiles to. Every construct below re-opens
+the hole Fable closed, and **no analyzer rule sees any of them** — the emit rules read
+`[<Emit>]` macros and nothing else, so an emit count reaching zero measured one escape hatch,
+not safety. These are on the author.
+
+Do not introduce any of these, and remove them from code you are already changing:
+
+- **A JavaScript program in a string.** An `[<Emit>]` outside `src/Fable.*`, an inline
+  `<script>` body, a CDP `Runtime.evaluate` source. Nothing type-checks it and nothing even
+  parses it. Write F# through Fable, behind a binding project if it reaches an API we do not
+  own.
+- **Dynamic access — `?` and `?<-`.** `fs?readdirSync path` and `keys?("Mod-b") <- cmd` are
+  one typo away from `undefined`, silently, at every warning level. Bind the module; key the
+  map with a type.
+- **`unbox`, `!!`, `:?>` on a value you did not just construct.** `unbox` does not check, it
+  asserts — a `Y.Text` unboxed as `string` does not throw, it simply is not one, and the fault
+  surfaces somewhere else entirely. Decode it, or type whatever produced it.
+- **`obj` in a signature.** A parameter or return typed `obj` is a contract nobody wrote down,
+  and both ends are free to disagree about it. If it crosses a wire it is a codec; if it
+  configures a binding it is that binding's options type.
+- **`createObj` / `==>` handed to a binding project.** The binding exists — give it an
+  interface and `jsOptions`. An untyped bag is the emit doctrine's hole one level down: a
+  header name spelled by hand is a header name spelled wrong eventually, and nothing says so.
+- **`[<AllowNullLiteral>]` outside `src/Fable.*`.** A nullable JavaScript interface declared
+  in product code is a binding that never moved into a binding project.
+- **A decode that cannot refuse.** `Option.defaultValue ""` over a field read makes absent,
+  garbage and genuinely-empty arrive identically, so the caller cannot tell them apart and the
+  bug lands downstream of the only place that knew. Answer `None`, or say in the code why the
+  default is the right answer.
+
+The escape is always one of three: a **binding project** for an API we do not own, a **codec**
+for a wire, a **typed options interface** for a bag. Where none applies — the DOM's
+`querySelector` answers `Element` and there is no other shape available — keep the cast on the
+line that needs it and give the result a type immediately, never carry `obj` onward.
+
 ## Testing
 
 Tests gated by CAPABILITIES the run declares, not folders (`tests/Yession.Tests/Tags.fs`). A
@@ -542,39 +579,20 @@ inner. Do not give a binding two types under one name; why CI's checker minds wh
 does is not yet known, and until it is, the rename is the fix.
 
 This file used to say that a reference is what CI's `lint` cannot afford, and that a one-line
-`[<Emit>]` beside the use was the way around it. That was wrong, and it is worth keeping the
-correction rather than the rule, because the reasoning failed in a way that is easy to repeat.
-
-What happened: a four-line conversion in `View.fs` declared `Fable.BrowserExtras` and
-`Fable.Browser.Dom` on `Yession.App`, and CI's whole-solution `lint` step then ran past 48
-minutes twice — both times never finishing, the job killed around it — where it takes about
-ten. Removing the two references brought it back. The conclusion drawn was that the reference
-had widened the population three of the scoping rules walk, so references low in the graph
-were the thing to avoid.
-
-The analyzer was the fault. `Population` and `Expressions` each kept a dictionary keyed by
-project that never evicted, and those entries hold FCS symbols, which retain a project's whole
-check results — so a run over the solution held all 23 projects at once, climbed to 10.5 GB,
-and was killed by GitHub's 16 GB runners four times in one day (`Kept.fs` records the
-measurements). That is the state those two runs fell off. The extra assembly did not cost 38
-minutes of work; it cost a few hundred megabytes on a process already at the ceiling, and what
-followed was a garbage collector the run never came out of. `Kept` fixed it the next day — one
-project's answer at a time, 4.1 GB, half the wall-clock — and the rule, written 21 hours
-before anyone found the leak, was never revisited.
-
-Measured since, on the whole solution in one process, which is how CI runs it: **168s and
-5.80 GB** without those two references, **175s and 6.38 GB** with them. Seven seconds.
-
-Two smaller things the original account got wrong, both checkable: `Fable.Browser.Dom` was
-already arriving transitively through `Fable.Lit` and the view was already using it, so naming
-it added nothing to the referenced-assembly closure; and the only genuinely new assembly,
-`Fable.BrowserExtras`, is about two hundred lines.
+`[<Emit>]` beside the use was the way around it. That was wrong, and the correction is worth
+keeping because the reasoning failed in a way that is easy to repeat. Two new references in
+`View.fs` were blamed for a `lint` step that ran past 48 minutes twice; the fault was an
+analyzer leak. `Population` and `Expressions` each kept a dictionary keyed by project that
+never evicted, and those entries hold FCS symbols, which retain a project's whole check
+results — so a whole-solution run held all 23 projects at once, climbed to 10.5 GB, and was
+killed by GitHub's 16 GB runners four times in one day. `Kept.fs` fixed it the next day and
+records the measurements: 4.1 GB, half the wall-clock. Measured since, the two references
+cost **seven seconds**.
 
 So: declare the dependency on the project that uses it. `[<Emit>]` is for binding an API this
 repository does not own — not for avoiding a reference, which was never the cost it was
-charged with. The population a scoping rule walks is a real expense and worth knowing about;
-it is measured in seconds, and a defect that turns it into an hour is a defect to fix in the
-analyzer.
+charged with. The population a scoping rule walks is a real expense measured in seconds; a
+defect that turns it into an hour is a defect to fix in the analyzer.
 
 Every rule carries a fixture — `analyzers/fixtures/<Rule>Fixture` — whose source says in
 `// YES00n` markers which of its cases must be reported (across several files where the rule is
