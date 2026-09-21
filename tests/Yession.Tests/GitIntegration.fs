@@ -953,12 +953,6 @@ let private compositionTests =
 // (no agent item), a turn ran and the clone was refused (the agent's words carry git's), or the
 // turn ran and produced no checkout (a turn in flight, nothing on disk).
 
-/// The errno a Node filesystem error carries (`ENOENT`, `EACCES`), where it is one of Node's.
-/// `||` rather than `??` because that is the falsiness the report was written against: an
-/// error carrying an empty code says as little as one carrying none.
-[<Emit("($0.code || undefined)")>]
-let private errnoOf (error: exn) : string option = jsNative
-
 /// A directory, rendered for a person reading the report below — never a value anything
 /// decides on. Every way the read can fail is a line in that report, which is why the failure
 /// is spelled out rather than swallowed.
@@ -968,7 +962,7 @@ let private listDir (path: string) : string =
         | "" -> "<empty>"
         | entries -> entries
     with error ->
-        sprintf "<%s>" (errnoOf error |> Option.defaultValue error.Message)
+        sprintf "<%s>" (Fable.NodeExtras.Errors.errno error |> Option.defaultValue error.Message)
 
 let private liveRepo = "octocat/Hello-World"
 
