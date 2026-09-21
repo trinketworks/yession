@@ -291,6 +291,9 @@ module Style =
 
     /// `btnPrimary`, laid out on `btnGrid` — the one a held word
     /// (`whenReady`/`whenBusy`) sits on top of, so pressing it never changes its own size.
+    /// Not Create's alone: `askStart` (the repo picker's commit button, below) builds on it
+    /// too, which is the point — the box-stable hold is a property of the LAYOUT, not of
+    /// which button first needed it.
     let btnPrimarySwap =
         cls [ btnFace; btnGrid; btnPrimaryFace ]
 
@@ -300,8 +303,10 @@ module Style =
     /// The two words a held button can be saying — the verb, and the verb under way
     /// — as siblings inside it, both always laid out (`btnGrid`, on `btnPrimarySwap`)
     /// so the box they share never resizes between them; `invisible` (not `hidden`) is what
-    /// keeps the one not showing in that box rather than out of it. Copy stays in the markup
-    /// where the server spells it; the script only sets the state. The button wears the
+    /// keeps the one not showing in that box rather than out of it. Copy stays in the markup;
+    /// only `aria-busy` on the button flips which is visible — set by a script for a plain
+    /// `<form>` post (Create, `app/ManagerUi.fs`), or straight from view state for a button
+    /// whose stage IS the model (Start, `View.fs`'s repo picker). The button wears the
     /// named group for it (`btnFace`) — named, so a button sitting inside some other
     /// group answers to its own state and never to that one's.
     let whenReady = "col-start-1 row-start-1 group-aria-busy/btn:invisible"
@@ -1481,8 +1486,11 @@ module Style =
     let askStartWidth = "w-full md:w-auto"
     /// The commit button, which is disabled until something is held — and looks it: the
     /// rim recedes to a hairline and the type to faint, so the press state is one a held row
-    /// visibly buys.
-    let askStart = cls [ btnPrimary; askStartWidth; "h-12 disabled:border-hair disabled:text-ink-faint disabled:cursor-default" ]
+    /// visibly buys. On `btnPrimarySwap` rather than `btnPrimary`: pressing it holds through
+    /// `Sent`/`Cloning` (`Launch.LaunchStage`), and "Start"/"starting…" share its box the same
+    /// way Create's two words do, so admission does not resize the one control the card asks
+    /// a thumb to find twice.
+    let askStart = cls [ btnPrimarySwap; askStartWidth; "h-12 disabled:border-hair disabled:text-ink-faint disabled:cursor-default" ]
     let caretIdle = caret + " opacity-50"
 
 
