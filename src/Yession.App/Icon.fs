@@ -156,6 +156,9 @@ module Icon =
     /// The mark a row wears when what it holds is a RECORDING rather than a terminal you
     /// can type into. Sits on the caps baseline beside the row's state, like the two above.
     let playSm = stroked "w-3 h-3 inline-block align-[-1px]" playPath
+    /// The stop, at the size a mark rides a small line: what a turn's stop signpost wears in
+    /// the slot a chip's prompt glyph takes.
+    let stopSm = stroked "w-3 h-3 inline-block align-[-2px]" stopPath
     /// The repository mark at the size an entity wears inline in a sentence: the same box
     /// as a person's small avatar, so a repo and a person referenced side by side sit on one
     /// line at one height.

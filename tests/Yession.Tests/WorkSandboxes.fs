@@ -46,12 +46,14 @@ let private noteDetail (item: ConversationItem) : string option =
         match Act.particulars act with
         | [] -> None
         | particulars -> Some (particulars |> List.map Phrase.said |> String.concat "; ")
-    | ItemContent.Message _ -> None
+    | ItemContent.Message _
+    | ItemContent.Stopped _ -> None
 
 let private isAct (item: ConversationItem) : bool =
     match item.Content with
     | ItemContent.Act _ -> true
-    | ItemContent.Message _ -> false
+    | ItemContent.Message _
+    | ItemContent.Stopped _ -> false
 
 /// The ask most of these cases make: nothing in particular about the sandbox, some
 /// credentials forwarded into it. The spec half has its own cases below.

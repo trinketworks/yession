@@ -38,6 +38,11 @@ type ConversationItemStatus =
 type ItemContent =
     | Message of body: string
     | Act of Act
+    /// The turn this item belongs to stopped here, and why — the process's account, never
+    /// the agent's words. Its own kind rather than a message carrying the reason as a body,
+    /// because a reason drawn in the agent's voice was read as something the agent said,
+    /// and a reader cannot be expected to know which paragraph of a reply was the machine's.
+    | Stopped of reason: string
 
 type ConversationItem =
     { MessageId : MessageId
@@ -102,6 +107,7 @@ module ConversationItem =
         match item.Content with
         | ItemContent.Message body -> body
         | ItemContent.Act act -> Phrase.said (Act.sentence act)
+        | ItemContent.Stopped reason -> reason
 
     /// The headline alone — what a message said, or the one sentence an act leads with.
     /// For a reader that has its own way of showing the particulars, or none: a chapter's
@@ -110,12 +116,14 @@ module ConversationItem =
         match item.Content with
         | ItemContent.Message body -> body
         | ItemContent.Act act -> Phrase.said (Act.phrase act)
+        | ItemContent.Stopped reason -> reason
 
     /// Whether this act opens a chapter by nature. A message never does.
     let notable (item: ConversationItem) : bool =
         match item.Content with
         | ItemContent.Act act -> Act.notable act
-        | ItemContent.Message _ -> false
+        | ItemContent.Message _
+        | ItemContent.Stopped _ -> false
 
     /// Whether this is a person's OWN words — which is the only thing a name is made from.
     ///
@@ -479,17 +487,6 @@ module ConversationProjection =
     let private updateItem (messageId: MessageId) (f: ConversationItem -> ConversationItem) (items: ConversationItem list) =
         items |> List.map (fun item -> if item.MessageId = messageId then f item else item)
 
-    /// A failed turn's item body: whatever it managed to say, and why it stopped. Both, and
-    /// never only the first — a failure a reader cannot name is a failure they re-run to
-    /// diagnose. Separated by a blank line so the model's own prose stays distinguishable
-    /// from the machine's account of what happened to it.
-    ///
-    /// Only ever called with a body that HAS prose in it: a turn that said nothing gets the
-    /// reason as an item of its own, at the offset it stopped at, rather than a body here.
-    let private withReason (body: string) (reason: string) : string =
-        let said = reason.Trim ()
-        if said = "" then body else body + "\n\n" + said
-
     /// Why the given turn exists, if nobody asked for it. Matched on the turn id rather than
     /// taken on trust: a late event from a turn the wake did not start must not inherit the
     /// current one's reason.
@@ -757,7 +754,8 @@ module ConversationProjection =
                                 Content = ItemContent.Message (body + a.Delta)
                                 Offset = if body = "" then envelope.Offset else item.Offset }
                         | ItemContent.Message _
-                        | ItemContent.Act _ -> item) }
+                        | ItemContent.Act _
+                        | ItemContent.Stopped _ -> item) }
         | AgentMessageCompleted a ->
             { proj with
                 Items =
@@ -766,7 +764,8 @@ module ConversationProjection =
                         let spoken =
                             match item.Content with
                             | ItemContent.Message body -> body <> ""
-                            | ItemContent.Act _ -> true
+                            | ItemContent.Act _
+                            | ItemContent.Stopped _ -> true
                         { item with
                             Content = ItemContent.Message a.Body
                             Status = Complete
@@ -785,32 +784,36 @@ module ConversationProjection =
                 // simply never produced an item.
                 { proj with ActiveAgentMessages = Map.remove a.AgentTurnId proj.ActiveAgentMessages }
         | AgentTurnFailed a ->
-            // Why a turn stopped is an item of its own, ANCHORED WHERE IT STOPPED — unless
-            // the turn had already said something, in which case the reason joins what it
-            // said and stays with it.
+            // Why a turn stopped is an item of its own, ANCHORED WHERE IT STOPPED — after
+            // every command and call the turn made, because that is where it stopped, and
+            // whatever the turn had said stays where it said it.
             //
-            // The distinction is the whole point, because an agent message is created when
-            // the turn STARTS, before the model has spoken and before a single tool call.
-            // A tool-only turn — which is most of them — therefore holds an empty item at
-            // the top of its own work, and filling that with the reason filed the account of
-            // a failure a hundred and forty rows above the thing that failed: directly under
-            // the message that asked for it, over every command it had run. A reader saw a
-            // turn open with its own obituary. So an item that never said anything is not
-            // where this belongs, and it is dropped rather than left standing empty.
-            let reasonItem () =
+            // It used to join what the turn had said, as a paragraph under it. That put the
+            // account of a failure ABOVE the work the failure ended — an agent message is
+            // created when the turn starts, and most turns then call tools for a while — so
+            // a reader saw "the session was restarted while this turn was running" as the
+            // agent's own closing sentence, three commands before anything went wrong. The
+            // message is left as what it said, complete: the turn ending is not a fact about
+            // those words, and late deltas still cannot reach an item that is not streaming.
+            //
+            // A turn's first message opens BEFORE the model has spoken, so a tool-only turn
+            // holds an empty item at the top of its own work. That placeholder is dropped
+            // rather than left standing empty over the stop.
+            let stopped (attributed: bool) =
                 let messageId =
                     match MessageId.create (sprintf "agent-turn-%s-failed" (AgentTurnId.value a.AgentTurnId)) with
                     | Ok id -> id
                     | Error e -> failwithf "derived message id invariant violated: %s" e
                 { MessageId = messageId
                   Author = ActorRef.Agent
-                  Content = ItemContent.Message a.Reason
+                  Content = ItemContent.Stopped a.Reason
                   Status = Failed
                   Offset = envelope.Offset
-                  Woke = wokeBy a.AgentTurnId proj
-                  // A turn that failed before saying anything is still a reply to what asked
-                  // for it — the ref rides its account for the same reason `Woke` does.
-                  Replying = replyingTo a.AgentTurnId proj }
+                  // A turn that stopped before saying anything is still a reply to what
+                  // asked for it, and still a turn nobody asked for if it was woken — the
+                  // refs ride its only item. One that spoke carries both on what it said.
+                  Woke = (if attributed then wokeBy a.AgentTurnId proj else None)
+                  Replying = (if attributed then replyingTo a.AgentTurnId proj else None) }
             let closed = Map.remove a.AgentTurnId proj.ActiveAgentMessages
             let spoke =
                 Map.tryFind a.AgentTurnId proj.ActiveAgentMessages
@@ -822,20 +825,17 @@ module ConversationProjection =
             | Some (messageId, true) ->
                 { proj with
                     Items =
-                        proj.Items
-                        |> updateItem messageId (fun item ->
-                            { item with Content = ItemContent.Message (withReason (ConversationItem.said item) a.Reason); Status = Failed })
+                        (proj.Items |> updateItem messageId (fun item -> { item with Status = Complete }))
+                        @ [ stopped false ]
                     ActiveAgentMessages = closed }
             | Some (messageId, false) ->
                 { proj with
-                    Items =
-                        (proj.Items |> List.filter (fun item -> item.MessageId <> messageId))
-                        @ [ reasonItem () ]
+                    Items = (proj.Items |> List.filter (fun item -> item.MessageId <> messageId)) @ [ stopped true ]
                     ActiveAgentMessages = closed }
             | None ->
                 // The turn failed before its message started: same item, same derivation —
                 // there was simply never a placeholder to drop.
-                { proj with Items = proj.Items @ [ reasonItem () ]; ActiveAgentMessages = closed }
+                { proj with Items = proj.Items @ [ stopped true ]; ActiveAgentMessages = closed }
 
     /// Fold ordered event envelopes into a conversation projection.
     ///

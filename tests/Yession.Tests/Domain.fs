@@ -141,12 +141,14 @@ let private noteDetail (item: ConversationItem) : string option =
         match Act.particulars act with
         | [] -> None
         | particulars -> Some (particulars |> List.map Phrase.said |> String.concat "; ")
-    | ItemContent.Message _ -> None
+    | ItemContent.Message _
+    | ItemContent.Stopped _ -> None
 
 let private isAct (item: ConversationItem) : bool =
     match item.Content with
     | ItemContent.Act _ -> true
-    | ItemContent.Message _ -> false
+    | ItemContent.Message _
+    | ItemContent.Stopped _ -> false
 
 /// Two acts for the cases that need one of each and do not care which: an ordinary one,
 /// and one that opens a chapter by nature (`Act.notable`).
@@ -788,7 +790,8 @@ let private repoTests =
                  |> List.collect (fun i ->
                      match i.Content with
                      | ItemContent.Act act -> Phrase.refs (Act.phrase act)
-                     | ItemContent.Message _ -> []))
+                     | ItemContent.Message _
+                     | ItemContent.Stopped _ -> []))
                 (List.replicate 3 (EntityRef.Repo (RepoRef.create "octo/hello" |> expect)))
                 "and each POINTS at it, so a screen draws the repository rather than its name"
             Expect.equal (proj.Items |> List.map noteDetail)
@@ -1514,7 +1517,8 @@ let private prWatchTests =
                  |> List.collect (fun i ->
                      match i.Content with
                      | ItemContent.Act act -> Phrase.refs (Act.phrase act)
-                     | ItemContent.Message _ -> []))
+                     | ItemContent.Message _
+                     | ItemContent.Stopped _ -> []))
                 (List.replicate 3 (EntityRef.Pr pr))
                 "each note points at the pull request"
 

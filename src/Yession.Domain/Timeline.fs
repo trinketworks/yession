@@ -506,7 +506,10 @@ module TimelineProjection =
                 | ConversationItemStatus.Complete
                 | ConversationItemStatus.Streaming
                 | ConversationItemStatus.Interrupted -> None
-            | ItemContent.Message _ -> None
+            // A stop is the turn's ending, not a task of the turn's: a card counts what the
+            // turn did, and this is where it stopped doing it.
+            | ItemContent.Message _
+            | ItemContent.Stopped _ -> None
         | TimelineBlock (_, _, blockId) -> blockStatus blockId |> Option.map TaskCard.stateOf |> Option.bind live
         | TimelineToolUse (_, id) ->
             match toolUse id proj with

@@ -411,7 +411,11 @@ let private turnTests =
                 [ "partial", ConversationItemStatus.Interrupted ]
                 "late deltas are ignored once the item left Streaming"
 
-        testCase "a turn failure marks the streaming item Failed, keeping what it said and adding why it stopped" <| fun () ->
+        // Why a turn stopped is an item of its OWN — `ItemContent.Stopped` — and never a
+        // paragraph under what the turn said. Joined to the prose, the reason read as the
+        // agent's own closing sentence, in the agent's voice; and it sat where the prose
+        // was, above every command the turn went on to run before it stopped.
+        testCase "a turn failure leaves what the turn said as said, and says why it stopped as its own item" <| fun () ->
             let projection, _ =
                 ConversationProjection.applyEvents
                     None
@@ -420,14 +424,25 @@ let private turnTests =
                       envelope 2L (AgentTurnFailed { AgentTurnId = turnId; Reason = "overloaded" }) ]
                     ConversationProjection.empty
             Expect.equal
-                (projection.Items |> List.map (fun i -> (ConversationItem.said i), i.Status))
-                [ "partial\n\noverloaded", ConversationItemStatus.Failed ]
-                "the streaming item fails in place"
+                (projection.Items |> List.map (fun i -> i.Content, i.Status))
+                [ ItemContent.Message "partial", ConversationItemStatus.Complete
+                  ItemContent.Stopped "overloaded", ConversationItemStatus.Failed ]
+                "the words stand as words; the stop is the machine's, and marked as such"
+            // A delta that raced past the failure cannot reach what was said.
+            let after, _ =
+                ConversationProjection.applyEvents
+                    (Some (EventOffset.create 2L |> expect))
+                    [ envelope 3L (AgentMessageDelta { AgentTurnId = turnId; MessageId = agentMessageId; Delta = " too late" }) ]
+                    projection
+            Expect.equal
+                (after.Items |> List.head |> ConversationItem.said)
+                "partial"
+                "late deltas are ignored once the item left Streaming"
 
         // The screenshot case, and the one the projection used to drop on the floor: a turn
         // that spent itself on tool calls and never streamed a word. The reason was in the
-        // event log and nowhere a reader — or the NEXT turn, which reads this projection as
-        // its transcript — could reach it, so an empty red item was the whole account.
+        // event log and nowhere a reader could reach it, so an empty red item was the whole
+        // account.
         testCase "a turn that said nothing before it failed still says why" <| fun () ->
             let projection, _ =
                 ConversationProjection.applyEvents
@@ -436,9 +451,9 @@ let private turnTests =
                       envelope 1L (AgentTurnFailed { AgentTurnId = turnId; Reason = "agent run ended: error_during_execution" }) ]
                     ConversationProjection.empty
             Expect.equal
-                (projection.Items |> List.map (fun i -> (ConversationItem.said i), i.Status))
-                [ "agent run ended: error_during_execution", ConversationItemStatus.Failed ]
-                "the reason is the item's account of itself"
+                (projection.Items |> List.map (fun i -> i.Content, i.Status))
+                [ ItemContent.Stopped "agent run ended: error_during_execution", ConversationItemStatus.Failed ]
+                "the stop is the turn's whole account, and the empty placeholder is gone"
 
         // Placement, which the body alone cannot pin. An agent message is created when the
         // turn STARTS — before the model has spoken and before a single tool call — so a
@@ -458,10 +473,10 @@ let private turnTests =
                 [ 9L ]
                 "the failure sits at the offset it happened at, not at the turn's first event"
 
-        // The other half of the same rule: a turn that DID speak keeps the place it spoke
-        // in. Its words were said there, and moving them to where the turn later died would
-        // reorder the conversation around a fact about the ending.
-        testCase "a turn that spoke keeps the place it spoke in" <| fun () ->
+        // The other half of the same rule, and the half the joined paragraph got wrong: a
+        // turn that DID speak keeps the place it spoke in, and the stop still lands where
+        // the turn stopped — after whatever it ran in between, not under its first words.
+        testCase "a turn that spoke keeps the place it spoke in, and the stop lands where it stopped" <| fun () ->
             let projection, _ =
                 ConversationProjection.applyEvents
                     None
@@ -472,8 +487,9 @@ let private turnTests =
             Expect.equal
                 (projection.Items |> List.map (fun i -> EventOffset.value i.Offset, (ConversationItem.said i)))
                 // Offset 2: where it SPOKE, not where it opened — the first word is the anchor.
-                [ 2L, "on it\n\noverloaded" ]
-                "the item stays where it was said, wearing the reason it stopped"
+                // Offset 9: where it STOPPED, past anything it did between.
+                [ 2L, "on it"; 9L, "overloaded" ]
+                "the words stay where they were said; the stop is where the turn ended"
 
         testCase "a turn that fails before its message started still shows in the conversation" <| fun () ->
             let projection, _ =
@@ -483,9 +499,9 @@ let private turnTests =
                       envelope 1L (AgentTurnFailed { AgentTurnId = turnId; Reason = "context build failed" }) ]
                     ConversationProjection.empty
             Expect.equal
-                (projection.Items |> List.map (fun i -> i.Author, (ConversationItem.said i), i.Status))
-                [ (ActorRef.Agent, "context build failed", ConversationItemStatus.Failed) ]
-                "the failure is a Failed conversation item"
+                (projection.Items |> List.map (fun i -> i.Author, i.Content, i.Status))
+                [ (ActorRef.Agent, ItemContent.Stopped "context build failed", ConversationItemStatus.Failed) ]
+                "the failure is the turn's stop, under the agent's name"
     ]
 
 // -----------------------------------------------------------------------------

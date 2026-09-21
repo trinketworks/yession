@@ -1729,7 +1729,8 @@ let private sandboxTaskTests =
                 Expect.isTrue ((ConversationItem.headline item).StartsWith "starting sandbox") "and says the sandbox is starting"
                 match item.Content with
                 | ItemContent.Act _ -> ()
-                | ItemContent.Message _ -> failwith "a sandbox coming up is an act, not a message"
+                | ItemContent.Message _
+                | ItemContent.Stopped _ -> failwith "a sandbox coming up is an act, not a message"
             | other -> failwithf "expected one running act, got %d items" (List.length other)
 
         testCase "the start resolves that same item in place, not a second" <| fun () ->
@@ -1749,7 +1750,8 @@ let private sandboxTaskTests =
                         (Act.particulars act |> List.map Phrase.said)
                         [ "the docker daemon is not reachable" ]
                         "and carries why it could not start"
-                | ItemContent.Message _ -> failwith "still an act"
+                | ItemContent.Message _
+                | ItemContent.Stopped _ -> failwith "still an act"
             | other -> failwithf "the failure must resolve the running act, not add a second — got %d items" (List.length other)
 
         testCase "a start with no preceding starting still appears (a log written before starting existed)" <| fun () ->

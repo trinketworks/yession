@@ -2172,6 +2172,18 @@ module View =
                   {shown}
                   {fold}
                 </article>"""
+        // Where a turn stopped, and why. A signpost on the chip column, after the last thing
+        // the turn did, in the machine's voice: the stop mark where a chip's `$` stands, the
+        // reason beside it. Not a message — nobody said this — so no rich body, no reply, no
+        // actions; and not an act — nobody did it — so no fold and no attribution of its own
+        // beyond the author line of the turn it ends. `data-turn-stopped` is the hook a
+        // test reads a stop by, wherever the design puts the mark.
+        let stoppedItem (reason: string) (item: ConversationItem) =
+            html $"""
+                <article class="{Style.turnStop}" data-message-id="{MessageId.value item.MessageId}" tabindex="-1" data-turn-stopped data-message-author="{Entity.actorToken item.Author}">
+                  <span class="{Style.turnStopMark}">{Icon.stopSm}<span class="{Style.srOnly}">{Dom.Text.turnStopped}</span></span>
+                  <span class="{Style.turnStopText}">{reason}</span>
+                </article>"""
         let messageItem (item: ConversationItem) =
             // What was said. An act never reaches here (`actNoteItem` takes those), and its
             // sentence would be the wrong thing to render as markdown if one did.
@@ -2436,6 +2448,7 @@ module View =
                     match item.Content with
                     | ItemContent.Act act -> Some (Some item.Author, actNoteItem act item)
                     | ItemContent.Message _ -> Some (Some item.Author, messageItem item)
+                    | ItemContent.Stopped reason -> Some (Some item.Author, stoppedItem reason item)
                 | RowItem (TimelineBlock (_, terminalId, blockId)) ->
                     // Both folds read the same page, so a chip without its block is a page
                     // boundary, not a bug: the next page brings it.
