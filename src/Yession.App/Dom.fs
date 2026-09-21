@@ -677,6 +677,9 @@ module Dom =
         let sandboxFactCheckout = "checkout"
         let sandboxFactForwarding = "forwarding"
         let sandboxFactAdjusted = "adjusted"
+        // A tool call's two blocks (`View.toolCall`): what it was given, what it answered.
+        let toolInput = "input"
+        let toolOutput = "output"
         // Environment lifecycle.
         let envNotStarted = "not-started"
         let envStarting = "starting"

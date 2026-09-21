@@ -7,6 +7,12 @@ open Yession.Domain.Agent
 open Yession.Domain.Tools
 open Yession.Domain.Terminals
 
+#if FABLE_COMPILER
+open Thoth.Json
+#else
+open Thoth.Json.Net
+#endif
+
 /// The chat as a PERSON reads it (Plan 14, stage 1): what was said and what was run, in the
 /// order it happened.
 ///
@@ -198,6 +204,18 @@ module ToolUse =
     /// Where a reader is sent, and what a link carries: `<namespace>/<name>` names the tool
     /// and the minted id names the call.
     let label (use': ToolUse) : string = sprintf "%s/%s" use'.Namespace use'.Name
+
+    /// The arguments as a reader opens them: the recorded JSON laid out one field per line,
+    /// so a two-hundred-character `old_string` reads as text rather than as a run of `\n`s
+    /// on one row. The RECORD is untouched — this is a rendering of it — and a record that
+    /// is not JSON (there are none, but a renderer does not get to assume) is shown as it is.
+    /// `None` is a foreign tool, whose arguments were never recorded.
+    let arguments (use': ToolUse) : string option =
+        use'.Arguments
+        |> Option.map (fun raw ->
+            match Decode.fromString Decode.value raw with
+            | Ok value -> Encode.toString 2 value
+            | Error _ -> raw)
 
 /// One DRAWN row of the chat. A row is usually one item; a run of consecutive tool calls
 /// from one turn is one row holding several, so the chat costs a line per turn rather than
