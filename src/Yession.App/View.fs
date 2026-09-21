@@ -750,8 +750,11 @@ module View =
                     {credentialReason Dom.Hooks.claudeSignInRequired scopeChoice credential}"""
             | None -> html $""""""
         let controls =
+            // A command of ours in flight outranks the flow: the controls that would send a
+            // second one are off the screen until this one is done — done meaning the STATUS
+            // shows it, not merely that the session said yes (`Pending`).
             match claude.Flow with
-            | ClaudeBusy ->
+            | _ when Pending.inFlight claude.Pending ->
                 html $"""<span class="{Style.statusRun}" data-claude-busy><span class="{Style.statusDotPulse}"></span>working…</span>"""
             | ClaudeAwaitingCode (url, _) ->
                 html $"""
@@ -763,7 +766,7 @@ module View =
                       <button type="button" class="{Style.btnPrimary}" data-claude-complete @click={Ev(fun _ -> actions.ClaudeComplete ())}>Complete</button>
                       <button type="button" class="{Style.btn}" data-claude-cancel @click={Ev(fun _ -> dispatch (ClaudeFlowMsg ClaudeIdle))}>Cancel</button>
                     </div>"""
-            | ClaudeIdle | ClaudeError _ ->
+            | ClaudeIdle ->
                 html $"""
                     <label class="{Style.label}" for="claude-scope">sign in for</label>
                     <select id="claude-scope" class="{Style.field}" data-claude-scope aria-label="Sign-in scope">
@@ -775,9 +778,9 @@ module View =
                     <input id="claude-token" type="password" class="{Style.field}" data-claude-token placeholder="sk-ant-…" />
                     <button type="button" class="{Style.btn}" data-claude-save-token @click={Ev(fun _ -> actions.ClaudePasteToken ())}>Save token</button>"""
         let error =
-            match claude.Flow with
-            | ClaudeError reason -> html $"""<span class="{Style.statusErr}" data-claude-error>{reason}</span>"""
-            | _ -> html $""""""
+            match Pending.refusal claude.Pending with
+            | Some reason -> html $"""<span class="{Style.statusErr}" data-claude-error>{reason}</span>"""
+            | None -> html $""""""
         html $"""
             <section class="{Style.cls [ Style.sideSection; Style.settingsLane1 ]}" data-claude-panel>
               <span class="{Style.label}">claude</span>
@@ -859,8 +862,9 @@ module View =
                     {credentialReason Dom.Hooks.githubSignInRequired scopeChoice credential}"""
             | None -> html $""""""
         let controls =
+            // As Claude's, for its reason.
             match github.Flow with
-            | GitHubBusy ->
+            | _ when Pending.inFlight github.Pending ->
                 html $"""<span class="{Style.statusRun}" data-github-busy><span class="{Style.statusDotPulse}"></span>working…</span>"""
             | GitHubAwaitingApproval (userCode, verificationUri, _, _) ->
                 // The code has to reach github.com's form, and on the phone that means the
@@ -885,7 +889,7 @@ module View =
                       <a class="{Style.btnPrimary}" href="{verificationUri}" target="_blank" rel="noreferrer" data-github-authorize>Approve on github.com</a>
                       <button type="button" class="{Style.btn}" data-github-cancel @click={Ev(fun _ -> dispatch (GitHubFlowMsg GitHubIdle))}>Cancel</button>
                     </div>"""
-            | GitHubIdle | GitHubError _ ->
+            | GitHubIdle ->
                 html $"""
                     <label class="{Style.label}" for="github-scope">sign in for</label>
                     <select id="github-scope" class="{Style.field}" data-github-scope aria-label="GitHub sign-in scope">
@@ -897,9 +901,9 @@ module View =
                     <input id="github-token" type="password" class="{Style.field}" data-github-token placeholder="github_pat_…" />
                     <button type="button" class="{Style.btn}" data-github-save-token @click={Ev(fun _ -> actions.GitHubPasteToken ())}>Save token</button>"""
         let error =
-            match github.Flow with
-            | GitHubError reason -> html $"""<span class="{Style.statusErr}" data-github-error>{reason}</span>"""
-            | _ -> html $""""""
+            match Pending.refusal github.Pending with
+            | Some reason -> html $"""<span class="{Style.statusErr}" data-github-error>{reason}</span>"""
+            | None -> html $""""""
         html $"""
             <section class="{Style.cls [ Style.sideSection; Style.settingsLane1 ]}" data-github-panel>
               <span class="{Style.label}">github</span>

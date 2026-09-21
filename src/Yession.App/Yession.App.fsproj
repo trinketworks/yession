@@ -12,6 +12,9 @@
     <Compile Include="EditorColour.fs" />
     <!-- The launch surface's own state and fold: pure, before the model that holds it. -->
     <Compile Include="Launch.fs" />
+    <!-- A command's wait for the query that will show it: pure, and above the model whose
+         panels hold one. -->
+    <Compile Include="Pending.fs" />
     <Compile Include="Model.fs" />
     <Compile Include="DraftSlot.fs" />
     <Compile Include="Connection.fs" />

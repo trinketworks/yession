@@ -197,10 +197,12 @@ let private representativeModel : ClientModel =
       // The pane shows a TAB by default; the list is what the cases below turn on.
       Claude =
         { Status = { SessionCredential = None; MineCredential = None; Owner = None; AgentAvailable = Some false }
-          Flow = ClaudeIdle }
+          Flow = ClaudeIdle
+          Pending = Pending.Ready }
       GitHub =
         { Status = { SessionCredential = None; MineCredential = None }
-          Flow = GitHubIdle }
+          Flow = GitHubIdle
+          Pending = Pending.Ready }
       Models = ModelsLoaded offeredModels
       // The generated read surface (Plan 15), with all three shapes declared at once, so
       // the acceptance render exercises the ONE renderer every future query goes through
