@@ -2406,10 +2406,22 @@ module Codec =
                     [ "id", modelId.Encode model.Id
                       "name", Encode.string model.Name ])
           Decode =
-            Decode.object (fun get ->
+            // `map2`, not the getter API, and the difference is not style. Thoth's
+            // `Decode.object` does NOT short-circuit: a required field that is missing
+            // stashes the error, hands the builder `Unchecked.defaultof<_>` — null — and
+            // runs it anyway, reporting only afterwards. A builder that merely STORES that
+            // value is fine, which is why every record literal here is; this one called
+            // `AgentModel.create`, which reads the id back out (`ModelId.value`, for the
+            // name's fallback), so a model entry with no `id` dereferenced null and THREW
+            // where a decode should have refused.
+            //
+            // `map2` applies the constructor only once both parts have decoded, which is
+            // the guarantee the getter cannot make. A decoder that calls a function on a
+            // required field's value wants a combinator, not a getter.
+            Decode.map2
                 AgentModel.create
-                    (get.Required.Field "id" modelId.Decode)
-                    (get.Optional.Field "name" Decode.string |> Option.toObj)) }
+                (Decode.field "id" modelId.Decode)
+                (Decode.optional "name" Decode.string |> Decode.map Option.toObj) }
 
     /// The catalogue as the session serves it to a picker. An OBJECT around the list rather
     /// than a bare array, so the reply has somewhere to grow — a provider's default, a
@@ -2587,8 +2599,19 @@ module Codec =
         codec.Encode value |> Encode.toString 0
 
     /// Deserialize a value from a JSON string.
+    ///
+    /// A decoder that RAISES is answered here as an `Error`, never let through. That is not
+    /// a second mechanism for the same requirement as `agentModel`'s `map2` above: that one
+    /// stops THIS decoder throwing, while this stops the NEXT one taking a reader down with
+    /// it, and they go red at different times. Every caller of this handles `Error`; none of
+    /// them survives an exception — the read stream's own promise is that a malformed frame
+    /// is dropped rather than thrown, and a frame that arrives mid-stream is exactly where
+    /// a decoder nobody has exercised on bad input gets its first hostile value.
     let fromString (codec: Codec<'a>) (json: string) : Result<'a, string> =
-        Decode.fromString codec.Decode json
+        try
+            Decode.fromString codec.Decode json
+        with e ->
+            Error (sprintf "the decoder raised rather than refused: %s" e.Message)
 
     /// A gated command's arguments, on the wire (Plan 15, stage 3b).
     ///
