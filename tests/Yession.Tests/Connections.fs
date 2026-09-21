@@ -3826,6 +3826,38 @@ let private panelWireTests =
                 (match panel.Models with ModelsUnavailable _ -> true | _ -> false)
                 "and the picker is told why it has no list"
 
+        testCase "a model entry with no id refuses, rather than raising" <| fun () ->
+            // Reproduced before the fix: Thoth's `Decode.object` hands a missing required
+            // field's builder a null and runs it anyway, so `AgentModel.create` read the id
+            // back out and threw `Cannot read properties of null (reading 'fields')`.
+            Expect.isTrue
+                (Result.isError (Codec.fromString Codec.modelCatalogue """{"models":[{"nope":1}]}"""))
+                "an entry this build cannot read is a refusal, and a refusal is a value"
+
+        testCase "a catalogue with an unreadable entry does not take the rows with it" <| fun () ->
+            let panel =
+                Codec.fromString
+                    Codec.claudePanel
+                    """{"session":null,"mine":{"kind":"static","signInRequired":null},"models":{"models":[{"nope":1}]}}"""
+                |> expect
+            Expect.equal
+                panel.MineCredential
+                (Some { Kind = StaticConnection; SignInRequired = None })
+                "the row survives a catalogue it could not read"
+            Expect.isTrue
+                (match panel.Models with ModelsUnavailable _ -> true | _ -> false)
+                "and the picker is told why it has no list"
+
+        testCase "a decoder that raises is answered, not propagated" <| fun () ->
+            // The guard the one above no longer needs, kept for the decoder nobody has yet
+            // handed a hostile value. A reader dies on an exception and drops an `Error`.
+            let raising : Codec<int> =
+                { Encode = Encode.int
+                  Decode = fun _ _ -> failwith "this decoder is broken" }
+            Expect.isTrue
+                (Result.isError (Codec.fromString raising "1"))
+                "a broken decoder refuses the value instead of killing its reader"
+
         testCase "a kind this build does not know reads as static" <| fun () ->
             let panel =
                 Codec.fromString Codec.claudePanel """{"mine":{"kind":"passkey","signInRequired":null}}""" |> expect
