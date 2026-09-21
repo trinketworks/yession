@@ -1272,6 +1272,60 @@ let private armTests =
             }
     ]
 
+/// The turn a previous process died under. A process killed mid-turn — a deploy that
+/// bounced the Manager, a crash, the machine — appends nothing on the way out, so the log
+/// says a turn is running that nothing is running, for ever: every client shows a caret that
+/// never stops and an interrupt that answers "already finished", and the person who asked
+/// waits on an agent that is not there. Photographed on the home instance after a
+/// `darwin-rebuild switch` landed under a turn.
+let private restartTests =
+    testList "A turn the previous process died under" [
+
+        let failedTurns (log: EventLog<SessionEvent>) =
+            async {
+                let! events = eventsOf log
+                return events |> List.choose (function AgentTurnFailed failed -> Some failed | _ -> None)
+            }
+
+        testCaseAsync "is failed at boot, naming the restart, so every client stops waiting on it" <|
+            async {
+                let scheduler, log =
+                    armedScheduler [ AgentTurnStarted { AgentTurnId = turnId; Cause = TurnCause.TriggeredBy humanMessageId } ] ignore
+                do! scheduler.ReconcileAtBoot ()
+                match! failedTurns log with
+                | [ failed ] ->
+                    Expect.equal failed.AgentTurnId turnId "the turn the log left open, not a new one"
+                    Expect.stringContains failed.Reason "restarted" "and the reason says what happened to it"
+                | other -> failwithf "expected exactly one failed turn, got %d" (List.length other)
+            }
+
+        testCaseAsync "a turn that had ended is left as it ended" <|
+            async {
+                // The boot call site fires on every session, and nearly every log ends with
+                // a turn that finished. It has to be free of consequence there.
+                let scheduler, log =
+                    armedScheduler
+                        [ AgentTurnStarted { AgentTurnId = turnId; Cause = TurnCause.TriggeredBy humanMessageId }
+                          AgentMessageCompleted { AgentTurnId = turnId; MessageId = agentMessageId; Body = "done" } ]
+                        ignore
+                do! scheduler.ReconcileAtBoot ()
+                let! failed = failedTurns log
+                Expect.isEmpty failed "nothing is failed twice, or failed for having finished"
+            }
+
+        testCaseAsync "a turn already failed is not failed again" <|
+            async {
+                let scheduler, log =
+                    armedScheduler
+                        [ AgentTurnStarted { AgentTurnId = turnId; Cause = TurnCause.TriggeredBy humanMessageId }
+                          AgentTurnFailed { AgentTurnId = turnId; Reason = "the model refused" } ]
+                        ignore
+                do! scheduler.ReconcileAtBoot ()
+                let! failed = failedTurns log
+                Expect.equal (List.length failed) 1 "the failure it already had is the whole account"
+            }
+    ]
+
 /// A scheduler over a doc a PEER writes, so the model choice arrives the way a person's
 /// choice actually arrives — through the picker's message and the sync boundary — rather
 /// than by a test reaching into the doc with a writer nothing in the product uses.
@@ -1795,6 +1849,7 @@ let tests =
         attributionTests
         replyRefTests
         armTests
+        restartTests
         Tag.needs "Agent E2E" [ Tag.Ports; Tag.Native ] (fun () -> e2eTests)
         Tag.needs "Agent live SDK" [ Tag.LiveAgent; Tag.Native ] (fun () -> liveTests)
     ]

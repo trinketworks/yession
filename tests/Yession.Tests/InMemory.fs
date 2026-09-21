@@ -46,6 +46,29 @@ let tests =
                 do! host.Stop ()
             }
 
+        // The Host is what puts the scheduler's boot repair in front of the first drain, and
+        // only a Host booted over the log a dead process left can say it does. The rule
+        // itself is the scheduler's (`Scheduler.ReconcileAtBoot`, pinned in `Agent.fs`).
+        testCaseAsync "a Host booted over a turn the previous process died under closes it, and a client sees it end" <|
+            async {
+                let log = InMemoryEventLog.create (sid ()) (fun () -> System.DateTimeOffset.UtcNow)
+                let turnId = AgentTurnId.create "turn-orphaned" |> expect
+                let asked = MessageId.create "msg-asked" |> expect
+                let! _ =
+                    log.Append
+                        ActorRef.SessionProcess
+                        (AgentTurnStarted { AgentTurnId = turnId; Cause = TurnCause.TriggeredBy asked })
+                let! host = Host.startWithEnvironment None None (Some log) (sid ()) 0
+                let! a = connectInMemoryClient host "ada" "Ada"
+                // What a client folds is the promise: no caret, no interrupt, over a turn
+                // nothing is running.
+                // Caught up past the failure the boot appended — the second event — rather
+                // than merely not yet at the start that opened the turn.
+                do! a.Runner.WaitFor (fun (m: ClientModel) -> m.EventConsumer.LastProcessedOffset |> Option.exists (fun o -> EventOffset.value o >= 1L))
+                Expect.isNone (a.Runner.Model ()).Agent.ActiveTurn "the turn the log left open is over for every client"
+                do! host.Stop ()
+            }
+
         testCaseAsync "a sent rich draft drains through the Host into both timelines as its markdown body" <|
             async {
                 let! host = Host.start (sid ()) 0
