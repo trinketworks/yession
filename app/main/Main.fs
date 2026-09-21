@@ -129,14 +129,15 @@ let private checkReport () =
              | None -> "never", ManagerCli.Off)
           Spawn = String.concat " " (sessionCommand :: sessionArgs), origin ManagerCli.spawnBinOption
           Addressing = addressing
-          // Decoded and re-encoded, so what is printed is what the relay will serve rather
-          // than what was typed. A declaration that could not be decoded refused the boot
-          // above.
+          // Re-encoded, so what is printed is what the relay will serve rather than what was
+          // typed. A declaration that could not be decoded refused the COMMAND LINE, so this
+          // report is only ever reached for endpoints that will be served — which is what
+          // `--check` promises and, until `--webhook` carried its own vocabulary, did not
+          // keep: the decode failed here too, and `Result.defaultValue []` printed "none
+          // declared" over it.
           Webhooks =
             Cli.valueOf ManagerCli.webhookOption args
-            |> WebhookRelay.EndpointSpec.decodeAll
-            |> Result.map (List.map WebhookRelay.EndpointSpec.encode)
-            |> Result.defaultValue []
+            |> List.map WebhookRelay.EndpointSpec.encode
           Inherited =
             Interop.envNames ()
             |> Array.filter (fun name -> name.StartsWith "YESSION_")

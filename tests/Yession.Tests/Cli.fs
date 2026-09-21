@@ -45,12 +45,25 @@ let private colour =
          | Some "blue" -> Ok "blue"
          | Some other -> Error (sprintf "unknown colour '%s' (expected red or blue)" other))
 
+/// A repeatable option whose vocabulary reads the WHOLE set, so these cases can ask what a
+/// reader sees when a rule spans declarations rather than sitting inside one.
+let private tags =
+    Cli.parsedValues
+        "tag"
+        "name"
+        "a tag to apply"
+        (fun given ->
+            match given |> List.filter (fun t -> given |> List.filter ((=) t) |> List.length > 1) with
+            | duplicate :: _ -> Error (sprintf "tag '%s' is given more than once" duplicate)
+            | [] -> Ok given)
+
 let private spec =
     Cli.spec "yession-manager"
     |> Cli.accepts auth
     |> Cli.accepts secrets
     |> Cli.accepts webhook
     |> Cli.accepts colour
+    |> Cli.accepts tags
 
 let private parse (args: string list) = Cli.parse spec (Array.ofList args)
 
@@ -231,6 +244,36 @@ let tests =
         testCase "the Manager reads --auth back as the strategy it means" <| fun () ->
             match Cli.parse ManagerCli.spec [| "--auth"; "localhost" |] with
             | Ok p -> Expect.equal (Cli.valueOf ManagerCli.authOption p).Name "localhost" "the strategy itself"
+            | Error e -> failwithf "expected a parse, got: %s" e
+
+        testCase "the Manager refuses a webhook declaration it cannot read, at the parse" <| fun () ->
+            // Two defects closed at once, both reproduced on the built bin before this existed.
+            // `--check` decoded the declarations itself and swallowed the failure with
+            // `Result.defaultValue []`, so `--webhook github --webhook github --check` printed
+            // "none declared", marked the feature off, and exited 0 over endpoints an operator
+            // had just asked for. A real boot threw inside Fable's async and surfaced as
+            // `UnhandledPromiseRejection ... "[object Object]"` — AFTER saying "manager
+            // started" — which is the exact failure `Cli.fs` was written to end, surviving on
+            // the one option that had not taken its vocabulary.
+            match Cli.parse ManagerCli.spec [| "--webhook"; "github"; "--webhook"; "github" |] with
+            | Error message ->
+                Expect.isTrue (message.Contains "declared more than once") "says what was wrong"
+                Expect.isTrue (message.Contains "usage: yession-manager") "and carries the usage"
+            | Ok _ -> failwith "a webhook declared twice must refuse the command line"
+
+        testCase "the Manager reads --webhook back as the endpoints it will serve" <| fun () ->
+            // Decoded once, by the parse, so the report and the relay cannot disagree about
+            // what was declared — they read one value rather than decoding the text apiece.
+            match Cli.parse ManagerCli.spec [| "--webhook"; "shop@1=x-shop-hmac:base64" |] with
+            | Ok p ->
+                match Cli.valueOf ManagerCli.webhookOption p with
+                | [ only ] ->
+                    Expect.equal only.Name "shop" "the endpoint's name, decoded"
+                    Expect.equal
+                        (WebhookRelay.EndpointSpec.encode only)
+                        "shop@1=x-shop-hmac:base64"
+                        "and it re-encodes to what was typed"
+                | other -> failwithf "expected one endpoint, got %A" other
             | Error e -> failwithf "expected a parse, got: %s" e
 
         testCase "a secrets mode spells itself back the way an operator typed it" <| fun () ->
@@ -436,6 +479,14 @@ let tests =
             match Cli.outcome spec "1.2.3" [| "--colour"; "banana"; "--version" |] with
             | Cli.Outcome.Answered text -> Expect.equal text "1.2.3" "still says what this bin is"
             | other -> failwithf "expected the version, got %A" other
+
+        testCase "a repeatable option's vocabulary reads the whole set, not each value alone" <| fun () ->
+            // The reason `parsedValues` hands over the list rather than one value at a time: a
+            // rule like "declared twice" is a disagreement BETWEEN declarations, and no reader
+            // that saw them singly could ever state it.
+            Expect.equal (Cli.valueOf tags (parsed [ "--tag"; "a"; "--tag"; "b" ])) [ "a"; "b" ] "both, in order"
+            let message = refused [ "--tag"; "a"; "--tag"; "a" ]
+            Expect.isTrue (message.Contains "given more than once") "and the set's own rule refuses"
 
         testCase "an option this spec never declared cannot be read off its parse" <| fun () ->
             // A mistake in the program, not on the command line, so it says so rather than
