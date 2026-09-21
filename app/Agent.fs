@@ -75,6 +75,11 @@ let private zodProperty () : Decoder<Zod.ZodType * string option> =
 /// A schema that cannot be read at all is no arguments at all. That is what the `catch`
 /// around `JSON.parse` used to say, and it is still the only answer available: refusing here
 /// would take a tool away from the turn over a schema the model never sees.
+///
+/// The ARGUMENTS of a call are the other side of that line and take the opposite answer —
+/// `toolArguments` below refuses them. Nothing is lost by refusing one call the model made
+/// and can make again, where refusing a schema withdraws a tool nobody in the turn can ask
+/// about.
 let zodShape (schema: string) : obj =
     let shape =
         Decode.object (fun get ->
@@ -93,6 +98,26 @@ let zodShape (schema: string) : obj =
     match Decode.fromString shape schema with
     | Ok properties -> createObj properties
     | Error _ -> createObj []
+
+/// The arguments a tool was called with, as the JSON text `ToolCall` carries — or why they
+/// could not be read.
+///
+/// An OBJECT is the whole of the contract, on both sides of this line. The SDK types a
+/// handler's argument as the shape the tool declared and enforces it before the handler
+/// runs: an empty raw shape is registered as `z.object({})`, so a call carrying no
+/// arguments arrives as `{}` and one carrying the wrong thing never arrives. Downstream,
+/// `ToolArguments.redact` reads the text as key/value pairs and a tool body decodes its
+/// own — so anything that is not an object records NOTHING and then fails inside the tool,
+/// two symptoms and no diagnosis.
+///
+/// So the shape question is answered by a decoder rather than by the `isNull` check this
+/// replaces, and answered honestly: a non-object is a protocol failure the model is told
+/// about, which is exactly what `isError` is for. `{}` was the wrong answer to give it —
+/// a valid call to every tool whose arguments are all optional, and a tool that needed one
+/// would have run on nothing.
+let toolArguments (args: obj) : Result<string, string> =
+    Decode.fromValue "$" (Decode.keyValuePairs Decode.value) (unbox args)
+    |> Result.map (Encode.object >> Encode.toString 0)
 
 /// One tool, as the SDK declares one, over the registry's single dispatch.
 ///
@@ -118,12 +143,14 @@ let private toolOf (registry: ToolRegistry) (descriptor: ToolDescriptor) : ToolD
         annotations
         (fun args ->
             async {
-                let arguments = JS.JSON.stringify (if isNull args then createObj [] else args)
-                let call : ToolCall =
-                    { Namespace = descriptor.Namespace; Name = descriptor.Name; Arguments = arguments }
-                match! registry.Invoke call with
-                | Ok answer -> return ToolResult.ofText false answer.Text
-                | Error reason -> return ToolResult.ofText true reason
+                match toolArguments args with
+                | Error reason -> return ToolResult.ofText true (sprintf "unreadable arguments: %s" reason)
+                | Ok arguments ->
+                    let call : ToolCall =
+                        { Namespace = descriptor.Namespace; Name = descriptor.Name; Arguments = arguments }
+                    match! registry.Invoke call with
+                    | Ok answer -> return ToolResult.ofText false answer.Text
+                    | Error reason -> return ToolResult.ofText true reason
             }
             |> Async.StartAsPromise)
 
