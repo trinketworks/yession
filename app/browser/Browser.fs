@@ -872,14 +872,15 @@ let private postJson (url: string) (body: string) : Async<Answered> =
           Fetch.Types.RequestProperties.Body (Fetch.Types.BodyInit.Case3 body) ]
         url
 
-/// A field left empty is OMITTED rather than sent blank, which is what the `|| undefined`
-/// this replaces was doing: `JSON.stringify` drops a key whose value is `undefined`, and a
-/// `None` reaches it as exactly that.
-let private sentIfGiven (value: string) : string option =
-    if String.IsNullOrEmpty value then None else Some value
-
-let private claudeBody (scope: string) (code: string) (token: string) : string =
-    JS.JSON.stringify {| scope = scope; code = sentIfGiven code; token = sentIfGiven token |}
+/// The body of a Claude panel write, as `Routes.fs` declares it for both ends of this POST.
+///
+/// There was a `sentIfGiven` here, turning `""` into a `None` so that `JSON.stringify` would
+/// drop the key — a serialiser's quirk steered by hand, one step before a body whose shape
+/// nothing checked against the session's decoder. Both are gone: the field is optional in
+/// the type, the omission is the encoder's rule, and every caller below already knows
+/// whether it has a code or a token, because each one refuses an empty field first.
+let private claudeBody (request: ClaudeRequest) : string =
+    Codec.toString ClaudeRequest.codec request
 
 /// A field off an already-parsed JSON value, or None wherever JavaScript's `||` default fell
 /// through — absent, `null`, `''` and `0` alike. That falsiness is not incidental: a poll reply
@@ -911,8 +912,10 @@ let private panelInput (selector: string) : string =
 // Same fetch shapes as the Claude panel's; the flow differs (device code) so the two
 // extra parsers below read the begin/poll replies.
 
-let private githubBody (scope: string) (token: string) : string =
-    JS.JSON.stringify {| scope = scope; token = sentIfGiven token |}
+/// A GitHub panel write, off the same declaration the session decodes it with. (Master's
+/// typed body; the status fetch that sat beside it is gone — the panel is pushed.)
+let private githubBody (request: GitHubRequest) : string =
+    Codec.toString GitHubRequest.codec request
 
 /// The begin reply: the code to type, where to type it, and the seconds GitHub asks this tab to
 /// leave between polls. A reply that states no interval — or states `0` — gets 5, which is the
@@ -1149,16 +1152,14 @@ let private start () =
                 })
         let postClaudeAction
             (route: string)
-            (scope: string)
-            (code: string)
-            (token: string)
+            (request: ClaudeRequest)
             (expectUrl: bool)
             (expect: ConnectionExpectation option)
             =
             claudeAction
                 (fun () ->
                     async {
-                        let! reply = postJson route (claudeBody scope code token)
+                        let! reply = postJson route (claudeBody request)
                         if not reply.Ok then return Error reply.Body
                         elif expectUrl then
                             match parseAuthorizeUrl reply.Body with
@@ -1166,7 +1167,7 @@ let private start () =
                             | Some url -> return Ok (Some url)
                         else return Ok None
                     })
-                scope
+                request.Scope
                 expect
 
         // The GitHub panel's round-trips (Plan 14). Device flow: begin puts the user
@@ -1187,7 +1188,7 @@ let private start () =
                         let! reply =
                             postJson
                                 (Page.href (GitHub GitHubAction.Poll))
-                                (githubBody scope "")
+                                (githubBody (GitHubRequest.scoped scope))
                         if not reply.Ok then
                             // A poll that failed is not necessarily a flow that ended. Only the
                             // session's own 4xx says this one is over; a 5xx or a fetch that
@@ -1295,7 +1296,7 @@ let private start () =
                     let scope = match panelInput "[data-claude-scope]" with "" -> "mine" | s -> s
                     // Nothing for the status to show: what this returns is an authorize URL,
                     // and the credential arrives when the human finishes in that tab.
-                    postClaudeAction (Page.href (Claude ClaudeAction.Begin)) scope "" "" true None
+                    postClaudeAction (Page.href (Claude ClaudeAction.Begin)) (ClaudeRequest.scoped scope) true None
               ClaudeComplete =
                 fun () ->
                     // The scope selector is unmounted while awaiting; the flow carries it.
@@ -1308,9 +1309,7 @@ let private start () =
                     | code ->
                         postClaudeAction
                             (Page.href (Claude ClaudeAction.Complete))
-                            scope
-                            code
-                            ""
+                            { Scope = scope; Code = Some code; Token = None }
                             false
                             (Some { Scope = scope; Connected = true })
               ClaudePasteToken =
@@ -1321,18 +1320,14 @@ let private start () =
                         let scope = match panelInput "[data-claude-scope]" with "" -> "mine" | s -> s
                         postClaudeAction
                             (Page.href (Claude ClaudeAction.Token))
-                            scope
-                            ""
-                            token
+                            { Scope = scope; Code = None; Token = Some token }
                             false
                             (Some { Scope = scope; Connected = true })
               ClaudeDisconnect =
                 fun scope ->
                     postClaudeAction
                         (Page.href (Claude ClaudeAction.Disconnect))
-                        scope
-                        ""
-                        ""
+                        (ClaudeRequest.scoped scope)
                         false
                         (Some { Scope = scope; Connected = false })
               GitHubConnect =
@@ -1346,7 +1341,7 @@ let private start () =
                             let! reply =
                                 postJson
                                     (Page.href (GitHub GitHubAction.Begin))
-                                    (githubBody scope "")
+                                    (githubBody (GitHubRequest.scoped scope))
                             if not reply.Ok then return Error reply.Body
                             else
                                 match parseDeviceBegin reply.Body with
@@ -1368,7 +1363,7 @@ let private start () =
                                 let! reply =
                                     postJson
                                         (Page.href (GitHub GitHubAction.Token))
-                                        (githubBody scope token)
+                                        (githubBody { Scope = scope; Token = Some token })
                                 if not reply.Ok then return Error reply.Body else return Ok None
                             })
                             (Some { Scope = scope; Connected = true })
@@ -1396,7 +1391,7 @@ let private start () =
                             let! reply =
                                 postJson
                                     (Page.href (GitHub GitHubAction.Disconnect))
-                                    (githubBody scope "")
+                                    (githubBody (GitHubRequest.scoped scope))
                             if not reply.Ok then return Error reply.Body else return Ok None
                         })
                         (Some { Scope = scope; Connected = false })

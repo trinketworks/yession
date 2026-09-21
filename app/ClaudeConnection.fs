@@ -25,12 +25,6 @@ open Thoth.Json
 open Thoth.Json.Net
 #endif
 
-#if FABLE_COMPILER
-open Thoth.Json
-#else
-open Thoth.Json.Net
-#endif
-
 /// The reserved storage name for the Claude credential, per scope. Opaque to the
 /// Manager — Claude-ness lives in this session-side choice.
 let secretName : SecretName =
@@ -455,17 +449,6 @@ let actorLabel (credential: CredentialFor) : string =
 // The browser asserts no identity here at all any more. It used to send its own peer id
 // and have the credential owned by it — see `ownerOf`.
 
-type private ClaudeRequestBody =
-    { Scope : string
-      Code : string option
-      Token : string option }
-
-let private bodyDecoder : Decoder<ClaudeRequestBody> =
-    Decode.object (fun get ->
-        { Scope = get.Optional.Field "scope" Decode.string |> Option.defaultValue "mine"
-          Code = get.Optional.Field "code" Decode.string
-          Token = get.Optional.Field "token" Decode.string })
-
 let private respondJson (res: ServerResponse) (status: int) (json: string) =
     res.writeHead (status, createObj [ "content-type", box "application/json"; "cache-control", box "no-store" ]) |> ignore
     res.``end`` json
@@ -545,7 +528,7 @@ let routes
             match auth.IdentityOf req with
             | None -> respondText res 401 "unauthorized"
             | Some identity ->
-                let handle (body: ClaudeRequestBody) : unit =
+                let handle (body: ClaudeRequest) : unit =
                     let owner = ownerOf identity
                     match routeOf () with
                     | Some (Claude action) ->
@@ -591,13 +574,12 @@ let routes
                     | None -> respondText res 404 "not found"
                 match req.``method`` with
                 | "GET" ->
-                    handle
-                        { Scope = "mine"
-                          Code = None
-                          Token = None }
+                    // A status read is about a scope and writes nothing, which is what the
+                    // body a write carries says when it carries only a scope.
+                    handle (ClaudeRequest.scoped "mine")
                 | _ ->
                     readBody req (fun raw ->
-                        match Decode.fromString bodyDecoder (if raw.Trim () = "" then "{}" else raw) with
+                        match Codec.fromString ClaudeRequest.codec (if raw.Trim () = "" then "{}" else raw) with
                         | Ok body -> handle body
                         | Error e -> respondText res 400 (sprintf "malformed request: %s" e))
             true

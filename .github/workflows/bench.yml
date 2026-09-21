@@ -43,9 +43,17 @@ on:
         type: boolean
         default: false
 
-# One measurement at a time per ref. Two benchmarks sharing a runner measure each other.
+# One measurement per COMMIT. Two benchmarks sharing a runner measure each other, and the sha is
+# what keeps that true without the group meaning something else on master: `github.ref` is
+# `refs/heads/master` for every push, so per-ref this cancelled the previous release's measurement
+# — and a cancelled job in a called workflow cancels the whole RUN, which skips the release.
+# verify.yml carries the same correction and the story of the run that proved it.
+#
+# Nothing is lost for a pull request, which is the case the cancelling was for: pr.yaml already
+# groups per pull request and cancels in progress, so a new push supersedes the entire run,
+# measurement included, before this group is ever consulted.
 concurrency:
-  group: bench-${{ github.ref }}
+  group: bench-${{ github.ref }}-${{ github.sha }}
   cancel-in-progress: true
 
 # No `permissions` block, deliberately, and this is the one thing about this file that is not

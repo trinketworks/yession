@@ -346,13 +346,8 @@
    the end of a scroll (photographed on iOS Safari as a white line under the composer). The
    ground has to be said on the document itself; a class on `<main>` cannot reach it.
 
-   The colour SCHEME — the browser's own paintwork: scrollbars, form-control defaults, and
-   the canvas it shows between committing a navigation and the new document's first paint —
-   is deliberately NOT declared here. This sheet is render-blocking and fetched, so anything
-   it says arrives after that canvas has already been painted; a `color-scheme` in it once
-   stood in for the meta tag (as a "duplicate") and every launch flashed white on iOS Safari
-   for as long as the sheet took to arrive. It is said once, in the head, ahead of the link
-   to this sheet: `Style.headTags`.
+   The colour SCHEME — the browser's own paintwork, scrollbars and form-control defaults — is
+   said in the head (`Style.headTags`) rather than here, once for every document.
 
    `overscroll-behavior` is what stops the rubber band happening at all: without it a flick
    that runs the timeline off its end chains to the document and bounces the whole app. An
@@ -362,6 +357,30 @@
     background-color: var(--color-bg);
     overscroll-behavior: none;
   }
+}
+
+/* Between two documents. Every navigation in the product is black to black — the Manager to
+   `/open`, `/open` through the sign-in bounce to a shell — and on an iPhone, opened from the
+   home screen, each one showed a WHITE screen in between: the old page is torn down when the
+   new one commits, and the new one cannot paint until its stylesheet has arrived, so what is
+   on the glass for that interval is the web view's own ground. Nothing a document says
+   reaches it. Not this sheet (it is the thing being waited for), not `color-scheme` in the
+   head (photographed: WebKit's pre-stylesheet canvas is white with it), not `theme-color`
+   (that is the browser's bars, not its page).
+
+   A cross-document view transition is the one mechanism that changes WHAT is held while the
+   new page gets ready: the browser keeps a snapshot of the old page up until the new one has
+   rendered, then crosses over. Same-origin navigations only, and both documents have to say
+   it — which they do, because both link this sheet, and the sheet is render-blocking, so the
+   new page's opt-in is known before its first render. Under the deployment this was
+   photographed on, the Manager and every session share one origin (path-mounted), so every
+   hop in the chain qualifies; a deployment that gives sessions their own origins gets the
+   Manager → `/open` hop and a plain navigation for the rest, which is what it had.
+
+   The crossfade is the platform default, kept: two black pages fading through each other
+   is, to the eye, one black page. */
+@view-transition {
+  navigation: auto;
 }
 
 /* A `<summary>` we have styled ourselves — the chat's tool runs, a block's facts — draws

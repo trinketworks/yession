@@ -3,9 +3,16 @@ namespace Yession.App
 open Yession.Domain
 open Yession.Domain.Terminals
 
-/// The HTTP contract of a Session Process: every path it serves, declared once. The
-/// server matches on these, the shell emits them, and the browser client fetches them —
-/// the same role `Dom` plays for markup hooks, one level up. Before this, `/client.js`
+#if FABLE_COMPILER
+open Thoth.Json
+#else
+open Thoth.Json.Net
+#endif
+
+/// The HTTP contract of a Session Process: every path it serves — and, for the two write
+/// surfaces that carry one, the body it is served with — declared once. The server matches
+/// on these, the shell emits them, and the browser client fetches them — the same role
+/// `Dom` plays for markup hooks, one level up. Before this, `/client.js`
 /// was spelled independently in the route match, in the emitted `<script src>`, and in
 /// the browser's fetch, three strings that agreed only by inspection.
 ///
@@ -39,6 +46,92 @@ type GitHubAction =
     | Poll
     | Token
     | Disconnect
+
+/// What a Claude panel write says, and the one place it is written.
+///
+/// Here rather than at either end because it HAS two ends, and they are in different
+/// projects: the browser client posts this, `Yession.Host.ClaudeConnection` reads it. The
+/// reading end declared the shape; the writing end stringified an anonymous record beside
+/// it, and nothing compared them. A field renamed on one side is a field silently never
+/// sent — which is the same class of fault `Route` was written to end for paths, one line
+/// up from here.
+///
+/// `Scope` stays a string. The route answers an unknown one with its own 400 naming the
+/// two it accepts, which is a better sentence than a decoder's, and the suites that pin
+/// that refusal post the scope as text.
+type ClaudeRequest =
+    { Scope : string
+      /// The authorization code a human pasted back: `Complete` carries one and nothing
+      /// else does.
+      Code : string option
+      /// A pasted token or key: `Token` carries one and nothing else does.
+      Token : string option }
+
+/// What a GitHub panel write says: the same contract with no pasted code, because the
+/// device flow never shows the browser one — `Poll` asks the session to go and look.
+type GitHubRequest =
+    { Scope : string
+      Token : string option }
+
+/// What the two bodies above share, in one place because they are one contract seen from
+/// two panels: a scope a body may leave unsaid, and a field a body may leave out.
+module private ConnectionBody =
+
+    /// The scope a body that names none is read as: the signing actor's own credential,
+    /// which is what the panel offers first and what a GET of a status route means.
+    [<Literal>]
+    let defaultScope = "mine"
+
+    /// A field with no value is OMITTED, never sent blank.
+    ///
+    /// That used to be arranged in the browser, by handing `JSON.stringify` a `None` and
+    /// relying on it to drop the `undefined` Fable compiles one to — a serialiser's quirk
+    /// steered by hand, through a helper whose whole job was to turn `""` into it. The
+    /// rule lives in the encoder now, where the optional field is declared optional.
+    let optionalField (name: string) (value: string option) =
+        value |> Option.map (fun text -> name, Encode.string text) |> Option.toList
+
+module ClaudeRequest =
+
+    open ConnectionBody
+
+
+    let codec : Codec<ClaudeRequest> =
+        { Encode =
+            fun (request: ClaudeRequest) ->
+                Encode.object
+                    [ yield "scope", Encode.string request.Scope
+                      yield! optionalField "code" request.Code
+                      yield! optionalField "token" request.Token ]
+          Decode =
+            Decode.object (fun get ->
+                { Scope = get.Optional.Field "scope" Decode.string |> Option.defaultValue defaultScope
+                  Code = get.Optional.Field "code" Decode.string
+                  Token = get.Optional.Field "token" Decode.string }) }
+
+    /// A write that carries nothing but the scope it is about — `Begin`, `Disconnect`, and
+    /// the GET of the status route, which asks about a scope without writing anything.
+    let scoped (scope: string) : ClaudeRequest =
+        { Scope = scope; Code = None; Token = None }
+
+module GitHubRequest =
+
+    open ConnectionBody
+
+    let codec : Codec<GitHubRequest> =
+        { Encode =
+            fun (request: GitHubRequest) ->
+                Encode.object
+                    [ yield "scope", Encode.string request.Scope
+                      yield! optionalField "token" request.Token ]
+          Decode =
+            Decode.object (fun get ->
+                { Scope = get.Optional.Field "scope" Decode.string |> Option.defaultValue defaultScope
+                  Token = get.Optional.Field "token" Decode.string }) }
+
+    /// A write that carries nothing but the scope: every GitHub action but `Token`.
+    let scoped (scope: string) : GitHubRequest =
+        { Scope = scope; Token = None }
 
 /// A route rendered as an address relative to the session's mount — and nothing else, which
 /// is the point of it being a type rather than the string it wraps. The string was correct in

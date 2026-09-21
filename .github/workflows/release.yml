@@ -47,11 +47,24 @@ on:
 # group on the `release` job alone (see it there), which is twelve seconds of work rather than
 # twenty minutes.
 #
-# One consequence to know rather than rediscover: bench.yml locks per REF with
-# `cancel-in-progress: true`, so two overlapping master runs cancel each other's measurement and
-# the newer one wins. The release still publishes — its condition is `!cancelled()` and the chart
-# download is `continue-on-error` — so the cost is a gap in the chart, which bench.yml already
-# calls the honest outcome for a measurement that did not happen.
+# Narrowing this lock exposed one that was hiding behind it, and the correction is worth keeping
+# because the reasoning failed in a way that is easy to repeat. Both workflows this one CALLS
+# grouped per REF with `cancel-in-progress: true`, and `github.ref` is `refs/heads/master` for
+# every push — so with nothing serialising the runs, the newer one cancelled the older one's gate
+# where it stood. The first overlapping pair after this landed proved it: run 35603572519
+# (711cfa4) had two of three tiers green and `nix` still running when the next push arrived, `nix`
+# was cancelled 51 seconds later, every job downstream skipped, and that commit was never
+# released.
+#
+# It was half-seen at the time and written down as a chart gap — "the release still publishes, so
+# the cost is a measurement that did not happen". That was wrong twice over: a cancelled job in a
+# called workflow cancels the whole RUN, so `!cancelled()` is false and the release job skips; and
+# the same group was on verify.yml, where it takes the gate rather than a number. Both are
+# per-commit now. The tell was available: the fault could be stated as a chain — a lock comes off,
+# an inner lock starts matching, a run dies — and the change touched one link.
+#
+# `Release gate` (cheap tier) now holds every workflow named here to it, so this cannot come back
+# quietly the next time one is added.
 
 permissions:
   contents: write

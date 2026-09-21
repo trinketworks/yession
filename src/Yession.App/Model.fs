@@ -463,6 +463,30 @@ type PaneReplay =
       /// jumping back to live rather than stopping on a stale frame.
       BehindLive : TerminalId option }
 
+/// What a fold on the timeline is a fold OF — the key its open state is kept under. One
+/// type for the three, because they are one control: an arrow on the gutter, a title on
+/// the line, and something that unfolds beneath. A key per KIND rather than one string
+/// namespace, so an act and a call that happened to share an id could never open together.
+[<RequireQualifiedAccess>]
+type FoldKey =
+    /// An act's particulars, under its note.
+    | Act of MessageId
+    /// A run of a turn's tool calls, under "used n tools" — keyed by its FIRST call, not
+    /// the turn: a turn that spoke between two runs of calls has two rows, and one key for
+    /// both would open both.
+    | ToolRun of ToolUseId
+    /// One call's input and output, under its line.
+    | ToolCall of ToolUseId
+
+module FoldKey =
+
+    /// The id an element carries for it — what `aria-controls` names and a test finds.
+    let value (key: FoldKey) : string =
+        match key with
+        | FoldKey.Act id -> "act-" + MessageId.value id
+        | FoldKey.ToolRun id -> "run-" + ToolUseId.value id
+        | FoldKey.ToolCall id -> "call-" + ToolUseId.value id
+
 type ClientModel =
     { Peer          : PeerState
       Connection    : ConnectionState
@@ -606,11 +630,12 @@ type ClientModel =
       /// open, because opening one is writing this. Two open menus would be two popovers
       /// over one column with one Escape between them.
       ItemMenu      : MessageId option
-      /// Which acts have their particulars UNFOLDED. View state like the menu above — what
-      /// one person opened to read is nobody else's — but a set rather than one slot: two
-      /// acts open at once are two things being read, not two popovers fighting over an
-      /// Escape. Empty is every act folded to its title, which is how a timeline is read.
-      OpenActs      : Set<MessageId>
+      /// Which folds are UNFOLDED — an act's particulars, a turn's tool calls, one call's
+      /// input and output. View state like the menu above — what one person opened to read
+      /// is nobody else's — but a set rather than one slot: two folds open at once are two
+      /// things being read, not two popovers fighting over an Escape. Empty is every line
+      /// folded to its title, which is how a timeline is read.
+      OpenFolds     : Set<FoldKey>
       /// What this client has just put on the clipboard, named by the hook of the box it
       /// came out of (`Dom.Hooks.githubUserCode` and whatever joins it). View state, local
       /// and transient for the same reason the menu above is: copying is one person's act
@@ -821,9 +846,10 @@ type ClientMsg =
     /// rather than an open, because the control that sends it is the same control either
     /// way — pressing the ellipsis a second time has to put the menu away.
     | ToggleItemMenuMsg of MessageId
-    /// Unfold this act's particulars, or fold them if they are open. One toggle for the one
-    /// control, as with the menu.
-    | ToggleActMsg of MessageId
+    /// Unfold what this line holds, or fold it if it is open. One toggle for the one
+    /// control, as with the menu — and one message for every fold on the timeline, because
+    /// they are one control drawn in three places.
+    | ToggleFoldMsg of FoldKey
     /// Shut whatever menu is open. Everything that dismisses one sends this: Escape, a
     /// press outside it, and choosing something from it.
     | CloseItemMenuMsg
@@ -899,7 +925,7 @@ module ClientModel =
           Pane = None
           TerminalsOpen = false
           ItemMenu = None
-          OpenActs = Set.empty
+          OpenFolds = Set.empty
           Copied = None
           Claude =
             { Status =
@@ -2006,11 +2032,11 @@ module ClientModel =
             let next = if model.ItemMenu = Some messageId then None else Some messageId
             { model with ItemMenu = next }
         | CloseItemMenuMsg -> { model with ItemMenu = None }
-        | ToggleActMsg messageId ->
+        | ToggleFoldMsg key ->
             let next =
-                if Set.contains messageId model.OpenActs then Set.remove messageId model.OpenActs
-                else Set.add messageId model.OpenActs
-            { model with OpenActs = next }
+                if Set.contains key model.OpenFolds then Set.remove key model.OpenFolds
+                else Set.add key model.OpenFolds
+            { model with OpenFolds = next }
         | CopiedMsg copied -> { model with Copied = copied }
         | ToggleTerminalListMsg ->
             // Going to the list KEEPS the read it covers, so coming back resumes it — a

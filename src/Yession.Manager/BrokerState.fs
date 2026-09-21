@@ -121,11 +121,6 @@ module BrokeredCredentialCodec =
 /// and grant wire shapes.
 module BrokerFlow =
 
-    let private query (parameters: (string * string) list) : string =
-        parameters
-        |> List.map (fun (k, v) -> sprintf "%s=%s" k (Uri.EscapeDataString v))
-        |> String.concat "&"
-
     /// The provider authorize URL for one flow. `authorizeUrlBase` may already contain
     /// a query string; standard params are appended either way.
     let authorizeUrl
@@ -139,7 +134,10 @@ module BrokerFlow =
         let separator = if authorizeUrlBase.Contains "?" then "&" else "?"
         authorizeUrlBase
         + separator
-        + query
+        // The authorize URL's parameters are urlencoded by the same rule as a form body —
+        // RFC 6749 §3.1 says so in as many words — so they are written by the same writer
+        // (`Access.Form`), rather than by a copy of it that lived here.
+        + Form.encode
             [ "response_type", "code"
               "client_id", clientId
               "redirect_uri", redirectUri
@@ -154,7 +152,7 @@ module BrokerFlow =
         match dialect with
         | FormEncoded ->
             { ContentType = "application/x-www-form-urlencoded"
-              Body = query parameters }
+              Body = Form.encode parameters }
         | JsonEncoded ->
             { ContentType = "application/json"
               Body =

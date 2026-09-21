@@ -15,7 +15,12 @@
        the browser shell already bind to; spelled again here they would be two authors of one
        fact, and a rename in the client would leave the camera waiting forever on an element
        that never appears. It drives nothing else of the App's: the page under the camera is
-       whatever the deployment serves. -->
+       whatever the deployment serves.
+
+       The rest is the platform it drives Chromium over: `Fable.Fetch` for the Manager's
+       routes, `Fable.NodeExtras` for the CDP socket and the process environment, and
+       `Fable.BrowserExtras` for reading the path back off the address the Manager answered
+       with — `URL` being a global on Node as much as in a browser. -->
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <OutputType>Exe</OutputType>
@@ -28,9 +33,11 @@
   <ItemGroup>
     <PackageReference Include="Fable.Node" />
     <PackageReference Include="Fable.Promise" />
+    <PackageReference Include="Fable.Fetch" />
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="../../src/Fable.BrowserExtras/Fable.BrowserExtras.fsproj" />
     <ProjectReference Include="../../src/Fable.NodeExtras/Fable.NodeExtras.fsproj" />
     <ProjectReference Include="../../src/Yession.Domain/Yession.Domain.fsproj" />
     <ProjectReference Include="../../src/Yession.App/Yession.App.fsproj" />

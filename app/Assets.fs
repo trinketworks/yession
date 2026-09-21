@@ -45,23 +45,6 @@ type private Missing =
     /// went away. No later root answers for this, because nothing about it is about absence.
     | Unreadable of path: string * reason: string
 
-/// The errno a Node filesystem error carries, or nothing for a failure that is not one of
-/// Node's.
-///
-/// An option rather than `""`, because the two absences here — a throw with no error at all,
-/// and an error naming no errno — are both "this fault has no errno", and a reader that has to
-/// tell an errno from a hole must be given one it cannot mistake. `ErrnoException` is
-/// `Fable.Node`'s name for the shape Node gives such an error, and `code` is read through it
-/// rather than through `($0.code || null)` — with the one case that `||` folded in written
-/// out: an errno spelled `''` names no more of a fault than a missing one does.
-let private errnoOf (error: exn) : string option =
-    if isNullOrUndefined (box error) then
-        None
-    else
-        match (unbox<Node.Base.ErrnoException> (box error)).code with
-        | None | Some "" -> None
-        | code -> code
-
 /// One declared file's bytes from ONE root, or why that root did not have them.
 ///
 /// Bytes, not text: a set holds woff2 as readily as CSS, and `utf8` would mangle it.
@@ -69,7 +52,7 @@ let private readFrom (root: string) (path: string) : Result<Buffer, Missing> =
     let full = root + "/" + path
     try Ok (fs.readFileSync full)
     with error ->
-        match errnoOf error with
+        match Fable.NodeExtras.Errors.errno error with
         | Some "ENOENT" -> Error Missing.Absent
         | _ -> Error (Missing.Unreadable (full, error.Message))
 

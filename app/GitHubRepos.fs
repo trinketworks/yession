@@ -162,18 +162,30 @@ let pageLimit = 33
 /// as `""` would be a cursor whose reader could not tell them apart.
 type private Cursor = { Text : string option; Page : int }
 
-/// A cursor as the browser carries it: this session's own JSON, base64url so it survives a
-/// query string. `q` is spelled `null` where there was no search text, which is what the
-/// reader tells apart from an empty one.
-let private mintCursor (text: string option) (page: int) : string =
-    // `null` rather than an absent key, which is what the JSON this replaced wrote and what
-    // every cursor already in a browser's hands carries.
-    let payload =
-        createObj
-            [ "q", (match text with Some searched -> box searched | None -> box null)
-              "page", box page ]
+/// A cursor's JSON, both ways. `q` is spelled `null` where there was no search text — an
+/// absent key and an empty string are the two things a reader must tell it apart from, so
+/// the encoder writes the null rather than dropping the field, which is what every cursor
+/// already in a browser's hands carries.
+///
+/// The pair is here, beside the type, because a cursor this session mints is a cursor this
+/// session reads: the two halves are one contract and a writer that drifted from the reader
+/// would strand every page but the first.
+let private cursor : Codec<Cursor> =
+    { Encode =
+        fun (c: Cursor) ->
+            Encode.object
+                [ "q", (match c.Text with Some searched -> Encode.string searched | None -> Encode.nil)
+                  "page", Encode.int c.Page ]
+      Decode =
+        Decode.object (fun get ->
+            { Cursor.Text = get.Optional.Field "q" Decode.string
+              Cursor.Page = get.Required.Field "page" Decode.int }) }
 
-    (buffer.Buffer.from (JS.JSON.stringify payload, BufferEncoding.Utf8)).toString base64url
+/// A cursor as the browser carries it: this session's own JSON, base64url so it survives a
+/// query string.
+let private mintCursor (text: string option) (page: int) : string =
+    let payload = cursor.Encode { Cursor.Text = text; Cursor.Page = page } |> Encode.toString 0
+    (buffer.Buffer.from (payload, BufferEncoding.Utf8)).toString base64url
 
 let private fromBase64Url (token: string) : string =
     (buffer.Buffer.from (token, base64url)).toString BufferEncoding.Utf8
@@ -184,11 +196,6 @@ let private fromBase64Url (token: string) : string =
 let private cursorJson (token: string) : string option =
     try Some (fromBase64Url token) with _ -> None
 
-let private cursorDecoder : Decoder<Cursor> =
-    Decode.object (fun get ->
-        { Text = get.Optional.Field "q" Decode.string
-          Page = get.Required.Field "page" Decode.int })
-
 /// The page a cursor asks for, and the text it asks within — or nothing, for a token that
 /// is not one of ours or that names a page outside the offer. Page one is not addressable
 /// by cursor: it is what a request with no cursor answers.
@@ -196,8 +203,8 @@ let readCursor (token: string) : (string option * int) option =
     match cursorJson token with
     | None -> None
     | Some json ->
-        match Decode.fromString cursorDecoder json with
-        | Ok cursor when cursor.Page >= 2 && cursor.Page <= pageLimit -> Some (cursor.Text, cursor.Page)
+        match Decode.fromString cursor.Decode json with
+        | Ok asked when asked.Page >= 2 && asked.Page <= pageLimit -> Some (asked.Text, asked.Page)
         | Ok _
         | Error _ -> None
 

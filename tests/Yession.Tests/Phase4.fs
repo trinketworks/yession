@@ -1110,25 +1110,23 @@ let private readinessTests =
                 do! pm.StopAll ()
             }
 
-        // The sheet says the ground once it has ARRIVED. Between a navigation committing and
-        // that sheet arriving, WebKit shows its canvas — white unless the document has said
-        // otherwise in a form the parser reads before any fetch, which is the head's
-        // `color-scheme` meta tag and nothing else. The Manager page had one, lost it as a
-        // "duplicate" of the sheet's, and every Create on an iPhone showed a white screen for
-        // as long as the `/open` page's and then the shell's stylesheets took. The invariant
-        // is the ORDER: the scheme is said before the sheet is asked for, on every document
-        // the Manager serves.
-        testCaseAsync "every Manager document says its colour scheme before it asks for its stylesheet" <|
+        // The browser paints some of every page itself — scrollbars, the defaults of a form
+        // control — and paints them for the scheme the document declared. A page that forgot
+        // would get light ones on a black ground. Said in the head by every document the
+        // Manager serves, through the one function that links their stylesheet, so this is
+        // what says none has stopped going through it. (It was once believed to colour the
+        // canvas WebKit shows before that stylesheet arrives; it does not — the view
+        // transition in `tailwind.css` is what holds the screen between two documents.)
+        testCaseAsync "every Manager document declares its colour scheme" <|
             async {
                 let! pm = managerWithUi "open-scheme"
                 let baseUrl = sprintf "http://127.0.0.1:%d" pm.EndpointPort.Value
                 let! manager = TestHttp.get (baseUrl + "/")
                 let! standalone = TestHttp.get (baseUrl + "/sessions/no-such-session/open")
                 for name, page in [ "the Manager page", manager.Body; "a standalone page", standalone.Body ] do
-                    let scheme = page.IndexOf "<meta name=\"color-scheme\" content=\"dark\">"
-                    let sheet = page.IndexOf "<link rel=\"stylesheet\""
-                    Expect.isTrue (scheme >= 0) (sprintf "%s declares its colour scheme in the head" name)
-                    Expect.isTrue (scheme < sheet) (sprintf "%s declares it before the stylesheet the browser will wait for" name)
+                    Expect.isTrue
+                        (page.Contains "<meta name=\"color-scheme\" content=\"dark\">")
+                        (sprintf "%s declares its colour scheme in the head" name)
                 do! pm.StopAll ()
             }
     ]

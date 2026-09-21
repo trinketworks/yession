@@ -1,8 +1,8 @@
 module Yession.Tests.Routes
 
 // The session's HTTP contract (`Yession.App.SessionRoute`): the paths its server matches,
-// its shell emits, and its browser client fetches, all from one declaration. Pure — the
-// cheapest tier covers it.
+// its shell emits, and its browser client fetches, all from one declaration — and the two
+// request bodies that go with them. Pure — the cheapest tier covers it.
 
 open Fable.Pyxpecto
 open Yession.Domain
@@ -317,4 +317,84 @@ let private managerRouteTests =
             Expect.equal (ManagerRoute.at "http://127.0.0.1:8321" ManagerRoute.Home) "http://127.0.0.1:8321/" "the page is the origin itself"
     ]
 
-let tests = testList "Routes" [ routeTests; mountTests; managerRouteTests ]
+// --- the bodies those write routes carry ---------------------------------------------------
+//
+// The BYTES, and deliberately so. A connection panel is the browser at one end and the
+// session at the other, and until now each end wrote the shape for itself: an anonymous
+// record stringified in `app/browser/Browser.fs`, a decoder in `app/ClaudeConnection.fs`
+// and `app/GitHubConnection.fs`. One declaration answers both now, and these cases pin
+// what it puts on the wire so that "one declaration" cannot quietly become "a different
+// wire" — the field names, their order, and the fact that an absent one is not there at
+// all rather than there and blank.
+
+let private claudeBodyTests =
+    testList "a Claude panel write" [
+
+        testCase "says the scope alone when it has nothing else to say" <| fun () ->
+            Expect.equal
+                (Codec.toString ClaudeRequest.codec (ClaudeRequest.scoped "session"))
+                """{"scope":"session"}"""
+                "no key for a code or a token nobody pasted"
+
+        testCase "says a pasted code beside the scope" <| fun () ->
+            let request : ClaudeRequest = { Scope = "mine"; Code = Some "abc123"; Token = None }
+            Expect.equal
+                (Codec.toString ClaudeRequest.codec request)
+                """{"scope":"mine","code":"abc123"}"""
+                "the code, under the name the session reads it by"
+
+        testCase "says a pasted token beside the scope" <| fun () ->
+            let request : ClaudeRequest = { Scope = "mine"; Code = None; Token = Some "sk-ant-oat01-x" }
+            Expect.equal
+                (Codec.toString ClaudeRequest.codec request)
+                """{"scope":"mine","token":"sk-ant-oat01-x"}"""
+                "the token, under the name the session reads it by"
+
+        testCase "is read back as the write that was sent" <| fun () ->
+            let request : ClaudeRequest = { Scope = "session"; Code = Some "abc123"; Token = None }
+            Expect.equal
+                (Codec.fromString ClaudeRequest.codec (Codec.toString ClaudeRequest.codec request))
+                (Ok request)
+                "the same write"
+
+        // The panel does not always name a scope — a GET of the status route names none at
+        // all — and "mine" is what that has always meant.
+        testCase "naming no scope means the signing actor's own" <| fun () ->
+            Expect.equal
+                (Codec.fromString ClaudeRequest.codec "{}")
+                (Ok (ClaudeRequest.scoped "mine"))
+                "mine, and nothing pasted"
+    ]
+
+let private githubBodyTests =
+    testList "a GitHub panel write" [
+
+        testCase "says the scope alone when it has nothing else to say" <| fun () ->
+            Expect.equal
+                (Codec.toString GitHubRequest.codec (GitHubRequest.scoped "mine"))
+                """{"scope":"mine"}"""
+                "no key for a token nobody pasted"
+
+        testCase "says a pasted token beside the scope" <| fun () ->
+            let request : GitHubRequest = { Scope = "session"; Token = Some "ghp_abc" }
+            Expect.equal
+                (Codec.toString GitHubRequest.codec request)
+                """{"scope":"session","token":"ghp_abc"}"""
+                "the token, under the name the session reads it by"
+
+        testCase "is read back as the write that was sent" <| fun () ->
+            let request : GitHubRequest = { Scope = "session"; Token = Some "ghp_abc" }
+            Expect.equal
+                (Codec.fromString GitHubRequest.codec (Codec.toString GitHubRequest.codec request))
+                (Ok request)
+                "the same write"
+
+        testCase "naming no scope means the signing actor's own" <| fun () ->
+            Expect.equal
+                (Codec.fromString GitHubRequest.codec "{}")
+                (Ok (GitHubRequest.scoped "mine"))
+                "mine, and nothing pasted"
+    ]
+
+let tests =
+    testList "Routes" [ routeTests; mountTests; managerRouteTests; claudeBodyTests; githubBodyTests ]

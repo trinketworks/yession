@@ -207,15 +207,6 @@ let grantRequest (target: SecretId) (granted: PollGrant) : ControlWire.Connectio
 // leaves the session: the browser is told the USER code and where to type it, and each
 // `Poll` from the panel drives one session→github.com poll of the pending flow.
 
-type private GitHubRequestBody =
-    { Scope : string
-      Token : string option }
-
-let private bodyDecoder : Decoder<GitHubRequestBody> =
-    Decode.object (fun get ->
-        { Scope = get.Optional.Field "scope" Decode.string |> Option.defaultValue "mine"
-          Token = get.Optional.Field "token" Decode.string })
-
 let private respondJson (res: ServerResponse) (status: int) (json: string) =
     res.writeHead (status, createObj [ "content-type", box "application/json"; "cache-control", box "no-store" ]) |> ignore
     res.``end`` json
@@ -495,7 +486,7 @@ let routes
             match auth.IdentityOf req with
             | None -> respondText res 401 "unauthorized"
             | Some identity ->
-                let handle (body: GitHubRequestBody) : unit =
+                let handle (body: GitHubRequest) : unit =
                     let owner = ownerOf identity
                     match routeOf () with
                     | Some (GitHub action) ->
@@ -586,12 +577,12 @@ let routes
                     | None -> respondText res 404 "not found"
                 match req.``method`` with
                 | "GET" ->
-                    handle
-                        { Scope = "mine"
-                          Token = None }
+                    // A status read is about a scope and writes nothing, which is what the
+                    // body a write carries says when it carries only a scope.
+                    handle (GitHubRequest.scoped "mine")
                 | _ ->
                     readBody req (fun raw ->
-                        match Decode.fromString bodyDecoder (if raw.Trim () = "" then "{}" else raw) with
+                        match Codec.fromString GitHubRequest.codec (if raw.Trim () = "" then "{}" else raw) with
                         | Ok body -> handle body
                         | Error e -> respondText res 400 (sprintf "malformed request: %s" e))
             true

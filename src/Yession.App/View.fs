@@ -2118,6 +2118,32 @@ module View =
                     html $"""<span class="{tone}">{line}</span>""")
             [ html $"""<pre class="{Style.actNoteDiff}" data-act-fact="diff">{lines}</pre>"""
               toldRow act ]
+        // THE fold: the one control every disclosure on the timeline is — an arrow on the
+        // dead centre of the gutter and the title's line, and something unfolding beneath,
+        // grown, slid and faded at the page's one pace (`Style.Motion`) and folded back the
+        // same way. Its own state per key (`OpenFolds`), so any number can be open at once; a
+        // real button with its expanded state said, so a keyboard and a screen reader get
+        // what a pointer gets. The container is the caller's — an act's article, a run's
+        // block — and owes the gutter (`pl-[32px]`) and `relative` the arrow is placed in.
+        // One pair of hooks for every fold — `data-fold` on the control and `data-fold-body`
+        // on what it opens, each carrying the key, and `data-fold-open` saying which way it
+        // is — because a test that walks one fold walks them all.
+        let foldArrow (key: FoldKey) (mark: TemplateResult) (label: string) =
+            let opened = Set.contains key model.OpenFolds
+            html $"""
+                <button type="button" class="{Style.fold}"
+                        aria-expanded="{if opened then "true" else "false"}" aria-controls="fold-{FoldKey.value key}"
+                        aria-label="{label}" data-fold="{FoldKey.value key}"
+                        @click={Ev(fun _ -> dispatch (ToggleFoldMsg key))}>
+                  <span class="{if opened then Style.foldMarkOpen else Style.foldMark}">{mark}</span>
+                </button>"""
+        let foldBody (key: FoldKey) (inner: string) (body: TemplateResult list) =
+            let opened = Set.contains key model.OpenFolds
+            html $"""
+                <div id="fold-{FoldKey.value key}" class="{if opened then Style.foldBodyOpen else Style.foldBodyShut}"
+                     data-fold-body="{FoldKey.value key}" data-fold-open="{if opened then "yes" else "no"}">
+                  <div class="{inner}">{body}</div>
+                </div>"""
         // A repo note is something someone DID, not said - one quiet line, actor-attributed,
         // no avatar and no rich body (Plan 14, repos). It rides the same timeline slot a
         // message does (both are `ConversationItem`s at an offset); `Content` is what tells
@@ -2155,32 +2181,17 @@ module View =
                     [ Segment.Text "starting sandbox "; Segment.Ref (EntityRef.Sandbox s.Sandbox) ], [], [ toldRow act ]
                 | Act.FileChanged { FileChanged.Diff = Some diff } -> Act.phrase act, [], fileChangeFacts act diff
                 | _ -> Act.phrase act, actNoteParticulars by act, [ toldRow act ]
-            // The fold: an arrow on the dead centre of the gutter and the title's line, and
-            // the particulars unfolding beneath — grown, slid and faded at the page's one
-            // pace (`Style.Motion`), and folded back the same way. Its own state per act
-            // (`OpenActs`), so two can be open at once; a real button with its expanded state
-            // said, so a keyboard and a screen reader get what a pointer gets. While the act
-            // is still RUNNING the gutter holds the pulse instead: an act in flight is not
-            // one to unfold, and its account is about to change under the reader anyway.
-            let opened = Set.contains item.MessageId model.OpenActs
-            let foldId = "act-fold-" + MessageId.value item.MessageId
+            // The fold (`foldArrow`/`foldBody`): the particulars under the title, behind the
+            // arrow on the gutter. While the act is still RUNNING the gutter holds the pulse
+            // instead: an act in flight is not one to unfold, and its account is about to
+            // change under the reader anyway.
+            let key = FoldKey.Act item.MessageId
             let arrow =
                 match item.Status with
                 | ConversationItemStatus.Running -> Lit.nothing
                 | Complete | Streaming | ConversationItemStatus.Failed ->
-                    html $"""
-                        <button type="button" class="{Style.actNoteFold}"
-                                aria-expanded="{if opened then "true" else "false"}" aria-controls="{foldId}"
-                                aria-label="{Dom.Text.details}" data-act-fold="{MessageId.value item.MessageId}"
-                                @click={Ev(fun _ -> dispatch (ToggleActMsg item.MessageId))}>
-                          <span class="{if opened then Style.actNoteFoldMarkOpen else Style.actNoteFoldMark}">{Icon.right}</span>
-                        </button>"""
-            let fold =
-                html $"""
-                    <div id="{foldId}" class="{if opened then Style.actNoteFoldBodyOpen else Style.actNoteFoldBodyShut}"
-                         data-act-facts data-act-facts-open="{if opened then "yes" else "no"}">
-                      <div class="{Style.actNoteFoldInner}">{folded}</div>
-                    </div>"""
+                    foldArrow key Icon.right Dom.Text.details
+            let fold = foldBody key Style.actNoteFoldInner folded
             html $"""
                 <article class="{Style.actNote}" data-message-id="{MessageId.value item.MessageId}" tabindex="-1" data-act-note data-act-status="{messageStatusLabel item.Status}" data-message-author="{Entity.actorToken item.Author}">
                   {itemActions item}
@@ -2342,7 +2353,7 @@ module View =
         // it went, and the call is its own disclosure, one chevron, opening on input and
         // output in one shape. The minted id rides the row, because that is what a deep link
         // will address once there is somewhere for it to land.
-        let toolCall (use': ToolUse) =
+        let toolCall (container: string) (title: TemplateResult) (use': ToolUse) =
             let status, rendered =
                 match use'.Outcome with
                 | None ->
@@ -2368,39 +2379,53 @@ module View =
                           <pre class="{Style.chatToolIoBody}">{text}</pre>
                         </div>"""
                 | _ -> Lit.nothing
-            html $"""
-                <details class="{Style.chatToolItem}"
-                         data-chat-tool="{ToolUseId.value use'.ToolUseId}"
-                         data-chat-tool-status="{status}">
-                  <summary class="{Style.chatToolCall}">
-                    <span class="{Style.chatToolCallMark}">{Icon.right}</span>
-                    <code class="{Style.chatToolName}">{ToolUse.label use'}</code>
-                    <span class="shrink-0">{rendered}</span>
-                  </summary>
-                  <div class="{Style.chatToolIo}">
+            let key = FoldKey.ToolCall use'.ToolUseId
+            let io =
+                [ html $"""
                     <div data-chat-tool-input="{ToolUseId.value use'.ToolUseId}">
                       <span class="{Style.chatToolIoLabel}">{Dom.Text.toolInput}</span>
                       <pre class="{Style.chatToolIoBody}">{input}</pre>
-                    </div>
-                    {output}
-                  </div>
-                </details>"""
-        // A turn's calls, folded to one line. The mark says how many kinds of thing are
-        // folded: two chevrons over several calls, one over one — so a reader can tell a
-        // stack from a single disclosure before opening either.
-        let toolRun (turn: AgentTurnId) (uses: ToolUse list) =
-            let summary, mark =
-                match uses with
-                | [ one ] -> ToolUse.label one, Icon.right
-                | many -> sprintf "%d tools" (List.length many), Icon.rights
+                    </div>"""
+                  output ]
+            let arrow = foldArrow key Icon.right Dom.Text.details
+            let body = foldBody key Style.chatToolIo io
             html $"""
-                <details class="{Style.chatToolRun}" data-chat-tool-run="{AgentTurnId.value turn}">
-                  <summary class="{Style.chatToolSummary}">
-                    <span class="{Style.chatToolRunMark}">{mark}</span>
-                    <span class="{Style.chatChipText}">used {summary}</span>
-                  </summary>
-                  {uses |> List.map toolCall}
-                </details>"""
+                <div class="{container}"
+                     data-chat-tool="{ToolUseId.value use'.ToolUseId}"
+                     data-chat-tool-status="{status}">
+                  {arrow}
+                  <div class="{Style.chatToolCall}">
+                    {title}
+                    <span class="shrink-0">{rendered}</span>
+                  </div>
+                  {body}
+                </div>"""
+        // A turn's calls on the same gutter every act's arrow sits on — the fold is the one
+        // control, wherever it is. A run of ONE call is that call, on the rail: "used
+        // yession/x", its outcome, and its fold opening straight onto input and output — a
+        // run around a single call was a fold over a fold, two presses to reach one thing.
+        // A run of SEVERAL is the aggregate: two chevrons on the rail, and inside it each
+        // call is a fold of its own on the SAME rail, not a gutter further in — the two
+        // chevrons over the one is what says which line holds the others, and an indent on
+        // top of that was a second way of saying it.
+        let toolRun (turn: AgentTurnId) (uses: ToolUse list) =
+            let named (use': ToolUse) = html $"""<code class="{Style.chatToolName}">{ToolUse.label use'}</code>"""
+            match uses with
+            | [ one ] ->
+                toolCall
+                    Style.chatToolRun
+                    (html $"""<span class="{Style.chatToolRunText}">used</span> {named one}""")
+                    one
+            | many ->
+                let key = FoldKey.ToolRun (List.head many).ToolUseId
+                let arrow = foldArrow key Icon.rights Dom.Text.details
+                let body = foldBody key Style.chatToolRunInner (many |> List.map (fun use' -> toolCall Style.chatToolItem (named use') use'))
+                html $"""
+                    <div class="{Style.chatToolRun}" data-chat-tool-run="{AgentTurnId.value turn}">
+                      {arrow}
+                      <span class="{Style.chatToolRunText}">used {List.length many} tools</span>
+                      {body}
+                    </div>"""
         // One agent burst: the commands one turn ran, in one row (Plan 20, stage 4). The
         // lines ARE block chips — same element, same click, same hooks — so a chip does not
         // change what it is by being grouped, and nothing here has to be kept in step with

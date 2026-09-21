@@ -110,6 +110,29 @@ let internal chromiumPath () : string =
 let internal await (t: Task<'a>) : Async<'a> = Async.AwaitTask t
 let internal awaitU (t: Task) : Async<unit> = Async.AwaitTask t
 
+/// The one way this suite launches Chromium, because the switches are load-bearing and were
+/// not the same at every site.
+///
+/// Playwright starts Chromium with a `--disable-features=` list of its own, and one entry on
+/// it — `RenderDocument` (playwright#37714) — leaves a document that arrives by a
+/// cross-document view transition (`tailwind.css`: every same-origin navigation in the
+/// product) with its rendering suppressed for good: `pagereveal` never fires, the animation
+/// timeline stays at zero, no frame is ever produced. Real Chrome has the feature on and the
+/// transition runs. Under the harness, a Create pressed on a path-mounted deployment came up
+/// CONNECTED — its script ran — with a rAF-polled wait that could never fire, and only the
+/// suites that happened to pass their own `--disable-features=` were spared, because a later
+/// switch REPLACES Playwright's rather than adding to it. So every launch passes one, and
+/// this is it: the WebRTC entry the peer cases need (headless sandboxes stall ICE gathering
+/// when host candidates hide behind mDNS), and `RenderDocument` deliberately absent.
+///
+/// The tell if this ever regresses: a browser case whose failure report says `rafAlive:
+/// false` with the page otherwise right.
+let internal launchChromium (pw: IPlaywright) : Async<IBrowser> =
+    await (pw.Chromium.LaunchAsync (
+        BrowserTypeLaunchOptions (
+            ExecutablePath = chromiumPath (),
+            Args = [| "--disable-features=WebRtcHideLocalIpsWithMdns" |])))
+
 // --- Loopback servers, on ports nobody chose ----------------------------------------------
 //
 // Nothing in this file names a port, and no case can ask for one. Hand-picked numbers are what
@@ -509,11 +532,7 @@ let private peersCase (name: string) (peers: int) (body: Host -> IPage list -> A
             let host = startHost ()
             let! pw = await (Playwright.CreateAsync ())
             let! br =
-                await (pw.Chromium.LaunchAsync (
-                    BrowserTypeLaunchOptions (
-                        ExecutablePath = chromiumPath (),
-                        // Headless sandboxes stall ICE gathering when host candidates hide behind mDNS.
-                        Args = [| "--disable-features=WebRtcHideLocalIpsWithMdns" |])))
+                launchChromium pw
             let! opened =
                 [ 1 .. peers ]
                 |> List.map (fun _ ->
@@ -1214,8 +1233,7 @@ let private editorCaseOn
             let server = serveStatic harnessRoot
             let! pw = await (Playwright.CreateAsync ())
             let! br =
-                await (pw.Chromium.LaunchAsync (
-                    BrowserTypeLaunchOptions (ExecutablePath = chromiumPath ())))
+                launchChromium pw
             let! page =
                 match viewport with
                 | None -> await (br.NewPageAsync ())
@@ -1578,16 +1596,16 @@ let editorTests =
         editorCase "a fold's arrow is centred in the act's gutter and on its title line" <| fun page ->
             async {
                 do! awaitU (page.EvaluateAsync "() => window.__acts()")
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-act-note] [data-act-fold]")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-act-note] [data-fold]")
                 let! off =
                     await (page.EvaluateAsync<float[]> """() => {
                         const note = document.querySelector('#shell [data-act-note]')
-                        const arrow = note.querySelector('[data-act-fold] svg').getBoundingClientRect()
+                        const arrow = note.querySelector('[data-fold] svg').getBoundingClientRect()
                         const box = note.getBoundingClientRect()
                         const gutter = parseFloat(getComputedStyle(note).paddingLeft)
                         // The title's FIRST line box, not its whole box: a title that wraps
                         // is two lines tall, and the arrow belongs on the first.
-                        const line = note.querySelector('[data-act-fold] ~ span').getClientRects()[0]
+                        const line = note.querySelector('[data-fold] ~ span').getClientRects()[0]
                         return [ (arrow.left + arrow.width / 2) - (box.left + gutter / 2),
                                  (arrow.top + arrow.height / 2) - (line.top + line.height / 2) ]
                     }""")
@@ -1602,15 +1620,15 @@ let editorTests =
         editorCase "unfolding an act shows its particulars, and folding hides them" <| fun page ->
             async {
                 do! awaitU (page.EvaluateAsync "() => window.__acts()")
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-act-note] [data-act-fold]")
-                let visibility = "getComputedStyle(document.querySelector('#shell [data-act-note] [data-act-facts]')).visibility"
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-act-note] [data-fold]")
+                let visibility = "getComputedStyle(document.querySelector('#shell [data-act-note] [data-fold-body]')).visibility"
                 do! waitFor "the particulars to start hidden" page (visibility + " === 'hidden'")
-                do! awaitU (page.ClickAsync "#shell [data-act-note] [data-act-fold]")
+                do! awaitU (page.ClickAsync "#shell [data-act-note] [data-fold]")
                 do! waitFor "the particulars to show once unfolded" page (visibility + " === 'visible'")
                 let! shown =
                     await (page.EvaluateAsync<float> "() => document.querySelector('#shell [data-act-note] [data-act-said]').getBoundingClientRect().height")
                 Expect.isTrue (shown > 0.0) "and what the agent was told has height on the page"
-                do! awaitU (page.ClickAsync "#shell [data-act-note] [data-act-fold]")
+                do! awaitU (page.ClickAsync "#shell [data-act-note] [data-fold]")
                 do! waitFor "the particulars to hide once folded" page (visibility + " === 'hidden'")
             }
 
@@ -3477,10 +3495,7 @@ let private offlineReopen (name: string) (make: IPage -> Async<unit>) (check: IP
                 let! pw = await (Playwright.CreateAsync ())
                 playwrightToDispose <- Some pw
                 let! br =
-                    await (pw.Chromium.LaunchAsync (
-                        BrowserTypeLaunchOptions (
-                            ExecutablePath = chromiumPath (),
-                            Args = [| "--disable-features=WebRtcHideLocalIpsWithMdns" |])))
+                    launchChromium pw
                 browserToClose <- Some br
                 let! context = await (br.NewContextAsync ())
                 let! page = await (context.NewPageAsync ())
@@ -3540,10 +3555,7 @@ let mountedTests =
                     let! pw = await (Playwright.CreateAsync ())
                     playwrightToDispose <- Some pw
                     let! br =
-                        await (pw.Chromium.LaunchAsync (
-                            BrowserTypeLaunchOptions (
-                                ExecutablePath = chromiumPath (),
-                                Args = [| "--disable-features=WebRtcHideLocalIpsWithMdns" |])))
+                        launchChromium pw
                     browserToClose <- Some br
                     let! context = await (br.NewContextAsync ())
                     let! page = await (context.NewPageAsync ())
@@ -3779,10 +3791,7 @@ let mountedTests =
                     let! pw = await (Playwright.CreateAsync ())
                     playwrightToDispose <- Some pw
                     let! br =
-                        await (pw.Chromium.LaunchAsync (
-                            BrowserTypeLaunchOptions (
-                                ExecutablePath = chromiumPath (),
-                                Args = [| "--disable-features=WebRtcHideLocalIpsWithMdns" |])))
+                        launchChromium pw
                     browserToClose <- Some br
                     let! context = await (br.NewContextAsync ())
                     let! page = await (context.NewPageAsync ())
@@ -3822,10 +3831,7 @@ let mountedTests =
                     let! pw = await (Playwright.CreateAsync ())
                     playwrightToDispose <- Some pw
                     let! br =
-                        await (pw.Chromium.LaunchAsync (
-                            BrowserTypeLaunchOptions (
-                                ExecutablePath = chromiumPath (),
-                                Args = [| "--disable-features=WebRtcHideLocalIpsWithMdns" |])))
+                        launchChromium pw
                     browserToClose <- Some br
                     let! context = await (br.NewContextAsync ())
                     let! page = await (context.NewPageAsync ())
@@ -4061,7 +4067,7 @@ let frontDoorTests =
                     startFrontedHost door.Origin frontManagerPort
                     let! pw = await (Playwright.CreateAsync ())
                     playwrightToDispose <- Some pw
-                    let! br = await (pw.Chromium.LaunchAsync (BrowserTypeLaunchOptions (ExecutablePath = chromiumPath ())))
+                    let! br = launchChromium pw
                     browserToClose <- Some br
                     let! context = await (br.NewContextAsync ())
                     let! page = await (context.NewPageAsync ())
@@ -4271,7 +4277,7 @@ let frontedTests =
                 try
                     let! pw = await (Playwright.CreateAsync ())
                     playwrightToDispose <- Some pw
-                    let! br = await (pw.Chromium.LaunchAsync (BrowserTypeLaunchOptions (ExecutablePath = chromiumPath ())))
+                    let! br = launchChromium pw
                     browserToClose <- Some br
                     // The browser IS the ingress here: what `serve` would assert about the
                     // caller rides every request, including the sign-in bounce a session sends
@@ -4332,9 +4338,13 @@ let frontedTests =
                         let! showing =
                             await (page.EvaluateAsync<string>
                                     (sprintf
-                                        """() => JSON.stringify({
+                                        """async () => JSON.stringify({
                                              url: location.href,
                                              title: document.title,
+                                             rafAlive: await Promise.race([new Promise(r => requestAnimationFrame(() => r(true))), new Promise(r => setTimeout(() => r(false), 2000))]),
+                                             animations: document.getAnimations().map(a => ({ pseudo: a.effect?.pseudoElement, state: a.playState, t: a.currentTime, dur: a.effect?.getTiming().duration, timeline: String(a.timeline?.currentTime) })),
+                                             visibility: document.visibilityState,
+                                             now: performance.now(),
                                              connection: document.querySelector('[%s]')?.getAttribute('%s') ?? null,
                                              name: document.querySelector('[%s]')?.textContent ?? null,
                                              text: document.body?.innerText?.slice(0, 200) ?? null
@@ -4390,7 +4400,7 @@ let filterTests =
                 try
                     let! pw = await (Playwright.CreateAsync ())
                     playwrightToDispose <- Some pw
-                    let! br = await (pw.Chromium.LaunchAsync (BrowserTypeLaunchOptions (ExecutablePath = chromiumPath ())))
+                    let! br = launchChromium pw
                     browserToClose <- Some br
                     let! page = await (br.NewPageAsync ())
                     page.SetDefaultTimeout 30000.0f
@@ -4513,7 +4523,7 @@ let private withHeldCreate
         try
             let! pw = await (Playwright.CreateAsync ())
             playwrightToDispose <- Some pw
-            let! br = await (pw.Chromium.LaunchAsync (BrowserTypeLaunchOptions (ExecutablePath = chromiumPath ())))
+            let! br = launchChromium pw
             browserToClose <- Some br
             let! page = await (br.NewPageAsync ())
             page.SetDefaultTimeout 30000.0f

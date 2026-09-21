@@ -234,7 +234,7 @@ let private workspaceFor (sandbox: SandboxRef) =
 /// backwards.
 let private makeSandboxes
     (credentials: WorkSandboxes.CredentialSource list)
-    : Yession.SessionProcess.EventLog<SessionEvent> -> WorkSandboxes.WorkSandboxes =
+    : Yession.SessionProcess.EventLog<SessionEvent> -> Async<WorkSandboxes.WorkSandboxes> =
     let name = SessionId.value sessionId
     fun log ->
         let create (sandbox: SandboxRef) (requested: EnvironmentSpec) (provision: WorkSandboxes.Provision) =
@@ -299,40 +299,42 @@ let private makeSandboxes
                             })
                         (Sandboxes.summaryFor backend workSpec)
                         (sprintf "env-%s" (SandboxRef.objectName sessionId sandbox)))
-        match WorkSandboxes.create
-                { Backend =
-                    // Described by SCOPE — the same rule the start goes through, minus
-                    // its refusal: a repo-owned entry is docker whether or not it has
-                    // started yet.
-                    fun (ref: SandboxRef) ->
-                        SandboxBackend.describe (SandboxRuntime.scopedBackend workBackend (SandboxRef.scope ref))
-                  // Asked of the fold rather than captured, because the sandbox manager is
-                  // built before the first fold has run and a description arrives with it.
-                  Describe = fun ref -> repoSandboxes.Described ref
-                  // Answered from the ref's own scope and the backend it will run under, so
-                  // the path is the one a command in THIS sandbox would use.
-                  Checkout =
-                    fun ref ->
-                        match SandboxRef.scope ref with
-                        | RepoOwned repo ->
-                            Some (
-                                sprintf
-                                    "%s/%s"
-                                    (Sandboxes.reposVisibleAt
-                                        (repoSandboxes.ReposAt ref)
-                                        (SandboxRuntime.scopedBackend workBackend (SandboxRef.scope ref))
-                                        reposDir)
-                                    (RepoRef.relativePath repo))
-                        | SessionOwned -> None
-                  // The credentials this session knows how to forward. GitHub is the one
-                  // Plan 14 left deferred, and it is what makes `git push` from a terminal
-                  // work; resolution is the Plan 08 precedence, unchanged.
-                  Credentials = credentials
-                  Create = create
-                  Log = log
-                  Clock = clock.Now } with
-        | Ok sandboxes -> sandboxes
-        | Error e -> failwithf "work sandboxes: %s" e
+        async {
+            match! WorkSandboxes.create
+                    { Backend =
+                        // Described by SCOPE — the same rule the start goes through, minus
+                        // its refusal: a repo-owned entry is docker whether or not it has
+                        // started yet.
+                        fun (ref: SandboxRef) ->
+                            SandboxBackend.describe (SandboxRuntime.scopedBackend workBackend (SandboxRef.scope ref))
+                      // Asked of the fold rather than captured, because the sandbox manager is
+                      // built before the first fold has run and a description arrives with it.
+                      Describe = fun ref -> repoSandboxes.Described ref
+                      // Answered from the ref's own scope and the backend it will run under, so
+                      // the path is the one a command in THIS sandbox would use.
+                      Checkout =
+                        fun ref ->
+                            match SandboxRef.scope ref with
+                            | RepoOwned repo ->
+                                Some (
+                                    sprintf
+                                        "%s/%s"
+                                        (Sandboxes.reposVisibleAt
+                                            (repoSandboxes.ReposAt ref)
+                                            (SandboxRuntime.scopedBackend workBackend (SandboxRef.scope ref))
+                                            reposDir)
+                                        (RepoRef.relativePath repo))
+                            | SessionOwned -> None
+                      // The credentials this session knows how to forward. GitHub is the one
+                      // Plan 14 left deferred, and it is what makes `git push` from a terminal
+                      // work; resolution is the Plan 08 precedence, unchanged.
+                      Credentials = credentials
+                      Create = create
+                      Log = log
+                      Clock = clock.Now } with
+            | Ok sandboxes -> return sandboxes
+            | Error e -> return failwithf "work sandboxes: %s" e
+        }
 
 // Where this session is reachable from outside, from the same two
 // variables the Manager parsed, inherited by plain env. Fails the boot on a combination
