@@ -1157,6 +1157,41 @@ module Style =
         "flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-8 pb-6 flex flex-col gap-6 [&>*:first-child]:mt-6 "
         + "max-md:px-4 max-md:pb-4 max-md:gap-5 max-md:[&>*:first-child]:mt-4 break-words"
 
+    /// The box `timeline` floats its "jump to latest" over — mirrors `terminalReplayRegion`'s
+    /// reason for existing: `timeline` IS the scroller, so an `absolute` child of it would
+    /// scroll away with everything else, and something has to sit around it to be the
+    /// positioned ancestor the float resolves against instead.
+    let chatRegion = "relative flex-1 min-h-0 flex flex-col"
+
+    /// The float's own slot: positioning, the scrim, and the show/hide `Render.fs` toggles (a
+    /// scroll-distance fact, not model state — see there for why), kept off the button itself
+    /// so toggling it can never fight the button's own `flex` layout for which `display` wins.
+    /// Centred rather than cornered, unlike `terminalLiveFloat`: that one is a status line a
+    /// reader glances at, this is a CONTROL a thumb has to reach, and centred is reachable
+    /// with either hand on a phone.
+    ///
+    /// The scrim fades to `bg` and NOT to `surface`: the timeline draws no fill of its own, so
+    /// what a line of prose actually sits on down there is the canvas `mainColumn` inherits.
+    /// Fading to the wrong one would leave a visible band edge where the two greys meet.
+    /// Tonal, so the module header still holds — the ONE gradient spent in this product is the
+    /// composer's blue→green edge, and darkening toward the ground the text is already on is
+    /// not a second one.
+    ///
+    /// `pointer-events-none`, with the button taking them back: the slot is a full-width strip
+    /// lying over live text, and a scrim that swallowed a tap or a selection would take more
+    /// from the reader than the contrast it buys.
+    let chatJumpToLatestSlot =
+        "hidden absolute inset-x-0 bottom-0 z-10 flex justify-center pointer-events-none "
+        + "pt-12 pb-4 bg-linear-to-t from-bg/90 to-transparent"
+
+    /// The button in that slot: the chat's twin of `terminalLiveFloat`'s solid ground —
+    /// opaque so it reads over whatever text is scrolling under it, no rounded corners
+    /// because this product draws none (see `itemGround`).
+    let chatJumpToLatest =
+        cls [ "pointer-events-auto flex items-center justify-center p-2.5 bg-surface"
+              "text-ink-dim hover:text-ink cursor-pointer transition-colors"
+              Stroke.ring; Stroke.rim; focusRing ]
+
     /// How wide anything in the timeline is allowed to get.
     ///
     /// 38rem is 608px, which at the body's 15px Source Serif is about 68 characters — inside
