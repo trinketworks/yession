@@ -1483,31 +1483,50 @@ let private getWithCookie (url: string) (cookie: string) : Async<TestHttp.Reply>
 let private cookieOf (jar: OidcHttp.Jar) : string =
     jar.Cookies |> Map.toList |> List.map (fun (k, v) -> sprintf "%s=%s" k v) |> String.concat "; "
 
-/// "This scope has a credential connected", as the status body says it — and "it has none".
+/// "This scope has a credential connected" — and "it has none" — as a panel states it.
 ///
 /// The shape lives HERE rather than in each case, because it used to live in four of them
 /// and adding one field to the wire broke all four at once. What these cases are about is
-/// whether a sign-in reached the session, not how the JSON spells it.
-let private connectedAt (scope: string) (body: string) : bool =
-    body.Contains (sprintf """"%s":{"kind":""" scope)
+/// whether a sign-in reached the session, not how it is spelled.
+let private connectedAt (scope: string) (panel: ClaudePanel) : bool =
+    (if scope = "session" then panel.SessionCredential else panel.MineCredential).IsSome
 
-let private notConnectedAt (scope: string) (body: string) : bool =
-    body.Contains (sprintf """"%s":null""" scope)
+let private notConnectedAt (scope: string) (panel: ClaudePanel) : bool = not (connectedAt scope panel)
 
-/// Poll the session's /claude status until `predicate` holds — the session learns of
-/// credential changes over its control stream, so the flip is asynchronous by design.
-let private awaitClaudeStatus (sessionUrl: string) (cookie: string) (predicate: string -> bool) : Async<unit> =
-    let rec go attempts =
-        async {
-            // No peer id: the cookie is the whole identity this route reads.
-            let! reply = getWithCookie (sessionUrl + "/claude") cookie
-            if reply.Status = 200 && predicate reply.Body then return ()
-            elif attempts <= 0 then return failwithf "claude status never settled; last: %d %s" reply.Status reply.Body
-            else
-                do! Async.Sleep 200
-                return! go (attempts - 1)
-        }
-    go 50
+/// Watch the session's read stream until a Claude panel satisfies `predicate`.
+///
+/// The session learns of credential changes over its control stream and tells every open
+/// browser, so the flip is asynchronous by design — but nothing here ASKS any more. This
+/// opens the stream the browser opens, and waits on the condition rather than on a
+/// duration, exactly as the query-stream cases do.
+let private awaitClaudePanel
+    (sessionUrl: string)
+    (cookie: string)
+    (predicate: ClaudePanel -> bool)
+    : Async<unit> =
+    async {
+        let seen = ResizeArray<ClaudePanel> ()
+        let subscription =
+            Sse.subscribe
+                (sessionUrl + "/queries")
+                [ "cookie", cookie ]
+                (fun data ->
+                    match Codec.fromString Codec.readFrame data with
+                    | Ok (Panels (claude, _)) -> seen.Add claude
+                    | Ok (Queried _)
+                    | Error _ -> ())
+        let rec go attempts =
+            async {
+                if seen |> Seq.exists predicate then return ()
+                elif attempts <= 0 then
+                    return failwithf "the panel never settled; saw %d frame(s), last: %A" seen.Count (Seq.tryLast seen)
+                else
+                    do! Async.Sleep 200
+                    return! go (attempts - 1)
+            }
+        try do! go 50
+        finally subscription.Stop ()
+    }
 
 let private e2eTests =
     testList "per-actor credentials across processes" [
@@ -1548,7 +1567,7 @@ let private e2eTests =
                         m.Conversation.Items
                         |> List.exists (fun i -> i.Status = Complete && (ConversationItem.said i).Contains "hello before sign-in"))
                 // The status surface says so honestly: no agent in this session yet.
-                do! awaitClaudeStatus sessionUrl cookieA (fun body -> body.Contains "\"agent\":false")
+                do! awaitClaudePanel sessionUrl cookieA (fun panel -> panel.AgentAvailable = Some false)
 
                 // 2. A pastes a setup token for "all my sessions" through the session's
                 //    /claude surface; the gate flips without a relaunch.
@@ -1559,8 +1578,8 @@ let private e2eTests =
                         """{"scope":"mine","token":"sk-ant-oat01-fake"}"""
                    
                 Expect.equal putMine.Status 200 (sprintf "the paste stores: %s" putMine.Body)
-                do! awaitClaudeStatus sessionUrl cookieA (fun body ->
-                        connectedAt "mine" body && body.Contains "\"agent\":true")
+                do! awaitClaudePanel sessionUrl cookieA (fun panel ->
+                        connectedAt "mine" panel && panel.AgentAvailable = Some true)
 
                 do! compose a a.Hello.PeerId "hello after sign-in"
                 a.Connection.SendDraft a.Hello.PeerId
@@ -1589,8 +1608,8 @@ let private e2eTests =
                             i.Author = ActorRef.Agent && i.Status = Complete && (ConversationItem.said i).Contains "credential: CLAUDE_CODE_OAUTH_TOKEN"))
                 // B's own status surface agrees, without B having asserted any identity.
                 let cookieB = cookieOf openedB.Jar
-                do! awaitClaudeStatus sessionUrl cookieB (fun body ->
-                        connectedAt "mine" body && body.Contains "\"owner\":\"local\"")
+                do! awaitClaudePanel sessionUrl cookieB (fun panel ->
+                        connectedAt "mine" panel && panel.Owner = Some "local")
 
                 // 4. A stores a SESSION-scoped api key: it overrides for every actor —
                 //    Bob's next turn now runs on it.
@@ -1601,7 +1620,7 @@ let private e2eTests =
                         """{"scope":"session","token":"sk-ant-api03-fake"}"""
                    
                 Expect.equal putSession.Status 200 (sprintf "the session-scoped paste stores: %s" putSession.Body)
-                do! awaitClaudeStatus sessionUrl cookieA (connectedAt "session")
+                do! awaitClaudePanel sessionUrl cookieA (connectedAt "session")
                 do! compose b b.Hello.PeerId "bob under the session credential"
                 b.Connection.SendDraft b.Hello.PeerId
                 do! b.Runner.WaitFor (fun m ->
@@ -1616,8 +1635,8 @@ let private e2eTests =
                 let! _ =
                     postJsonWithCookie (sessionUrl + "/claude/disconnect") cookieA """{"scope":"mine"}"""
                    
-                do! awaitClaudeStatus sessionUrl cookieA (fun body ->
-                        notConnectedAt "session" body && notConnectedAt "mine" body)
+                do! awaitClaudePanel sessionUrl cookieA (fun panel ->
+                        notConnectedAt "session" panel && notConnectedAt "mine" panel)
 
                 do! a.Channel.Close ()
                 do! b.Channel.Close ()
@@ -1668,7 +1687,7 @@ let private e2eTests =
                         """{"scope":"mine","token":"sk-ant-oat01-alices"}"""
                    
                 Expect.equal putMine.Status 200 (sprintf "alice connects her own: %s" putMine.Body)
-                do! awaitClaudeStatus sessionUrl cookieAlice (connectedAt "mine")
+                do! awaitClaudePanel sessionUrl cookieAlice (connectedAt "mine")
 
                 do! compose alice alice.Hello.PeerId "alice on her own credential"
                 alice.Connection.SendDraft alice.Hello.PeerId

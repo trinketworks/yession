@@ -877,8 +877,10 @@ let private compositionTests =
                     (sessionUrl + "/queries")
                     [ "cookie", OidcHttp.cookieHeader opened.Jar ]
                     (fun data ->
-                        match Codec.fromString Codec.queryFrame data with
-                        | Ok frame -> frames.Add frame
+                        // The stream carries every read model now; this one is about queries.
+                        match Codec.fromString Codec.readFrame data with
+                        | Ok (Queried frame) -> frames.Add frame
+                        | Ok (Panels _)
                         | Error _ -> ())
 
             let reposRows () =
