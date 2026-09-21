@@ -80,13 +80,17 @@ type AgentViewState = { ActiveTurn : AgentTurnId option }
 /// Where the Claude sign-in flow is (Plan 08). `ClaudeAwaitingCode` = the authorize
 /// tab is open; completion may land at the Manager's callback (the panel polls status)
 /// or arrive as a pasted code.
+///
+/// This axis is about a HUMAN being somewhere else — approving in another tab — and nothing
+/// else. Whether a command of ours is in flight, and whether one failed, is the panel's
+/// `Pending`: they were cases here (`ClaudeBusy`, `ClaudeError`) and the two axes kept
+/// overwriting each other, which is how "the command was accepted" came to be stored as
+/// "there is nothing left to wait for".
 type ClaudeFlowState =
     | ClaudeIdle
     /// `scope` remembers the sign-in choice ("session" | "mine") the flow began with,
     /// so a pasted-code completion targets the same credential slot.
     | ClaudeAwaitingCode of authorizeUrl: string * scope: string
-    | ClaudeBusy
-    | ClaudeError of string
 
 /// One connected credential as a panel row reads it.
 ///
@@ -98,6 +102,32 @@ type ClaudeFlowState =
 type ConnectionView =
     { Kind : string
       SignInRequired : string option }
+
+/// What the status query must SHOW for a connection command to have landed.
+///
+/// Data rather than a predicate: it lives in the model, so the model stays comparable and a
+/// red test can print what the panel was waiting for. `Scope` is the panel's own vocabulary
+/// ("mine" | "session") — the word the command was sent with — rather than a second one to
+/// keep in step with it.
+type ConnectionExpectation =
+    { Scope : string
+      /// `true` after a connect, `false` after a disconnect. Both are waits, and a
+      /// disconnect that waited for "a credential is there" would never end.
+      Connected : bool }
+
+module ConnectionExpectation =
+
+    /// Has the query shown it? Read off the two rows a panel has, because those rows ARE
+    /// what the wait is about: the credential appearing (or going) under the scope the
+    /// person chose. A scope neither panel offers reads as the shared one, which is the
+    /// same default the command was sent under.
+    let landed
+        (expect: ConnectionExpectation)
+        (sessionCredential: ConnectionView option)
+        (mineCredential: ConnectionView option)
+        : bool =
+        let credential = if expect.Scope = "session" then sessionCredential else mineCredential
+        credential.IsSome = expect.Connected
 
 /// What the /claude status probe reported, per sign-in scope, when connected.
 type ClaudeStatus =
@@ -116,19 +146,28 @@ type ClaudeStatus =
 [<RequireQualifiedAccess>]
 type ClaudeViewState =
     { Status : ClaudeStatus
-      Flow : ClaudeFlowState }
+      Flow : ClaudeFlowState
+      /// A command of ours on its way into `Status`, modelled rather than assumed.
+      Pending : Pending<ConnectionExpectation> }
+
+module ClaudeStatus =
+
+    /// This panel's wait rule, beside the status it reads, so no caller composes it.
+    let landed (expect: ConnectionExpectation) (status: ClaudeStatus) : bool =
+        ConnectionExpectation.landed expect status.SessionCredential status.MineCredential
 
 /// Where the GitHub sign-in flow is (Plan 14). Device flow: the panel shows a user
 /// code, the human approves it on github.com in their own tab, and the browser polls
 /// the session (which polls GitHub) until the grant lands.
+///
+/// Like Claude's, this axis is only about the human being elsewhere; a command of ours in
+/// flight is the panel's `Pending`.
 type GitHubFlowState =
     | GitHubIdle
     /// The code is on screen. `scope` remembers the sign-in choice ("session" |
     /// "mine"); `interval` is GitHub's polling pace in seconds, which `slow_down`
     /// replies may widen mid-flow.
     | GitHubAwaitingApproval of userCode: string * verificationUri: string * scope: string * interval: int
-    | GitHubBusy
-    | GitHubError of string
 
 module GitHubFlow =
 
@@ -151,7 +190,15 @@ type GitHubStatus =
 [<RequireQualifiedAccess>]
 type GitHubViewState =
     { Status : GitHubStatus
-      Flow : GitHubFlowState }
+      Flow : GitHubFlowState
+      /// A command of ours on its way into `Status`, modelled rather than assumed.
+      Pending : Pending<ConnectionExpectation> }
+
+module GitHubStatus =
+
+    /// This panel's wait rule, beside the status it reads, so no caller composes it.
+    let landed (expect: ConnectionExpectation) (status: GitHubStatus) : bool =
+        ConnectionExpectation.landed expect status.SessionCredential status.MineCredential
 
 /// What the picker knows about the models it can offer. Three states and no fourth,
 /// because a picker has exactly three honest things to say: I have not looked yet, here is
@@ -705,12 +752,20 @@ type ClientMsg =
     | DeleteQueuedMsg of QueueId
     /// A fresh /claude status probe result (Plan 08).
     | ClaudeStatusMsg of ClaudeStatus
-    /// The Claude sign-in flow moved (begin/busy/error/reset).
+    /// The Claude sign-in flow moved (the authorize tab opened, or the person cancelled).
     | ClaudeFlowMsg of ClaudeFlowState
+    /// A Claude connection command moved (sent, accepted and now awaiting the status that
+    /// will show it, or refused).
+    | ClaudePendingMsg of Pending<ConnectionExpectation>
     /// A fresh /github status probe result (Plan 14).
     | GitHubStatusMsg of GitHubStatus
-    /// The GitHub sign-in flow moved (begin/awaiting/busy/error/reset).
+    /// The GitHub sign-in flow moved (the code came up, or the person cancelled).
     | GitHubFlowMsg of GitHubFlowState
+    /// A GitHub connection command moved, exactly as Claude's does.
+    | GitHubPendingMsg of Pending<ConnectionExpectation>
+    /// The clock, for every panel waiting on a query at once: one tick, because a deadline
+    /// is about elapsed time and not about which panel is watching it.
+    | PendingWaitedMsg of now: int64
     /// What /models answered: the catalogue, or why there isn't one.
     | ModelCatalogueMsg of ModelCatalogueState
     /// The launch surface moved (typed, listed, chose, sent, answered, failed, dismissed).
@@ -881,10 +936,12 @@ module ClientModel =
           Copied = None
           Claude =
             { Status = { SessionCredential = None; MineCredential = None; Owner = None; AgentAvailable = None }
-              Flow = ClaudeIdle }
+              Flow = ClaudeIdle
+              Pending = Pending.Ready }
           GitHub =
             { Status = { SessionCredential = None; MineCredential = None }
-              Flow = GitHubIdle }
+              Flow = GitHubIdle
+              Pending = Pending.Ready }
           Models = ModelsUnknown
           Queries = { Declared = []; Values = Map.empty } }
 
@@ -1837,27 +1894,46 @@ module ClientModel =
         | DeleteQueuedMsg queueId ->
             model |> withSynced { model.Synced with Queue = Map.remove queueId model.Synced.Queue }
         | ClaudeStatusMsg status ->
-            // A connected credential ends an in-flight wait (the callback completed in
-            // its own tab); otherwise the flow state is untouched by a mere probe.
+            // A connected credential ends the wait for the human in the other tab (the
+            // callback completed there); otherwise the flow is untouched by a mere probe.
             let connected = status.SessionCredential.IsSome || status.MineCredential.IsSome
             let flow =
                 match model.Claude.Flow, connected with
-                | (ClaudeAwaitingCode _ | ClaudeBusy), true -> ClaudeIdle
+                | ClaudeAwaitingCode _, true -> ClaudeIdle
                 | flow, _ -> flow
-            { model with Claude = { Status = status; Flow = flow } }
+            // And this is the probe our own command is waiting on: it ends that wait when it
+            // shows what the command asked for, and only then. A probe that has not caught
+            // up leaves the wait standing, which is the difference between eventual
+            // consistency and a coin flip.
+            { model with
+                Claude =
+                  { Status = status
+                    Flow = flow
+                    Pending = model.Claude.Pending |> Pending.observed ClaudeStatus.landed status } }
         | ClaudeFlowMsg flow ->
             { model with Claude = { model.Claude with Flow = flow } }
+        | ClaudePendingMsg pending ->
+            { model with Claude = { model.Claude with Pending = pending } }
         | GitHubStatusMsg status ->
-            // A connected credential ends an in-flight wait (the poll completed, or the
-            // grant landed from another tab); otherwise a mere probe leaves the flow be.
+            // The same two rules, for the same two reasons (see Claude's above).
             let connected = status.SessionCredential.IsSome || status.MineCredential.IsSome
             let flow =
                 match model.GitHub.Flow, connected with
-                | (GitHubAwaitingApproval _ | GitHubBusy), true -> GitHubIdle
+                | GitHubAwaitingApproval _, true -> GitHubIdle
                 | flow, _ -> flow
-            { model with GitHub = { Status = status; Flow = flow } }
+            { model with
+                GitHub =
+                  { Status = status
+                    Flow = flow
+                    Pending = model.GitHub.Pending |> Pending.observed GitHubStatus.landed status } }
         | GitHubFlowMsg flow ->
             { model with GitHub = { model.GitHub with Flow = flow } }
+        | GitHubPendingMsg pending ->
+            { model with GitHub = { model.GitHub with Pending = pending } }
+        | PendingWaitedMsg now ->
+            { model with
+                Claude = { model.Claude with Pending = Pending.waited now model.Claude.Pending }
+                GitHub = { model.GitHub with Pending = Pending.waited now model.GitHub.Pending } }
         | QueryFrameMsg (QueriesDeclared defs) ->
             // The declarations REPLACE rather than merge: a reconnect re-declares, and a
             // query the session has dropped must leave the surface with it.

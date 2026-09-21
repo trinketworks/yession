@@ -902,6 +902,17 @@ let private claudeReply : Decoder<ClaudeReply> =
                 // Neither: an older session process, answering the status alone.
                 | None -> ModelsUnknown })
 
+/// The clock the connection panels' waits are measured against. Milliseconds since the
+/// epoch, because `Pending`'s deadline is an elapsed time and nothing here needs a date.
+let private nowMillis () : int64 = System.DateTimeOffset.UtcNow.ToUnixTimeMilliseconds ()
+
+/// How often a panel re-asks the status while a command of ours is still on its way into
+/// it. Short, because the frame it is waiting for is milliseconds behind the command and
+/// the whole point is not to miss it by having asked once, too early; bounded by
+/// `Pending.deadlineMillis`, which is what ends the asking.
+[<Literal>]
+let private pollLandedMillis = 200
+
 /// A status round-trip that answers only when it HAS an answer. A fetch that never arrived, a
 /// session that refused, and a reply this build cannot read are one outcome with one remedy:
 /// say nothing, so the panel keeps showing what it last knew rather than blanking on a blip.
@@ -1214,22 +1225,61 @@ let private start () =
                         pollClaudeWhileAwaiting ()
                     | _ -> ()
                 })
-        let claudeAction (run: unit -> Async<Result<string option, string>>) (scope: string) =
-            // One shape for every panel action: busy → run → error or refreshed status
-            // (and into awaiting-code when the action returned an authorize URL).
-            dispatchRef (ClaudeFlowMsg ClaudeBusy)
+        // A wait for a status this panel has not been shown yet, kept asking until the
+        // status shows it or `Pending` gives up. The probe fired the moment the command
+        // answered is the one that almost always settles it; this is what makes "almost"
+        // stop mattering, because the status the command moved arrives on a stream of its
+        // own and nothing orders the two (`Pending`'s own doc has the whole account).
+        let rec pollClaudeUntilLanded () =
+            Async.StartImmediate (
+                async {
+                    do! Async.Sleep pollLandedMillis
+                    match latestModel.Claude.Pending with
+                    | Pending.Awaiting _ ->
+                        // The deadline is the model's rule, not this loop's: the loop only
+                        // says what time it is.
+                        dispatchRef (PendingWaitedMsg (nowMillis ()))
+                        match latestModel.Claude.Pending with
+                        | Pending.Awaiting _ ->
+                            refreshClaude ()
+                            pollClaudeUntilLanded ()
+                        | _ -> ()
+                    | _ -> ()
+                })
+        /// One shape for every panel action: sending → the command answers → either it is
+        /// refused, or it opened an authorize tab (nothing for the status to show yet), or
+        /// it was ACCEPTED and `expect` names what the status has to show before this panel
+        /// calls it done.
+        let claudeAction
+            (run: unit -> Async<Result<string option, string>>)
+            (scope: string)
+            (expect: ConnectionExpectation option)
+            =
+            dispatchRef (ClaudePendingMsg Pending.Sending)
             Async.StartImmediate (
                 async {
                     match! run () with
-                    | Error reason -> dispatchRef (ClaudeFlowMsg (ClaudeError reason))
+                    | Error reason -> dispatchRef (ClaudePendingMsg (Pending.Refused reason))
                     | Ok (Some authorizeUrl) ->
+                        dispatchRef (ClaudePendingMsg Pending.Ready)
                         dispatchRef (ClaudeFlowMsg (ClaudeAwaitingCode (authorizeUrl, scope)))
                         pollClaudeWhileAwaiting ()
                     | Ok None ->
-                        dispatchRef (ClaudeFlowMsg ClaudeIdle)
+                        match expect with
+                        | Some expect ->
+                            dispatchRef (ClaudePendingMsg (Pending.Awaiting (expect, nowMillis ())))
+                            pollClaudeUntilLanded ()
+                        | None -> dispatchRef (ClaudePendingMsg Pending.Ready)
                         refreshClaude ()
                 })
-        let postClaudeAction (route: string) (scope: string) (code: string) (token: string) (expectUrl: bool) =
+        let postClaudeAction
+            (route: string)
+            (scope: string)
+            (code: string)
+            (token: string)
+            (expectUrl: bool)
+            (expect: ConnectionExpectation option)
+            =
             claudeAction
                 (fun () ->
                     async {
@@ -1242,6 +1292,7 @@ let private start () =
                         else return Ok None
                     })
                 scope
+                expect
 
         // The GitHub panel's round-trips (Plan 14). Device flow: begin puts the user
         // code on screen, then this tab drives the session's poll at GitHub's stated
@@ -1274,7 +1325,12 @@ let private start () =
                             // never answered is a bad moment, and the code on screen — which the
                             // human may already have approved — is still good.
                             if GitHubFlow.ended reply.Status then
-                                dispatchRef (GitHubFlowMsg (GitHubError reply.Body))
+                                // The flow is over as well as refused, and both have to be
+                                // said: the code on screen is dead, so it goes with the
+                                // reason it died. (When the two were one state, saying the
+                                // error did this by accident.)
+                                dispatchRef (GitHubFlowMsg GitHubIdle)
+                                dispatchRef (GitHubPendingMsg (Pending.Refused reply.Body))
                             else pollGitHubWhileAwaiting ()
                         else
                             let outcome = parseDevicePoll reply.Body
@@ -1305,17 +1361,40 @@ let private start () =
                     | Error _ -> ())
             |> ignore
 
-        let githubAction (run: unit -> Async<Result<GitHubFlowState option, string>>) =
-            dispatchRef (GitHubFlowMsg GitHubBusy)
+        // The GitHub panel's own wait, for the Claude panel's reason and by the same rule.
+        let rec pollGitHubUntilLanded () =
+            Async.StartImmediate (
+                async {
+                    do! Async.Sleep pollLandedMillis
+                    match latestModel.GitHub.Pending with
+                    | Pending.Awaiting _ ->
+                        dispatchRef (PendingWaitedMsg (nowMillis ()))
+                        match latestModel.GitHub.Pending with
+                        | Pending.Awaiting _ ->
+                            refreshGitHub ()
+                            pollGitHubUntilLanded ()
+                        | _ -> ()
+                    | _ -> ()
+                })
+        let githubAction
+            (run: unit -> Async<Result<GitHubFlowState option, string>>)
+            (expect: ConnectionExpectation option)
+            =
+            dispatchRef (GitHubPendingMsg Pending.Sending)
             Async.StartImmediate (
                 async {
                     match! run () with
-                    | Error reason -> dispatchRef (GitHubFlowMsg (GitHubError reason))
+                    | Error reason -> dispatchRef (GitHubPendingMsg (Pending.Refused reason))
                     | Ok (Some flow) ->
+                        dispatchRef (GitHubPendingMsg Pending.Ready)
                         dispatchRef (GitHubFlowMsg flow)
                         pollGitHubWhileAwaiting ()
                     | Ok None ->
-                        dispatchRef (GitHubFlowMsg GitHubIdle)
+                        match expect with
+                        | Some expect ->
+                            dispatchRef (GitHubPendingMsg (Pending.Awaiting (expect, nowMillis ())))
+                            pollGitHubUntilLanded ()
+                        | None -> dispatchRef (GitHubPendingMsg Pending.Ready)
                         refreshGitHub ()
                 })
 
@@ -1366,7 +1445,9 @@ let private start () =
               ClaudeConnect =
                 fun () ->
                     let scope = match panelInput "[data-claude-scope]" with "" -> "mine" | s -> s
-                    postClaudeAction (Page.href (Claude ClaudeAction.Begin)) scope "" "" true
+                    // Nothing for the status to show: what this returns is an authorize URL,
+                    // and the credential arrives when the human finishes in that tab.
+                    postClaudeAction (Page.href (Claude ClaudeAction.Begin)) scope "" "" true None
               ClaudeComplete =
                 fun () ->
                     // The scope selector is unmounted while awaiting; the flow carries it.
@@ -1375,25 +1456,44 @@ let private start () =
                         | ClaudeAwaitingCode (_, scope) -> scope
                         | _ -> "mine"
                     match panelInput "[data-claude-code]" with
-                    | "" -> dispatchRef (ClaudeFlowMsg (ClaudeError "paste the code first"))
-                    | code -> postClaudeAction (Page.href (Claude ClaudeAction.Complete)) scope code "" false
+                    | "" -> dispatchRef (ClaudePendingMsg (Pending.Refused "paste the code first"))
+                    | code ->
+                        postClaudeAction
+                            (Page.href (Claude ClaudeAction.Complete))
+                            scope
+                            code
+                            ""
+                            false
+                            (Some { Scope = scope; Connected = true })
               ClaudePasteToken =
                 fun () ->
                     match panelInput "[data-claude-token]" with
-                    | "" -> dispatchRef (ClaudeFlowMsg (ClaudeError "paste a token first"))
+                    | "" -> dispatchRef (ClaudePendingMsg (Pending.Refused "paste a token first"))
                     | token ->
+                        let scope = match panelInput "[data-claude-scope]" with "" -> "mine" | s -> s
                         postClaudeAction
                             (Page.href (Claude ClaudeAction.Token))
-                            (match panelInput "[data-claude-scope]" with "" -> "mine" | s -> s)
+                            scope
                             ""
                             token
                             false
+                            (Some { Scope = scope; Connected = true })
               ClaudeDisconnect =
-                fun scope -> postClaudeAction (Page.href (Claude ClaudeAction.Disconnect)) scope "" "" false
+                fun scope ->
+                    postClaudeAction
+                        (Page.href (Claude ClaudeAction.Disconnect))
+                        scope
+                        ""
+                        ""
+                        false
+                        (Some { Scope = scope; Connected = false })
               GitHubConnect =
                 fun () ->
                     let scope = match panelInput "[data-github-scope]" with "" -> "mine" | s -> s
-                    githubAction (fun () ->
+                    // Nothing for the status to show yet: the grant lands when the human
+                    // approves the code this puts on screen.
+                    githubAction
+                        (fun () ->
                         async {
                             let! reply =
                                 postJson
@@ -1407,13 +1507,15 @@ let private start () =
                                     return
                                         Ok (Some (GitHubAwaitingApproval (began.UserCode, began.VerificationUri, scope, began.Interval)))
                         })
+                        None
               GitHubPasteToken =
                 fun () ->
                     match panelInput "[data-github-token]" with
-                    | "" -> dispatchRef (GitHubFlowMsg (GitHubError "paste a token first"))
+                    | "" -> dispatchRef (GitHubPendingMsg (Pending.Refused "paste a token first"))
                     | token ->
                         let scope = match panelInput "[data-github-scope]" with "" -> "mine" | s -> s
-                        githubAction (fun () ->
+                        githubAction
+                            (fun () ->
                             async {
                                 let! reply =
                                     postJson
@@ -1421,6 +1523,7 @@ let private start () =
                                         (githubBody scope token)
                                 if not reply.Ok then return Error reply.Body else return Ok None
                             })
+                            (Some { Scope = scope; Connected = true })
               Copy =
                 fun key text ->
                     writeClipboard text (fun written ->
@@ -1439,7 +1542,8 @@ let private start () =
                                     copiedShownMs)
               GitHubDisconnect =
                 fun scope ->
-                    githubAction (fun () ->
+                    githubAction
+                        (fun () ->
                         async {
                             let! reply =
                                 postJson
@@ -1447,6 +1551,7 @@ let private start () =
                                     (githubBody scope "")
                             if not reply.Ok then return Error reply.Body else return Ok None
                         })
+                        (Some { Scope = scope; Connected = false })
               OpenTerminal = fun title -> connectionRef |> Option.iter (fun c -> c.OpenTerminal title)
               ApproveRepoCapabilities =
                 fun repo granted -> connectionRef |> Option.iter (fun c -> c.ApproveRepoCapabilities repo granted)

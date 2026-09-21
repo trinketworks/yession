@@ -3643,8 +3643,134 @@ let private prAgentToolTests =
             }
     ]
 
+open Yession.App
+
+// --- The gap between a command being accepted and the query showing it -------------------
+//
+// `Pending` is where the connection panels used to guess. Everything below is pure, which is
+// the point of the expectation being DATA and the rule being a parameter: the wait a browser
+// case can only observe by racing it is settled here, in the cheap tier, by stating it.
+
+let private connected : ConnectionView = { Kind = "static"; SignInRequired = None }
+
+let private claudeStatus session mine : ClaudeStatus =
+    { SessionCredential = session; MineCredential = mine; Owner = Some "user"; AgentAvailable = Some true }
+
+let private githubStatus session mine : GitHubStatus =
+    { SessionCredential = session; MineCredential = mine }
+
+/// Connecting the shared credential — the command the browser case drives.
+let private connectMine : ConnectionExpectation = { Scope = "mine"; Connected = true }
+let private disconnectMine : ConnectionExpectation = { Scope = "mine"; Connected = false }
+
+let private awaitingMine = Pending.Awaiting (connectMine, 1_000L)
+
+let private panelTests =
+    testList "a command waiting on the query that will show it" [
+        testCase "a status that has not caught up leaves the wait standing" <| fun () ->
+            Expect.equal
+                (awaitingMine |> Pending.observed ClaudeStatus.landed (claudeStatus None None))
+                awaitingMine
+                "the probe answered before the credential reached the status — not a refusal"
+
+        testCase "the status showing what was asked for ends the wait" <| fun () ->
+            Expect.equal
+                (awaitingMine |> Pending.observed ClaudeStatus.landed (claudeStatus None (Some connected)))
+                Pending.Ready
+                "the shared credential is there, which is what the command asked for"
+
+        testCase "a credential under another scope leaves the wait standing" <| fun () ->
+            Expect.equal
+                (awaitingMine |> Pending.observed ClaudeStatus.landed (claudeStatus (Some connected) None))
+                awaitingMine
+                "this session's own credential is not the one the command connected"
+
+        testCase "a disconnect waits for the credential to GO" <| fun () ->
+            Expect.equal
+                (Pending.Awaiting (disconnectMine, 1_000L)
+                 |> Pending.observed ClaudeStatus.landed (claudeStatus None (Some connected)))
+                (Pending.Awaiting (disconnectMine, 1_000L))
+                "the credential is still on the status, so the disconnect has not landed"
+
+        testCase "a disconnect lands when the status stops showing it" <| fun () ->
+            Expect.equal
+                (Pending.Awaiting (disconnectMine, 1_000L)
+                 |> Pending.observed ClaudeStatus.landed (claudeStatus None None))
+                Pending.Ready
+                "the credential is gone, which is what the disconnect asked for"
+
+        testCase "the same rule reads the GitHub panel's own status" <| fun () ->
+            Expect.equal
+                (awaitingMine |> Pending.observed GitHubStatus.landed (githubStatus None (Some connected)))
+                Pending.Ready
+                "one wait, two panels — the expectation is about a scope, not about a provider"
+
+        testCase "a wait inside its deadline stands" <| fun () ->
+            Expect.equal
+                (awaitingMine |> Pending.waited (1_000L + Pending.deadlineMillis - 1L))
+                awaitingMine
+                "still within the window the status has to arrive in"
+
+        testCase "a wait that outlives its deadline is reported, not held" <| fun () ->
+            Expect.equal
+                (awaitingMine |> Pending.waited (1_000L + Pending.deadlineMillis))
+                (Pending.Refused Pending.unseen)
+                "the write was accepted and never seen — which is not the same as failing"
+
+        testCase "the clock moves nothing when no command is in flight" <| fun () ->
+            Expect.equal
+                (Pending.Ready |> Pending.waited 9_999_999L)
+                Pending.Ready
+                "a panel with nothing of its own on the way has no deadline to miss"
+
+        testCase "a panel with a command on the way is working" <| fun () ->
+            Expect.isTrue
+                (Pending.inFlight awaitingMine)
+                "accepted but not yet shown is still in flight — the controls stay off the screen"
+
+        testCase "a panel whose wait has ended is not" <| fun () ->
+            Expect.isFalse
+                (Pending.inFlight Pending.Ready)
+                "the status has shown it; the panel is done"
+    ]
+
+/// The same two rules where they actually run: folded into the client model. This is the
+/// regression the browser tier could only catch by winning a race — the probe that arrives
+/// before the status has caught up used to end the wait anyway, and the panel then sat on
+/// what that probe happened to say.
+let private panelFoldTests =
+    let peer : PeerState = { PeerId = PeerId.create "panel-peer" |> expect; DisplayName = "Ada" }
+    let awaiting (model: ClientModel) =
+        { model with Claude = { model.Claude with Pending = awaitingMine } }
+    testList "a panel's wait, folded" [
+        testCase "a probe that has not caught up leaves the panel working" <| fun () ->
+            let model =
+                ClientModel.init peer
+                |> awaiting
+                |> ClientModel.update (ClaudeStatusMsg (claudeStatus None None))
+            Expect.equal model.Claude.Pending awaitingMine "the wait survives a probe that says nothing yet"
+
+        testCase "the probe that shows the connected account ends the wait" <| fun () ->
+            let model =
+                ClientModel.init peer
+                |> awaiting
+                |> ClientModel.update (ClaudeStatusMsg (claudeStatus None (Some connected)))
+            Expect.equal model.Claude.Pending Pending.Ready "the status shows it, so the panel is done"
+
+        testCase "one tick answers for every panel waiting at once" <| fun () ->
+            let model =
+                ClientModel.init peer
+                |> awaiting
+                |> fun model -> { model with GitHub = { model.GitHub with Pending = awaitingMine } }
+                |> ClientModel.update (PendingWaitedMsg (1_000L + Pending.deadlineMillis))
+            Expect.equal model.Claude.Pending (Pending.Refused Pending.unseen) "claude gave up"
+            Expect.equal model.GitHub.Pending (Pending.Refused Pending.unseen) "and so did github"
+    ]
+
 let tests =
     testList "Connections" [
+        panelTests
+        panelFoldTests
         codecTests
         flowTests
         wireTests
