@@ -1772,16 +1772,28 @@ module View =
             match launch.Problem with
             | Some reason -> note (html $"""<span class="{Style.statusErr}" role="alert" data-repo-picker-problem>{reason}</span>""")
             | None -> Lit.nothing
+        // The commit button, generalised from Create's box-stable hold
+        // (`Style.btnPrimarySwap`/`whenReady`/`whenBusy`, `app/ManagerUi.fs`): "Start" and
+        // "starting…" share ONE grid cell, so pressing it never resizes the box, and it stays
+        // the SAME element through `Sent`/`Cloning` — `aria-busy` flips rather than the button
+        // being replaced by a status line, which is what a DOM swap mid-press would strand
+        // focus doing. `target` is the STAGE's own, not re-derived from `Selected`, so a row
+        // that drops out of the listing while the clone is under way cannot blank a target
+        // already committed.
+        let startButton (target: LaunchTarget option) (busy: bool) : TemplateResult =
+            html $"""
+                <button type="button" class="{Style.askStart}" data-repo-picker-start
+                        ?disabled={target.IsNone || busy} aria-busy="{if busy then "true" else "false"}"
+                        @click={Ev(fun _ -> target |> Option.iter actions.LaunchStart)}>
+                  <span class="{Style.whenReady}">{Dom.Text.repoPickerStart}</span><span class="{Style.whenBusy}">{Dom.Text.repoPickerCloning}</span>
+                </button>"""
         let actionsRow =
-            match launch.Stage, Launch.target launch with
-            | Resolving _, _ ->
+            match launch.Stage with
+            | Resolving _ ->
                 html $"""<span class="{Style.statusRun}" role="status"><span class="{Style.statusDotPulse}"></span>{Dom.Text.repoPickerLooking}</span>"""
-            | (Sent _ | Cloning _), _ ->
-                html $"""<span class="{Style.statusRun}" role="status"><span class="{Style.statusDotPulse}"></span>{Dom.Text.repoPickerCloning}</span>"""
-            | Choosing, target ->
-                html $"""
-                    <button type="button" class="{Style.askStart}" data-repo-picker-start ?disabled={target.IsNone}
-                            @click={Ev(fun _ -> target |> Option.iter actions.LaunchStart)}>{Dom.Text.repoPickerStart}</button>"""
+            | Choosing -> startButton (Launch.target launch) false
+            | Sent (_, target) -> startButton (Some target) true
+            | Cloning target -> startButton (Some target) true
         // The HEAD both panes fill: the same slot, the same line boxes, the same gutter — so
         // the title never moves between them and the subtitle under it is the only thing that
         // changes. The gutter carries the way OUT, which is what makes the two panes one
