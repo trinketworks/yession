@@ -2298,8 +2298,11 @@ module View =
                   <span class="shrink-0">{stretchEnding model stretch.End}</span>
                 </button>"""
         // One call the agent made. No pane tab: unlike a block there is nothing recorded to
-        // open — what there is to know (where it went, with what, and how it went) fits on
-        // the line. The minted id rides the row anyway, because that is what a deep link
+        // open — but there IS something to read: what the call was given and what it answered.
+        // Those used to sit on the line (the arguments, truncated, beside the name) and under
+        // it (the answer, behind its own "output" summary); now the line is the tool and how
+        // it went, and the call is its own disclosure, one chevron, opening on input and
+        // output in one shape. The minted id rides the row, because that is what a deep link
         // will address once there is somewhere for it to land.
         let toolCall (use': ToolUse) =
             let status, rendered =
@@ -2310,43 +2313,52 @@ module View =
                 | Some ToolCallOk -> Dom.Text.blockOk, html $"""<span class="{Style.statusOk}">{Icon.checkSm}</span>"""
                 | Some (ToolCallFailed reason) -> Dom.Text.blockFailed, html $"""<span class="{Style.statusErr}">{reason}</span>"""
             // `None` is not "no arguments" — it is a foreign tool, whose schema we did not
-            // write and therefore cannot trust to have marked its own secrets.
-            let args =
-                match use'.Arguments with
+            // write and therefore cannot trust to have marked its own secrets. Said so, in
+            // the input's place, rather than shown as an empty input.
+            let input =
+                match ToolUse.arguments use' with
                 | Some recorded -> recorded
                 | None -> "(arguments not recorded)"
             // The answer, when this chip is the only place to read it (a non-block call of one
-            // of our own tools). Collapsed: the line still reads as one row, and the output is
-            // there for whoever wants it — which is the whole of what was missing when a
-            // `repos` call showed its name, its `{}` and nothing it came back with.
-            let result =
+            // of our own tools) — the same block the input is, under it.
+            let output =
                 match use'.Result with
                 | Some text when text <> "" ->
                     html $"""
-                        <details class="{Style.chatToolResult}" data-chat-tool-result="{ToolUseId.value use'.ToolUseId}">
-                          <summary class="{Style.chatToolResultSummary}">output</summary>
-                          <pre class="{Style.chatToolResultBody}">{text}</pre>
-                        </details>"""
+                        <div data-chat-tool-result="{ToolUseId.value use'.ToolUseId}">
+                          <span class="{Style.chatToolIoLabel}">{Dom.Text.toolOutput}</span>
+                          <pre class="{Style.chatToolIoBody}">{text}</pre>
+                        </div>"""
                 | _ -> Lit.nothing
             html $"""
-                <div class="{Style.chatToolItem}">
-                  <div class="{Style.chatToolCall}"
-                       data-chat-tool="{ToolUseId.value use'.ToolUseId}"
-                       data-chat-tool-status="{status}">
+                <details class="{Style.chatToolItem}"
+                         data-chat-tool="{ToolUseId.value use'.ToolUseId}"
+                         data-chat-tool-status="{status}">
+                  <summary class="{Style.chatToolCall}">
+                    <span class="{Style.chatToolCallMark}">{Icon.right}</span>
                     <code class="{Style.chatToolName}">{ToolUse.label use'}</code>
-                    <code class="{Style.chatToolArgs}">{args}</code>
                     <span class="shrink-0">{rendered}</span>
+                  </summary>
+                  <div class="{Style.chatToolIo}">
+                    <div data-chat-tool-input="{ToolUseId.value use'.ToolUseId}">
+                      <span class="{Style.chatToolIoLabel}">{Dom.Text.toolInput}</span>
+                      <pre class="{Style.chatToolIoBody}">{input}</pre>
+                    </div>
+                    {output}
                   </div>
-                  {result}
-                </div>"""
+                </details>"""
+        // A turn's calls, folded to one line. The mark says how many kinds of thing are
+        // folded: two chevrons over several calls, one over one — so a reader can tell a
+        // stack from a single disclosure before opening either.
         let toolRun (turn: AgentTurnId) (uses: ToolUse list) =
-            let summary =
+            let summary, mark =
                 match uses with
-                | [ one ] -> ToolUse.label one
-                | many -> sprintf "%d tools" (List.length many)
+                | [ one ] -> ToolUse.label one, Icon.right
+                | many -> sprintf "%d tools" (List.length many), Icon.rights
             html $"""
                 <details class="{Style.chatToolRun}" data-chat-tool-run="{AgentTurnId.value turn}">
                   <summary class="{Style.chatToolSummary}">
+                    <span class="{Style.chatToolRunMark}">{mark}</span>
                     <span class="{Style.chatChipText}">used {summary}</span>
                   </summary>
                   {uses |> List.map toolCall}

@@ -35,6 +35,9 @@ module Icon =
     let private downPath = "M8 3.5 L8 12 M4.25 8.25 L8 12 L11.75 8.25"
     let private leftPath = "M9.75 3.5 L5.25 8 L9.75 12.5"
     let private rightPath = "M6.25 3.5 L10.75 8 L6.25 12.5"
+    /// Two chevrons, one behind the other: the mark of a disclosure with SEVERAL things
+    /// inside — a turn's tool calls — where one chevron marks a disclosure over one.
+    let private rightsPath = "M3.75 3.5 L8.25 8 L3.75 12.5 M8.25 3.5 L12.75 8 L8.25 12.5"
     // Taller and narrower than the chrome chevrons: a mark set to the proportions of the
     // extralight lowercase word it travels with, not to a 24px button.
     let private pivotLeftPath = "M10.25 1.5 L4.5 8 L10.25 14.5"
@@ -112,6 +115,7 @@ module Icon =
     let down = stroked "w-3.5 h-3.5" downPath
     let left = stroked "w-3.5 h-3.5" leftPath
     let right = stroked "w-3.5 h-3.5" rightPath
+    let rights = stroked "w-3.5 h-3.5" rightsPath
     let send = stroked "w-3.5 h-3.5" sendPath
     /// Put what this sits on onto the clipboard, and — the same control, once it has — the
     /// check that says it went. Button-sized: `checkSm` below is the inline mark that rides

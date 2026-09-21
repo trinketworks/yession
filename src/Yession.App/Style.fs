@@ -1521,37 +1521,51 @@ module Style =
     let chatChipText = "font-light text-small text-ink-dim truncate min-w-0 flex-1"
 
     /// A turn's tool calls (Plan 16): a `<details>` on the same content column as the chips,
-    /// so a chatty turn reads as one quiet line until somebody wants the detail.
-    let chatToolRun = cls [ "w-full pl-[32px] py-0.5"; readingColumn ]
+    /// so a chatty turn reads as one quiet line until somebody wants the detail. A NAMED
+    /// group (`group/run`), because each call inside it is a disclosure of its own with a
+    /// mark of its own, and an unnamed `group-open:` on the inner mark would turn it the
+    /// moment the run opened — before its own call had.
+    let chatToolRun = cls [ "group/run w-full pl-[32px] py-0.5"; readingColumn ]
     /// Its summary. A real `<summary>` rather than a button, so the disclosure is the
     /// browser's and arrives keyboard-operable and correctly announced.
     let chatToolSummary =
-        cls [ "flex items-baseline gap-2 cursor-pointer list-none"
+        cls [ "flex items-center gap-2 cursor-pointer list-none"
               "text-ink-dim hover:text-ink transition-colors duration-150 ease-out"
               focusRing ]
-    /// One call inside an expanded run: the tool it called, then how it went.
-    let chatToolCall = "flex items-baseline gap-2 py-0.5"
-    /// `namespace/name` — mono, because it is an identifier and reads as one.
-    let chatToolName = "font-terminal text-code-sm text-ink-dim truncate min-w-0"
-    /// The arguments as recorded. Dim and truncated: this is evidence, not content.
-    let chatToolArgs = "font-terminal text-code-sm text-ink-faint truncate min-w-0 flex-1"
+    /// The run's mark: two chevrons when the run holds several calls, one when it holds one
+    /// — so the line says there are SEVERAL acts folded here, not merely that it opens. Turns
+    /// to point down while the run is open.
+    let chatToolRunMark =
+        "shrink-0 text-ink-faint transition-transform duration-150 ease-out motion-reduce:transition-none "
+        + "group-open/run:rotate-90"
 
-    /// A tool call and, under it, its disclosable answer. A block wrapper so the answer sits
-    /// BELOW the line rather than in it — the line stays one row whether or not there is a
-    /// result to open.
-    let chatToolItem = "w-full"
-    /// The answer disclosure — collapsed by default, aligned under the name. A result a
-    /// reader opens, never a thing that fills the chat on its own.
-    let chatToolResult = "pl-2 mt-0.5"
-    /// "output ›" — the same faint label the rest of these chips use, and a pointer cursor so
-    /// it reads as openable.
-    let chatToolResultSummary =
-        cls [ label; "inline-flex items-center gap-1 cursor-pointer select-none hover:text-ink transition-colors"; focusRing ]
-    /// The answer itself: mono, wrapped, dim, and bounded — a preview that scrolls rather than
-    /// a pane that grows. The `resultCap` upstream keeps the text small; this keeps a small
+    /// One call inside an expanded run: its own `<details>`, so its input and output are a
+    /// tap away rather than crammed onto the line — the line is the tool and how it went,
+    /// and everything else is under it.
+    let chatToolItem = "group/call w-full"
+    /// The call's summary line: mark, tool, outcome.
+    let chatToolCall =
+        cls [ "flex items-center gap-2 py-0.5 cursor-pointer list-none"
+              "hover:text-ink transition-colors duration-150 ease-out"
+              focusRing ]
+    /// One chevron: this disclosure is over one thing. Turns with its own call only.
+    let chatToolCallMark =
+        "shrink-0 text-ink-faint transition-transform duration-150 ease-out motion-reduce:transition-none "
+        + "group-open/call:rotate-90"
+    /// `namespace/name` — mono, because it is an identifier and reads as one.
+    let chatToolName = "font-terminal text-code-sm text-ink-dim truncate min-w-0 flex-1"
+
+    /// What the call was given and what it answered, under its line and indented past the
+    /// mark: two labelled blocks in the same shape, because they are the same kind of thing —
+    /// text that crossed the tool boundary, one way and then the other.
+    let chatToolIo = "flex flex-col gap-1.5 pl-[22px] pb-1.5"
+    /// "input" / "output" — the same faint label the rest of these chips use.
+    let chatToolIoLabel = label
+    /// The text itself: mono, wrapped, dim, and bounded — a preview that scrolls rather than
+    /// a pane that grows. The `resultCap` upstream keeps an answer small; this keeps a small
     /// text from still being a wall.
-    let chatToolResultBody =
-        cls [ monoOut; "mt-1 max-h-64 overflow-auto bg-surface-2 p-2 rounded" ]
+    let chatToolIoBody =
+        cls [ monoOut; "mt-0.5 max-h-64 overflow-auto bg-surface-2 p-2 rounded" ]
 
     /// One agent burst (Plan 20, stage 4). A `<details>` on the same content column the chips
     /// and tool runs sit on, for the same reason: a turn that ran twelve commands reads as

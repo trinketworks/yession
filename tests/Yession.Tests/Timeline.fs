@@ -1183,6 +1183,38 @@ let private toolTests =
                 (Map.containsKey (ToolUseId.value (toolUse "1")) timeline.ToolUses)
                 "the audit record is still there — the audit wants every call"
 
+        // What a call was given is under its line, as its own element in the same shape its
+        // answer takes — not on the line beside the name, truncated. A two-hundred-character
+        // `old_string` on the line was a row that said nothing; under it, opened on tap, it is
+        // the edit a reader can check. What is pinned is the split: the input is its own
+        // element, and the line does not carry it.
+        testCase "a call's input is under its line, as its own element, not on it" <| fun () ->
+            let args = """{"path":"src/A.fs","old_string":"let x = 1"}"""
+            let events =
+                [ at 1L 0.0 (SessionEvent.ToolUseStarted { ToolUseId = toolUse "1"; AgentTurnId = turn "a"; Namespace = "yession"; Name = "edit_file"; Arguments = Some args })
+                  at 2L 1.0 (toolDoneWith "1" ToolCallOk None (Some "edited src/A.fs: −1 +1 lines")) ]
+            let html = Support.render (clientOf events)
+            let callAt = html.IndexOf (Dom.attr Dom.Hooks.chatTool "t-1")
+            Expect.isTrue (callAt >= 0) "the call is drawn"
+            let summaryEnd = html.IndexOf ("</summary>", callAt)
+            let line = html.Substring (callAt, summaryEnd - callAt)
+            Expect.isFalse (line.Contains "old_string") "the line carries the tool and its outcome, not its arguments"
+            let inputAt = html.IndexOf ("data-chat-tool-input=\"t-1\"", callAt)
+            Expect.isTrue (inputAt > summaryEnd) "the input is its own element, under the line"
+            let input = html.Substring (inputAt, html.IndexOf ("</pre>", inputAt) - inputAt)
+            Expect.isTrue (input.Contains "old_string") "carrying what the call was given"
+            Expect.isTrue (input.Contains "\n") "laid out a field per line, not as one row of JSON"
+            let outputAt = html.IndexOf ("data-chat-tool-result=\"t-1\"", inputAt)
+            Expect.isTrue (outputAt > inputAt) "and the answer follows it, in the same place"
+
+        testCase "arguments are laid out for reading, and the record is untouched" <| fun () ->
+            let use' : ToolUse =
+                { ToolUseId = toolUse "1"; AgentTurnId = turn "a"; Namespace = "yession"; Name = "read_file"
+                  Arguments = Some """{"path":"a.fs","offset":2}"""; Outcome = None; Block = None; Result = None }
+            Expect.equal (ToolUse.arguments use') (Some "{\n  \"path\": \"a.fs\",\n  \"offset\": 2\n}") "one field per line"
+            Expect.equal (ToolUse.arguments { use' with Arguments = Some "not json" }) (Some "not json") "what is not JSON is shown as it is"
+            Expect.equal (ToolUse.arguments { use' with Arguments = None }) None "a foreign tool's arguments were never recorded"
+
         testCase "consecutive calls from one turn collapse into a single row" <| fun () ->
             // Tool use is the first item a SINGLE turn can emit a dozen of, so a chatty turn
             // costs one line rather than twenty.
