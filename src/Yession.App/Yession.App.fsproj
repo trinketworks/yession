@@ -47,6 +47,12 @@
     <PackageReference Include="Ylmish" />
     <PackageReference Include="Fable.Yjs" />
     <PackageReference Include="Fable.Browser.Dom" />
+    <!-- The codecs for the two request bodies `Routes.fs` declares: Thoth.Json under Fable,
+         Thoth.Json.Net for the .NET type-check, the split `Yession.Domain` declares for its
+         own. Named here because this project names it — it arrived transitively before, and
+         a dependency taken by accident is one nothing states. -->
+    <PackageReference Include="Thoth.Json" />
+    <PackageReference Include="Thoth.Json.Net" />
     <ProjectReference Include="..\Fable.BrowserExtras\Fable.BrowserExtras.fsproj" />
     <ProjectReference Include="..\Fable.ProseMirror\Fable.ProseMirror.fsproj" />
     <ProjectReference Include="..\Fable.YjsExtras\Fable.YjsExtras.fsproj" />
