@@ -880,7 +880,18 @@ let private openingPage (target: string) (readyUrl: string) : string =
     }
     setTimeout(poll, 500)
   }
-  poll()
+  // Not before this page has been SHOWN. The Manager launched the session before answering
+  // with this page, so the first poll usually says ready, and the page used to leave within
+  // milliseconds of arriving — before it had a single frame. It arrives by a view transition
+  // (`tailwind.css`) and leaves by one, and a document that goes while the transition INTO
+  // it is still running cuts that crossfade off a few frames in and starts the next from a
+  // page nobody saw. So: the first frame first, the transition that brought us here (if one
+  // did) run to its end, and only then ask whether the session answers.
+  let arrival = null
+  addEventListener('pagereveal', e => { arrival = e.viewTransition }, { once: true })
+  requestAnimationFrame(() => {
+    (arrival ? arrival.finished.catch(() => {}) : Promise.resolve()).then(poll)
+  })
 </script>"""
             Style.body
             Style.proseLink
