@@ -23,22 +23,41 @@ open Fable.NodeDataChannel
 /// One side's session description, as the wire carries it: `{ type, sdp }`.
 type SdpMessage = { Type : string; Sdp : string }
 
-let private sdpToJson (ty: string) (sdp: string) : string =
-    JS.JSON.stringify {| ``type`` = ty; sdp = sdp |}
-
-/// Both fields required, because neither has a meaning this side can supply. A message is
-/// DECODED rather than asserted: it arrives over somebody else's POST, and the two readers
-/// that used to unbox it handed a missing `sdp` to libdatachannel as `undefined` — a native
-/// call with no answer for it, inside a handler with nowhere to report one.
-let private sdpDecoder : Decoder<SdpMessage> =
-    Decode.object (fun get ->
-        { Type = get.Required.Field "type" Decode.string
-          Sdp = get.Required.Field "sdp" Decode.string })
+/// Both halves of the signalling wire, in one value.
+///
+/// The decode half was already here; the encode half was `JSON.stringify {| ``type`` = ty;
+/// sdp = sdp |}`, an anonymous record whose backtick-escaped label was the only place the
+/// wire's field name was written on the way OUT. Nothing checked the two against each
+/// other — rename the field on one side and this side still compiles, still stringifies,
+/// and answers an offer with a body the other side reads as no session description at
+/// all. A codec cannot drift that way: one declaration, read in both directions.
+///
+/// Both fields are required, because neither has a meaning this side can supply. A message
+/// is DECODED rather than asserted: it arrives over somebody else's POST, and the two
+/// readers that used to unbox it handed a missing `sdp` to libdatachannel as `undefined` —
+/// a native call with no answer for it, inside a handler with nowhere to report one.
+///
+/// It stays HERE rather than moving to the domain's `Link` namespace, which holds the
+/// protocol shapes the Session Process and the Browser Client share. This one is not
+/// shared: the browser's end of the same exchange is a `RTCSessionDescriptionInit`, the
+/// browser's own type, which it hands to `setRemoteDescription` rather than to a decoder.
+/// Both readers of this shape — `answerOffer` below and `Signalling.fs` — are in this
+/// project, so the rule sits with the state it governs.
+let sdpMessage : Codec<SdpMessage> =
+    { Encode =
+        fun (message: SdpMessage) ->
+            Encode.object
+                [ "type", Encode.string message.Type
+                  "sdp", Encode.string message.Sdp ]
+      Decode =
+        Decode.object (fun get ->
+            { Type = get.Required.Field "type" Decode.string
+              Sdp = get.Required.Field "sdp" Decode.string }) }
 
 /// What a signalling body says, or nothing — a body that is not JSON, and one that is JSON
 /// carrying no session description, are the same nothing to both callers.
 let parseSdp (json: string) : SdpMessage option =
-    Decode.fromString sdpDecoder json |> Result.toOption
+    Codec.fromString sdpMessage json |> Result.toOption
 
 /// The transport never inspects the state-sync payload, so its codec is just a string.
 let private frameCodec : Codec<SessionFrame<string>> = Codec.sessionFrame Codec.string
@@ -142,7 +161,7 @@ let private gatherDescription (pc: PeerConnection) : Async<string> =
     pc.onGatheringStateChange (fun state ->
         if state = "complete" && Option.isNone result then
             let ld = pc.localDescription ()
-            let json = sdpToJson ld.``type`` ld.sdp
+            let json = Codec.toString sdpMessage { Type = ld.``type``; Sdp = ld.sdp }
             result <- Some json
             match waiter with
             | Some w -> waiter <- None; w json

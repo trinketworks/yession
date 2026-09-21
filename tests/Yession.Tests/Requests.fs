@@ -1,7 +1,6 @@
 module Yession.Tests.Requests
 
-// What this host puts on the wire when it asks a provider something, and what it makes of
-// the answer.
+// What this host puts on the wire when it asks something, and what it makes of the answer.
 //
 // Every case here was, until recently, a line inside an `[<Emit>]` string: the header a
 // credential rides on, the two content types an MCP POST offers, the status that means a
@@ -19,6 +18,7 @@ module Yession.Tests.Requests
 // accepts what is sent. Those are conversations; these are the decisions taken before one.
 
 open Fable.Pyxpecto
+open Yession.Domain
 open Yession.Host
 open Yession.Host.PrWatches
 
@@ -205,5 +205,39 @@ let private githubStatusTests =
             Expect.stringContains said "could not be reached" "the other half of the pair"
     ]
 
+// --- the signalling exchange ---------------------------------------------------------------
+
+/// A session description with a newline in it, because a real one is a multi-line block and
+/// an escape that changed would change the wire as surely as a renamed field.
+let private sampleSdp = "v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\n"
+
+let private signallingTests =
+    testList "a session description on the signalling wire" [
+
+        // The bytes, not the shape. Both ends of this exchange are somebody else's — a
+        // browser handing the answer to `setRemoteDescription`, or a Node peer's own
+        // decoder — so what is pinned here is what they will read: the two field names,
+        // in the order they have always been written, with nothing else beside them.
+        testCase "is offered as its type and its sdp, and nothing else" <| fun () ->
+            let answer : WebRtc.SdpMessage = { Type = "answer"; Sdp = sampleSdp }
+            let json = Codec.toString WebRtc.sdpMessage answer
+            Expect.equal
+                json
+                """{"type":"answer","sdp":"v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\n"}"""
+                "the answer a peer reads"
+
+        // The other half of the same declaration: that what this host writes is what it
+        // reads. The two used to be written apart — an anonymous record on the way out, a
+        // decoder on the way in — and nothing compared them.
+        testCase "reads back as the description that was offered" <| fun () ->
+            let message : WebRtc.SdpMessage = { Type = "offer"; Sdp = sampleSdp }
+            Expect.equal
+                (WebRtc.parseSdp (Codec.toString WebRtc.sdpMessage message))
+                (Some message)
+                "the same description"
+    ]
+
 let tests =
-    testList "Requests" [ reasonTests; mcpTests; claudeTests; githubRequestTests; githubStatusTests ]
+    testList
+        "Requests"
+        [ reasonTests; mcpTests; claudeTests; githubRequestTests; githubStatusTests; signallingTests ]
