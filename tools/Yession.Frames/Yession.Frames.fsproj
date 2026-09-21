@@ -6,9 +6,16 @@
        arranges for it not to be: the package bundles from each bin's entry, so a project no
        bin references is simply never reached.
 
-       It references the App for `Cli` and the promise builder the App already carries; it
-       drives nothing of the App's — the page under the camera is whatever the deployment
-       serves. -->
+       What it takes, and why each: `Cli` is the Domain's, so this instrument declares and
+       refuses its options the way every bin does; the `promise` builder is Fable.Promise's.
+       From the App it takes two facts about the deployment it points a camera at —
+       `ManagerRoute`, so the session it creates and stops is addressed through the same
+       parser the Manager routes by, and `Dom.appId`, the element the client mounts into and
+       therefore the one this waits for. Both are shared vocabulary the views, the suites and
+       the browser shell already bind to; spelled again here they would be two authors of one
+       fact, and a rename in the client would leave the camera waiting forever on an element
+       that never appears. It drives nothing else of the App's: the page under the camera is
+       whatever the deployment serves. -->
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <OutputType>Exe</OutputType>
@@ -20,10 +27,12 @@
 
   <ItemGroup>
     <PackageReference Include="Fable.Node" />
+    <PackageReference Include="Fable.Promise" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="../../src/Fable.NodeExtras/Fable.NodeExtras.fsproj" />
+    <ProjectReference Include="../../src/Yession.Domain/Yession.Domain.fsproj" />
     <ProjectReference Include="../../src/Yession.App/Yession.App.fsproj" />
   </ItemGroup>
 
