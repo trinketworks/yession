@@ -2428,10 +2428,12 @@ module Codec =
                       "signInRequired", Encode.option Encode.string row.SignInRequired ]
           Decode =
             Decode.object (fun get ->
+                // REQUIRED, and the distinction is the rule's: a row with no `kind` at all is
+                // a malformed row and fails, while a kind this build does not KNOW is a word
+                // `ofLabel` has an answer for. Defaulting the missing one to `""` made the
+                // two the same thing and called it static.
                 { Access.CredentialRow.Kind =
-                    get.Optional.Field "kind" Decode.string
-                    |> Option.defaultValue ""
-                    |> Access.ConnectionKind.ofLabel
+                    get.Required.Field "kind" Decode.string |> Access.ConnectionKind.ofLabel
                   Access.CredentialRow.SignInRequired = get.Optional.Field "signInRequired" Decode.string }) }
 
     /// The Claude panel as the session serves it.
