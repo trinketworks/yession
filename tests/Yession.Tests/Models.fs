@@ -23,6 +23,7 @@ open Fable.Core
 open Thoth.Json
 open Fable.Pyxpecto
 open Yession.Domain
+open Yession.Domain.Access
 open Yession.Domain.Agent
 open Yession.App
 open Yession.Host
@@ -208,75 +209,41 @@ let private stubConnections : ControlClient.SessionConnections =
       Reject = fun _ _ -> refuse ()
       Resolve = refuse }
 
-/// The Claude panel's status route over a stub catalogue — the one route that answers what
-/// this session can run a turn on.
-let private startClaudeRoutes (list: ListModels) =
-    async {
-        let sessionId = SessionId.create "sess-models" |> expect
-        let route =
-            ClaudeConnection.routes
-                sessionId
-                (stubAuth ())
-                stubConnections
-                (fun _ -> None)
-                (fun () -> false)
-                list
-                ""
-        let! url, server =
-            serving (fun req res ->
-                if not (route req res) then
-                    res.writeHead (404, JsInterop.createObj [ "content-type", box "text/plain" ]) |> ignore
-                    res.``end`` "not found")
-        return SessionRoute.at url SessionRoute.ClaudeStatus, server
-    }
+/// The Claude panel over a stub catalogue. `panelFor` is what the read stream pushes, and
+/// it is the whole answer to "what can a turn run on here" — so these ask it directly
+/// rather than through a route. There is no status route to drive any more: the panel's
+/// own door is the stream's, pinned where the stream is.
+let private panelFor (list: ListModels) (identity: CookieIdentity) : Async<ClaudePanel> =
+    ClaudeConnection.panelFor
+        (SessionId.create "sess-models" |> expect)
+        (fun _ -> None)
+        (fun () -> false)
+        list
+        identity
 
-/// The models off a status reply, as the browser reads them: the catalogue's own JSON — which
-/// the shared codec then decodes, exactly as the browser does — or the reason there is none.
-///
-/// `Optional.Field` is what the `||` in the macros this replaces meant: a field spelled `null`
-/// and a field left off are both "no catalogue here". What it does NOT do is conflate those
-/// with a reply this cannot read at all, which the old reading did — an unreadable status was
-/// a status with no catalogue, and the case asserting "a failed lookup is not a catalogue"
-/// would have passed on a reply that was not a status reply at all.
-let private catalogue : Decoder<{| models: string option; unavailable: string option |}> =
-    Decode.object (fun get ->
-        {| models = get.Optional.Field "models" Decode.value |> Option.map (Encode.toString 0)
-           unavailable = get.Optional.Field "modelsUnavailable" Decode.string |})
+let private ada : CookieIdentity =
+    { Subject = "ada"
+      DisplayName = None
+      Attribution = AttributedUser (UserId.create "ada" |> expect) }
 
-let private catalogueOf (body: string) : {| models: string option; unavailable: string option |} =
-    match Decode.fromString catalogue body with
-    | Ok read -> read
-    | Error reason -> failwithf "the status route answered something this is not a status reply: %s" reason
+let private catalogueTests =
+    testList "the catalogue on the panel" [
 
-let private routeTests =
-    testList "the catalogue on the status reply" [
-
-        testCaseAsync "no identity, no catalogue" <|
-            async {
-                // Which models this session can run on is a fact about the session, so it
-                // goes to the people in it and to nobody else.
-                let! url, server = startClaudeRoutes (fun _ -> async { return Ok [] })
-                let! reply = get url ""
-                server.close ignore
-                Expect.equal reply.Status 401 "unauthenticated is refused"
-            }
-
-        testCaseAsync "the catalogue crosses as the shared codec, on the asking party's authority" <|
+        testCaseAsync "the catalogue is asked for on the looking party's authority" <|
             async {
                 let mutable askedFor : CredentialFor option = None
-                let! url, server =
-                    startClaudeRoutes (fun actor ->
-                        async {
-                            askedFor <- Some actor
-                            return Ok [ AgentModel.create (ModelId.create "model-a" |> expect) "Model A" ]
-                        })
-                let! reply = get url "who=ada"
-                server.close ignore
-                Expect.equal reply.Status 200 "an identity gets an answer"
+                let! panel =
+                    panelFor
+                        (fun actor ->
+                            async {
+                                askedFor <- Some actor
+                                return Ok [ AgentModel.create (ModelId.create "model-a" |> expect) "Model A" ]
+                            })
+                        ada
                 Expect.equal
-                    (Codec.fromString Codec.modelCatalogue (catalogueOf reply.Body).models.Value |> expect)
-                    [ AgentModel.create (ModelId.create "model-a" |> expect) "Model A" ]
-                    "and it is the catalogue, decoded by the codec the browser uses"
+                    panel.Models
+                    (ModelsLoaded [ AgentModel.create (ModelId.create "model-a" |> expect) "Model A" ])
+                    "the catalogue is what the provider answered"
                 Expect.equal
                     askedFor
                     (Some (CredentialFor.Person (Principal.User (UserId.create "ada" |> expect))))
@@ -287,32 +254,30 @@ let private routeTests =
             async {
                 // An empty menu with no explanation is the state this whole shape exists to
                 // avoid: the remedy is one panel up, and nothing would have pointed at it.
-                let! url, server = startClaudeRoutes (fun _ -> async { return Error "no Claude account connected" })
-                let! reply = get url "who=ada"
-                server.close ignore
-                let catalogue = catalogueOf reply.Body
-                Expect.isNone catalogue.models "a failed lookup is not a catalogue"
+                let! panel = panelFor (fun _ -> async { return Error "no Claude account connected" }) ada
                 Expect.equal
-                    catalogue.unavailable
-                    (Some "no Claude account connected")
-                    "and the reason rides the same reply"
+                    panel.Models
+                    (ModelsUnavailable "no Claude account connected")
+                    "the reason is the answer, and an empty list is not"
             }
 
-        testCaseAsync "the credential status and the catalogue arrive together, or not at all" <|
+        testCaseAsync "the credential status and the catalogue are one value" <|
             async {
-                // The invariant the fold exists for. Two routes with two refresh triggers
-                // let the picker keep a refusal naming an account the panel beside it had
-                // already shown as connected; one reply cannot disagree with itself.
-                let! url, server = startClaudeRoutes (fun _ -> async { return Error "no Claude account connected" })
-                let! reply = get url "who=ada"
-                server.close ignore
-                Expect.isTrue (reply.Body.Contains "\"owner\"") "the status is on the reply"
-                Expect.isTrue (reply.Body.Contains "\"modelsUnavailable\"") "and so is what the picker can offer"
+                // The invariant the whole shape exists for. Two routes with two refresh
+                // triggers let the picker keep a refusal naming an account the panel beside
+                // it had already shown as connected; one value cannot disagree with itself,
+                // which is a stronger promise than one reply.
+                let! panel = panelFor (fun _ -> async { return Error "no Claude account connected" }) ada
+                Expect.equal panel.Owner (Some "user") "the panel says whose the shared scope is"
+                Expect.equal
+                    panel.Models
+                    (ModelsUnavailable "no Claude account connected")
+                    "and what the picker can offer, in the same breath"
             }
     ]
 
-let portsTests =
+let tests =
     testList "Model catalogue" [
         lookupTests
-        routeTests
+        catalogueTests
     ]

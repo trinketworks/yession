@@ -475,19 +475,45 @@ let ownerOf (identity: CookieIdentity) : CredentialOwner =
 /// the catalogue it is answered with is the one this person's credential can actually see.
 let private actorOf (identity: CookieIdentity) : CredentialFor = PeerAttribution.credential identity.Attribution
 
-/// Build the /claude* route handler. `statusOf` reads the session's live status cache
-/// (fed by the Manager's connection stream); `agentAvailable` is the agent gate's own
-/// truth (any relevant credential OR the ambient env) — served so the client can say
-/// "no agent in this session" honestly; `list` is the model catalogue, on the reply for
-/// the reason below; `connections` is the control-channel broker client. Composes into
-/// `Signalling.start` extra routes.
+/// This session's Claude panel, for one browser identity. The read stream pushes it and
+/// nothing fetches it: the catalogue rides the same value as the rows for the reason it has
+/// always ridden the same reply — split in two, the second drifted, and the picker sat on a
+/// refusal computed before the account it named existed.
+let panelFor
+    (sessionId: SessionId)
+    (statusOf: SecretId -> ConnectionStatus option)
+    (agentAvailable: unit -> bool)
+    (list: ListModels)
+    (identity: CookieIdentity)
+    : Async<ClaudePanel> =
+    async {
+        let owner = ownerOf identity
+        let sessionTarget : SecretId = { Scope = SessionScope sessionId; Name = secretName }
+        let mineTarget : SecretId = { Scope = CredentialOwner.scope owner; Name = secretName }
+        let! catalogue = list (actorOf identity)
+        return
+            { SessionCredential = CredentialRow.ofStatus (statusOf sessionTarget)
+              MineCredential = CredentialRow.ofStatus (statusOf mineTarget)
+              // What "mine" MEANS here, so the panel can say it honestly: one person's
+              // credential, or this whole deployment's.
+              Owner = Some (match owner with UserOwner _ -> "user" | LocalOwner -> "local")
+              AgentAvailable = Some (agentAvailable ())
+              Models =
+                match catalogue with
+                | Ok models -> ModelsLoaded models
+                // "This provider offers nothing" and "nobody has connected an account" are
+                // different facts, and a picker that could not tell them apart would show an
+                // empty menu with no way to fix it.
+                | Error reason -> ModelsUnavailable reason }
+    }
+
+/// Build the /claude* route handler. There is no status route: the panel is
+/// PUSHED on the read stream, so what is left here is the commands. `connections` is the
+/// control-channel broker client. Composes into `Signalling.start` extra routes.
 let routes
     (sessionId: SessionId)
     (auth: SessionAuth.Auth)
     (connections: ControlClient.SessionConnections)
-    (statusOf: SecretId -> ConnectionStatus option)
-    (agentAvailable: unit -> bool)
-    (list: ListModels)
     /// The path this session is served under (`""` at an origin root), stripped off the
     /// request the same way the rest of the session's surface strips it.
     (mount: string)
@@ -498,55 +524,13 @@ let routes
         // rest of its surface uses — so a route added there is unhandled here until this
         // match accounts for it.
         match routeOf () with
-        | Some ClaudeStatus
         | Some (Claude _) ->
             match auth.IdentityOf req with
             | None -> respondText res 401 "unauthorized"
             | Some identity ->
                 let handle (body: ClaudeRequest) : unit =
                     let owner = ownerOf identity
-                    let kindLabel kind = match kind with OAuthConnection -> "oauth" | StaticConnection -> "static"
                     match routeOf () with
-                    | Some ClaudeStatus ->
-                        // One panel, one codec: the shape the browser reads is the shape
-                        // this writes (`Codec.claudePanel`). It used to be a `sprintf` here
-                        // and a hand-written decoder there — two lists of field names that
-                        // nothing checked against each other, with the GitHub panel keeping
-                        // a third copy of the row encoder.
-                        let sessionTarget : SecretId = { Scope = SessionScope sessionId; Name = secretName }
-                        let mineTarget : SecretId = { Scope = CredentialOwner.scope owner; Name = secretName }
-                        // What "mine" MEANS here, so the panel can say it honestly:
-                        // one person's credential, or this whole deployment's.
-                        let ownerLabel =
-                            match owner with
-                            | UserOwner _ -> "user"
-                            | LocalOwner -> "local"
-                        // The catalogue rides the panel rather than answering on a route of
-                        // its own. It is the same question one line further on — what can a
-                        // turn run on here — and `agent` beside it is already the first line
-                        // of that answer. Split across two routes with two refresh triggers,
-                        // the second one drifted: the picker sat on a refusal computed before
-                        // the account it named existed, because signing in re-probed the
-                        // status and nothing re-asked for the models. One reply cannot
-                        // disagree with itself.
-                        Async.StartImmediate (
-                            async {
-                                let! catalogue = list (actorOf identity)
-                                let panel : ClaudePanel =
-                                    { SessionCredential = CredentialRow.ofStatus (statusOf sessionTarget)
-                                      MineCredential = CredentialRow.ofStatus (statusOf mineTarget)
-                                      Owner = Some ownerLabel
-                                      AgentAvailable = Some (agentAvailable ())
-                                      Models =
-                                        match catalogue with
-                                        | Ok models -> ModelsLoaded models
-                                        // "This provider offers nothing" and "nobody has
-                                        // connected an account" are different facts, and a
-                                        // picker that could not tell them apart would show an
-                                        // empty menu with no way to fix it.
-                                        | Error reason -> ModelsUnavailable reason }
-                                respondJson res 200 (Codec.toString Codec.claudePanel panel)
-                            })
                     | Some (Claude action) ->
                         match targetFor sessionId owner body.Scope with
                         | Error e -> respondText res 400 e

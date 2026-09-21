@@ -357,9 +357,9 @@ let private stubAuth () : SessionAuth.Auth =
       HandleCallback = fun _ -> async { return Error (500, "not under test") }
       CookieName = "who" }
 
-let private startQueryRoutes (registry: Queries.QueryRegistry) =
+let private startQueryRoutes (registry: Queries.QueryRegistry) (feed: Queries.PanelFeed) =
     async {
-        let route = Queries.routes (stubAuth ()) registry ""
+        let route = Queries.routes (stubAuth ()) registry feed ""
         let handler (req: Interop.IncomingMessage) (res: Interop.ServerResponse) =
             if not (route req res) then
                 res.writeHead (404, Fable.Core.JsInterop.createObj [ "content-type", box "text/plain" ]) |> ignore
@@ -385,6 +385,19 @@ let private awaitFrames (frames: ResizeArray<QueryFrame>) (predicate: QueryFrame
         }
     go 200
 
+/// `awaitFrames`, for the frames the stream actually carries.
+let private awaitReadFrames (frames: ResizeArray<Tools.ReadFrame>) (predicate: Tools.ReadFrame list -> bool) =
+    let rec go attempts =
+        async {
+            let current = List.ofSeq frames
+            if predicate current then return current
+            elif attempts <= 0 then return failwithf "the stream never satisfied the condition; got %A" current
+            else
+                do! Async.Sleep 25
+                return! go (attempts - 1)
+        }
+    go 200
+
 let private routeTests =
     testList "the /queries stream" [
 
@@ -393,7 +406,7 @@ let private routeTests =
         testCaseAsync "no identity, no stream" <|
             async {
                 let registry = Queries.create [ constant "repos" Value (ValueOf (CellText "x")) ] |> expect
-                let! url = startQueryRoutes registry
+                let! url = startQueryRoutes registry Queries.noPanels
                 let! reply = TestHttp.getNoStore [ "cookie", "" ] (url + "/queries")
                 Expect.equal reply.Status 401 "the stream is gated"
                 Expect.isFalse (reply.Body.Contains "repos") "and it leaked nothing on the way out"
@@ -413,15 +426,16 @@ let private routeTests =
                                   async { return Ok (RowsOf [ [ "repo", CellText "octo/hello"; "dirty", CellText branch ] ]) } }
                           constant "leases" Value (ValueOf (CellText "none")) ]
                     |> expect
-                let! url = startQueryRoutes registry
+                let! url = startQueryRoutes registry Queries.noPanels
                 let frames = ResizeArray<QueryFrame> ()
                 let subscription =
                     Sse.subscribe
                         (url + "/queries")
                         [ "cookie", "who=ada" ]
                         (fun data ->
-                            match Codec.fromString Codec.queryFrame data with
-                            | Ok frame -> frames.Add frame
+                            match Codec.fromString Codec.readFrame data with
+                            | Ok (Queried frame) -> frames.Add frame
+                            | Ok (Panels _)
                             | Error _ -> ())
 
                 let! opening = awaitFrames frames (fun fs -> List.length fs >= 3)
@@ -505,12 +519,134 @@ let private routeTests =
             }
     ]
 
+// --- the connection panels, on the same stream ------------------------------------------
+
+open Yession.Domain.Access
+
+let private anyone : CookieIdentity =
+    { Subject = "ada"; DisplayName = None; Attribution = AttributedUser (UserId.create "ada" |> expect) }
+
+let private panelOf (who: string) : ClaudePanel =
+    { SessionCredential = None
+      MineCredential = None
+      Owner = Some who
+      AgentAvailable = Some true
+      Models = ModelsUnknown }
+
+let private githubOf (who: string) : GitHubPanel =
+    { SessionCredential = None; MineCredential = None; Owner = Some who }
+
+/// The panels are the second read model on this stream, and the reason they are ON it is
+/// that a fetch could not be ordered against the command that moved them. What these pin is
+/// what "pushed" has to mean: told on connect, told again on a change, and told what is true
+/// for the ASKING identity rather than for whoever subscribed first.
+let private panelFeedTests =
+    testList "the connection panels on the stream" [
+
+        testCaseAsync "a subscriber is told the panels without asking" <| async {
+            let feed = Queries.panels (fun identity -> async { return panelOf identity.Subject }) (fun i -> githubOf i.Subject)
+            let seen = ResizeArray<ClaudePanel * GitHubPanel> ()
+            let subscription = feed.Subscribe anyone seen.Add
+            do! settle ()
+            Expect.equal seen.Count 1 "the opening send IS the snapshot — nothing has to ask"
+            subscription.Stop ()
+        }
+
+        testCaseAsync "a change tells every open subscriber again" <| async {
+            let mutable owner = "user"
+            let feed = Queries.panels (fun _ -> async { return panelOf owner }) (fun _ -> githubOf owner)
+            let seen = ResizeArray<ClaudePanel * GitHubPanel> ()
+            let subscription = feed.Subscribe anyone seen.Add
+            do! settle ()
+            owner <- "local"
+            feed.Changed ()
+            do! settle ()
+            Expect.equal (seen |> Seq.last |> fst).Owner (Some "local") "the frame carries what is true NOW"
+            subscription.Stop ()
+        }
+
+        testCaseAsync "each subscriber is told what is true for its own identity" <| async {
+            let feed = Queries.panels (fun identity -> async { return panelOf identity.Subject }) (fun i -> githubOf i.Subject)
+            let alice = ResizeArray<ClaudePanel * GitHubPanel> ()
+            let bob = ResizeArray<ClaudePanel * GitHubPanel> ()
+            let a = feed.Subscribe { anyone with Subject = "alice" } alice.Add
+            let b = feed.Subscribe { anyone with Subject = "bob" } bob.Add
+            do! settle ()
+            feed.Changed ()
+            do! settle ()
+            Expect.isTrue (alice |> Seq.forall (fun (c, _) -> c.Owner = Some "alice")) "alice is told about alice"
+            Expect.isTrue (bob |> Seq.forall (fun (c, _) -> c.Owner = Some "bob")) "and bob about bob"
+            a.Stop ()
+            b.Stop ()
+        }
+
+        testCaseAsync "a subscriber that left is not told" <| async {
+            let feed = Queries.panels (fun _ -> async { return panelOf "user" }) (fun _ -> githubOf "user")
+            let seen = ResizeArray<ClaudePanel * GitHubPanel> ()
+            let subscription = feed.Subscribe anyone seen.Add
+            do! settle ()
+            subscription.Stop ()
+            feed.Changed ()
+            do! settle ()
+            Expect.equal seen.Count 1 "a closed drawer is not a listener"
+        }
+
+        testCase "a read frame says which read model it carries" <| fun () ->
+            let frame = Panels (panelOf "user", githubOf "user")
+            Expect.equal (Codec.toString Codec.readFrame frame |> Codec.fromString Codec.readFrame) (Ok frame) "panels round-trip"
+            let queried = Queried (QueriesDeclared [])
+            Expect.equal (Codec.toString Codec.readFrame queried |> Codec.fromString Codec.readFrame) (Ok queried) "and so do queries"
+            Expect.isTrue
+                (Result.isError (Codec.fromString Codec.readFrame """{"kind":"whatever"}"""))
+                "a frame this build does not know is refused, never guessed at"
+    ]
+
+/// Over real HTTP, which is the only place "one connection carries both" can be observed.
+let private panelRouteTests =
+    testList "both read models, one connection" [
+        testCaseAsync "the queries and the panels arrive on the same stream" <|
+            async {
+                let registry = Queries.create [ constant "leases" Value (ValueOf (CellText "none")) ] |> expect
+                let mutable owner = "user"
+                let feed =
+                    Queries.panels
+                        (fun _ -> async { return { panelOf owner with Owner = Some owner } })
+                        (fun _ -> githubOf owner)
+                let! url = startQueryRoutes registry feed
+                let frames = ResizeArray<ReadFrame> ()
+                let subscription =
+                    Sse.subscribe
+                        (url + "/queries")
+                        [ "cookie", "who=ada" ]
+                        (fun data ->
+                            match Codec.fromString Codec.readFrame data with
+                            | Ok frame -> frames.Add frame
+                            | Error _ -> ())
+
+                let hasPanels (fs: ReadFrame list) =
+                    fs |> List.exists (function Panels _ -> true | Queried _ -> false)
+                let hasQueries (fs: ReadFrame list) =
+                    fs |> List.exists (function Queried (QueriesDeclared _) -> true | _ -> false)
+                let! _ =
+                    awaitReadFrames frames (fun fs -> hasPanels fs && hasQueries fs)
+
+                // And a change reaches the SAME connection, which is what being told means.
+                owner <- "local"
+                feed.Changed ()
+                let! _ =
+                    awaitReadFrames frames (fun fs ->
+                        fs |> List.exists (function Panels (claude, _) -> claude.Owner = Some "local" | _ -> false))
+                subscription.Stop ()
+            }
+    ]
+
 let tests =
     testList "Queries" [
         shapeTests
         nameTests
         streamTests
         codecTests
+        panelFeedTests
     ]
 
-let portsTests = testList "Queries over HTTP" [ routeTests ]
+let portsTests = testList "Queries over HTTP" [ routeTests; panelRouteTests ]

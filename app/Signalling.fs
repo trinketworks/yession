@@ -488,9 +488,7 @@ let start
                 | None ->
                     res.writeHead (401, createObj [ "content-type", box "text/plain"; "cache-control", box "no-store" ]) |> ignore
                     res.``end`` "unauthorized"
-        | Some ClaudeStatus
         | Some (Claude _)
-        | Some GitHubStatus
         | Some (GitHub _)
         | Some GitHubRepos
         | Some (GitHubBranches _)

@@ -50,7 +50,6 @@ let private every =
       TerminalTranscriptRange ("term-a", 500, 612)
       TerminalKeyframe ("term-a", 0)
       TerminalKeyframe ("term-a", 41)
-      ClaudeStatus
       Claude ClaudeAction.Begin
       Claude ClaudeAction.Complete
       Claude ClaudeAction.Token

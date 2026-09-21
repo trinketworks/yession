@@ -226,20 +226,8 @@ type SessionRoute =
     /// a ranged replay starts from. Immutable on the same argument the chunks are: a
     /// keyframe is written once, at a position that never moves.
     | TerminalKeyframe of terminal: string * seq: int
-    /// The Claude panel's current credential status, and — on the same reply — the models
-    /// this session can run a turn on.
-    ///
-    /// One route, because it is one question: what can a turn run on here. The catalogue
-    /// had a `/models` of its own, and the two answers drifted the moment their refresh
-    /// triggers did — the picker kept a refusal naming an account that had since been
-    /// connected, because signing in re-probed the status and nothing re-asked for the
-    /// models. Which provider answers is still nothing the browser learns: the catalogue
-    /// crosses as the same provider-neutral pair it always did.
-    | ClaudeStatus
     /// One of the Claude panel's write actions.
     | Claude of action: ClaudeAction
-    /// The GitHub panel's current credential status (Plan 14).
-    | GitHubStatus
     /// One of the GitHub panel's write actions.
     | GitHub of action: GitHubAction
     /// The repositories the caller's GitHub credential reaches, most recently pushed
@@ -319,9 +307,7 @@ module SessionRoute =
           | TerminalTranscriptAfter (terminal, Some after) -> sprintf "terminals/%s/after/%d" terminal after
           | TerminalTranscriptRange (terminal, first, last) -> sprintf "terminals/%s/%d-%d" terminal first last
           | TerminalKeyframe (terminal, seq) -> sprintf "terminals/%s/keyframes/%d" terminal seq
-          | ClaudeStatus -> "claude"
           | Claude action -> "claude/" + claudeSegment action
-          | GitHubStatus -> "github"
           | GitHub action -> "github/" + githubSegment action
           | GitHubRepos -> "github/repos"
           | GitHubBranches (owner, repo) -> sprintf "github/repos/%s/%s/branches" owner repo
@@ -399,12 +385,10 @@ module SessionRoute =
                     Some (TerminalTranscriptRange (terminal, f, l))
                 | _ -> None
             | _ -> None
-        | "GET", [ "claude" ] -> Some ClaudeStatus
         | "POST", [ "claude"; "begin" ] -> Some (Claude ClaudeAction.Begin)
         | "POST", [ "claude"; "complete" ] -> Some (Claude ClaudeAction.Complete)
         | "POST", [ "claude"; "token" ] -> Some (Claude ClaudeAction.Token)
         | "POST", [ "claude"; "disconnect" ] -> Some (Claude ClaudeAction.Disconnect)
-        | "GET", [ "github" ] -> Some GitHubStatus
         | "POST", [ "github"; "begin" ] -> Some (GitHub GitHubAction.Begin)
         | "POST", [ "github"; "poll" ] -> Some (GitHub GitHubAction.Poll)
         | "POST", [ "github"; "token" ] -> Some (GitHub GitHubAction.Token)

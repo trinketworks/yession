@@ -1483,31 +1483,50 @@ let private getWithCookie (url: string) (cookie: string) : Async<TestHttp.Reply>
 let private cookieOf (jar: OidcHttp.Jar) : string =
     jar.Cookies |> Map.toList |> List.map (fun (k, v) -> sprintf "%s=%s" k v) |> String.concat "; "
 
-/// "This scope has a credential connected", as the status body says it — and "it has none".
+/// "This scope has a credential connected" — and "it has none" — as a panel states it.
 ///
 /// The shape lives HERE rather than in each case, because it used to live in four of them
 /// and adding one field to the wire broke all four at once. What these cases are about is
-/// whether a sign-in reached the session, not how the JSON spells it.
-let private connectedAt (scope: string) (body: string) : bool =
-    body.Contains (sprintf """"%s":{"kind":""" scope)
+/// whether a sign-in reached the session, not how it is spelled.
+let private connectedAt (scope: string) (panel: ClaudePanel) : bool =
+    (if scope = "session" then panel.SessionCredential else panel.MineCredential).IsSome
 
-let private notConnectedAt (scope: string) (body: string) : bool =
-    body.Contains (sprintf """"%s":null""" scope)
+let private notConnectedAt (scope: string) (panel: ClaudePanel) : bool = not (connectedAt scope panel)
 
-/// Poll the session's /claude status until `predicate` holds — the session learns of
-/// credential changes over its control stream, so the flip is asynchronous by design.
-let private awaitClaudeStatus (sessionUrl: string) (cookie: string) (predicate: string -> bool) : Async<unit> =
-    let rec go attempts =
-        async {
-            // No peer id: the cookie is the whole identity this route reads.
-            let! reply = getWithCookie (sessionUrl + "/claude") cookie
-            if reply.Status = 200 && predicate reply.Body then return ()
-            elif attempts <= 0 then return failwithf "claude status never settled; last: %d %s" reply.Status reply.Body
-            else
-                do! Async.Sleep 200
-                return! go (attempts - 1)
-        }
-    go 50
+/// Watch the session's read stream until a Claude panel satisfies `predicate`.
+///
+/// The session learns of credential changes over its control stream and tells every open
+/// browser, so the flip is asynchronous by design — but nothing here ASKS any more. This
+/// opens the stream the browser opens, and waits on the condition rather than on a
+/// duration, exactly as the query-stream cases do.
+let private awaitClaudePanel
+    (sessionUrl: string)
+    (cookie: string)
+    (predicate: ClaudePanel -> bool)
+    : Async<unit> =
+    async {
+        let seen = ResizeArray<ClaudePanel> ()
+        let subscription =
+            Sse.subscribe
+                (sessionUrl + "/queries")
+                [ "cookie", cookie ]
+                (fun data ->
+                    match Codec.fromString Codec.readFrame data with
+                    | Ok (Panels (claude, _)) -> seen.Add claude
+                    | Ok (Queried _)
+                    | Error _ -> ())
+        let rec go attempts =
+            async {
+                if seen |> Seq.exists predicate then return ()
+                elif attempts <= 0 then
+                    return failwithf "the panel never settled; saw %d frame(s), last: %A" seen.Count (Seq.tryLast seen)
+                else
+                    do! Async.Sleep 200
+                    return! go (attempts - 1)
+            }
+        try do! go 50
+        finally subscription.Stop ()
+    }
 
 let private e2eTests =
     testList "per-actor credentials across processes" [
@@ -1548,7 +1567,7 @@ let private e2eTests =
                         m.Conversation.Items
                         |> List.exists (fun i -> i.Status = Complete && (ConversationItem.said i).Contains "hello before sign-in"))
                 // The status surface says so honestly: no agent in this session yet.
-                do! awaitClaudeStatus sessionUrl cookieA (fun body -> body.Contains "\"agent\":false")
+                do! awaitClaudePanel sessionUrl cookieA (fun panel -> panel.AgentAvailable = Some false)
 
                 // 2. A pastes a setup token for "all my sessions" through the session's
                 //    /claude surface; the gate flips without a relaunch.
@@ -1559,8 +1578,8 @@ let private e2eTests =
                         """{"scope":"mine","token":"sk-ant-oat01-fake"}"""
                    
                 Expect.equal putMine.Status 200 (sprintf "the paste stores: %s" putMine.Body)
-                do! awaitClaudeStatus sessionUrl cookieA (fun body ->
-                        connectedAt "mine" body && body.Contains "\"agent\":true")
+                do! awaitClaudePanel sessionUrl cookieA (fun panel ->
+                        connectedAt "mine" panel && panel.AgentAvailable = Some true)
 
                 do! compose a a.Hello.PeerId "hello after sign-in"
                 a.Connection.SendDraft a.Hello.PeerId
@@ -1589,8 +1608,8 @@ let private e2eTests =
                             i.Author = ActorRef.Agent && i.Status = Complete && (ConversationItem.said i).Contains "credential: CLAUDE_CODE_OAUTH_TOKEN"))
                 // B's own status surface agrees, without B having asserted any identity.
                 let cookieB = cookieOf openedB.Jar
-                do! awaitClaudeStatus sessionUrl cookieB (fun body ->
-                        connectedAt "mine" body && body.Contains "\"owner\":\"local\"")
+                do! awaitClaudePanel sessionUrl cookieB (fun panel ->
+                        connectedAt "mine" panel && panel.Owner = Some "local")
 
                 // 4. A stores a SESSION-scoped api key: it overrides for every actor —
                 //    Bob's next turn now runs on it.
@@ -1601,7 +1620,7 @@ let private e2eTests =
                         """{"scope":"session","token":"sk-ant-api03-fake"}"""
                    
                 Expect.equal putSession.Status 200 (sprintf "the session-scoped paste stores: %s" putSession.Body)
-                do! awaitClaudeStatus sessionUrl cookieA (connectedAt "session")
+                do! awaitClaudePanel sessionUrl cookieA (connectedAt "session")
                 do! compose b b.Hello.PeerId "bob under the session credential"
                 b.Connection.SendDraft b.Hello.PeerId
                 do! b.Runner.WaitFor (fun m ->
@@ -1616,8 +1635,8 @@ let private e2eTests =
                 let! _ =
                     postJsonWithCookie (sessionUrl + "/claude/disconnect") cookieA """{"scope":"mine"}"""
                    
-                do! awaitClaudeStatus sessionUrl cookieA (fun body ->
-                        notConnectedAt "session" body && notConnectedAt "mine" body)
+                do! awaitClaudePanel sessionUrl cookieA (fun panel ->
+                        notConnectedAt "session" panel && notConnectedAt "mine" panel)
 
                 do! a.Channel.Close ()
                 do! b.Channel.Close ()
@@ -1658,8 +1677,7 @@ let private e2eTests =
                 let! alice = connectClient (sessionUrl + "/signal") openedAlice.PeerToken "browser-alice" "Alice"
 
                 // The launch was attributed, so it holds no deployment credential at all.
-                let! aliceStatus = getWithCookie (sessionUrl + "/claude") cookieAlice
-                Expect.isTrue (aliceStatus.Body.Contains "\"owner\":\"user\"") "an attributed deployment owns by user"
+                do! awaitClaudePanel sessionUrl cookieAlice (fun panel -> panel.Owner = Some "user")
 
                 let! putMine =
                     postJsonWithCookie
@@ -1668,7 +1686,7 @@ let private e2eTests =
                         """{"scope":"mine","token":"sk-ant-oat01-alices"}"""
                    
                 Expect.equal putMine.Status 200 (sprintf "alice connects her own: %s" putMine.Body)
-                do! awaitClaudeStatus sessionUrl cookieAlice (connectedAt "mine")
+                do! awaitClaudePanel sessionUrl cookieAlice (connectedAt "mine")
 
                 do! compose alice alice.Hello.PeerId "alice on her own credential"
                 alice.Connection.SendDraft alice.Hello.PeerId
@@ -1682,8 +1700,7 @@ let private e2eTests =
                 let! openedBob = OidcHttp.openSessionVia (asUser "bob@example.com") "/login" sessionUrl
                 let cookieBob = cookieOf openedBob.Jar
                 let! bob = connectClient (sessionUrl + "/signal") openedBob.PeerToken "browser-bob" "Bob"
-                let! bobStatus = getWithCookie (sessionUrl + "/claude") cookieBob
-                Expect.isTrue (bobStatus.Body.Contains "\"mine\":null") "bob does not inherit alice's"
+                do! awaitClaudePanel sessionUrl cookieBob (notConnectedAt "mine")
 
                 do! compose bob bob.Hello.PeerId "bob without a credential"
                 bob.Connection.SendDraft bob.Hello.PeerId
@@ -1812,10 +1829,9 @@ let private stored (kind: ConnectionKind) (health: ConnectionHealth) (id: Secret
 let private startGitHubRoutesOver
     (post: GitHubConnection.GitHubPost)
     (connections: ControlClient.SessionConnections)
-    (statusOf: SecretId -> ConnectionStatus option)
     =
     async {
-        let route = GitHubConnection.routes sessionA (stubAuth ()) connections statusOf post ""
+        let route = GitHubConnection.routes sessionA (stubAuth ()) connections post ""
         let handler (req: Interop.IncomingMessage) (res: Interop.ServerResponse) =
             if not (route req res) then
                 res.writeHead (404, Fable.Core.JsInterop.createObj [ "content-type", box "text/plain" ]) |> ignore
@@ -1826,8 +1842,18 @@ let private startGitHubRoutesOver
         return sprintf "http://127.0.0.1:%d" (Interop.serverPort listening)
     }
 
-let private startGitHubRoutes (connections: ControlClient.SessionConnections) (statusOf: SecretId -> ConnectionStatus option) =
-    startGitHubRoutesOver GitHubConnection.posting connections statusOf
+let private startGitHubRoutes (connections: ControlClient.SessionConnections) =
+    startGitHubRoutesOver GitHubConnection.posting connections
+
+/// One browser's identity, as the panel builders take it. The panels are per-IDENTITY —
+/// "mine" is a different credential for different people — so a case about scoping asks
+/// `panelFor` rather than a route: there is no status route any more, and the invariant was
+/// never about HTTP.
+let private identityOf (who: string) (attribution: Yession.SessionProcess.PeerAttribution) : Yession.SessionProcess.CookieIdentity =
+    { Subject = who; DisplayName = None; Attribution = attribution }
+
+let private githubPanelFor (statusOf: SecretId -> ConnectionStatus option) (identity: Yession.SessionProcess.CookieIdentity) =
+    GitHubConnection.panelFor sessionA statusOf identity
 
 /// Point the module at the stub for the duration of one test, and put the environment back
 /// afterwards — these are process-wide and the suite runs beside others.
@@ -1844,14 +1870,14 @@ let private githubRouteTests =
             async {
                 let! stub = startStubGitHub ()
                 let recorder = recordingConnections ()
-                let! url = startGitHubRoutes recorder.Client (fun _ -> None)
+                let! url = startGitHubRoutes recorder.Client
                 do! withStubGitHub stub (Some "Iv1.test") (fun () ->
                     async {
                         // No cookie: every route is 401 before it looks at anything else. The
                         // begin route reaches github.com, so an unauthenticated caller getting
                         // past this door would make the session an open device-flow proxy.
-                        let! status = getWithCookie (url + "/github") ""
-                        Expect.equal status.Status 401 "status is gated"
+                        // (What a panel SAYS is behind the read stream's door, pinned there:
+                        // there is no status route here any more.)
                         let! began = postJsonWithCookie (url + "/github/begin") "" """{"scope":"mine"}"""
                         Expect.equal began.Status 401 "begin is gated"
                         Expect.equal stub.TokenRequests.Count 0 "nothing reached github.com"
@@ -1879,39 +1905,41 @@ let private githubRouteTests =
                 // and every new value stranded the last one's credential.
                 let recorder = recordingConnections ()
                 let storedTargets = ResizeArray<SecretId> ()
-                let! url =
-                    startGitHubRoutes recorder.Client (fun target ->
-                        if storedTargets.Contains target then Some (stored StaticConnection ConnectionUsable target) else None)
+                let! url = startGitHubRoutes recorder.Client
 
                 let! connected =
                     postJsonWithCookie (url + "/github/token") "who=anon" """{"scope":"mine","token":"ghp_abc"}"""
-                   
+
                 Expect.equal connected.Status 200 "unattributed access can connect"
                 Expect.equal recorder.Puts.Count 1 "one credential stored"
                 let target, _ = recorder.Puts.[0]
                 Expect.equal target.Scope LocalScope "owned by the deployment, not by any browser"
                 storedTargets.Add target
 
+                let statusOf target =
+                    if storedTargets.Contains target then Some (stored StaticConnection ConnectionUsable target) else None
+
                 // A DIFFERENT browser — no shared storage, no shared id, nothing carried over
                 // but the same deployment. Before this change it saw `"mine":null` and was
                 // shown a Connect button.
-                let! elsewhere = getWithCookie (url + "/github") "who=anon"
-                Expect.equal elsewhere.Status 200 "readable"
-                Expect.isTrue (connectedAt "mine" elsewhere.Body) "already connected, from a browser that never connected anything"
-                Expect.isTrue (elsewhere.Body.Contains "\"owner\":\"local\"") "and says whose it is: the deployment's"
+                let elsewhere = githubPanelFor statusOf (identityOf "anon" Yession.SessionProcess.UnattributedAccess)
+                Expect.isTrue
+                    elsewhere.MineCredential.IsSome
+                    "already connected, from a browser that never connected anything"
+                Expect.equal elsewhere.Owner (Some "local") "and says whose it is: the deployment's"
 
                 // An attributed user is untouched by any of it — they own their own, and the
                 // deployment's credential is not theirs to see.
-                let! alicesView = getWithCookie (url + "/github") "who=alice"
-                Expect.isTrue (notConnectedAt "mine" alicesView.Body) "an attributed user does not inherit it"
-                Expect.isTrue (alicesView.Body.Contains "\"owner\":\"user\"") "and owns by user"
+                let alicesView = githubPanelFor statusOf (identityOf "alice" (Yession.SessionProcess.AttributedUser alice))
+                Expect.isNone alicesView.MineCredential "an attributed user does not inherit it"
+                Expect.equal alicesView.Owner (Some "user") "and owns by user"
             }
 
         testCaseAsync "begin hands the browser the user code and keeps the device code; poll paces, then connects" <|
             async {
                 let! stub = startStubGitHub ()
                 let recorder = recordingConnections ()
-                let! url = startGitHubRoutes recorder.Client (fun _ -> None)
+                let! url = startGitHubRoutes recorder.Client
                 do! withStubGitHub stub (Some "Iv1.test") (fun () ->
                     async {
                         let! began = postJsonWithCookie (url + "/github/begin") "who=alice" """{"scope":"mine"}"""
@@ -1987,7 +2015,7 @@ let private githubRouteTests =
                                 return Error (GitHubConnection.GitHubUnreachable "socket hang up")
                             else return! GitHubConnection.posting (url, body)
                         }
-                let! url = startGitHubRoutesOver flaky recorder.Client (fun _ -> None)
+                let! url = startGitHubRoutesOver flaky recorder.Client
                 do! withStubGitHub stub (Some "Iv1.test") (fun () ->
                     async {
                         let! _ = postJsonWithCookie (url + "/github/begin") "who=alice" """{"scope":"mine"}"""
@@ -2013,7 +2041,7 @@ let private githubRouteTests =
                 let recorder = recordingConnections ()
                 let unreachable : GitHubConnection.GitHubPost =
                     fun _ -> async { return Error (GitHubConnection.GitHubUnreachable "getaddrinfo ENOTFOUND github.com") }
-                let! url = startGitHubRoutesOver unreachable recorder.Client (fun _ -> None)
+                let! url = startGitHubRoutesOver unreachable recorder.Client
                 do! withStubGitHub stub (Some "Iv1.test") (fun () ->
                     async {
                         let! began = postJsonWithCookie (url + "/github/begin") "who=alice" """{"scope":"mine"}"""
@@ -2026,7 +2054,7 @@ let private githubRouteTests =
             async {
                 let! stub = startStubGitHub ()
                 let recorder = recordingConnections ()
-                let! url = startGitHubRoutes recorder.Client (fun _ -> None)
+                let! url = startGitHubRoutes recorder.Client
                 do! withStubGitHub stub (Some "Iv1.test") (fun () ->
                     async {
                         // Alice begins for herself. Bob is signed in too, and github.com is
@@ -2061,7 +2089,7 @@ let private githubRouteTests =
             async {
                 let! stub = startStubGitHub ()
                 let recorder = recordingConnections ()
-                let! url = startGitHubRoutes recorder.Client (fun _ -> None)
+                let! url = startGitHubRoutes recorder.Client
                 do! withStubGitHub stub None (fun () ->
                     async {
                         // No client id: the operator has registered no App. The route says so
@@ -2085,31 +2113,24 @@ let private githubRouteTests =
                     })
             }
 
-        testCaseAsync "status reports both scopes, and reports them per caller" <|
-            async {
-                let! stub = startStubGitHub ()
-                let recorder = recordingConnections ()
-                let aliceTarget = githubTarget (UserScope alice)
-                let connected = Map.ofList [ aliceTarget, stored StaticConnection ConnectionUsable aliceTarget ]
-                let! url = startGitHubRoutes recorder.Client (fun target -> Map.tryFind target connected)
-                do! withStubGitHub stub (Some "Iv1.test") (fun () ->
-                    async {
-                        let! forAlice = getWithCookie (url + "/github") "who=alice"
-                        Expect.equal forAlice.Status 200 "alice sees her own"
-                        Expect.isTrue (connectedAt "mine" forAlice.Body) "alice is connected"
-                        Expect.isTrue
-                            (forAlice.Body.Contains """"signInRequired":null""")
-                            "and nothing says otherwise"
-                        Expect.isTrue (notConnectedAt "session" forAlice.Body) "the session is not"
-                        Expect.isTrue (forAlice.Body.Contains "\"owner\":\"user\"") "as a user"
+        testCase "a panel reports both scopes, and reports them per caller" <| fun () ->
+            let aliceTarget = githubTarget (UserScope alice)
+            let connected = Map.ofList [ aliceTarget, stored StaticConnection ConnectionUsable aliceTarget ]
+            let statusOf target = Map.tryFind target connected
 
-                        // The same session, a different human: status is computed from the
-                        // caller's identity, so bob does not learn he is signed in because
-                        // alice is.
-                        let! forBob = getWithCookie (url + "/github") "who=bob"
-                        Expect.isTrue (notConnectedAt "mine" forBob.Body) "bob is not connected"
-                    })
-            }
+            let forAlice = githubPanelFor statusOf (identityOf "alice" (Yession.SessionProcess.AttributedUser alice))
+            Expect.isTrue forAlice.MineCredential.IsSome "alice is connected"
+            Expect.equal
+                (forAlice.MineCredential |> Option.bind (fun row -> row.SignInRequired))
+                None
+                "and nothing says otherwise"
+            Expect.isNone forAlice.SessionCredential "the session is not"
+            Expect.equal forAlice.Owner (Some "user") "as a user"
+
+            // The same session, a different human: the panel is computed from the caller's
+            // identity, so bob does not learn he is signed in because alice is.
+            let forBob = githubPanelFor statusOf (identityOf "bob" (Yession.SessionProcess.AttributedUser bob))
+            Expect.isNone forBob.MineCredential "bob is not connected"
     ]
 
 // --- watched pull requests (the poller, and the two endpoints under it) -------------------
