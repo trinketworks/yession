@@ -1311,6 +1311,46 @@ module Style =
               "max-md:-mx-4"
               "hover:bg-surface transition-colors duration-150 ease-out" ]
 
+    // --- The fold: the one disclosure the timeline has -------------------------------
+
+    /// The fold: an arrow in the gutter, a title beside it, and something unfolding beneath
+    /// — an act's particulars, a turn's work, one call's input and output. ONE control, so
+    /// the timeline's disclosures are one thing a reader learns once (`View.foldArrow`).
+    ///
+    /// A ROW owns the geometry, and that is the whole of why this aligns. The arrow used to
+    /// place itself — `absolute left-0 top-2 h-5` — against a first line it ASSUMED was
+    /// twenty pixels tall and eight pixels down, so every row that wanted one had to be
+    /// given `relative`, a gutter, `py-2`, and a title overridden to `leading-5`: four
+    /// compensations, one per row kind, and a mono line (`text-code-sm` is 11/16, not 13/20)
+    /// still sat two pixels off because its own step brought its own line-height. Here the
+    /// row is a grid — gutter, then content — and it states the line box ONCE (`leading-5`).
+    /// The arrow is `1lh` of that box and centred in it, the title inherits it, and a new
+    /// kind of row aligns by being a row.
+    /// The gutter is ONE width everywhere (`2rem`), including on a phone: a row that bleeds
+    /// to the screen's edges (`itemGround`) puts the bleed back as padding, exactly as a
+    /// message does (`max-md:pl-4`), rather than widening its gutter by it — which put a
+    /// bled row's arrow sixteen pixels left of a nested row's on a phone and nowhere else.
+    let foldRow = cls [ "grid grid-cols-[2rem_1fr] leading-5" ]
+    /// Everything that is not the arrow sits in the content column, and says so: a row is a
+    /// grid, and a child that did not name its column would be placed in the gutter under
+    /// the arrow. `min-w-0` so a long line truncates inside the column rather than widening
+    /// it.
+    let foldContent = "col-start-2 min-w-0"
+    /// The arrow's cell: one line of the row's own box, whatever the title is set in.
+    let fold =
+        cls [ "h-[1lh] flex items-center justify-center cursor-pointer bg-transparent border-0 p-0"
+              "text-ink-faint hover:text-ink transition-colors"; focusRing ]
+    let foldMark = cls [ "block"; Motion.turn ]
+    let foldMarkOpen = cls [ foldMark; Motion.turned ]
+    /// What unfolds UNDER the title, in the content column — an act's particulars, a call's
+    /// input and output: an aside to the line, indented with it.
+    let foldBodyOpen = cls [ "col-start-2"; Motion.unfold; Motion.unfolded ]
+    let foldBodyShut = cls [ "col-start-2"; Motion.unfold; Motion.folded ]
+    /// What unfolds BESIDE it, across both columns — a run's items, which are rows of their
+    /// own and put their arrows on this row's rail rather than one gutter in.
+    let foldBodyWideOpen = cls [ "col-span-2"; Motion.unfold; Motion.unfolded ]
+    let foldBodyWideShut = cls [ "col-span-2"; Motion.unfold; Motion.folded ]
+
     /// One item inside a group: its (rare) meta line over its body.
     let messageItem = cls [ itemGround; "max-md:pl-4"; "flex flex-col gap-1" ]
     /// The meta line carries only what is NEWS — streaming, failed, woke unasked. The author
@@ -1625,31 +1665,37 @@ module Style =
     /// the gutter — and the two used to sit on different rails, the run a gutter further in
     /// than the act above it. `itemGround` gives it the act's rhythm and the phone's full
     /// bleed; the gutter is where `fold` puts the arrow.
-    let chatToolRun =
-        cls [ itemGround; readingColumn; "pl-[32px] max-md:pl-12"; "flex flex-col gap-0.5" ]
+    let chatToolRun = cls [ itemGround; readingColumn; foldRow; "max-md:pl-4" ]
     /// "used n tools" — the chip voice, on its line; also the "used" before a lone call's
     /// name.
-    let chatToolRunText = "font-light text-small text-ink-dim truncate min-w-0"
-    /// The calls, unfolding beneath the run's line. Steps back out of the run's gutter
-    /// (`-ml-[32px]`) so the calls can lay their own and put their arrows on the SAME rail
-    /// — here, on the clipping box itself, because an unfolding body clips (`overflow-hidden`
-    /// is what makes the grow animate) and a call that stepped out on its own would have its
-    /// arrow cut off.
-    let chatToolRunInner = cls [ Motion.unfoldInner; "flex flex-col pt-1 -ml-[32px] max-md:-ml-12" ]
+    let chatToolRunText = "font-light text-small leading-[inherit] text-ink-dim truncate min-w-0"
+    /// The calls, unfolding beneath the run's line. The body spans both columns
+    /// (`foldBodyWide*`), so each call lays its own gutter and its arrow lands on the run's
+    /// rail — no stepping back out of anything.
+    let chatToolRunInner = cls [ Motion.unfoldInner; "flex flex-col pt-1" ]
 
-    /// One call inside an unfolded run: a fold of its own on the SAME rail as the run — the
-    /// run's body has stepped back out of the gutter, and this lays its own, so its arrow
-    /// sits where every other arrow does and its line where the run's does. Its input and output
-    /// are a tap away rather than crammed onto the line — the line is the tool and how it
-    /// went, and everything else is under it. The act's rhythm (`-my-1.5 py-2`), so the
-    /// arrow `fold` places at `top-2` lands on the line.
-    let chatToolItem = "relative -my-1.5 py-2 pl-[32px] max-md:pl-12 flex flex-col gap-0.5"
-    /// The call's line: tool, then outcome. On the BASELINE, like a block chip's line: a
-    /// prose "used" and a mono name have different line boxes, and centring them set the
-    /// name a couple of pixels above the word beside it.
-    let chatToolCall = "flex items-baseline gap-2 text-ink-dim"
+    /// One call inside an unfolded run: a fold row of its own, on the SAME rail as the run
+    /// — it is a row, so its arrow lands where every other arrow does. Its input and output
+    /// are a tap away rather than crammed onto the line: the line is the tool and how it
+    /// went, and everything else is under it.
+    let chatToolItem = cls [ foldRow; "py-0.5" ]
+    /// The call's line: tool, then outcome. The words sit on the BASELINE, so a prose "used"
+    /// and a mono name — two steps with two line-heights — read as one line rather than each
+    /// centring in its own box. The line is ONE of the row's (`h-[1lh]`), which is what keeps
+    /// it a line: a baseline-aligned ICON hangs its whole height below the text's baseline
+    /// and would otherwise grow the box a couple of pixels, taking the outcome's glyph — and
+    /// the arrow measured against this line — off it. The outcome centres itself instead
+    /// (`chatToolStatus`), the one thing on the line that is not a word.
+    let chatToolCall = "flex items-baseline gap-2 h-[1lh] text-ink-dim"
+    /// The outcome at the end of the call's line: a glyph, so it centres on the line rather
+    /// than standing on its baseline.
+    let chatToolStatus = "shrink-0 self-center flex items-center"
     /// `namespace/name` — mono, because it is an identifier and reads as one.
-    let chatToolName = "font-terminal text-code-sm text-ink-dim truncate min-w-0 flex-1"
+    /// `namespace/name` — mono, because it is an identifier and reads as one, and on the
+    /// ROW's line box (`leading-[inherit]`) rather than its own step's: the row states the
+    /// line once and everything on it agrees, which is what puts the arrow on the line
+    /// without anybody subtracting pixels.
+    let chatToolName = "font-terminal text-code-sm leading-[inherit] text-ink-dim truncate min-w-0 flex-1"
 
     /// What the call was given and what it answered, unfolding under its line: two labelled
     /// blocks in the same shape, because they are the same kind of thing — text that crossed
@@ -1786,8 +1832,7 @@ module Style =
 
     /// A repo note in the timeline (Plan 14): one quiet act-line, indented past the
     /// avatar gutter so the reading edge lines up with message bodies.
-    let actNote =
-        cls [ itemGround; readingColumn; "pl-[32px] max-md:pl-12"; "flex flex-col gap-0.5" ]
+    let actNote = cls [ itemGround; readingColumn; foldRow; "max-md:pl-4" ]
     /// The pulse for an act in flight, sat in the LEFT gutter rather than trailing the line.
     /// The box spans exactly the margin the text clears (`pl-[32px]`, `pl-12` on a phone) and
     /// the first line's own height, so `justify-center`/`items-center` put the dot on the dead
@@ -1795,9 +1840,7 @@ module Style =
     /// gutter is. `top-2` matches `itemGround`'s `py-2`, so it sits on the first line even when
     /// a detail wraps below. Out of the text flow and unclickable; the reader's cue is the dot,
     /// the screen-reader's is the `sr-only` word it wraps.
-    let actNoteRunning =
-        cls [ "absolute left-0 top-2 h-5 w-8 max-md:w-12"
-              "flex items-center justify-center text-blue pointer-events-none" ]
+    let actNoteRunning = cls [ "h-[1lh] flex items-center justify-center text-blue pointer-events-none" ]
     /// The dot itself: the same size and pulse as elsewhere, but no inline margin or baseline
     /// nudge — those are for a dot that rides text, and this one is centred by its box.
     let actNoteRunningDot =
@@ -1807,10 +1850,13 @@ module Style =
     /// ADA` is a line nobody reads, because uppercase flattens the word shapes a reader scans
     /// by and the tracking stretches one clause across the whole column. A label that has
     /// grown into a sentence is a sentence, and the timeline is prose.
-    let actNoteText = "text-small leading-5 text-ink-dim"
+    let actNoteText = "text-small leading-[inherit] text-ink-dim"
     /// The particulars under the headline: the same size, one step fainter, so the pair reads
     /// as one act rather than as two lines about it.
-    let actNoteDetail = "text-small leading-5 text-ink-faint"
+    let actNoteDetail = "text-small leading-[inherit] text-ink-faint"
+    /// The particulars that show WITHOUT unfolding, stacked under the title in the content
+    /// column. Empty for most acts, and an empty box costs nothing.
+    let actNoteShown = "flex flex-col gap-0.5"
 
     /// A sandbox start's particulars, laid out as labelled fact rows rather than one
     /// sentence (`View.sandboxStartFacts`). The container stacks each fact on its own row at
@@ -1840,30 +1886,10 @@ module Style =
     /// A path inside a fact line - the checkout, when it is worth showing. Mono, because it
     /// is an identifier and reads as one, and dim enough to sit inside the faint line around it.
     let actNotePath = cls [ mono; "text-code-sm text-ink-dim" ]
-    /// The fold an act's particulars sit behind, and the arrow that opens it.
-    ///
-    /// The arrow lives in the LEFT gutter, on the dead centre of the margin the text clears
-    /// and of the headline's own line — the box `actNoteRunning` uses for its dot, so the two
-    /// cues an act can wear sit on one spot. A real button, so it is a Tab stop with a ring
-    /// and a name; faint at rest, because a column of acts should read as its titles, and
-    /// brighter under the pointer or the keyboard, since it is the only way in. The chevron
-    /// points ON at rest and turns DOWN when the particulars are open, at the page's one pace.
-    ///
-    /// THE fold, not the act's: a tool run and each call in it wear the same control on the
-    /// same gutter (`View.foldArrow`), which is what makes the timeline's disclosures one
-    /// thing a reader learns once.
-    let fold =
-        cls [ "absolute left-0 top-2 h-5 w-8 max-md:w-12"
-              "flex items-center justify-center cursor-pointer bg-transparent border-0 p-0"
-              "text-ink-faint hover:text-ink transition-colors"; focusRing ]
-    let foldMark = cls [ "block"; Motion.turn ]
-    let foldMarkOpen = cls [ foldMark; Motion.turned ]
-    let foldBodyOpen = cls [ Motion.unfold; Motion.unfolded ]
-    let foldBodyShut = cls [ Motion.unfold; Motion.folded ]
-    /// The particulars, unfolding beneath the title: grown, slid and faded in as one, at the
-    /// page's pace, and folded back the same way. Inside, the rows the act lays out and —
-    /// last — what the agent was told, in the detail voice, so a reference in it is drawn as
-    /// it is drawn above.
+    /// What an act unfolds: the rows it lays out and — last — what the agent was told, in
+    /// the detail voice, so a reference in it is drawn as it is drawn above. The fold
+    /// itself, and where its arrow sits, is `fold` above: an act wears the timeline's one
+    /// disclosure rather than a disclosure of its own.
     let actNoteFoldInner = cls [ Motion.unfoldInner; "flex flex-col gap-1 pt-1" ]
     /// The sentence the agent was told, QUOTED: typographic marks either side, drawn by the
     /// stylesheet rather than written into the row, so what the element SAYS stays exactly

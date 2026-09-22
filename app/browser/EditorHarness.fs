@@ -24,6 +24,7 @@ open Yession.Domain.Terminals
 open Yession.Domain.Collab
 open Yession.Domain.Chat
 open Yession.Domain.Sandboxes
+open Yession.Domain.Tools
 open Fable.BrowserExtras
 open Fable.YjsExtras
 open Fable.ProseMirror
@@ -817,6 +818,7 @@ let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
     let burstFailed : BlockId = BlockId.create "block-burst-failed" |> expect
     let burstRunning : BlockId = BlockId.create "block-burst-running" |> expect
     let peerId : PeerId = PeerId.create "ada" |> expect
+    let toolUseId : ToolUseId = ToolUseId.create "tool-harness" |> expect
     let messageId : MessageId = MessageId.create "msg-harness" |> expect
     /// What the agent actually says, which is the hard case for a phone: a fenced block whose
     /// lines are far wider than the screen, and prose carrying tokens no line break fits
@@ -932,7 +934,22 @@ let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
                     [ TimelineBlock (offset 2L, terminalId, blockId)
                       TimelineBlock (offset 3L, terminalId, burstOk)
                       TimelineBlock (offset 4L, terminalId, burstFailed)
-                      TimelineBlock (offset 5L, terminalId, burstRunning) ]
+                      TimelineBlock (offset 5L, terminalId, burstRunning)
+                      // A tool call, so the page holds the OTHER kind of fold row: its title
+                      // is mono and its own type step brings its own line-height, which is
+                      // exactly what the arrow used to be measured wrong against.
+                      TimelineToolUse (offset 6L, toolUseId) ]
+                ToolUses =
+                    Map.ofList
+                        [ ToolUseId.value toolUseId,
+                          { ToolUseId = toolUseId
+                            AgentTurnId = agentTurn
+                            Namespace = "yession"
+                            Name = "read_file"
+                            Arguments = Some """{"path":"src/Program.fs"}"""
+                            Outcome = Some ToolCallOk
+                            Block = None
+                            Result = Some "src/Program.fs lines 1-2 of 2" } ]
                 BlockTurns =
                     Map.ofList
                         [ BlockId.value burstOk, agentTurn

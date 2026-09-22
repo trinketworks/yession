@@ -2160,13 +2160,19 @@ module View =
                         @click={Ev(fun _ -> dispatch (ToggleFoldMsg key))}>
                   <span class="{if opened then Style.foldMarkOpen else Style.foldMark}">{mark}</span>
                 </button>"""
-        let foldBody (key: FoldKey) (inner: string) (body: TemplateResult list) =
+        // What unfolds sits UNDER the title, in the content column — an act's particulars, a
+        // call's input and output. `foldBodyWide` is the exception that earns itself: a run's
+        // items are fold rows of their own, and spanning both columns is what puts their
+        // arrows on this row's rail rather than one gutter in.
+        let foldBodyIn (width: bool -> string) (key: FoldKey) (inner: string) (body: TemplateResult list) =
             let opened = Set.contains key model.OpenFolds
             html $"""
-                <div id="fold-{FoldKey.value key}" class="{if opened then Style.foldBodyOpen else Style.foldBodyShut}"
+                <div id="fold-{FoldKey.value key}" class="{width opened}"
                      data-fold-body="{FoldKey.value key}" data-fold-open="{if opened then "yes" else "no"}">
                   <div class="{inner}">{body}</div>
                 </div>"""
+        let foldBody = foldBodyIn (fun opened -> if opened then Style.foldBodyOpen else Style.foldBodyShut)
+        let foldBodyWide = foldBodyIn (fun opened -> if opened then Style.foldBodyWideOpen else Style.foldBodyWideShut)
         // A repo note is something someone DID, not said - one quiet line, actor-attributed,
         // no avatar and no rich body (Plan 14, repos). It rides the same timeline slot a
         // message does (both are `ConversationItem`s at an offset); `Content` is what tells
@@ -2220,8 +2226,8 @@ module View =
                   {itemActions item}
                   {running}
                   {arrow}
-                  <span class="{Style.actNoteText}">{Entity.phrase model by title} {failedMark}</span>
-                  {shown}
+                  <span class="{Style.cls [ Style.foldContent; Style.actNoteText ]}">{Entity.phrase model by title} {failedMark}</span>
+                  <div class="{Style.cls [ Style.foldContent; Style.actNoteShown ]}">{shown}</div>
                   {fold}
                 </article>"""
         // Where a turn stopped, and why. A signpost on the chip column, after the last thing
@@ -2417,9 +2423,9 @@ module View =
                      data-chat-tool="{ToolUseId.value use'.ToolUseId}"
                      data-chat-tool-status="{status}">
                   {arrow}
-                  <div class="{Style.chatToolCall}">
+                  <div class="{Style.cls [ Style.foldContent; Style.chatToolCall ]}">
                     {title}
-                    <span class="shrink-0">{rendered}</span>
+                    <span class="{Style.chatToolStatus}">{rendered}</span>
                   </div>
                   {body}
                 </div>"""
@@ -2453,11 +2459,11 @@ module View =
                 | TimelineToolUse (_, id) :: _ -> FoldKey.ToolRun id
                 | _ -> FoldKey.ToolRun (ToolUseId.create (AgentTurnId.value turn) |> Result.defaultWith failwith)
             let arrow = foldArrow key Icon.rights Dom.Text.details
-            let body = foldBody key Style.chatToolRunInner entries
+            let body = foldBodyWide key Style.chatToolRunInner entries
             html $"""
                 <div class="{Style.chatToolRun}" data-chat-tool-run="{AgentTurnId.value turn}">
                   {arrow}
-                  <span class="{Style.chatToolRunText}">{WorkRun.summary items}</span>
+                  <span class="{Style.cls [ Style.foldContent; Style.chatToolRunText ]}">{WorkRun.summary items}</span>
                   {body}
                 </div>"""
         // One agent burst: the commands one turn ran, in one row (Plan 20, stage 4). The
