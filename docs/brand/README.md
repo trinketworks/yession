@@ -741,9 +741,12 @@ itself. The run is SMIL with the easing baked into the samples: every face is on
 `d` carries 37 keyframes on uniform `keyTimes`, and the clips, bloom, back faces and solid start
 are each a `use` of it; a face's visibility flips discretely, which is safe because a face only
 turns over when it is edge-on. Camera, travel and fades are all sampled through
-cubic-bezier(0.4, 0, 0.2, 1), Tailwind's ease-in-out — the ask card on the repository screen
-uses the ease-out half of that family, and a camera starting at rest needs the eased start. The
-last frame matches the static build to the pixel: same rig and material, with four-point faces
-(the straight lens needs no subdivision) and bounding-box gradients so the fills follow the
-faces. About 110 KB, 18 KB gzipped; SMIL cannot read `prefers-reduced-motion`, so a page that
+cubic-bezier(0.42, 0, 0.58, 1), CSS's symmetric ease-in-out: Tailwind's (0.4, 0, 0.2, 1) left
+faster than it landed. The sheen is the reflection of one fixed point light in the shared top
+plane — the eye's line to the lamp's mirror image meets the plane at one point, and that is
+where the highlight is, clipped into whichever tops it falls across — so it slides over the
+surface as the camera moves instead of riding on it, and each top's graded fill runs from its
+corner nearest the lamp; the lamp is not part of the material, so the sheen is there from the
+first frame. The last frame is `clearer-clean` but for that sheen: same rig and material, with
+four-point faces (the straight lens needs no subdivision). About 110 KB, 18 KB gzipped; SMIL cannot read `prefers-reduced-motion`, so a page that
 respects it shows the static mark instead. Click to replay. Built by `gen28.py`.
