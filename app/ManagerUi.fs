@@ -693,7 +693,7 @@ let page
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         "<title>Yession Manager</title>"
         Style.headTags styleSheetUrl
-        WebApp.managerHeadTags (ManagerRoute.path ManagerRoute.Manifest) (ManagerRoute.path ManagerRoute.Icon)
+        WebApp.managerHeadTags (ManagerRoute.path ManagerRoute.Manifest) (ManagerRoute.path ManagerRoute.Icon) (ManagerRoute.path ManagerRoute.Favicon)
         sprintf "</head><body class=\"%s\">" Style.app
         Ssr.render (bodyTemplate access query views declarations hooks)
         sprintf "<script>%s</script>" script
@@ -972,7 +972,13 @@ let tryHandle
                 200,
                 createObj [ "content-type", box "image/png"; "cache-control", box CachePolicy.shell ])
             |> ignore
-            res.``end`` (decodeBase64 WebApp.iconPngBase64)
+            res.``end`` (decodeBase64 Brand.iconPngBase64)
+        | ManagerRoute.Favicon ->
+            res.writeHead (
+                200,
+                createObj [ "content-type", box "image/svg+xml; charset=utf-8"; "cache-control", box CachePolicy.shell ])
+            |> ignore
+            res.``end`` Brand.faviconSvg
         // Creating a session is asking to WORK in one. It used to answer with a refreshed
         // table, which left the primary path at three acts — create, find the row, Launch —
         // and then a fourth to open what you had just made. So the answer says where the

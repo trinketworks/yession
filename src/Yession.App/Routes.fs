@@ -189,6 +189,9 @@ type SessionRoute =
     /// The app icon the manifest and the head both point at. Constant bytes in the binary,
     /// so a session with no assets directory beside it still has a mark.
     | Icon
+    /// The mark for the tab: the 16px cut of it, as SVG, for a browser that takes one (which
+    /// is every browser but Safari, and Safari takes the icon above). Same constant story.
+    | Favicon
     /// WebRTC offer in, answer out. The only interactive HTTP surface.
     | Signal
     /// The auth probe: mints the peer token a data channel's `PeerHello` needs.
@@ -296,6 +299,7 @@ module SessionRoute =
           | ServiceWorker -> "sw.js"
           | Manifest -> "manifest.webmanifest"
           | Icon -> "icon.png"
+          | Favicon -> "icon.svg"
           | Signal -> "signal"
           | Me -> "me"
           | Login -> "login"
@@ -335,6 +339,7 @@ module SessionRoute =
         | "GET", [ "sw.js" ] -> Some ServiceWorker
         | "GET", [ "manifest.webmanifest" ] -> Some Manifest
         | "GET", [ "icon.png" ] -> Some Icon
+        | "GET", [ "icon.svg" ] -> Some Favicon
         // Everything static, by path, with no opinion about what is in there.
         | "GET", "assets" :: build :: path when isAssetPath (build :: path) ->
             Some (Asset (build, String.concat "/" path))
@@ -551,6 +556,8 @@ type ManagerRoute =
     /// somebody puts on a home screen — see `WebApp.managerManifest` for what a missing one
     /// costs there.
     | Manifest
+    /// And the tab's, likewise.
+    | Favicon
     /// Register a session; answers with a redirect to `OpenSession`.
     | CreateSession
     /// The registry stream: the Running set as wire frames, for an operator's proxy.
@@ -604,6 +611,7 @@ module ManagerRoute =
         | ManagerRoute.Asset (build, file) -> RelativeUrl.under "" (SessionRoute.relative (Asset (build, file)))
         | ManagerRoute.Icon -> RelativeUrl.under "" (SessionRoute.relative Icon)
         | ManagerRoute.Manifest -> RelativeUrl.under "" (SessionRoute.relative Manifest)
+        | ManagerRoute.Favicon -> RelativeUrl.under "" (SessionRoute.relative Favicon)
         | ManagerRoute.CreateSession -> "/sessions"
         | ManagerRoute.SessionRegistry -> "/sessions/stream"
         | ManagerRoute.SessionRows -> "/sessions/rows"
@@ -646,5 +654,6 @@ module ManagerRoute =
             | Some (Asset (build, file)) -> Ok (ManagerRoute.Asset (build, file))
             | Some Icon -> Ok ManagerRoute.Icon
             | Some Manifest -> Ok ManagerRoute.Manifest
+            | Some Favicon -> Ok ManagerRoute.Favicon
             | _ -> Error ManagerMiss.Unclaimed
         | _ -> Error ManagerMiss.Unclaimed

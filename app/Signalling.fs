@@ -38,7 +38,7 @@ let private bootstrapHtml (sessionId: SessionId) (mount: string) (managerOrigin:
     // browser re-learns it from `PeerAccepted` once connected).
     Ssr.page sessionId mount managerOrigin ephemeralStorage assets { ClientModel.init placeholderPeer with Session = Some sessionId }
 
-/// The app icon's bytes. The constant is base64 (`WebApp.iconPngBase64`) because it lives in
+/// The app icon's bytes. The constant is base64 (`Brand.iconPngBase64`) because it lives in
 /// source; the wire wants the PNG, and `res.end` is typed to the string case it is used with
 /// everywhere else — so the Buffer goes through `unbox`, which is what Node's `end` accepts.
 let private decodeBase64 (encoded: string) : string =
@@ -384,7 +384,13 @@ let start
                 200,
                 createObj [ "content-type", box "image/png"; "cache-control", box CachePolicy.shell ])
             |> ignore
-            res.``end`` (decodeBase64 WebApp.iconPngBase64)
+            res.``end`` (decodeBase64 Brand.iconPngBase64)
+        | Some Favicon ->
+            res.writeHead (
+                200,
+                createObj [ "content-type", box "image/svg+xml; charset=utf-8"; "cache-control", box CachePolicy.shell ])
+            |> ignore
+            res.``end`` Brand.faviconSvg
         | Some (EventsAfter after) ->
             match events with
             | Some endpoint -> serveCursor endpoint req req.url after res
