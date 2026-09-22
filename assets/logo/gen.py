@@ -6,10 +6,11 @@
 The mark is a blue cube — the agent — with two green half-depth panels — the people — hugging
 its near faces, the hairline kerfs between them forming a Y; a pinhole lens two block-widths
 away, aimed two above the centre; and a jelly material: a translucent body over its own back
-faces, a hot rim, a fixed lamp reflected in the top plane, a little turbidity, a bloom. The
-intro is the same scene sampled along a clock; the logo IS its last frame, so the two cannot
-disagree. The design record is docs/brand/README.md. Requires fontTools (for the lockup's
-wordmark, cut from the Noto Sans the product ships) and nothing else.
+faces, a hot rim, a fixed lamp reflected in the top plane, a little turbidity, a bloom, and on
+black the agent's own sides taken down a fifth, which is what draws the Y. The intro is the
+same scene sampled along a clock; the logo IS its last frame, so the two cannot disagree. The
+design record is docs/brand/README.md. Requires fontTools (for the lockup's wordmark, cut from
+the Noto Sans the product ships) and nothing else.
 """
 import math, os, re, sys
 
@@ -131,7 +132,8 @@ class Intro:
     """Every keyframe is the same scene at one instant; the file carries them as baked SMIL values
     on uniform keyTimes, so the easing lives in the samples and nothing on the page knows the curve."""
     def __init__(self, N=48, dur=2.4, delta=0.1, panels=(0.3, 1.0), fx=(0.0, 0.4), camera=(0.08, 1.0),
-                 clarity=0.6, backs=0.45, rim=1.3, spill=0.5, bloom=0.3, margin=3.0, start_pad=15.5, end_pad=7.0):
+                 clarity=0.6, backs=0.45, rim=1.3, spill=0.5, bloom=0.3, agent=0.8, margin=3.0,
+                 start_pad=15.5, end_pad=7.0):
         self.__dict__.update({k: v for k, v in locals().items() if k != "self"})
         self.cam1 = fit(Lens(PHI1, DIST, UP1, target=TARGET), prisms_at(0.0), pad=end_pad)
         self.cam0 = fit(Lens(PHI0, DIST, 0.0, target=TARGET), prisms_at(0.0)[:1], pad=start_pad)
@@ -212,6 +214,9 @@ class Intro:
         col = lambda i: B if prism(i) == 0 else G
         hot = lambda i: B_HOT if prism(i) == 0 else G_HOT
         deep = lambda i: B_DEEP if prism(i) == 0 else G_DEEP
+        # the agent's own sides, taken down: the mark's Y is the two kerfs and the cube's near
+        # vertical corner, and all three read off the sides being darker than the tops they meet
+        dk = lambda i, c_: mix(c_, self.agent) if prism(i) == 0 and nrm(i)[2] < 0.5 else c_
         defs = [el("path", f' id="{key}-p{i}"', [("d", [pathd(f["faces"][i][2]) for f in fr])]) for i in range(nf)]
         pcl = lambda pi: "".join(f'<use href="#{key}-p{i}"/>' for i in range(nf) if prism(i) == pi)
         defs += [f'<clipPath id="{key}-c{pi}">{pcl(pi)}</clipPath>' for pi in range(3)]
@@ -222,9 +227,9 @@ class Intro:
                                f'<stop offset="0" stop-color="{hot(i)}"/><stop offset="0.5" stop-color="{col(i)}"/>'
                                f'<stop offset="1" stop-color="{mix(col(i), 0.9)}"/>'))
             else:
-                c_ = shade(col(i), nrm(i))
+                c_ = dk(i, shade(col(i), nrm(i)))
                 defs.append(f'<linearGradient id="{key}-f{i}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="{c_}"/>'
-                            f'<stop offset="0.55" stop-color="{mix(c_, 0.92)}"/><stop offset="1" stop-color="{deep(i)}"/></linearGradient>')
+                            f'<stop offset="0.55" stop-color="{mix(c_, 0.92)}"/><stop offset="1" stop-color="{dk(i, deep(i))}"/></linearGradient>')
         for tag, hc in (("g", G_HOT), ("b", B_HOT)):
             defs.append(f'<filter id="{key}-rim{tag}" filterUnits="userSpaceOnUse" x="-8" y="-8" width="80" height="80">'
                         f'<feFlood flood-color="{hc}" flood-opacity="{min(1.0, 0.9*self.rim):.2f}" result="f"/>'
@@ -275,7 +280,7 @@ class Intro:
         spl = lambda c_: f'<g clip-path="url(#{key}-{c_})"><rect width="64" height="64" fill="url(#{key}-sp)"/></g>'
         body += Eg(spl("c0") + Pg(spl("c1") + spl("c2")))
         # the solid start, shaded per face so the form is there the moment a side shows; gone by the end
-        flat = lambda pi: "".join(use(i, col(i) if nrm(i)[2] > 0.5 else shade(col(i), nrm(i))) for i in range(nf) if prism(i) == pi)
+        flat = lambda pi: "".join(use(i, col(i) if nrm(i)[2] > 0.5 else dk(i, shade(col(i), nrm(i)))) for i in range(nf) if prism(i) == pi)
         body += el("g", "", gate("flat"), flat(0) + Pg(flat(1) + flat(2)))
         # the lamp: one highlight on the shared top plane, clipped into whichever tops it falls
         # across, above everything because it is not part of the material
@@ -317,7 +322,7 @@ def wordmark(key, em, x, baseline, ink, weight=WEIGHT):
 
 # The mark's visual weight sits low — the panels and the stem are its mass, the apex a point —
 # so where it is composed with something else it is set a little above the geometric centre.
-LIFT = 0.04      # of the box, in the icon
+LIFT = 0.02      # of the box, in the icon
 def lockup(mark_svg, ink, label, weight=WEIGHT):
     """The mark and the wordmark on one line: the mark lifted two units, the x-height band
     centred on where its mass then reads."""
@@ -342,12 +347,16 @@ def small(cam, g=0.2, pad=1.0):
     return svg("".join(f'<path d="{pathd(p)}" fill="{col}"/>' for _, p, col in faces), "", "yession")
 
 PLATE = "#111111"   # the product's surface token: off black, so the mark's own black has an edge to sit on
+FILL = 0.84         # the mark's box as a share of the icon's side
 def icon(mark_svg):
     """The app icon: the mark on off-black, in a 1024 box with the corners a platform will mask
-    anyway rounded to 22%; the mark at 72% so the bloom has its room, lifted 4% of the box."""
-    y = 144 - LIFT*1024
+    anyway rounded to 22%. The mark's own box already carries 7 units of air in 64, so setting
+    that box at 84% lands the object itself at about two thirds of the side and leaves the bloom
+    its room; the panels' tips are what the rounded corner comes for, and past 86% they meet it."""
+    side = FILL*1024; x = (1024 - side)/2
     return svg(f'<rect width="1024" height="1024" rx="228" fill="{PLATE}"/>'
-               f'<svg x="144" y="{n(y)}" width="736" height="736" viewBox="0 0 64 64">{inner(mark_svg).replace("mark-", "icon-")}</svg>',
+               f'<svg x="{n(x)}" y="{n(x - LIFT*1024)}" width="{n(side)}" height="{n(side)}" viewBox="0 0 64 64">'
+               f'{inner(mark_svg).replace("mark-", "icon-")}</svg>',
                "", "yession", box="0 0 1024 1024")
 
 # ---- rasters ---------------------------------------------------------------------------------
@@ -399,9 +408,10 @@ if __name__ == "__main__":
     out = {}
     out["intro.svg"] = I.intro()
     out["logo.svg"] = I.mark()
-    # on paper the black no longer darkens the body's middle, so the light variant is denser,
-    # and a bloom that is light on black is a smudge on white, so it is all but gone
-    out["logo-light.svg"] = Intro(clarity=0.82, backs=0.55, bloom=0.1).mark()
+    # on paper the black no longer darkens the body's middle, so the light variant is denser; a
+    # bloom that is light on black is a smudge on white, so it is all but gone; and the agent's
+    # sides already read against the ground, so they are not taken down
+    out["logo-light.svg"] = Intro(clarity=0.82, backs=0.55, bloom=0.1, agent=1.0).mark()
     out["lockup.svg"] = lockup(out["logo.svg"], INK, "yession")
     out["lockup-light.svg"] = lockup(out["logo-light.svg"], INK_LIGHT, "yession")
     out["logo-16.svg"] = small(I.cam1)

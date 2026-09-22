@@ -732,7 +732,10 @@ lit by the intro's lamp, built as a static file from the same code at t = 1 by
 `assets/logo/gen.py`, so the two agree by construction. That generator is the one file the
 mark, the intro, the lockup, the 16px cut and the app icon all come from, and the ladder under
 `jelly/` stays as the record of how it was reached; `clearer` there is the body it was chosen
-from.
+from. On black the agent's own sides are then taken down a fifth against its top: the Y is the
+two kerfs and the cube's near vertical corner, and all three are read off the step from a top
+to the side beside it, which the jelly had been softening. On paper the sides already read
+against the ground, so `logo-light.svg` keeps the diffuse shading unaltered.
 
 The pull back. `intro` is the mark's intro as one SVG, no script, framed on the agent. Three
 clocks, overlapping: the material over the opening 40% of 2.4s — a top-down view of the agent as
