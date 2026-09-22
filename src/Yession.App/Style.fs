@@ -671,12 +671,15 @@ module Style =
         let hash = id |> Seq.fold (fun acc c -> acc * 31 + int c |> abs) 7
         humanCheckers.[hash % humanCheckers.Length]
 
-    /// The agent's mark: a dark square holding a small solid blue square.
+    /// The agent's mark: a dark square holding a small solid blue DIAMOND — the product's
+    /// mark seen from above, its first frame, in the same blue the mark is drawn in. The
+    /// square turned 45° is the whole of it: solid, one colour, no rim. The humans keep their
+    /// checkers; a diamond is the agent and only the agent.
     let agentAvatar =
-        "bg-agent-ground grid place-items-center after:content-[''] after:w-2 after:h-2 after:bg-blue"
+        "bg-agent-ground grid place-items-center after:content-[''] after:w-2 after:h-2 after:bg-blue after:rotate-45"
 
     let agentAvatarSm =
-        "bg-agent-ground grid place-items-center after:content-[''] after:w-1.5 after:h-1.5 after:bg-blue"
+        "bg-agent-ground grid place-items-center after:content-[''] after:w-1.5 after:h-1.5 after:bg-blue after:rotate-45"
 
     // --- Workspace regions ---------------------------------------------------------------
     // Two presentation bits live on the root <html> element, outside `#app`, so they survive
