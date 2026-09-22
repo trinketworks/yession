@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Room">
+  <g transform="translate(4.89 3.31) scale(0.85)">
+    <circle cx="32" cy="32" r="30" fill="none" stroke="#2e2e2e" stroke-width="1.5"/>
+    <path d="M28.4 28.53 L10.42 11.16" stroke="#a8dd00" stroke-width="7.5" stroke-linecap="butt" fill="none"/>
+    <path d="M35.6 28.53 L53.58 11.16" stroke="#a8dd00" stroke-width="7.5" stroke-linecap="butt" fill="none"/>
+    <path d="M32 37 L32 62" stroke="#1ba1e2" stroke-width="7.5" stroke-linecap="butt" fill="none"/>
+  </g>
+</svg>

@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Nodes">
+  <g transform="translate(-2.58 -6.37) scale(1.08)">
+    <path d="M29.12 29.22 L15.46 16.02" stroke="#a8dd00" stroke-width="2.6" stroke-linecap="butt" fill="none"/>
+    <circle cx="15.46" cy="16.02" r="5.5" fill="#a8dd00"/>
+    <path d="M34.88 29.22 L48.54 16.02" stroke="#a8dd00" stroke-width="2.6" stroke-linecap="butt" fill="none"/>
+    <circle cx="48.54" cy="16.02" r="5.5" fill="#a8dd00"/>
+    <path d="M32 36 L32 55" stroke="#1ba1e2" stroke-width="2.6" stroke-linecap="butt" fill="none"/>
+    <circle cx="32" cy="55" r="5.5" fill="#1ba1e2"/>
+  </g>
+</svg>

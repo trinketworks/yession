@@ -1,0 +1,308 @@
+[
+ {
+  "key": "roll01",
+  "title": "Roll 01",
+  "params": {
+   "silhouette": "circle",
+   "arm angle": "45",
+   "cut weight": "medium 3.8",
+   "cut profile": "parallel",
+   "cut reach": "short",
+   "corners": "sharp",
+   "fold": "normal",
+   "colour": "green + blue cut",
+   "surface": "flat",
+   "extra": "bevel",
+   "rotation": "0"
+  }
+ },
+ {
+  "key": "roll02",
+  "title": "Roll 02",
+  "params": {
+   "silhouette": "hexagon",
+   "arm angle": "Noto glyph",
+   "cut weight": "medium 3.8",
+   "cut profile": "parallel",
+   "cut reach": "short",
+   "corners": "sharp",
+   "fold": "inverted",
+   "colour": "split",
+   "surface": "flat",
+   "extra": "none",
+   "rotation": "-7"
+  }
+ },
+ {
+  "key": "roll03",
+  "title": "Roll 03",
+  "params": {
+   "silhouette": "squircle",
+   "arm angle": "60 (isometric)",
+   "cut weight": "heavy 5.4",
+   "cut profile": "round-ended",
+   "cut reach": "to the rim",
+   "corners": "sharp",
+   "fold": "subtle",
+   "colour": "blue top",
+   "surface": "per-face gradient",
+   "extra": "rim",
+   "rotation": "-14"
+  }
+ },
+ {
+  "key": "roll04",
+  "title": "Roll 04",
+  "params": {
+   "silhouette": "rounded hexagon",
+   "arm angle": "60 (isometric)",
+   "cut weight": "heavy 5.4",
+   "cut profile": "reverse taper",
+   "cut reach": "overshoot",
+   "corners": "soft 1.6",
+   "fold": "flat",
+   "colour": "green + blue cut",
+   "surface": "per-face gradient",
+   "extra": "rim",
+   "rotation": "0"
+  }
+ },
+ {
+  "key": "roll05",
+  "title": "Roll 05",
+  "params": {
+   "silhouette": "squircle",
+   "arm angle": "60 (isometric)",
+   "cut weight": "heavy 5.4",
+   "cut profile": "parallel",
+   "cut reach": "overshoot",
+   "corners": "soft 1.6",
+   "fold": "strong",
+   "colour": "green + blue cut",
+   "surface": "glow",
+   "extra": "rim",
+   "rotation": "-14"
+  }
+ },
+ {
+  "key": "roll06",
+  "title": "Roll 06",
+  "params": {
+   "silhouette": "squircle",
+   "arm angle": "Noto glyph",
+   "cut weight": "light 2.4",
+   "cut profile": "reverse taper",
+   "cut reach": "short",
+   "corners": "soft 1.6",
+   "fold": "subtle",
+   "colour": "blue top",
+   "surface": "sweep",
+   "extra": "shadow",
+   "rotation": "+7"
+  }
+ },
+ {
+  "key": "roll07",
+  "title": "Roll 07",
+  "params": {
+   "silhouette": "chamfered",
+   "arm angle": "33 (letterform)",
+   "cut weight": "heavy 5.4",
+   "cut profile": "parallel",
+   "cut reach": "short",
+   "corners": "hub only",
+   "fold": "subtle",
+   "colour": "blue left",
+   "surface": "per-face gradient",
+   "extra": "shadow",
+   "rotation": "-14"
+  }
+ },
+ {
+  "key": "roll08",
+  "title": "Roll 08",
+  "params": {
+   "silhouette": "hexagon",
+   "arm angle": "60 (isometric)",
+   "cut weight": "heavy 5.4",
+   "cut profile": "round-ended",
+   "cut reach": "to the rim",
+   "corners": "round 3.2",
+   "fold": "normal",
+   "colour": "green + blue cut",
+   "surface": "glow",
+   "extra": "shadow",
+   "rotation": "0"
+  }
+ },
+ {
+  "key": "roll09",
+  "title": "Roll 09",
+  "params": {
+   "silhouette": "hexagon",
+   "arm angle": "33 (letterform)",
+   "cut weight": "medium 3.8",
+   "cut profile": "parallel",
+   "cut reach": "short",
+   "corners": "round 3.2",
+   "fold": "inverted",
+   "colour": "split",
+   "surface": "sweep",
+   "extra": "shadow",
+   "rotation": "+7"
+  }
+ },
+ {
+  "key": "roll10",
+  "title": "Roll 10",
+  "params": {
+   "silhouette": "hexagon",
+   "arm angle": "Noto glyph",
+   "cut weight": "light 2.4",
+   "cut profile": "tapered",
+   "cut reach": "overshoot",
+   "corners": "sharp",
+   "fold": "strong",
+   "colour": "blue top",
+   "surface": "per-face gradient",
+   "extra": "rim",
+   "rotation": "-7"
+  }
+ },
+ {
+  "key": "roll11",
+  "title": "Roll 11",
+  "params": {
+   "silhouette": "rounded hexagon",
+   "arm angle": "Noto glyph",
+   "cut weight": "medium 3.8",
+   "cut profile": "flared",
+   "cut reach": "short",
+   "corners": "soft 1.6",
+   "fold": "strong",
+   "colour": "split",
+   "surface": "sweep",
+   "extra": "bevel",
+   "rotation": "-14"
+  }
+ },
+ {
+  "key": "roll12",
+  "title": "Roll 12",
+  "params": {
+   "silhouette": "squircle",
+   "arm angle": "33 (letterform)",
+   "cut weight": "medium 3.8",
+   "cut profile": "reverse taper",
+   "cut reach": "overshoot",
+   "corners": "hub only",
+   "fold": "subtle",
+   "colour": "blue right",
+   "surface": "flat",
+   "extra": "bevel",
+   "rotation": "-7"
+  }
+ },
+ {
+  "key": "roll13",
+  "title": "Roll 13",
+  "params": {
+   "silhouette": "rounded hexagon",
+   "arm angle": "45",
+   "cut weight": "none",
+   "cut profile": "flared",
+   "cut reach": "overshoot",
+   "corners": "soft 1.6",
+   "fold": "normal",
+   "colour": "blue left",
+   "surface": "flat",
+   "extra": "bevel",
+   "rotation": "-14"
+  }
+ },
+ {
+  "key": "roll14",
+  "title": "Roll 14",
+  "params": {
+   "silhouette": "squircle",
+   "arm angle": "33 (letterform)",
+   "cut weight": "heavy 5.4",
+   "cut profile": "round-ended",
+   "cut reach": "to the rim",
+   "corners": "soft 1.6",
+   "fold": "inverted",
+   "colour": "green + blue cut",
+   "surface": "flat",
+   "extra": "shadow",
+   "rotation": "-14"
+  }
+ },
+ {
+  "key": "roll15",
+  "title": "Roll 15",
+  "params": {
+   "silhouette": "chamfered",
+   "arm angle": "Noto glyph",
+   "cut weight": "medium 3.8",
+   "cut profile": "parallel",
+   "cut reach": "to the rim",
+   "corners": "hub only",
+   "fold": "flat",
+   "colour": "blue right",
+   "surface": "flat",
+   "extra": "bevel",
+   "rotation": "-14"
+  }
+ },
+ {
+  "key": "roll16",
+  "title": "Roll 16",
+  "params": {
+   "silhouette": "rounded hexagon",
+   "arm angle": "60 (isometric)",
+   "cut weight": "light 2.4",
+   "cut profile": "round-ended",
+   "cut reach": "short",
+   "corners": "sharp",
+   "fold": "flat",
+   "colour": "green + blue cut",
+   "surface": "per-face gradient",
+   "extra": "none",
+   "rotation": "+7"
+  }
+ },
+ {
+  "key": "roll17",
+  "title": "Roll 17",
+  "params": {
+   "silhouette": "squircle",
+   "arm angle": "60 (isometric)",
+   "cut weight": "none",
+   "cut profile": "tapered",
+   "cut reach": "overshoot",
+   "corners": "hub only",
+   "fold": "subtle",
+   "colour": "blue left",
+   "surface": "sweep",
+   "extra": "rim",
+   "rotation": "-14"
+  }
+ },
+ {
+  "key": "roll18",
+  "title": "Roll 18",
+  "params": {
+   "silhouette": "hexagon",
+   "arm angle": "60 (isometric)",
+   "cut weight": "medium 3.8",
+   "cut profile": "flared",
+   "cut reach": "to the rim",
+   "corners": "hub only",
+   "fold": "normal",
+   "colour": "blue top",
+   "surface": "per-face gradient",
+   "extra": "none",
+   "rotation": "+7"
+  }
+ }
+]

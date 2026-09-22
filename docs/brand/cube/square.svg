@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Square">
+  <defs><mask id="sq-m"><rect width="64" height="64" fill="#fff"/><g stroke="#000" stroke-width="4" stroke-linecap="butt"><path d="M32 32 L70.97 9.5"/><path d="M32 32 L32 77"/><path d="M32 32 L-6.97 9.5"/></g></mask></defs>
+  <g mask="url(#sq-m)"><path d="M4 4 L60 4 L60 15.83 L32 32 L4 15.83 Z" fill="#1ba1e2"/><path d="M60 15.83 L60 60 L32 60 L32 32 Z" fill="#a8dd00"/><path d="M4 15.83 L32 32 L32 60 L4 60 Z" fill="#a8dd00"/></g>
+</svg>

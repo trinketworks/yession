@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Counterform">
+  <defs><mask id="cf-m"><rect width="64" height="64" fill="#fff"/><g stroke="#000" stroke-width="7" stroke-linecap="butt"><path d="M32 32 L8.98 9.77"/><path d="M32 32 L55.02 9.77"/><path d="M32 32 L32 64"/></g></mask></defs>
+  <g mask="url(#cf-m)">
+    <path d="M32 32 L10.42 11.16 A30 30 0 0 1 53.58 11.16 Z" fill="#a8dd00"/>
+    <path d="M32 32 L32 62 A30 30 0 0 1 10.42 11.16 Z" fill="#a8dd00"/>
+    <path d="M32 32 L53.58 11.16 A30 30 0 0 1 32 62 Z" fill="#1ba1e2"/>
+    </g>
+</svg>

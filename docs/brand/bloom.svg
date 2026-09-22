@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Bloom">
+  <defs><linearGradient id="bloom-g" x1="0" y1="0" x2="0.25" y2="1"><stop offset="0" stop-color="#a8dd00"/><stop offset="0.45" stop-color="#a8dd00"/><stop offset="1" stop-color="#1ba1e2"/></linearGradient><filter id="bloom-f" x="-70%" y="-70%" width="240%" height="240%"><feGaussianBlur stdDeviation="3" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs>
+  <g transform="translate(2.35 -0.3) scale(0.93)">
+    <path d="M15.38 10.72 L32 32 L48.62 10.72 M32 32 L32 59" stroke="url(#bloom-g)" stroke-width="9" fill="none" stroke-linejoin="round" stroke-linecap="round" filter="url(#bloom-f)"/>
+  </g>
+</svg>

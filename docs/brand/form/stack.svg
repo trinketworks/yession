@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Stack">
+  <defs><mask id="stack-m"><rect width="64" height="64" fill="#fff"/><g stroke="#000" stroke-width="4" stroke-linecap="round"><path d="M32 32 L49.32 22"/><path d="M32 32 L32 52"/><path d="M32 32 L14.68 22"/></g></mask></defs>
+  <g mask="url(#stack-m)"><path d="M30.96 31.4 L10.35 19.5 Q8.62 18.5 10.35 17.5 L29.83 6.25 Q32 5 34.17 6.25 L53.65 17.5 Q55.38 18.5 53.65 19.5 L33.04 31.4 Q32 32 30.96 31.4 Z" fill="#1ba1e2"/><path d="M35.29 32.7 L55.9 20.8 Q57.63 19.8 57.63 21.8 L57.63 44.3 Q57.63 46.8 55.47 48.05 L35.98 59.3 Q34.25 60.3 34.25 58.3 L34.25 34.5 Q34.25 33.3 35.29 32.7 Z" fill="#a8dd00"/><path d="M27.5 35.8 L27.5 59.6 Q27.5 61.6 25.76 60.6 L6.28 49.35 Q4.11 48.1 4.11 45.6 L4.11 23.1 Q4.11 21.1 5.85 22.1 L26.46 34 Q27.5 34.6 27.5 35.8 Z" fill="#a8dd00"/></g>
+</svg>

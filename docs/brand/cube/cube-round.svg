@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Rounded">
+  <defs><mask id="round-m"><rect width="64" height="64" fill="#fff"/><g stroke="#000" stroke-width="4.2" stroke-linecap="butt"><path d="M32 32 L61.44 15"/><path d="M32 32 L32 66"/><path d="M32 32 L2.56 15"/></g></mask></defs>
+  <g mask="url(#round-m)">
+  <path d="M32 30.6 L10.18 18 L32 5.4 L53.82 18 Z" fill="#1ba1e2" stroke="#1ba1e2" stroke-width="5" stroke-linejoin="round"/>
+  <path d="M33.21 32.7 L55.04 20.1 L55.04 45.3 L33.21 57.9 Z" fill="#a8dd00" stroke="#a8dd00" stroke-width="5" stroke-linejoin="round"/>
+  <path d="M30.79 32.7 L30.79 57.9 L8.96 45.3 L8.96 20.1 Z" fill="#a8dd00" stroke="#a8dd00" stroke-width="5" stroke-linejoin="round"/>
+  </g>
+</svg>
