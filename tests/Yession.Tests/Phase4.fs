@@ -943,6 +943,19 @@ let private contrast (a: string) (b: string) : float =
     let la, lb = luminance a, luminance b
     (max la lb + 0.05) / (min la lb + 0.05)
 
+/// `Brand.fs` is generated from `assets/logo` by `tasks.fsx brand`, and this is what makes
+/// that a rule rather than a memory: regenerate the assets without the verb and the cheap
+/// tier says so, on every run, before a session serves a stale mark.
+let private brandTests =
+    testList "Brand constants are the reference set" [
+        testCase "the app icon is assets/logo/icon-512.png" <| fun () ->
+            Expect.equal Brand.iconPngBase64 (TestFiles.readBase64 "assets/logo/icon-512.png") "run `dotnet fsi tasks.fsx brand`"
+        testCase "the tab's mark is assets/logo/logo-16.svg" <| fun () ->
+            Expect.equal Brand.faviconSvg ((TestFiles.read "assets/logo/logo-16.svg").Trim ()) "run `dotnet fsi tasks.fsx brand`"
+        testCase "the mark is assets/logo/logo.svg" <| fun () ->
+            Expect.equal (Support.renderTemplate Brand.mark) ((TestFiles.read "assets/logo/logo.svg").Trim ()) "run `dotnet fsi tasks.fsx brand`"
+    ]
+
 let private themeContrastTests =
     testList "Theme contrast (WCAG 2.0 AA floor)" [
         testCase "every text colour keeps >= 4.5:1 on every surface" <| fun () ->
@@ -3058,6 +3071,7 @@ let tests =
         uiRenderTests
         publicAccessTests
         themeContrastTests
+        brandTests
         sseTests
         notificationTests
         hookRelayTests

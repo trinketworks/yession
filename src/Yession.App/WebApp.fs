@@ -31,34 +31,11 @@ module WebApp =
     /// cannot reach.
     let private ground = "#000000"
 
-    /// The app icon: 512x512, flat colour, drawn from the palette — the agent's blue square
-    /// and the human's green one on the product's black. PNG rather than SVG because iOS
-    /// takes only PNG for a home-screen icon, and base64 rather than a file because the
-    /// process serving it has no assets directory it can count on.
-    let iconPngBase64 =
-        "iVBORw0KGgoAAAANSUhEUgAAAgAAAAIACAIAAAB7GkOtAAAF80lEQVR42u3VsQ0AIAhFQfZwejuXsmESW0o7I7nLH4HwIgAA"
-        + "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-        + "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-        + "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAa2Om"
-        + "fTQXCwiAAAAIgAAACIAAAAiAAAAIgAAACIAAAAiAAAACYAIACIAJACAAJgCAAJgAAAJgAgAIgAkAIAAmAIAAmAAAAmACAAiA"
-        + "CQAgACYAgACYAAACYAIACIAJACAAJgCAAJgAAAIgAAACIAAAAiAAAAIgAAACIAAAAiAAAAIgAAACIACAAJgAAAJgAgAIgAkA"
-        + "IAAmAIAAmAAAAmACAAiACQAgACYAgACYAAACYAIACIAJACAAJgCAAJgAAAJgAgAIgAkAIAACACAAAgAgAAIAIAACACAAAgAg"
-        + "AAIAIAACACAAAgAIgAkAIAAmAIAAmAAAAmACAAiACQAgACYAgACYAAACYAIACIAJACAAJgCAAJgAAAJgAgAIgAkAIAAmAIAA"
-        + "mAAAAmACAAiAAAAIgAAACIAAAAiAAAAIgAAACIAAAAiAAAB4qQIACIAJACAAJgCAAJgAAAJgAgAIgAkAIAAmAIAAmAAAAmAC"
-        + "AAiACQAgACYAgACYAAACYAIACIAJACAAJgCAAJgAAAIgAAACIAAAAiAAAAIgAAACIAAAAiAAAAIgAAACIACAAJgAAAJgAgAI"
-        + "gAkAIAAmAIAAmAAAAmACAAiACQAgACYAgACYAAACYAIACIAJACAAJgCAAJgAAAJgAgAIgAkAIAAmAIAACACAAAgAgAAIAIAA"
-        + "CACAAAgAgAAIAIAACAAgAL6qAAACYAIACIAJACAAJgCAAJgAAAJgAgAIgAkAIAAmAIAAmAAAAmACAAiACQAgACYAgACYAAAC"
-        + "YAIACIAJACAAJgCAAAgAgAAIAIAACAAAVGvbywEIgAAACIAAAAiAAAAIgAAACIAAAAiAAAAIgAAACIAAAAiAAAAIgAAACIAA"
-        + "AHjBAgAIgAkAIAAmAIAAmAAAAmACAAiACQAgACYAgACYAAACYAIACIAJACAAJgCAAJgAAAIgAAACIAAAAiAAAAIgAAACIAAA"
-        + "AiAAAAIgAAACIAAAAiAAAAIgAAACIAAAAiAAgACYAAACYAIACIAJACAAJgCAAJgAAAJgAgAIgAkAIAAmAIAAmAAAAmACAAiA"
-        + "CQAgAAIAIAACACAAAgAgAAIAIAACACAAAgAgAAIAIAACACAAAgAgAAIAIAACACAAAgAIgC8sAIAAmAAAAmACAAiACQAgACYA"
-        + "gACYAAACYAIACIAJACAAJgCAAJgAAAJgAgAIgAkAIAACACAAAgAgAAIAIAACACAAAgAgAAIAIAACACAAAgAgAAIAIAACACAA"
-        + "AgAgAAIACIAJACAAJgCAAJgAAAJgAgAIgAkAIAAmAIAAmAAAAmACAAiACQAgACYAgACYAAACIAAAAiAAAAIgAAACIAAAAiAA"
-        + "AAIgAAACIAAAAiAAAAIgAAACIAAAAiAAAAIgAIAAmAAAAmACAAiACQAgACYAgACYAAACYAIACIAJACAAJgCAAJgAAAJgAgAI"
-        + "gAkAIAAmAIAACACAAAgAgAAIAIAACACAAAgAgAAIAIAACACAAAgAgAAIAIAACAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-        + "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-        + "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQCsHrIJLXSSN3hoAAAAASUVORK5CYII="
-
+    /// The app icon and the tab's mark are `Brand.iconPngBase64` and `Brand.faviconSvg`:
+    /// generated from `assets/logo` by `tasks.fsx brand`, never written here by hand. PNG for
+    /// the icon rather than SVG because iOS takes only PNG for a home-screen icon, and base64
+    /// rather than a file because the process serving it has no assets directory it can
+    /// count on.
     /// The manifest. `start_url` and the icon are relative to the MANIFEST's own address,
     /// which is what makes a path-mounted session install as ITSELF rather than as whatever
     /// sits at the origin root.
@@ -204,9 +181,13 @@ self.addEventListener('fetch', (e) => {
     /// The head tags, given the routes as this document addresses them. Emitted by both
     /// shells; the Manager takes only the icon and the tint (there is nothing to install
     /// about a session list).
-    let headTags (manifestUrl: string) (iconUrl: string) =
+    let headTags (manifestUrl: string) (iconUrl: string) (faviconUrl: string) =
         String.concat "" [
             sprintf "<link rel=\"manifest\" href=\"%s\">" manifestUrl
+            // Two tab marks for two kinds of browser, not a fallback beside a primary: one
+            // that takes SVG prefers it and draws the cut made for 16px; Safari ignores it
+            // and takes the PNG, as it always has.
+            sprintf "<link rel=\"icon\" type=\"image/svg+xml\" href=\"%s\">" faviconUrl
             sprintf "<link rel=\"icon\" type=\"image/png\" href=\"%s\">" iconUrl
             sprintf "<link rel=\"apple-touch-icon\" href=\"%s\">" iconUrl
             sprintf "<meta name=\"theme-color\" content=\"%s\">" ground
@@ -246,9 +227,10 @@ self.addEventListener('fetch', (e) => {
     /// point at. The apple tags ride along for the same reason they do on the shell: they are
     /// where an iOS before 16.4 looks, and the status bar over a black app is a stated thing
     /// rather than a default.
-    let managerHeadTags (manifestUrl: string) (iconUrl: string) =
+    let managerHeadTags (manifestUrl: string) (iconUrl: string) (faviconUrl: string) =
         String.concat "" [
             sprintf "<link rel=\"manifest\" href=\"%s\">" manifestUrl
+            sprintf "<link rel=\"icon\" type=\"image/svg+xml\" href=\"%s\">" faviconUrl
             sprintf "<link rel=\"icon\" type=\"image/png\" href=\"%s\">" iconUrl
             sprintf "<link rel=\"apple-touch-icon\" href=\"%s\">" iconUrl
             sprintf "<meta name=\"theme-color\" content=\"%s\">" ground

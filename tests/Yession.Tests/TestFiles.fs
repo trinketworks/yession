@@ -66,6 +66,9 @@ let append (path: string) (text: string) : unit = fs.appendFileSync (path, box t
 /// Read a whole file as text.
 let read (path: string) : string = fs.readFileSync (path, "utf8")
 
+/// A file's bytes as base64 — the shape a binary constant in the product carries.
+let readBase64 (path: string) : string = fs.readFileSync (path, "base64")
+
 /// Is there anything at that path?
 let exists (path: string) : bool = fs.existsSync (U2.Case1 path)
 

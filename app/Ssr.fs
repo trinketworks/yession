@@ -151,7 +151,7 @@ let page (sessionId: SessionId) (mount: string) (managerOrigin: string option) (
         // What makes this installable, and chrome-less once it is (`WebApp`). Both URLs are
         // relative, like every other one here, so they resolve under the mount rather than at
         // the origin root — and the manifest's own contents then resolve against ITS address.
-        WebApp.headTags (href Manifest) (href Icon)
+        WebApp.headTags (href Manifest) (href Icon) (href Favicon)
         // The ONE inline script in the shell, and the only thing that has to run before first
         // paint: a collapsed sidebar is a stored preference (written by the nav toggle), and
         // applying it from the bundle would paint the sidebar open and then shut it. Desktop
