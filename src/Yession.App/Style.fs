@@ -126,6 +126,15 @@ module Style =
     let private focusRingFar =
         "focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue focus-visible:outline-offset-4"
 
+    // --- The acrylic: a surface that floats over another ----------------------------------
+    // Worn only where there is something under it to blur — a band over a scrolling list, a
+    // pane over the workspace, a card over the composer. On its own over the black ground it
+    // is indistinguishable from the panel, which is the point: nothing depends on the effect,
+    // and a reader who declines transparency gets the panel, opaque, and the same edge.
+    let acrylic =
+        "bg-acrylic backdrop-blur-acrylic backdrop-saturate-150 border-t border-acrylic-edge "
+        + "reduced-transparency:bg-panel reduced-transparency:backdrop-blur-none reduced-transparency:backdrop-saturate-100"
+
     // --- Motion (one vocabulary, so every surface that moves moves the same way) ---------
     // Zune's signature: things arrive by sliding a little and fading in, fast, eased out,
     // and leave the way they came. The settings drawer's lanes, the ask card's panes and an
@@ -161,7 +170,16 @@ module Style =
     // drift off its 4px line box; `leading-*` composes over a step where a context needs
     // a different box (roster rows and fields sit 13/20, a draft summary clamps 13/32).
 
-    let wordmark = "font-extralight text-wordmark tracking-[-0.02em] text-ink"
+    /// The wordmark: `yession`, at 400 rather than the 200 it was drawn at, because it no
+    /// longer stands alone — beside the mark (`lockup`) the extralight read thin, and the
+    /// full stop that was its one colour is the mark's job now (assets/logo/lockup.svg).
+    let wordmark = "font-normal text-wordmark tracking-[-0.02em] text-ink"
+    /// The mark and the wordmark on one line, the lockup's own proportions scaled to the
+    /// band: the mark 56px to the word's 32 (the lockup file draws 64 to 32, which the 88px
+    /// band has no room for), its foot 15px below the word's line box so the x-height band
+    /// sits where the lockup puts it — on the mark's optical middle, a little above its own.
+    let lockup = "flex items-end gap-2"
+    let lockupMark = "block w-14 h-14 -mb-[15px] shrink-0 [&>svg]:block [&>svg]:w-full [&>svg]:h-full"
     let heading = "font-extralight text-heading tracking-[-0.01em] lowercase text-ink truncate"
     let body = "font-light text-body text-ink"
     /// The body voice one step back: worn by a record that is not live — a stopped, exited or
@@ -681,15 +699,6 @@ module Style =
     let agentAvatarSm =
         "bg-agent-ground grid place-items-center after:content-[''] after:w-1.5 after:h-1.5 after:bg-blue after:rotate-45"
 
-    // --- The acrylic: a surface that floats over another ----------------------------------
-    // Worn only where there is something under it to blur — a band over a scrolling list, a
-    // pane over the workspace, a card over the composer. On its own over the black ground it
-    // is indistinguishable from the panel, which is the point: nothing depends on the effect,
-    // and a reader who declines transparency gets the panel, opaque, and the same edge.
-    let acrylic =
-        "bg-acrylic backdrop-blur-acrylic backdrop-saturate-150 border-t border-acrylic-edge "
-        + "reduced-transparency:bg-panel reduced-transparency:backdrop-blur-none reduced-transparency:backdrop-saturate-100"
-
     // --- Workspace regions ---------------------------------------------------------------
     // Two presentation bits live on the root <html> element, outside `#app`, so they survive
     // every re-render and stay out of the model: `nav-alt` (toggled by [data-nav-toggle]) and
@@ -739,8 +748,10 @@ module Style =
 
     let navPane = paneBase + " [.settings-open_&]:opacity-0 [.settings-open_&]:invisible"
 
+    /// Acrylic, because it is the one pane that floats over another: while it fades in, the
+    /// workspace face is still under it, and the blur is what says so.
     let settingsPane =
-        paneBase + " opacity-0 invisible [.settings-open_&]:opacity-100 [.settings-open_&]:visible"
+        paneBase + " opacity-0 invisible [.settings-open_&]:opacity-100 [.settings-open_&]:visible " + acrylic
 
     // Zune's signature motion, recast: the two faces do not merely cross-fade — the arriving
     // face's rows slide in from the side a beat apart, and the leaving face's go in one piece,

@@ -657,8 +657,10 @@ let private bodyTemplate
                ellipsis. 1152px leaves it 318px — wider than the 254px it had when there were
                four — and gives the MCP table's address column room it was already short of. -->
           <div class="max-w-6xl w-full mx-auto flex flex-col px-8 max-md:px-4">
-            <header class="h-[88px] shrink-0 flex items-end pb-5 border-b border-hair">
-              <h1 class="{Style.wordmark}">yession<span class="text-green">.</span> <span class="{Style.label}">manager</span></h1>
+            <!-- Sticky, and acrylic: the band floats over the registry as it scrolls under it,
+                 which is the one place on this page a surface sits over another. -->
+            <header class="h-[88px] shrink-0 flex items-end pb-5 border-b border-hair sticky top-0 z-10 {Style.acrylic}">
+              <h1 class="{Style.lockup}"><span class="{Style.lockupMark}" aria-hidden="true">{Brand.mark}</span><span class="{Style.wordmark}">yession</span> <span class="{Style.label} pb-2">manager</span></h1>
               <!-- The Manager's own build, in the same faint mono step the rows use for
                    theirs. It belongs beside them because it is the same question asked of a
                    different process, and because the Manager is the one that CANNOT roll
