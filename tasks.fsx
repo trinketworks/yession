@@ -32,6 +32,58 @@ let binDir = Path.Combine (repoRoot, "node_modules", ".bin")
 let esbuild = Path.Combine (binDir, "esbuild")
 let tailwind = Path.Combine (binDir, "tailwindcss")
 
+// What a .NET child that died on a SIGNAL left behind, so the next one says more than a number.
+//
+// `dotnet fable` has twice died inside the nix build sandbox with exit 139 and nothing else to
+// read: silently, the instant Fable started compiling, on aarch64-linux with the CoreCLR's W^X
+// left on (release run 753) and on x86_64-linux with it off (run 849). The same signature on
+// either side of the `DOTNET_EnableWriteXorExecute=0` that nix/packages.nix sets is what rules
+// that pairing out as the explanation, and a native crash unwinds nothing and prints nothing,
+// so the third one would say exactly as little and the diagnosis would start over.
+//
+// The runtime can be told to account for itself: a crash report names the faulting thread's
+// frames, native and managed. Children are started here, so here is where they are told to
+// write one and where it is read back out. A run that does not crash pays nothing — no dump is
+// written unless the runtime dies — and the dump is dropped once its report has been read,
+// because the stacks are the evidence and the heap is several hundred megabytes of nobody's.
+let private crashPrefix = sprintf "yession-crash-%d." (Process.GetCurrentProcess ()).Id
+
+let private accountsForItself (psi: ProcessStartInfo) =
+    psi.Environment.["DOTNET_DbgEnableMiniDump"] <- "1"
+    psi.Environment.["DOTNET_DbgMiniDumpType"] <- "1" // stacks and modules, not the heap
+    psi.Environment.["DOTNET_DbgMiniDumpName"] <- Path.Combine (Path.GetTempPath (), crashPrefix + "%p.dmp")
+    psi.Environment.["DOTNET_EnableCrashReport"] <- "1"
+    psi
+
+/// 128 + N is how an exit code says "killed by signal N": the shell's convention, and what .NET
+/// reports for a child that never got to exit on its own.
+let private killedBy (code: int) : string option =
+    match code - 128 with
+    | 4 -> Some "SIGILL"
+    | 6 -> Some "SIGABRT"
+    | 7 -> Some "SIGBUS"
+    | 8 -> Some "SIGFPE"
+    | 9 -> Some "SIGKILL"
+    | 11 -> Some "SIGSEGV"
+    | n when n > 0 && n < 64 -> Some (sprintf "signal %d" n)
+    | _ -> None
+
+/// The reports written since this script started. The dumps beside them go; the reports stay on
+/// disk as well as in the message, for a crash on a box somebody can still walk up to.
+let private crashEvidence () : string =
+    let written pattern = Directory.GetFiles (Path.GetTempPath (), crashPrefix + pattern)
+    written "*.dmp" |> Array.iter (fun dump -> try File.Delete dump with _ -> ())
+    written "*.crashreport.json"
+    |> Array.map (fun report -> sprintf "\n%s:\n%s" report (File.ReadAllText report))
+    |> String.concat ""
+
+/// How a failed child is named in a message: its exit code, and the signal that ended it when
+/// one did — the difference between "failed (139)" and a fault somebody can start reading.
+let private diedOf (code: int) : string =
+    match killedBy code with
+    | Some signal -> sprintf "%d, killed by %s" code signal
+    | None -> string code
+
 // Run a command capturing stdout (fails on non-zero); used where the output is a value.
 //
 // A failure carries what the command PRINTED. `compile` builds the solution through this, and
@@ -44,11 +96,17 @@ let runIn (workingDir: string) (command: string) (arguments: string list) : stri
     arguments |> List.iter psi.ArgumentList.Add
     psi.WorkingDirectory <- workingDir
     psi.RedirectStandardOutput <- true
-    use p = Process.Start psi
+    use p = Process.Start (accountsForItself psi)
     let output = p.StandardOutput.ReadToEnd ()
     p.WaitForExit ()
     if p.ExitCode <> 0 then
-        failwithf "%s %s failed (%d):\n%s" command (String.concat " " arguments) p.ExitCode (output.Trim ())
+        failwithf
+            "%s %s failed (%s):\n%s%s"
+            command
+            (String.concat " " arguments)
+            (diedOf p.ExitCode)
+            (output.Trim ())
+            (crashEvidence ())
     output.Trim ()
 
 let run (command: string) (arguments: string list) : string = runIn repoRoot command arguments
@@ -59,13 +117,14 @@ let runInherit (workingDir: string) (command: string) (arguments: string list) :
     arguments |> List.iter psi.ArgumentList.Add
     psi.WorkingDirectory <- workingDir
     psi.UseShellExecute <- false
-    use p = Process.Start psi
+    use p = Process.Start (accountsForItself psi)
     p.WaitForExit ()
     p.ExitCode
 
 let exec (command: string) (arguments: string list) : unit =
     let code = runInherit repoRoot command arguments
-    if code <> 0 then failwithf "%s %s failed (%d)" command (String.concat " " arguments) code
+    if code <> 0 then
+        failwithf "%s %s failed (%s)%s" command (String.concat " " arguments) (diedOf code) (crashEvidence ())
 
 // --- version: the continuous-delivery number, bumped from commit messages ---------------------
 
