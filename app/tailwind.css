@@ -266,6 +266,14 @@
      hard against the command line's own glyphs. What a block has instead is a colour, so
      that is what changes. */
   --animate-reveal-line: reveal-line 1.6s ease-out 1;
+  /* The starting screen (the Manager's `/open`): once the intro has landed the mark breathes
+     — the jelly catching the light, which is what a wait looks like here instead of a
+     spinner — and the wordmark rises under it as the last frame arrives. Both delays are
+     the intro's clock (2.4s), and `motion-reduce:animate-none` on each element turns them
+     off; the intro itself is SMIL and cannot read the preference, so under it the page shows
+     the still mark instead. */
+  --animate-breathe: breathe 2.6s ease-in-out 2.8s infinite;
+  --animate-rise: rise 0.5s ease-out 2.2s 1 both;
 
   @keyframes pulse2 {
     0%, 100% { opacity: 0.25; }
@@ -273,6 +281,14 @@
   }
   @keyframes blink {
     50% { opacity: 0; }
+  }
+  @keyframes breathe {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.86; }
+  }
+  @keyframes rise {
+    from { opacity: 0; translate: 0 6px; }
+    to { opacity: 1; translate: 0 0; }
   }
   @keyframes reveal-line {
     0%, 55% { background-color: var(--color-surface-2); }

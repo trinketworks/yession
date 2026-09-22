@@ -2046,6 +2046,11 @@ let brandSource () =
         "    let mark : TemplateResult ="
         "        html $\"\"\"" + svg "logo.svg" + "\"\"\""
         ""
+        "    /// `assets/logo/intro.svg`: the mark's intro, SMIL in one SVG, for the page a browser"
+        "    /// looks at while a session starts. Its last frame is `mark`."
+        "    let intro : TemplateResult ="
+        "        html $\"\"\"" + svg "intro.svg" + "\"\"\""
+        ""
     ]
 
 let brand () =
