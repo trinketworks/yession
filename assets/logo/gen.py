@@ -322,7 +322,7 @@ def wordmark(key, em, x, baseline, ink, weight=WEIGHT):
 
 # The mark's visual weight sits low — the panels and the stem are its mass, the apex a point —
 # so where it is composed with something else it is set a little above the geometric centre.
-LIFT = 0.04      # of the box, in the icon
+LIFT = 0.02      # of the box, in the icon
 def lockup(mark_svg, ink, label, weight=WEIGHT):
     """The mark and the wordmark on one line: the mark lifted two units, the x-height band
     centred on where its mass then reads."""
@@ -347,12 +347,16 @@ def small(cam, g=0.2, pad=1.0):
     return svg("".join(f'<path d="{pathd(p)}" fill="{col}"/>' for _, p, col in faces), "", "yession")
 
 PLATE = "#111111"   # the product's surface token: off black, so the mark's own black has an edge to sit on
+FILL = 0.84         # the mark's box as a share of the icon's side
 def icon(mark_svg):
     """The app icon: the mark on off-black, in a 1024 box with the corners a platform will mask
-    anyway rounded to 22%; the mark at 72% so the bloom has its room, lifted 4% of the box."""
-    y = 144 - LIFT*1024
+    anyway rounded to 22%. The mark's own box already carries 7 units of air in 64, so setting
+    that box at 84% lands the object itself at about two thirds of the side and leaves the bloom
+    its room; the panels' tips are what the rounded corner comes for, and past 86% they meet it."""
+    side = FILL*1024; x = (1024 - side)/2
     return svg(f'<rect width="1024" height="1024" rx="228" fill="{PLATE}"/>'
-               f'<svg x="144" y="{n(y)}" width="736" height="736" viewBox="0 0 64 64">{inner(mark_svg).replace("mark-", "icon-")}</svg>',
+               f'<svg x="{n(x)}" y="{n(x - LIFT*1024)}" width="{n(side)}" height="{n(side)}" viewBox="0 0 64 64">'
+               f'{inner(mark_svg).replace("mark-", "icon-")}</svg>',
                "", "yession", box="0 0 1024 1024")
 
 # ---- rasters ---------------------------------------------------------------------------------
