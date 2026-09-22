@@ -953,7 +953,7 @@ let private brandTests =
         testCase "the tab's mark is assets/logo/logo-16.svg" <| fun () ->
             Expect.equal Brand.faviconSvg ((TestFiles.read "assets/logo/logo-16.svg").Trim ()) "run `dotnet fsi tasks.fsx brand`"
         testCase "the mark is assets/logo/logo.svg" <| fun () ->
-            Expect.equal Brand.markSvg ((TestFiles.read "assets/logo/logo.svg").Trim ()) "run `dotnet fsi tasks.fsx brand`"
+            Expect.equal (Support.renderTemplate Brand.mark) ((TestFiles.read "assets/logo/logo.svg").Trim ()) "run `dotnet fsi tasks.fsx brand`"
     ]
 
 let private themeContrastTests =
