@@ -315,11 +315,15 @@ def wordmark(key, em, x, baseline, ink, weight=WEIGHT):
         pen_x += g.width*k - 0.02*em
     return f'<g id="{key}-word">{out}</g>', pen_x - x + 0.02*em
 
+# The mark's visual weight sits low — the panels and the stem are its mass, the apex a point —
+# so where it is composed with something else it is set a little above the geometric centre.
+LIFT = 0.04      # of the box, in the icon
 def lockup(mark_svg, ink, label, weight=WEIGHT):
-    """The mark and the wordmark on one line: the x-height band centred on the mark's optical middle."""
+    """The mark and the wordmark on one line: the mark lifted two units, the x-height band
+    centred on where its mass then reads."""
     em = 32.0; word, adv = wordmark("lockup", em, 70.0, 40.5, ink, weight)
     w = 70.0 + adv + 4.0
-    return svg(f'<g>{inner(mark_svg).replace("mark-", "lockup-")}</g>{word}', "", label, box=f"0 0 {n(w)} 64")
+    return svg(f'<g transform="translate(0 -2)">{inner(mark_svg).replace("mark-", "lockup-")}</g>{word}', "", label, box=f"0 0 {n(w)} 64")
 
 def small(cam, g=0.2, pad=1.0):
     """The mark for 16px: the same object with the kerfs cut twice as wide so the Y survives a
@@ -337,11 +341,13 @@ def small(cam, g=0.2, pad=1.0):
     faces.sort(key=lambda f: f[0])
     return svg("".join(f'<path d="{pathd(p)}" fill="{col}"/>' for _, p, col in faces), "", "yession")
 
+PLATE = "#111111"   # the product's surface token: off black, so the mark's own black has an edge to sit on
 def icon(mark_svg):
-    """The app icon: the mark on the product's black, in a 1024 box with the corners a platform
-    will mask anyway rounded to 22%; the mark at 72% so the bloom has its room."""
-    return svg(f'<rect width="1024" height="1024" rx="228" fill="#000"/>'
-               f'<svg x="144" y="144" width="736" height="736" viewBox="0 0 64 64">{inner(mark_svg).replace("mark-", "icon-")}</svg>',
+    """The app icon: the mark on off-black, in a 1024 box with the corners a platform will mask
+    anyway rounded to 22%; the mark at 72% so the bloom has its room, lifted 4% of the box."""
+    y = 144 - LIFT*1024
+    return svg(f'<rect width="1024" height="1024" rx="228" fill="{PLATE}"/>'
+               f'<svg x="144" y="{n(y)}" width="736" height="736" viewBox="0 0 64 64">{inner(mark_svg).replace("mark-", "icon-")}</svg>',
                "", "yession", box="0 0 1024 1024")
 
 # ---- rasters ---------------------------------------------------------------------------------
