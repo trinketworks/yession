@@ -729,20 +729,21 @@ that. Built by `gen27.py`.
 Locked: `clearer`. It is copied to `mark.svg` at the top of this directory as the mark; the
 ladder under `jelly/` stays as the record of how it was reached.
 
-The pull back. `intro-close` and `intro-far` are the mark's intro as one SVG each, no script: a
-top-down view of the agent as a solid blue diamond, the camera pulling up and back into the wide
-lens while the collaborators slide in from 0.35 of a block width further out, from nothing, and
-the material arrives — the solid colour is a flat copy on top that fades out while the jelly
-underneath, back faces to sparkles, fades in. The two differ only in where the first frame is
-fitted: on the agent alone, so the camera also pulls back out of it, or on the finished object
-seen from above, so the agent starts high and the camera only tilts. The run is SMIL with the
-easing baked into the samples: every face is one path whose `d` carries 33 keyframes on uniform
-`keyTimes`, and the clips, bloom, back faces and solid start are each a `use` of it; a face's
-visibility flips discretely, which is safe because a face only turns over when it is edge-on.
-Camera, travel and fades are all sampled through cubic-bezier(0.4, 0, 0.2, 1), Tailwind's
-ease-in-out — the ask card on the repository screen uses the ease-out half of that family, and a
-camera starting at rest needs the eased start. The last frame is `clearer` to the pixel: same rig
-and material, with four-point faces (the straight lens needs no subdivision) and bounding-box
-gradients so the fills follow the faces. About 115 KB, 19 KB gzipped; SMIL cannot read
-`prefers-reduced-motion`, so a page that respects it shows `mark.svg` instead. Click to replay.
-Built by `gen28.py`.
+The pull back. `intro` is the mark's intro as one SVG, no script: a top-down view of the agent
+as a solid blue diamond, framed on the agent, the camera pulling up and back into the wide lens
+while the collaborators slide in from 0.12 of a block width further out, from nothing, and the
+material arrives. The solid start is a flat copy on top, shaded per face so the cube is a cube
+the moment the camera tilts; only the material underneath, rim to spill, fades in after it. The
+collaborators start arriving at the first instant they would be wholly inside the frame at
+their far position, so nothing fades in cropped. It ends on `clearer-clean`, the clearer body
+without its sparkle, bleed, gleam and caustics; `intro-lit` is the same run ending on `clearer`
+itself. The run is SMIL with the easing baked into the samples: every face is one path whose
+`d` carries 37 keyframes on uniform `keyTimes`, and the clips, bloom, back faces and solid start
+are each a `use` of it; a face's visibility flips discretely, which is safe because a face only
+turns over when it is edge-on. Camera, travel and fades are all sampled through
+cubic-bezier(0.4, 0, 0.2, 1), Tailwind's ease-in-out — the ask card on the repository screen
+uses the ease-out half of that family, and a camera starting at rest needs the eased start. The
+last frame matches the static build to the pixel: same rig and material, with four-point faces
+(the straight lens needs no subdivision) and bounding-box gradients so the fills follow the
+faces. About 110 KB, 18 KB gzipped; SMIL cannot read `prefers-reduced-motion`, so a page that
+respects it shows the static mark instead. Click to replay. Built by `gen28.py`.
