@@ -678,6 +678,15 @@ module Style =
     let agentAvatarSm =
         "bg-agent-ground grid place-items-center after:content-[''] after:w-1.5 after:h-1.5 after:bg-blue"
 
+    // --- The acrylic: a surface that floats over another ----------------------------------
+    // Worn only where there is something under it to blur — a band over a scrolling list, a
+    // pane over the workspace, a card over the composer. On its own over the black ground it
+    // is indistinguishable from the panel, which is the point: nothing depends on the effect,
+    // and a reader who declines transparency gets the panel, opaque, and the same edge.
+    let acrylic =
+        "bg-acrylic backdrop-blur-acrylic backdrop-saturate-150 border-t border-acrylic-edge "
+        + "reduced-transparency:bg-panel reduced-transparency:backdrop-blur-none reduced-transparency:backdrop-saturate-100"
+
     // --- Workspace regions ---------------------------------------------------------------
     // Two presentation bits live on the root <html> element, outside `#app`, so they survive
     // every re-render and stay out of the model: `nav-alt` (toggled by [data-nav-toggle]) and

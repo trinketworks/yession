@@ -954,10 +954,21 @@ let private themeContrastTests =
                 [ for name in [ "black"; "red"; "green"; "yellow"; "blue"; "magenta"; "cyan"; "white" ] do
                     yield "term-" + name
                     yield "term-" + name + "-bright" ]
-            for fg in [ "ink"; "ink-dim"; "ink-faint"; "blue"; "green"; "err" ] @ terminalPalette do
+            // The hue anchors that may carry text: each hue's hot self (the hover lift) and
+            // green's deep. Blue's deep is NOT here, and that is the assertion below.
+            let anchors = [ "blue-bright"; "green-bright"; "green-deep" ]
+            for fg in [ "ink"; "ink-dim"; "ink-faint"; "blue"; "green"; "err" ] @ anchors @ terminalPalette do
                 for bg in [ "bg"; "panel"; "surface"; "surface-2" ] do
                     let ratio = contrast (colour fg) (colour bg)
                     Expect.isTrue (ratio >= 4.5) (sprintf "--color-%s on --color-%s is %.2f:1 — the AA floor is 4.5:1" fg bg ratio)
+
+        testCase "blue-deep is paint: it does not clear the floor, so it is never a text token" <| fun () ->
+            // Pinned the other way round on purpose. If a retune ever lifts blue-deep over the
+            // floor, this goes red and the token moves into the list above — which is the
+            // moment somebody decides it is text, rather than a surface finding out.
+            let colour = themeColour (TestFiles.read "app/tailwind.css")
+            let ratio = contrast (colour "blue-deep") (colour "surface-2")
+            Expect.isTrue (ratio < 4.5) (sprintf "--color-blue-deep on surface-2 is %.2f:1 — it clears the floor now; list it as text" ratio)
 
         testCase "inverse text on filled (active) buttons keeps >= 4.5:1" <| fun () ->
             let colour = themeColour (TestFiles.read "app/tailwind.css")

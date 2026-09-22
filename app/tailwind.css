@@ -133,11 +133,31 @@
   --color-green: #a8dd00;
   --color-err: #ff4a4a;
   /* The rest of what the chrome wears, so no hex floats in Style.fs: the bordered
-     controls' rest border (a step brighter than hair), blue's hover lift, and the
-     agent avatar's dark ground. */
+     controls' rest border (a step brighter than hair), and each hue run to a hotter and a
+     deeper self — the mark's own anchors (assets/logo), never toward white, which is Zune's
+     palette move. `blue-bright` is the hover lift and was #7fd0f5 before the mark existed;
+     it is the light the mark throws now, so the two cannot disagree. The deep pair is PAINT:
+     blue-deep is 3.8:1 on black and under the floor on surface-2, so no text is ever set in
+     it, and the theme-contrast test lists it as such; green-deep clears and may carry text.
+     The two grounds are a 950-step tint of each hue, for the avatars' dark squares. */
   --color-edge: #2e2e2e;
-  --color-blue-bright: #7fd0f5;
+  --color-blue-bright: #6fd8ff;
+  --color-green-bright: #d8f54a;
+  --color-blue-deep: #0f6ea3;
+  --color-green-deep: #6f9a00;
   --color-agent-ground: #0e1418;
+  --color-human-ground: #101a00;
+
+  /* The acrylic: what one surface wears where it floats over another — the header band over
+     a scrolling registry, the settings pane, the ask card. Zune was flat type on black; this
+     is what Fluent added on top, and it means something only where there is something under
+     it to blur. The tint is the panel colour most of the way to opaque, the blur is the one
+     radius (a `--blur-*` token drives `backdrop-blur-acrylic`), and the edge is the light
+     catching the slab's top — the same idea as the mark's rim. `Style.acrylic` composes
+     them and falls back to the opaque panel where transparency is declined. */
+  --color-acrylic: rgb(10 10 10 / 0.72);
+  --color-acrylic-edge: rgb(255 255 255 / 0.06);
+  --blur-acrylic: 24px;
 
   /* The sixteen named ANSI colours a terminal can paint its output with (Plan 13).
      `Ansi.rgbOf` resolves the 240 arithmetic ones (the 6x6x6 cube and the grey ramp) on
@@ -284,6 +304,9 @@
    springing back up to say nothing while the browser is on its way somewhere. One variant,
    so a face cannot fill for the finger and forget the hold. */
 @custom-variant pressed (&:is(:active, [aria-busy="true"]));
+/* A reader who has asked for less transparency gets the opaque panel instead of the acrylic:
+   the effect is decoration over a surface that works without it. */
+@custom-variant reduced-transparency (@media (prefers-reduced-transparency: reduce));
 
 @utility bg-grad {
   background-image: linear-gradient(90deg, var(--color-blue), var(--color-green));
