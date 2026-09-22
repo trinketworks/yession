@@ -1110,6 +1110,31 @@ let private readinessTests =
                 do! pm.StopAll ()
             }
 
+        // What a phone paints where no page is: a site added to the home screen launches as
+        // a standalone app, and that app's WINDOW carries the manifest's `background_color` —
+        // seen between two documents and beside the outgoing page during a back swipe. With
+        // no manifest it is white, which is what a black product flashed on every navigation
+        // (photographed on an iPhone, pressing Create). The invariant is that the Manager
+        // DECLARES an app at all and that its ground is the product's; the colour is read
+        // from the same constant the shell's manifest uses, so the two cannot drift.
+        testCaseAsync "the app the Manager declares is painted in the product's ground" <|
+            async {
+                let! pm = managerWithUi "manager-manifest"
+                let baseUrl = sprintf "http://127.0.0.1:%d" pm.EndpointPort.Value
+                let! page = TestHttp.get (baseUrl + "/")
+                let linked =
+                    System.Text.RegularExpressions.Regex.Match (page.Body, "<link rel=\"manifest\" href=\"([^\"]+)\">")
+                Expect.isTrue linked.Success "the Manager page declares an app to install"
+                let! manifest = TestHttp.get (resolveUrl (baseUrl + "/") linked.Groups.[1].Value)
+                Expect.equal manifest.Status 200 "and the browser can fetch it from where the page is"
+                let declared (field: string) =
+                    System.Text.RegularExpressions.Regex.Match (manifest.Body, sprintf "\"%s\":\"([^\"]+)\"" field)
+                    |> fun m -> if m.Success then Some m.Groups.[1].Value else None
+                Expect.equal (declared "background_color") (Some "#000000") "the window it launches is the product's ground, never the default white"
+                Expect.equal (declared "display") (Some "standalone") "and it launches as an app rather than a tab"
+                do! pm.StopAll ()
+            }
+
         // The browser paints some of every page itself — scrollbars, the defaults of a form
         // control — and paints them for the scheme the document declared. A page that forgot
         // would get light ones on a black ground. Said in the head by every document the
