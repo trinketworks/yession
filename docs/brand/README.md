@@ -726,27 +726,29 @@ coming back; `clear-caustic` pools each piece's colour on the ground under it, t
 that shows the material without touching the object; `clear-ground` adds the reflection to
 that. Built by `gen27.py`.
 
-Locked: `clearer`. It is copied to `mark.svg` at the top of this directory as the mark; the
-ladder under `jelly/` stays as the record of how it was reached.
+Locked: the mark is `mark.svg` at the top of this directory, and it is DEFINED as the last frame
+of the intro below — the clearer body without its sparkle, bleed, gleam and caustics, lit by the
+intro's lamp — built as a static file from the same code at t = 1, so the two agree by
+construction. The ladder under `jelly/` stays as the record of how it was reached; `clearer`
+there is the body it was chosen from.
 
-The pull back. `intro` is the mark's intro as one SVG, no script: a top-down view of the agent
-as a solid blue diamond, framed on the agent, the camera pulling up and back into the wide lens
-while the collaborators slide in from 0.12 of a block width further out, from nothing, and the
-material arrives. The solid start is a flat copy on top, shaded per face so the cube is a cube
-the moment the camera tilts; only the material underneath, rim to spill, fades in after it. The
-collaborators start arriving at the first instant they would be wholly inside the frame at
-their far position, so nothing fades in cropped. It ends on `clearer-clean`, the clearer body
-without its sparkle, bleed, gleam and caustics; `intro-lit` is the same run ending on `clearer`
-itself. The run is SMIL with the easing baked into the samples: every face is one path whose
-`d` carries 37 keyframes on uniform `keyTimes`, and the clips, bloom, back faces and solid start
-are each a `use` of it; a face's visibility flips discretely, which is safe because a face only
-turns over when it is edge-on. Camera, travel and fades are all sampled through
-cubic-bezier(0.42, 0, 0.58, 1), CSS's symmetric ease-in-out: Tailwind's (0.4, 0, 0.2, 1) left
-faster than it landed. The sheen is the reflection of one fixed point light in the shared top
-plane — the eye's line to the lamp's mirror image meets the plane at one point, and that is
-where the highlight is, clipped into whichever tops it falls across — so it slides over the
-surface as the camera moves instead of riding on it, and each top's graded fill runs from its
-corner nearest the lamp; the lamp is not part of the material, so the sheen is there from the
-first frame. The last frame is `clearer-clean` but for that sheen: same rig and material, with
-four-point faces (the straight lens needs no subdivision). About 110 KB, 18 KB gzipped; SMIL cannot read `prefers-reduced-motion`, so a page that
-respects it shows the static mark instead. Click to replay. Built by `gen28.py`.
+The pull back. `intro` is the mark's intro as one SVG, no script, framed on the agent. Three
+clocks, in order: the material first, over the opening 40% of 2.8s with the camera still — a
+top-down view of the agent as a solid blue diamond, a flat copy on top that fades out while the
+jelly underneath fades in, and from above what that reveals is the bottom face and its edges
+through the body, so the block is a block before it moves; then the camera, from 35%, pulling up
+and back into the wide lens; then the collaborators, from the first instant they would be wholly
+inside the frame at their far position (0.12 of a block width out), so nothing fades in cropped.
+The run is SMIL with the easing baked into the samples: every face is one path whose `d` carries
+57 keyframes on uniform `keyTimes`, and the clips, bloom, back faces and solid start are each a
+`use` of it; a face's visibility flips discretely, which is safe because a face only turns over
+when it is edge-on. Everything is sampled through cubic-bezier(0.42, 0, 0.58, 1), CSS's
+symmetric ease-in-out: Tailwind's (0.4, 0, 0.2, 1) left faster than it landed. The sheen is the
+reflection of one fixed point light in the shared top plane — the eye's line to the lamp's
+mirror image meets the plane at one point, and that is where the highlight is, clipped into
+whichever tops it falls across — so it slides over the surface as the camera moves instead of
+riding on it, and each top's graded fill runs from its corner nearest the lamp; the lamp is not
+part of the material, so the sheen is there from the first frame. The straight lens needs no
+subdivision, so the faces are four points each. About 155 KB, 20 KB gzipped; SMIL cannot read
+`prefers-reduced-motion`, so a page that respects it shows `mark.svg` instead. Click to replay.
+Built by `gen28.py`.
