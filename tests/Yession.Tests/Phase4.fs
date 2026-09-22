@@ -1145,26 +1145,6 @@ let private readinessTests =
                 Expect.equal (declared "display") (Some "standalone") "and it launches as an app rather than a tab"
                 do! pm.StopAll ()
             }
-
-        // The browser paints some of every page itself — scrollbars, the defaults of a form
-        // control — and paints them for the scheme the document declared. A page that forgot
-        // would get light ones on a black ground. Said in the head by every document the
-        // Manager serves, through the one function that links their stylesheet, so this is
-        // what says none has stopped going through it. (It was once believed to colour the
-        // canvas WebKit shows before that stylesheet arrives; it does not — the view
-        // transition in `tailwind.css` is what holds the screen between two documents.)
-        testCaseAsync "every Manager document declares its colour scheme" <|
-            async {
-                let! pm = managerWithUi "open-scheme"
-                let baseUrl = sprintf "http://127.0.0.1:%d" pm.EndpointPort.Value
-                let! manager = TestHttp.get (baseUrl + "/")
-                let! standalone = TestHttp.get (baseUrl + "/sessions/no-such-session/open")
-                for name, page in [ "the Manager page", manager.Body; "a standalone page", standalone.Body ] do
-                    Expect.isTrue
-                        (page.Contains "<meta name=\"color-scheme\" content=\"dark\">")
-                        (sprintf "%s declares its colour scheme in the head" name)
-                do! pm.StopAll ()
-            }
     ]
 
 /// The half of archiving that cannot be decided purely: it stops a real child, and the

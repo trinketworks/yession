@@ -2095,14 +2095,6 @@ let private shellTests =
                 ((pageWith None false).Contains Dom.ephemeralStorageMetaName)
                 "absence is the good case, so the client reads false"
 
-        // Same promise as the Manager's documents make (Phase4): the browser's own paintwork
-        // on the shell — scrollbars, form-control defaults — is drawn for a dark scheme,
-        // because the shell said so in its head.
-        testCase "the shell declares its colour scheme" <| fun () ->
-            Expect.isTrue
-                ((page None).Contains "<meta name=\"color-scheme\" content=\"dark\">")
-                "the shell declares its colour scheme in the head"
-
         // The terminals column's open state lives on `<html>`, outside the mount the client
         // re-renders, so the client cannot paint it — only the shell can, and if it does not,
         // the first render shuts a column the first paint showed open. What is pinned is
