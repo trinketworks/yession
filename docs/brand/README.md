@@ -726,11 +726,13 @@ coming back; `clear-caustic` pools each piece's colour on the ground under it, t
 that shows the material without touching the object; `clear-ground` adds the reflection to
 that. Built by `gen27.py`.
 
-Locked: the mark is `mark.svg` at the top of this directory, and it is DEFINED as the last frame
-of the intro below — the clearer body without its sparkle, bleed, gleam and caustics, lit by the
-intro's lamp — built as a static file from the same code at t = 1, so the two agree by
-construction. The ladder under `jelly/` stays as the record of how it was reached; `clearer`
-there is the body it was chosen from.
+Locked. The mark lives in `assets/logo/` — `logo.svg` — and is DEFINED as the last frame of the
+intro beside it (`intro.svg`): the clearer body without its sparkle, bleed, gleam and caustics,
+lit by the intro's lamp, built as a static file from the same code at t = 1 by
+`assets/logo/gen.py`, so the two agree by construction. That generator is the one file the
+mark, the intro, the lockup, the 16px cut and the app icon all come from, and the ladder under
+`jelly/` stays as the record of how it was reached; `clearer` there is the body it was chosen
+from.
 
 The pull back. `intro` is the mark's intro as one SVG, no script, framed on the agent. Three
 clocks, overlapping: the material over the opening 40% of 2.4s — a top-down view of the agent as
