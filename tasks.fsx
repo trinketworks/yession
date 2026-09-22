@@ -612,11 +612,42 @@ let package (version: string) =
 
 // --- install-smoke: prove a clean npm install pulls the native deps and boots ----------------
 
+/// The install itself, into a directory of its own, retried.
+///
+/// A clean install reaches two hosts this repository does not own: the registry, and the
+/// release assets a native addon's install script fetches its prebuilt binary from. The
+/// second has nothing behind it — node-datachannel answers a failed `prebuild-install` by
+/// building from source, and that fallback crashes on its own (`prebuild WARN This package
+/// does not support N-API version undefined`) — so a few minutes of rate limiting at GitHub
+/// arrive here as "the published package does not install". That took master red on two
+/// releases seven minutes apart, on a tarball that installed cleanly either side of them.
+///
+/// So the FETCH is retried, which is what a person installing the package does, and each
+/// attempt gets a fresh prefix so a half-populated tree is never what the next one reads.
+/// What the install was worth is still decided by the assertions below it rather than by
+/// this exit code: a package that resolves but carries no addon fails there, retries or no.
+let private installed (tgz: string) : string =
+    let attempts = 3
+    let rec attempt (n: int) : string =
+        let prefix = Path.Combine (Path.GetTempPath (), "yession-install-" + Guid.NewGuid().ToString "N")
+        Directory.CreateDirectory prefix |> ignore
+        match runInherit repoRoot "npm" [ "install"; "--prefix"; prefix; tgz ] with
+        | 0 -> prefix
+        | code ->
+            try Directory.Delete (prefix, true) with _ -> ()
+            if n = attempts then
+                failwithf "install-smoke: npm install failed on all %d attempts (last exit %d)" attempts code
+            let pause = TimeSpan.FromSeconds (10.0 * float n)
+            printfn
+                "install-smoke: npm install failed (exit %d) on attempt %d of %d; again in %.0fs, on a fresh prefix"
+                code n attempts pause.TotalSeconds
+            Threading.Thread.Sleep pause
+            attempt (n + 1)
+    attempt 1
+
 let installSmoke (tgz: string) =
     let tgz = Path.GetFullPath tgz // a bare dist/x.tgz looks like a GitHub owner/repo to npm.
-    let prefix = Path.Combine (Path.GetTempPath (), "yession-install-" + Guid.NewGuid().ToString "N")
-    Directory.CreateDirectory prefix |> ignore
-    exec "npm" [ "install"; "--prefix"; prefix; tgz ]
+    let prefix = installed tgz
 
     // The SDK's native `claude` binary is an optional dep keyed by platform (…-linux-x64 etc.);
     // assert one such package resolved, without hard-coding the arch suffix.
