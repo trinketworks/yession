@@ -1571,28 +1571,73 @@ let editorTests =
                 Expect.isTrue (drift < 0.5) (sprintf "the name's baseline is the line's, it was %.2fpx off" drift)
             }
 
-        // The fold's arrow sits on the dead centre of the act's gutter — the margin the title
-        // clears — and of the title's own line, whatever width the platform gives the gutter.
+        // EVERY fold's arrow sits on the centre of its own title's line, and every arrow on
+        // one rail — an act's title is prose at one step, a tool call's is mono at another,
+        // and the two steps carry different line-heights (13/16 and 11/16 against a row that
+        // states 20). The arrow used to place itself against a line it assumed, so a row of a
+        // new kind arrived a couple of pixels off and was fixed by subtracting pixels at the
+        // row; now the row is a grid that states the line once. Asked of every fold the page
+        // holds, not one: the fault this guards is a NEW kind of row, and a case that looked
+        // at the first would have passed while the new one sat off the line.
+        //
         // Geometry, which only a rendered page can settle; pinned as a distance from the
         // centre, never as coordinates, so a wider gutter or a taller line does not move it.
-        editorCase "a fold's arrow is centred in the act's gutter and on its title line" <| fun page ->
+        editorCase "every fold's arrow is on its own title's line, and all of them on one rail" <| fun page ->
             async {
                 do! awaitU (page.EvaluateAsync "() => window.__acts()")
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-act-note] [data-fold]")
                 let! off =
                     await (page.EvaluateAsync<float[]> """() => {
-                        const note = document.querySelector('#shell [data-act-note]')
-                        const arrow = note.querySelector('[data-fold] svg').getBoundingClientRect()
-                        const box = note.getBoundingClientRect()
-                        const gutter = parseFloat(getComputedStyle(note).paddingLeft)
-                        // The title's FIRST line box, not its whole box: a title that wraps
-                        // is two lines tall, and the arrow belongs on the first.
-                        const line = note.querySelector('[data-fold] ~ span').getClientRects()[0]
-                        return [ (arrow.left + arrow.width / 2) - (box.left + gutter / 2),
-                                 (arrow.top + arrow.height / 2) - (line.top + line.height / 2) ]
+                        const folds = [...document.querySelectorAll('#shell [data-fold]')]
+                        const down = folds.map(b => {
+                            const arrow = b.querySelector('svg').getBoundingClientRect()
+                            // The title's FIRST line box, not its whole box: a title that
+                            // wraps is two lines tall, and the arrow belongs on the first.
+                            const line = b.parentElement.querySelector('.col-start-2').getClientRects()[0]
+                            return (arrow.top + arrow.height / 2) - (line.top + line.height / 2)
+                        })
+                        const rails = folds.map(b => {
+                            const arrow = b.querySelector('svg').getBoundingClientRect()
+                            return arrow.left + arrow.width / 2
+                        })
+                        return [ folds.length,
+                                 Math.max(...down.map(Math.abs)),
+                                 Math.max(...rails) - Math.min(...rails) ]
                     }""")
-                Expect.isTrue (abs off.[0] < 1.0) (sprintf "across the gutter, it was %.2fpx off centre" off.[0])
-                Expect.isTrue (abs off.[1] < 1.0) (sprintf "down the title's line, it was %.2fpx off centre" off.[1])
+                Expect.isTrue (off.[0] >= 2.0) (sprintf "the page must hold folds of both kinds, it held %.0f" off.[0])
+                Expect.isTrue (abs off.[1] < 1.0) (sprintf "one arrow sat %.2fpx off its title's line" off.[1])
+                Expect.isTrue (abs off.[2] < 1.0) (sprintf "the arrows spread %.2fpx across the rail" off.[2])
+            }
+
+        // The same promise on a PHONE, because that is where it broke in a way desktop could
+        // not show: a row that bleeds to the screen's edges (`itemGround`'s `max-md:-mx-4`)
+        // once spent the bleed on its gutter, so a bled row's arrow stood sixteen pixels left
+        // of a nested row's — on phones only. A rail is a rail at every width.
+        editorCaseIn 390 844 "and on a phone, where a bled row could spend its bleed on the gutter" <| fun page ->
+            async {
+                do! awaitU (page.EvaluateAsync "() => window.__acts()")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-act-note] [data-fold]")
+                let! off =
+                    await (page.EvaluateAsync<float[]> """() => {
+                        const folds = [...document.querySelectorAll('#shell [data-fold]')]
+                        const down = folds.map(b => {
+                            const arrow = b.querySelector('svg').getBoundingClientRect()
+                            // The title's FIRST line box, not its whole box: a title that
+                            // wraps is two lines tall, and the arrow belongs on the first.
+                            const line = b.parentElement.querySelector('.col-start-2').getClientRects()[0]
+                            return (arrow.top + arrow.height / 2) - (line.top + line.height / 2)
+                        })
+                        const rails = folds.map(b => {
+                            const arrow = b.querySelector('svg').getBoundingClientRect()
+                            return arrow.left + arrow.width / 2
+                        })
+                        return [ folds.length,
+                                 Math.max(...down.map(Math.abs)),
+                                 Math.max(...rails) - Math.min(...rails) ]
+                    }""")
+                Expect.isTrue (off.[0] >= 2.0) (sprintf "the page must hold folds of both kinds, it held %.0f" off.[0])
+                Expect.isTrue (abs off.[1] < 1.0) (sprintf "one arrow sat %.2fpx off its title's line" off.[1])
+                Expect.isTrue (abs off.[2] < 1.0) (sprintf "the arrows spread %.2fpx across the rail" off.[2])
             }
 
         // Unfolding shows the particulars and folding takes them off the page — not merely
