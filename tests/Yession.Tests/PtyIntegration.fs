@@ -999,14 +999,19 @@ let private lentTests =
                         do! terminals.RunBlock id (queueEntry id ada "1") "echo \"count=$GIT_CONFIG_COUNT\"" ignore
                         do! terminals.RunBlock id (queueEntry id ada "2") "echo \"count=$GIT_CONFIG_COUNT\"" ignore
                         do! terminals.RunBlock id (queueEntry id ada "3") "eval echo \"value=\\$GIT_CONFIG_VALUE_$((GIT_CONFIG_COUNT-1))\"" ignore
-                        // Split on either line ending: zsh guards a partial line with a
-                        // `%`, a row of spaces and a bare `\r`, so the next block's output
-                        // begins after a `\r` on what a `\n` split reads as the same line.
+                        // Read the numbers out of the transcript rather than off the
+                        // starts of lines. zsh guards a partial line with a `%`, a row of
+                        // spaces and a bare `\r`, and repaints its prompt without always
+                        // putting a line ending in front of what comes next — so a block's
+                        // answer can arrive glued to the redraw
+                        // (`\u001b[K\u001b[?2004hcount=1`), where a line-anchored filter
+                        // does not see it. That dropped one of the two counts on master
+                        // twice in one afternoon, on a shell that had printed both. What is
+                        // promised is the two numbers, not where the lines break.
                         let counts =
-                            (printed records).Split ([| '\n'; '\r' |])
-                            |> Array.map (fun line -> line.Trim ())
-                            |> Array.filter (fun line -> line.StartsWith "count=")
-                            |> List.ofArray
+                            System.Text.RegularExpressions.Regex.Matches (printed records, "count=([0-9]+)")
+                            |> Seq.map (fun m -> m.Groups.[1].Value)
+                            |> List.ofSeq
                         match counts with
                         | [ first; second ] -> Expect.equal first second "the second block did not push the count past the first's"
                         | other -> failwithf "expected two counts, got %A in: %s" other (printed records)
