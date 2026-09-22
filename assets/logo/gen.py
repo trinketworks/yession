@@ -301,7 +301,7 @@ def inner(s):
     """An svg's defs and body, for nesting."""
     return re.search(r"<svg[^>]*>(.*)</svg>", s, re.S).group(1).strip()
 
-WEIGHT = 300     # the product's wordmark is 200; beside a mark this dense the type needs a step more
+WEIGHT = 400     # the product's wordmark is 200; beside a mark this dense, 300 still read thin
 def wordmark(key, em, x, baseline, ink, weight=WEIGHT):
     """'yession' in Noto Sans at −0.02em, as paths; returns (markup, advance). The face is the one
     the product ships, read where it lives."""
@@ -321,9 +321,10 @@ def lockup(mark_svg, ink, label, weight=WEIGHT):
     w = 70.0 + adv + 4.0
     return svg(f'<g>{inner(mark_svg).replace("mark-", "lockup-")}</g>{word}', "", label, box=f"0 0 {n(w)} 64")
 
-def small(cam, g=0.32, pad=1.0):
-    """The mark for 16px: the same object with the kerfs cut three times wider so the Y survives a
-    quarter-pixel, flat faces in the diffuse shading, nothing else — a filter has no room to work."""
+def small(cam, g=0.2, pad=1.0):
+    """The mark for 16px: the same object with the kerfs cut twice as wide so the Y survives a
+    quarter-pixel (three times read as a gap), flat faces in the diffuse shading, nothing else — a
+    filter has no room to work."""
     cube, pl, pr = plan(g, DD)
     prisms = [(cube, 0.0, H, B), (pl, 0.0, H, G), (pr, 0.0, H, G)]
     a = 1.0 + g/2
