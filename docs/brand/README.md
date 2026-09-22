@@ -737,11 +737,15 @@ clocks, overlapping: the material over the opening 40% of 2.4s — a top-down vi
 a solid blue diamond, a flat copy on top that fades out while the jelly underneath fades in, and
 from above what that reveals is the bottom face and its edges through the body; the camera from
 8%, as the edges begin to show, pulling up and back into the wide lens (its ease-in keeps it near
-still while the block is still becoming one — a pause before it moved read as a pause); then the
-collaborators, from the first instant they would be wholly inside the frame at their far position
-(0.12 of a block width out), so nothing fades in cropped — and since from above they sit well
-below the agent, that instant is set by how much room the first frame leaves around it: fitted
-tight they arrived at 67%, fitted with the diamond at two thirds of the frame at 48%.
+still while the block is still becoming one — a pause before it moved read as a pause); the
+collaborators from 30%, behind a gate that checks they are wholly inside the frame at their far
+position (0.1 of a block width out) with room for their glow from then on, so nothing fades in
+cropped. The pull is one arc: the eye's path was already near a straight line in the world, but
+with the lens scale lerped the agent shrank in the first third and tilted in the rest, which read
+as up, then back; the scale is solved per frame so the agent's width on screen changes evenly
+(33 to 28 units) and the tilt, whose visible sign is the sides growing, keeps pace. The end frame
+is fitted with 7 units of air rather than the ladder's 5, which is what lets the arriving panels
+and their bloom clear the edge — so the mark sits a little smaller in its box than `clearer`.
 The run is SMIL with the easing baked into the samples: every face is one path whose `d` carries
 49 keyframes on uniform `keyTimes`, and the clips, bloom, back faces and solid start are each a
 `use` of it; a face's visibility flips discretely, which is safe because a face only turns over
