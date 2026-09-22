@@ -2678,15 +2678,13 @@ module Style =
     /// Takes the URL rather than building it: the stylesheet is addressed by a digest of its
     /// own bytes, which only the serving process (having read them) can know.
     ///
-    /// The colour scheme rides here too, as a meta tag, so every document says it — the
-    /// browser's own paintwork (scrollbars, form-control defaults) is dark on each of them
-    /// because none can forget to. It was first put here on the belief that it also colours
-    /// the canvas WebKit shows between committing a navigation and the new document's first
-    /// paint; it does not — photographed on WebKit, that canvas is white with the tag in
-    /// place. What holds the screen across a navigation is the view transition in
-    /// `tailwind.css`, which is where that story is told.
+    /// The colour SCHEME is not said here. It rides in the sheet, beside the ground it
+    /// belongs with (`tailwind.css`); a `<meta name="color-scheme">` stood here for two
+    /// releases on the belief that being parsed before any fetch let it colour what a phone
+    /// shows between two documents, and photographs on WebKit say it does not. What is on
+    /// the glass there is the standalone app's window: `WebApp.managerManifest`.
     let headTags (styleSheetUrl: string) =
-        sprintf "<meta name=\"color-scheme\" content=\"dark\"><link rel=\"stylesheet\" href=\"%s\">" styleSheetUrl
+        sprintf "<link rel=\"stylesheet\" href=\"%s\">" styleSheetUrl
 
     /// A stylesheet the page may never need: linked, so its address is the server's to state
     /// and the browser may fetch it whenever it likes, but `media="not all"` so it matches

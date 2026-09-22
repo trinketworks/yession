@@ -248,7 +248,8 @@ let tests =
                 let server = serveStatic harnessRoot
                 let! pw = await (Playwright.CreateAsync ())
                 let! br =
-                    launchChromium pw
+                    await (pw.Chromium.LaunchAsync (
+                        BrowserTypeLaunchOptions (ExecutablePath = chromiumPath ())))
                 let! page = await (br.NewPageAsync ())
                 let evidence = watching page
                 page.SetDefaultTimeout 30000.0f
