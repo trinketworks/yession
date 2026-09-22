@@ -733,14 +733,15 @@ construction. The ladder under `jelly/` stays as the record of how it was reache
 there is the body it was chosen from.
 
 The pull back. `intro` is the mark's intro as one SVG, no script, framed on the agent. Three
-clocks, in order: the material first, over the opening 40% of 2.8s with the camera still — a
-top-down view of the agent as a solid blue diamond, a flat copy on top that fades out while the
-jelly underneath fades in, and from above what that reveals is the bottom face and its edges
-through the body, so the block is a block before it moves; then the camera, from 35%, pulling up
-and back into the wide lens; then the collaborators, from the first instant they would be wholly
-inside the frame at their far position (0.12 of a block width out), so nothing fades in cropped.
+clocks, overlapping: the material over the opening 40% of 2.4s — a top-down view of the agent as
+a solid blue diamond, a flat copy on top that fades out while the jelly underneath fades in, and
+from above what that reveals is the bottom face and its edges through the body; the camera from
+8%, as the edges begin to show, pulling up and back into the wide lens (its ease-in keeps it near
+still while the block is still becoming one — a pause before it moved read as a pause); then the
+collaborators, from the first instant they would be wholly inside the frame at their far position
+(0.12 of a block width out), so nothing fades in cropped.
 The run is SMIL with the easing baked into the samples: every face is one path whose `d` carries
-57 keyframes on uniform `keyTimes`, and the clips, bloom, back faces and solid start are each a
+49 keyframes on uniform `keyTimes`, and the clips, bloom, back faces and solid start are each a
 `use` of it; a face's visibility flips discretely, which is safe because a face only turns over
 when it is edge-on. Everything is sampled through cubic-bezier(0.42, 0, 0.58, 1), CSS's
 symmetric ease-in-out: Tailwind's (0.4, 0, 0.2, 1) left faster than it landed. The sheen is the
@@ -749,6 +750,6 @@ mirror image meets the plane at one point, and that is where the highlight is, c
 whichever tops it falls across — so it slides over the surface as the camera moves instead of
 riding on it, and each top's graded fill runs from its corner nearest the lamp; the lamp is not
 part of the material, so the sheen is there from the first frame. The straight lens needs no
-subdivision, so the faces are four points each. About 155 KB, 20 KB gzipped; SMIL cannot read
+subdivision, so the faces are four points each. About 135 KB, 18 KB gzipped; SMIL cannot read
 `prefers-reduced-motion`, so a page that respects it shows `mark.svg` instead. Click to replay.
 Built by `gen28.py`.
