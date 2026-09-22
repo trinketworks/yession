@@ -739,7 +739,9 @@ from above what that reveals is the bottom face and its edges through the body; 
 8%, as the edges begin to show, pulling up and back into the wide lens (its ease-in keeps it near
 still while the block is still becoming one — a pause before it moved read as a pause); then the
 collaborators, from the first instant they would be wholly inside the frame at their far position
-(0.12 of a block width out), so nothing fades in cropped.
+(0.12 of a block width out), so nothing fades in cropped — and since from above they sit well
+below the agent, that instant is set by how much room the first frame leaves around it: fitted
+tight they arrived at 67%, fitted with the diamond at two thirds of the frame at 48%.
 The run is SMIL with the easing baked into the samples: every face is one path whose `d` carries
 49 keyframes on uniform `keyTimes`, and the clips, bloom, back faces and solid start are each a
 `use` of it; a face's visibility flips discretely, which is safe because a face only turns over
