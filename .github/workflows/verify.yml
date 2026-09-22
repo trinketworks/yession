@@ -134,7 +134,17 @@ jobs:
       # public cache — libdatachannel and node-datachannel are C++ builds, and every pull request
       # compiled them from scratch until they were published here. Nix keys by derivation hash, so
       # a stale entry is never consulted: this can miss, it cannot serve a wrong answer.
+      # And it may not FAIL a job either. The daemon pushes paths as they are built and drains
+      # at post-job time; a drain that does not finish inside its minute exits 3 ("Failed 1
+      # stuck jobs after drain timeout"), which reddened a gate whose every suite had passed
+      # (release run 777) and a release whose package had already built and pushed (run 847).
+      # A path that missed the cache costs the next run compile time and nothing else, so it
+      # must not cost a red one. `continue-on-error` reaches the post step, which is where the
+      # drain runs, because the runner's post step reads the same step's setting; it covers
+      # this step's own failure too, which is the same trade — a bad token stops the cache
+      # filling rather than stopping delivery.
       - uses: cachix/cachix-action@v17
+        continue-on-error: true
         with:
           name: yession
           authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}

@@ -90,7 +90,9 @@ jobs:
         with:
           extra_nix_config: |
             experimental-features = nix-command flakes
+      # A cache push may not fail the job (verify.yml's step says why).
       - uses: cachix/cachix-action@v17
+        continue-on-error: true
         with:
           name: yession
           extraPullNames: devenv

@@ -70,7 +70,9 @@ jobs:
       # built is the only rule that covers both. release.yml has no darwin job, so aarch64-darwin
       # paths are built nowhere but here — a read-only PR tier would leave the darwin half of the
       # cache permanently empty. Fork pull requests get no secret, so they read and skip the push.
+      # A cache push may not fail the job (verify.yml's step says why).
       - uses: cachix/cachix-action@v17
+        continue-on-error: true
         with:
           name: yession
           # devenv's own cache, and the reason this is here rather than in `extra_nix_config`
@@ -169,7 +171,9 @@ jobs:
       # — and one 418 disables it for the whole run. So a warm darwin run compiled 99 CXX objects,
       # exactly as many as a cold one, while Linux went 99 -> 0. Two jobs sharing one repository's
       # Actions cache is what provoked it, and no amount of retrying fixes a rate limit.
+      # A cache push may not fail the job (verify.yml's step says why).
       - uses: cachix/cachix-action@v17
+        continue-on-error: true
         with:
           name: yession
           # devenv's own cache, and the reason this is here rather than in `extra_nix_config`

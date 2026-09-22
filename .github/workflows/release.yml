@@ -131,7 +131,9 @@ jobs:
           extra_nix_config: |
             experimental-features = nix-command flakes
       # Publishes the dev-shell closure this job builds — same argument as `verify`.
+      # A cache push may not fail the job (verify.yml's step says why).
       - uses: cachix/cachix-action@v17
+        continue-on-error: true
         with:
           name: yession
           authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
@@ -224,7 +226,9 @@ jobs:
       # Publishes the INSTALLABLE's closure: what a consumer gets from
       # `nix profile install github:trinketworks/yession`, who otherwise compiles libdatachannel on
       # their own machine. That reach, not the CI minutes, is what makes this cache worth keeping.
+      # A cache push may not fail the job (verify.yml's step says why).
       - uses: cachix/cachix-action@v17
+        continue-on-error: true
         with:
           name: yession
           authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
