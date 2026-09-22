@@ -854,15 +854,55 @@ let private problem (res: ServerResponse) (status: int) (title: string) (detail:
 /// a person saw anything they could use. Entering through `/login` runs the bounce first and
 /// paints once; a browser already holding the session's cookie is sent straight on by that
 /// route (`Signalling.fs`), so the return visit pays one redirect, never a second sign-in.
-let private openingPage (target: string) (readyUrl: string) : string =
-    standalonePage
+/// A standalone SCREEN rather than a page: the same document as `standalonePage` (same
+/// stylesheet, same head, for the same reasons) with no heading, because what is on it is
+/// the heading.
+let private screenPage (title: string) (body: string) : string =
+    sprintf
+        """<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>%s</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+%s
+%s
+</head><body class="%s">
+%s
+</body></html>"""
+        (Ssr.escapeText title)
+        (Style.headTags cssUrl)
+        (WebApp.managerHeadTags (ManagerRoute.path ManagerRoute.Manifest) (ManagerRoute.path ManagerRoute.Icon) (ManagerRoute.path ManagerRoute.Favicon))
+        Style.standalone
+        body
+
+/// What the screen looks like: the mark's intro at 224px (`Brand.intro`, one SVG, SMIL),
+/// the wordmark rising under it as the last frame lands, and under that the status line —
+/// `starting` with the session's id, then `ready`. The way out is on the screen from the
+/// start, because a screen that waits must never trap anyone: the session's own address, and
+/// the manager. A reader who declined motion gets the still mark (`Brand.mark`) and the same
+/// words; the switch is CSS, since SMIL cannot read the preference.
+///
+/// The poll keeps its shape and its bound (below). What is added is a DWELL: the page does not
+/// go before the intro has finished plus a beat (2.4s + 0.4s), however fast the session comes
+/// up, because a start that flashes past is not a start anyone saw — and it does not hold a
+/// slow one, which keeps polling, and breathing, until the bound says why it gave up.
+let private openingPage (sessionId: SessionId) (target: string) (readyUrl: string) : string =
+    screenPage
         "Opening session…"
         (sprintf
-            """<p id="status" class="%s">Waiting for it to answer.</p>
-<p><a id="target" class="%s" href="%s">Open it directly</a></p>
+            """<main class="%s">
+<div class="%s" data-mark-intro aria-hidden="true">%s</div>
+<div class="%s" data-mark-static aria-hidden="true">%s</div>
+<p class="%s">yession</p>
+<p id="status" role="status" class="%s %s"><span class="%s"></span><span data-word>starting</span><span class="%s">%s</span></p>
+<p class="%s"><a id="target" class="%s" href="%s">Open it directly</a> · <a class="%s" href="%s">Back to the session manager</a></p>
+</main>
 <script>
   const target = %s
   const ready = %s
+  // The intro is 2.4s and a beat after it lands is the least anyone is shown; under reduced
+  // motion there is no intro, and nothing to wait for.
+  const DWELL = matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 2800
+  const shownAt = performance.now()
+  const status = document.getElementById('status')
   let attempts = 0
   async function poll () {
     attempts++
@@ -872,10 +912,15 @@ let private openingPage (target: string) (readyUrl: string) : string =
       // requests reads that as the session answering, redirects into it, and leaves whoever
       // pressed Create looking at the front door's 404. This route reports the difference.
       const answer = await fetch(ready, { cache: 'no-store' })
-      if (answer.ok) { location.replace(target); return }
+      if (answer.ok) {
+        status.querySelector('[data-word]').textContent = 'ready'
+        setTimeout(() => location.replace(target), Math.max(0, DWELL - (performance.now() - shownAt)))
+        return
+      }
     } catch (e) { /* the Manager itself is unreachable: the same wait, bounded the same way */ }
     if (attempts >= 40) {
-      document.getElementById('status').textContent =
+      status.className = %s
+      status.textContent =
         'The session started, but its address is not answering after 20 seconds. ' +
         'If this deployment maps session ports through a proxy, that mapping has not appeared.'
       return
@@ -884,11 +929,25 @@ let private openingPage (target: string) (readyUrl: string) : string =
   }
   poll()
 </script>"""
-            Style.body
+            Style.startScreen
+            Style.startMarkIntro
+            (Ssr.render Brand.intro)
+            Style.startMarkStill
+            (Ssr.render Brand.mark)
+            Style.startWord
+            Style.statusRun
+            Style.startStatus
+            Style.statusDotPulse
+            Style.startStatusId
+            (Ssr.escapeText (SessionId.value sessionId))
+            Style.startLinks
             Style.proseLink
             (Ssr.escapeAttr target)
+            Style.proseLink
+            (ManagerRoute.path ManagerRoute.Home)
             (jsonLiteral target)
-            (jsonLiteral readyUrl))
+            (jsonLiteral readyUrl)
+            (jsonLiteral (Style.statusErr + " " + Style.startStatus)))
 
 /// Handle a management-UI request against the Manager. Returns false for paths that
 /// are not the UI's (the composing server falls through — e.g. to the control routes).
@@ -1104,6 +1163,7 @@ let tryHandle
                             html
                                 res
                                 (openingPage
+                                    sessionId
                                     (RelativeUrl.under address.Url (SessionRoute.relative Login))
                                     (ManagerRoute.path (ManagerRoute.SessionReady sessionId)))
                 })

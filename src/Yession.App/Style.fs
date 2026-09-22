@@ -699,6 +699,24 @@ module Style =
     let agentAvatarSm =
         "bg-agent-ground grid place-items-center after:content-[''] after:w-1.5 after:h-1.5 after:bg-blue after:rotate-45"
 
+    // --- The starting screen: what a browser looks at while a session launches -----------
+    // Black, one object, one line of type. The mark's intro plays once at 224px, the
+    // wordmark rises under it as the last frame lands, and the status line under that says
+    // the one thing the operator wants to know. Nothing else: no band, no table.
+    let startScreen = "min-h-dvh flex flex-col items-center justify-center px-4 pb-16"
+    let private startMarkBox = "w-56 h-56 [&>svg]:block [&>svg]:w-full [&>svg]:h-full"
+    /// The intro, breathing once it has landed. Hidden for a reader who declined motion —
+    /// SMIL cannot read the preference, so the page decides for it.
+    let startMarkIntro = startMarkBox + " motion-reduce:hidden animate-breathe motion-reduce:animate-none"
+    /// The still mark, shown only where the intro is not.
+    let startMarkStill = startMarkBox + " hidden motion-reduce:block"
+    let startWord = wordmark + " mt-2 animate-rise motion-reduce:animate-none"
+    let startStatus = "mt-7 flex items-center gap-2"
+    /// The session's minted id beside the status word, in the face an identifier wears; the
+    /// caps voice of the word around it is undone here rather than composed.
+    let startStatusId = "font-terminal text-code text-ink-dim normal-case tracking-normal"
+    let startLinks = "mt-10 " + body
+
     // --- Workspace regions ---------------------------------------------------------------
     // Two presentation bits live on the root <html> element, outside `#app`, so they survive
     // every re-render and stay out of the model: `nav-alt` (toggled by [data-nav-toggle]) and

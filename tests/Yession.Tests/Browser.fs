@@ -4596,6 +4596,99 @@ let pressTests =
             })
     ]
 
+// --- The opening page: what a browser looks at while a session launches ---------------------
+// Two promises only a browser can settle. The DWELL — the page goes once the Manager says
+// the session answers, and not before the intro has landed — is a wait the page's own clock
+// keeps, so it is measured from the outside with the answer faked to arrive at once: a page
+// without the dwell would leave inside a second. And the switch for a reader who declined
+// motion is CSS over SMIL, which only a rendered page can show applied.
+
+let private openingDataDir = "tests/browser/.data-opening"
+
+let private withOpening (name: string) (prepare: IPage -> Async<unit>) (body: Deployed -> IPage -> string -> Async<unit>) : Async<unit> =
+    async {
+        if Directory.Exists openingDataDir then Directory.Delete (openingDataDir, true)
+        let manager =
+            deploy
+                "the Manager"
+                "node"
+                [ "app/out/Main.js"; "--auth"; "localhost"; "--secrets"; "ephemeral"
+                  "--port"; "0"; "--data-dir"; openingDataDir ]
+                []
+                (fun line -> line.Contains "management UI at")
+        let mutable browserToClose : IBrowser option = None
+        let mutable playwrightToDispose : IPlaywright option = None
+        try
+            let! pw = await (Playwright.CreateAsync ())
+            playwrightToDispose <- Some pw
+            let! br = await (pw.Chromium.LaunchAsync (BrowserTypeLaunchOptions (ExecutablePath = chromiumPath ())))
+            browserToClose <- Some br
+            let! page = await (br.NewPageAsync ())
+            page.SetDefaultTimeout 30000.0f
+            let evidence = watching page
+            do! reporting name page evidence <| async {
+                do! prepare page
+                // A session to open, created the way the button creates one; the answer to
+                // that is the address of the page under test.
+                use handler = new HttpClientHandler (AllowAutoRedirect = false)
+                use http = new HttpClient (handler)
+                let! created = await (http.PostAsync (manager.At "/sessions", new FormUrlEncodedContent (dict [ "name", "opening" ])))
+                let location = created.Headers.Location
+                Expect.isNotNull (box location) "Create answers with where the session now is"
+                let opening = if location.IsAbsoluteUri then location.ToString () else manager.At location.OriginalString
+                do! body manager page opening
+            }
+        finally
+            browserToClose |> Option.iter (fun b -> b.CloseAsync () |> ignore)
+            playwrightToDispose |> Option.iter (fun p -> p.Dispose ())
+            manager.Stop ()
+    }
+
+/// The Manager's readiness answer, faked: `ok` at once, or never.
+let private readyAnswers (status: int) (page: IPage) : Async<unit> =
+    awaitU (page.RouteAsync ("**/ready", fun route ->
+        route.FulfillAsync (RouteFulfillOptions (Status = status, ContentType = "application/json", Body = "{}")) |> ignore))
+
+let private marksShown =
+    """() => JSON.stringify({
+        intro: getComputedStyle(document.querySelector('[data-mark-intro]')).display,
+        still: getComputedStyle(document.querySelector('[data-mark-static]')).display })"""
+
+let openingTests =
+    testList "The opening page (browser)" [
+        testCaseAsync "it goes once the session answers, and not before the intro has landed" <|
+            withOpening "the dwell" (readyAnswers 200) (fun manager page opening -> async {
+                // Wherever the page goes, it must not need the session to be up for the
+                // measurement: the destination is answered here, so what is timed is the page.
+                do! awaitU (page.RouteAsync ("**/login*", fun route ->
+                        route.FulfillAsync (RouteFulfillOptions (Status = 200, ContentType = "text/html", Body = "<title>session</title>")) |> ignore))
+                let clock = Stopwatch.StartNew ()
+                let! _ = await (page.GotoAsync opening)
+                do! waitFor "the browser to have left for the session" page (sprintf "location.port !== '%d'" manager.Port)
+                // The page's own dwell is 2.8s from its first script; measured from before the
+                // navigation began, so the reading can only be longer. A page that left on the
+                // first poll would read well under a second.
+                Expect.isTrue (clock.ElapsedMilliseconds >= 2500L) (sprintf "left after %dms, before the intro had landed" clock.ElapsedMilliseconds)
+            })
+
+        testCaseAsync "a reader who declined motion is shown the still mark, and only it" <|
+            withOpening "reduced motion" (fun page -> async {
+                do! awaitU (page.EmulateMediaAsync (PageEmulateMediaOptions (ReducedMotion = ReducedMotion.Reduce)))
+                do! readyAnswers 503 page
+            }) (fun _ page opening -> async {
+                let! _ = await (page.GotoAsync opening)
+                let! shown = await (page.EvaluateAsync<string> marksShown)
+                Expect.equal shown """{"intro":"none","still":"block"}""" "the intro is off and the still mark is on"
+            })
+
+        testCaseAsync "otherwise the intro is shown, and the still mark is not" <|
+            withOpening "motion" (readyAnswers 503) (fun _ page opening -> async {
+                let! _ = await (page.GotoAsync opening)
+                let! shown = await (page.EvaluateAsync<string> marksShown)
+                Expect.equal shown """{"intro":"block","still":"none"}""" "the intro is on and the still mark is off"
+            })
+    ]
+
 #else
 
 // Fable (JS on Node): Playwright is a .NET driver and does not exist here, so the flows above
@@ -4608,5 +4701,6 @@ let frontDoorTests : Fable.Pyxpecto.Model.TestCase = testList "Creating a sessio
 let frontedTests : Fable.Pyxpecto.Model.TestCase = testList "A fronted deployment, for real (browser)" []
 let filterTests : Fable.Pyxpecto.Model.TestCase = testList "The management page's filters (browser)" []
 let pressTests : Fable.Pyxpecto.Model.TestCase = testList "Pressing Create (browser)" []
+let openingTests : Fable.Pyxpecto.Model.TestCase = testList "The opening page (browser)" []
 
 #endif

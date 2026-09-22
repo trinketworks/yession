@@ -954,6 +954,8 @@ let private brandTests =
             Expect.equal Brand.faviconSvg ((TestFiles.read "assets/logo/logo-16.svg").Trim ()) "run `dotnet fsi tasks.fsx brand`"
         testCase "the mark is assets/logo/logo.svg" <| fun () ->
             Expect.equal (Support.renderTemplate Brand.mark) ((TestFiles.read "assets/logo/logo.svg").Trim ()) "run `dotnet fsi tasks.fsx brand`"
+        testCase "the intro is assets/logo/intro.svg" <| fun () ->
+            Expect.equal (Support.renderTemplate Brand.intro) ((TestFiles.read "assets/logo/intro.svg").Trim ()) "run `dotnet fsi tasks.fsx brand`"
     ]
 
 let private themeContrastTests =
@@ -1158,6 +1160,25 @@ let private readinessTests =
                 Expect.equal (declared "display") (Some "standalone") "and it launches as an app rather than a tab"
                 do! pm.StopAll ()
             }
+
+        // The screen a browser looks at while a session launches: the mark (both the intro
+        // and, for a reader who declined motion, the still one), a status line a screen
+        // reader is told about, and the way back — availability and the floor, not the
+        // design. What the screen looks like is the browser suite's to see.
+        testCaseAsync "the opening page carries the mark, an announced status, and the way back" <|
+            async {
+                let! pm = managerWithUi "open-screen"
+                let baseUrl = sprintf "http://127.0.0.1:%d" pm.EndpointPort.Value
+                pm.CreateSession "open-screen" "" |> expect |> ignore
+                let! page = TestHttp.get (baseUrl + "/sessions/open-screen/open")
+                Expect.equal page.Status 200 "a session that exists opens"
+                Expect.stringContains page.Body "role=\"status\"" "the status line is announced"
+                Expect.stringContains page.Body "data-mark-intro" "the intro is on the screen"
+                Expect.stringContains page.Body "data-mark-static" "and the still mark, for a reader who declined motion"
+                Expect.stringContains page.Body (sprintf "href=\"%s\"" (ManagerRoute.path ManagerRoute.Home)) "the way back is a link to the manager"
+                do! pm.StopAll ()
+            }
+
     ]
 
 /// The half of archiving that cannot be decided purely: it stops a real child, and the
