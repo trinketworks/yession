@@ -811,7 +811,7 @@ let private standalonePage (title: string) (body: string) : string =
 </body></html>"""
         (Ssr.escapeText title)
         (Style.headTags cssUrl)
-        (WebApp.managerHeadTags (ManagerRoute.path ManagerRoute.Manifest) (ManagerRoute.path ManagerRoute.Icon))
+        (WebApp.managerHeadTags (ManagerRoute.path ManagerRoute.Manifest) (ManagerRoute.path ManagerRoute.Icon) (ManagerRoute.path ManagerRoute.Favicon))
         Style.standalone
         Style.heading
         (Ssr.escapeText title)
