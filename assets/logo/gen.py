@@ -15,7 +15,7 @@ import math, os, re, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(os.path.dirname(HERE))
-FONT = os.path.join(REPO, "app", "fonts", "noto-sans-latin-200-normal.woff2")
+FONT = os.path.join(REPO, "app", "fonts", "noto-sans-latin-%d-normal.woff2")
 
 # ---- palette ---------------------------------------------------------------------------------
 G, B = "#a8dd00", "#1ba1e2"                      # the product's green and blue
@@ -131,7 +131,7 @@ class Intro:
     """Every keyframe is the same scene at one instant; the file carries them as baked SMIL values
     on uniform keyTimes, so the easing lives in the samples and nothing on the page knows the curve."""
     def __init__(self, N=48, dur=2.4, delta=0.1, panels=(0.3, 1.0), fx=(0.0, 0.4), camera=(0.08, 1.0),
-                 clarity=0.6, backs=0.45, rim=1.3, spill=0.5, margin=3.0, start_pad=15.5, end_pad=7.0):
+                 clarity=0.6, backs=0.45, rim=1.3, spill=0.5, bloom=0.3, margin=3.0, start_pad=15.5, end_pad=7.0):
         self.__dict__.update({k: v for k, v in locals().items() if k != "self"})
         self.cam1 = fit(Lens(PHI1, DIST, UP1, target=TARGET), prisms_at(0.0), pad=end_pad)
         self.cam0 = fit(Lens(PHI0, DIST, 0.0, target=TARGET), prisms_at(0.0)[:1], pad=start_pad)
@@ -242,7 +242,7 @@ class Intro:
         Eg = lambda inner: el("g", "", gate("E"), inner)          # the material's arrival
         body = ""
         # bloom
-        body += Eg(f'<g filter="url(#{key}-bl)" opacity="0.55">'
+        body += Eg(f'<g filter="url(#{key}-bl)" opacity="{self.bloom}">'
                    + "".join(f'<use href="#{key}-p{i}" fill="{col(i)}"/>' for i in range(nf) if prism(i) == 0)
                    + Pg("".join(f'<use href="#{key}-p{i}" fill="{col(i)}"/>' for i in range(nf) if prism(i) != 0)) + '</g>')
         # the back faces, deep, under the body: what makes it see-through
@@ -301,23 +301,23 @@ def inner(s):
     """An svg's defs and body, for nesting."""
     return re.search(r"<svg[^>]*>(.*)</svg>", s, re.S).group(1).strip()
 
-def wordmark(key, em, x, baseline, ink):
-    """'yession.' in the product's wordmark face — Noto Sans 200 at −0.02em — as paths, the dot in
-    green; returns (markup, advance). The face is the one the product ships, read where it lives."""
+WEIGHT = 300     # the product's wordmark is 200; beside a mark this dense the type needs a step more
+def wordmark(key, em, x, baseline, ink, weight=WEIGHT):
+    """'yession' in Noto Sans at −0.02em, as paths; returns (markup, advance). The face is the one
+    the product ships, read where it lives."""
     from fontTools.ttLib import TTFont
     from fontTools.pens.svgPathPen import SVGPathPen
-    f = TTFont(FONT); gs = f.getGlyphSet(); cmap = f.getBestCmap(); k = em/f["head"].unitsPerEm
+    f = TTFont(FONT % weight); gs = f.getGlyphSet(); cmap = f.getBestCmap(); k = em/f["head"].unitsPerEm
     out, pen_x = "", x
-    for ch in "yession.":
+    for ch in "yession":
         g = gs[cmap[ord(ch)]]; pen = SVGPathPen(gs, ntos=lambda v: n(v)); g.draw(pen)
-        out += (f'<path transform="translate({n(pen_x)} {n(baseline)}) scale({n(k)} {n(-k)})" '
-                f'fill="{G if ch == "." else ink}" d="{pen.getCommands()}"/>')
+        out += (f'<path transform="translate({n(pen_x)} {n(baseline)}) scale({n(k)} {n(-k)})" fill="{ink}" d="{pen.getCommands()}"/>')
         pen_x += g.width*k - 0.02*em
     return f'<g id="{key}-word">{out}</g>', pen_x - x + 0.02*em
 
-def lockup(mark_svg, ink, label):
+def lockup(mark_svg, ink, label, weight=WEIGHT):
     """The mark and the wordmark on one line: the x-height band centred on the mark's optical middle."""
-    em = 32.0; word, adv = wordmark("lockup", em, 70.0, 40.5, ink)
+    em = 32.0; word, adv = wordmark("lockup", em, 70.0, 40.5, ink, weight)
     w = 70.0 + adv + 4.0
     return svg(f'<g>{inner(mark_svg).replace("mark-", "lockup-")}</g>{word}', "", label, box=f"0 0 {n(w)} 64")
 
@@ -392,8 +392,9 @@ if __name__ == "__main__":
     out = {}
     out["intro.svg"] = I.intro()
     out["logo.svg"] = I.mark()
-    # on paper the black no longer darkens the body's middle, so the light variant is denser
-    out["logo-light.svg"] = Intro(clarity=0.82, backs=0.55).mark()
+    # on paper the black no longer darkens the body's middle, so the light variant is denser,
+    # and a bloom that is light on black is a smudge on white, so it is all but gone
+    out["logo-light.svg"] = Intro(clarity=0.82, backs=0.55, bloom=0.1).mark()
     out["lockup.svg"] = lockup(out["logo.svg"], INK, "yession")
     out["lockup-light.svg"] = lockup(out["logo-light.svg"], INK_LIGHT, "yession")
     out["logo-16.svg"] = small(I.cam1)
