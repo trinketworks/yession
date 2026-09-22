@@ -547,6 +547,10 @@ type ManagerRoute =
     | Asset of build: string * path: string
     /// The mark the page wears, from the same constant a session shell wears.
     | Icon
+    /// The Manager as an INSTALLABLE app. A session list turned out to be exactly the thing
+    /// somebody puts on a home screen — see `WebApp.managerManifest` for what a missing one
+    /// costs there.
+    | Manifest
     /// Register a session; answers with a redirect to `OpenSession`.
     | CreateSession
     /// The registry stream: the Running set as wire frames, for an operator's proxy.
@@ -599,6 +603,7 @@ module ManagerRoute =
         | ManagerRoute.Home -> "/"
         | ManagerRoute.Asset (build, file) -> RelativeUrl.under "" (SessionRoute.relative (Asset (build, file)))
         | ManagerRoute.Icon -> RelativeUrl.under "" (SessionRoute.relative Icon)
+        | ManagerRoute.Manifest -> RelativeUrl.under "" (SessionRoute.relative Manifest)
         | ManagerRoute.CreateSession -> "/sessions"
         | ManagerRoute.SessionRegistry -> "/sessions/stream"
         | ManagerRoute.SessionRows -> "/sessions/rows"
@@ -640,5 +645,6 @@ module ManagerRoute =
             match SessionRoute.parse method path with
             | Some (Asset (build, file)) -> Ok (ManagerRoute.Asset (build, file))
             | Some Icon -> Ok ManagerRoute.Icon
+            | Some Manifest -> Ok ManagerRoute.Manifest
             | _ -> Error ManagerMiss.Unclaimed
         | _ -> Error ManagerMiss.Unclaimed

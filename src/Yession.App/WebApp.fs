@@ -215,11 +215,44 @@ self.addEventListener('fetch', (e) => {
             "<meta name=\"apple-mobile-web-app-title\" content=\"Yession\">"
         ]
 
-    /// The Manager's half: no manifest, because a session list is not a thing to launch
-    /// chrome-less — but the same mark in the tab and the same tint on the browser's bars.
-    let managerHeadTags (iconUrl: string) =
+    /// The Manager's own manifest. Same shape as the shell's and the same ground, for a
+    /// deployment where the Manager is the thing on the home screen — which is what it turned
+    /// out to be. Root-anchored, like every address the Manager emits.
+    ///
+    /// This is here because of what iOS does with the colour. A site added to the home screen
+    /// launches as a standalone app, and that app's WINDOW is painted in the manifest's
+    /// `background_color` — which is what shows wherever no page is painted: between two
+    /// documents, and beside the outgoing page during a back swipe. With no manifest there is
+    /// no colour to read and the window is WHITE, so a black product flashed white on every
+    /// navigation and the status bar re-tinted for a light app while it did. Photographed on
+    /// an iPhone: pressing Create, and swiping back out of a session.
+    ///
+    /// Nothing a document says reaches that window. Not the stylesheet (the ground it paints
+    /// is the page's), not `color-scheme`, not `theme-color` (the browser's bars), not the
+    /// view transition in `tailwind.css` (it holds the outgoing page, and the window is
+    /// behind both). The manifest is the only place the answer can be given, and it is read
+    /// when the app is installed rather than on the visit — so an app added before this
+    /// landed keeps the white window until it is added again.
+    ///
+    /// `name` says which of the two apps this is, because a phone may hold both: the Manager
+    /// and a session installed from its own shell.
+    let managerManifest (iconUrl: string) =
+        sprintf
+            """{"name":"Yession Manager","short_name":"Yession","start_url":"/","scope":"/","display":"standalone","orientation":"any","background_color":"%s","theme_color":"%s","icons":[{"src":"%s","sizes":"512x512","type":"image/png","purpose":"any"}]}"""
+            ground ground iconUrl
+
+    /// The Manager's half: the mark in the tab, the tint on the browser's bars, and the
+    /// manifest above — the three statements that differ from a session's only in what they
+    /// point at. The apple tags ride along for the same reason they do on the shell: they are
+    /// where an iOS before 16.4 looks, and the status bar over a black app is a stated thing
+    /// rather than a default.
+    let managerHeadTags (manifestUrl: string) (iconUrl: string) =
         String.concat "" [
+            sprintf "<link rel=\"manifest\" href=\"%s\">" manifestUrl
             sprintf "<link rel=\"icon\" type=\"image/png\" href=\"%s\">" iconUrl
             sprintf "<link rel=\"apple-touch-icon\" href=\"%s\">" iconUrl
             sprintf "<meta name=\"theme-color\" content=\"%s\">" ground
+            "<meta name=\"apple-mobile-web-app-capable\" content=\"yes\">"
+            "<meta name=\"apple-mobile-web-app-status-bar-style\" content=\"black\">"
+            "<meta name=\"apple-mobile-web-app-title\" content=\"Yession\">"
         ]

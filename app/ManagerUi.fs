@@ -693,7 +693,7 @@ let page
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         "<title>Yession Manager</title>"
         Style.headTags styleSheetUrl
-        WebApp.managerHeadTags (ManagerRoute.path ManagerRoute.Icon)
+        WebApp.managerHeadTags (ManagerRoute.path ManagerRoute.Manifest) (ManagerRoute.path ManagerRoute.Icon)
         sprintf "</head><body class=\"%s\">" Style.app
         Ssr.render (bodyTemplate access query views declarations hooks)
         sprintf "<script>%s</script>" script
@@ -811,7 +811,7 @@ let private standalonePage (title: string) (body: string) : string =
 </body></html>"""
         (Ssr.escapeText title)
         (Style.headTags cssUrl)
-        (WebApp.managerHeadTags (ManagerRoute.path ManagerRoute.Icon))
+        (WebApp.managerHeadTags (ManagerRoute.path ManagerRoute.Manifest) (ManagerRoute.path ManagerRoute.Icon))
         Style.standalone
         Style.heading
         (Ssr.escapeText title)
@@ -955,6 +955,16 @@ let tryHandle
             // route nor this file knows what those are, which is the point: a build that adds
             // an asset adds a file, not a case.
             Assets.serve assets build file res
+        | ManagerRoute.Manifest ->
+            // What an installed Manager is: the app's name, its mark, and — the reason this
+            // route exists — the ground its WINDOW is painted in on a phone
+            // (`WebApp.managerManifest`). Cached like the shell, since it changes only when
+            // the build does.
+            res.writeHead (
+                200,
+                createObj [ "content-type", box "application/manifest+json"; "cache-control", box CachePolicy.shell ])
+            |> ignore
+            res.``end`` (WebApp.managerManifest (ManagerRoute.path ManagerRoute.Icon))
         | ManagerRoute.Icon ->
             // The same mark the session shells wear, from the same constant, at the address
             // the page emits for it.
