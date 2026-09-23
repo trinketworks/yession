@@ -54,9 +54,9 @@ type Act =
 
 module Act =
 
-    /// The headline: the one sentence a reader lands on. Dispatch only — the words are
-    /// beside each event.
-    let phrase (act: Act) : Phrase =
+    /// What was done, without who it was done for — the headline's first half. Dispatch
+    /// only — the words are beside each event.
+    let deed (act: Act) : Phrase =
         match act with
         | Act.RepoAdded r -> RepoAdded.phrase r
         | Act.RepoRemoved r -> RepoRemoved.phrase r
@@ -73,23 +73,28 @@ module Act =
         | Act.FileChanged f -> FileChanged.phrase f
         | Act.CommandRefused c -> CommandRefused.phrase c
         | Act.GatedCommandFailed c -> GatedCommandFailed.phrase c
-        | Act.CredentialSpent g -> GitCredentialSpent.phrase g
+        | Act.CredentialSpent g -> GitCredentialSpent.deed g
         | Act.McpServerAvailable m -> McpServerNoted.available m
         | Act.McpServerUnavailable m -> McpServerNoted.unavailable m
         | Act.PrWatched p -> PrWatched.phrase p
         | Act.PrUnwatched p -> PrUnwatched.phrase p
         | Act.PrTransitioned p -> PrTransitioned.phrase p
 
-    /// Whose authority the act ran on, when that is not its author's own — the person
-    /// behind the agent, or behind a repo's file. A screen says it after the headline
-    /// ("started sandbox dev for Ada"), so the file or the agent is never the whole
-    /// answer to who did this.
-    let onBehalfOf (act: Act) : Principal option =
+    /// Who the act was done for, when that is not its author: " for Ada" after the deed —
+    /// the person behind the agent or a repo's file, or whose credential a push spent. Empty
+    /// when the author acted for themselves. Its own clause, so a narrow screen can put it
+    /// on a line of its own.
+    let forWhom (act: Act) : Phrase =
+        let person (principal: Principal option) =
+            match principal with
+            | Some p -> [ Segment.Text " for "; Segment.Ref (EntityRef.Actor (Principal.toActor p)) ]
+            | None -> []
         match act with
-        | Act.SandboxStarting s -> s.OnBehalfOf
-        | Act.SandboxStarted s -> s.OnBehalfOf
-        | Act.SandboxStartFailed s -> s.OnBehalfOf
-        | Act.ShellProfileSet p -> p.OnBehalfOf
+        | Act.SandboxStarting s -> person s.OnBehalfOf
+        | Act.SandboxStarted s -> person s.OnBehalfOf
+        | Act.SandboxStartFailed s -> person s.OnBehalfOf
+        | Act.ShellProfileSet p -> person p.OnBehalfOf
+        | Act.CredentialSpent g -> GitCredentialSpent.forWhom g
         | Act.RepoAdded _
         | Act.RepoRemoved _
         | Act.RepoBranchSwitched _
@@ -101,12 +106,14 @@ module Act =
         | Act.FileChanged _
         | Act.CommandRefused _
         | Act.GatedCommandFailed _
-        | Act.CredentialSpent _
         | Act.McpServerAvailable _
         | Act.McpServerUnavailable _
         | Act.PrWatched _
         | Act.PrUnwatched _
-        | Act.PrTransitioned _ -> None
+        | Act.PrTransitioned _ -> []
+
+    /// The headline: the one sentence a reader lands on — the deed, then who it was for.
+    let phrase (act: Act) : Phrase = deed act @ forWhom act
 
     /// What the headline holds back, one phrase per fact. Empty is an act that is already
     /// one clause — most are: "removed repo octo/hello" has no second half to withhold, and
@@ -123,6 +130,7 @@ module Act =
         | Act.CommandRefused c -> CommandRefused.particulars c
         | Act.GatedCommandFailed c -> GatedCommandFailed.particulars c
         | Act.PrWatched p -> PrWatched.particulars p
+        | Act.CredentialSpent g -> GitCredentialSpent.particulars g
         | Act.RepoRemoved _
         | Act.RepoBranchSwitched _
         | Act.RepoCapabilitiesApproved _
@@ -131,7 +139,6 @@ module Act =
         // The diff is not a phrase: a screen draws it as lines, and the agent already holds
         // the texts it sent. The headline's counts are the whole of what prose says.
         | Act.FileChanged _
-        | Act.CredentialSpent _
         | Act.McpServerAvailable _
         | Act.McpServerUnavailable _
         | Act.PrUnwatched _

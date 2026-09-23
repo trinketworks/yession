@@ -305,7 +305,9 @@ module GitCredentialSpent =
     /// the reason the event exists: the block that pushed is on the timeline already, but a
     /// block says what ran, not whose key went out on it. The sentence leads with the act
     /// and names the person it was done for, the way the actor column reads — "agent pushed
-    /// … on behalf of user:ada" — rather than with the credential, which is the mechanism.
+    /// … for user:ada" — rather than with the credential, which is the mechanism. The deed
+    /// and who it was for are two halves (`deed`, `forWhom`), so a screen can break between
+    /// them; `Act.phrase` joins them.
     /// "Pushed to" is the request that went out, not github.com's answer to it: a branch
     /// protection or a rejected ref is git's to print, in the block.
     ///
@@ -313,15 +315,17 @@ module GitCredentialSpent =
     /// (`github:octo/hello`, `user:ada`) and a screen draws them as it draws that repository
     /// and that person everywhere else. The deployment is not a party a screen draws, so it
     /// stays a word.
-    let phrase (g: GitCredentialSpent) : Phrase =
-        let owner =
-            match g.Owner with
-            | CredentialFor.Person person -> Segment.Ref (EntityRef.Actor (Principal.toActor person))
-            | CredentialFor.Deployment -> Segment.Text (CredentialFor.token CredentialFor.Deployment)
-        // Typed under a lease: no block on the timeline says what ran, so this line says
-        // where it was typed.
-        let typed =
-            match g.Block with
-            | Some _ -> []
-            | None -> [ Segment.Text ", holding the terminal" ]
-        [ Segment.Text "pushed to "; Segment.Ref (EntityRef.Repo g.Repo); Segment.Text " on behalf of "; owner ] @ typed
+    let deed (g: GitCredentialSpent) : Phrase =
+        [ Segment.Text "pushed to "; Segment.Ref (EntityRef.Repo g.Repo) ]
+
+    /// Typed under a lease: no block on the timeline says what ran, so the note says where
+    /// it was typed.
+    let particulars (g: GitCredentialSpent) : Phrase list =
+        match g.Block with
+        | Some _ -> []
+        | None -> [ Phrase.text "holding the terminal" ]
+
+    let forWhom (g: GitCredentialSpent) : Phrase =
+        match g.Owner with
+        | CredentialFor.Person person -> [ Segment.Text " for "; Segment.Ref (EntityRef.Actor (Principal.toActor person)) ]
+        | CredentialFor.Deployment -> [ Segment.Text (" for " + CredentialFor.token CredentialFor.Deployment) ]

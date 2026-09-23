@@ -2244,8 +2244,8 @@ module View =
                     [ Segment.Text "started sandbox "; Segment.Ref (EntityRef.Sandbox s.Sandbox) ], [], sandboxStartFacts by act s
                 | Act.SandboxStarting s ->
                     [ Segment.Text "starting sandbox "; Segment.Ref (EntityRef.Sandbox s.Sandbox) ], [], [ toldRow act ]
-                | Act.FileChanged { FileChanged.Diff = Some diff } -> Act.phrase act, [], fileChangeFacts act diff
-                | _ -> Act.phrase act, actNoteParticulars by act, [ toldRow act ]
+                | Act.FileChanged { FileChanged.Diff = Some diff } -> Act.deed act, [], fileChangeFacts act diff
+                | _ -> Act.deed act, actNoteParticulars by act, [ toldRow act ]
             // The fold (`foldArrow`/`foldBody`): the particulars under the title, behind the
             // arrow on the gutter. While the act is still RUNNING the gutter holds the pulse
             // instead: an act in flight is not one to unfold, and its account is about to
@@ -2257,18 +2257,16 @@ module View =
                 | Complete | Streaming | ConversationItemStatus.Failed ->
                     foldArrow key Icon.right Dom.Text.details
             let fold = foldBody key Style.actNoteFoldInner folded
-            // Who the act was for, after the headline: "started sandbox dev for Ada". The
-            // author alone would name a repo's file or the agent and stop there.
-            let title =
-                match Act.onBehalfOf act with
-                | Some principal -> title @ [ Segment.Text (" " + Dom.Text.actFor + " "); Segment.Ref (EntityRef.Actor (Principal.toActor principal)) ]
-                | None -> title
+            // Who the act was for, after the deed: "started sandbox dev for Ada". The author
+            // alone would name a repo's file or the agent and stop there. Its own box, so a
+            // narrow screen puts it on its own line rather than wrapping mid-clause.
+            let whom = html $"""<span class="{Style.actNoteFor}">{Entity.phrase model by (Act.forWhom act)}</span>"""
             html $"""
                 <article class="{Style.actNote}" data-message-id="{MessageId.value item.MessageId}" tabindex="-1" data-act-note data-act-status="{messageStatusLabel item.Status}" data-message-author="{Entity.actorToken item.Author}">
                   {itemActions item}
                   {running}
                   {arrow}
-                  <span class="{Style.cls [ Style.foldContent; Style.actNoteText ]}">{Entity.phrase model by title} {failedMark}</span>
+                  <span class="{Style.cls [ Style.foldContent; Style.actNoteText ]}">{Entity.phrase model by title}{whom} {failedMark}</span>
                   {causeLine item}
                   <div class="{Style.cls [ Style.foldContent; Style.actNoteShown ]}">{shown}</div>
                   {fold}

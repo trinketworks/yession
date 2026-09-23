@@ -1857,6 +1857,9 @@ module Style =
     /// by and the tracking stretches one clause across the whole column. A label that has
     /// grown into a sentence is a sentence, and the timeline is prose.
     let actNoteText = "text-small leading-[inherit] text-ink-dim"
+    /// Who an act was for (" for Ada"): inline on a wide screen, its own line on a narrow
+    /// one, where the whole headline would otherwise wrap mid-clause.
+    let actNoteFor = "max-md:block"
     /// The particulars under the headline: the same size, one step fainter, so the pair reads
     /// as one act rather than as two lines about it.
     let actNoteDetail = "text-small leading-[inherit] text-ink-faint"
