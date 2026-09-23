@@ -164,15 +164,3 @@ module Entity =
             | Segment.Text words -> html $"""{words}"""
             | Segment.Ref entity -> render model by entity)
 
-    /// The same sentence as the AGENT read it: every reference spelled as prose spells it
-    /// (`EntityRef.said` — `user:ada`, `octo/hello:dev`), wearing its mark so a reader can
-    /// still see what kind of thing each is. This is what sits behind "as told to the agent":
-    /// its text is `Phrase.said` to the character, which a name the screen resolved or
-    /// shortened would break — that resolution is the screen's opinion, and this row is
-    /// the other reader's.
-    let told (model: ClientModel) (phrase: Phrase) : TemplateResult list =
-        phrase
-        |> List.map (fun segment ->
-            match segment with
-            | Segment.Text words -> html $"""{words}"""
-            | Segment.Ref entity -> draw model (EntityRef.said entity) entity)
