@@ -408,6 +408,26 @@ let private layoutTests =
 
 let private srtTests =
     testList "repo verbs under srt (local fixtures)" [
+        // A sandbox the add brings up points back to the add, so the add has to say which
+        // item it was. A re-add records nothing, so it has nothing to point to.
+        testCaseAsync "an add answers with the item it recorded, and a re-add with none" <| async {
+            let root = mkdtemp ()
+            makeBareFixture root "hello" |> ignore
+            let log = freshLog ()
+            let service = serviceIn root log
+            let repo = RepoRef.create "octo/hello" |> expect
+            let! first = service.AddRepo caller repo
+            let! again = service.AddRepo caller repo
+            let! events = eventsOf log
+            match events with
+            | [ SessionEvent.RepoAdded added ] ->
+                Expect.equal
+                    [ (expect first).RecordedAs; (expect again).RecordedAs ]
+                    [ Some added.MessageId; None ]
+                    "the add names its item; the re-add names none"
+            | other -> failwithf "expected exactly one RepoAdded, got %A" other
+        }
+
         testCaseAsync "add clones into the repos dir, records the fact, and re-add is a quiet no-op" <| async {
             let root = mkdtemp ()
             makeBareFixture root "hello" |> ignore
@@ -415,7 +435,7 @@ let private srtTests =
             let service = serviceIn root log
             let repo = RepoRef.create "octo/hello" |> expect
             let! listing = service.AddRepo caller repo
-            let listing = expect listing
+            let listing = (expect listing).Answer
             Expect.equal listing.Branch "main" "on the fixture's default branch"
             Expect.isFalse listing.Dirty "clean checkout"
             Expect.isTrue (TestFiles.exists (sprintf "%s/octo/hello/.git" (reposIn root))) "checkout landed at owner/repo"
@@ -428,7 +448,7 @@ let private srtTests =
                 Expect.equal added.AgentsMd None "no AGENTS.md at this fixture's root"
             | other -> failwithf "expected exactly one RepoAdded, got %A" other
             let! again = service.AddRepo caller repo
-            Expect.equal (expect again).Branch "main" "re-add answers with current state"
+            Expect.equal (expect again).Answer.Branch "main" "re-add answers with current state"
             let! events = eventsOf log
             Expect.equal (List.length events) 1 "and records nothing new"
 
@@ -490,7 +510,7 @@ let private srtTests =
                 |> expect
             let repo = RepoRef.create "octo/hello" |> expect
             let! listing = service.AddRepo caller repo
-            Expect.equal (expect listing).Branch "main" "the verb reports the checkout it made"
+            Expect.equal (expect listing).Answer.Branch "main" "the verb reports the checkout it made"
         }
 
         testCaseAsync "a git that cannot run inside the sandbox refuses the verb in words that name a knob" <| async {
@@ -596,7 +616,7 @@ let private srtTests =
             Expect.isEmpty (expect listed) "and nothing was cloned"
             // The current name, asked the same way, is what it is: it clones, under itself.
             let! addedCurrent = service.AddRepo caller current
-            Expect.equal (expect addedCurrent).Repo current "the checkout is under the provider's name"
+            Expect.equal (expect addedCurrent).Answer.Repo current "the checkout is under the provider's name"
         }
 
         testCaseAsync "a provider that cannot say does not stand in the way of a clone" <| async {
@@ -604,7 +624,7 @@ let private srtTests =
             makeBareFixture root "hello" |> ignore
             let service = serviceAsking namedGit None (ResizeArray ()) (fun _ _ -> async { return None }) root (freshLog ())
             let! added = service.AddRepo caller (RepoRef.create "octo/hello" |> expect)
-            Expect.equal (expect added).Branch "main" "cloned as before"
+            Expect.equal (expect added).Answer.Branch "main" "cloned as before"
         }
 
         testCaseAsync "a clone brings no hook templates with it" <| async {
@@ -632,9 +652,9 @@ let private srtTests =
             let repo = RepoRef.create "octo/hello" |> expect
             let! _ = service.AddRepo caller repo
             let! switched = service.SwitchBranch caller repo "feature/x" true
-            Expect.equal (expect switched).Branch "feature/x" "created and moved"
+            Expect.equal (expect switched).Answer.Branch "feature/x" "created and moved"
             let! back = service.SwitchBranch caller repo "main" false
-            Expect.equal (expect back).Branch "main" "moved back"
+            Expect.equal (expect back).Answer.Branch "main" "moved back"
             let! events = eventsOf log
             let switches =
                 events |> List.choose (function SessionEvent.RepoBranchSwitched s -> Some (s.Branch, s.Created) | _ -> None)
@@ -799,7 +819,7 @@ let private srtTests =
             let service = serviceIn root (freshLog ())
             let repo = RepoRef.create "octo/hello" |> expect
             let! added = service.AddRepo caller repo
-            let listing = expect added
+            let listing = (expect added).Answer
             let! removed = service.RemoveRepo caller repo false
             Expect.equal (expect removed) listing.Path "the same path the listing reported"
         }

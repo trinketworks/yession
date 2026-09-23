@@ -1371,6 +1371,12 @@ module Style =
     let replyRef = "pl-8 flex items-baseline gap-1.5 text-small text-ink-faint"
     let replyRefMark = "shrink-0 text-ink-faint"
     let replyRefQuote = "truncate min-w-0 italic"
+    /// An act's cause, under its headline in the content column: the same quiet line as a
+    /// reply's ref, but its sentence holds references (some of them links), so the jump is
+    /// the MARK alone — a link cannot sit inside a button.
+    let causeRef = "flex items-baseline gap-1.5 text-small leading-[inherit] text-ink-faint"
+    let causeJump =
+        cls [ "shrink-0 bg-transparent border-0 p-0 cursor-pointer text-ink-faint hover:text-ink"; focusRing ]
     /// The same quiet line as `replyRef`, but a real control — it jumps to the message it
     /// quotes. Borderless and transparent (it rides above the body, not a box of its own),
     /// brightening under the pointer and wearing the shared focus ring so a keyboard reaches

@@ -324,7 +324,7 @@ let private frameSerializationTests =
                       Checkout = None
                       Forwarded = [ ConnectionName.create "github" |> expect ]
                       Realisation = [ "the socket at /run/docker.sock — this host cannot scope that" ]
-                      Actor = ActorRef.Agent; OnBehalfOf = None }
+                      Actor = ActorRef.Agent; OnBehalfOf = None; CausedBy = None }
                   // A repo-declared start, carrying both the things only a sandbox settles:
                   // what it is for, and where it sees the checkout.
                   WorkSandboxStarted
@@ -336,7 +336,7 @@ let private frameSerializationTests =
                       Forwarded = [ ConnectionName.create "github" |> expect ]
                       Realisation = []
                       Actor = ActorRef.Configured (RepoRef.create "octo/hello" |> expect)
-                      OnBehalfOf = Some (Principal.User (UserId.create "alice" |> expect)) }
+                      OnBehalfOf = Some (Principal.User (UserId.create "alice" |> expect)); CausedBy = None }
                   // A push spending somebody's credential: the person's own, and the
                   // deployment's, which a repo's setup block at boot spends.
                   GitCredentialSpent
@@ -372,7 +372,8 @@ let private frameSerializationTests =
                       Checkout = None
                       Forwarded = []
                       Realisation = []
-                      Actor = PeerRef peerId; OnBehalfOf = None }
+                      Actor = PeerRef peerId; OnBehalfOf = None
+                      CausedBy = Some (Cause.Connected (Principal.Peer peerId)) }
                   // The two halves of a sandbox coming up, beside the start they resolve: a
                   // running act opens on `Starting` and the start or failure below closes it.
                   WorkSandboxStarting
@@ -380,12 +381,14 @@ let private frameSerializationTests =
                       Sandbox = SandboxRef.parse "octo/hello:dev" |> expect
                       Backend = "docker"
                       Description = Some "day-to-day work"
-                      Actor = ActorRef.Configured (RepoRef.create "octo/hello" |> expect); OnBehalfOf = None }
+                      Actor = ActorRef.Configured (RepoRef.create "octo/hello" |> expect); OnBehalfOf = None
+                      CausedBy = Some (Cause.Item messageId) }
                   WorkSandboxStartFailed
                     { MessageId = messageId
                       Sandbox = SandboxRef.parse "octo/hello:dev" |> expect
                       Reason = "the docker daemon is not reachable"
-                      Actor = ActorRef.Configured (RepoRef.create "octo/hello" |> expect); OnBehalfOf = None }
+                      Actor = ActorRef.Configured (RepoRef.create "octo/hello" |> expect); OnBehalfOf = None
+                      CausedBy = Some Cause.Booted }
                   WorkSandboxStopped { MessageId = messageId; Sandbox = SandboxRef.parse "test" |> expect; Actor = ActorRef.Agent }
                   // The shell profile (Plan 25): both cases, because a set and a clear are
                   // one event and the difference between them is the whole payload.
@@ -576,7 +579,7 @@ let private frameSerializationTests =
                       // reads as "nothing was measured", which is the only honest answer for
                       // a sandbox nobody asked the question about.
                       Realisation = []
-                      Actor = ActorRef.Agent; OnBehalfOf = None })
+                      Actor = ActorRef.Agent; OnBehalfOf = None; CausedBy = None })
                 "a bare name is the sandbox the session itself owns"
     ]
 
@@ -846,7 +849,7 @@ let private repoTests =
                               AgentsMd = None })
                   Status = Complete
                   Offset = EventOffset.create 1L |> expect
-                  Woke = None; Replying = None }
+                  Woke = None; CausedBy = None }
             Expect.equal
                 (ConversationItem.said note)
                 "added repo github:octo/hello — on branch main"
@@ -861,7 +864,7 @@ let private repoTests =
                   Content = content
                   Status = Complete
                   Offset = EventOffset.create 1L |> expect
-                  Woke = None; Replying = None }
+                  Woke = None; CausedBy = None }
             Expect.equal
                 (ConversationItem.said (item (ItemContent.Act ordinaryAct)))
                 "removed repo github:octo/hello"
@@ -932,7 +935,7 @@ let private chapterTests =
           Content = content
           Status = Complete
           Offset = EventOffset.create 1L |> expect
-          Woke = None; Replying = None }
+          Woke = None; CausedBy = None }
     let notable = itemSaying "n" (ItemContent.Act notableAct)
     let ordinary = itemSaying "o" (ItemContent.Act ordinaryAct)
     let said = itemSaying "s" (ItemContent.Message "something happened")
@@ -1565,6 +1568,32 @@ let private prWatchTests =
 // Who is behind an act (Plan 20). The type exists because these three were loose fields
 // every site re-spelled, and one site drifted: agent terminal commands recorded no owner at
 // all, so Plan 08's no-borrowing rule held in two places and was absent in a third.
+// Why a repo's sandbox came up, decided per repo from why the fold ran.
+let private foldCauseTests =
+    let one = RepoRef.create "octo/one" |> expect
+    let two = RepoRef.create "octo/two" |> expect
+    let added = MessageId.create "m-added" |> expect
+    let ada = Principal.User (UserId.create "ada" |> expect)
+    testList "what a fold says caused a sandbox" [
+        testCase "a change to a repo caused that repo's sandboxes" <| fun () ->
+            Expect.equal (FoldCause.causeFor one (FoldCause.Changed (one, Some added))) (Some (Cause.Item added)) "the add"
+
+        testCase "a change to one repo caused nothing of another's" <| fun () ->
+            Expect.isNone (FoldCause.causeFor two (FoldCause.Changed (one, Some added))) "no false link"
+
+        testCase "a change that recorded nothing is no cause" <| fun () ->
+            Expect.isNone (FoldCause.causeFor one (FoldCause.Changed (one, None))) "nothing to point to"
+
+        testCase "a person connecting caused every repo's sandboxes" <| fun () ->
+            Expect.equal
+                (FoldCause.causeFor two (FoldCause.Connected (CredentialFor.Person ada)))
+                (Some (Cause.Connected ada))
+                "Ada connected"
+
+        testCase "a connection nobody is named behind is no cause" <| fun () ->
+            Expect.isNone (FoldCause.causeFor one (FoldCause.Connected CredentialFor.Deployment)) "nobody to point to"
+    ]
+
 let private authorityTests =
     let ada = PeerId.create "ada" |> expect
     let bob = PeerId.create "bob" |> expect
@@ -2802,7 +2831,7 @@ let private namingTests =
           Content = ItemContent.Message (body)
           Status = Complete
           Offset = EventOffset.create 1L |> expect
-          Woke = None; Replying = None }
+          Woke = None; CausedBy = None }
     /// A chapter opening at this item, wearing whatever is written on it.
     let opened (item: ConversationItem) (written: string) =
         item.MessageId, { Opens = true; Name = Ylmish.Text.ofString written }
@@ -3155,6 +3184,7 @@ let tests =
         sandboxRequestTests
         modelTests
         authorityTests
+        foldCauseTests
         attributionTests
         envelopeSerializationTests
         conversationProjectionTests

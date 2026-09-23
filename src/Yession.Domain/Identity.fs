@@ -536,6 +536,46 @@ module Authority =
             Authority.ConfiguredBy (repo, CredentialFor.Person (f principal))
         | Authority.ConfiguredBy (_, CredentialFor.Deployment) -> authority
 
+/// Why something happened, when it is not the author's own idea: the thing a timeline can
+/// point back to. `Authority` says whose act this is and is deliberately not a chain; this is
+/// the one link back that a reader is shown, and nothing is inherited through it.
+[<RequireQualifiedAccess>]
+type Cause =
+    /// Something earlier in the conversation: the message a turn answers, the repo added
+    /// that a sandbox came up for.
+    | Item of MessageId
+    /// The session started, and re-read what its repos declare.
+    | Booted
+    /// A person's credential became readable here — they verified into this launch, or
+    /// connected something — and the repos' declarations were re-read for them.
+    | Connected of Principal
+
+/// Why the repos' declarations were re-read, which decides why each sandbox that re-read
+/// starts came up. Decided here, per repo, so the fold only asks.
+[<RequireQualifiedAccess>]
+type FoldCause =
+    /// The session started.
+    | Booted
+    /// A credential became readable here: a person's, or one nobody is named behind.
+    | Connected of CredentialFor
+    /// Something was done to one repo, recorded as this item — or as nothing, when it
+    /// changed nothing (a repeated add).
+    | Changed of RepoRef * MessageId option
+
+module FoldCause =
+
+    /// Why a sandbox of this repo came up in this fold. A change to one repo explains that
+    /// repo's sandboxes and nobody else's: a second repo's sandbox that happens to come up
+    /// in the same fold was not caused by it, and saying so would be a false link.
+    let causeFor (repo: RepoRef) (fold: FoldCause) : Cause option =
+        match fold with
+        | FoldCause.Booted -> Some Cause.Booted
+        | FoldCause.Connected (CredentialFor.Person principal) -> Some (Cause.Connected principal)
+        // Nobody is named behind it, so there is nobody to point to.
+        | FoldCause.Connected CredentialFor.Deployment -> None
+        | FoldCause.Changed (changed, Some item) when changed = repo -> Some (Cause.Item item)
+        | FoldCause.Changed _ -> None
+
 /// The name of one of the session's WorkSandboxes (Plan 15, stage 2). A session used to
 /// have exactly one, so it needed no name; now the agent can ask for a `test` sandbox
 /// beside the `default` one and get the SAME sandbox back on the second ask — which is

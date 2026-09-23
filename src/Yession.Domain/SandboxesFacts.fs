@@ -70,7 +70,11 @@ and WorkSandboxStarting =
       Description : string option
       Actor : ActorRef
       /// Carried for the same parity: who the start is for, as `WorkSandboxStarted` says it.
-      OnBehalfOf : Principal option }
+      OnBehalfOf : Principal option
+      /// What made it come up, when that was not its author's own idea: the repo added, the
+      /// session starting, a person joining. `None` on a start somebody asked for directly,
+      /// whose cause is the ask itself.
+      CausedBy : Cause option }
 
 /// A sandbox that began coming up (`WorkSandboxStarting`) could NOT — the container failed to
 /// come up, or failed its own checks. Carries the starting item's `MessageId`, so the running
@@ -84,7 +88,9 @@ and WorkSandboxStartFailed =
       Reason : string
       Actor : ActorRef
       /// Who the start was for, as `WorkSandboxStarted` says it.
-      OnBehalfOf : Principal option }
+      OnBehalfOf : Principal option
+      /// What made it try, as `WorkSandboxStarting` says it.
+      CausedBy : Cause option }
 
 and WorkSandboxStarted =
     { MessageId : MessageId
@@ -136,7 +142,9 @@ and WorkSandboxStarted =
       /// behind the agent, or behind a repo's file. `None` on a person's own start and on
       /// the boot fold, which nobody asked for. Attribution only — a start lends no
       /// credential, and each block spends its own act's.
-      OnBehalfOf : Principal option }
+      OnBehalfOf : Principal option
+      /// What made it come up, as `WorkSandboxStarting` says it.
+      CausedBy : Cause option }
 
 and WorkSandboxStopped =
     { MessageId : MessageId

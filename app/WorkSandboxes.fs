@@ -162,8 +162,8 @@ type WorkSandboxes =
       /// Started on an AUTHORITY — the agent's, a person's, a repo's file's — and lent to
       /// nobody: what a sandbox's blocks spend is each block's own act's credential
       /// (`Loans`). The authority is here for attribution only: the start records who it
-      /// was for.
-      Ensure : Authority -> SandboxRef -> SandboxRequest -> Async<Result<SandboxOutcome, string>>
+      /// was for. The cause is what made it come up, when that was not the ask itself.
+      Ensure : Authority -> Cause option -> SandboxRef -> SandboxRequest -> Async<Result<SandboxOutcome, string>>
       Stop : ActorRef -> SandboxRef -> Async<Result<unit, string>>
       /// The environment a terminal runs in. Total, because a terminal has to be told no
       /// in the same shape it is told anything else — an unknown name resolves to an
@@ -322,7 +322,7 @@ let create (config: WorkSandboxesConfig) : Async<Result<WorkSandboxes, string>> 
                     return ()
                 }
 
-            let ensure (authority: Authority) (name: SandboxRef) (request: SandboxRequest) : Async<Result<SandboxOutcome, string>> =
+            let ensure (authority: Authority) (causedBy: Cause option) (name: SandboxRef) (request: SandboxRequest) : Async<Result<SandboxOutcome, string>> =
                 async {
                     let actor = Authority.author authority
                     let onBehalfOf = Authority.onBehalfOf authority
@@ -374,7 +374,8 @@ let create (config: WorkSandboxesConfig) : Async<Result<WorkSandboxes, string>> 
                                               Backend = config.Backend name
                                               Description = config.Describe name
                                               Actor = actor
-                                              OnBehalfOf = onBehalfOf })
+                                              OnBehalfOf = onBehalfOf
+                                              CausedBy = causedBy })
                                 match! environment.Ensure None (sprintf "sandbox '%s' was started" (SandboxRef.render name)) with
                                 | EnvironmentUnavailable reason ->
                                     do!
@@ -385,7 +386,8 @@ let create (config: WorkSandboxesConfig) : Async<Result<WorkSandboxes, string>> 
                                                   Sandbox = name
                                                   Reason = reason
                                                   Actor = actor
-                                                  OnBehalfOf = onBehalfOf })
+                                                  OnBehalfOf = onBehalfOf
+                                                  CausedBy = causedBy })
                                     return Error reason
                                 | EnvironmentAvailable ->
                                     let startedAt = config.Clock ()
@@ -414,7 +416,8 @@ let create (config: WorkSandboxesConfig) : Async<Result<WorkSandboxes, string>> 
                                                   // one.
                                                   Realisation = environment.Realisation ()
                                                   Actor = actor
-                                                  OnBehalfOf = onBehalfOf })
+                                                  OnBehalfOf = onBehalfOf
+                                                  CausedBy = causedBy })
                                     return Ok (SandboxStarted entry)
                 }
 
@@ -508,7 +511,7 @@ let singleton (backend: string) (environment: SessionEnvironment.SessionEnvironm
           StartedAt = None
           Environment = environment }
     { Ensure =
-        fun _ name _ ->
+        fun _ _ name _ ->
             async {
                 if name <> SandboxRef.defaultRef then
                     return Error "this session has only its default sandbox"
@@ -548,7 +551,7 @@ let unavailable : WorkSandboxes =
           StartedBy = None
           StartedAt = None
           Environment = SessionEnvironment.unavailable }
-    { Ensure = fun _ _ _ -> async { return Error "this session has no environment" }
+    { Ensure = fun _ _ _ _ -> async { return Error "this session has no environment" }
       Stop = fun _ _ -> async { return Error "this session has no environment" }
       EnvironmentFor = fun _ -> SessionEnvironment.unavailable
       Loans = SessionTerminals.BlockLoans.none

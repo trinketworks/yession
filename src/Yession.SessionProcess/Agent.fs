@@ -199,7 +199,7 @@ module AgentTurn =
                               Offset = EventOffset.zero
                               // A turn with a triggering message is by definition a turn
                               // somebody asked for, so there is nothing here to explain.
-                              Woke = None; Replying = None })
+                              Woke = None; CausedBy = None })
                 let context =
                     { SessionId = sessionId
                       Conversation = conversation

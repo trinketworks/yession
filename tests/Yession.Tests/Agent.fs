@@ -80,7 +80,7 @@ let private triggerItem : ConversationItem =
       Content = ItemContent.Message ("hi agent")
       Status = Complete
       Offset = EventOffset.zero
-      Woke = None; Replying = None }
+      Woke = None; CausedBy = None }
 
 let private envelope (offset: int64) (event: SessionEvent) : EventEnvelope<SessionEvent> =
     { EventId = EventId.fresh ()
@@ -1211,7 +1211,7 @@ let private attributionTests =
 
 // The reply ref: a turn's first message carries the message it answers, but ONLY when that
 // message is not the one it lands directly below. The projection decides — presence of
-// `Replying` is the whole "draw a ref" signal.
+// `CausedBy` is the whole "draw a ref" signal.
 let private replyRefTests =
     let humanSent (offset: int64) (id: string) =
         envelope offset (MessageSent { MessageId = MessageId.create id |> expect; QueueId = None; Author = Principal.Peer ada; Body = "do a thing" })
@@ -1222,7 +1222,7 @@ let private replyRefTests =
     let replyingOf (proj: ConversationProjection) =
         proj.Items
         |> List.tryFind (fun i -> i.MessageId = agentMessageId)
-        |> Option.map (fun i -> i.Replying)
+        |> Option.map (fun i -> i.CausedBy)
 
     testList "The reply ref (a turn's cause, on the surface)" [
 
@@ -1242,7 +1242,7 @@ let private replyRefTests =
                     // triggered by m1 now answers below m2, pushed away from what it answers.
                     [ humanSent 0L "m1"; humanSent 1L "m2"; turnFor 2L "m1"; firstMessage 3L ]
                     ConversationProjection.empty
-            Expect.equal (replyingOf proj) (Some (Some (MessageId.create "m1" |> expect))) "the ref points at the detached cause"
+            Expect.equal (replyingOf proj) (Some (Some (Cause.Item (MessageId.create "m1" |> expect)))) "the ref points at the detached cause"
 
         testCase "a follower within the turn carries no ref — it answers its antecedent" <| fun () ->
             let proj, _ =
@@ -1252,7 +1252,7 @@ let private replyRefTests =
                       envelope 4L (AgentMessageStarted { AgentTurnId = turnId; MessageId = laterMessageId; Antecedent = Some agentMessageId }) ]
                     ConversationProjection.empty
             Expect.equal
-                (proj.Items |> List.tryFind (fun i -> i.MessageId = laterMessageId) |> Option.map (fun i -> i.Replying))
+                (proj.Items |> List.tryFind (fun i -> i.MessageId = laterMessageId) |> Option.map (fun i -> i.CausedBy))
                 (Some None)
                 "only the turn's first message answers the trigger"
 

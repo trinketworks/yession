@@ -123,13 +123,13 @@ let private representativeModel : ClientModel =
                 Content = ItemContent.Message ("ship it")
                 Status = Complete
                 Offset = EventOffset.create 1L |> expect
-                Woke = None; Replying = None }
+                Woke = None; CausedBy = None }
               { MessageId = MessageId.create "msg-agent" |> expect
                 Author = ActorRef.Agent
                 Content = ItemContent.Message ("Sounds go")
                 Status = Streaming
                 Offset = EventOffset.create 4L |> expect
-                Woke = None; Replying = None } ]
+                Woke = None; CausedBy = None } ]
           ActiveAgentMessages = Map.ofList [ turnId, MessageId.create "msg-agent" |> expect ]
           WokenTurn = None; TriggeredTurn = None }
       // The terminal half of the chat (Plan 14): the fixture's one block, anchored between
@@ -1090,7 +1090,7 @@ let private uiChecklistTests =
                   Content = ItemContent.Message ("# Heading one\n\nText with **bold** and `code`.\n\n- item one\n- item two")
                   Status = Complete
                   Offset = EventOffset.create 1L |> expect
-                  Woke = None; Replying = None }
+                  Woke = None; CausedBy = None }
             let model =
                 { representativeModel with
                     Conversation = { representativeModel.Conversation with Items = [ richItem ] } }
@@ -1120,7 +1120,7 @@ let private uiChecklistTests =
                   Content = ItemContent.Act (repoRemoved "octo/hello")
                   Status = Complete
                   Offset = EventOffset.create 1L |> expect
-                  Woke = None; Replying = None }
+                  Woke = None; CausedBy = None }
             let model =
                 { representativeModel with
                     Conversation = { representativeModel.Conversation with Items = [ note ] } }
@@ -1147,7 +1147,7 @@ let private uiChecklistTests =
                   Content = ItemContent.Act (repoAdded "octo/hello" "main")
                   Status = Complete
                   Offset = EventOffset.create 1L |> expect
-                  Woke = None; Replying = None }
+                  Woke = None; CausedBy = None }
             let model =
                 { representativeModel with
                     Conversation = { representativeModel.Conversation with Items = [ note ] } }
@@ -1183,7 +1183,7 @@ let private uiChecklistTests =
                     )
                   Status = Complete
                   Offset = EventOffset.create 1L |> expect
-                  Woke = None; Replying = None }
+                  Woke = None; CausedBy = None }
             let model =
                 { representativeModel with
                     Conversation = { representativeModel.Conversation with Items = [ edited ] } }
@@ -1213,7 +1213,7 @@ let private uiChecklistTests =
                     )
                   Status = Complete
                   Offset = EventOffset.create 1L |> expect
-                  Woke = None; Replying = None }
+                  Woke = None; CausedBy = None }
             let model =
                 { representativeModel with
                     Conversation = { representativeModel.Conversation with Items = [ written ] } }
@@ -1242,7 +1242,7 @@ let private uiChecklistTests =
                               Actor = ActorRef.Agent })
                   Status = Complete
                   Offset = EventOffset.create 1L |> expect
-                  Woke = None; Replying = None }
+                  Woke = None; CausedBy = None }
             let model =
                 { representativeModel with
                     Conversation = { representativeModel.Conversation with Items = [ push ] } }
@@ -1265,7 +1265,7 @@ let private uiChecklistTests =
                   Content = ItemContent.Act (repoAdded "octo/hello" "main")
                   Status = Complete
                   Offset = EventOffset.create 1L |> expect
-                  Woke = None; Replying = None }
+                  Woke = None; CausedBy = None }
             let model =
                 { representativeModel with
                     Conversation = { representativeModel.Conversation with Items = [ note ] } }
@@ -1290,7 +1290,7 @@ let private uiChecklistTests =
                   Content = ItemContent.Act (repoAdded "octo/hello" "main")
                   Status = Complete
                   Offset = EventOffset.create 1L |> expect
-                  Woke = None; Replying = None }
+                  Woke = None; CausedBy = None }
             let folded =
                 { representativeModel with
                     Conversation = { representativeModel.Conversation with Items = [ note ] } }
@@ -1320,10 +1320,10 @@ let private uiChecklistTests =
                               Sandbox = SandboxRef.defaultRef
                               Backend = "srt"
                               Description = None
-                              Actor = ActorRef.Agent; OnBehalfOf = None })
+                              Actor = ActorRef.Agent; OnBehalfOf = None; CausedBy = None })
                   Status = ConversationItemStatus.Running
                   Offset = EventOffset.create 1L |> expect
-                  Woke = None; Replying = None }
+                  Woke = None; CausedBy = None }
             let html =
                 Support.render
                     { representativeModel with
@@ -1349,10 +1349,10 @@ let private uiChecklistTests =
                               Checkout = None
                               Forwarded = [ github ]
                               Realisation = []
-                              Actor = ActorRef.Agent; OnBehalfOf = None })
+                              Actor = ActorRef.Agent; OnBehalfOf = None; CausedBy = None })
                   Status = Complete
                   Offset = EventOffset.create 1L |> expect
-                  Woke = None; Replying = None }
+                  Woke = None; CausedBy = None }
             let model =
                 { representativeModel with
                     Conversation = { representativeModel.Conversation with Items = [ start ] } }
@@ -1380,10 +1380,10 @@ let private uiChecklistTests =
                           Checkout = None
                           Forwarded = []
                           Realisation = []
-                          Actor = by; OnBehalfOf = None })
+                          Actor = by; OnBehalfOf = None; CausedBy = None })
               Status = Complete
               Offset = EventOffset.create 1L |> expect
-              Woke = None; Replying = None }
+              Woke = None; CausedBy = None }
 
         // A repo's file is the author of its sandbox's start, but somebody asked for the
         // fold that started it — and a note that names only the file answers "who did this"
@@ -1460,7 +1460,7 @@ let private uiChecklistTests =
                     ItemContent.Act (Act.PrUnwatched { MessageId = MessageId.create "msg-pr" |> expect; Pr = pr; Actor = PeerRef ada })
                   Status = Complete
                   Offset = EventOffset.create 1L |> expect
-                  Woke = None; Replying = None }
+                  Woke = None; CausedBy = None }
             let html =
                 Support.render
                     { representativeModel with
@@ -1481,7 +1481,7 @@ let private uiChecklistTests =
                   Content = ItemContent.Act (repoRemoved "octo/hello")
                   Status = Complete
                   Offset = EventOffset.create 1L |> expect
-                  Woke = None; Replying = None }
+                  Woke = None; CausedBy = None }
             let model =
                 { representativeModel with
                     Conversation = { representativeModel.Conversation with Items = [ note ] } }
@@ -1502,7 +1502,7 @@ let private uiChecklistTests =
                   Content = ItemContent.Message ("the build finished")
                   Status = Complete
                   Offset = EventOffset.create 1L |> expect
-                  Woke = woke; Replying = None }
+                  Woke = woke; CausedBy = None }
             let model =
                 { representativeModel with
                     Conversation =
@@ -1604,7 +1604,7 @@ let private uiChecklistTests =
                   Content = ItemContent.Message ("ship it")
                   Status = Complete
                   Offset = EventOffset.create at |> expect
-                  Woke = None; Replying = None }
+                  Woke = None; CausedBy = None }
             let first = saidBy "msg-a" 1L
             let next = saidBy "msg-b" 2L
             let joined =
@@ -1662,7 +1662,7 @@ let private uiChecklistTests =
                   Content = ItemContent.Message ("")
                   Status = Complete
                   Offset = EventOffset.create 9L |> expect
-                  Woke = None; Replying = None }
+                  Woke = None; CausedBy = None }
             Expect.equal
                 (ClientModel.chapterName representativeModel silent)
                 Dom.Text.unnamedChapter
@@ -1681,7 +1681,7 @@ let private uiChecklistTests =
                   Content = content
                   Status = Complete
                   Offset = EventOffset.create 1L |> expect
-                  Woke = None; Replying = None }
+                  Woke = None; CausedBy = None }
             let model =
                 { representativeModel with
                     Conversation =
@@ -2535,7 +2535,7 @@ let private semanticsTests =
                             Content = ItemContent.Message ("on it")
                             Status = Complete
                             Offset = EventOffset.create 1L |> expect
-                            Woke = None; Replying = None } ]
+                            Woke = None; CausedBy = None } ]
                       ActiveAgentMessages = Map.empty; WokenTurn = None; TriggeredTurn = None }
                 Timeline = TimelineProjection.empty }
 
@@ -2580,7 +2580,7 @@ let private semanticsTests =
                                     Content = ItemContent.Message ("on it")
                                     Status = Complete
                                     Offset = EventOffset.create 1L |> expect
-                                    Woke = None; Replying = None } ]
+                                    Woke = None; CausedBy = None } ]
                               ActiveAgentMessages = Map.empty; WokenTurn = None; TriggeredTurn = None }
                         Timeline = TimelineProjection.empty }
             let meta = messageMetaOfLabel (UserId.value carol) html
@@ -2605,7 +2605,7 @@ let private semanticsTests =
                                     Content = ItemContent.Message ("on it")
                                     Status = Complete
                                     Offset = EventOffset.create 1L |> expect
-                                    Woke = None; Replying = None } ]
+                                    Woke = None; CausedBy = None } ]
                               ActiveAgentMessages = Map.empty; WokenTurn = None; TriggeredTurn = None }
                         Timeline = TimelineProjection.empty }
             Expect.isTrue
@@ -2634,7 +2634,7 @@ let private semanticsTests =
                                     Content = ItemContent.Message ("on it")
                                     Status = Complete
                                     Offset = EventOffset.create 1L |> expect
-                                    Woke = None; Replying = None } ]
+                                    Woke = None; CausedBy = None } ]
                               ActiveAgentMessages = Map.empty; WokenTurn = None; TriggeredTurn = None }
                         Timeline = TimelineProjection.empty }
             let meta = messageMetaOfLabel (UserId.value carol) html
@@ -2686,7 +2686,7 @@ let private semanticsTests =
                                 Content = ItemContent.Message ("on it")
                                 Status = Complete
                                 Offset = EventOffset.create 1L |> expect
-                                Woke = None; Replying = None } ]
+                                Woke = None; CausedBy = None } ]
                           ActiveAgentMessages = Map.empty; WokenTurn = None; TriggeredTurn = None }
                     Timeline = TimelineProjection.empty }
             let html = Support.render model
