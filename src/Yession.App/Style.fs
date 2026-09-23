@@ -1336,9 +1336,10 @@ module Style =
     /// the arrow. `min-w-0` so a long line truncates inside the column rather than widening
     /// it.
     let foldContent = "col-start-2 min-w-0"
-    /// The arrow's cell: one line of the row's own box, whatever the title is set in.
+    /// The arrow's cell: one line of the row's own box, whatever the title is set in. Named
+    /// into the gutter, so a row drawn above the title (an act's cause) cannot push it over.
     let fold =
-        cls [ "h-[1lh] flex items-center justify-center cursor-pointer bg-transparent border-0 p-0"
+        cls [ "col-start-1 h-[1lh] flex items-center justify-center cursor-pointer bg-transparent border-0 p-0"
               "text-ink-faint hover:text-ink transition-colors"; focusRing ]
     let foldMark = cls [ "block"; Motion.turn ]
     let foldMarkOpen = cls [ foldMark; Motion.turned ]
@@ -1371,12 +1372,17 @@ module Style =
     let replyRef = "pl-8 flex items-baseline gap-1.5 text-small text-ink-faint"
     let replyRefMark = "shrink-0 text-ink-faint"
     let replyRefQuote = "truncate min-w-0 italic"
-    /// An act's cause, under its headline in the content column: the same quiet line as a
-    /// reply's ref, but its sentence holds references (some of them links), so the jump is
-    /// the MARK alone — a link cannot sit inside a button.
-    let causeRef = "flex items-baseline gap-1.5 text-small leading-[inherit] text-ink-faint"
+    /// An act's cause, ABOVE its headline: a row of the act's own grid (`contents`), its mark
+    /// in the gutter over the fold arrow and its sentence in the content column. The same
+    /// quiet voice as a reply's ref, but the sentence holds references (some of them links),
+    /// so the jump is the MARK alone — a link cannot sit inside a button.
+    let causeRow = "contents"
+    let causeMark = "col-start-1 h-[1lh] flex items-center justify-center text-ink-faint"
+    let causeSaid = "flex items-baseline text-small leading-[inherit] text-ink-faint"
+    /// The link of a chain: shorter than a line, so a run of acts with one cause stays a run.
+    let causeChainMark = "col-start-1 h-3.5 flex items-center justify-center text-ink-faint"
     let causeJump =
-        cls [ "shrink-0 bg-transparent border-0 p-0 cursor-pointer text-ink-faint hover:text-ink"; focusRing ]
+        cls [ "flex bg-transparent border-0 p-0 cursor-pointer text-ink-faint hover:text-ink"; focusRing ]
     /// The same quiet line as `replyRef`, but a real control — it jumps to the message it
     /// quotes. Borderless and transparent (it rides above the body, not a box of its own),
     /// brightening under the pointer and wearing the shared focus ring so a keyboard reaches
@@ -1849,7 +1855,7 @@ module Style =
     /// gutter is. `top-2` matches `itemGround`'s `py-2`, so it sits on the first line even when
     /// a detail wraps below. Out of the text flow and unclickable; the reader's cue is the dot,
     /// the screen-reader's is the `sr-only` word it wraps.
-    let actNoteRunning = cls [ "h-[1lh] flex items-center justify-center text-blue pointer-events-none" ]
+    let actNoteRunning = cls [ "col-start-1 h-[1lh] flex items-center justify-center text-blue pointer-events-none" ]
     /// The dot itself: the same size and pulse as elsewhere, but no inline margin or baseline
     /// nudge — those are for a dot that rides text, and this one is centred by its box.
     let actNoteRunningDot =

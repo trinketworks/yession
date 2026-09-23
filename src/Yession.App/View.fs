@@ -2188,41 +2188,56 @@ module View =
         // drawn everywhere else on this screen — except where a screen has its own layout for
         // the act, and then the title is the screen's.
         // Why an act happened, when that was not its author's own idea (`CausedBy`): the repo
-        // added, the session starting, a person connecting. One quiet line under the
-        // headline, said as a sentence with its references drawn. A cause still in the loaded
-        // conversation gets a jump — the same `RevealMessage` the chapter rail and a reply's
-        // ref use — on the MARK, because the sentence holds links and a link cannot sit
-        // inside a button. `data-cause-ref` is the hook a test finds it by.
+        // added, the session starting, a person connecting. One quiet line ABOVE the headline,
+        // its mark in the gutter turning down into the act, said as a sentence with its
+        // references drawn. A run of acts with one cause says it once: each act after the
+        // first carries only a down mark, so the run reads as one chain
+        // (`ConversationItem.causeLinks`). A cause still in the loaded conversation gets a
+        // jump — the same `RevealMessage` the chapter rail and a reply's ref use — on the
+        // MARK, because the sentence holds links and a link cannot sit inside a button.
+        // `data-cause-ref` / `data-cause-chain` are the hooks a test finds them by.
+        let causeLinks = ConversationItem.causeLinks model.Conversation.Items
         let causeLine (item: ConversationItem) =
             let line (mark: TemplateResult) (said: TemplateResult list) (hook: string) =
                 html $"""
-                    <div class="{Style.cls [ Style.foldContent; Style.causeRef ]}" data-cause-ref="{hook}">
-                      <span class="{Style.srOnly}">{Dom.Text.causedBy}</span>{mark}<span class="{Style.replyRefQuote}">{said}</span>
+                    <div class="{Style.causeRow}" data-cause-ref="{hook}">
+                      <span class="{Style.causeMark}">{mark}</span>
+                      <span class="{Style.cls [ Style.foldContent; Style.causeSaid ]}"><span class="{Style.srOnly}">{Dom.Text.causedBy}</span><span class="{Style.replyRefQuote}">{said}</span></span>
                     </div>"""
-            let still = html $"""<span class="{Style.replyRefMark}" aria-hidden="true">↳</span>"""
-            match item.CausedBy with
+            let still = html $"""<span aria-hidden="true">{Icon.caused}</span>"""
+            let drawn cause =
+                match cause with
+                | Cause.Item target ->
+                    match model.Conversation.Items |> List.tryFind (fun i -> i.MessageId = target) with
+                    | Some cause ->
+                        let said =
+                            match cause.Content with
+                            | ItemContent.Act act ->
+                                Entity.phrase model cause.Author (Segment.Ref (EntityRef.Actor cause.Author) :: Segment.Text " " :: Act.phrase act)
+                            | _ -> [ html $"""{ConversationItem.said cause}""" ]
+                        let jump =
+                            html $"""<button type="button" class="{Style.causeJump}" data-cause-jump aria-label="{Dom.Text.causeJumpLabel}" @click={Ev(fun _ -> actions.RevealMessage target)}>{Icon.caused}</button>"""
+                        line jump said (MessageId.value target)
+                    | None -> line still [ html $"""{Dom.Text.causeMissing}""" ] (MessageId.value target)
+                | Cause.Booted -> line still [ html $"""{Dom.Text.causeBooted}""" ] "booted"
+                | Cause.Connected principal ->
+                    line
+                        still
+                        (Entity.phrase
+                            model
+                            item.Author
+                            [ Segment.Ref (EntityRef.Actor (Principal.toActor principal)); Segment.Text (" " + Dom.Text.causeConnected) ])
+                        "connected"
+            match Map.tryFind item.MessageId causeLinks with
+            | Some (CauseLink.Drawn cause) -> drawn cause
+            | Some CauseLink.Chained ->
+                html $"""
+                    <div class="{Style.causeRow}" data-cause-chain>
+                      <span class="{Style.causeChainMark}" aria-hidden="true">{Icon.chained}</span>
+                      <span class="{Style.srOnly}">{Dom.Text.causeChained}</span>
+                    </div>"""
+            | Some CauseLink.Unlinked
             | None -> Lit.nothing
-            | Some (Cause.Item target) ->
-                match model.Conversation.Items |> List.tryFind (fun i -> i.MessageId = target) with
-                | Some cause ->
-                    let said =
-                        match cause.Content with
-                        | ItemContent.Act act ->
-                            Entity.phrase model cause.Author (Segment.Ref (EntityRef.Actor cause.Author) :: Segment.Text " " :: Act.phrase act)
-                        | _ -> [ html $"""{ConversationItem.said cause}""" ]
-                    let jump =
-                        html $"""<button type="button" class="{Style.causeJump}" data-cause-jump aria-label="{Dom.Text.causeJumpLabel}" @click={Ev(fun _ -> actions.RevealMessage target)}>↳</button>"""
-                    line jump said (MessageId.value target)
-                | None -> line still [ html $"""{Dom.Text.causeMissing}""" ] (MessageId.value target)
-            | Some Cause.Booted -> line still [ html $"""{Dom.Text.causeBooted}""" ] "booted"
-            | Some (Cause.Connected principal) ->
-                line
-                    still
-                    (Entity.phrase
-                        model
-                        item.Author
-                        [ Segment.Ref (EntityRef.Actor (Principal.toActor principal)); Segment.Text (" " + Dom.Text.causeConnected) ])
-                    "connected"
         let actNoteItem (act: Act) (item: ConversationItem) =
             let by = item.Author
             // A slow act coming up pulses in the LEFT gutter — a quiet dot on the margin
@@ -2267,7 +2282,7 @@ module View =
             // Who the act was for, after the deed: "started sandbox dev for Ada". The author
             // alone would name a repo's file or the agent and stop there. Its own box, so a
             // narrow screen puts it on its own line rather than wrapping mid-clause — and
-            // nothing at all when the cause line below already names that person.
+            // nothing at all when the cause already names that person.
             let whom =
                 match ConversationItem.forWhom model.Conversation.Items item with
                 | [] -> Lit.nothing
@@ -2275,10 +2290,10 @@ module View =
             html $"""
                 <article class="{Style.actNote}" data-message-id="{MessageId.value item.MessageId}" tabindex="-1" data-act-note data-act-status="{messageStatusLabel item.Status}" data-message-author="{Entity.actorToken item.Author}">
                   {itemActions item}
+                  {causeLine item}
                   {running}
                   {arrow}
                   <span class="{Style.cls [ Style.foldContent; Style.actNoteText ]}">{Entity.phrase model by title}{whom} {failedMark}</span>
-                  {causeLine item}
                   <div class="{Style.cls [ Style.foldContent; Style.actNoteShown ]}">{shown}</div>
                   {fold}
                 </article>"""

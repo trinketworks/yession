@@ -33,6 +33,9 @@ module Icon =
     let private closePath = "M4 4 L12 12 M12 4 L4 12"
     let private upPath = "M8 12.5 L8 4 M4.25 7.75 L8 4 L11.75 7.75"
     let private downPath = "M8 3.5 L8 12 M4.25 8.25 L8 12 L11.75 8.25"
+    /// An act's cause, above it: from the sentence on the right, left and then down into the
+    /// act below.
+    let private causedPath = "M13.5 4 L6 4 L6 12.5 M3.25 9.75 L6 12.5 L8.75 9.75"
     let private leftPath = "M9.75 3.5 L5.25 8 L9.75 12.5"
     let private rightPath = "M6.25 3.5 L10.75 8 L6.25 12.5"
     /// Two chevrons, one behind the other: the mark of a disclosure with SEVERAL things
@@ -122,6 +125,9 @@ module Icon =
     let close = stroked "w-3.5 h-3.5" closePath
     let up = stroked "w-3.5 h-3.5" upPath
     let down = stroked "w-3.5 h-3.5" downPath
+    let caused = stroked "w-3.5 h-3.5" causedPath
+    /// The next act of a chain one cause began: straight down, on the same stroke.
+    let chained = stroked "w-3.5 h-3.5" downPath
     let left = stroked "w-3.5 h-3.5" leftPath
     let right = stroked "w-3.5 h-3.5" rightPath
     let rights = stroked "w-3.5 h-3.5" rightsPath

@@ -111,11 +111,24 @@ type ConversationItem =
       /// note, a woken turn's output). `None` on a woken turn (no message caused it), on a
       /// follower (its cause is its antecedent), and on everything a person said.
       ///
-      /// Presence is the whole decision — the view draws the ref iff this is `Some`. The
-      /// detached test lives here, not in the view, because "is the trigger the item above"
-      /// is a fact about the fold's order that a cheap test can reach. The same rule drops a
-      /// sandbox start's cause when it is the item directly above (`detached`).
+      /// For a reply, presence is the whole decision — the view draws the ref iff this is
+      /// `Some`. The detached test lives here, not in the view, because "is the trigger the
+      /// item above" is a fact about the fold's order that a cheap test can reach.
+      ///
+      /// For an act, the cause is kept whole, and how it is drawn is `ConversationItem.causeLinks`:
+      /// whether it sits directly above, or continues the chain the act above began, is read
+      /// off both neighbours rather than off the one the fold had when this landed.
       CausedBy  : Cause option }
+
+/// How an act's cause is drawn, read off the act above it (`ConversationItem.causeLinks`).
+[<RequireQualifiedAccess>]
+type CauseLink =
+    /// Nothing to draw: no cause, or the cause is the item directly above.
+    | Unlinked
+    /// The cause, drawn above the act.
+    | Drawn of Cause
+    /// The act above has the same cause: drawn as the next link of that chain.
+    | Chained
 
 module ConversationItem =
 
@@ -142,10 +155,39 @@ module ConversationItem =
         | Some Cause.Booted
         | None -> None
 
+    /// How each act's cause is drawn, keyed by the act. One pass over `items` in screen
+    /// order, because a link is a fact about an act AND the one above it:
+    ///
+    /// - the cause is the item directly above → nothing; the eye already sees it.
+    /// - the act above has the same cause → a link in its chain, so the cause is said once
+    ///   over a run of acts it produced (a repo's ask and each sandbox it starts).
+    /// - otherwise → the cause, drawn.
+    ///
+    /// Only acts: a reply's ref is its own rule (`CausedBy`).
+    let causeLinks (items: ConversationItem list) : Map<MessageId, CauseLink> =
+        let isAct (i: ConversationItem) =
+            match i.Content with
+            | ItemContent.Act _ -> true
+            | ItemContent.Message _
+            | ItemContent.Stopped _ -> false
+        let linkOf (above: ConversationItem option) (item: ConversationItem) =
+            match item.CausedBy, above with
+            | None, _ -> CauseLink.Unlinked
+            | Some (Cause.Item target), Some a when a.MessageId = target -> CauseLink.Unlinked
+            | Some cause, Some a when isAct a && a.CausedBy = Some cause -> CauseLink.Chained
+            | Some cause, _ -> CauseLink.Drawn cause
+        items
+        |> List.fold
+            (fun (above, links) item ->
+                Some item, (if isAct item then Map.add item.MessageId (linkOf above item) links else links))
+            (None, Map.empty)
+        |> snd
+
     /// Who an act was for, as a screen that also draws its cause says it: `Act.forWhom`,
-    /// unless the cause already names that person. "started sandbox gate for Nick" over
-    /// "Nick added repo …" says Nick twice; the cause is the fuller account, so it keeps
-    /// him. A cause that names somebody else, or nobody, leaves the clause as it was.
+    /// unless the cause already names that person. "started sandbox gate for Nick" under
+    /// "Nick added repo …" says Nick twice, whether that line is drawn over the act, over
+    /// the chain it continues, or is the item right above. A cause that names somebody
+    /// else, or nobody, leaves the clause as it was.
     let forWhom (items: ConversationItem list) (item: ConversationItem) : Phrase =
         match item.Content with
         | ItemContent.Act act ->
@@ -542,11 +584,11 @@ module ConversationProjection =
     /// Why the given turn exists, if nobody asked for it. Matched on the turn id rather than
     /// taken on trust: a late event from a turn the wake did not start must not inherit the
     /// current one's reason.
-    /// A cause worth drawing: an item that is not the one this lands directly below. The
-    /// detachment is read off `proj.Items` as it stands BEFORE the new item is appended, so
-    /// its last entry is exactly what will render above: adjacent means it already sits
-    /// under its cause, and the ref would say what the eye can see. A cause that is not an
-    /// item — the session starting, a person connecting — is never on screen to sit under.
+    /// A reply's cause worth drawing: an item that is not the one this lands directly below.
+    /// The detachment is read off `proj.Items` as it stands BEFORE the new item is appended,
+    /// so its last entry is exactly what will render above: adjacent means it already sits
+    /// under its cause, and the ref would say what the eye can see. An act's cause is kept
+    /// whole instead (`ConversationItem.causeLinks`).
     let private detached (cause: Cause option) (proj: ConversationProjection) : Cause option =
         match cause, List.tryLast proj.Items with
         | Some (Cause.Item item), Some last when last.MessageId = item -> None
@@ -571,7 +613,7 @@ module ConversationProjection =
                       Content = ItemContent.Act act
                       Status = Complete
                       Offset = envelope.Offset
-                      Woke = None; CausedBy = detached causedBy proj } ] }
+                      Woke = None; CausedBy = causedBy } ] }
 
     let private noted messageId actor act envelope proj = causedNote messageId None actor act envelope proj
 
@@ -602,7 +644,7 @@ module ConversationProjection =
                           Content = ItemContent.Act act
                           Status = status
                           Offset = envelope.Offset
-                          Woke = None; CausedBy = detached causedBy proj } ] }
+                          Woke = None; CausedBy = causedBy } ] }
 
     let private wokeBy (turnId: AgentTurnId) (proj: ConversationProjection) : WakeReason option =
         match proj.WokenTurn with
@@ -774,7 +816,7 @@ module ConversationProjection =
                           Content = ItemContent.Act (Act.SandboxStarting s)
                           Status = Running
                           Offset = envelope.Offset
-                          Woke = None; CausedBy = detached s.CausedBy proj } ] }
+                          Woke = None; CausedBy = s.CausedBy } ] }
         // Resolve the running item this start's `WorkSandboxStarting` opened, in place. A
         // start from a log written before `Starting` existed has no such item — so it is
         // appended, exactly as it was before, and the two readings never both fire because
