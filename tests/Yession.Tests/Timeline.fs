@@ -1969,6 +1969,10 @@ let private causeOf (n: string) events =
     |> List.tryFind (fun i -> i.MessageId = message n)
     |> Option.bind (fun i -> i.CausedBy)
 
+/// How the note for act `n` draws its cause.
+let private linkOf (n: string) events =
+    ConversationItem.causeLinks (conversationOf events) |> Map.tryFind (message n)
+
 /// The cause line of the note for sandbox start `n`, as rendered.
 let private causeLineOf (n: string) (html: string) =
     let note = html.IndexOf (Dom.attr "data-message-id" (MessageId.value (message n)))
@@ -1980,18 +1984,18 @@ let private sandboxCauseTests =
     testList "why a repo's sandbox came up" [
         testCase "a start directly under what caused it draws no ref" <| fun () ->
             let events = [ at 1L 0.0 (repoAdded "a" "octo/hello"); at 2L 1.0 (startingBecause "s" (Cause.Item (message "a"))) ]
-            Expect.isNone (causeOf "s" events) "the cause is the item right above"
+            Expect.equal (linkOf "s" events) (Some CauseLink.Unlinked) "the cause is the item right above"
 
         testCase "a start pushed away from what caused it points back to it" <| fun () ->
             let events =
                 [ at 1L 0.0 (repoAdded "a" "octo/hello")
                   at 2L 1.0 (repoAdded "b" "octo/other")
                   at 3L 2.0 (startingBecause "s" (Cause.Item (message "a"))) ]
-            Expect.equal (causeOf "s" events) (Some (Cause.Item (message "a"))) "the ref points at the add"
+            Expect.equal (linkOf "s" events) (Some (CauseLink.Drawn (Cause.Item (message "a")))) "the ref points at the add"
 
         testCase "a start the session brought up says so, whatever sits above it" <| fun () ->
             let events = [ at 1L 0.0 (repoAdded "a" "octo/hello"); at 2L 1.0 (startingBecause "s" Cause.Booted) ]
-            Expect.equal (causeOf "s" events) (Some Cause.Booted) "the session starting is never on screen to sit under"
+            Expect.equal (linkOf "s" events) (Some (CauseLink.Drawn Cause.Booted)) "the session starting is never on screen to sit under"
 
         testCase "a start keeps its cause once it has come up" <| fun () ->
             let events =
@@ -2000,6 +2004,39 @@ let private sandboxCauseTests =
                   at 3L 2.0 (startingBecause "s" (Cause.Item (message "a")))
                   at 4L 3.0 (startedSandbox "s") ]
             Expect.equal (causeOf "s" events) (Some (Cause.Item (message "a"))) "the started act is the same item"
+
+        testCase "a start under an act with the same cause continues its chain" <| fun () ->
+            let events =
+                [ at 1L 0.0 (repoAdded "a" "octo/hello")
+                  at 2L 1.0 (repoAdded "b" "octo/other")
+                  at 3L 2.0 (startingBecause "s" (Cause.Item (message "a")))
+                  at 4L 3.0 (startingBecause "t" (Cause.Item (message "a"))) ]
+            Expect.equal (linkOf "t" events) (Some CauseLink.Chained) "one cause, said once"
+
+        testCase "a chain continues from an act that sits right under the cause" <| fun () ->
+            let events =
+                [ at 1L 0.0 (repoAdded "a" "octo/hello")
+                  at 2L 1.0 (startingBecause "s" (Cause.Item (message "a")))
+                  at 3L 2.0 (startingBecause "t" (Cause.Item (message "a"))) ]
+            Expect.equal (linkOf "t" events) (Some CauseLink.Chained) "the second start is the chain's next link"
+
+        testCase "a start under an act with a different cause draws its own" <| fun () ->
+            let events =
+                [ at 1L 0.0 (repoAdded "a" "octo/hello")
+                  at 2L 1.0 (startingBecause "s" Cause.Booted)
+                  at 3L 2.0 (startingBecause "t" (Cause.Item (message "a"))) ]
+            Expect.equal (linkOf "t" events) (Some (CauseLink.Drawn (Cause.Item (message "a")))) "a new chain"
+
+        testCase "a chain says its cause once" <| fun () ->
+            let html =
+                Support.render (
+                    clientOf
+                        [ at 1L 0.0 (repoAdded "a" "octo/hello")
+                          at 2L 1.0 (repoAdded "b" "octo/other")
+                          at 3L 2.0 (startingBecause "s" (Cause.Item (message "a")))
+                          at 4L 3.0 (startingBecause "t" (Cause.Item (message "a"))) ])
+            let lines = html.Split "data-cause-ref=" |> Array.length |> fun n -> n - 1
+            Expect.equal lines 1 "one cause line over the two starts"
 
         testCase "a loaded cause is named as who did what, with references" <| fun () ->
             let html =
@@ -2037,9 +2074,13 @@ let private sandboxCauseTests =
                   at 3L 2.0 (startingFor "s" (PeerId.create "bob" |> expect) (Some (Cause.Item (message "a")))) ]
             Expect.equal (forWhomOf "s" events) " for peer:bob" "Ada caused it; it ran for Bob"
 
-        testCase "who a start was for stays when nothing on the note names them" <| fun () ->
+        testCase "who a start was for is not said when the item right above caused it" <| fun () ->
             let events = [ at 1L 0.0 (repoAdded "a" "octo/hello"); at 2L 1.0 (startingFor "s" ada (Some (Cause.Item (message "a")))) ]
-            Expect.equal (forWhomOf "s" events) " for peer:ada" "the cause sits right above, so no cause line is drawn"
+            Expect.equal (forWhomOf "s" events) "" "Ada is named on the add right above"
+
+        testCase "who a start was for stays when nothing names them" <| fun () ->
+            let events = [ at 1L 0.0 (repoAdded "a" "octo/hello"); at 2L 1.0 (startingFor "s" ada (Some Cause.Booted)) ]
+            Expect.equal (forWhomOf "s" events) " for peer:ada" "the session starting names nobody"
 
         testCase "what a repo asks for, pushed away from what caused it, points back to it" <| fun () ->
             let asks =

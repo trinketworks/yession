@@ -658,6 +658,8 @@ module Dom =
         let causedBy = "Caused by:"
         /// The accessible name of the mark that jumps to the cause. It says what it does.
         let causeJumpLabel = "Go to the cause"
+        /// Said, not drawn, where an act continues the chain above it (the mark is hidden).
+        let causeChained = "Same cause as above"
         /// A cause that has scrolled out of what is loaded. It was real; it is not on screen.
         let causeMissing = "an earlier item"
         /// The cause when the session starting brought a sandbox up.
