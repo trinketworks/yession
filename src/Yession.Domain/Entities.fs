@@ -1,5 +1,7 @@
 namespace Yession.Domain
 
+open Yession.Domain.Content
+
 /// What a sentence in this session can point AT, and the sentence that points.
 ///
 /// An act on the timeline names things: the person whose credential a push went out on,
@@ -30,6 +32,9 @@ type EntityRef =
     | Sandbox of SandboxRef
     /// A pull request, `owner/repo#12`.
     | Pr of PrRef
+    /// One version of one artifact — a thing the session can SHOW, and the first reference that
+    /// leads somewhere inside the session rather than out of it.
+    | Artifact of ArtifactRef
 
 module EntityRef =
 
@@ -50,6 +55,11 @@ module EntityRef =
         | EntityRef.Sandbox sandbox -> SandboxRef.render sandbox
         // `owner/repo#12`, as the gates, queries and notes have always spelled one.
         | EntityRef.Pr pr -> PrRef.render pr
+        // The pinned `file:///artifacts/chart.png/0003-7f2a91`: the version, not the name, so an
+        // agent quoting this back has said which bytes — and the same spelling a message body
+        // links to, which is what lets a link in prose and a reference in a fold draw as one
+        // chip.
+        | EntityRef.Artifact artifact -> ArtifactRef.url artifact
 
 /// One piece of a sentence: words, or a thing the words are about.
 [<RequireQualifiedAccess>]

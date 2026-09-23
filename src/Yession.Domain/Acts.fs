@@ -4,6 +4,8 @@ open Yession.Domain
 open Yession.Domain.Repos
 open Yession.Domain.Sandboxes
 open Yession.Domain.Files
+open Yession.Domain.Artifacts
+open Yession.Domain.Content
 open Yession.Domain.Terminals
 open Yession.Domain.Tools
 open Yession.Domain.Prs
@@ -43,6 +45,7 @@ type Act =
     | SandboxSetupQueued of SandboxSetupQueued
     | ShellProfileSet of ShellProfileSet
     | FileChanged of FileChanged
+    | ArtifactShared of ArtifactShared
     | CommandRefused of CommandRefused
     | GatedCommandFailed of GatedCommandFailed
     | CredentialSpent of GitCredentialSpent
@@ -71,6 +74,7 @@ module Act =
         | Act.SandboxSetupQueued q -> SandboxSetupQueued.phrase q
         | Act.ShellProfileSet p -> ShellProfileSet.phrase p
         | Act.FileChanged f -> FileChanged.phrase f
+        | Act.ArtifactShared a -> ArtifactShared.phrase a
         | Act.CommandRefused c -> CommandRefused.phrase c
         | Act.GatedCommandFailed c -> GatedCommandFailed.phrase c
         | Act.CredentialSpent g -> GitCredentialSpent.deed g
@@ -104,6 +108,7 @@ module Act =
         | Act.SandboxStopped _
         | Act.SandboxSetupQueued _
         | Act.FileChanged _
+        | Act.ArtifactShared _
         | Act.CommandRefused _
         | Act.GatedCommandFailed _
         | Act.McpServerAvailable _
@@ -142,6 +147,7 @@ module Act =
         | Act.GatedCommandFailed c -> GatedCommandFailed.particulars c
         | Act.PrWatched p -> PrWatched.particulars p
         | Act.CredentialSpent g -> GitCredentialSpent.particulars g
+        | Act.ArtifactShared a -> ArtifactShared.particulars a
         | Act.RepoRemoved _
         | Act.RepoBranchSwitched _
         | Act.RepoCapabilitiesApproved _
@@ -191,6 +197,10 @@ module Act =
         | Act.ShellProfileSet _ -> "set", "shell profile", "shell profiles"
         | Act.FileChanged { Change = FileChange.Edited _ } -> "edited", "file", "files"
         | Act.FileChanged { Change = FileChange.Written _ } -> "wrote", "file", "files"
+        // Two counts off one event, like a file edited and a file written: a run that shared
+        // three artifacts and a run that revised one three times are different stories, and a
+        // reader asks about them separately.
+        | Act.ArtifactShared a -> ArtifactShared.verb a, "artifact", "artifacts"
         | Act.CommandRefused _ -> "refused", "command", "commands"
         | Act.GatedCommandFailed _ -> "failed", "command", "commands"
         | Act.CredentialSpent _ -> "spent", "credential", "credentials"
@@ -227,6 +237,7 @@ module Act =
         | Act.SandboxStopped _
         | Act.ShellProfileSet _
         | Act.FileChanged _
+        | Act.ArtifactShared _
         | Act.CommandRefused _
         | Act.GatedCommandFailed _
         | Act.CredentialSpent _

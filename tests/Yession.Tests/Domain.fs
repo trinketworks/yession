@@ -11,6 +11,8 @@ open Yession.Domain.Repos
 open Yession.Domain.Prs
 open Yession.Domain.Chat
 open Yession.Domain.Files
+open Yession.Domain.Artifacts
+open Yession.Domain.Content
 open Yession.Domain.Hooks
 
 let private expect =
@@ -3175,6 +3177,156 @@ let private fileChangedTests =
             Expect.stringContains diff "3 more lines" "which says how much was cut"
     ]
 
+let private contentTests =
+    testList "Content the pane can show" [
+
+        testCase "a content path is relative, and its URL form is the same value" <| fun () ->
+            let ref = ContentRef.create "artifacts/chart.png/0000-e7f1a6" |> expect
+            Expect.equal (ContentRef.value ref) "artifacts/chart.png/0000-e7f1a6" "the canonical path"
+            Expect.equal (ContentRef.url ref) "file:///artifacts/chart.png/0000-e7f1a6" "what an agent writes in a message"
+            Expect.equal (ContentRef.root ref) "artifacts" "which directory of the content root"
+            Expect.equal (ContentRef.fileName ref) "0000-e7f1a6" "the last segment"
+            // The three spellings of one reference all parse, because an agent quoting a
+            // chip's URL back into a tool must not be refused for the shape it copied.
+            for spelling in [ "file:///artifacts/chart.png"; "/artifacts/chart.png"; "  artifacts/chart.png  " ] do
+                Expect.equal
+                    (ContentRef.create spelling |> expect |> ContentRef.value)
+                    "artifacts/chart.png"
+                    (sprintf "'%s' means the same path" spelling)
+
+        testCase "a path that could leave the content root is refused at construction" <| fun () ->
+            for bad in [ ""; "/"; "artifacts/../etc/passwd"; "artifacts/."; "artifacts/.ssh/id_rsa"; "artifacts/a b"; "artifacts/a?b=1"; "artifacts//a" ] do
+                Expect.isError (ContentRef.create bad) (sprintf "'%s' is not a content path" bad)
+            Expect.isError (ContentRef.create (String.replicate 13 "a/" + "a")) "deeper than content goes"
+
+        testCase "what the pane makes of a name is read from the name, and unknown is a download" <| fun () ->
+            Expect.equal (ContentMedia.ofName "chart.PNG") (Some "image/png") "the extension, case-folded"
+            Expect.equal (ContentMedia.ofName "notes.tar.gz") None "not a type this build shows"
+            Expect.equal (ContentMedia.ofName "chart") None "no extension is no claim"
+            Expect.equal (ContentKind.ofMediaType (Some "image/webp")) (ContentKind.Image "image/webp") "an image is shown"
+            Expect.equal (ContentKind.ofMediaType (Some "application/pdf")) ContentKind.Download "anything else downloads"
+            Expect.equal (ContentKind.ofMediaType None) ContentKind.Download "and so does a type nobody knows"
+
+        testCase "a size reads the way the cap is written: decimal" <| fun () ->
+            Expect.equal (ContentSize.render 0L) "0 bytes" "nothing"
+            Expect.equal (ContentSize.render 999L) "999 bytes" "under a kilobyte"
+            Expect.equal (ContentSize.render 1_500L) "1.50 kB" "two decimals while small"
+            Expect.equal (ContentSize.render 100_000_000L) "100 MB" "and none once large"
+
+        testCase "a digest is 64 hex characters or it is not a digest" <| fun () ->
+            let hex = String.replicate 64 "a"
+            Expect.equal (ContentDigest.create ("  " + hex.ToUpperInvariant () + "  ") |> expect |> ContentDigest.value) hex "trimmed and case-folded"
+            Expect.isError (ContentDigest.create (String.replicate 63 "a")) "too short"
+            Expect.isError (ContentDigest.create (String.replicate 64 "z")) "not hex"
+    ]
+
+let private artifactTests =
+    let stamp = ArtifactStamp.create "7f2a91" |> expect
+    let chart (seq: int) = ArtifactRef.create "chart.png" seq stamp |> expect
+    let shared (ref: ArtifactRef) : SessionEvent =
+        SessionEvent.ArtifactShared
+            { ArtifactShared.MessageId = MessageId.create "msg-1" |> expect
+              ArtifactShared.Ref = ref
+              ArtifactShared.MediaType = Some "image/png"
+              ArtifactShared.Bytes = 1_500L
+              ArtifactShared.Digest = ContentDigest.create (String.replicate 64 "a") |> expect
+              ArtifactShared.Actor = ActorRef.Agent }
+    testList "Artifacts an agent shares" [
+
+        testCase "a version's address is the name as a directory and the version as its leaf" <| fun () ->
+            Expect.equal (ContentRef.value (ArtifactRef.content (chart 3))) "artifacts/chart.png/0003-7f2a91" "padded, so a listing sorts by version"
+            Expect.equal (ContentRef.value (ArtifactRef.directory (chart 3))) "artifacts/chart.png" "the artifact itself: latest, resolved when asked"
+            Expect.equal (ArtifactRef.directoryOf "chart.png" |> expect |> ContentRef.value) "artifacts/chart.png" "and named without a version in hand"
+            Expect.equal (ArtifactRef.url (chart 3)) "file:///artifacts/chart.png/0003-7f2a91" "the pinned URL"
+            Expect.equal (ArtifactRef.mediaType (chart 3)) (Some "image/png") "the type comes off the NAME, which is where the extension lives"
+
+        testCase "an address parses back to the version it names" <| fun () ->
+            let ref = chart 12
+            Expect.equal (ArtifactRef.ofContent (ArtifactRef.content ref)) (Ok ref) "content and ofContent are inverses"
+            Expect.equal (ArtifactRef.ofLeaf "chart.png" "0012-7f2a91") (Ok ref) "as read off a directory listing"
+            for bad in [ "12-7f2a91"; "0012-7F2A91"; "0012-7f2a9"; "latest" ] do
+                Expect.isError (ArtifactRef.ofLeaf "chart.png" bad) (sprintf "'%s' is not a version" bad)
+            Expect.isError (ArtifactRef.ofContent (ContentRef.create "repos/octo/hello/README.md" |> expect)) "another directory of the content root is not an artifact"
+
+        testCase "an artifact is named, not placed, and its versions are bounded" <| fun () ->
+            Expect.isError (ArtifactRef.create "sub/chart.png" 0 stamp) "a name with a slash would choose a layout this type owns"
+            Expect.isError (ArtifactRef.create ".hidden" 0 stamp) "and a dotfile is refused with the dot-segments"
+            Expect.isError (ArtifactRef.create "chart.png" -1 stamp) "there is no version before the first"
+            Expect.isError (ArtifactRef.create "chart.png" 10_000 stamp) "a fifth digit would sort before the rest"
+            Expect.isError (ArtifactRef.next stamp (chart 9999)) "so the next version refuses rather than wrapping"
+
+        testCase "the first version is a share and any later one an update" <| fun () ->
+            Expect.isTrue (ArtifactRef.isFirst (ArtifactRef.first "chart.png" stamp |> expect)) "seq 0 put the name there"
+            Expect.equal (ArtifactRef.next stamp (chart 0) |> expect |> ArtifactRef.seq) 1 "an update increments"
+            Expect.isFalse (ArtifactRef.isFirst (chart 1)) "and is no longer the first"
+
+        testCase "the latest version is the highest number, the stamp breaking a tie" <| fun () ->
+            // Two writers reaching version 3 both keep their bytes; one of them is latest, and
+            // the order is total so every surface agrees which.
+            let other = ArtifactStamp.create "0b1234" |> expect
+            let mine = chart 3
+            let theirs = ArtifactRef.create "chart.png" 3 other |> expect
+            Expect.equal (ArtifactRef.latest [ theirs; mine; chart 2 ]) (Some mine) "the higher stamp wins a tie"
+            Expect.equal (ArtifactRef.latest [ mine; chart 4 ]) (Some (chart 4)) "but the number wins first"
+            Expect.equal (ArtifactRef.latest []) None "nothing shared is no latest"
+
+        testCase "a stamp is a hash of the actor, stable across the platforms that mint one" <| fun () ->
+            // Pinned, because the host writes a leaf and a client names one: a hash that
+            // differed between .NET and Fable would be two artifacts at one version.
+            Expect.equal (ArtifactStamp.ofActor ActorRef.Agent |> ArtifactStamp.value) "e7f1a6" "the agent's"
+            Expect.equal
+                (ArtifactStamp.ofActor (UserRef (UserId.create "ada" |> expect)) |> ArtifactStamp.value)
+                "1b9984"
+                "a person's, off the same token the acts record"
+            Expect.isError (ArtifactStamp.create "nothex") "and a stamp is hex"
+
+        testCase "an ArtifactShared on the wire is pinned, not round-tripped" <| fun () ->
+            // The ref crosses as its PATH: one spelling on the log, so a name, a number and a
+            // stamp cannot arrive disagreeing.
+            let pinned =
+                """{"type":"artifactShared","payload":{"messageId":"msg-1","ref":"artifacts/chart.png/0003-7f2a91","mediaType":"image/png","bytes":1500,"digest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","actor":{"kind":"agent"}}}"""
+            Expect.equal (Codec.fromString Codec.sessionEvent pinned |> expect) (shared (chart 3)) "the durable form decodes to the event"
+
+        testCase "a share and an update read as different acts, and count separately" <| fun () ->
+            let act (ref: ArtifactRef) =
+                Act.ArtifactShared
+                    { ArtifactShared.MessageId = MessageId.create "m" |> expect
+                      ArtifactShared.Ref = ref
+                      ArtifactShared.MediaType = Some "image/png"
+                      ArtifactShared.Bytes = 1_500L
+                      ArtifactShared.Digest = ContentDigest.create (String.replicate 64 "a") |> expect
+                      ArtifactShared.Actor = ActorRef.Agent }
+            Expect.equal
+                (Act.sentence (act (chart 0)) |> Phrase.said)
+                "shared artifact file:///artifacts/chart.png/0000-7f2a91 (1.50 kB)"
+                "prose gets the address it can quote back"
+            Expect.equal
+                (Act.sentence (act (chart 3)) |> Phrase.said)
+                "updated artifact file:///artifacts/chart.png/0003-7f2a91 (1.50 kB) — version 4"
+                "and an update says which version, because the old ones are still there"
+            Expect.equal (Act.counted (act (chart 0))) ("shared", "artifact", "artifacts") "a run counts the shares"
+            Expect.equal (Act.counted (act (chart 3))) ("updated", "artifact", "artifacts") "separately from the updates"
+            Expect.equal
+                (Act.phrase (act (chart 0)) |> Phrase.refs)
+                [ EntityRef.Artifact (chart 0) ]
+                "the artifact is a reference, so the chat draws the chip every other entity gets"
+
+        testCase "a share reads in the timeline attributed to whoever shared it" <| fun () ->
+            let envelope : EventEnvelope<SessionEvent> =
+                { EventId = EventId.fresh ()
+                  SessionId = SessionId.create "session-1" |> expect
+                  Offset = EventOffset.create 1L |> expect
+                  Actor = ActorRef.Agent
+                  Timestamp = DateTimeOffset (2026, 9, 24, 0, 0, 0, TimeSpan.Zero)
+                  Event = shared (chart 0) }
+            let proj, _ = ConversationProjection.applyEvents None [ envelope ] ConversationProjection.empty
+            match proj.Items with
+            | [ item ] ->
+                Expect.equal (ConversationItem.headline item) "shared artifact file:///artifacts/chart.png/0000-7f2a91 (1.50 kB)" "the act, on the timeline"
+                Expect.equal item.Author ActorRef.Agent "attributed to whoever shared it"
+            | items -> failwithf "expected one act, got %d" (List.length items)
+    ]
+
 let tests =
     testList "Domain" [
         identityTests
@@ -3196,5 +3348,7 @@ let tests =
         deliveryDocumentTests
         shellProfileTests
         fileChangedTests
+        contentTests
+        artifactTests
         frameSerializationTests
     ]

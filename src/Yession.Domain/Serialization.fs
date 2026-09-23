@@ -3,6 +3,8 @@ namespace Yession.Domain
 open Yession.Domain.Chat
 open Yession.Domain.Sandboxes
 open Yession.Domain.Files
+open Yession.Domain.Artifacts
+open Yession.Domain.Content
 open Yession.Domain.Repos
 open Yession.Domain.Prs
 open System
@@ -1542,6 +1544,38 @@ module Codec =
                   FileChanged.Diff = get.Optional.Field "diff" Decode.string
                   FileChanged.Actor = get.Required.Field "actor" actor.Decode }) }
 
+    /// An artifact version on the wire as its PATH (`artifacts/chart.png/0003-7f2a91`), not as
+    /// three fields. The path is the canonical form everywhere else — the route serves it, a
+    /// message links to it, a chip carries it — and `ArtifactRef.ofContent` is its inverse, so
+    /// one spelling is on the log and a name, a number and a stamp cannot arrive disagreeing.
+    let private artifactRef : Codec<ArtifactRef> =
+        { Encode = fun (r: ArtifactRef) -> Encode.string (ContentRef.value (ArtifactRef.content r))
+          Decode =
+            Decode.string
+            |> Decode.andThen (fun raw ->
+                match ContentRef.create raw |> Result.bind ArtifactRef.ofContent with
+                | Ok r -> Decode.succeed r
+                | Error e -> Decode.fail e) }
+
+    let private artifactShared : Codec<ArtifactShared> =
+        { Encode =
+            fun (a: ArtifactShared) ->
+                Encode.object
+                    [ "messageId", messageId.Encode a.MessageId
+                      "ref", artifactRef.Encode a.Ref
+                      "mediaType", Encode.option Encode.string a.MediaType
+                      "bytes", Encode.int64 a.Bytes
+                      "digest", Encode.string (ContentDigest.value a.Digest)
+                      "actor", actor.Encode a.Actor ]
+          Decode =
+            Decode.object (fun get ->
+                { ArtifactShared.MessageId = get.Required.Field "messageId" messageId.Decode
+                  ArtifactShared.Ref = get.Required.Field "ref" artifactRef.Decode
+                  ArtifactShared.MediaType = get.Optional.Field "mediaType" Decode.string
+                  ArtifactShared.Bytes = get.Required.Field "bytes" Decode.int64
+                  ArtifactShared.Digest = get.Required.Field "digest" (viaSmartCtor ContentDigest.create Decode.string)
+                  ArtifactShared.Actor = get.Required.Field "actor" actor.Decode }) }
+
     let private commandRefused : Codec<CommandRefused> =
         { Encode =
             fun (p: CommandRefused) ->
@@ -1745,6 +1779,8 @@ module Codec =
                     Encode.object [ "type", Encode.string "shellProfileSet"; "payload", shellProfileSet.Encode p ]
                 | SessionEvent.FileChanged p ->
                     Encode.object [ "type", Encode.string "fileChanged"; "payload", fileChanged.Encode p ]
+                | SessionEvent.ArtifactShared p ->
+                    Encode.object [ "type", Encode.string "artifactShared"; "payload", artifactShared.Encode p ]
                 | SessionEvent.CommandRefused p ->
                     Encode.object [ "type", Encode.string "commandRefused"; "payload", commandRefused.Encode p ]
                 | SessionEvent.GatedCommandFailed p ->
@@ -1821,6 +1857,8 @@ module Codec =
                 | "workSandboxStopped" -> Decode.field "payload" workSandboxStopped.Decode |> Decode.map WorkSandboxStopped
                 | "shellProfileSet" -> Decode.field "payload" shellProfileSet.Decode |> Decode.map ShellProfileSet
                 | "fileChanged" -> Decode.field "payload" fileChanged.Decode |> Decode.map SessionEvent.FileChanged
+                | "artifactShared" ->
+                    Decode.field "payload" artifactShared.Decode |> Decode.map SessionEvent.ArtifactShared
                 | "commandRefused" -> Decode.field "payload" commandRefused.Decode |> Decode.map SessionEvent.CommandRefused
                 | "gatedCommandFailed" -> Decode.field "payload" gatedCommandFailed.Decode |> Decode.map SessionEvent.GatedCommandFailed
                 | "toolUseStarted" -> Decode.field "payload" toolUseStarted.Decode |> Decode.map ToolUseStarted

@@ -106,6 +106,15 @@ module Icon =
     /// bending into it — a change asking to join. The mark a PR wears wherever a sentence
     /// points at one.
     let private prPath = "M4.5 3.5 L4.5 12.5 M3 2 L6 2 L6 5 L3 5 Z M3 11 L6 11 L6 14 L3 14 Z M11.5 7 L11.5 12.5 M10 11 L13 11 L13 14 L10 14 Z M8 4.5 L11.5 4.5 L11.5 7"
+    /// A picture: a frame, two ridges rising to its bottom edge, and a sun as a zero-length
+    /// subpath (the dot trick `morePath` uses — this set has no fills). The mark an artifact
+    /// wears when the pane can SHOW it, which is the fact a reader wants off the chip: a
+    /// thumbnail's worth of promise that tapping it opens something to look at.
+    let private imagePath = "M2.5 3.5 L13.5 3.5 L13.5 12.5 L2.5 12.5 Z M2.5 11 L6 7.5 L9.5 11 M7.5 11 L10 8.5 L13.5 12 M11 6 L11 6"
+    /// A sheet with its corner turned: an artifact this build does not draw, which is a
+    /// download. Deliberately not a downward arrow — the arrow is the CONTROL's to wear, and
+    /// this is a statement about what the thing is.
+    let private filePath = "M4 2.5 L9.5 2.5 L12 5 L12 13.5 L4 13.5 Z M9.5 2.5 L9.5 5 L12 5"
 
     // --- The vocabulary ----------------------------------------------------------------------
     // 14px inside a 24px icon button; 12px where an icon rides a caps-label line.
@@ -170,6 +179,8 @@ module Icon =
     let keySm = stroked "w-3.5 h-3.5 block" keyPath
     let sandboxSm = stroked "w-3.5 h-3.5 block" sandboxPath
     let prSm = stroked "w-3.5 h-3.5 block" prPath
+    let imageSm = stroked "w-3.5 h-3.5 block" imagePath
+    let fileSm = stroked "w-3.5 h-3.5 block" filePath
 
     /// GitHub's mark, as GitHub draws it: the one FILLED shape in this file, and the one
     /// exception to its vocabulary, because a brand's mark is not ours to redraw in strokes

@@ -18,6 +18,9 @@
     <!-- Time as a port: now, and waiting. Depends on nothing but System. -->
     <Compile Include="Clock.fs" />
     <Compile Include="Identity.fs" />
+    <!-- What the side pane can show, as a path under the session's content root, and the
+         artifacts that are one directory of it. Before Entities.fs, which points at one. -->
+    <Compile Include="Content.fs" />
     <!-- What a sentence on the timeline points at, and the sentence itself. Right after
          Identity.fs, because the references are identities and the facts files below are
          where each event says its sentence. -->
@@ -34,6 +37,8 @@
     <Compile Include="SandboxesFacts.fs" />
     <!-- A file changed through the file verbs: the act, its phrase and its diff excerpt. -->
     <Compile Include="FilesFacts.fs" />
+    <!-- An artifact version shared into the session: the act, and what the log keeps of it. -->
+    <Compile Include="ArtifactFacts.fs" />
     <Compile Include="ChatFacts.fs" />
     <Compile Include="AgentFacts.fs" />
     <Compile Include="TerminalsFacts.fs" />
