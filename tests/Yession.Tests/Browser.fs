@@ -3182,14 +3182,25 @@ let editorTests =
         // is the design, and the design is what a card is FOR.
         editorCase "a task card's lines stay real controls, reachable and pressable without a pointer" <| fun page ->
             async {
-                // A real `<details>`, so the disclosure is the browser's: keyboard-operable
-                // and announced without a handler or an ARIA role of our own.
+                // The fold's own CSS animates `grid-template-rows` (0fr -> 1fr) over 200ms
+                // (`Style.Motion.unfold`), so the instant after `data-fold-open` flips to
+                // "yes" the lines are still sitting in a near-zero-height, `overflow-hidden`
+                // row — real, `visibility: visible`, but with no laid-out area yet. Chromium's
+                // sequential focus navigation skips a target with no area at the moment Tab is
+                // pressed, so it landed on the next fold's arrow further down the page instead
+                // of the line just revealed. Motion turned off is what every other case that
+                // measures or reaches into something mid-animation already does (see "a turn
+                // in flight is stated on the screen exactly once"), and every fold already
+                // carries `motion-reduce:transition-none` for it.
+                do! awaitU (page.EmulateMediaAsync (PageEmulateMediaOptions (ReducedMotion = ReducedMotion.Reduce)))
+                // The timeline's one fold (`data-fold`), same as every other disclosure here:
+                // a real button, keyboard-operable and announced without a role of our own.
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-chat-task-card]")
-                do! awaitU (page.FocusAsync "#shell [data-chat-task-card] summary")
+                do! awaitU (page.FocusAsync "#shell [data-chat-task-card] [data-fold]")
                 do! awaitU (page.Keyboard.PressAsync "Enter")
                 let! _ =
                     await (page.WaitForFunctionAsync
-                        """document.querySelector('#shell [data-chat-task-card]')?.open === true""")
+                        """document.querySelector('#shell [data-chat-task-card] [data-fold-body]')?.getAttribute('data-fold-open') === 'yes'""")
 
                 // The failed command leads, which is the one thing the ordering promises —
                 // and it is a BUTTON, not a div someone hung a click on.

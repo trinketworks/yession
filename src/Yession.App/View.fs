@@ -2535,14 +2535,23 @@ module View =
                 html $"""<span class="{Style.chatTaskCounts}">{failed}{running}{done'}</span>"""
             let commands =
                 if tally.Commands = 1 then "1 command" else sprintf "%d commands" tally.Commands
+            // The fold every other row wears, not a `<details>` of its own — see
+            // `Style.chatTaskCard`. Keyed by the turn (`FoldKey.Task`), same as a tool run
+            // keys by its first call: one row, one key, any number open at once.
+            let key = FoldKey.Task turn
+            let arrow = foldArrow key Icon.rights Dom.Text.details
+            let body =
+                foldBodyWide key Style.chatTaskCardInner
+                    (lines |> List.map (fun ((terminalId, block), _) -> blockChip terminalId block))
             html $"""
-                <details class="{Style.chatTaskCard}" data-chat-task-card="{AgentTurnId.value turn}">
-                  <summary class="{Style.chatTaskSummary}">
+                <div class="{Style.chatTaskCard}" data-chat-task-card="{AgentTurnId.value turn}">
+                  {arrow}
+                  <span class="{Style.chatTaskSummary}">
                     <span class="{Style.chatChipText}">ran {commands}</span>
                     {counts}
-                  </summary>
-                  {lines |> List.map (fun ((terminalId, block), _) -> blockChip terminalId block)}
-                </details>"""
+                  </span>
+                  {body}
+                </div>"""
         // Where a chapter opens: a rule across the column carrying what it is called, above
         // the item it opens at and outside whatever author group that item belongs to — a
         // divider folded into a group would be a line drawn inside somebody's turn rather

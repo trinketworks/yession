@@ -481,6 +481,9 @@ type FoldKey =
     | ToolRun of ToolUseId
     /// One call's input and output, under its line.
     | ToolCall of ToolUseId
+    /// One agent burst's commands, under "ran n commands" — keyed by the turn, since a task
+    /// card groups everything the turn ran into one row rather than one per call.
+    | Task of AgentTurnId
 
 module FoldKey =
 
@@ -490,6 +493,7 @@ module FoldKey =
         | FoldKey.Act id -> "act-" + MessageId.value id
         | FoldKey.ToolRun id -> "run-" + ToolUseId.value id
         | FoldKey.ToolCall id -> "call-" + ToolUseId.value id
+        | FoldKey.Task id -> "task-" + AgentTurnId.value id
 
 type ClientModel =
     { Peer          : PeerState
