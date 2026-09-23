@@ -2,6 +2,7 @@ namespace Yession.App
 
 open Lit
 open Yession.Domain
+open Yession.Domain.Content
 
 /// How a thing the session names is shown, wherever it is shown.
 ///
@@ -78,6 +79,7 @@ module Entity =
         | EntityRef.Connection _ -> "connection"
         | EntityRef.Sandbox _ -> "sandbox"
         | EntityRef.Pr _ -> "pr"
+        | EntityRef.Artifact _ -> "artifact"
 
     /// What a reference is called on a screen, in a sentence attributed to `by`. A person by
     /// the name the roster knows; a repo by `owner/repo` — the host is the mark's to say,
@@ -101,17 +103,28 @@ module Entity =
             | RepoOwned _, _ -> SandboxRef.render sandbox
             | SessionOwned, _ -> SandboxName.value (SandboxRef.name sandbox)
         | EntityRef.Pr pr -> PrRef.render pr
+        // The NAME, not the version: a person shares `chart.png` and reads about `chart.png`,
+        // and which version it was is the particular the act already says ("version 4"). Prose
+        // keeps the pinned address either way (`EntityRef.said`), because an agent quoting one
+        // has to say which bytes it means.
+        | EntityRef.Artifact artifact -> ArtifactRef.name artifact
 
     /// Where a reference leads, when it is somewhere a person can go. A repository is a page
     /// on its host; a person and a connection are not places. The one spelling of the URL
     /// lives with the type (`RepoRef.cloneUrl` is git's; this is the page's).
+    ///
+    /// An artifact leads INSIDE the session, and nothing serves it yet: the route and the pane
+    /// that opens one are the next piece of this feature, and a chip that linked to a path no
+    /// handler answers would be a broken link on the timeline rather than an unfinished one. So
+    /// it draws as the reference it is until there is somewhere to go.
     let href (entity: EntityRef) : string option =
         match entity with
         | EntityRef.Repo repo -> Some (sprintf "https://github.com/%s" (RepoRef.value repo))
         | EntityRef.Pr pr -> Some (PrRef.url pr)
         | EntityRef.Actor _
         | EntityRef.Connection _
-        | EntityRef.Sandbox _ -> None
+        | EntityRef.Sandbox _
+        | EntityRef.Artifact _ -> None
 
     /// One reference, drawn: its mark and its name, inline, the same wherever a sentence
     /// points at it. `data-entity` carries the prose spelling (`EntityRef.said`), so a test
@@ -142,6 +155,16 @@ module Entity =
                 html $"""<span class="{Style.entityMark}" aria-hidden="true">{connectionMark connection}</span>"""
             | EntityRef.Sandbox _ -> html $"""<span class="{Style.entityMark}" aria-hidden="true">{Icon.sandboxSm}</span>"""
             | EntityRef.Pr _ -> html $"""<span class="{Style.entityMark}" aria-hidden="true">{Icon.prSm}</span>"""
+            // The mark says which KIND of content this is, because that is what decides what
+            // tapping it does: a picture opens in the pane, anything else downloads. Read off
+            // the name's media type (`ContentKind`), which is the same rule the pane will use —
+            // one answer, so the chip cannot promise a view the pane will not give.
+            | EntityRef.Artifact artifact ->
+                let glyph =
+                    match ContentKind.ofMediaType (ArtifactRef.mediaType artifact) with
+                    | ContentKind.Image _ -> Icon.imageSm
+                    | ContentKind.Download -> Icon.fileSm
+                html $"""<span class="{Style.entityMark}" aria-hidden="true">{glyph}</span>"""
         match href entity with
         | Some url ->
             html

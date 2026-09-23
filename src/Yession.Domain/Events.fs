@@ -6,6 +6,7 @@ open Yession.Domain.Agent
 open Yession.Domain.Chat
 open Yession.Domain.Sandboxes
 open Yession.Domain.Files
+open Yession.Domain.Artifacts
 open Yession.Domain.Tools
 open Yession.Domain.Link
 open Yession.Domain.Repos
@@ -131,6 +132,11 @@ type SessionEvent =
     // A file changed through `edit_file` or `write_file` (the file verbs): which file, how
     // much, and for an edit the change itself. Recorded after the write landed.
     | FileChanged of FileChanged
+    // An artifact version shared into the session: what the pane can show and a message can
+    // link to. One event for the share and the update, because the version number already
+    // distinguishes them (`ArtifactShared`) and the bytes are immutable once written — so there
+    // is no later event about this version to reconcile with this one.
+    | ArtifactShared of ArtifactShared
     // The approval gate's refusal (Plan 15, stage 3). Only the refusal: an approval is
     // recorded on the event of the command it released.
     | CommandRefused of CommandRefused
