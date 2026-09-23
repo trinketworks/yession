@@ -113,6 +113,14 @@ module private ToolArgs =
                 get.Optional.Field "sandbox" Decode.string |> Option.filter (fun s -> s <> "")))
             json
 
+    /// `share_artifact`'s three: the file to share, what to call it here, and which sandbox
+    /// it is in. The name is optional because the file already has one, and carrying it over
+    /// keeps the extension the media type is read from.
+    let artifactShare (json: string) : Result<string * string option * string option, string> =
+        let some (key: string) (get: Decode.IGetters) =
+            get.Optional.Field key Decode.string |> Option.filter (fun s -> s <> "")
+        read (Decode.object (fun get -> get.Required.Field "path" Decode.string, some "name" get, some "sandbox" get)) json
+
     /// `search_files`'s four: the pattern, where, which names, which sandbox.
     let fileSearch (json: string) : Result<string * string option * string option * string option, string> =
         let some (key: string) (get: Decode.IGetters) =
@@ -516,6 +524,23 @@ module AgentTools =
                 | Error e -> return sprintf "could not write %s: %s" path e
             })
 
+    /// Sharing is a command like a write, and reads like one: the gate's renderer says what
+    /// happened, and the dispatch's own sentence carries the address the version got — which
+    /// is the one thing the caller cannot work out, because it did not choose it.
+    let private shareArtifact
+        (capabilities: AgentCapabilities)
+        (path: string)
+        (name: string option)
+        (sandbox: string option)
+        : Async<string> =
+        let raw = sandbox |> Option.defaultValue (SandboxRef.render SandboxRef.defaultRef)
+        withSandbox raw (fun sandbox ->
+            async {
+                match! capabilities.Artifacts.Share sandbox path name with
+                | Ok outcome -> return renderCommandOutcome outcome
+                | Error e -> return sprintf "could not share %s: %s" path e
+            })
+
     let private searchFiles
         (capabilities: AgentCapabilities)
         (pattern: string)
@@ -901,6 +926,19 @@ module AgentTools =
                       match ToolArgs.fileWrite args with
                       | Error e -> return Error e
                       | Ok (path, content, sandbox) -> return! ok (writeFile capabilities path content sandbox)
+                  })
+
+          tool
+              "share_artifact"
+              "Share a file with the people here — an image you plotted, a screenshot, a report. Takes a path in a sandbox (as read_file takes them) and copies it into the session's artifacts, which everyone can see and nobody has to have a sandbox to read. Answers with the address the copy got, `file:///artifacts/<name>/<version>`: write that in a message to point at it. Sharing the same name again does NOT overwrite it — it adds a version, and the older ones stay where they are, so an address you have already written keeps showing what it showed. At most 100 MB a file; the refusal says how big yours is. The `artifacts` query lists what has been shared."
+              [ ToolField.required "path" "string" "the file to share, e.g. \"$TMPDIR/chart.png\" — as read_file takes a path"
+                ToolField.optional "name" "string" "what to call it here, e.g. \"coverage.png\"; omit to keep the file's own name (which is where the file type is read from)"
+                ToolField.optional "sandbox" "string" "the work sandbox the file is in; omit for the default one" ]
+              (fun args ->
+                  async {
+                      match ToolArgs.artifactShare args with
+                      | Error e -> return Error e
+                      | Ok (path, name, sandbox) -> return! ok (shareArtifact capabilities path name sandbox)
                   })
 
           tool

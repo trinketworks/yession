@@ -27,6 +27,7 @@ module Yession.Host.Commands
 
 open Yession.Domain
 open Yession.Domain.Sandboxes
+open Yession.Domain.Content
 open Yession.Domain.Agent
 open Yession.Domain.Files
 open Yession.Domain.Tools
@@ -53,6 +54,8 @@ type CommandServices =
       Terminals : unit -> SessionTerminals.SessionTerminals
       /// The files inside each sandbox, for the two commands that change one.
       Files : unit -> SessionFiles.SessionFiles
+      /// The session's artifacts, for the one command that adds to them.
+      Artifacts : unit -> Artifacts.SessionArtifacts
       /// Queueing a command as a recorded block — the same door `execute_command` goes
       /// through, which is the point: a sandbox's declared `setup:` is a command somebody
       /// can watch, edit before it runs, and read the outcome of afterwards, not a private
@@ -148,6 +151,7 @@ let private stopWorkSandboxTool = "stop_work_sandbox"
 let private setShellProfileTool = "set_shell_profile"
 let private editFileTool = "edit_file"
 let private writeFileTool = "write_file"
+let private shareArtifactTool = "share_artifact"
 
 /// One `start_work_sandbox` call, built where the dispatch entry that reads it lives.
 ///
@@ -645,6 +649,43 @@ let dispatch (services: CommandServices) : CommandDispatch =
                         | Error reason -> return Error reason
                         | Ok () -> return Ok (sprintf "wrote %s (%d lines)" path (List.length (FileSlice.lines content)))
                 | other -> return Error (sprintf "write_file takes a sandbox, a path and the content, got %d arguments" (List.length other))
+            }
+
+          // Sharing a file with the people here. The gate sees the source path and the name
+          // asked for; which VERSION it becomes is minted on the far side, by the store, after
+          // the verdict — so an approval is never for an address that has since been taken.
+          shareArtifactTool,
+          fun (invocation: GatedInvocation) ->
+            async {
+                let named (values: string list) =
+                    match values with
+                    | [ rawName; path ] -> Ok (rawName, path, None)
+                    | [ rawName; path; name ] -> Ok (rawName, path, Some name)
+                    | other ->
+                        Error (
+                            sprintf
+                                "share_artifact takes a sandbox, a path and an optional name, got %d arguments"
+                                (List.length other))
+                match named (decodeArgs invocation.Args) with
+                | Error e -> return Error e
+                | Ok (rawName, path, name) ->
+                    match SandboxRef.parse rawName with
+                    | Error e -> return Error (sprintf "not a sandbox: %s" e)
+                    | Ok sandbox ->
+                        match! (services.Artifacts ()).Share (Authority.author invocation.Authority) sandbox path name with
+                        | Error reason -> return Error reason
+                        | Ok shared ->
+                            services.Invalidate Artifacts.queryName
+                            // The address is the one thing the caller could not have worked
+                            // out, because it did not choose it — so it is what the answer
+                            // leads with.
+                            return
+                                Ok (
+                                    sprintf
+                                        "shared %s as %s (%s)"
+                                        path
+                                        (ArtifactRef.url shared.Ref)
+                                        (ContentSize.render shared.Bytes))
             } ]
 
 /// How a PERSON puts the first repo into a session — the launch surface's one act, and the
@@ -927,8 +968,28 @@ let private fileCapabilitiesFor (turnActor: Principal) (capabilities: AgentCapab
                 fun sandbox path content ->
                   gated writeFileTool [ SandboxRef.render sandbox; path; content ] (FileEdit.writeSummary path content) } }
 
+/// Sharing a file with everyone here, as a gated call. The summary names the file and what it
+/// will be called — never a version, because none exists yet: the store mints it past the
+/// gate, so what is approved is "share this file under this name" and not an address that
+/// could be stale by the time the verdict lands.
+let private artifactCapabilitiesFor (turnActor: Principal) (capabilities: AgentCapabilities) : AgentCapabilities =
+    { capabilities with
+        Artifacts =
+          { ArtifactCapabilities.Share =
+              fun sandbox path name ->
+                let summary =
+                    match name with
+                    | Some name -> sprintf "share_artifact %s as %s" path name
+                    | None -> sprintf "share_artifact %s" path
+                capabilities.RunGated
+                    { Tool = shareArtifactTool
+                      Args = encodeArgs ([ SandboxRef.render sandbox; path ] @ Option.toList name)
+                      Summary = summary
+                      Authority = Authority.agentFor turnActor } } }
+
 let bindFor (services: CommandServices) (turnActor: Principal) (capabilities: AgentCapabilities) : AgentCapabilities =
     capabilities
     |> repoCapabilitiesFor services turnActor
     |> sandboxCapabilitiesFor turnActor
     |> fileCapabilitiesFor turnActor
+    |> artifactCapabilitiesFor turnActor

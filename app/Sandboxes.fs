@@ -19,6 +19,7 @@ open Fable.NodeExtras
 open Fable.SandboxRuntime
 open Node.ChildProcess
 open Yession.Domain
+open Yession.Domain.Content
 open Yession.Domain.Sandboxes
 
 /// Abbreviated rather than opened: the SDK's `SpawnOptions` and `Fable.NodeExtras`' are two
@@ -191,6 +192,30 @@ module SessionLayout =
     let reposDir (dataDir: string) : string =
         sprintf "%s/repos" (workspaceFor dataDir SandboxRef.defaultRef)
 
+    /// The session's CONTENT root: everything the side pane can be asked to show, and what a
+    /// `file:///` reference is relative to (`ContentRef`).
+    ///
+    /// It is the default sandbox's workspace — the directory `repos` already sits in — rather
+    /// than a new place of its own. That is the whole reason artifacts need no second address
+    /// space: `repos/owner/name/src/A.fs` and `artifacts/chart.png/0000-7f2a91` are two paths
+    /// under one root, so showing a repo file later is this same route with a different first
+    /// segment.
+    let contentDir (dataDir: string) : string = workspaceFor dataDir SandboxRef.defaultRef
+
+    /// Where the artifacts an agent has shared are kept, on THIS filesystem: one directory per
+    /// name, one file per version (`ArtifactRef`). Under the content root, so the path a chip
+    /// links to and the path on disk are the same string with the root cut off.
+    let artifactsDir (dataDir: string) : string =
+        sprintf "%s/%s" (contentDir dataDir) ArtifactRef.root
+
+    /// Make it, and answer with it — the shape `prepareReposDir` has, for the same reason: a
+    /// caller that had to remember to create it first is a caller that can share into a
+    /// directory that is not there.
+    let prepareArtifactsDir (dataDir: string) : string =
+        let dir = artifactsDir dataDir
+        Fs.ensureDir dir
+        dir
+
     /// What the SESSION gives a sandbox of its own filesystem, and what it leaves to the
     /// backend.
     ///
@@ -227,7 +252,7 @@ module SessionLayout =
     ///
     /// The host family works in directories this session makes and owns. A CONTAINER
     /// brings its own filesystem — the image has a home, the spec's `workdir` says where a
-    /// terminal starts, and the checkouts arrive as a bind mount (`withSessionRepos`)
+    /// terminal starts, and the checkouts arrive as a bind mount (`withSessionShares`)
     /// rather than as a host path it could not reach anyway — so the session contributes
     /// none of the three, and that is said once here instead of three times wherever a
     /// sandbox is composed.
@@ -360,6 +385,21 @@ let checkoutViewsAt (declared: string option) (reposDir: string) (repo: RepoRef)
     { InSandbox = workCheckoutAt declared reposDir repo
       OnHost = sprintf "%s/%s" reposDir (RepoRef.relativePath repo) }
 
+/// Where the session's artifacts directory is reachable from INSIDE a work sandbox — the
+/// same story as `reposVisibleAt` one directory over, and the reason a share needs no bytes
+/// to cross this process: the sandbox copies the file into a directory the host is holding
+/// open, and the host reads what landed.
+///
+/// No `declared` counterpart, unlike the checkouts: `repos:` exists because a repo's own
+/// toolchain may expect its sources somewhere particular, and nothing in a sandbox is built
+/// against the artifacts directory. It is a drop box, and a drop box a sandbox could move
+/// would be one the store might not be watching.
+let artifactsVisibleAt (backend: SandboxBackend) (hostArtifactsDir: string) : string =
+    match backend with
+    | HostBackend
+    | SrtBackend -> hostArtifactsDir
+    | DockerBackend -> "/artifacts"
+
 /// What the SESSION adds to whatever was asked for. The checkouts are the session's,
 /// shared by every sandbox in it, so they are not part of anybody's ask: a repo that
 /// declared its own `dev` did not decline to see the repos directory.
@@ -373,7 +413,16 @@ let checkoutViewsAt (declared: string option) (reposDir: string) (repo: RepoRef)
 /// It lives HERE, beside `reposVisibleAt`, because the mount and the paths that answer
 /// for it must name the same place — and because the dev-container suite drives this
 /// exact assembly rather than a hand-kept copy of it.
-let withSessionRepos (reposDir: string) (backend: SandboxBackend) (requested: EnvironmentSpec) : EnvironmentSpec =
+/// Both of the session's shared directories in ONE verb, because they are one fact: what
+/// every sandbox in this session sees of it. A caller that added the checkouts and forgot
+/// the artifacts would leave `share_artifact` copying into a directory that exists only
+/// inside the container — a share that reports success and shows nothing.
+let withSessionShares
+    (reposDir: string)
+    (artifactsDir: string)
+    (backend: SandboxBackend)
+    (requested: EnvironmentSpec)
+    : EnvironmentSpec =
     match backend with
     | DockerBackend ->
         let container =
@@ -391,6 +440,9 @@ let withSessionRepos (reposDir: string) (backend: SandboxBackend) (requested: En
                                   // resolved against — one function, so the mount and the
                                   // paths that answer for it cannot name two places.
                                   Target = reposVisibleAt requested.ReposAt backend reposDir
+                                  Mode = ReadWrite }
+                                { Source = HostPath artifactsDir
+                                  Target = artifactsVisibleAt backend artifactsDir
                                   Mode = ReadWrite } ] } }
     | HostBackend
     | SrtBackend -> requested

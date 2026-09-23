@@ -26,6 +26,8 @@ open Yjs
 open Yession.Domain
 open Yession.Domain.Sandboxes
 open Yession.Domain.Agent
+open Yession.Domain.Content
+open Yession.Domain.Artifacts
 open Yession.Domain.Files
 open Yession.Domain.Collab
 open Yession.Domain.Prs
@@ -173,6 +175,7 @@ let private servicesOver (service: Repos.ReposService) : Commands.CommandService
               OnHost = "/data/repos/" + RepoRef.relativePath repo }
       Terminals = fun () -> SessionTerminals.unavailable
       Files = fun () -> SessionFiles.unavailable
+      Artifacts = fun () -> Artifacts.unavailable
       RunCommand = fun () -> TerminalCommands.unavailable
       Prs = fun () -> None
       Invalidate = ignore
@@ -789,4 +792,87 @@ let private fileTests =
             }
     ]
 
-let tests = testList "Tool calls" [ tests'; fileTests; launchTests ]
+/// The artifact verb, driven the way a turn drives it: the tool, the gate, the dispatch, and
+/// the store at the far end. What is pinned here is the JOIN — that the path and the name
+/// survive the encoding, that the sandbox defaults to the one everybody works in, and that the
+/// address the store minted is what comes back, since it is the one thing the caller could not
+/// have worked out for itself.
+let private artifactTests =
+    let stamp =
+        match ArtifactStamp.create "7f2a1c" with
+        | Ok s -> s
+        | Error e -> failwithf "stamp: %s" e
+
+    let digest =
+        match ContentDigest.create (String.replicate 64 "a") with
+        | Ok d -> d
+        | Error e -> failwithf "digest: %s" e
+
+    /// A store that records what it was asked and answers as if the bytes had landed.
+    let servicesSharing (seen: ResizeArray<SandboxRef * string * string option>) (result: string -> Result<ArtifactRef, string>) =
+        { servicesOver (reposAnswering (fun _ -> async { return Error "not part of this test" })) with
+            Artifacts =
+                fun () ->
+                    { Artifacts.unavailable with
+                        Share =
+                            fun actor sandbox path name ->
+                                async {
+                                    seen.Add (sandbox, path, name)
+                                    let asked = name |> Option.defaultValue (Artifacts.nameOfPath path)
+                                    match result asked with
+                                    | Error e -> return Error e
+                                    | Ok ref ->
+                                        return
+                                            Ok
+                                                { ArtifactShared.MessageId = MessageId.create "m1" |> Result.toOption |> Option.get
+                                                  ArtifactShared.Ref = ref
+                                                  ArtifactShared.MediaType = ArtifactRef.mediaType ref
+                                                  ArtifactShared.Bytes = 2048L
+                                                  ArtifactShared.Digest = digest
+                                                  ArtifactShared.Actor = actor }
+                                } } }
+
+    let firstVersion (name: string) = ArtifactRef.first name stamp
+
+    testList
+        "artifacts"
+        [ testCaseAsync "a share_artifact answers with the address the store minted" <|
+            async {
+                let seen = ResizeArray ()
+                let session = openToolSession (servicesSharing seen firstVersion)
+                let! answer = session.Call "share_artifact" """{"path":"out/chart.png"}"""
+                let sandbox, path, name = Seq.exactlyOne seen
+                Expect.equal sandbox SandboxRef.defaultRef "the sandbox everybody works in, when none was said"
+                Expect.equal path "out/chart.png" "the file, as the sandbox takes it"
+                Expect.equal name None "no name asked for — the store takes the file's own"
+                let text = answered answer
+                Expect.stringContains text "file:///artifacts/chart.png/0000-7f2a1c" "the address it got"
+                // 2048 bytes in the decimal units ContentSize.render speaks, so the size beside an
+                // address reads in the same units as the cap a refusal quotes.
+                Expect.stringContains text "2.05 kB" "and how big it is"
+            }
+
+          testCaseAsync "a name and a sandbox survive the gate's encoding" <|
+            async {
+                let seen = ResizeArray ()
+                let session = openToolSession (servicesSharing seen firstVersion)
+                let! _ = session.Call "share_artifact" """{"path":"/tmp/x.png","name":"coverage.png","sandbox":"dev"}"""
+                let sandbox, path, name = Seq.exactlyOne seen
+                Expect.equal (SandboxRef.render sandbox) "dev" "the sandbox asked for"
+                Expect.equal path "/tmp/x.png" "the file"
+                Expect.equal name (Some "coverage.png") "what to call it here"
+            }
+
+          // The cap is the store's to enforce and its wording is what the agent acts on, so the
+          // refusal comes back whole rather than as "the command failed".
+          testCaseAsync "a refusal comes back in the store's own words" <|
+            async {
+                let seen = ResizeArray ()
+                let session =
+                    openToolSession (servicesSharing seen (fun _ -> Error "big.iso is 4.1 GB, and an artifact may be at most 100 MB"))
+                let! answer = session.Call "share_artifact" """{"path":"big.iso"}"""
+                Expect.stringContains (answered answer) "at most 100 MB" "the cap, as the store said it"
+            }
+        ]
+
+let tests = testList "Tool calls" [ tests'; fileTests; artifactTests; launchTests ]

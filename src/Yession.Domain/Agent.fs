@@ -744,6 +744,23 @@ type FileCapabilities =
       Search : SearchFiles
       Find : FindFiles }
 
+/// Share a file out of a sandbox into the session's artifacts, as a new version of a name
+/// (the file's own name when none is given). A COMMAND, like the file verbs: it puts bytes
+/// everyone here can see and a sentence on the timeline, so it passes the gate and answers
+/// with a `CommandOutcome` a refusal can ride.
+///
+/// The agent never names a version. Which seq a share takes, and which peer's stamp breaks a
+/// tie, is the store's to mint (`ArtifactRef`) — a caller that could propose an address could
+/// propose one that already holds other bytes, and an artifact is immutable.
+type ShareArtifact = SandboxRef -> string -> string option -> Async<Result<CommandOutcome, string>>
+
+/// what a turn may do to the session's artifacts. One verb, because LISTING them is the
+/// `artifacts` query — one declaration, two audiences, as `list_repos` stopped being a tool
+/// to become one.
+[<RequireQualifiedAccess>]
+type ArtifactCapabilities =
+    { Share : ShareArtifact }
+
 /// the session's read-only queries, and how to answer one.
 type QueryCapabilities =
       /// The session's read-only queries (Plan 15), declared once and surfaced to the
@@ -788,6 +805,7 @@ type AgentCapabilities =
       Repos : RepoCapabilities
       Sandboxes : SandboxCapabilities
       Files : FileCapabilities
+      Artifacts : ArtifactCapabilities
       Queries : QueryCapabilities
       Tools : ToolCapabilities
       RunGated : RunGatedCommand }
@@ -832,6 +850,8 @@ module AgentCapabilities =
               FileCapabilities.Write = fun _ _ _ -> async { return Error "no file capability" }
               FileCapabilities.Search = fun _ _ _ _ -> async { return Error "no file capability" }
               FileCapabilities.Find = fun _ _ _ -> async { return Error "no file capability" } }
+          Artifacts =
+            { ArtifactCapabilities.Share = fun _ _ _ -> async { return Error "no artifact capability" } }
           Queries =
             { Declared = []
               Read = fun _ -> async { return Error "no query capability" } }

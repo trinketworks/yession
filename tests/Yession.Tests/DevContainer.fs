@@ -71,15 +71,20 @@ let private reposDirWith (checkout: string -> unit) : string =
 /// The `dev` request exactly as the session builds it: this repo's own file through the
 /// real decoder, the workdir resolved against the CONTAINER's view of the checkout
 /// (`workCheckoutAt`), and the one thing the session adds — the /repos bind — through
-/// the same `withSessionRepos` the session calls, not a hand-kept copy of it.
+/// the same `withSessionShares` the session calls, not a hand-kept copy of it.
 let private declaredDev (reposDir: string) : EnvironmentSpec =
+    // The session's other shared directory, beside the checkouts because that is where the
+    // layout puts it. Created here for the same reason the session creates it at boot: a
+    // bind source that does not exist is one docker invents, owned by root.
+    let artifactsDir = reposDir + "/../artifacts"
+    TestFiles.ensureDir artifactsDir
     let file = RepoConfig.read reposDir repoRef |> expect |> Option.get
     let decl = file.Sandboxes |> Map.find (SandboxName.create "dev" |> expect)
     let request = SandboxDecl.toRequest (Some (Sandboxes.checkoutViewsAt None reposDir repoRef)) decl |> expect
     match request.Spec.Runtime with
     | Container _ -> ()
     | Confinement -> failwith "yession.yaml declares no container, and a repo work sandbox is one"
-    Sandboxes.withSessionRepos reposDir DockerBackend request.Spec
+    Sandboxes.withSessionShares reposDir artifactsDir DockerBackend request.Spec
 
 /// The same, minus the entrypoint. The file's entrypoint assembles the devshell from the
 /// flake, and the backend runs it once at start to find the shell — so a container with it
