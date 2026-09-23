@@ -112,6 +112,17 @@ module Act =
         | Act.PrUnwatched _
         | Act.PrTransitioned _ -> []
 
+    /// The person `forWhom` names, when it names one — for a reader that has to know WHO,
+    /// not how to say it.
+    let onBehalfOf (act: Act) : Principal option =
+        match act with
+        | Act.SandboxStarting s -> s.OnBehalfOf
+        | Act.SandboxStarted s -> s.OnBehalfOf
+        | Act.SandboxStartFailed s -> s.OnBehalfOf
+        | Act.ShellProfileSet p -> p.OnBehalfOf
+        | Act.CredentialSpent g -> CredentialFor.person g.Owner
+        | _ -> None
+
     /// The headline: the one sentence a reader lands on — the deed, then who it was for.
     let phrase (act: Act) : Phrase = deed act @ forWhom act
 

@@ -131,6 +131,30 @@ module ConversationItem =
     /// It lives here rather than in each of those readers for the ordinary reason: a rule
     /// about how an act's two halves compose is a rule about the act, and a caller that had
     /// to remember to ask for the second half is a caller that will one day not.
+    /// Who an item's cause names as the one who caused it: the author of the item it points
+    /// to, or the person who connected. `None` when the cause names nobody, or points at an
+    /// item that is not among `items`.
+    let causer (items: ConversationItem list) (item: ConversationItem) : ActorRef option =
+        match item.CausedBy with
+        | Some (Cause.Item target) ->
+            items |> List.tryFind (fun i -> i.MessageId = target) |> Option.map (fun i -> i.Author)
+        | Some (Cause.Connected principal) -> Some (Principal.toActor principal)
+        | Some Cause.Booted
+        | None -> None
+
+    /// Who an act was for, as a screen that also draws its cause says it: `Act.forWhom`,
+    /// unless the cause already names that person. "started sandbox gate for Nick" over
+    /// "Nick added repo …" says Nick twice; the cause is the fuller account, so it keeps
+    /// him. A cause that names somebody else, or nobody, leaves the clause as it was.
+    let forWhom (items: ConversationItem list) (item: ConversationItem) : Phrase =
+        match item.Content with
+        | ItemContent.Act act ->
+            match Act.onBehalfOf act, causer items item with
+            | Some person, Some named when Principal.toActor person = named -> []
+            | _ -> Act.forWhom act
+        | ItemContent.Message _
+        | ItemContent.Stopped _ -> []
+
     let said (item: ConversationItem) : string =
         match item.Content with
         | ItemContent.Message body -> body
