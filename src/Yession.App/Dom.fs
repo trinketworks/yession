@@ -652,9 +652,6 @@ module Dom =
         /// Stands where the quoted message would be when the ref points past the loaded page —
         /// the reply is real, its cause simply is not on screen yet.
         let replyRefMissing = "earlier message"
-        /// The word between an act and the person it was done for: "started sandbox dev
-        /// for Ada".
-        let actFor = "for"
         /// What a screen reader hears before an act's cause: "Caused by: Ada added repo
         /// octo/hello".
         let causedBy = "Caused by:"

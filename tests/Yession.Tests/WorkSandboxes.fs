@@ -986,7 +986,7 @@ let private timelineTests =
             let proj, _ = ConversationProjection.applyEvents None [ envelope ] ConversationProjection.empty
             match proj.Items with
             | [ item ] ->
-                Expect.equal (ConversationItem.headline item) "pushed to github:octo/hello on behalf of user:ada" "where, and for whom — the act first, the credential's owner after it"
+                Expect.equal (ConversationItem.headline item) "pushed to github:octo/hello for user:ada" "where, and for whom — the act first, the credential's owner after it"
                 Expect.equal item.Author ActorRef.Agent "by whoever's act the block was"
                 Expect.isTrue (isAct item) "an act"
             | other -> failwithf "expected one note, got %A" other
@@ -1006,7 +1006,7 @@ let private timelineTests =
                   Repo = RepoRef.create "octo/hello" |> expect
                   Actor = ActorRef.Agent }
             Expect.equal
-                (Phrase.refs (GitCredentialSpent.phrase spent))
+                (Phrase.refs (Act.phrase (Act.CredentialSpent spent)))
                 [ EntityRef.Repo (RepoRef.create "octo/hello" |> expect); EntityRef.Actor (UserRef ada) ]
                 "the repository, then the person — in the order the sentence names them"
 
@@ -1022,12 +1022,12 @@ let private timelineTests =
                   Repo = RepoRef.create "octo/hello" |> expect
                   Actor = ActorRef.Agent }
             Expect.equal
-                (Phrase.refs (GitCredentialSpent.phrase spent))
+                (Phrase.refs (Act.phrase (Act.CredentialSpent spent)))
                 [ EntityRef.Repo (RepoRef.create "octo/hello" |> expect) ]
                 "one reference"
             Expect.equal
-                (Phrase.said (GitCredentialSpent.phrase spent))
-                "pushed to github:octo/hello on behalf of this deployment"
+                (Phrase.said (Act.phrase (Act.CredentialSpent spent)))
+                "pushed to github:octo/hello for this deployment"
                 "and the deployment in words"
 
         // No block says what ran when the push was typed under a lease, so the line says
@@ -1052,8 +1052,8 @@ let private timelineTests =
             match proj.Items with
             | [ item ] ->
                 Expect.equal
-                    (ConversationItem.headline item)
-                    "pushed to github:octo/hello on behalf of user:ada, holding the terminal"
+                    (ConversationItem.said item)
+                    "pushed to github:octo/hello for user:ada — holding the terminal"
                     "whose, where, and that it was typed rather than queued"
             | other -> failwithf "expected one note, got %A" other
 
