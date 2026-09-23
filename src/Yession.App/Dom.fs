@@ -655,6 +655,17 @@ module Dom =
         /// The word between an act and the person it was done for: "started sandbox dev
         /// for Ada".
         let actFor = "for"
+        /// What a screen reader hears before an act's cause: "Caused by: Ada added repo
+        /// octo/hello".
+        let causedBy = "Caused by:"
+        /// The accessible name of the mark that jumps to the cause. It says what it does.
+        let causeJumpLabel = "Go to the cause"
+        /// A cause that has scrolled out of what is loaded. It was real; it is not on screen.
+        let causeMissing = "an earlier item"
+        /// The cause when the session starting brought a sandbox up.
+        let causeBooted = "The session started"
+        /// The verb after the person whose credential arrived: "Ada connected".
+        let causeConnected = "connected"
         /// The accessible name of the ref, said in full for a reader who does not get the
         /// quote's visual context.
         let replyRefLabel = "In reply to"

@@ -141,7 +141,12 @@ let openToolSession (services: Commands.CommandServices) : ToolSession =
 /// everything else — the leaf substituted, and nothing above it.
 let private reposAnswering (add: RepoRef -> Async<Result<RepoListing, string>>) : Repos.ReposService =
     let denied _ = async { return Error "not part of this test" }
-    { AddRepo = fun _ repo -> add repo
+    { AddRepo =
+        fun _ repo ->
+            async {
+                let! added = add repo
+                return added |> Result.map (fun listing -> { Repos.Recorded.Answer = listing; Repos.Recorded.RecordedAs = None })
+            }
       ListRepos = fun () -> async { return Ok [] }
       SwitchBranch = fun _ _ _ _ -> async { return Error "not part of this test" }
       FetchRepo = fun _ _ -> async { return Error "not part of this test" }
@@ -172,7 +177,7 @@ let private servicesOver (service: Repos.ReposService) : Commands.CommandService
       Prs = fun () -> None
       Invalidate = ignore
       NoteSetup = fun _ _ _ _ -> async { return () }
-      Refold = fun _ -> async { return () } }
+      Refold = fun _ _ -> async { return () } }
 
 /// The same, with a shell profile already set for the default sandbox — a session where
 /// somebody has already said where terminals start.
@@ -218,7 +223,7 @@ let private answered (result: Result<string, string>) : string =
 let private registryReporting (outcome: WorkSandboxes.RunningSandbox -> WorkSandboxes.SandboxOutcome) (spec: EnvironmentSpec) =
     { WorkSandboxes.unavailable with
         Ensure =
-            fun _ name _ ->
+            fun _ _ name _ ->
                 async {
                     return
                         Ok (
@@ -274,6 +279,29 @@ let private tests' =
                 let text = answered answer
                 Expect.stringContains text "added octo/hello" "the service's own words came back"
                 Expect.isFalse (text.Contains "WAITING") "nobody was waiting on anything"
+            }
+
+        // A sandbox the add brings up points back to the add, so the fold after it is told
+        // which item the add recorded, and for which repo.
+        testCaseAsync "add_repo refolds with the item it recorded" <|
+            async {
+                let hello = RepoRef.create "octo/hello" |> expect
+                let added = MessageId.create "m-added" |> expect
+                let folds = ResizeArray<FoldCause> ()
+                let repos =
+                    { reposAnswering (fun _ -> async { return Error "not this one" }) with
+                        AddRepo =
+                            fun _ repo ->
+                                async {
+                                    return
+                                        Ok
+                                            { Repos.Recorded.Answer = { Repo = repo; Branch = "main"; Dirty = false; Path = "/repos/octo/hello" }
+                                              Repos.Recorded.RecordedAs = Some added }
+                                } }
+                let session =
+                    openToolSession { servicesOver repos with Refold = fun cause _ -> async { folds.Add cause } }
+                let! _ = addRepo session "octo/hello"
+                Expect.equal (List.ofSeq folds) [ FoldCause.Changed (hello, Some added) ] "the fold knows what the add recorded"
             }
 
         // The answer has to carry the one fact the next step needs. "added octo/hello" on
@@ -500,7 +528,7 @@ let private reposHolding (initial: RepoListing list) (clone: RepoRef -> Result<R
                     | Error e -> return Error e
                     | Ok listing ->
                         listings <- listings @ [ listing ]
-                        return Ok listing
+                        return Ok { Repos.Recorded.Answer = listing; Repos.Recorded.RecordedAs = None }
                 }
           ListRepos = fun () -> async { return Ok listings }
           SwitchBranch =
@@ -508,7 +536,7 @@ let private reposHolding (initial: RepoListing list) (clone: RepoRef -> Result<R
                 async {
                     calls.Add (sprintf "switch_branch %s -> %s" (RepoRef.value repo) branch, caller.Actor)
                     listings <- listings |> List.map (fun l -> if l.Repo = repo then { l with Branch = branch } else l)
-                    return Ok (listings |> List.find (fun l -> l.Repo = repo))
+                    return Ok { Repos.Recorded.Answer = listings |> List.find (fun l -> l.Repo = repo); Repos.Recorded.RecordedAs = None }
                 }
           FetchRepo = fun _ _ -> async { return Error "not part of this test" }
           RepoStatus = denied

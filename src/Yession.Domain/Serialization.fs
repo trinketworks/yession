@@ -158,6 +158,24 @@ module Codec =
                 | Some p -> Decode.succeed p
                 | None -> Decode.fail (sprintf "Not a principal: %s" (ActorRef.token a))) }
 
+    /// Why something happened, as a tagged object. A kind this version does not know fails,
+    /// so a reader is never shown a cause it made up.
+    let cause : Codec<Cause> =
+        { Encode =
+            fun (c: Cause) ->
+                match c with
+                | Cause.Item id -> Encode.object [ "kind", Encode.string "item"; "messageId", messageId.Encode id ]
+                | Cause.Booted -> Encode.object [ "kind", Encode.string "booted" ]
+                | Cause.Connected p -> Encode.object [ "kind", Encode.string "connected"; "principal", principal.Encode p ]
+          Decode =
+            Decode.field "kind" Decode.string
+            |> Decode.andThen (fun kind ->
+                match kind with
+                | "item" -> Decode.field "messageId" messageId.Decode |> Decode.map Cause.Item
+                | "booted" -> Decode.succeed Cause.Booted
+                | "connected" -> Decode.field "principal" principal.Decode |> Decode.map Cause.Connected
+                | other -> Decode.fail (sprintf "Unknown cause kind: %s" other)) }
+
     /// Whose credential: a person is the principal's tagged object, the deployment its own
     /// kind. Not an actor kind — the deployment is not a party that acts in the log, it is
     /// whose credentials an act ran on when nobody's were named — so the actor decoder is
@@ -1283,7 +1301,8 @@ module Codec =
                       "forwarded", Encode.list (p.Forwarded |> List.map (ConnectionName.value >> Encode.string))
                       "realisation", Encode.list (p.Realisation |> List.map Encode.string)
                       "actor", actor.Encode p.Actor
-                      "onBehalfOf", Encode.option principal.Encode p.OnBehalfOf ]
+                      "onBehalfOf", Encode.option principal.Encode p.OnBehalfOf
+                      "causedBy", Encode.option cause.Encode p.CausedBy ]
           Decode =
             Decode.object (fun get ->
                 { WorkSandboxStarted.MessageId = get.Required.Field "messageId" messageId.Decode
@@ -1312,7 +1331,10 @@ module Codec =
                   // Optional in: a start written before this field existed named nobody
                   // behind its actor, and nobody is what it reads back as.
                   WorkSandboxStarted.OnBehalfOf =
-                    get.Optional.Field "onBehalfOf" (Decode.option principal.Decode) |> Option.flatten }) }
+                    get.Optional.Field "onBehalfOf" (Decode.option principal.Decode) |> Option.flatten
+                  // Optional in: a start written before causes were recorded names none.
+                  WorkSandboxStarted.CausedBy =
+                    get.Optional.Field "causedBy" (Decode.option cause.Decode) |> Option.flatten }) }
 
     let private gitCredentialSpent : Codec<GitCredentialSpent> =
         { Encode =
@@ -1346,7 +1368,8 @@ module Codec =
                       "backend", Encode.string p.Backend
                       "description", Encode.option Encode.string p.Description
                       "actor", actor.Encode p.Actor
-                      "onBehalfOf", Encode.option principal.Encode p.OnBehalfOf ]
+                      "onBehalfOf", Encode.option principal.Encode p.OnBehalfOf
+                      "causedBy", Encode.option cause.Encode p.CausedBy ]
           Decode =
             Decode.object (fun get ->
                 { WorkSandboxStarting.MessageId = get.Required.Field "messageId" messageId.Decode
@@ -1356,7 +1379,10 @@ module Codec =
                     get.Optional.Field "description" (Decode.option Decode.string) |> Option.flatten
                   WorkSandboxStarting.Actor = get.Required.Field "actor" actor.Decode
                   WorkSandboxStarting.OnBehalfOf =
-                    get.Optional.Field "onBehalfOf" (Decode.option principal.Decode) |> Option.flatten }) }
+                    get.Optional.Field "onBehalfOf" (Decode.option principal.Decode) |> Option.flatten
+                  // Optional in: a start written before causes were recorded names none.
+                  WorkSandboxStarting.CausedBy =
+                    get.Optional.Field "causedBy" (Decode.option cause.Decode) |> Option.flatten }) }
 
     let private workSandboxStartFailed : Codec<WorkSandboxStartFailed> =
         { Encode =
@@ -1366,7 +1392,8 @@ module Codec =
                       "sandbox", sandboxRef.Encode p.Sandbox
                       "reason", Encode.string p.Reason
                       "actor", actor.Encode p.Actor
-                      "onBehalfOf", Encode.option principal.Encode p.OnBehalfOf ]
+                      "onBehalfOf", Encode.option principal.Encode p.OnBehalfOf
+                      "causedBy", Encode.option cause.Encode p.CausedBy ]
           Decode =
             Decode.object (fun get ->
                 { WorkSandboxStartFailed.MessageId = get.Required.Field "messageId" messageId.Decode
@@ -1374,7 +1401,10 @@ module Codec =
                   WorkSandboxStartFailed.Reason = get.Required.Field "reason" Decode.string
                   WorkSandboxStartFailed.Actor = get.Required.Field "actor" actor.Decode
                   WorkSandboxStartFailed.OnBehalfOf =
-                    get.Optional.Field "onBehalfOf" (Decode.option principal.Decode) |> Option.flatten }) }
+                    get.Optional.Field "onBehalfOf" (Decode.option principal.Decode) |> Option.flatten
+                  // Optional in: a start written before causes were recorded names none.
+                  WorkSandboxStartFailed.CausedBy =
+                    get.Optional.Field "causedBy" (Decode.option cause.Decode) |> Option.flatten }) }
 
     let private repoCapabilitiesChanged : Codec<RepoCapabilitiesChanged> =
         { Encode =

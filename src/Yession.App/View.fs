@@ -2180,6 +2180,42 @@ module View =
         // segment: the same words the agent reads, with each thing they name drawn as it is
         // drawn everywhere else on this screen — except where a screen has its own layout for
         // the act, and then the title is the screen's.
+        // Why an act happened, when that was not its author's own idea (`CausedBy`): the repo
+        // added, the session starting, a person connecting. One quiet line under the
+        // headline, said as a sentence with its references drawn. A cause still in the loaded
+        // conversation gets a jump — the same `RevealMessage` the chapter rail and a reply's
+        // ref use — on the MARK, because the sentence holds links and a link cannot sit
+        // inside a button. `data-cause-ref` is the hook a test finds it by.
+        let causeLine (item: ConversationItem) =
+            let line (mark: TemplateResult) (said: TemplateResult list) (hook: string) =
+                html $"""
+                    <div class="{Style.cls [ Style.foldContent; Style.causeRef ]}" data-cause-ref="{hook}">
+                      <span class="{Style.srOnly}">{Dom.Text.causedBy}</span>{mark}<span class="{Style.replyRefQuote}">{said}</span>
+                    </div>"""
+            let still = html $"""<span class="{Style.replyRefMark}" aria-hidden="true">↳</span>"""
+            match item.CausedBy with
+            | None -> Lit.nothing
+            | Some (Cause.Item target) ->
+                match model.Conversation.Items |> List.tryFind (fun i -> i.MessageId = target) with
+                | Some cause ->
+                    let said =
+                        match cause.Content with
+                        | ItemContent.Act act ->
+                            Entity.phrase model cause.Author (Segment.Ref (EntityRef.Actor cause.Author) :: Segment.Text " " :: Act.phrase act)
+                        | _ -> [ html $"""{ConversationItem.said cause}""" ]
+                    let jump =
+                        html $"""<button type="button" class="{Style.causeJump}" data-cause-jump aria-label="{Dom.Text.causeJumpLabel}" @click={Ev(fun _ -> actions.RevealMessage target)}>↳</button>"""
+                    line jump said (MessageId.value target)
+                | None -> line still [ html $"""{Dom.Text.causeMissing}""" ] (MessageId.value target)
+            | Some Cause.Booted -> line still [ html $"""{Dom.Text.causeBooted}""" ] "booted"
+            | Some (Cause.Connected principal) ->
+                line
+                    still
+                    (Entity.phrase
+                        model
+                        item.Author
+                        [ Segment.Ref (EntityRef.Actor (Principal.toActor principal)); Segment.Text (" " + Dom.Text.causeConnected) ])
+                    "connected"
         let actNoteItem (act: Act) (item: ConversationItem) =
             let by = item.Author
             // A slow act coming up pulses in the LEFT gutter — a quiet dot on the margin
@@ -2233,6 +2269,7 @@ module View =
                   {running}
                   {arrow}
                   <span class="{Style.cls [ Style.foldContent; Style.actNoteText ]}">{Entity.phrase model by title} {failedMark}</span>
+                  {causeLine item}
                   <div class="{Style.cls [ Style.foldContent; Style.actNoteShown ]}">{shown}</div>
                   {fold}
                 </article>"""
@@ -2313,7 +2350,7 @@ module View =
                     html $"""<div class="{Style.messageMeta}">{wokeInner}{statusInner}</div>"""
                 else Lit.nothing
             // A ref to what this reply answers, drawn ONLY when the projection judged it worth
-            // drawing (`Replying = Some`, the detached case). A quiet quoted line above the
+            // drawing (`CausedBy = Some`, the detached case). A quiet quoted line above the
             // body — the parent's own words, truncated to one line, plain not rich, so it
             // reads as the context it is and cannot grow taller than the message it heads.
             //
@@ -2323,9 +2360,13 @@ module View =
             // button; one paged off (the quote falls back to a bare label) is inert, because a
             // control that scrolls to nothing is worse than a line that never offered to.
             let replyRef =
-                match item.Replying with
-                | None -> Lit.nothing
-                | Some target ->
+                match item.CausedBy with
+                // A message is caused by another item or by nothing; what brings a sandbox
+                // up is an act's to say (`causeLine`).
+                | None
+                | Some Cause.Booted
+                | Some (Cause.Connected _) -> Lit.nothing
+                | Some (Cause.Item target) ->
                     match model.Conversation.Items |> List.tryFind (fun i -> i.MessageId = target) with
                     | Some parent ->
                         html $"""

@@ -48,7 +48,9 @@ type RepoSandboxes =
       /// asked. `None` is the fold at boot, which nobody triggered — and the one that runs
       /// again, on THEIR authority, when somebody arrives. One fold runs at a time; a
       /// second asked for while one is in flight waits for it.
-      Fold : CredentialFor -> Async<unit>
+      ///
+      /// The fold cause is why it ran, which becomes why each sandbox it starts came up.
+      Fold : FoldCause -> CredentialFor -> Async<unit>
       /// What the last fold made of each repo, in a stable order — the query's rows.
       Outcomes : unit -> FoldOutcome list
       /// Sandboxes this session is running that no file declares any more. Named rather
@@ -71,7 +73,7 @@ type RepoSandboxes =
 /// A session with nothing to fold: no repos service, or a composition without one. Total,
 /// so a caller never branches on whether the fold exists.
 let none : RepoSandboxes =
-    { Fold = fun _ -> async { return () }
+    { Fold = fun _ _ -> async { return () }
       Outcomes = fun () -> []
       Undeclared = fun () -> []
       Described = fun _ -> None
@@ -205,7 +207,7 @@ let create
     let mutable describedRefs : Map<string, string> = Map.empty
     let mutable reposAtRefs : Map<string, string> = Map.empty
 
-    let foldOnce (onBehalfOf: CredentialFor) : Async<unit> =
+    let foldOnce (cause: FoldCause) (onBehalfOf: CredentialFor) : Async<unit> =
         async {
             match repos () with
             | None ->
@@ -321,6 +323,7 @@ let create
                                     let call =
                                         Commands.startWorkSandboxCall
                                             (Authority.configuredBy repo onBehalfOf)
+                                            (FoldCause.causeFor repo cause)
                                             ref
                                             decl
                                     match! run call with
@@ -398,13 +401,13 @@ let create
     let mutable folding = false
     let waiting = System.Collections.Generic.Queue<unit -> unit> ()
 
-    let fold (onBehalfOf: CredentialFor) : Async<unit> =
+    let fold (cause: FoldCause) (onBehalfOf: CredentialFor) : Async<unit> =
         async {
             if folding then
                 do! Async.FromContinuations (fun (cont, _, _) -> waiting.Enqueue cont)
             folding <- true
             try
-                do! foldOnce onBehalfOf
+                do! foldOnce cause onBehalfOf
             finally
                 // Hand straight to the next in line, so `folding` never reads false with a
                 // fold about to start; it is the last one out that clears it.
@@ -461,11 +464,12 @@ let create
                                     (String.concat "; " asked))
                     | Some asked ->
                         let actor = Principal.toActor approver
+                        let approval = mintMessageId ()
                         do!
                             append
                                 actor
                                 (SessionEvent.RepoCapabilitiesApproved
-                                    { RepoCapabilitiesApproved.MessageId = mintMessageId ()
+                                    { RepoCapabilitiesApproved.MessageId = approval
                                       RepoCapabilitiesApproved.Repo = repo
                                       RepoCapabilitiesApproved.Granted = asked
                                       RepoCapabilitiesApproved.Actor = actor })
@@ -478,7 +482,7 @@ let create
                         // construction: it re-asks for what is already running and
                         // records nothing when nothing changed. It runs on the authority
                         // of whoever approved, which is the truth of why it ran.
-                        do! fold (CredentialFor.Person approver)
+                        do! fold (FoldCause.Changed (repo, Some approval)) (CredentialFor.Person approver)
                         return Ok ()
         }
 

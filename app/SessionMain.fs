@@ -477,10 +477,13 @@ let mutable private queryRegistry : Queries.QueryRegistry = Queries.empty
 /// told to whoever is reading. Every fold this file triggers goes through here — the
 /// boot one, a repo verb's, an arrival's — so "fold, then invalidate the two queries it
 /// feeds" is written once rather than at each of them.
-let private foldFor (authorities: CredentialFor list) : Async<unit> =
+///
+/// The fold cause is asked of each authority, because at an arrival each one is its own
+/// reason: Ada connecting is why the fold on Ada's authority ran.
+let private foldFor (causeOf: CredentialFor -> FoldCause) (authorities: CredentialFor list) : Async<unit> =
     async {
         for onBehalfOf in authorities do
-            do! repoSandboxes.Fold onBehalfOf
+            do! repoSandboxes.Fold (causeOf onBehalfOf) onBehalfOf
         if not (List.isEmpty authorities) then
             queryRegistry.Invalidate RepoSandboxes.queryName
             queryRegistry.Invalidate WorkSandboxes.queryName
@@ -675,7 +678,7 @@ let private commandServices : Commands.CommandServices =
       // fold itself because the cell is filled after this record is built — and because a
       // command's business is to say WHEN the configuration may have changed, never to know
       // what reading it involves.
-      Refold = fun actor -> foldFor [ actor ] }
+      Refold = fun cause actor -> foldFor (fun _ -> cause) [ actor ] }
 
 /// The credential a party's calls on the provider run on (Plan 08): the session's own
 /// explicit credential first, then the actor's — fresh from the Manager, which lazily
@@ -1053,7 +1056,7 @@ Async.StartImmediate (
                     // to lose every forwarding sandbox until a repo verb happened to run.
                     // Before the fold exists (this stream opens ahead of the Host) the
                     // frame is only kept, and the boot fold below reads who is here.
-                    Async.StartImmediate (foldFor arrived)
+                    Async.StartImmediate (foldFor FoldCause.Connected arrived)
                     // And every open drawer is told, which is the whole of what the panels
                     // used to be probed for.
                     panelsChanged.Value ())
@@ -1423,5 +1426,7 @@ Async.StartImmediate (
         // happened to run. Read off the same frame the stream keeps, so the two cannot
         // disagree about who is here.
         Async.StartImmediate (
-            foldFor (List.distinct (CredentialFor.Deployment :: ConnectionStatusList.arrivals Map.empty connectionStatus)))
+            foldFor
+                (fun _ -> FoldCause.Booted)
+                (List.distinct (CredentialFor.Deployment :: ConnectionStatusList.arrivals Map.empty connectionStatus)))
     })

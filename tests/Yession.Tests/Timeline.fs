@@ -1759,7 +1759,7 @@ let private tallyTests =
 // The reply ref, rendered — the projection decides whether one is due (Agent.fs pins that);
 // here the rendered page is what settles that a due ref actually reaches the screen quoting
 // its cause, and that an undue one draws nothing. Only a render can see this: the markup of a
-// message with `Replying = None` and one whose ref quote silently failed to resolve read the
+// message with `CausedBy = None` and one whose ref quote silently failed to resolve read the
 // same everywhere the DATA is checked.
 let private replyRefRenderTests =
     let conversation (trigger: string) (triggerBody: string) (interleaved: (string * string) list) =
@@ -1826,7 +1826,7 @@ let private repoActor = ActorRef.Configured (RepoRef.create "octo/hello" |> expe
 
 let private starting (n: string) =
     SessionEvent.WorkSandboxStarting
-        { MessageId = message n; Sandbox = sandboxRef; Backend = "docker"; Description = Some "day-to-day work"; Actor = repoActor; OnBehalfOf = None }
+        { MessageId = message n; Sandbox = sandboxRef; Backend = "docker"; Description = Some "day-to-day work"; Actor = repoActor; OnBehalfOf = None; CausedBy = None }
 
 let private startedSandbox (n: string) =
     SessionEvent.WorkSandboxStarted
@@ -1837,10 +1837,10 @@ let private startedSandbox (n: string) =
           Checkout = Some "/repos/octo/hello"
           Forwarded = []
           Realisation = []
-          Actor = repoActor; OnBehalfOf = None }
+          Actor = repoActor; OnBehalfOf = None; CausedBy = None }
 
 let private startFailed (n: string) (reason: string) =
-    SessionEvent.WorkSandboxStartFailed { MessageId = message n; Sandbox = sandboxRef; Reason = reason; Actor = repoActor; OnBehalfOf = None }
+    SessionEvent.WorkSandboxStartFailed { MessageId = message n; Sandbox = sandboxRef; Reason = reason; Actor = repoActor; OnBehalfOf = None; CausedBy = None }
 
 let private conversationOf events =
     (ConversationProjection.applyEvents None events ConversationProjection.empty |> fst).Items
@@ -1938,10 +1938,89 @@ let private sandboxTaskTests =
             Expect.isTrue (started.Contains "data-act-status=\"complete\"") "the resolved act says it is complete"
     ]
 
+// Why a repo's sandbox came up (`CausedBy`): the repo added, the session starting, a person
+// connecting. The fold keeps a ref only where one is worth drawing; the screen draws it as a
+// sentence with its references, and jumps to it when it is loaded.
+let private hello = RepoRef.create "octo/hello" |> expect
+
+let private repoAdded (n: string) (repo: string) =
+    SessionEvent.RepoAdded
+        { MessageId = message n; Repo = RepoRef.create repo |> expect; Branch = "main"; Actor = PeerRef ada; AgentsMd = None }
+
+let private startingBecause (n: string) (cause: Cause) =
+    match starting n with
+    | SessionEvent.WorkSandboxStarting s -> SessionEvent.WorkSandboxStarting { s with CausedBy = Some cause }
+    | other -> other
+
+let private causeOf (n: string) events =
+    conversationOf events
+    |> List.tryFind (fun i -> i.MessageId = message n)
+    |> Option.bind (fun i -> i.CausedBy)
+
+/// The cause line of the note for sandbox start `n`, as rendered.
+let private causeLineOf (n: string) (html: string) =
+    let note = html.IndexOf (Dom.attr "data-message-id" (MessageId.value (message n)))
+    let at = html.IndexOf ("data-cause-ref", note)
+    Expect.isTrue (note >= 0 && at >= 0) "the note has a cause line"
+    html.Substring (at, html.IndexOf ("</div>", at) - at)
+
+let private sandboxCauseTests =
+    testList "why a repo's sandbox came up" [
+        testCase "a start directly under what caused it draws no ref" <| fun () ->
+            let events = [ at 1L 0.0 (repoAdded "a" "octo/hello"); at 2L 1.0 (startingBecause "s" (Cause.Item (message "a"))) ]
+            Expect.isNone (causeOf "s" events) "the cause is the item right above"
+
+        testCase "a start pushed away from what caused it points back to it" <| fun () ->
+            let events =
+                [ at 1L 0.0 (repoAdded "a" "octo/hello")
+                  at 2L 1.0 (repoAdded "b" "octo/other")
+                  at 3L 2.0 (startingBecause "s" (Cause.Item (message "a"))) ]
+            Expect.equal (causeOf "s" events) (Some (Cause.Item (message "a"))) "the ref points at the add"
+
+        testCase "a start the session brought up says so, whatever sits above it" <| fun () ->
+            let events = [ at 1L 0.0 (repoAdded "a" "octo/hello"); at 2L 1.0 (startingBecause "s" Cause.Booted) ]
+            Expect.equal (causeOf "s" events) (Some Cause.Booted) "the session starting is never on screen to sit under"
+
+        testCase "a start keeps its cause once it has come up" <| fun () ->
+            let events =
+                [ at 1L 0.0 (repoAdded "a" "octo/hello")
+                  at 2L 1.0 (repoAdded "b" "octo/other")
+                  at 3L 2.0 (startingBecause "s" (Cause.Item (message "a")))
+                  at 4L 3.0 (startedSandbox "s") ]
+            Expect.equal (causeOf "s" events) (Some (Cause.Item (message "a"))) "the started act is the same item"
+
+        testCase "a loaded cause is named as who did what, with references" <| fun () ->
+            let html =
+                Support.render (
+                    clientOf
+                        [ at 1L 0.0 (repoAdded "a" "octo/hello")
+                          at 2L 1.0 (repoAdded "b" "octo/other")
+                          at 3L 2.0 (startingBecause "s" (Cause.Item (message "a"))) ])
+            let line = causeLineOf "s" html
+            Expect.isTrue
+                (line.Contains (Dom.attr "data-entity" (EntityRef.said (EntityRef.Actor (PeerRef ada))))
+                 && line.Contains (Dom.attr "data-entity" (EntityRef.said (EntityRef.Repo hello))))
+                "Ada and the repo she added are references"
+
+        testCase "a loaded cause offers a jump to it" <| fun () ->
+            let html =
+                Support.render (
+                    clientOf
+                        [ at 1L 0.0 (repoAdded "a" "octo/hello")
+                          at 2L 1.0 (repoAdded "b" "octo/other")
+                          at 3L 2.0 (startingBecause "s" (Cause.Item (message "a"))) ])
+            Expect.isTrue ((causeLineOf "s" html).Contains "data-cause-jump") "the mark is a jump"
+
+        testCase "a cause that is not an item offers no jump" <| fun () ->
+            let html = Support.render (clientOf [ at 1L 0.0 (startingBecause "s" Cause.Booted) ])
+            Expect.isFalse ((causeLineOf "s" html).Contains "data-cause-jump") "nothing to jump to"
+    ]
+
 let tests =
     testList "Timeline and the pane (Plan 14)" [
         listTests
         sandboxTaskTests
+        sandboxCauseTests
         replyRefRenderTests
         pinTests
         orderTests

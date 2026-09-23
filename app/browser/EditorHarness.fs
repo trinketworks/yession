@@ -851,7 +851,7 @@ let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
                     else replyBody i)
               Status = Complete
               Offset = offset (int64 (10 + i))
-              Woke = None; Replying = None } ]
+              Woke = None; CausedBy = None } ]
     { ClientModel.init { PeerId = peerId; DisplayName = "swift-heron" } with
         Connection = Connected
         Session = Some (SessionId.create "harness" |> expect)
@@ -892,13 +892,13 @@ let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
                     Content = ItemContent.Message ("ship it")
                     Status = Complete
                     Offset = offset 1L
-                    Woke = None; Replying = None }
+                    Woke = None; CausedBy = None }
                   { MessageId = wideId
                     Author = ActorRef.Agent
                     Content = ItemContent.Message (wideBody)
                     Status = Complete
                     Offset = offset 3L
-                    Woke = None; Replying = None }
+                    Woke = None; CausedBy = None }
                   // Where that turn stopped, and why — AFTER the burst of commands it ran
                   // (offsets 3–5), which is where a turn stops: the signpost's whole point is
                   // that it stands at the end of the work and not under the words.
@@ -907,18 +907,18 @@ let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
                     Content = ItemContent.Stopped (TurnStop.Failed "the session was restarted while this turn was running")
                     Status = ConversationItemStatus.Failed
                     Offset = offset 6L
-                    Woke = None; Replying = None } ]
+                    Woke = None; CausedBy = None } ]
                 @ filler
                 // A detached reply at the BOTTOM whose source is the very first message — the
                 // long column between them is what makes the ref's jump a real scroll, the same
-                // precondition the rail's own jump case needs. `Replying = Some` because it is
+                // precondition the rail's own jump case needs. `CausedBy = Some` because it is
                 // pushed far from what it answers; the ref renders as a live jump control.
                 @ [ { MessageId = MessageId.create "msg-reply" |> expect
                       Author = ActorRef.Agent
                       Content = ItemContent.Message ("Rebased and pushed, as you asked up top.")
                       Status = Complete
                       Offset = offset 30L
-                      Woke = None; Replying = Some messageId }
+                      Woke = None; CausedBy = Some (Cause.Item messageId) }
                     // The other way a turn stops: a person's hand. Its signpost names them
                     // — resolved to a name the way every person on this screen is.
                     { MessageId = MessageId.create "msg-interrupted" |> expect
@@ -926,7 +926,7 @@ let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
                       Content = ItemContent.Stopped (TurnStop.Interrupted peerId)
                       Status = Complete
                       Offset = offset 31L
-                      Woke = None; Replying = None } ]
+                      Woke = None; CausedBy = None } ]
               ActiveAgentMessages = Map.empty; WokenTurn = None; TriggeredTurn = None }
         Timeline =
             { TimelineProjection.empty with
@@ -1101,10 +1101,10 @@ let private actsModel : ClientModel =
                       Checkout = None
                       Forwarded = [ ConnectionName.create "github" |> expect ]
                       Realisation = []
-                      Actor = ActorRef.Agent; OnBehalfOf = None })
+                      Actor = ActorRef.Agent; OnBehalfOf = None; CausedBy = None })
           Status = Complete
           Offset = offset 31L
-          Woke = None; Replying = None }
+          Woke = None; CausedBy = None }
     { shellModel with Conversation = { shellModel.Conversation with Items = shellModel.Conversation.Items @ [ start ] } }
 
 /// The session's FIRST screen: connected, the log read to an end holding nothing, and the

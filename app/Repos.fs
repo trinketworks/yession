@@ -277,12 +277,19 @@ type RepoCaller =
     { Actor : ActorRef
       Credential : CredentialFor }
 
+/// A verb's answer, and the item it recorded — `None` when it recorded nothing, as a
+/// repeated add does. What a later act can point back to as its cause.
+[<RequireQualifiedAccess>]
+type Recorded<'a> =
+    { Answer : 'a
+      RecordedAs : MessageId option }
+
 /// The Process-side repo manager. Caller-taking members append the acting party onto
 /// the event; the read-only inspectors take none because they record nothing.
 type ReposService =
-    { AddRepo : RepoCaller -> RepoRef -> Async<Result<RepoListing, string>>
+    { AddRepo : RepoCaller -> RepoRef -> Async<Result<Recorded<RepoListing>, string>>
       ListRepos : unit -> Async<Result<RepoListing list, string>>
-      SwitchBranch : RepoCaller -> RepoRef -> string -> bool -> Async<Result<RepoListing, string>>
+      SwitchBranch : RepoCaller -> RepoRef -> string -> bool -> Async<Result<Recorded<RepoListing>, string>>
       FetchRepo : RepoCaller -> RepoRef -> Async<Result<string, string>>
       RepoStatus : RepoRef -> Async<Result<string, string>>
       RepoLog : RepoRef -> Async<Result<string, string>>
@@ -518,7 +525,7 @@ let create (config: ReposConfig) : Result<ReposService, string> =
         /// Clone into the staging area and MOVE the finished thing into place. The rename
         /// is the moment the repo exists; before it, nothing at the visible path suggests
         /// one is coming, and a clone that dies leaves the wreckage somewhere nobody reads.
-        let cloneIntoPlace (caller: RepoCaller) (repo: RepoRef) : Async<Result<RepoListing, string>> =
+        let cloneIntoPlace (caller: RepoCaller) (repo: RepoRef) : Async<Result<Recorded<RepoListing>, string>> =
             async {
                 let! token = config.ResolveToken caller.Credential
                 match! config.Canonical token repo with
@@ -558,24 +565,25 @@ let create (config: ReposConfig) : Result<ReposService, string> =
                     match! listingOf repo with
                     | Error e -> return Error e
                     | Ok listing ->
-                        do! append caller.Actor (SessionEvent.RepoAdded { MessageId = mintMessageId (); Repo = repo; Branch = listing.Branch; Actor = caller.Actor; AgentsMd = agentsMdOf repo })
-                        return Ok listing
+                        let messageId = mintMessageId ()
+                        do! append caller.Actor (SessionEvent.RepoAdded { MessageId = messageId; Repo = repo; Branch = listing.Branch; Actor = caller.Actor; AgentsMd = agentsMdOf repo })
+                        return Ok { Recorded.Answer = listing; Recorded.RecordedAs = Some messageId }
             }
 
         /// Clones in flight, keyed by repo. A clone is not instant, and the same repo asked
         /// for twice while the first is still running used to start a SECOND clone into the
         /// same directory. Joining the first is both correct and the answer the caller
         /// wanted — `Broker`'s token refresh is this shape for the same reason.
-        let cloning = Dictionary<string, JS.Promise<Result<RepoListing, string>>> ()
+        let cloning = Dictionary<string, JS.Promise<Result<Recorded<RepoListing>, string>>> ()
 
-        let addRepo (caller: RepoCaller) (repo: RepoRef) : Async<Result<RepoListing, string>> =
+        let addRepo (caller: RepoCaller) (repo: RepoRef) : Async<Result<Recorded<RepoListing>, string>> =
             async {
                 if present repo then
                     // Already here: answer with the current state and record nothing —
                     // a repeated add is a question, not an act. `present` can be trusted to
                     // mean WHOLE now, which is what the staging rename above buys.
                     match! listingOf repo with
-                    | Ok listing -> return Ok listing
+                    | Ok listing -> return Ok { Recorded.Answer = listing; Recorded.RecordedAs = None }
                     | Error e ->
                         // The one bad state the rename cannot prevent, because it predates
                         // it: a checkout an interrupted clone left at the visible path. git
@@ -629,7 +637,7 @@ let create (config: ReposConfig) : Result<ReposService, string> =
                 | None -> return Ok listings
             }
 
-        let switchBranch (caller: RepoCaller) (repo: RepoRef) (branch: string) (create: bool) : Async<Result<RepoListing, string>> =
+        let switchBranch (caller: RepoCaller) (repo: RepoRef) (branch: string) (create: bool) : Async<Result<Recorded<RepoListing>, string>> =
             requirePresent repo (fun () ->
                 async {
                     match validBranchName branch with
@@ -643,8 +651,9 @@ let create (config: ReposConfig) : Result<ReposService, string> =
                             match! listingOf repo with
                             | Error e -> return Error e
                             | Ok listing ->
-                                do! append caller.Actor (SessionEvent.RepoBranchSwitched { MessageId = mintMessageId (); Repo = repo; Branch = listing.Branch; Created = create; Actor = caller.Actor })
-                                return Ok listing
+                                let messageId = mintMessageId ()
+                                do! append caller.Actor (SessionEvent.RepoBranchSwitched { MessageId = messageId; Repo = repo; Branch = listing.Branch; Created = create; Actor = caller.Actor })
+                                return Ok { Recorded.Answer = listing; Recorded.RecordedAs = Some messageId }
                 })
 
         let fetchRepo (caller: RepoCaller) (repo: RepoRef) : Async<Result<string, string>> =

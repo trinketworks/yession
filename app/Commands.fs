@@ -80,7 +80,9 @@ type CommandServices =
       /// is idempotent — a declaration that is already a running sandbox is an ask that
       /// changes nothing and records nothing, which is what every mutating command being
       /// ensure-shaped bought.
-      Refold : CredentialFor -> Async<unit> }
+      ///
+      /// The fold cause says what the verb did, so a sandbox it brings up can point back to it.
+      Refold : FoldCause -> CredentialFor -> Async<unit> }
 
 let private encodeArgs (values: string list) : string = Codec.toString Codec.gatedArgs values
 
@@ -97,19 +99,23 @@ let private decodeArgs (raw: string) : string list =
 /// three verbs it applies to have nothing else in common with it — what a fold reads is none
 /// of their business, and the day a fourth verb changes a checkout, this is the one thing it
 /// has to be given.
+///
+/// The verb answers with the item it recorded, when it recorded one, so a sandbox the fold
+/// brings up for this repo can say it came up because of it.
 let private andRefold
     (services: CommandServices)
     (invocation: GatedInvocation)
-    (outcome: Async<Result<'a, string>>)
+    (repo: RepoRef)
+    (outcome: Async<Result<'a * MessageId option, string>>)
     : Async<Result<'a, string>> =
     async {
-        let! result = outcome
-        match result with
+        match! outcome with
         // Whoever the verb ran on the authority of. A `forward:` in a file the fold picks up
         // resolves for THEM, by the same Plan 08 precedence the verb itself used.
-        | Ok _ -> do! services.Refold (Authority.credential invocation.Authority)
-        | Error _ -> ()
-        return result
+        | Ok (answer, recordedAs) ->
+            do! services.Refold (FoldCause.Changed (repo, recordedAs)) (Authority.credential invocation.Authority)
+            return Ok answer
+        | Error e -> return Error e
     }
 
 /// Invalidate a query once a command has actually changed its answer.
@@ -149,9 +155,15 @@ let private writeFileTool = "write_file"
 /// would be a second spelling of them, and the two would disagree the first time one
 /// changed. Every route to this verb — the agent's capability below, the fold over
 /// `yession.yaml` — goes through here.
-let startWorkSandboxCall (authority: Authority) (sandbox: SandboxRef) (decl: SandboxDecl) : GatedCall =
+///
+/// The cause rides with the arguments, because the start is where it is recorded and the
+/// gate is the only road there.
+let startWorkSandboxCall (authority: Authority) (causedBy: Cause option) (sandbox: SandboxRef) (decl: SandboxDecl) : GatedCall =
     { Tool = startWorkSandboxTool
-      Args = encodeArgs [ SandboxRef.render sandbox; SandboxDecl.encode decl ]
+      Args =
+        encodeArgs (
+            [ SandboxRef.render sandbox; SandboxDecl.encode decl ]
+            @ (causedBy |> Option.map (Codec.toString Codec.cause) |> Option.toList))
       Summary =
         match ConnectionName.normalise decl.Forward with
         | [] -> sprintf "start_work_sandbox %s" (SandboxRef.render sandbox)
@@ -161,6 +173,21 @@ let startWorkSandboxCall (authority: Authority) (sandbox: SandboxRef) (decl: San
                 (SandboxRef.render sandbox)
                 (names |> List.map ConnectionName.value |> String.concat ", ")
       Authority = authority }
+
+/// `startWorkSandboxCall`'s arguments read back: the sandbox, its declaration, and what caused
+/// the start when anything did. Beside the encoding so the two cannot drift apart.
+let private readStartArgs (values: string list) : Result<string * string * Cause option, string> =
+    match values with
+    | [ name; declared ] -> Ok (name, declared, None)
+    | [ name; declared; cause ] ->
+        Codec.fromString Codec.cause cause
+        |> Result.map (fun c -> name, declared, Some c)
+        |> Result.mapError (sprintf "not a cause: %s")
+    | other ->
+        Error (
+            sprintf
+                "start_work_sandbox takes a sandbox, a declaration and an optional cause, got %d arguments"
+                (List.length other))
 
 /// How each gated command is actually carried out, by tool name (Plan 15, stage 3b).
 ///
@@ -188,12 +215,13 @@ let dispatch (services: CommandServices) : CommandDispatch =
                     | Error e -> return Error (sprintf "not a repo name: %s" e)
                     | Ok repo ->
                         return!
-                            andRefold services invocation (
+                            andRefold services invocation repo (
                             andPublish services Repos.queryName (
                                 async {
                                     match! service.AddRepo (repoCaller invocation) repo with
                                     | Error e -> return Error e
-                                    | Ok listing ->
+                                    | Ok recorded ->
+                                        let listing = recorded.Answer
                                         // What this verb KNOWS, and nothing else. It used to
                                         // end with "set_shell_profile with that path", which
                                         // is advice about a tool a repo verb has no business
@@ -223,7 +251,8 @@ let dispatch (services: CommandServices) : CommandDispatch =
                                             Ok (
                                                 sprintf
                                                     "added %s — and that path is the DEFAULT sandbox's. A sandbox this repo declares sees the checkout somewhere of its own and says where when it starts. It is shared with everyone in this session either way."
-                                                    (RepoListing.describe listing))
+                                                    (RepoListing.describe listing),
+                                                recorded.RecordedAs)
                                 }))
                 | Some _, other -> return Error (sprintf "add_repo takes one repo, got %d arguments" (List.length other))
             }
@@ -238,7 +267,7 @@ let dispatch (services: CommandServices) : CommandDispatch =
                     | Error e -> return Error (sprintf "not a repo name: %s" e)
                     | Ok repo ->
                         return!
-                            andRefold services invocation (
+                            andRefold services invocation repo (
                             andPublish services Repos.queryName (
                                 async {
                                     match! service.RemoveRepo (repoCaller invocation) repo (force = "true") with
@@ -268,7 +297,10 @@ let dispatch (services: CommandServices) : CommandDispatch =
                                                 sprintf
                                                     "removed %s — the checkout is gone from this session, and from the work environment.%s"
                                                     (RepoRef.value repo)
-                                                    profiles)
+                                                    profiles,
+                                                // A removal starts nothing for this repo, so
+                                                // there is nothing to point back to it.
+                                                None)
                                 }))
                 | Some _, other ->
                     return Error (sprintf "remove_repo takes a repo and a flag, got %d arguments" (List.length other))
@@ -284,12 +316,13 @@ let dispatch (services: CommandServices) : CommandDispatch =
                     | Error e -> return Error (sprintf "not a repo name: %s" e)
                     | Ok repo ->
                         return!
-                            andRefold services invocation (
+                            andRefold services invocation repo (
                             andPublish services Repos.queryName (
                                 async {
                                     match! service.SwitchBranch (repoCaller invocation) repo branch (create = "true") with
                                     | Error e -> return Error e
-                                    | Ok listing -> return Ok (sprintf "now on %s" (RepoListing.describe listing))
+                                    | Ok recorded ->
+                                        return Ok (sprintf "now on %s" (RepoListing.describe recorded.Answer), recorded.RecordedAs)
                                 }))
                 | Some _, other ->
                     return Error (sprintf "switch_branch takes a repo, a branch and a flag, got %d arguments" (List.length other))
@@ -416,8 +449,8 @@ let dispatch (services: CommandServices) : CommandDispatch =
                 // have: the agent's names some credentials, a repo's file names everything.
                 // One shape, so the declarative route and the interactive one cannot
                 // diverge — which is the reason this gate is a capability at all.
-                match decodeArgs invocation.Args with
-                | [ name; declared ] ->
+                match readStartArgs (decodeArgs invocation.Args) with
+                | Ok (name, declared, causedBy) ->
                     match SandboxRef.parse name with
                     | Error e -> return Error (sprintf "not a sandbox: %s" e)
                     | Ok name ->
@@ -441,7 +474,7 @@ let dispatch (services: CommandServices) : CommandDispatch =
                             match SandboxDecl.toRequest checkout decl with
                             | Error e -> return Error e
                             | Ok request ->
-                                match! (services.Sandboxes ()).Ensure invocation.Authority name request with
+                                match! (services.Sandboxes ()).Ensure invocation.Authority causedBy name request with
                                 | Error e -> return Error e
                                 | Ok outcome ->
                                     let entry = WorkSandboxes.SandboxOutcome.sandbox outcome
@@ -517,12 +550,7 @@ let dispatch (services: CommandServices) : CommandDispatch =
                                                 entry.Backend
                                                 forwarding
                                                 setup)
-                | other ->
-                    return
-                        Error (
-                            sprintf
-                                "start_work_sandbox takes a sandbox and a declaration, got %d arguments"
-                                (List.length other))
+                | Error e -> return Error e
             }
 
           stopWorkSandboxTool,
@@ -853,7 +881,7 @@ let private sandboxCapabilitiesFor (turnActor: Principal) (capabilities: AgentCa
         Sandboxes =
           { capabilities.Sandboxes with
               Start =
-                fun name decl -> capabilities.RunGated (startWorkSandboxCall (Authority.agentFor turnActor) name decl)
+                fun name decl -> capabilities.RunGated (startWorkSandboxCall (Authority.agentFor turnActor) None name decl)
               Stop =
                 fun name ->
                   gated

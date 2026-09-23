@@ -99,7 +99,11 @@ type ConversationItem =
       /// and an item does not know its turn. It rides here for the same reason `Offset` does:
       /// the fold knows something the view needs and cannot re-derive.
       Woke      : WakeReason option
-      /// The message this turn was replying to, when a ref is worth drawing: `Some` on the
+      /// What this item came from, when a ref is worth drawing (`Cause`): the message a turn
+      /// was replying to, or what brought a repo's sandbox up — a repo added, the session
+      /// starting, a person connecting.
+      ///
+      /// For a reply: `Some` on the
       /// first message of a turn a message triggered, but ONLY when that message is not the
       /// one this item lands directly below. An adjacent reply already sits under what it
       /// answers, so a ref there is noise on every ordinary turn — the value is the DETACHED
@@ -109,8 +113,9 @@ type ConversationItem =
       ///
       /// Presence is the whole decision — the view draws the ref iff this is `Some`. The
       /// detached test lives here, not in the view, because "is the trigger the item above"
-      /// is a fact about the fold's order that a cheap test can reach.
-      Replying  : MessageId option }
+      /// is a fact about the fold's order that a cheap test can reach. The same rule drops a
+      /// sandbox start's cause when it is the item directly above (`detached`).
+      CausedBy  : Cause option }
 
 module ConversationItem =
 
@@ -530,7 +535,17 @@ module ConversationProjection =
                       Content = ItemContent.Act act
                       Status = Complete
                       Offset = envelope.Offset
-                      Woke = None; Replying = None } ] }
+                      Woke = None; CausedBy = None } ] }
+
+    /// A cause worth drawing: an item that is not the one this lands directly below. The
+    /// detachment is read off `proj.Items` as it stands BEFORE the new item is appended, so
+    /// its last entry is exactly what will render above: adjacent means it already sits
+    /// under its cause, and the ref would say what the eye can see. A cause that is not an
+    /// item — the session starting, a person connecting — is never on screen to sit under.
+    let private detached (cause: Cause option) (proj: ConversationProjection) : Cause option =
+        match cause, List.tryLast proj.Items with
+        | Some (Cause.Item item), Some last when last.MessageId = item -> None
+        | _ -> cause
 
     /// An act that RESOLVES a running one in place — the same id, a settled status and the
     /// facts of how it settled. A log written before the running half existed has no such
@@ -538,6 +553,7 @@ module ConversationProjection =
     /// two readings never both fire.
     let private resolved
         (messageId: MessageId)
+        (causedBy: Cause option)
         (actor: ActorRef)
         (act: Act)
         (status: ConversationItemStatus)
@@ -558,7 +574,7 @@ module ConversationProjection =
                           Content = ItemContent.Act act
                           Status = status
                           Offset = envelope.Offset
-                          Woke = None; Replying = None } ] }
+                          Woke = None; CausedBy = detached causedBy proj } ] }
 
     let private wokeBy (turnId: AgentTurnId) (proj: ConversationProjection) : WakeReason option =
         match proj.WokenTurn with
@@ -567,15 +583,10 @@ module ConversationProjection =
 
     /// The message the given turn was replying to, IF a ref is worth drawing — matched on
     /// the turn id like `wokeBy`, then suppressed when the trigger is the item this one lands
-    /// directly below. The detachment is read off `proj.Items` as it stands BEFORE the new
-    /// item is appended, so its last entry is exactly what will render above: adjacent means
-    /// the reply already sits under its cause, and the ref would say what the eye can see.
-    let private replyingTo (turnId: AgentTurnId) (proj: ConversationProjection) : MessageId option =
+    /// directly below (`detached`).
+    let private replyingTo (turnId: AgentTurnId) (proj: ConversationProjection) : Cause option =
         match proj.TriggeredTurn with
-        | Some (triggered, trigger) when triggered = turnId ->
-            match List.tryLast proj.Items with
-            | Some last when last.MessageId = trigger -> None
-            | _ -> Some trigger
+        | Some (triggered, trigger) when triggered = turnId -> detached (Some (Cause.Item trigger)) proj
         | _ -> None
 
     /// A turn stopping short — failed, or interrupted by a person — is an item of its own,
@@ -615,7 +626,7 @@ module ConversationProjection =
               Status = status
               Offset = envelope.Offset
               Woke = (if attributed then wokeBy turnId proj else None)
-              Replying = (if attributed then replyingTo turnId proj else None) }
+              CausedBy = (if attributed then replyingTo turnId proj else None) }
         let closed = Map.remove turnId proj.ActiveAgentMessages
         let spoke =
             Map.tryFind turnId proj.ActiveAgentMessages
@@ -655,7 +666,7 @@ module ConversationProjection =
                           Content = ItemContent.Message m.Body
                           Status = Complete
                           Offset = envelope.Offset
-                          Woke = None; Replying = None } ] }
+                          Woke = None; CausedBy = None } ] }
         // Lifecycle; the item appears at `AgentMessageStarted`. What is remembered here is
         // only the turn's REASON for existing, which that item cannot re-derive: by the time
         // it arrives, the event that carried the reason is pages behind it.
@@ -735,17 +746,17 @@ module ConversationProjection =
                           Content = ItemContent.Act (Act.SandboxStarting s)
                           Status = Running
                           Offset = envelope.Offset
-                          Woke = None; Replying = None } ] }
+                          Woke = None; CausedBy = detached s.CausedBy proj } ] }
         // Resolve the running item this start's `WorkSandboxStarting` opened, in place. A
         // start from a log written before `Starting` existed has no such item — so it is
         // appended, exactly as it was before, and the two readings never both fire because
         // an id is either already there or not.
-        | SessionEvent.WorkSandboxStarted s -> proj |> resolved s.MessageId s.Actor (Act.SandboxStarted s) Complete envelope
+        | SessionEvent.WorkSandboxStarted s -> proj |> resolved s.MessageId s.CausedBy s.Actor (Act.SandboxStarted s) Complete envelope
         // The sandbox could not come up: resolve its running item to a failure in place. Like
         // the start above, an id already present is updated and an absent one appended, so a
         // failure whose `Starting` predates this code still reads.
         | SessionEvent.WorkSandboxStartFailed s ->
-            proj |> resolved s.MessageId s.Actor (Act.SandboxStartFailed s) Failed envelope
+            proj |> resolved s.MessageId s.CausedBy s.Actor (Act.SandboxStartFailed s) Failed envelope
         // The other outcome of a declaration, beside the start above. What a repo asks for,
         // when it changed; a person's yes to it; and the file that could not be honoured.
         | SessionEvent.RepoCapabilitiesChanged c -> proj |> noted c.MessageId c.Actor (Act.RepoCapabilitiesChanged c) envelope
@@ -821,7 +832,7 @@ module ConversationProjection =
                           Woke = (match a.Antecedent with None -> wokeBy a.AgentTurnId proj | Some _ -> None)
                           // The reply ref sits on the turn's first message for the same
                           // reason — a follower answers its antecedent, not the trigger.
-                          Replying = (match a.Antecedent with None -> replyingTo a.AgentTurnId proj | Some _ -> None) } ]
+                          CausedBy = (match a.Antecedent with None -> replyingTo a.AgentTurnId proj | Some _ -> None) } ]
                 ActiveAgentMessages = Map.add a.AgentTurnId a.MessageId proj.ActiveAgentMessages }
         // The first word anchors the item (see `Offset`); every later one only lengthens it.
         // A completion that carries a body nobody streamed — a turn whose only words arrived
