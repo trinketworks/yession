@@ -3182,14 +3182,14 @@ let editorTests =
         // is the design, and the design is what a card is FOR.
         editorCase "a task card's lines stay real controls, reachable and pressable without a pointer" <| fun page ->
             async {
-                // A real `<details>`, so the disclosure is the browser's: keyboard-operable
-                // and announced without a handler or an ARIA role of our own.
+                // The timeline's one fold (`data-fold`), same as every other disclosure here:
+                // a real button, keyboard-operable and announced without a role of our own.
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-chat-task-card]")
-                do! awaitU (page.FocusAsync "#shell [data-chat-task-card] summary")
+                do! awaitU (page.FocusAsync "#shell [data-chat-task-card] [data-fold]")
                 do! awaitU (page.Keyboard.PressAsync "Enter")
                 let! _ =
                     await (page.WaitForFunctionAsync
-                        """document.querySelector('#shell [data-chat-task-card]')?.open === true""")
+                        """document.querySelector('#shell [data-chat-task-card] [data-fold-body]')?.getAttribute('data-fold-open') === 'yes'""")
 
                 // The failed command leads, which is the one thing the ordering promises —
                 // and it is a BUTTON, not a div someone hung a click on.

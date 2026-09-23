@@ -1715,19 +1715,22 @@ module Style =
     let chatToolIoBody =
         cls [ monoOut; "mt-0.5 max-h-64 overflow-auto bg-surface-2 p-2 rounded" ]
 
-    /// One agent burst (Plan 20, stage 4). A `<details>` on the same content column the chips
-    /// and tool runs sit on, for the same reason: a turn that ran twelve commands reads as
-    /// one line until somebody wants the twelve.
-    let chatTaskCard = cls [ "w-full pl-[32px] py-0.5"; readingColumn ]
-    /// Its summary. A real `<summary>`, so the disclosure is the browser's and arrives
-    /// keyboard-operable and correctly announced.
-    let chatTaskSummary =
-        cls [ "flex items-baseline gap-2 cursor-pointer list-none"
-              "text-ink-dim hover:text-ink transition-colors duration-150 ease-out"
-              focusRing ]
+    /// One agent burst (Plan 20, stage 4). The same fold every other row on the timeline
+    /// wears (`View.foldArrow`/`foldBody`), not a `<details>` of its own: a native
+    /// disclosure keeps its open state on the DOM node rather than the model, so nothing
+    /// that drives a re-render — `syncJumpToLatest` among them — has anything to read it
+    /// from. Same ground and rail as a turn's tool run (`chatToolRun`), because it IS the
+    /// same thing: a line that reads as one until somebody wants the several it groups.
+    let chatTaskCard = cls [ itemGround; readingColumn; foldRow; "max-md:pl-4" ]
+    /// The summary line, in the fold's content column. No cursor or focus styling of its
+    /// own — the arrow beside it is the control now, same as `chatToolRunText`.
+    let chatTaskSummary = cls [ foldContent; "flex items-baseline gap-2 text-ink-dim" ]
     /// The counts, at the end of the summary line. Baseline-aligned with the sentence beside
     /// them so the glyphs sit on the text's line rather than floating above it.
     let chatTaskCounts = "flex items-baseline gap-2 shrink-0"
+    /// The lines, unfolding beneath — spanning both columns like a run's items
+    /// (`chatToolRunInner`), because each line is a row of its own with its own gutter.
+    let chatTaskCardInner = cls [ Motion.unfoldInner; "flex flex-col pt-1" ]
 
     // --- Chapters: where the session divides ------------------------------------------
 
