@@ -752,8 +752,16 @@ as up, then back; the scale is solved per frame so the agent's width on screen c
 is fitted with 7 units of air rather than the ladder's 5, which is what lets the arriving panels
 and their bloom clear the edge — so the mark sits a little smaller in its box than `clearer`.
 The run is SMIL with the easing baked into the samples: every face is one path whose `d` carries
-49 keyframes on uniform `keyTimes`, and the clips, bloom, back faces and solid start are each a
-`use` of it; a face's visibility flips discretely, which is safe because a face only turns over
+49 keyframes on uniform `keyTimes`, and the clips, bloom, back faces, hidden edges and solid start
+are each a `use` of it. That last one is a performance rule as much as a tidiness one: interpolating
+a `d` is the expensive thing SMIL does per frame, and the hidden edges used to be a polyline apiece
+with its own morph — 22 of them against the faces' 18, more than half the budget for a layer that
+sits at 0.3 under a blur. A face turned away is bounded by exactly the edges that are hidden, so
+stroking it says the same thing off a path that is already morphing. Measured on the starting
+screen's own layout at 224px and a 3x pixel ratio, under a 10x CPU throttle (a phone-class budget,
+paired runs): 25.9 fps before, 30.0 after, and the file goes from 135 KB to 97 KB. Neither the
+filters nor the keyframe count is what costs — stripping every filter buys 2 fps at that size, and
+rebuilding at 17 keyframes instead of 49 measures the same. a face's visibility flips discretely, which is safe because a face only turns over
 when it is edge-on. Everything is sampled through cubic-bezier(0.42, 0, 0.58, 1), CSS's
 symmetric ease-in-out: Tailwind's (0.4, 0, 0.2, 1) left faster than it landed. The sheen is the
 reflection of one fixed point light in the shared top plane — the eye's line to the lamp's
