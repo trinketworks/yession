@@ -68,7 +68,9 @@ and WorkSandboxStarting =
       /// parity with the start it resolves into, so the running line and the started line read
       /// the same.
       Description : string option
-      Actor : ActorRef }
+      Actor : ActorRef
+      /// Carried for the same parity: who the start is for, as `WorkSandboxStarted` says it.
+      OnBehalfOf : Principal option }
 
 /// A sandbox that began coming up (`WorkSandboxStarting`) could NOT — the container failed to
 /// come up, or failed its own checks. Carries the starting item's `MessageId`, so the running
@@ -80,7 +82,9 @@ and WorkSandboxStartFailed =
       Sandbox : SandboxRef
       /// Why it could not come up — the same sentence the start attempt returned.
       Reason : string
-      Actor : ActorRef }
+      Actor : ActorRef
+      /// Who the start was for, as `WorkSandboxStarted` says it.
+      OnBehalfOf : Principal option }
 
 and WorkSandboxStarted =
     { MessageId : MessageId
@@ -127,7 +131,12 @@ and WorkSandboxStarted =
       /// what a leaf MEANS is the operator's vocabulary at the time, and a log that outlived
       /// that vocabulary would be re-reading old grants through a profile that has moved.
       Realisation : string list
-      Actor : ActorRef }
+      Actor : ActorRef
+      /// Whose authority the start ran on, when that is not the actor's own: the person
+      /// behind the agent, or behind a repo's file. `None` on a person's own start and on
+      /// the boot fold, which nobody asked for. Attribution only — a start lends no
+      /// credential, and each block spends its own act's.
+      OnBehalfOf : Principal option }
 
 and WorkSandboxStopped =
     { MessageId : MessageId
@@ -143,7 +152,9 @@ and ShellProfileSet =
       /// Where a shell opened in that sandbox starts. `None` is the CLEAR — back to the
       /// sandbox's own default, which is what every terminal did before this plan.
       WorkingDirectory : string option
-      Actor : ActorRef }
+      Actor : ActorRef
+      /// The person behind the agent that set it. `None` when a person set it themselves.
+      OnBehalfOf : Principal option }
 
 /// The prose a start writes into the timeline - the headline a screen lands on, and the
 /// particulars beneath it. It lives HERE, beside the event, for the same reason

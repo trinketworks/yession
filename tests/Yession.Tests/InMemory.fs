@@ -584,7 +584,7 @@ let tests =
 
                 let caller = ActorRef.Agent
                 let test = SandboxRef.parse "test" |> expect
-                let! started = host.Sandboxes.Ensure caller test SandboxRequest.defaults
+                let! started = host.Sandboxes.Ensure (Authority.agentFor (Principal.Peer (PeerId.create "ada" |> expect))) test SandboxRequest.defaults
                 Expect.isTrue (Result.isOk started) "the sandbox starts"
 
                 match! host.TerminalCommands.Execute { CommandRequest.ofCommand "echo hi" with Target = Some (InSandbox test) } agentActing with

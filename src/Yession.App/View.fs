@@ -2221,6 +2221,12 @@ module View =
                 | Complete | Streaming | ConversationItemStatus.Failed ->
                     foldArrow key Icon.right Dom.Text.details
             let fold = foldBody key Style.actNoteFoldInner folded
+            // Who the act was for, after the headline: "started sandbox dev for Ada". The
+            // author alone would name a repo's file or the agent and stop there.
+            let title =
+                match Act.onBehalfOf act with
+                | Some principal -> title @ [ Segment.Text (" " + Dom.Text.actFor + " "); Segment.Ref (EntityRef.Actor (Principal.toActor principal)) ]
+                | None -> title
             html $"""
                 <article class="{Style.actNote}" data-message-id="{MessageId.value item.MessageId}" tabindex="-1" data-act-note data-act-status="{messageStatusLabel item.Status}" data-message-author="{Entity.actorToken item.Author}">
                   {itemActions item}

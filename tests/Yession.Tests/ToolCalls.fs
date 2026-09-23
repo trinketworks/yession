@@ -523,11 +523,11 @@ let private servicesRecording (held: HeldRepos) : Commands.CommandServices =
             fun () ->
                 { SessionTerminals.unavailable with
                     SetProfile =
-                        fun actor sandbox cwd ->
+                        fun authority sandbox cwd ->
                             async {
                                 held.Calls.Add (
                                     sprintf "set_shell_profile %s %s" (SandboxRef.render sandbox) (defaultArg cwd "(cleared)"),
-                                    actor)
+                                    Authority.author authority)
                                 return Ok "set"
                             } } }
 

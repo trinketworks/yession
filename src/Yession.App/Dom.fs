@@ -652,6 +652,9 @@ module Dom =
         /// Stands where the quoted message would be when the ref points past the loaded page —
         /// the reply is real, its cause simply is not on screen yet.
         let replyRefMissing = "earlier message"
+        /// The word between an act and the person it was done for: "started sandbox dev
+        /// for Ada".
+        let actFor = "for"
         /// The accessible name of the ref, said in full for a reader who does not get the
         /// quote's visual context.
         let replyRefLabel = "In reply to"

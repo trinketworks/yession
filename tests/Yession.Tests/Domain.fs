@@ -324,7 +324,7 @@ let private frameSerializationTests =
                       Checkout = None
                       Forwarded = [ ConnectionName.create "github" |> expect ]
                       Realisation = [ "the socket at /run/docker.sock — this host cannot scope that" ]
-                      Actor = ActorRef.Agent }
+                      Actor = ActorRef.Agent; OnBehalfOf = None }
                   // A repo-declared start, carrying both the things only a sandbox settles:
                   // what it is for, and where it sees the checkout.
                   WorkSandboxStarted
@@ -335,7 +335,8 @@ let private frameSerializationTests =
                       Checkout = Some "/repos/octo/hello"
                       Forwarded = [ ConnectionName.create "github" |> expect ]
                       Realisation = []
-                      Actor = ActorRef.Configured (RepoRef.create "octo/hello" |> expect) }
+                      Actor = ActorRef.Configured (RepoRef.create "octo/hello" |> expect)
+                      OnBehalfOf = Some (Principal.User (UserId.create "alice" |> expect)) }
                   // A push spending somebody's credential: the person's own, and the
                   // deployment's, which a repo's setup block at boot spends.
                   GitCredentialSpent
@@ -371,7 +372,7 @@ let private frameSerializationTests =
                       Checkout = None
                       Forwarded = []
                       Realisation = []
-                      Actor = PeerRef peerId }
+                      Actor = PeerRef peerId; OnBehalfOf = None }
                   // The two halves of a sandbox coming up, beside the start they resolve: a
                   // running act opens on `Starting` and the start or failure below closes it.
                   WorkSandboxStarting
@@ -379,12 +380,12 @@ let private frameSerializationTests =
                       Sandbox = SandboxRef.parse "octo/hello:dev" |> expect
                       Backend = "docker"
                       Description = Some "day-to-day work"
-                      Actor = ActorRef.Configured (RepoRef.create "octo/hello" |> expect) }
+                      Actor = ActorRef.Configured (RepoRef.create "octo/hello" |> expect); OnBehalfOf = None }
                   WorkSandboxStartFailed
                     { MessageId = messageId
                       Sandbox = SandboxRef.parse "octo/hello:dev" |> expect
                       Reason = "the docker daemon is not reachable"
-                      Actor = ActorRef.Configured (RepoRef.create "octo/hello" |> expect) }
+                      Actor = ActorRef.Configured (RepoRef.create "octo/hello" |> expect); OnBehalfOf = None }
                   WorkSandboxStopped { MessageId = messageId; Sandbox = SandboxRef.parse "test" |> expect; Actor = ActorRef.Agent }
                   // The shell profile (Plan 25): both cases, because a set and a clear are
                   // one event and the difference between them is the whole payload.
@@ -392,12 +393,12 @@ let private frameSerializationTests =
                     { MessageId = messageId
                       Sandbox = SandboxRef.defaultRef
                       WorkingDirectory = Some "/repos/octo/hello"
-                      Actor = ActorRef.Agent }
+                      Actor = ActorRef.Agent; OnBehalfOf = None }
                   ShellProfileSet
                     { MessageId = messageId
                       Sandbox = SandboxRef.parse "test" |> expect
                       WorkingDirectory = None
-                      Actor = PeerRef peerId }
+                      Actor = PeerRef peerId; OnBehalfOf = None }
                   // Tool use (Plan 16): both argument cases, because they are different
                   // facts — recorded-with-secrets-gone, and a foreign tool whose arguments
                   // are not recorded at all.
@@ -575,7 +576,7 @@ let private frameSerializationTests =
                       // reads as "nothing was measured", which is the only honest answer for
                       // a sandbox nobody asked the question about.
                       Realisation = []
-                      Actor = ActorRef.Agent })
+                      Actor = ActorRef.Agent; OnBehalfOf = None })
                 "a bare name is the sandbox the session itself owns"
     ]
 
@@ -586,7 +587,7 @@ let private shellProfileTests =
             { MessageId = MessageId.create "msg-1" |> expect
               Sandbox = sandbox
               WorkingDirectory = cwd
-              Actor = ActorRef.Agent }
+              Actor = ActorRef.Agent; OnBehalfOf = None }
     let fold events =
         events |> List.fold ShellProfileProjection.applyEvent ShellProfileProjection.empty
     testList "Shell profile (Plan 25)" [

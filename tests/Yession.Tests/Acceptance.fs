@@ -1320,7 +1320,7 @@ let private uiChecklistTests =
                               Sandbox = SandboxRef.defaultRef
                               Backend = "srt"
                               Description = None
-                              Actor = ActorRef.Agent })
+                              Actor = ActorRef.Agent; OnBehalfOf = None })
                   Status = ConversationItemStatus.Running
                   Offset = EventOffset.create 1L |> expect
                   Woke = None; Replying = None }
@@ -1349,7 +1349,7 @@ let private uiChecklistTests =
                               Checkout = None
                               Forwarded = [ github ]
                               Realisation = []
-                              Actor = ActorRef.Agent })
+                              Actor = ActorRef.Agent; OnBehalfOf = None })
                   Status = Complete
                   Offset = EventOffset.create 1L |> expect
                   Woke = None; Replying = None }
@@ -1380,10 +1380,31 @@ let private uiChecklistTests =
                           Checkout = None
                           Forwarded = []
                           Realisation = []
-                          Actor = by })
+                          Actor = by; OnBehalfOf = None })
               Status = Complete
               Offset = EventOffset.create 1L |> expect
               Woke = None; Replying = None }
+
+        // A repo's file is the author of its sandbox's start, but somebody asked for the
+        // fold that started it — and a note that names only the file answers "who did this"
+        // with a file. The person it was for is named on the note, as a reference.
+        testCase "a repo's sandbox start names the person it was for" <| fun () ->
+            let ada = Principal.Peer (PeerId.create "ada" |> expect)
+            let item = sandboxStartBy (ActorRef.Configured (RepoRef.create "octo/hello" |> expect))
+            let forAda =
+                match item.Content with
+                | ItemContent.Act (Act.SandboxStarted s) ->
+                    { item with Content = ItemContent.Act (Act.SandboxStarted { s with OnBehalfOf = Some ada }) }
+                | _ -> failwith "the fixture is a sandbox start"
+            let html =
+                Support.render
+                    { representativeModel with
+                        Conversation = { representativeModel.Conversation with Items = [ forAda ] } }
+            let noteStart = html.IndexOf "data-act-note"
+            let note = html.Substring (noteStart, html.IndexOf ("</article>", noteStart) - noteStart)
+            Expect.isTrue
+                (note.Contains (Dom.attr "data-entity" (EntityRef.said (EntityRef.Actor (Principal.toActor ada)))))
+                "the note names Ada as a reference"
 
         /// The sandbox reference's NAME as rendered — the text inside the entity element.
         let sandboxNameOn (html: string) : string =
