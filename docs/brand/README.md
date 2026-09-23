@@ -761,6 +761,13 @@ mirror image meets the plane at one point, and that is where the highlight is, c
 whichever tops it falls across — so it slides over the surface as the camera moves instead of
 riding on it, and each top's graded fill runs from its corner nearest the lamp; the lamp is not
 part of the material, so the sheen is there from the first frame. The straight lens needs no
-subdivision, so the faces are four points each. About 135 KB, 18 KB gzipped; SMIL cannot read
+subdivision, so the faces are four points each. The eye also dollies: it starts three times
+DIST out and eases to DIST, and because the scale is already solved per frame the framing does
+not move — only the strength of the perspective. That is not a flourish. At two block-widths a
+collaborator's near vertical corner projects through horizontal around 1.7s, putting a flat
+four-unit edge under the panel where the mark itself holds that edge at 43 degrees, and a
+horizontal edge under a form reads as a slice rather than a corner. Further out it stays a
+corner the whole way; the eye is back at DIST by the last frame, so the mark is untouched.
+About 135 KB, 18 KB gzipped; SMIL cannot read
 `prefers-reduced-motion`, so a page that respects it shows `mark.svg` instead. Click to replay.
 Built by `gen28.py`.

@@ -132,8 +132,8 @@ class Intro:
     """Every keyframe is the same scene at one instant; the file carries them as baked SMIL values
     on uniform keyTimes, so the easing lives in the samples and nothing on the page knows the curve."""
     def __init__(self, N=48, dur=2.4, delta=0.1, panels=(0.3, 1.0), fx=(0.0, 0.4), camera=(0.08, 1.0),
-                 clarity=0.6, backs=0.45, rim=1.3, spill=0.5, bloom=0.3, agent=0.8, margin=3.0,
-                 start_pad=15.5, end_pad=7.0):
+                 clarity=0.6, backs=0.45, rim=1.3, spill=0.5, bloom=0.3, agent=0.8, dolly=2.0,
+                 margin=3.0, start_pad=15.5, end_pad=7.0):
         self.__dict__.update({k: v for k, v in locals().items() if k != "self"})
         self.cam1 = fit(Lens(PHI1, DIST, UP1, target=TARGET), prisms_at(0.0), pad=end_pad)
         self.cam0 = fit(Lens(PHI0, DIST, 0.0, target=TARGET), prisms_at(0.0)[:1], pad=start_pad)
@@ -153,8 +153,15 @@ class Intro:
         return max(p[0] for p in top) - min(p[0] for p in top)
     def rig(self, e):
         """The camera at tilt e. The eye's path is near a straight line in the world; the scale is
-        solved per frame so the agent's width on screen changes evenly, or the pull reads as two moves."""
-        c = Lens(PHI0 + (PHI1-PHI0)*e, DIST, UP1*e, target=TARGET)
+        solved per frame so the agent's width on screen changes evenly, or the pull reads as two moves.
+
+        The eye also starts `dolly` times further out and comes in, which the scale solve holds at
+        the same framing — so the only thing it changes is how strong the perspective is. At the
+        wide lens's own two block-widths a collaborator's near vertical corner foreshortens right
+        through horizontal partway down the arc, and a horizontal edge under a form reads as a
+        slice rather than a corner. Further out it stays a corner; by the end the eye is back at
+        DIST, so the last frame is the mark either way."""
+        c = Lens(PHI0 + (PHI1-PHI0)*e, DIST*(1 + self.dolly*(1-e)), UP1*e, target=TARGET)
         for k in ("cx", "cy"):
             setattr(c, k, getattr(self.cam0, k) + (getattr(self.cam1, k) - getattr(self.cam0, k))*e)
         c.s = 1.0
