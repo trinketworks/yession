@@ -3182,6 +3182,17 @@ let editorTests =
         // is the design, and the design is what a card is FOR.
         editorCase "a task card's lines stay real controls, reachable and pressable without a pointer" <| fun page ->
             async {
+                // The fold's own CSS animates `grid-template-rows` (0fr -> 1fr) over 200ms
+                // (`Style.Motion.unfold`), so the instant after `data-fold-open` flips to
+                // "yes" the lines are still sitting in a near-zero-height, `overflow-hidden`
+                // row — real, `visibility: visible`, but with no laid-out area yet. Chromium's
+                // sequential focus navigation skips a target with no area at the moment Tab is
+                // pressed, so it landed on the next fold's arrow further down the page instead
+                // of the line just revealed. Motion turned off is what every other case that
+                // measures or reaches into something mid-animation already does (see "a turn
+                // in flight is stated on the screen exactly once"), and every fold already
+                // carries `motion-reduce:transition-none` for it.
+                do! awaitU (page.EmulateMediaAsync (PageEmulateMediaOptions (ReducedMotion = ReducedMotion.Reduce)))
                 // The timeline's one fold (`data-fold`), same as every other disclosure here:
                 // a real button, keyboard-operable and announced without a role of our own.
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-chat-task-card]")
