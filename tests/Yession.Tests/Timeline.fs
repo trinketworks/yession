@@ -2041,6 +2041,18 @@ let private sandboxCauseTests =
             let events = [ at 1L 0.0 (repoAdded "a" "octo/hello"); at 2L 1.0 (startingFor "s" ada (Some (Cause.Item (message "a")))) ]
             Expect.equal (forWhomOf "s" events) " for peer:ada" "the cause sits right above, so no cause line is drawn"
 
+        testCase "what a repo asks for, pushed away from what caused it, points back to it" <| fun () ->
+            let asks =
+                SessionEvent.RepoCapabilitiesChanged
+                    { Repos.RepoCapabilitiesChanged.MessageId = message "c"
+                      Repos.RepoCapabilitiesChanged.Repo = hello
+                      Repos.RepoCapabilitiesChanged.Granted = [ "path:/nix:ro" ]
+                      Repos.RepoCapabilitiesChanged.Sensitive = false
+                      Repos.RepoCapabilitiesChanged.Actor = ActorRef.Configured hello
+                      Repos.RepoCapabilitiesChanged.CausedBy = Some (Cause.Item (message "a")) }
+            let events = [ at 1L 0.0 (repoAdded "a" "octo/hello"); at 2L 1.0 (repoAdded "b" "octo/other"); at 3L 2.0 asks ]
+            Expect.equal (causeOf "c" events) (Some (Cause.Item (message "a"))) "the ref points at the add"
+
         testCase "a cause that is not an item offers no jump" <| fun () ->
             let html = Support.render (clientOf [ at 1L 0.0 (startingBecause "s" Cause.Booted) ])
             Expect.isFalse ((causeLineOf "s" html).Contains "data-cause-jump") "nothing to jump to"

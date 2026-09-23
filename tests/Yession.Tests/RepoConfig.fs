@@ -523,6 +523,27 @@ let foldTests =
                 | other -> failwithf "expected one note, got %A" other
             }
 
+        // Why the file was read this time is on the note, as on the starts it did not produce.
+        testCaseAsync "a refused declaration records what caused the fold" <|
+            async {
+                let r = repo "octo/hello"
+                let dir = checkout r (Some "version: 2\nsandboxes:\n  dev: {}\n")
+                let log = foldLog ()
+                let folded =
+                    RepoSandboxes.create
+                        dir
+                        (cell (Some (reposOver dir [ r ])))
+                        (cell WorkSandboxes.unavailable)
+                        (refusingGate "registry.npmjs.org is not in this session's egress")
+                        log
+                        noCapabilities
+                do! folded.Fold FoldCause.Booted CredentialFor.Deployment
+                let! page = log.Read None System.Int32.MaxValue
+                match page.Events |> List.choose (fun e -> match e.Event with SessionEvent.RepoConfigRefused n -> Some n | _ -> None) with
+                | [ note ] -> Expect.equal note.CausedBy (Some Cause.Booted) "the session starting"
+                | other -> failwithf "expected one note, got %A" other
+            }
+
         // The fold runs after every repo verb. A note per outcome would rebuild exactly the
         // accumulation the query was chosen to avoid — on the surface it was avoided for.
         testCaseAsync "the same refusal folded twice is said once" <|
@@ -620,6 +641,47 @@ let foldTests =
                     Expect.equal note.Actor (ActorRef.Configured r) "attributed to the file, like everything else it asks for"
                 | other -> failwithf "expected one note, got %A" other
             }
+
+        // Why the file was read this time is on the note, as on the starts it precedes.
+        testCaseAsync "what a repo asks for records what caused the fold" <|
+            async {
+                let r = repo "octo/hello"
+                let dir = checkout r (Some "version: 2\nsandboxes:\n  dev:\n    uses: [ nix ]\n")
+                let log = foldLog ()
+                let folded =
+                    RepoSandboxes.create
+                        dir
+                        (cell (Some (reposOver dir [ r ])))
+                        (cell WorkSandboxes.unavailable)
+                        (recordingGate (ResizeArray<GatedCall> ()))
+                        log
+                        (granting [ "path:/nix:ro" ])
+                do! folded.Fold FoldCause.Booted CredentialFor.Deployment
+                let! page = log.Read None System.Int32.MaxValue
+                match page.Events |> List.choose (fun e -> match e.Event with SessionEvent.RepoCapabilitiesChanged c -> Some c | _ -> None) with
+                | [ note ] -> Expect.equal note.CausedBy (Some Cause.Booted) "the session starting"
+                | other -> failwithf "expected one note, got %A" other
+            }
+
+        // The cause crosses the wire with the set it explains.
+        testCase "what a repo asks for keeps its cause on the wire" <| fun () ->
+            let r = repo "octo/hello"
+            let envelope : EventEnvelope<SessionEvent> =
+                { EventId = EventId.fresh ()
+                  SessionId = SessionId.create "caps-session" |> expect
+                  Offset = EventOffset.create 1L |> expect
+                  Actor = ActorRef.Configured r
+                  Timestamp = System.DateTimeOffset (2026, 8, 8, 10, 0, 0, System.TimeSpan.Zero)
+                  Event =
+                    SessionEvent.RepoCapabilitiesChanged
+                        { RepoCapabilitiesChanged.MessageId = MessageId.create "m1" |> expect
+                          RepoCapabilitiesChanged.Repo = r
+                          RepoCapabilitiesChanged.Granted = [ "path:/nix:ro" ]
+                          RepoCapabilitiesChanged.Sensitive = false
+                          RepoCapabilitiesChanged.Actor = ActorRef.Configured r
+                          RepoCapabilitiesChanged.CausedBy = Some (Cause.Item (MessageId.create "added" |> expect)) } }
+            let json = Codec.toString Codec.sessionEventEnvelope envelope
+            Expect.equal (Codec.fromString Codec.sessionEventEnvelope json |> expect) envelope "unchanged by the wire"
 
         // The fold runs after every repo verb. A note per fold would be the accumulation the
         // whole delta rule exists to avoid.
@@ -796,7 +858,8 @@ let foldTests =
                       RepoCapabilitiesChanged.Repo = r
                       RepoCapabilitiesChanged.Granted = [ "!net:anywhere" ]
                       RepoCapabilitiesChanged.Sensitive = true
-                      RepoCapabilitiesChanged.Actor = ActorRef.Configured r }
+                      RepoCapabilitiesChanged.Actor = ActorRef.Configured r
+                      RepoCapabilitiesChanged.CausedBy = None }
             Expect.equal
                 (RepoApprovals.pending [ asked ])
                 [ r, [ "!net:anywhere" ] ]
@@ -810,7 +873,8 @@ let foldTests =
                       RepoCapabilitiesChanged.Repo = r
                       RepoCapabilitiesChanged.Granted = granted
                       RepoCapabilitiesChanged.Sensitive = false
-                      RepoCapabilitiesChanged.Actor = ActorRef.Configured r }
+                      RepoCapabilitiesChanged.Actor = ActorRef.Configured r
+                      RepoCapabilitiesChanged.CausedBy = None }
             Expect.equal (RepoApprovals.pending [ asked [ "path:/nix:ro" ]; asked [ "path:/nix:ro"; "path:/opt:ro" ] ]) [] "nothing to ask"
 
         testCase "an approval settles the set it names" <| fun () ->
@@ -822,7 +886,8 @@ let foldTests =
                       RepoCapabilitiesChanged.Repo = r
                       RepoCapabilitiesChanged.Granted = [ "!net:anywhere" ]
                       RepoCapabilitiesChanged.Sensitive = true
-                      RepoCapabilitiesChanged.Actor = ActorRef.Configured r }
+                      RepoCapabilitiesChanged.Actor = ActorRef.Configured r
+                      RepoCapabilitiesChanged.CausedBy = None }
             let approved granted =
                 SessionEvent.RepoCapabilitiesApproved
                     { RepoCapabilitiesApproved.MessageId = MessageId.create "m2" |> expect
@@ -845,7 +910,8 @@ let foldTests =
                       RepoCapabilitiesChanged.Repo = r
                       RepoCapabilitiesChanged.Granted = granted
                       RepoCapabilitiesChanged.Sensitive = true
-                      RepoCapabilitiesChanged.Actor = ActorRef.Configured r }
+                      RepoCapabilitiesChanged.Actor = ActorRef.Configured r
+                      RepoCapabilitiesChanged.CausedBy = None }
             let approved =
                 SessionEvent.RepoCapabilitiesApproved
                     { RepoCapabilitiesApproved.MessageId = MessageId.create "m2" |> expect

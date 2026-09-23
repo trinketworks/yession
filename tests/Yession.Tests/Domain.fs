@@ -892,7 +892,8 @@ let private repoTests =
                               RepoCapabilitiesChanged.Repo = RepoRef.create "octo/hello" |> expect
                               RepoCapabilitiesChanged.Granted = granted
                               RepoCapabilitiesChanged.Sensitive = false
-                              RepoCapabilitiesChanged.Actor = ActorRef.SessionProcess } }
+                              RepoCapabilitiesChanged.Actor = ActorRef.SessionProcess
+                              RepoCapabilitiesChanged.CausedBy = None } }
                 let proj, _ = ConversationProjection.applyEvents None [ envelope ] ConversationProjection.empty
                 match proj.Items with
                 | [ item ] -> ConversationItem.headline item, noteDetail item
@@ -918,7 +919,8 @@ let private repoTests =
                           RepoCapabilitiesChanged.Repo = RepoRef.create "octo/hello" |> expect
                           RepoCapabilitiesChanged.Granted = [ "/nix, read-only" ]
                           RepoCapabilitiesChanged.Sensitive = false
-                          RepoCapabilitiesChanged.Actor = ActorRef.SessionProcess } }
+                          RepoCapabilitiesChanged.Actor = ActorRef.SessionProcess
+                          RepoCapabilitiesChanged.CausedBy = None } }
             let proj, _ = ConversationProjection.applyEvents None [ envelope ] ConversationProjection.empty
             match proj.Items with
             | [ item ] ->

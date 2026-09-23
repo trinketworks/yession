@@ -542,10 +542,22 @@ module ConversationProjection =
     /// Why the given turn exists, if nobody asked for it. Matched on the turn id rather than
     /// taken on trust: a late event from a turn the wake did not start must not inherit the
     /// current one's reason.
+    /// A cause worth drawing: an item that is not the one this lands directly below. The
+    /// detachment is read off `proj.Items` as it stands BEFORE the new item is appended, so
+    /// its last entry is exactly what will render above: adjacent means it already sits
+    /// under its cause, and the ref would say what the eye can see. A cause that is not an
+    /// item — the session starting, a person connecting — is never on screen to sit under.
+    let private detached (cause: Cause option) (proj: ConversationProjection) : Cause option =
+        match cause, List.tryLast proj.Items with
+        | Some (Cause.Item item), Some last when last.MessageId = item -> None
+        | _ -> cause
+
     /// One act, appended where it happened. What it says is the act's own (`Act.phrase`),
-    /// and every arm that notes something hands over the facts and nothing else.
-    let private noted
+    /// and every arm that notes something hands over the facts and nothing else — its cause
+    /// among them, when it has one. `noted` is this with none.
+    let private causedNote
         (messageId: MessageId)
+        (causedBy: Cause option)
         (actor: ActorRef)
         (act: Act)
         (envelope: EventEnvelope<SessionEvent>)
@@ -559,17 +571,9 @@ module ConversationProjection =
                       Content = ItemContent.Act act
                       Status = Complete
                       Offset = envelope.Offset
-                      Woke = None; CausedBy = None } ] }
+                      Woke = None; CausedBy = detached causedBy proj } ] }
 
-    /// A cause worth drawing: an item that is not the one this lands directly below. The
-    /// detachment is read off `proj.Items` as it stands BEFORE the new item is appended, so
-    /// its last entry is exactly what will render above: adjacent means it already sits
-    /// under its cause, and the ref would say what the eye can see. A cause that is not an
-    /// item — the session starting, a person connecting — is never on screen to sit under.
-    let private detached (cause: Cause option) (proj: ConversationProjection) : Cause option =
-        match cause, List.tryLast proj.Items with
-        | Some (Cause.Item item), Some last when last.MessageId = item -> None
-        | _ -> cause
+    let private noted messageId actor act envelope proj = causedNote messageId None actor act envelope proj
 
     /// An act that RESOLVES a running one in place — the same id, a settled status and the
     /// facts of how it settled. A log written before the running half existed has no such
@@ -783,9 +787,11 @@ module ConversationProjection =
             proj |> resolved s.MessageId s.CausedBy s.Actor (Act.SandboxStartFailed s) Failed envelope
         // The other outcome of a declaration, beside the start above. What a repo asks for,
         // when it changed; a person's yes to it; and the file that could not be honoured.
-        | SessionEvent.RepoCapabilitiesChanged c -> proj |> noted c.MessageId c.Actor (Act.RepoCapabilitiesChanged c) envelope
+        | SessionEvent.RepoCapabilitiesChanged c ->
+            proj |> causedNote c.MessageId c.CausedBy c.Actor (Act.RepoCapabilitiesChanged c) envelope
         | SessionEvent.RepoCapabilitiesApproved a -> proj |> noted a.MessageId a.Actor (Act.RepoCapabilitiesApproved a) envelope
-        | SessionEvent.RepoConfigRefused r -> proj |> noted r.MessageId r.Actor (Act.RepoConfigRefused r) envelope
+        | SessionEvent.RepoConfigRefused r ->
+            proj |> causedNote r.MessageId r.CausedBy r.Actor (Act.RepoConfigRefused r) envelope
         | SessionEvent.WorkSandboxStopped s -> proj |> noted s.MessageId s.Actor (Act.SandboxStopped s) envelope
         // Where new terminals start (Plan 25) folds in for the repo notes' reason: it is a
         // session-shaping act everyone is affected by — the next terminal a PERSON opens
