@@ -2060,9 +2060,16 @@ module View =
         // hid the sentence it did, would be two accounts of one act with no way to compare
         // them. The same phrase (`Act.sentence`) both readers collapse, so `data-act-said`'s
         // text IS what the prompt carried, to the character.
+        //
+        // PLAIN, therefore. It used to draw each reference in the quote the way the screen
+        // draws one — mark, link, resolved name — over the prose spelling, which put a
+        // repository glyph and a person's checker inside a quotation of a prompt that never
+        // held either: the row claimed to be what the agent read and looked like what the
+        // screen renders. A quote of text is text. The line around it still names the agent
+        // as a reference, because that is the SCREEN saying whose sentence follows.
         let toldRow (act: Act) =
             html $"""
-                <div class="{Style.actNoteToldRow}">{Entity.render model ActorRef.Agent (EntityRef.Actor ActorRef.Agent)} {Dom.Text.actSaid} <span class="{Style.actNoteTold}" data-act-said>{Entity.told model (Act.sentence act)}</span></div>"""
+                <div class="{Style.actNoteToldRow}">{Entity.render model ActorRef.Agent (EntityRef.Actor ActorRef.Agent)} {Dom.Text.actSaid} <span class="{Style.actNoteTold}" data-act-said>{Phrase.said (Act.sentence act)}</span></div>"""
         // A sandbox start shows its TITLE and nothing else on the line: which sandbox, drawn
         // as a reference (under the repo that declared it, that is the bare `dev`). Everything
         // the sentence also carries — the backend, what it is for, where the checkout sits,

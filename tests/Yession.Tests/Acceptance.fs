@@ -1277,6 +1277,14 @@ let private uiChecklistTests =
             let text = System.Text.RegularExpressions.Regex.Replace(element.Substring (element.IndexOf ">" + 1), "<[^>]*>", "").Trim ()
             Expect.equal text (ConversationItem.said note) "the disclosure reads exactly as the prompt did"
             Expect.isTrue (text.Contains "on branch main") "particulars included, not the headline alone"
+            // And it is TEXT. The quote used to draw each reference in it the way the screen
+            // draws one — a repository glyph, a person's checker, a link — inside a quotation
+            // of a prompt that held none of them: it claimed to be what the agent read and
+            // looked like what the screen renders. The words were always right; what they
+            // wore was not.
+            let quote = element.Substring (element.IndexOf ">" + 1)
+            Expect.isFalse (quote.Contains "data-entity") "a quote of what the agent read carries no drawn references"
+            Expect.isFalse (quote.Contains "<a ") "and nothing in it leads anywhere the agent could not go"
 
         // The fold is a CONTROL, and says which way it is: a real button carrying its
         // expanded state, so a keyboard reaches it and a screen reader hears it — and the
