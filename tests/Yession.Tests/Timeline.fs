@@ -1952,6 +1952,18 @@ let private startingBecause (n: string) (cause: Cause) =
     | SessionEvent.WorkSandboxStarting s -> SessionEvent.WorkSandboxStarting { s with CausedBy = Some cause }
     | other -> other
 
+/// A start for `person`, with what caused it when anything did.
+let private startingFor (n: string) (person: PeerId) (cause: Cause option) =
+    match starting n with
+    | SessionEvent.WorkSandboxStarting s ->
+        SessionEvent.WorkSandboxStarting { s with OnBehalfOf = Some (Principal.Peer person); CausedBy = cause }
+    | other -> other
+
+/// Who the note for start `n` says it was for, as a screen that draws its cause says it.
+let private forWhomOf (n: string) events =
+    let items = conversationOf events
+    items |> List.find (fun i -> i.MessageId = message n) |> ConversationItem.forWhom items |> Phrase.said
+
 let private causeOf (n: string) events =
     conversationOf events
     |> List.tryFind (fun i -> i.MessageId = message n)
@@ -2010,6 +2022,24 @@ let private sandboxCauseTests =
                           at 2L 1.0 (repoAdded "b" "octo/other")
                           at 3L 2.0 (startingBecause "s" (Cause.Item (message "a"))) ])
             Expect.isTrue ((causeLineOf "s" html).Contains "data-cause-jump") "the mark is a jump"
+
+        testCase "who a start was for is not said again when its cause names them" <| fun () ->
+            let events =
+                [ at 1L 0.0 (repoAdded "a" "octo/hello")
+                  at 2L 1.0 (repoAdded "b" "octo/other")
+                  at 3L 2.0 (startingFor "s" ada (Some (Cause.Item (message "a")))) ]
+            Expect.equal (forWhomOf "s" events) "" "Ada added the repo, so the cause already names her"
+
+        testCase "who a start was for stays when its cause names somebody else" <| fun () ->
+            let events =
+                [ at 1L 0.0 (repoAdded "a" "octo/hello")
+                  at 2L 1.0 (repoAdded "b" "octo/other")
+                  at 3L 2.0 (startingFor "s" (PeerId.create "bob" |> expect) (Some (Cause.Item (message "a")))) ]
+            Expect.equal (forWhomOf "s" events) " for peer:bob" "Ada caused it; it ran for Bob"
+
+        testCase "who a start was for stays when nothing on the note names them" <| fun () ->
+            let events = [ at 1L 0.0 (repoAdded "a" "octo/hello"); at 2L 1.0 (startingFor "s" ada (Some (Cause.Item (message "a")))) ]
+            Expect.equal (forWhomOf "s" events) " for peer:ada" "the cause sits right above, so no cause line is drawn"
 
         testCase "a cause that is not an item offers no jump" <| fun () ->
             let html = Support.render (clientOf [ at 1L 0.0 (startingBecause "s" Cause.Booted) ])

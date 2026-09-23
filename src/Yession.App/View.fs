@@ -2266,8 +2266,12 @@ module View =
             let fold = foldBody key Style.actNoteFoldInner folded
             // Who the act was for, after the deed: "started sandbox dev for Ada". The author
             // alone would name a repo's file or the agent and stop there. Its own box, so a
-            // narrow screen puts it on its own line rather than wrapping mid-clause.
-            let whom = html $"""<span class="{Style.actNoteFor}">{Entity.phrase model by (Act.forWhom act)}</span>"""
+            // narrow screen puts it on its own line rather than wrapping mid-clause — and
+            // nothing at all when the cause line below already names that person.
+            let whom =
+                match ConversationItem.forWhom model.Conversation.Items item with
+                | [] -> Lit.nothing
+                | clause -> html $"""<span class="{Style.actNoteFor}" data-act-for>{Entity.phrase model by clause}</span>"""
             html $"""
                 <article class="{Style.actNote}" data-message-id="{MessageId.value item.MessageId}" tabindex="-1" data-act-note data-act-status="{messageStatusLabel item.Status}" data-message-author="{Entity.actorToken item.Author}">
                   {itemActions item}
