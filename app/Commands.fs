@@ -174,8 +174,8 @@ let dispatch (services: CommandServices) : CommandDispatch =
     let repoCaller (invocation: GatedInvocation) : Repos.RepoCaller =
         { Actor = Authority.author invocation.Authority
           Credential = Authority.credential invocation.Authority }
-    // A sandbox is started by an ACTOR and lent to nobody: what its blocks spend is each
-    // block's own act's credential, so a start carries none.
+    // A sandbox is stopped by an ACTOR. A start takes the whole authority, but only to say
+    // who it was for: what its blocks spend is each block's own act's credential.
     let sandboxCaller (invocation: GatedInvocation) : ActorRef = Authority.author invocation.Authority
     Map.ofList
         [ addRepoTool,
@@ -253,7 +253,7 @@ let dispatch (services: CommandServices) : CommandDispatch =
                                         // invalidates. Nothing is computed here.
                                         let! cleared =
                                             (services.Terminals ())
-                                                .ClearProfilesUnder (Authority.author invocation.Authority) path
+                                                .ClearProfilesUnder invocation.Authority path
                                         if not (List.isEmpty cleared) then
                                             services.Invalidate ShellProfile.queryName
                                         let profiles =
@@ -441,7 +441,7 @@ let dispatch (services: CommandServices) : CommandDispatch =
                             match SandboxDecl.toRequest checkout decl with
                             | Error e -> return Error e
                             | Ok request ->
-                                match! (services.Sandboxes ()).Ensure (sandboxCaller invocation) name request with
+                                match! (services.Sandboxes ()).Ensure invocation.Authority name request with
                                 | Error e -> return Error e
                                 | Ok outcome ->
                                     let entry = WorkSandboxes.SandboxOutcome.sandbox outcome
@@ -566,7 +566,7 @@ let dispatch (services: CommandServices) : CommandDispatch =
                     | Ok name ->
                         return!
                             andPublish services ShellProfile.queryName (
-                                (services.Terminals ()).SetProfile (Authority.author invocation.Authority) name cwd)
+                                (services.Terminals ()).SetProfile invocation.Authority name cwd)
             }
 
           // The two file commands (the file verbs). Acts on the shared checkout, so they

@@ -1084,7 +1084,7 @@ let private actsModel : ClientModel =
                       Checkout = None
                       Forwarded = [ ConnectionName.create "github" |> expect ]
                       Realisation = []
-                      Actor = ActorRef.Agent })
+                      Actor = ActorRef.Agent; OnBehalfOf = None })
           Status = Complete
           Offset = offset 31L
           Woke = None; Replying = None }

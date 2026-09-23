@@ -159,9 +159,11 @@ module SandboxOutcome =
 type WorkSandboxes =
     { /// Get-or-create by name. Idempotent when the configuration matches; a legible
       /// error when it does not. The answer says which of those happened.
-      /// Started by an ACTOR — the agent, a person, a repo's file — and lent to nobody:
-      /// what a sandbox's blocks spend is each block's own act's credential (`Loans`).
-      Ensure : ActorRef -> SandboxRef -> SandboxRequest -> Async<Result<SandboxOutcome, string>>
+      /// Started on an AUTHORITY — the agent's, a person's, a repo's file's — and lent to
+      /// nobody: what a sandbox's blocks spend is each block's own act's credential
+      /// (`Loans`). The authority is here for attribution only: the start records who it
+      /// was for.
+      Ensure : Authority -> SandboxRef -> SandboxRequest -> Async<Result<SandboxOutcome, string>>
       Stop : ActorRef -> SandboxRef -> Async<Result<unit, string>>
       /// The environment a terminal runs in. Total, because a terminal has to be told no
       /// in the same shape it is told anything else — an unknown name resolves to an
@@ -320,8 +322,10 @@ let create (config: WorkSandboxesConfig) : Async<Result<WorkSandboxes, string>> 
                     return ()
                 }
 
-            let ensure (actor: ActorRef) (name: SandboxRef) (request: SandboxRequest) : Async<Result<SandboxOutcome, string>> =
+            let ensure (authority: Authority) (name: SandboxRef) (request: SandboxRequest) : Async<Result<SandboxOutcome, string>> =
                 async {
+                    let actor = Authority.author authority
+                    let onBehalfOf = Authority.onBehalfOf authority
                     // Already normalised by construction (`SandboxRequest.Forward` is a
                     // `ConnectionName list`), so two asks that mean the same thing compare equal.
                     let wanted = request
@@ -369,7 +373,8 @@ let create (config: WorkSandboxesConfig) : Async<Result<WorkSandboxes, string>> 
                                               Sandbox = name
                                               Backend = config.Backend name
                                               Description = config.Describe name
-                                              Actor = actor })
+                                              Actor = actor
+                                              OnBehalfOf = onBehalfOf })
                                 match! environment.Ensure None (sprintf "sandbox '%s' was started" (SandboxRef.render name)) with
                                 | EnvironmentUnavailable reason ->
                                     do!
@@ -379,7 +384,8 @@ let create (config: WorkSandboxesConfig) : Async<Result<WorkSandboxes, string>> 
                                                 { MessageId = messageId
                                                   Sandbox = name
                                                   Reason = reason
-                                                  Actor = actor })
+                                                  Actor = actor
+                                                  OnBehalfOf = onBehalfOf })
                                     return Error reason
                                 | EnvironmentAvailable ->
                                     let startedAt = config.Clock ()
@@ -407,7 +413,8 @@ let create (config: WorkSandboxesConfig) : Async<Result<WorkSandboxes, string>> 
                                                   // built from, and this manager never sees
                                                   // one.
                                                   Realisation = environment.Realisation ()
-                                                  Actor = actor })
+                                                  Actor = actor
+                                                  OnBehalfOf = onBehalfOf })
                                     return Ok (SandboxStarted entry)
                 }
 

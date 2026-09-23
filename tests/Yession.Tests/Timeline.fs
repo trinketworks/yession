@@ -1327,7 +1327,7 @@ let private toolTests =
                     { ShellProfileSet.MessageId = MessageId.create "p-1" |> expect
                       ShellProfileSet.Sandbox = SandboxRef.defaultRef
                       ShellProfileSet.WorkingDirectory = Some "/repos/x"
-                      ShellProfileSet.Actor = PeerRef ada }
+                      ShellProfileSet.Actor = PeerRef ada; OnBehalfOf = None }
             let events =
                 [ at 1L 0.0 agentWrote
                   at 2L 1.0 (used "1" "a" "read_file")
@@ -1826,7 +1826,7 @@ let private repoActor = ActorRef.Configured (RepoRef.create "octo/hello" |> expe
 
 let private starting (n: string) =
     SessionEvent.WorkSandboxStarting
-        { MessageId = message n; Sandbox = sandboxRef; Backend = "docker"; Description = Some "day-to-day work"; Actor = repoActor }
+        { MessageId = message n; Sandbox = sandboxRef; Backend = "docker"; Description = Some "day-to-day work"; Actor = repoActor; OnBehalfOf = None }
 
 let private startedSandbox (n: string) =
     SessionEvent.WorkSandboxStarted
@@ -1837,10 +1837,10 @@ let private startedSandbox (n: string) =
           Checkout = Some "/repos/octo/hello"
           Forwarded = []
           Realisation = []
-          Actor = repoActor }
+          Actor = repoActor; OnBehalfOf = None }
 
 let private startFailed (n: string) (reason: string) =
-    SessionEvent.WorkSandboxStartFailed { MessageId = message n; Sandbox = sandboxRef; Reason = reason; Actor = repoActor }
+    SessionEvent.WorkSandboxStartFailed { MessageId = message n; Sandbox = sandboxRef; Reason = reason; Actor = repoActor; OnBehalfOf = None }
 
 let private conversationOf events =
     (ConversationProjection.applyEvents None events ConversationProjection.empty |> fst).Items

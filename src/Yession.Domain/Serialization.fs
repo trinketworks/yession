@@ -1282,7 +1282,8 @@ module Codec =
                       // every peer, and a shape that could hold a token eventually does.
                       "forwarded", Encode.list (p.Forwarded |> List.map (ConnectionName.value >> Encode.string))
                       "realisation", Encode.list (p.Realisation |> List.map Encode.string)
-                      "actor", actor.Encode p.Actor ]
+                      "actor", actor.Encode p.Actor
+                      "onBehalfOf", Encode.option principal.Encode p.OnBehalfOf ]
           Decode =
             Decode.object (fun get ->
                 { WorkSandboxStarted.MessageId = get.Required.Field "messageId" messageId.Decode
@@ -1307,7 +1308,11 @@ module Codec =
                   // differed or that nothing did.
                   WorkSandboxStarted.Realisation =
                     get.Optional.Field "realisation" (Decode.list Decode.string) |> Option.defaultValue []
-                  WorkSandboxStarted.Actor = get.Required.Field "actor" actor.Decode }) }
+                  WorkSandboxStarted.Actor = get.Required.Field "actor" actor.Decode
+                  // Optional in: a start written before this field existed named nobody
+                  // behind its actor, and nobody is what it reads back as.
+                  WorkSandboxStarted.OnBehalfOf =
+                    get.Optional.Field "onBehalfOf" (Decode.option principal.Decode) |> Option.flatten }) }
 
     let private gitCredentialSpent : Codec<GitCredentialSpent> =
         { Encode =
@@ -1340,7 +1345,8 @@ module Codec =
                       "sandbox", sandboxRef.Encode p.Sandbox
                       "backend", Encode.string p.Backend
                       "description", Encode.option Encode.string p.Description
-                      "actor", actor.Encode p.Actor ]
+                      "actor", actor.Encode p.Actor
+                      "onBehalfOf", Encode.option principal.Encode p.OnBehalfOf ]
           Decode =
             Decode.object (fun get ->
                 { WorkSandboxStarting.MessageId = get.Required.Field "messageId" messageId.Decode
@@ -1348,7 +1354,9 @@ module Codec =
                   WorkSandboxStarting.Backend = get.Required.Field "backend" Decode.string
                   WorkSandboxStarting.Description =
                     get.Optional.Field "description" (Decode.option Decode.string) |> Option.flatten
-                  WorkSandboxStarting.Actor = get.Required.Field "actor" actor.Decode }) }
+                  WorkSandboxStarting.Actor = get.Required.Field "actor" actor.Decode
+                  WorkSandboxStarting.OnBehalfOf =
+                    get.Optional.Field "onBehalfOf" (Decode.option principal.Decode) |> Option.flatten }) }
 
     let private workSandboxStartFailed : Codec<WorkSandboxStartFailed> =
         { Encode =
@@ -1357,13 +1365,16 @@ module Codec =
                     [ "messageId", messageId.Encode p.MessageId
                       "sandbox", sandboxRef.Encode p.Sandbox
                       "reason", Encode.string p.Reason
-                      "actor", actor.Encode p.Actor ]
+                      "actor", actor.Encode p.Actor
+                      "onBehalfOf", Encode.option principal.Encode p.OnBehalfOf ]
           Decode =
             Decode.object (fun get ->
                 { WorkSandboxStartFailed.MessageId = get.Required.Field "messageId" messageId.Decode
                   WorkSandboxStartFailed.Sandbox = get.Required.Field "sandbox" sandboxRef.Decode
                   WorkSandboxStartFailed.Reason = get.Required.Field "reason" Decode.string
-                  WorkSandboxStartFailed.Actor = get.Required.Field "actor" actor.Decode }) }
+                  WorkSandboxStartFailed.Actor = get.Required.Field "actor" actor.Decode
+                  WorkSandboxStartFailed.OnBehalfOf =
+                    get.Optional.Field "onBehalfOf" (Decode.option principal.Decode) |> Option.flatten }) }
 
     let private repoCapabilitiesChanged : Codec<RepoCapabilitiesChanged> =
         { Encode =
@@ -1446,13 +1457,17 @@ module Codec =
                       // indistinguishable from a line an older build wrote — and that is the
                       // right answer for both: no profile.
                       "workingDirectory", Encode.option Encode.string p.WorkingDirectory
-                      "actor", actor.Encode p.Actor ]
+                      "actor", actor.Encode p.Actor
+                      "onBehalfOf", Encode.option principal.Encode p.OnBehalfOf ]
           Decode =
             Decode.object (fun get ->
                 { ShellProfileSet.MessageId = get.Required.Field "messageId" messageId.Decode
                   ShellProfileSet.Sandbox = get.Required.Field "sandbox" sandboxRef.Decode
                   ShellProfileSet.WorkingDirectory = get.Optional.Field "workingDirectory" Decode.string
-                  ShellProfileSet.Actor = get.Required.Field "actor" actor.Decode }) }
+                  ShellProfileSet.Actor = get.Required.Field "actor" actor.Decode
+                  // Optional in, as on a start: an older line named nobody behind its actor.
+                  ShellProfileSet.OnBehalfOf =
+                    get.Optional.Field "onBehalfOf" (Decode.option principal.Decode) |> Option.flatten }) }
 
     let private fileChanged : Codec<FileChanged> =
         let change : Codec<FileChange> =

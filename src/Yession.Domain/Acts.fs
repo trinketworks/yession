@@ -80,6 +80,34 @@ module Act =
         | Act.PrUnwatched p -> PrUnwatched.phrase p
         | Act.PrTransitioned p -> PrTransitioned.phrase p
 
+    /// Whose authority the act ran on, when that is not its author's own — the person
+    /// behind the agent, or behind a repo's file. A screen says it after the headline
+    /// ("started sandbox dev for Ada"), so the file or the agent is never the whole
+    /// answer to who did this.
+    let onBehalfOf (act: Act) : Principal option =
+        match act with
+        | Act.SandboxStarting s -> s.OnBehalfOf
+        | Act.SandboxStarted s -> s.OnBehalfOf
+        | Act.SandboxStartFailed s -> s.OnBehalfOf
+        | Act.ShellProfileSet p -> p.OnBehalfOf
+        | Act.RepoAdded _
+        | Act.RepoRemoved _
+        | Act.RepoBranchSwitched _
+        | Act.RepoCapabilitiesChanged _
+        | Act.RepoCapabilitiesApproved _
+        | Act.RepoConfigRefused _
+        | Act.SandboxStopped _
+        | Act.SandboxSetupQueued _
+        | Act.FileChanged _
+        | Act.CommandRefused _
+        | Act.GatedCommandFailed _
+        | Act.CredentialSpent _
+        | Act.McpServerAvailable _
+        | Act.McpServerUnavailable _
+        | Act.PrWatched _
+        | Act.PrUnwatched _
+        | Act.PrTransitioned _ -> None
+
     /// What the headline holds back, one phrase per fact. Empty is an act that is already
     /// one clause — most are: "removed repo octo/hello" has no second half to withhold, and
     /// inventing one would pad every short line into looking like a long one.

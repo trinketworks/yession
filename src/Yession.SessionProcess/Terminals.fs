@@ -790,7 +790,7 @@ module SessionTerminals =
           /// The directory arrives, and is stored, in the vocabulary the rest of the session
           /// speaks (`SandboxPath`): as a terminal in that sandbox reaches it. What the
           /// sandbox resolves it to is the sandbox's own business and stays there.
-          SetProfile : ActorRef -> SandboxRef -> string option -> Async<Result<string, string>>
+          SetProfile : Authority -> SandboxRef -> string option -> Async<Result<string, string>>
           /// Clear every profile whose directory is inside this tree, because the tree is
           /// about to stop existing (Plan 26; Plan 25's upstream half). Answers with the
           /// sandboxes it cleared, so the caller can say so.
@@ -803,7 +803,7 @@ module SessionTerminals =
           /// deleting a tree knows only that it is going, and a caller left to work out
           /// WHICH profiles that invalidates is a caller that can get it wrong somewhere no
           /// cheap test reaches.
-          ClearProfilesUnder : ActorRef -> string -> Async<SandboxRef list>
+          ClearProfilesUnder : Authority -> string -> Async<SandboxRef list>
           /// Every sandbox's profile as it stands — what the `shell_profile` query reads.
           Profiles : unit -> ShellProfileProjection
           /// Reclaim any lease that has gone idle with something queued behind it (Plan 13,
@@ -2555,7 +2555,8 @@ module SessionTerminals =
         /// Validate, append, apply, answer — one verb, because a caller that could do the
         /// second without the first is a caller that can point every future terminal at a
         /// directory that is not there.
-        let setProfile (actor: ActorRef) (sandbox: SandboxRef) (cwd: string option) : Async<Result<string, string>> =
+        let setProfile (authority: Authority) (sandbox: SandboxRef) (cwd: string option) : Async<Result<string, string>> =
+            let actor = Authority.author authority
             async {
                 let name = SandboxRef.render sandbox
                 // Checked INSIDE the sandbox, by asking it. A host-side existence check
@@ -2651,7 +2652,8 @@ module SessionTerminals =
                               // The path the sandbox resolved, said the way a terminal here
                               // reaches it — never what the caller typed.
                               WorkingDirectory = resolved
-                              Actor = actor }
+                              Actor = actor
+                              OnBehalfOf = Authority.onBehalfOf authority }
                     do! appendAs actor event
                     profiles <- ShellProfileProjection.applyEvent profiles event
                     // The agent's GENERAL-PURPOSE terminal in this sandbox is retired, and
@@ -2704,7 +2706,8 @@ module SessionTerminals =
         /// a place they already start in. The terminals open in it keep running — a shell
         /// whose directory is deleted is a fact of the filesystem, not ours to tidy — and the
         /// next one to open lands somewhere that exists.
-        let clearProfilesUnder (actor: ActorRef) (tree: string) : Async<SandboxRef list> =
+        let clearProfilesUnder (authority: Authority) (tree: string) : Async<SandboxRef list> =
+            let actor = Authority.author authority
             async {
                 let affected =
                     ShellProfileProjection.listed profiles
@@ -2719,7 +2722,8 @@ module SessionTerminals =
                             { MessageId = mintMessageId ()
                               Sandbox = sandbox
                               WorkingDirectory = None
-                              Actor = actor }
+                              Actor = actor
+                              OnBehalfOf = Authority.onBehalfOf authority }
                     do! appendAs actor event
                     profiles <- ShellProfileProjection.applyEvent profiles event
                 return affected

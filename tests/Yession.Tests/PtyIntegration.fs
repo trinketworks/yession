@@ -1528,7 +1528,7 @@ let tests =
              withPreparedTerminal
                  (fun terminals ->
                      async {
-                         match! terminals.SetProfile ActorRef.Agent SandboxRef.defaultRef (Some directory) with
+                         match! terminals.SetProfile (Authority.agentFor (Principal.Peer (PeerId.create "ada" |> expect))) SandboxRef.defaultRef (Some directory) with
                          | Error e -> failwithf "the profile would not set: %s" e
                          | Ok _ -> ()
                      })
