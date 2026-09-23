@@ -41,7 +41,6 @@ def n(v):
     t = f"{v:.2f}".rstrip("0").rstrip(".")
     return t if t != "-0" else "0"
 def pathd(poly): return "M" + " L".join(f"{n(x)} {n(y)}" for x, y in poly) + " Z"
-def polyline(pts): return "M" + " L".join(f"{n(x)} {n(y)}" for x, y in pts)
 def blur(key, sd):
     return (f'<filter id="{key}" filterUnits="userSpaceOnUse" x="-40" y="-40" width="144" '
             f'height="144"><feGaussianBlur stdDeviation="{n(sd)}"/></filter>')
@@ -171,19 +170,11 @@ class Intro:
         """One instant: everything the drawing needs, as numbers."""
         e, ep, ef = ramp(t, *self.camera), ramp(t, *self.panels), ramp(t, *self.fx)
         c = self.rig(e); prisms = prisms_at(self.delta*(1-ep)); P = c.project
-        f = dict(E=ef, P=ep, flat=1-ef, faces=[], edges=[], grad={})
+        f = dict(E=ef, P=ep, flat=1-ef, faces=[], grad={})
         for pi, (poly, z0, z1, col) in enumerate(prisms):
             for nrm, corners in prism_faces(poly, z0, z1):
                 cen = tuple(sum(q[i] for q in corners)/4 for i in range(3))
                 f["faces"].append((pi, nrm, [P(q) for q in corners], c.visible(nrm, cen)))
-            poly = ccw(poly); back = []
-            for (x0, y0), (x1, y1) in zip(poly, poly[1:] + poly[:1]):
-                dx, dy = x1-x0, y1-y0; L = math.hypot(dx, dy)
-                back.append(not c.visible((dy/L, -dx/L, 0.0), ((x0+x1)/2, (y0+y1)/2, (z0+z1)/2)))
-            for i in range(4):
-                (x0, y0), (x1, y1) = poly[i], poly[(i+1) % 4]
-                f["edges"].append((pi, [P((x0, y0, z0)), P((x1, y1, z0))], back[i]))
-                f["edges"].append((pi, [P((x0, y0, z0)), P((x0, y0, z1))], back[i] and back[i-1]))
         f["J"] = P((0, 0, H))
         f["hl"] = P(highlight(c.eye))
         top = f["faces"][0][2]
@@ -266,14 +257,16 @@ class Intro:
         piece = lambda pi: (f'<g filter="url(#{key}-rim{"b" if pi == 0 else "g"})" opacity="{self.clarity}">'
                             + "".join(use(i, f"url(#{key}-f{i})") for i in range(nf) if prism(i) == pi) + '</g>')
         body += f'<g filter="url(#{key}-tb)">{piece(0)}{Pg(piece(1) + piece(2))}</g>'
-        # hidden edges, soft, in the hot colour
+        # hidden edges, soft, in the hot colour. A face turned away IS bounded by the edges that
+        # are hidden, and its path is already in defs with its morph on it — so this strokes
+        # those rather than animating a polyline per edge. Interpolating a `d` is the expensive
+        # thing SMIL does per frame, and at 22 of them it was most of the intro's frame budget:
+        # on a phone-class CPU (10x throttle) this is the difference between 25fps and 33.
         def edges(pi):
-            out = ""
-            for j, (q, _, _) in enumerate(fr[0]["edges"]):
-                if q != pi or not any(f["edges"][j][2] for f in fr): continue
-                out += el("path", f' stroke="{B_HOT if pi == 0 else G_HOT}" stroke-width="0.6" fill="none" stroke-linecap="round"',
-                          [("d", [polyline(f["edges"][j][1]) for f in fr]),
-                           ("opacity", ["1" if f["edges"][j][2] else "0" for f in fr], True)])
+            out = "".join(el("use", f' href="#{key}-p{i}" fill="none" stroke="{B_HOT if pi == 0 else G_HOT}"'
+                                    f' stroke-width="0.6" stroke-linejoin="round"',
+                              [("opacity", ["0" if f["faces"][i][3] else "1" for f in fr], True)])
+                          for i in range(nf) if prism(i) == pi and not all(f["faces"][i][3] for f in fr))
             return f'<g clip-path="url(#{key}-c{pi})" filter="url(#{key}-hb)" opacity="0.3">{out}</g>'
         body += Eg(edges(0) + Pg(edges(1) + edges(2)))
         # the blue through the greens
