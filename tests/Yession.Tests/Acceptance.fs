@@ -465,7 +465,8 @@ let private uiChecklistTests =
                       RepoCapabilitiesChanged.Repo = repo
                       RepoCapabilitiesChanged.Granted = granted
                       RepoCapabilitiesChanged.Sensitive = sensitive
-                      RepoCapabilitiesChanged.Actor = ActorRef.Configured repo }
+                      RepoCapabilitiesChanged.Actor = ActorRef.Configured repo
+                      RepoCapabilitiesChanged.CausedBy = None }
             let model =
                 { representativeModel with
                     Approvals =
@@ -502,7 +503,8 @@ let private uiChecklistTests =
                                   RepoCapabilitiesChanged.Repo = repo
                                   RepoCapabilitiesChanged.Granted = [ "!sock:/run/docker.sock" ]
                                   RepoCapabilitiesChanged.Sensitive = true
-                                  RepoCapabilitiesChanged.Actor = ActorRef.Configured repo } ] }
+                                  RepoCapabilitiesChanged.Actor = ActorRef.Configured repo
+                                  RepoCapabilitiesChanged.CausedBy = None } ] }
             let html = Support.render model
             // The tag each legend hook sits in: back to its `<`, forward to its `>`.
             let rec tags (from: int) (found: string list) =
@@ -534,7 +536,8 @@ let private uiChecklistTests =
                                   RepoCapabilitiesChanged.Repo = repo
                                   RepoCapabilitiesChanged.Granted = [ "!sock:/run/docker.sock" ]
                                   RepoCapabilitiesChanged.Sensitive = true
-                                  RepoCapabilitiesChanged.Actor = ActorRef.Configured repo } ] }
+                                  RepoCapabilitiesChanged.Actor = ActorRef.Configured repo
+                                  RepoCapabilitiesChanged.CausedBy = None } ] }
             let html = Support.render model
             Expect.isTrue
                 (html.Contains (Dom.attr Dom.Hooks.legend "2"))

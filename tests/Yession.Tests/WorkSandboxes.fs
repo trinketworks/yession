@@ -1133,7 +1133,8 @@ let private timelineTests =
                           RepoConfigRefused.Repo = hello
                           RepoConfigRefused.Sandbox = Some (sandbox "test")
                           RepoConfigRefused.Reason = "YESSION_SESSION_WORK_NET is empty"
-                          RepoConfigRefused.Actor = ActorRef.Configured hello } }
+                          RepoConfigRefused.Actor = ActorRef.Configured hello
+                          RepoConfigRefused.CausedBy = None } }
             let proj, _ = ConversationProjection.applyEvents None [ envelope ] ConversationProjection.empty
             match proj.Items with
             | [ item ] ->
@@ -1163,7 +1164,8 @@ let private timelineTests =
                           RepoConfigRefused.Repo = hello
                           RepoConfigRefused.Sandbox = None
                           RepoConfigRefused.Reason = "yession.yaml in octo/hello: unknown key: workdirr"
-                          RepoConfigRefused.Actor = ActorRef.Configured hello } }
+                          RepoConfigRefused.Actor = ActorRef.Configured hello
+                          RepoConfigRefused.CausedBy = None } }
             let proj, _ = ConversationProjection.applyEvents None [ envelope ] ConversationProjection.empty
             match proj.Items with
             | [ item ] ->
@@ -1187,7 +1189,8 @@ let private timelineTests =
                               RepoConfigRefused.Repo = hello
                               RepoConfigRefused.Sandbox = named
                               RepoConfigRefused.Reason = "the ceiling is closed"
-                              RepoConfigRefused.Actor = ActorRef.Configured hello } }
+                              RepoConfigRefused.Actor = ActorRef.Configured hello
+                              RepoConfigRefused.CausedBy = None } }
                 let json = Codec.toString Codec.sessionEventEnvelope envelope
                 Expect.equal (Codec.fromString Codec.sessionEventEnvelope json |> expect) envelope "unchanged by the wire"
     ]

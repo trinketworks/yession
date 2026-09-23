@@ -277,7 +277,8 @@ let create
                                               RepoCapabilitiesChanged.Repo = repo
                                               RepoCapabilitiesChanged.Granted = granted
                                               RepoCapabilitiesChanged.Sensitive = capabilities.Sensitive
-                                              RepoCapabilitiesChanged.Actor = actor })
+                                              RepoCapabilitiesChanged.Actor = actor
+                                              RepoCapabilitiesChanged.CausedBy = FoldCause.causeFor repo cause })
                     // Which repos are waiting on somebody. Only a SENSITIVE set waits: a
                     // repo asking for a cache and a store is not a decision anybody wants to
                     // be asked to make, and a prompt that appears for everything is a prompt
@@ -388,7 +389,8 @@ let create
                                           RepoConfigRefused.Repo = outcome.Repo
                                           RepoConfigRefused.Sandbox = outcome.Sandbox
                                           RepoConfigRefused.Reason = reason
-                                          RepoConfigRefused.Actor = actor })
+                                          RepoConfigRefused.Actor = actor
+                                          RepoConfigRefused.CausedBy = FoldCause.causeFor outcome.Repo cause })
         }
 
     // One fold at a time. Folding is idempotent by construction, but only ONE AT A TIME:

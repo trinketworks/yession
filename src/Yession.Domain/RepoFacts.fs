@@ -82,7 +82,9 @@ and [<RequireQualifiedAccess>] RepoCapabilitiesChanged =
       /// sentence, which is a design and will move.
       Sensitive : bool
       /// The repo's file, as the party asking.
-      Actor : ActorRef }
+      Actor : ActorRef
+      /// What made the file be read this time — the same cause the starts it precedes carry.
+      CausedBy : Cause option }
 
 /// A person consented to what a repo asks for.
 ///
@@ -110,7 +112,9 @@ and RepoConfigRefused =
       Reason : string
       /// The repo's file, as the party that asked (`ActorRef.Configured`) — the same
       /// attribution its successful starts carry.
-      Actor : ActorRef }
+      Actor : ActorRef
+      /// What made the file be read this time, as on its starts.
+      CausedBy : Cause option }
 
 // --- What each repo act SAYS ----------------------------------------------------------------
 // The sentence an event writes into the timeline lives beside the event, for the reason

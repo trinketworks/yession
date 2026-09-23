@@ -1417,7 +1417,8 @@ module Codec =
                       // authors the file this watches.
                       "granted", Encode.list (p.Granted |> List.map Encode.string)
                       "sensitive", Encode.bool p.Sensitive
-                      "actor", actor.Encode p.Actor ]
+                      "actor", actor.Encode p.Actor
+                      "causedBy", Encode.option cause.Encode p.CausedBy ]
           Decode =
             Decode.object (fun get ->
                 { RepoCapabilitiesChanged.MessageId = get.Required.Field "messageId" messageId.Decode
@@ -1427,7 +1428,10 @@ module Codec =
                   // that log meant: nothing then waited on anybody.
                   RepoCapabilitiesChanged.Sensitive =
                     get.Optional.Field "sensitive" Decode.bool |> Option.defaultValue false
-                  RepoCapabilitiesChanged.Actor = get.Required.Field "actor" actor.Decode }) }
+                  RepoCapabilitiesChanged.Actor = get.Required.Field "actor" actor.Decode
+                  // Optional in: a set said before causes were recorded names none.
+                  RepoCapabilitiesChanged.CausedBy =
+                    get.Optional.Field "causedBy" (Decode.option cause.Decode) |> Option.flatten }) }
 
     let private repoCapabilitiesApproved : Codec<RepoCapabilitiesApproved> =
         { Encode =
@@ -1455,14 +1459,18 @@ module Codec =
                       // here knows the fix is in the YAML rather than in what it asked for.
                       "sandbox", Encode.option sandboxRef.Encode p.Sandbox
                       "reason", Encode.string p.Reason
-                      "actor", actor.Encode p.Actor ]
+                      "actor", actor.Encode p.Actor
+                      "causedBy", Encode.option cause.Encode p.CausedBy ]
           Decode =
             Decode.object (fun get ->
                 { RepoConfigRefused.MessageId = get.Required.Field "messageId" messageId.Decode
                   RepoConfigRefused.Repo = get.Required.Field "repo" repoRef.Decode
                   RepoConfigRefused.Sandbox = get.Required.Field "sandbox" (Decode.option sandboxRef.Decode)
                   RepoConfigRefused.Reason = get.Required.Field "reason" Decode.string
-                  RepoConfigRefused.Actor = get.Required.Field "actor" actor.Decode }) }
+                  RepoConfigRefused.Actor = get.Required.Field "actor" actor.Decode
+                  // Optional in: a refusal said before causes were recorded names none.
+                  RepoConfigRefused.CausedBy =
+                    get.Optional.Field "causedBy" (Decode.option cause.Decode) |> Option.flatten }) }
 
     let private workSandboxStopped : Codec<WorkSandboxStopped> =
         { Encode =
