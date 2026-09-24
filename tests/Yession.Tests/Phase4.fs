@@ -949,16 +949,30 @@ let private themeColour (css: string) (name: string) : string =
         let from = start + marker.Length
         css.Substring(from, css.IndexOf (';', from) - from).Trim ()
 
-let private luminance (hex: string) : float =
-    // Tokens use both #rgb and #rrggbb — expand the short form before slicing channels.
+/// A colour's red, green and blue as 0..1. Tokens use both #rgb and #rrggbb — expand the
+/// short form before slicing channels.
+let private channels (hex: string) : float * float * float =
     let h =
         if hex.Length = 4 then
             sprintf "#%c%c%c%c%c%c" hex.[1] hex.[1] hex.[2] hex.[2] hex.[3] hex.[3]
         else hex
-    let channel (i: int) =
-        let c = parseHex (h.Substring (i, 2)) / 255.0
-        if c <= 0.03928 then c / 12.92 else ((c + 0.055) / 1.055) ** 2.4
-    0.2126 * channel 1 + 0.7152 * channel 3 + 0.0722 * channel 5
+    let channel (i: int) = parseHex (h.Substring (i, 2)) / 255.0
+    channel 1, channel 3, channel 5
+
+let private luminance (hex: string) : float =
+    let linear c = if c <= 0.03928 then c / 12.92 else ((c + 0.055) / 1.055) ** 2.4
+    let r, g, b = channels hex
+    0.2126 * linear r + 0.7152 * linear g + 0.0722 * linear b
+
+/// A colour's HSL hue in degrees, or None for a grey, which has none.
+let private hue (hex: string) : float option =
+    let r, g, b = channels hex
+    let hi, lo = max r (max g b), min r (min g b)
+    let d = hi - lo
+    if d = 0.0 then None
+    elif hi = r then Some ((60.0 * ((g - b) / d) + 360.0) % 360.0)
+    elif hi = g then Some (60.0 * ((b - r) / d) + 120.0)
+    else Some (60.0 * ((r - g) / d) + 240.0)
 
 let private contrast (a: string) (b: string) : float =
     let la, lb = luminance a, luminance b
@@ -1006,11 +1020,57 @@ let private themeContrastTests =
             let ratio = contrast (colour "blue-deep") (colour "surface-2")
             Expect.isTrue (ratio < 4.5) (sprintf "--color-blue-deep on surface-2 is %.2f:1 — it clears the floor now; list it as text" ratio)
 
+        testCase "a person's checker keeps >= 3:1 on every surface" <| fun () ->
+            // A mark, not text: WCAG 2.1's non-text floor is 3:1, and it is the checker's light
+            // tone that draws its shape — the dark one is the shadow between its squares.
+            let colour = themeColour (TestFiles.read "app/tailwind.css")
+            for light, _ in Style.humanTones do
+                for bg in [ "bg"; "panel"; "surface"; "surface-2" ] do
+                    let ratio = contrast light (colour bg)
+                    Expect.isTrue (ratio >= 3.0) (sprintf "the %s checker on --color-%s is %.2f:1 — a mark needs 3:1" light bg ratio)
+
         testCase "inverse text on filled (active) buttons keeps >= 4.5:1" <| fun () ->
             let colour = themeColour (TestFiles.read "app/tailwind.css")
             for fill in [ "blue"; "green"; "err"; "ink" ] do
                 let ratio = contrast (colour "bg") (colour fill)
                 Expect.isTrue (ratio >= 4.5) (sprintf "text-bg on bg-%s is %.2f:1 — the AA floor is 4.5:1" fill ratio)
+    ]
+
+// --- People's marks: blue is the agent -----------------------------------------------------
+// A person's checker (`Style.humanTones`) must never be mistaken for the agent's diamond,
+// which is drawn in the mark's blue. What reads as blue is a hue band, not one hex: a
+// checker in a lighter blue beside the diamond says "agent" just as loudly as the exact one.
+
+/// Cyan through blue to violet, in HSL degrees.
+let private blueBand = 180.0, 270.0
+
+let private inBlueBand (hex: string) =
+    let lo, hi = blueBand
+    match hue hex with
+    | Some h -> h >= lo && h < hi
+    | None -> false
+
+let private peopleMarkTests =
+    testList "People's marks" [
+        testCase "the blue band holds every blue the agent is drawn in" <| fun () ->
+            // The band is only a rule about the agent while the agent is inside it: retune the
+            // blue out of it and this says so, rather than the case below going vacuous.
+            let colour = themeColour (TestFiles.read "app/tailwind.css")
+            for token in [ "blue"; "blue-bright"; "blue-deep" ] do
+                Expect.isTrue (inBlueBand (colour token)) (sprintf "--color-%s (%s) is outside the blue band %A" token (colour token) blueBand)
+
+        testCase "no person's checker is drawn in the agent's blue" <| fun () ->
+            for light, dark in Style.humanTones do
+                for tone in [ light; dark ] do
+                    Expect.isFalse (inBlueBand tone) (sprintf "%s reads as the agent's blue (hue %A); a person's checker may not wear it" tone (hue tone))
+
+        testCase "every person's checker is declared to Tailwind" <| fun () ->
+            // The checkers are assembled at runtime, so the stylesheet generates only the ones
+            // app/tailwind.css names inline; one it does not name paints nothing at all.
+            let css = TestFiles.read "app/tailwind.css"
+            for light, dark in Style.humanTones do
+                let declared = sprintf "@source inline(\"%s\");" (Style.checker light dark)
+                Expect.isTrue (css.Contains declared) (sprintf "app/tailwind.css does not declare the %s/%s checker" light dark)
     ]
 
 /// A form POST that does NOT follow its redirect. Where the create route points is the
@@ -3113,6 +3173,7 @@ let tests =
         uiRenderTests
         publicAccessTests
         themeContrastTests
+        peopleMarkTests
         brandTests
         sseTests
         notificationTests

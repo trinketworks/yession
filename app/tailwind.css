@@ -473,13 +473,21 @@ summary::-webkit-details-marker { display: none; }
 @source "../src/**/*.fs";
 @source "../app/**/*.fs";
 
-/* The avatar checkers are assembled at runtime (`Style.checker` in Style.fs) and so never
-   appear as literals for the scanner — declare them inline (replaces the old `safelist`). */
-@source inline("bg-[conic-gradient(from_0deg,#1ba1e2_25%,#0b5d85_0_50%,#1ba1e2_0_75%,#0b5d85_0)]");
-@source inline("bg-[conic-gradient(from_0deg,#a8dd00_25%,#55700a_0_50%,#a8dd00_0_75%,#55700a_0)]");
+/* The avatar checkers are assembled at runtime (`Style.checker` over `Style.humanTones`) and
+   so never appear as literals for the scanner — declare them inline (replaces the old
+   `safelist`). One line per tone pair, in the same order; the cheap tier fails if one is
+   missing, because a checker Tailwind never generated paints nothing at all. */
 @source inline("bg-[conic-gradient(from_0deg,#17c3b2_25%,#0a5c54_0_50%,#17c3b2_0_75%,#0a5c54_0)]");
-@source inline("bg-[conic-gradient(from_0deg,#4ab8f0_25%,#1a6a96_0_50%,#4ab8f0_0_75%,#1a6a96_0)]");
-@source inline("bg-[conic-gradient(from_0deg,#7fb800_25%,#3d5a05_0_50%,#7fb800_0_75%,#3d5a05_0)]");
+@source inline("bg-[conic-gradient(from_0deg,#3fd75f_25%,#186a2c_0_50%,#3fd75f_0_75%,#186a2c_0)]");
+@source inline("bg-[conic-gradient(from_0deg,#b8f7d4_25%,#3d7a5a_0_50%,#b8f7d4_0_75%,#3d7a5a_0)]");
+@source inline("bg-[conic-gradient(from_0deg,#a8dd00_25%,#55700a_0_50%,#a8dd00_0_75%,#55700a_0)]");
+@source inline("bg-[conic-gradient(from_0deg,#f3f59a_25%,#7a7a2a_0_50%,#f3f59a_0_75%,#7a7a2a_0)]");
+@source inline("bg-[conic-gradient(from_0deg,#ecd000_25%,#665a00_0_50%,#ecd000_0_75%,#665a00_0)]");
+@source inline("bg-[conic-gradient(from_0deg,#ffa928_25%,#7a4a06_0_50%,#ffa928_0_75%,#7a4a06_0)]");
+@source inline("bg-[conic-gradient(from_0deg,#ffc9a3_25%,#8a5230_0_50%,#ffc9a3_0_75%,#8a5230_0)]");
+@source inline("bg-[conic-gradient(from_0deg,#ff7a45_25%,#803010_0_50%,#ff7a45_0_75%,#803010_0)]");
+@source inline("bg-[conic-gradient(from_0deg,#ff8fd8_25%,#7a2a66_0_50%,#ff8fd8_0_75%,#7a2a66_0)]");
+@source inline("bg-[conic-gradient(from_0deg,#e8469e_25%,#6e1349_0_50%,#e8469e_0_75%,#6e1349_0)]");
 
 /* While the chat/terminal split is being dragged (`PaneShell.installPaneResize` sets this on
    the root): the pointer is captured by a 6px handle but the gesture is a page-wide one, so
