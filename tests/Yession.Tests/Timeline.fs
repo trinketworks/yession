@@ -1987,9 +1987,13 @@ let private causeLineOf (n: string) (html: string) =
 
 let private sandboxCauseTests =
     testList "why a repo's sandbox came up" [
-        testCase "a start directly under what caused it draws no ref" <| fun () ->
-            let events = [ at 1L 0.0 (repoAdded "a" "octo/hello"); at 2L 1.0 (startingBecause "s" (Cause.Item (message "a"))) ]
+        testCase "an act directly under what caused it, by the same author, draws no ref" <| fun () ->
+            let events = [ at 1L 0.0 (starting "a"); at 2L 1.0 (startingBecause "s" (Cause.Item (message "a"))) ]
             Expect.equal (linkOf "s" events) (Some CauseLink.Unlinked) "the cause is the item right above"
+
+        testCase "an act directly under what caused it, by another author, draws its cause" <| fun () ->
+            let events = [ at 1L 0.0 (repoAdded "a" "octo/hello"); at 2L 1.0 (startingBecause "s" (Cause.Item (message "a"))) ]
+            Expect.equal (linkOf "s" events) (Some (CauseLink.Drawn (Cause.Item (message "a")))) "a header sits between them"
 
         testCase "a start pushed away from what caused it points back to it" <| fun () ->
             let events =
