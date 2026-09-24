@@ -364,6 +364,15 @@ module Dom =
         /// press that swaps the body keeps the focus it was pressed with. Its VALUE is the
         /// face it will show — `watch` / `output` — the same contract the list toggle keeps.
         let paneWatch = "data-pane-watch"
+        /// A reference to a file under the session's content root, anywhere it is drawn — the
+        /// chip in a message body, the chip in a fold's note. Its value is the content path.
+        ///
+        /// It is the hook a CLICK is delegated on: the chip is a real `<a>` to the bytes, and
+        /// the timeline turns a press on one into a pane tab instead of leaving the page. One
+        /// hook and one listener, rather than a dispatch threaded into every surface that can
+        /// name a file — and with no script the link still works, which is what makes the
+        /// interception an improvement rather than the only way in.
+        let content = "data-content"
         /// The live screen of a terminal in live mode (Plan 14, stage 6). Its value is the
         /// terminal's id; the holder's copy is the one that takes keystrokes, and every other
         /// peer's is the same screen read-only.

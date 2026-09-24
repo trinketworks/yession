@@ -3348,8 +3348,8 @@ let private artifactTests =
             Expect.equal (Act.counted (act (chart 3))) ("updated", "artifact", "artifacts") "separately from the updates"
             Expect.equal
                 (Act.phrase (act (chart 0)) |> Phrase.refs)
-                [ EntityRef.Artifact (chart 0) ]
-                "the artifact is a reference, so the chat draws the chip every other entity gets"
+                [ EntityRef.Content (ArtifactRef.content (chart 0)) ]
+                "the artifact is a reference to a content path, so the chip a fold draws and the chip a file: link in a message draws are one"
 
         testCase "a share reads in the timeline attributed to whoever shared it" <| fun () ->
             let envelope : EventEnvelope<SessionEvent> =

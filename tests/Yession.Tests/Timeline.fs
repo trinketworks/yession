@@ -14,6 +14,7 @@ open Yession.Domain.Collab
 open Yession.Domain.Chat
 open Yession.Domain.Sandboxes
 open Yession.Domain.Files
+open Yession.Domain.Content
 open Yession.App
 
 let private expect =
@@ -2103,8 +2104,69 @@ let private sandboxCauseTests =
             Expect.isFalse ((causeLineOf "s" html).Contains "data-cause-jump") "nothing to jump to"
     ]
 
+// --- A file, referenced (Plan 26) ---------------------------------------------------------
+
+let private chart (seq: int) =
+    ArtifactRef.create "chart.png" seq (ArtifactStamp.ofActor ActorRef.Agent) |> expect
+
+let private sharedArtifact (n: string) (ref: ArtifactRef) =
+    SessionEvent.ArtifactShared
+        { Artifacts.ArtifactShared.MessageId = message n
+          Artifacts.ArtifactShared.Ref = ref
+          Artifacts.ArtifactShared.MediaType = Some "image/png"
+          Artifacts.ArtifactShared.Bytes = 2_048L
+          Artifacts.ArtifactShared.Digest = ContentDigest.create (String.replicate 64 "a") |> expect
+          Artifacts.ArtifactShared.Actor = ActorRef.Agent }
+
+/// The chip the chat passes in — the real one, because the point of the exercise is that a
+/// link in prose and a reference in a fold arrive at the SAME drawing.
+let private markerChip (ref: ContentRef) =
+    Entity.render (clientOf []) ActorRef.Agent (EntityRef.Content ref)
+
+let private contentChipTests =
+    testList "A file, referenced (Plan 26)" [
+
+        testCase "the act of sharing one draws the chip, linked to the version's own bytes" <| fun () ->
+            let html = Support.render (clientOf [ at 1L 0.0 (sharedArtifact "a" (chart 0)) ])
+            let hook = html.IndexOf (Dom.attr "data-entity-kind" "content")
+            Expect.isTrue (hook >= 0) "the artifact is a reference, drawn as one"
+            // From the anchor's own start, because the href is written before the hook: a
+            // window that began at the hook would assert about everything except the link.
+            let opens = (html.Substring (0, hook)).LastIndexOf "<a "
+            let chip = html.Substring (opens, html.IndexOf ("</a>", opens) + "</a>".Length - opens)
+            // The PINNED path, both as the href and as the hook: an act names the version it
+            // shared, so the bytes a reader opens from the timeline are the bytes it is about,
+            // whatever has been shared since.
+            Expect.isTrue (chip.Contains (Dom.attr Dom.Hooks.content (ContentRef.value (ArtifactRef.content (chart 0)))))
+                "carrying the content path, which is what the pane opens on"
+            Expect.isTrue (chip.Contains ("content/" + ContentRef.value (ArtifactRef.content (chart 0))))
+                "and leading to the route that serves it, so it works with no script at all"
+            Expect.isTrue (chip.Contains ">chart.png<") "called what a person called it, not by its version leaf"
+            Expect.isFalse (chip.Contains "target=\"_blank\"") "it stays in this session rather than opening a tab"
+
+        testCase "a file: link in a message body becomes the same reference" <| fun () ->
+            let rendered = Support.renderTemplate (RichText.render markerChip "see [the chart](file:///artifacts/chart.png) for it")
+            Expect.isTrue (rendered.Contains (Dom.attr Dom.Hooks.content "artifacts/chart.png")) "the link is drawn as a reference"
+            Expect.isFalse (rendered.Contains "href=\"file:") "and never as a link to somebody's disk"
+            // The NAME form, unresolved: a body written once goes on saying "the latest", and
+            // which version that is stays the route's answer rather than a fact frozen into
+            // prose at the moment it was typed.
+            Expect.isTrue (rendered.Contains "see ") "the words around it are still the sentence"
+
+        testCase "a file: link to nothing this session serves is words, not a link" <| fun () ->
+            let rendered = Support.renderTemplate (RichText.render markerChip "[passwords](file:///etc/passwd)")
+            Expect.isFalse (rendered.Contains "href") "a path on somebody's disk is nowhere this page can send a reader"
+            Expect.isTrue (rendered.Contains "passwords") "what was written still reads"
+
+        testCase "an ordinary link is untouched" <| fun () ->
+            let rendered = Support.renderTemplate (RichText.render markerChip "[the repo](https://github.com/octo/hello)")
+            Expect.isTrue (rendered.Contains "href=\"https://github.com/octo/hello\"") "still a link out"
+            Expect.isTrue (rendered.Contains "target=\"_blank\"") "opened the way a link out of the session is"
+    ]
+
 let tests =
     testList "Timeline and the pane (Plan 14)" [
+        contentChipTests
         listTests
         sandboxTaskTests
         sandboxCauseTests

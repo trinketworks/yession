@@ -79,7 +79,7 @@ module Entity =
         | EntityRef.Connection _ -> "connection"
         | EntityRef.Sandbox _ -> "sandbox"
         | EntityRef.Pr _ -> "pr"
-        | EntityRef.Artifact _ -> "artifact"
+        | EntityRef.Content _ -> "content"
 
     /// What a reference is called on a screen, in a sentence attributed to `by`. A person by
     /// the name the roster knows; a repo by `owner/repo` — the host is the mark's to say,
@@ -106,25 +106,35 @@ module Entity =
         // The NAME, not the version: a person shares `chart.png` and reads about `chart.png`,
         // and which version it was is the particular the act already says ("version 4"). Prose
         // keeps the pinned address either way (`EntityRef.said`), because an agent quoting one
-        // has to say which bytes it means.
-        | EntityRef.Artifact artifact -> ArtifactRef.name artifact
+        // has to say which bytes it means. An artifact path knows its own name; any other
+        // content is called by its file name, which is what `repos/…` will want.
+        | EntityRef.Content ref ->
+            match ArtifactRef.ofContent ref with
+            | Ok artifact -> ArtifactRef.name artifact
+            | Error _ -> ContentRef.fileName ref
 
-    /// Where a reference leads, when it is somewhere a person can go. A repository is a page
-    /// on its host; a person and a connection are not places. The one spelling of the URL
-    /// lives with the type (`RepoRef.cloneUrl` is git's; this is the page's).
+    /// Where a reference leads, and whether that is out of this session or into it — which is
+    /// one question, because it decides both the URL and what a click does.
     ///
-    /// An artifact leads INSIDE the session, and nothing serves it yet: the route and the pane
-    /// that opens one are the next piece of this feature, and a chip that linked to a path no
-    /// handler answers would be a broken link on the timeline rather than an unfinished one. So
-    /// it draws as the reference it is until there is somewhere to go.
-    let href (entity: EntityRef) : string option =
+    /// A repository is a page on its host and opens in a new tab; a person and a connection
+    /// are not places. Content leads INSIDE, to the content route, and stays a real `<a>` to
+    /// real bytes: with no script it downloads, which is the honest fallback for a file. The
+    /// one spelling of each URL lives with the type (`RepoRef.cloneUrl` is git's, this is the
+    /// page's; `SessionRoute.Content` is the content route's).
+    type Destination =
+        | Away of url: string
+        | Inside of url: string * ref: ContentRef
+        | Nowhere
+
+    let destination (entity: EntityRef) : Destination =
         match entity with
-        | EntityRef.Repo repo -> Some (sprintf "https://github.com/%s" (RepoRef.value repo))
-        | EntityRef.Pr pr -> Some (PrRef.url pr)
+        | EntityRef.Repo repo -> Away (sprintf "https://github.com/%s" (RepoRef.value repo))
+        | EntityRef.Pr pr -> Away (PrRef.url pr)
+        | EntityRef.Content ref ->
+            Inside (RelativeUrl.inDocument DocumentBase.shell (SessionRoute.relative (SessionRoute.Content ref)), ref)
         | EntityRef.Actor _
         | EntityRef.Connection _
-        | EntityRef.Sandbox _
-        | EntityRef.Artifact _ -> None
+        | EntityRef.Sandbox _ -> Nowhere
 
     /// One reference, drawn: its mark and its name, inline, the same wherever a sentence
     /// points at it. `data-entity` carries the prose spelling (`EntityRef.said`), so a test
@@ -159,17 +169,26 @@ module Entity =
             // tapping it does: a picture opens in the pane, anything else downloads. Read off
             // the name's media type (`ContentKind`), which is the same rule the pane will use —
             // one answer, so the chip cannot promise a view the pane will not give.
-            | EntityRef.Artifact artifact ->
+            | EntityRef.Content ref ->
                 let glyph =
-                    match ContentKind.ofMediaType (ArtifactRef.mediaType artifact) with
+                    match ContentKind.ofMediaType (ContentMedia.ofRef ref) with
                     | ContentKind.Image _ -> Icon.imageSm
                     | ContentKind.Download -> Icon.fileSm
                 html $"""<span class="{Style.entityMark}" aria-hidden="true">{glyph}</span>"""
-        match href entity with
-        | Some url ->
+        match destination entity with
+        | Away url ->
             html
                 $"""<a class="{Style.entityLink}" href="{url}" target="_blank" rel="noopener" title="{EntityRef.said entity}" data-entity-kind="{kind entity}" data-entity="{EntityRef.said entity}">{mark}<span class="{Style.entityLinkName}">{spelled}</span></a>"""
-        | None ->
+        // Inside the session: the same chip, plus the path as a hook. The timeline reads that
+        // hook on the way up and shows the file in the pane instead of leaving the page
+        // (`View.contentOpen`) — the chip stays a pure template and the surface that owns the
+        // pane owns the interception, as it does for every other place a click changes a tab.
+        // With no script it is still a working download, and `download` names the file the way
+        // a person knows it: a pinned version would otherwise land on disk as `0003-7f2a91`.
+        | Inside (url, ref) ->
+            html
+                $"""<a class="{Style.entityLink}" href="{url}" download="{spelled}" title="{EntityRef.said entity}" data-entity-kind="{kind entity}" data-entity="{EntityRef.said entity}" data-content="{ContentRef.value ref}">{mark}<span class="{Style.entityLinkName}">{spelled}</span></a>"""
+        | Nowhere ->
             html
                 $"""<span class="{Style.entity}" title="{EntityRef.said entity}" data-entity-kind="{kind entity}" data-entity="{EntityRef.said entity}">{mark}<span class="{Style.entityName}">{spelled}</span></span>"""
 

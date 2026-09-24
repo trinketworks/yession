@@ -1988,6 +1988,12 @@ module View =
             </section>"""
 
     let private chat (actions: ViewActions) (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
+        // A file an agent linked to in a message, drawn as the reference it is — the SAME chip
+        // the fold below it draws for the act of sharing one (`Entity.render`), because a body
+        // saying "see file:///artifacts/chart.png" and a note saying "shared artifact
+        // chart.png" are pointing at one thing and a reader should not have to notice that
+        // twice.
+        let contentChip (by: ActorRef) (ref: ContentRef) = Entity.render model by (EntityRef.Content ref)
         // What can be done to one item, behind an ellipsis at its top-right. It goes on
         // every item that HAS an id — a message and an act alike — because "divide it
         // anywhere" is the promise, and chapters chosen for the reader would be somebody
@@ -2412,7 +2418,7 @@ module View =
                   {itemActions item}
                   {meta}
                   {replyRef}
-                  <div class="{bodyClass}" data-message-body>{RichText.render body}{caret}</div>
+                  <div class="{bodyClass}" data-message-body>{RichText.render (contentChip item.Author) body}{caret}</div>
                 </article>"""
         // One line: who ran what, and how it went. No output — a tail inline would make the
         // chat noisiest exactly when it is busiest, and would put everything a command
@@ -2773,9 +2779,36 @@ module View =
                     // MEANS is not readable from the mark, and these two mean opposite things.
                     [ html $"""<div class="{Style.timelineIdle}" data-timeline-empty aria-hidden="true"><span class="{Style.caretIdle}"></span></div>""" ]
             | _ -> Option.toList missing @ items
+        // A press on a content chip, wherever in the timeline it sits — a message body's link or
+        // a fold's note — shows the file in the pane instead of leaving the page. Delegated on
+        // the conversation rather than bound per chip, because a chip is a pure template that
+        // knows nothing about tabs, and there is one timeline however many chips are in it.
+        //
+        // What it does NOT intercept is as deliberate: a modified or middle click is the
+        // reader asking the browser for the file in their own way, and a chip for something
+        // the pane cannot draw is a download — the chip's mark already promised which, so
+        // letting the `<a>` do its job keeps the two answers the same one.
+        let contentOpen (e: Browser.Types.Event) =
+            let mouse = e :?> Browser.Types.MouseEvent
+            let plain = not (mouse.ctrlKey || mouse.metaKey || mouse.shiftKey || mouse.altKey) && mouse.button = 0.0
+            let hooked =
+                if isNull (box e.target) then None
+                else (e.target :?> Browser.Types.Element).closest ("[" + Dom.Hooks.content + "]")
+            match hooked |> Option.filter (fun _ -> plain) with
+            | None -> ()
+            | Some el ->
+                match ContentRef.create (el.getAttribute Dom.Hooks.content) with
+                | Error _ -> ()
+                | Ok ref ->
+                    match ContentKind.ofMediaType (ContentMedia.ofRef ref) with
+                    | ContentKind.Download -> ()
+                    | ContentKind.Image _ ->
+                        e.preventDefault ()
+                        dispatch (ShowInPaneMsg (Reading (ContentTab ref)))
+                        actions.FocusPane ()
         html $"""
             <div class="{Style.chatRegion}">
-              <section class="{Style.timeline}" data-conversation>{body}</section>
+              <section class="{Style.timeline}" data-conversation @click={Ev(contentOpen)}>{body}</section>
               <div class="{Style.chatJumpToLatestSlot}" data-jump-to-latest>
                 <div class="{Style.chatJumpToLatestRail}">
                   <button type="button" class="{Style.chatJumpToLatest}" aria-label="{Dom.Text.jumpToLatest}"
