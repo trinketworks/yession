@@ -305,6 +305,22 @@ let private codecTests =
             | Some act -> Expect.isNone act.Size "a number is not a width anybody claimed"
             | None -> failwith "the command was dropped over its width"
 
+        // The send reads the key its draft becomes from the doc, not from the model, so it
+        // reads what a peer wrote there — and must refuse it the way every other reader does.
+        testCase "a draft slot that is not an entry is nothing to send" <| fun () ->
+            let doc = Y.Doc.Create ()
+            (doc.getMap "drafts" : Y.Map<obj>).set (PeerId.value ada, box "not an entry") |> ignore
+
+            Expect.isNone (SyncedStateSync.draftQueueId doc ada) "a scalar names no queue key"
+
+        testCase "a terminal draft slot that is not an entry is nothing to send" <| fun () ->
+            let doc = Y.Doc.Create ()
+            let terminal = TerminalId.create "term-a" |> expect
+            let key = SyncedStateSync.TerminalDraftKey.make terminal ada
+            (doc.getMap "terminalDrafts" : Y.Map<obj>).set (key, box "not an entry") |> ignore
+
+            Expect.isNone (SyncedStateSync.terminalDraftQueueId doc terminal ada) "a scalar names no queue key"
+
         // A second menu cannot be open, and that is the FIELD's promise rather than a
         // behaviour: `ItemMenu` is one slot, so opening one is writing it. There is no case
         // here for it because nothing short of changing that type could make it false, and a
