@@ -283,6 +283,15 @@ module Codec =
                 | "title" -> Decode.succeed NamingSubject.Title
                 | other -> Decode.fail (sprintf "Not a naming subject: %s" other)) }
 
+    let private sessionResumed : Codec<SessionResumed> =
+        { Encode =
+            fun (p: SessionResumed) ->
+                Encode.object [ "messageId", messageId.Encode p.MessageId; "lastHeardAt", timestamp.Encode p.LastHeardAt ]
+          Decode =
+            Decode.object (fun get ->
+                { SessionResumed.MessageId = get.Required.Field "messageId" messageId.Decode
+                  SessionResumed.LastHeardAt = get.Required.Field "lastHeardAt" timestamp.Decode }) }
+
     let private sessionNamed : Codec<SessionNamed> =
         { Encode =
             fun (p: SessionNamed) ->
@@ -1911,6 +1920,8 @@ module Codec =
                     Encode.object [ "type", Encode.string "toolUseFinished"; "payload", toolUseFinished.Encode p ]
                 | McpServerAvailable p ->
                     Encode.object [ "type", Encode.string "mcpServerAvailable"; "payload", mcpServerNoted.Encode p ]
+                | SessionResumed p ->
+                    Encode.object [ "type", Encode.string "sessionResumed"; "payload", sessionResumed.Encode p ]
                 | McpServerUnavailable p ->
                     Encode.object [ "type", Encode.string "mcpServerUnavailable"; "payload", mcpServerNoted.Encode p ]
                 | SessionEvent.PrWatched p ->
@@ -1983,6 +1994,7 @@ module Codec =
                 | "gatedCommandFailed" -> Decode.field "payload" gatedCommandFailed.Decode |> Decode.map SessionEvent.GatedCommandFailed
                 | "toolUseStarted" -> Decode.field "payload" toolUseStarted.Decode |> Decode.map ToolUseStarted
                 | "toolUseFinished" -> Decode.field "payload" toolUseFinished.Decode |> Decode.map ToolUseFinished
+                | "sessionResumed" -> Decode.field "payload" sessionResumed.Decode |> Decode.map SessionResumed
                 | "mcpServerAvailable" ->
                     Decode.field "payload" mcpServerNoted.Decode |> Decode.map McpServerAvailable
                 | "mcpServerUnavailable" ->

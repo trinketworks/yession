@@ -2247,9 +2247,14 @@ let private persistenceTests =
                 let managed2 = (m2.Registered ()) |> List.head
                 let! after = managed2.Host.Log.Read None Int32.MaxValue
                 Expect.equal
-                    (after.Events |> List.map (fun e -> e.Offset, e.Event))
+                    (after.Events |> List.truncate (List.length before.Events) |> List.map (fun e -> e.Offset, e.Event))
                     (before.Events |> List.map (fun e -> e.Offset, e.Event))
                     "the reopened log replays the identical history"
+                // ...and the second life's first word is that it resumed: it adds to the
+                // history, and never rewrites it.
+                match after.Events |> List.skip (List.length before.Events) |> List.map (fun e -> e.Event) with
+                | SessionResumed _ :: _ -> ()
+                | other -> failwithf "expected the second life to open by saying it resumed, got %A" other
 
                 // A reconnecting client catches up on the persisted conversation, and
                 // new appends continue the offset sequence.

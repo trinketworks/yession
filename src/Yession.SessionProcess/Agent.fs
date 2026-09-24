@@ -136,6 +136,8 @@ module AgentTurn =
         (mintTurnId: unit -> AgentTurnId)
         (mintMessageId: unit -> MessageId)
         (sessionId: SessionId)
+        // When the session began and last came back, off the same page as the conversation.
+        (history: SessionHistory)
         (conversation: ConversationItem list)
         // What the terminals did since the previous turn (Plan 13, stage 3a). Built by the
         // caller from the same log page the conversation came from, so the two describe
@@ -169,9 +171,12 @@ module AgentTurn =
                 match trigger with
                 | FromMessage message -> Some message
                 | FromWake _ -> None
-            do!
-                append (
-                    AgentTurnStarted
+            // Kept, not discarded like the rest: the envelope it was written in is this turn's
+            // "now", on the session's own clock — read back by the offset the append answered.
+            let! appended =
+                log.Append
+                    ActorRef.Agent
+                    (AgentTurnStarted
                         { AgentTurnId = turnId
                           // 1:1 with the trigger the scheduler handed in — the cause is the
                           // trigger, said durably, with no second field to keep consistent.
@@ -179,6 +184,15 @@ module AgentTurn =
                             match trigger with
                             | FromMessage message -> TurnCause.TriggeredBy message.MessageId
                             | FromWake (reason, _) -> TurnCause.Woke reason })
+            let! written =
+                let before = EventOffset.value appended.Offset - 1L
+                log.Read (if before < 0L then None else EventOffset.create before |> Result.toOption) 1
+            let now =
+                match written.Events with
+                | envelope :: _ -> envelope.Timestamp
+                // Unreachable: the log just said it holds this offset. Failing the turn over a
+                // clock reading would be the worse answer, so it falls to the host's.
+                | [] -> System.DateTimeOffset.UtcNow
             try
                 // The agent's context is the event-log-derived projection — by
                 // construction it can never include Yjs/draft state.
@@ -212,6 +226,8 @@ module AgentTurn =
                       Terminals = terminals
                       Repos = repos
                       Model = model
+                      Now = now
+                      History = history
                       SystemPrompt = promptWith guidance }
                 do! append (AgentContextBuilt { AgentTurnId = turnId; MessageCount = List.length conversation })
 

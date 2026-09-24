@@ -194,7 +194,7 @@ module Scheduler =
                                         (Digest.window events)
                                 let repos =
                                     events |> List.fold ReposProjection.applyEvent ReposProjection.empty
-                                do! AgentTurn.run log agent (signalFor turn) capabilitiesFor emitUsage (fun () -> turn.TurnId) mintMessageId sessionId projection.Items terminals repos.Repos (selectedModel ()) guidance trigger
+                                do! AgentTurn.run log agent (signalFor turn) capabilitiesFor emitUsage (fun () -> turn.TurnId) mintMessageId sessionId (SessionHistory.ofEnvelopes page.Events) projection.Items terminals repos.Repos (selectedModel ()) guidance trigger
                                 // Release the slot and re-arm — unless an interrupt
                                 // already released it (and possibly started a successor).
                                 match running with
@@ -261,6 +261,7 @@ module Scheduler =
                                     (fun () -> turn.TurnId)
                                     mintMessageId
                                     sessionId
+                                    (SessionHistory.ofEnvelopes page.Events)
                                     projection.Items
                                     terminals
                                     repos.Repos

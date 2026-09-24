@@ -888,6 +888,10 @@ module ConversationProjection =
         // its own events, against the newly resolved set, so a boot, a reconnect and a
         // restart all emit nothing and only a genuine change by the operator is loud.
         | SessionEvent.McpServerAvailable m -> proj |> noted m.MessageId ActorRef.System (Act.McpServerAvailable m) envelope
+        // The process's own account of the gap it was absent for — the session speaking, not
+        // anybody in it.
+        | SessionEvent.SessionResumed r ->
+            proj |> noted r.MessageId ActorRef.SessionProcess (Act.SessionResumed (r, envelope.Timestamp)) envelope
         | SessionEvent.McpServerUnavailable m -> proj |> noted m.MessageId ActorRef.System (Act.McpServerUnavailable m) envelope
         // Watched pull requests fold in for the repo notes' reason: a watch is a
         // session-shaping act, and a transition is exactly what a joining human or the

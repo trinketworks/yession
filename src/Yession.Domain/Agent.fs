@@ -18,6 +18,28 @@ open Yession.Domain.Repos
 /// are scoped, not ambient", "Verification is automated end-to-end").
 
 /// Everything the agent is given for one turn. Phase 1: no tools, no environment.
+/// What the log says about the session's own time: when it began, and when it last came back
+/// after being stopped. The agent is told both, because an agent that does not know a night
+/// passed reads "checks pending" from before it as if it were a minute old.
+type SessionHistory =
+    { StartedAt : System.DateTimeOffset option
+      /// When the session last resumed, and when it was last heard from before that.
+      LastResumed : (System.DateTimeOffset * System.DateTimeOffset) option }
+
+module SessionHistory =
+
+    let none : SessionHistory = { StartedAt = None; LastResumed = None }
+
+    let ofEnvelopes (envelopes: EventEnvelope<SessionEvent> list) : SessionHistory =
+        { StartedAt = envelopes |> List.tryHead |> Option.map (fun e -> e.Timestamp)
+          LastResumed =
+            envelopes
+            |> List.tryFindBack (fun e -> match e.Event with SessionResumed _ -> true | _ -> false)
+            |> Option.bind (fun e ->
+                match e.Event with
+                | SessionResumed r -> Some (e.Timestamp, r.LastHeardAt)
+                | _ -> None) }
+
 type AgentContextPack =
     { SessionId      : SessionId
       Conversation   : ConversationItem list
@@ -61,6 +83,10 @@ type AgentContextPack =
       /// turn, re-read from the collaborative register each time — so a person changing it
       /// mid-session changes the next turn, with nothing to relaunch.
       Model          : ModelId option
+      /// When this turn is running, on the session's clock — the timestamp its own start was
+      /// written with.
+      Now            : System.DateTimeOffset
+      History        : SessionHistory
       SystemPrompt   : string }
 
 /// What a runner streams, in the order it arrives. `Text` is the model speaking. A

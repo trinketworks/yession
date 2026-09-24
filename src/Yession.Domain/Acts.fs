@@ -61,6 +61,9 @@ type Act =
     /// and every kind of watch has it the same way. Everything below reads through it to
     /// the act inside, and only the headline adds the words.
     | Noticed of late: System.TimeSpan * Act
+    /// The session came back after a stretch with nothing running. With when it came back,
+    /// which is half of the gap it states and lives on the envelope rather than the record.
+    | SessionResumed of SessionResumed * at: System.DateTimeOffset
 
 module Act =
 
@@ -91,6 +94,7 @@ module Act =
         | Act.PrWatched p -> PrWatched.phrase p
         | Act.PrUnwatched p -> PrUnwatched.phrase p
         | Act.PrTransitioned p -> PrTransitioned.phrase p
+        | Act.SessionResumed (r, at) -> SessionResumed.phrase at r
 
     /// Who the act was done for, when that is not its author: " for Ada" after the deed —
     /// the person behind the agent or a repo's file, or whose credential a push spent. Empty
@@ -124,7 +128,8 @@ module Act =
         | Act.McpServerUnavailable _
         | Act.PrWatched _
         | Act.PrUnwatched _
-        | Act.PrTransitioned _ -> []
+        | Act.PrTransitioned _
+        | Act.SessionResumed _ -> []
 
     /// The person `forWhom` names, when it names one — for a reader that has to know WHO,
     /// not how to say it.
@@ -176,7 +181,8 @@ module Act =
         | Act.McpServerAvailable _
         | Act.McpServerUnavailable _
         | Act.PrUnwatched _
-        | Act.PrTransitioned _ -> []
+        | Act.PrTransitioned _
+        | Act.SessionResumed _ -> []
 
     /// The whole account as ONE sentence: headline, then the particulars after an em-dash,
     /// semicolon-joined. This is the composition every reader that is not a screen gets
@@ -227,6 +233,7 @@ module Act =
         | Act.PrWatched _ -> "watched", "pull request", "pull requests"
         | Act.PrUnwatched _ -> "unwatched", "pull request", "pull requests"
         | Act.PrTransitioned _ -> "noted", "pull request", "pull requests"
+        | Act.SessionResumed _ -> "resumed", "session", "sessions"
 
     /// Whether this act opens a chapter BY NATURE — one nobody had to ask for.
     ///
@@ -262,4 +269,5 @@ module Act =
         | Act.CredentialSpent _
         | Act.McpServerAvailable _
         | Act.McpServerUnavailable _
-        | Act.PrUnwatched _ -> false
+        | Act.PrUnwatched _
+        | Act.SessionResumed _ -> false

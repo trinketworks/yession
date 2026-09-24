@@ -291,6 +291,10 @@ let startFull
         // Seed the scheduler's log-anchored dedup set from the durable log (the
         // restart case): exactly-once is anchored in the log, not the doc.
         let! replayed = log.Read None Int32.MaxValue
+        // When the previous process was last heard from, read before this one writes a thing:
+        // the gap `SessionResumed` states is from here to boot, and one of this process's own
+        // appends landing first would shrink it to nothing.
+        let lastHeardAt = replayed.Events |> List.tryLast |> Option.map (fun e -> e.Timestamp)
         latestOffset <- replayed.Events |> List.tryLast |> Option.map (fun e -> e.Offset)
         replayed.Events |> List.iter (fun e -> recordAttribution e.Event)
         let initialConsumed =
@@ -919,6 +923,14 @@ let startFull
         // the log is describing something that no longer exists. Close them before anything
         // reads the projection — and before the terminal drain, which must not try to run a
         // command in a terminal that is gone.
+        // First, that the session was away at all — before the reconciles below write what
+        // being away cut off, so the timeline reads in the order it happened. A log with
+        // nothing in it is a session starting for the first time, and resumes nothing.
+        match lastHeardAt with
+        | Some at ->
+            let! _ = log.Append ActorRef.SessionProcess (SessionResumed { MessageId = mintMessageId (); LastHeardAt = at })
+            ()
+        | None -> ()
         do! terminals.ReconcileAtBoot ()
         // And the turn that process was running, then what people queued, then what the log
         // still owes — in that order, which is the scheduler's to keep (`Scheduler.Boot`).

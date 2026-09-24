@@ -110,6 +110,36 @@ let tests =
                 do! host.Stop ()
             }
 
+        // The session's own account of having been away: written first at boot, and dated from
+        // the last thing the previous process wrote rather than from anything this one did.
+        testCaseAsync "a Host booted over a previous process's log records that it resumed, and since when" <|
+            async {
+                let log = InMemoryEventLog.create (sid ()) (fun () -> System.DateTimeOffset.UtcNow)
+                let! _ =
+                    log.Append
+                        ActorRef.System
+                        (McpServerAvailable { MessageId = MessageId.create "mcp-1" |> expect; Name = McpServerName.create "serial" |> expect })
+                let! before = log.Read None System.Int32.MaxValue
+                let lastHeard = (List.last before.Events).Timestamp
+                let! host = Host.startWithEnvironment None None (Some log) (sid ()) 0
+                let! after = log.Read None System.Int32.MaxValue
+                match after.Events |> List.skip (List.length before.Events) |> List.map (fun e -> e.Event) with
+                | SessionResumed resumed :: _ -> Expect.equal resumed.LastHeardAt lastHeard "the gap runs from the last thing the previous process wrote"
+                | other -> failwithf "expected the resume first, got %A" other
+                do! host.Stop ()
+            }
+
+        testCaseAsync "a Host booted over an empty log resumes nothing" <|
+            async {
+                let log = InMemoryEventLog.create (sid ()) (fun () -> System.DateTimeOffset.UtcNow)
+                let! host = Host.startWithEnvironment None None (Some log) (sid ()) 0
+                let! after = log.Read None System.Int32.MaxValue
+                Expect.isFalse
+                    (after.Events |> List.exists (fun e -> match e.Event with SessionResumed _ -> true | _ -> false))
+                    "a session starting for the first time was never away"
+                do! host.Stop ()
+            }
+
         testCaseAsync "a sent rich draft drains through the Host into both timelines as its markdown body" <|
             async {
                 let! host = Host.start (sid ()) 0
