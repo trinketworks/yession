@@ -74,6 +74,22 @@ let headerOf (name: string) (response: Fetch.Types.Response) : string =
 /// A value on its way into a query string.
 let urlPart (value: string) : string = JS.encodeURIComponent value
 
+/// Send what follows through the proxy the environment names, as it names it NOW.
+///
+/// Node's `fetch` ignores `HTTPS_PROXY` unless asked, while every child this host runs (git,
+/// the agent CLI) honours it — so on a proxied network the host's own requests were the one
+/// thing that went out direct: refused at the edge, or, where the proxy is what holds the
+/// real credential, arriving with a placeholder GitHub rejects as a dead sign-in. Loopback
+/// stays direct either way, so the Manager and its sessions still reach each other.
+///
+/// Process-wide, because Node's dispatcher is: whoever calls this reconfigures every request
+/// the process makes after it. `attempt` calls it once, before its first request, which is
+/// why no bin has to; it is public so a caller that has just changed the environment can
+/// have it read again.
+let followEnvironmentProxy () : unit = Fable.NodeExtras.Proxies.setGlobalProxyFromEnv () |> ignore
+
+let private proxyFollowed = lazy (followEnvironmentProxy ())
+
 /// One request, with its body read by `read`.
 ///
 /// `fetchUnsafe`, not `fetch`: the plain binding throws on a non-2xx status, which would
@@ -85,6 +101,7 @@ let attempt
     (init: Fetch.Types.RequestProperties list)
     : Async<Attempt<'body>> =
     async {
+        proxyFollowed.Force ()
         try
             let! response = Fetch.fetchUnsafe url init |> Interop.awaitPromise
             let! body = read response |> Interop.awaitPromise

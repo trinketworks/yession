@@ -56,6 +56,9 @@ let all =
         // answer. Cheap because none of it needs a provider: these are the decisions taken
         // BEFORE a conversation, and they used to be unreachable inside `[<Emit>]` strings.
         Tag.needs "Requests" [] (fun () -> Requests.tests)
+        // The one decision above that only a socket can settle: that a request follows the
+        // proxy the environment names.
+        Tag.needs "Requests over a socket" [ Tag.Ports ] (fun () -> Requests.portsTests)
         Tag.needs "Tools" [] (fun () -> Tools.tests)
         // The layers above join here: what a model calls, and what it is told back.
         Tag.needs "Tool calls" [] (fun () -> ToolCalls.tests)
