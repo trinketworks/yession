@@ -631,8 +631,9 @@ module Style =
         pivotMarkBase + " group-hover:-translate-x-1 group-focus-visible:-translate-x-1 group-active:-translate-x-2"
 
     // --- Tiny square display pics (never round) -----------------------------------------
-    // Two-tone checkers in the blue/green family stand in until real avatars exist; the
-    // variant is picked by hashing the peer id so identity is stable without name colours.
+    // Two-tone checkers stand in for people until real avatars exist; the variant is picked
+    // by hashing the peer id so identity is stable without name colours. The agent is not a
+    // checker: it is a blue diamond (`agentAvatar`), and the palette below keeps it that way.
     // The checker hexes are deliberately NOT theme tokens: they are artwork constants, and
     // each class must appear as the same literal in the `@source inline` mirror in
     // app/tailwind.css — a var() inside would decouple nothing and complicate the mirror.
@@ -674,15 +675,45 @@ module Style =
     /// name beside it, so the name is what the eye reads and the mark says what kind.
     let entityMark = cls [ entitySeat; "text-ink-dim" ]
 
-    let private checker (a: string) (b: string) =
-        sprintf "bg-[conic-gradient(from_0deg,%s_25%%,%s_0_50%%,%s_0_75%%,%s_0)]" a b a b
+    /// The class that paints one checker from its two tones.
+    let checker (light: string) (dark: string) =
+        sprintf "bg-[conic-gradient(from_0deg,%s_25%%,%s_0_50%%,%s_0_75%%,%s_0)]" light dark light dark
 
-    let private humanCheckers =
-        [| checker "#1ba1e2" "#0b5d85"
-           checker "#a8dd00" "#55700a"
-           checker "#17c3b2" "#0a5c54"
-           checker "#4ab8f0" "#1a6a96"
-           checker "#7fb800" "#3d5a05" |]
+    /// The people's checkers, as (light, dark) tone pairs.
+    ///
+    /// BLUE IS THE AGENT. The mark is a blue cube held by green panels — the agent and the
+    /// people (`assets/logo`) — and the agent's avatar is a blue diamond, so no person is
+    /// drawn in blue or in anything that reads as it: no tone between cyan and violet (HSL hue
+    /// 180°–270°). A checker once carried the mark's own `#1ba1e2` and sat directly above the
+    /// agent's diamond in the same colour. The people's side is the mark's green and the hues
+    /// either side of it — teal, green, lime, yellow, amber — plus the warm accents the Metro
+    /// palette the product is drawn from carries (orange, pink, magenta) and pale tints of
+    /// the greens and warms. Never red either, which is `--color-err`.
+    ///
+    /// A peer's checker is its id's hash modulo the length, so the length is the collision
+    /// rate: with five entries a three-person room shared a checker about half the time;
+    /// eleven brings that to about a quarter, and two people to one in eleven. Every entry is
+    /// one hue at two values (the light tone carries the shape at >= 3:1 on every surface;
+    /// the dark tone is its shadow), and no two sit close enough in hue and value to be
+    /// mistaken for each other at 14px. Adding one means checking it against its neighbours
+    /// on the page, not only the rule — and mirroring it in `app/tailwind.css`.
+    ///
+    /// `Phase4`'s "People's marks" suite pins the rule, the contrast and the mirror.
+    let humanTones =
+        [| "#17c3b2", "#0a5c54" // teal
+           "#3fd75f", "#186a2c" // green
+           "#b8f7d4", "#3d7a5a" // mint
+           "#a8dd00", "#55700a" // lime: the mark's green
+           "#f3f59a", "#7a7a2a" // lemon
+           "#ecd000", "#665a00" // yellow
+           "#ffa928", "#7a4a06" // amber
+           "#ffc9a3", "#8a5230" // peach
+           "#ff7a45", "#803010" // orange
+           "#ff8fd8", "#7a2a66" // pink
+           "#e8469e", "#6e1349" // magenta
+        |]
+
+    let private humanCheckers = humanTones |> Array.map (fun (light, dark) -> checker light dark)
 
     /// A stable checker for a human peer id.
     let humanAvatar (id: string) : string =
