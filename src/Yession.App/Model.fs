@@ -9,6 +9,7 @@ open Yession.Domain.Terminals
 open Yession.Domain.Collab
 open Yession.Domain.Tools
 open Yession.Domain.Chat
+open Yession.Domain.Content
 open Yession.Domain.Prs
 
 /// The Browser Client Elmish model and update loop shell. It holds a single typed
@@ -294,6 +295,10 @@ type PaneTab =
     | BlockTab of TerminalId * BlockId
     /// One stretch of live mode. Opened from its chat item.
     | StretchTab of TerminalStretch
+    /// One file from the session's content root — an artifact today, a repo file later.
+    /// Opened by tapping its chip in the chat, or from the list. Not a terminal at all,
+    /// which is why `terminal` below stopped being total.
+    | ContentTab of ContentRef
 
 module PaneTab =
 
@@ -305,13 +310,18 @@ module PaneTab =
         | TerminalTab id -> "terminal:" + TerminalId.value id
         | BlockTab (id, blockId) -> "block:" + TerminalId.value id + ":" + BlockId.value blockId
         | StretchTab stretch -> "stretch:" + TerminalStretch.key stretch
+        | ContentTab ref -> "content:" + ContentRef.value ref
 
     /// Which terminal this tab is about — what the strip groups by and what a replay reads.
+    /// `None` for a tab that is not a terminal's: a content tab has no feed, no header and
+    /// nothing to rewind, and every caller that assumed otherwise is a site the compiler
+    /// named when this stopped being total.
     let terminal =
         function
-        | TerminalTab id -> id
-        | BlockTab (id, _) -> id
-        | StretchTab stretch -> stretch.TerminalId
+        | TerminalTab id -> Some id
+        | BlockTab (id, _) -> Some id
+        | StretchTab stretch -> Some stretch.TerminalId
+        | ContentTab _ -> None
 
     /// Whether this tab is a LIVE terminal's, given the terminals as they stand (Plan 20,
     /// stage 1) — what the strip may keep.
@@ -324,7 +334,7 @@ module PaneTab =
         function
         | TerminalTab id ->
             Projection.tryFind id terminals |> Option.map (fun t -> t.IsOpen) |> Option.defaultValue false
-        | BlockTab _ | StretchTab _ -> true
+        | BlockTab _ | StretchTab _ | ContentTab _ -> true
 
 /// Which read of a tab the pane is showing (Plan 25, stage 2): the reader's POSITION — which
 /// tab, and for a terminal where in its history — and their FIDELITY — the text of it, or the
@@ -1081,7 +1091,7 @@ module ClientModel =
         let exists (tab: PaneTab) =
             match tab with
             | TerminalTab id -> Projection.tryFind id model.Terminals |> Option.isSome
-            | BlockTab _ | StretchTab _ -> true
+            | BlockTab _ | StretchTab _ | ContentTab _ -> true
         // The mode's SUBJECT rather than only what is on screen: while the list is up it is
         // the read the list covers, so the strip, the header and the composer keep answering
         // "which terminal am I working with" instead of going blank behind the census.
@@ -1109,11 +1119,13 @@ module ClientModel =
     let paneAnchor (model: ClientModel) : (TerminalId * BlockId) option =
         model.Pane |> Option.bind PaneMode.onTab |> Option.bind TabMode.anchor
 
-    /// Which terminal the pane is about — the selected tab's, whichever kind it is. A block
-    /// tab and a stretch tab still belong to a terminal, which is what the composer, the
-    /// presence marks and the transcript reads are keyed by.
+    /// Which terminal the pane is about — the selected tab's, when the selected tab is a
+    /// terminal's at all. A block tab and a stretch tab still belong to a terminal, which is
+    /// what the composer, the presence marks and the transcript reads are keyed by; a content
+    /// tab belongs to none, and answers `None` so those surfaces stand down rather than
+    /// addressing a terminal nobody selected.
     let selectedTerminal (model: ClientModel) : TerminalId option =
-        selectedPane model |> Option.map PaneTab.terminal
+        selectedPane model |> Option.bind PaneTab.terminal
 
     /// The transcript length this client's rewind pinned, while the terminal is still LIVE
     /// (Plan 14, stage 7). Resolved rather than read raw, for the same reason `selectedPane`
@@ -1192,7 +1204,10 @@ module ClientModel =
     /// function of the model, and a value the cheap tier can assert on is worth more than
     /// one only a real player can.
     let paneReplay (tab: PaneTab) (model: ClientModel) : PaneReplay option =
-        let feed = model.TerminalFeeds |> Map.tryFind (PaneTab.terminal tab) |> Option.defaultValue TerminalFeed.empty
+        let feed =
+            PaneTab.terminal tab
+            |> Option.bind (fun terminal -> model.TerminalFeeds |> Map.tryFind terminal)
+            |> Option.defaultValue TerminalFeed.empty
         /// The recording's own clock at a transcript line — what a marker, a poster and a
         /// start position are all measured in. `None` for a line this client has not read.
         let timeOf (seq: int) = feed.Records |> Map.tryFind seq |> Option.map (fun r -> r.At)
@@ -1202,6 +1217,9 @@ module ClientModel =
         | None -> None
         | Some header ->
             match tab with
+            // A file is not a recording: there is nothing to play, and the empty feed above
+            // means this arm is only ever reached by way of exhaustiveness.
+            | ContentTab _ -> None
             | BlockTab (terminal, blockId) ->
                 blockRange terminal blockId model
                 |> Option.map (fun (fromSeq, toSeq) ->
@@ -1290,6 +1308,8 @@ module ClientModel =
             | StretchTab stretch -> stretch.Range |> Option.map (fun (fromSeq, _) -> stretch.TerminalId, fromSeq)
             // A whole recording starts at the start; the header is its keyframe.
             | TerminalTab _ -> None
+            // A file is not a replay: it has no screen to start from.
+            | ContentTab _ -> None
         wanted |> Option.filter (fun key -> not (Map.containsKey key model.TerminalKeyframes))
 
     /// Whether this client is watching a terminal behind its live edge (Plan 14, stage 7).
@@ -1338,7 +1358,8 @@ module ClientModel =
     /// The header gates every case because it is transcript line 0: without it the geometry
     /// is a guess, and a recording replayed under the wrong one rewraps every line in it.
     let playable (tab: PaneTab) (model: ClientModel) : bool =
-        (terminalFeed (PaneTab.terminal tab) model).Header |> Option.isSome
+        PaneTab.terminal tab
+        |> Option.exists (fun terminal -> (terminalFeed terminal model).Header |> Option.isSome)
         && match tab with
            // A whole terminal's recording starts at the start, and the header is its
            // keyframe: there is nothing else to resolve.
@@ -1347,6 +1368,9 @@ module ClientModel =
            // A stretch with no recorded bounds is a gap in the record, which the surface
            // states rather than playing an empty player over.
            | StretchTab stretch -> Option.isSome stretch.Range
+           // A file is not a recording: the surface offers the file, and nothing to press
+           // play on.
+           | ContentTab _ -> false
 
     /// Whether the pane shows this tab as its RECORDING rather than as its text.
     ///
@@ -1387,6 +1411,8 @@ module ClientModel =
             chosen
             || (Projection.tryFind id model.Terminals
                 |> Option.exists (fun view -> (affordances view model).ReplayIsTheRead))
+        // Nothing to play: a file is drawn, not replayed.
+        | ContentTab _ -> false
 
     /// The terminal list, in the order it renders (Plan 20, stage 0): the OPEN terminals in
     /// open order, then the closed ones most recently opened first.

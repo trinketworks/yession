@@ -481,6 +481,18 @@ module DocumentBase =
     /// for the same reason as the manifest.
     let serviceWorker : DocumentBase = DocumentBase ""
 
+    /// The client VIEW, which renders in one document and only ever that one: the session
+    /// shell, whose base tag `declare` writes server-side and whose absence fails the browser
+    /// boot outright (`Yession.Browser.Page`). So a template inside the view has a base by
+    /// construction — what it does not have is the mount, which lives in the process that
+    /// served the page and in the tag the browser already resolved.
+    ///
+    /// That costs nothing, because `RelativeUrl.inDocument` never reads a mount: the in-document
+    /// spelling is the bare relative address, identical whichever witness produced it. The mount
+    /// matters only to `under`, which takes one outright rather than a witness — so this cannot
+    /// be used to anchor an address under the wrong root.
+    let shell : DocumentBase = DocumentBase ""
+
 module RelativeUrl =
 
     /// Inside a document that has declared its base: the bare relative form, resolved by

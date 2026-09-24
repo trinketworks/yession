@@ -9,6 +9,7 @@ open Yession.Domain.Terminals
 open Yession.Domain.Collab
 open Yession.Domain.Tools
 open Yession.Domain.Chat
+open Yession.Domain.Content
 open Yession.Domain.Files
 open Yession.Domain.Prs
 open Fable.BrowserExtras
@@ -3385,6 +3386,47 @@ module View =
               {player}
             </section>"""
 
+    /// One file from the session's content root, shown in the pane (Plan 26).
+    ///
+    /// The pane stopped being the terminal panel and became a content area, and this is the
+    /// second kind it can hold. What it draws is decided by the NAME's media type
+    /// (`ContentKind`) — the same rule the chip's mark uses, so a chip that promises a picture
+    /// opens one — and a kind this build cannot draw is a DOWNLOAD rather than an error: an
+    /// unsupported type is a file the reader can still have, and saying "cannot show" while
+    /// withholding the bytes would be the pane's limitation reported as the file's.
+    ///
+    /// The address is the content route, relative like every other (`<base href>` resolves
+    /// it), so the browser fetches the bytes itself with the session cookie it already has.
+    /// A pinned artifact version is immutable at its address, which is what lets an `<img>`
+    /// be right without this knowing that versions exist.
+    let private paneContentView (ref: ContentRef) : TemplateResult =
+        let url = RelativeUrl.inDocument DocumentBase.shell (SessionRoute.relative (SessionRoute.Content ref))
+        let name = ContentRef.fileName ref
+        // `download` names the file the way a person knows it, not the way it is addressed:
+        // saved from a pinned version the browser would otherwise write `0003-7f2a91` to disk.
+        let save =
+            html $"""
+                <a class="{Style.btn}" href="{url}" download="{name}"
+                   data-content-download="{ContentRef.value ref}">{Dom.Text.download}</a>"""
+        match ContentKind.ofMediaType (ContentMedia.ofRef ref) with
+        | ContentKind.Image _ ->
+            html $"""
+                <section class="{Style.paneBody}" data-pane-content="{ContentRef.value ref}">
+                  <div class="{Style.contentImageBox}">
+                    <img class="{Style.contentImage}" src="{url}" alt="{name}" data-content-image="{ContentRef.value ref}">
+                  </div>
+                  <div class="{Style.paneActions}">{save}</div>
+                </section>"""
+        | ContentKind.Download ->
+            html $"""
+                <section class="{Style.paneBody}" data-pane-content="{ContentRef.value ref}">
+                  <div class="{Style.contentDownload}">
+                    <span class="{Style.entityMark}" aria-hidden="true">{Icon.fileSm}</span>
+                    <span class="{Style.small}">{name}</span>
+                    {save}
+                  </div>
+                </section>"""
+
     /// The terminal LIST (Plan 20, stage 0): every terminal the session has ever had, and
     /// every verb one of them affords.
     ///
@@ -3541,6 +3583,10 @@ module View =
                 |> Option.map (fun b -> b.Command)
                 |> Option.defaultValue (BlockId.value blockId)
             | StretchTab stretch -> sprintf "%s · %s" (Entity.actorName model stretch.Holder) stretch.Title
+            // The file's own name, which is what the reader asked for. Not the path: a tab
+            // strip is narrow, and `artifacts/chart.png/0003-7f2a91` truncates to the part
+            // that says least.
+            | ContentTab ref -> ContentRef.fileName ref
         let readonlyTabButton (activate: unit -> unit) (pinMark: TemplateResult) (pinnedAttr: string) (hint: string) (tab: PaneTab) =
             let on = isOn tab
             let label = tabLabel tab
@@ -3589,7 +3635,7 @@ module View =
                 match Projection.tryFind id model.Terminals with
                 | Some view -> terminalTabButton activate pinMark pinnedAttr hint view
                 | None -> Lit.nothing
-            | BlockTab _ | StretchTab _ -> readonlyTabButton activate pinMark pinnedAttr hint tab
+            | BlockTab _ | StretchTab _ | ContentTab _ -> readonlyTabButton activate pinMark pinnedAttr hint tab
         let terminalBody (view: TerminalView) =
             let feed = ClientModel.terminalFeed view.TerminalId model
             let affords = ClientModel.affordances view model
@@ -3710,6 +3756,7 @@ module View =
                         | None -> Lit.nothing
                     | BlockTab (terminalId, blockId) -> paneBlockView actions dispatch model terminalId blockId
                     | StretchTab stretch -> paneStretchView model stretch
+                    | ContentTab ref -> paneContentView ref
                 // `tabindex="-1"` so the panel can take focus programmatically when a chip
                 // opens it, without becoming a Tab stop of its own. A DOM swap that leaves
                 // focus on the control that vanished is the failure this exists to avoid.
