@@ -1128,7 +1128,7 @@ let private appendNow (log: EventLog<SessionEvent>) (event: SessionEvent) =
     // lets these cases arrange a log and then observe a synchronous scheduler decision.
     Async.StartImmediate (log.Append ActorRef.Agent event |> Async.Ignore)
 
-let private armedScheduler (seed: SessionEvent list) (duringTurn: EventLog<SessionEvent> -> unit) =
+let private armedSchedulerOver (doc: Y.Doc) (seed: SessionEvent list) (duringTurn: EventLog<SessionEvent> -> unit) =
     let sessionId = SessionId.create "wake-session" |> expect
     let log = newLog ()
     for event in seed do
@@ -1151,10 +1151,13 @@ let private armedScheduler (seed: SessionEvent list) (duringTurn: EventLog<Sessi
             n <- n + 1
             MessageId.create (sprintf "message-%d" n) |> expect
     let scheduler =
-        Scheduler.create sessionId (Y.Doc.Create ()) log (fun () -> Some runner)
+        Scheduler.create sessionId doc log (fun () -> Some runner)
             (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId mintMessageId Principal.Peer
             (fun _ _ _ -> []) None Set.empty
     scheduler, log
+
+let private armedScheduler (seed: SessionEvent list) (duringTurn: EventLog<SessionEvent> -> unit) =
+    armedSchedulerOver (Y.Doc.Create ()) seed duringTurn
 
 let private startedTurns (log: EventLog<SessionEvent>) =
     async {
@@ -1354,7 +1357,7 @@ let private restartTests =
             async {
                 let scheduler, log =
                     armedScheduler [ AgentTurnStarted { AgentTurnId = turnId; Cause = TurnCause.TriggeredBy humanMessageId } ] ignore
-                do! scheduler.ReconcileAtBoot ()
+                do! scheduler.Boot ()
                 match! failedTurns log with
                 | [ failed ] ->
                     Expect.equal failed.AgentTurnId turnId "the turn the log left open, not a new one"
@@ -1371,9 +1374,33 @@ let private restartTests =
                         [ AgentTurnStarted { AgentTurnId = turnId; Cause = TurnCause.TriggeredBy humanMessageId }
                           AgentMessageCompleted { AgentTurnId = turnId; MessageId = agentMessageId; Body = "done" } ]
                         ignore
-                do! scheduler.ReconcileAtBoot ()
+                do! scheduler.Boot ()
                 let! failed = failedTurns log
                 Expect.isEmpty failed "nothing is failed twice, or failed for having finished"
+            }
+
+        // A person who asked while the session was down is answered before the agent reads
+        // its own news: the queue drains at boot ahead of the wake, as it does at every
+        // turn's end. The doc a peer sent into is the doc the process replays.
+        testCaseAsync "what people queued is answered before what the log owes" <|
+            async {
+                let peerDoc = Y.Doc.Create ()
+                let registry = Yession.Domain.Collab.BodyRegistry peerDoc
+                let bob = PeerId.create "bob" |> expect
+                let runner = Harness.run (Client.makeProgram peerDoc (ClientModel.init (peer "bob" "Bob")))
+                Body.author registry runner bob "are you there?"
+                Body.send registry runner bob |> ignore
+                let processDoc = Y.Doc.Create ()
+                Yession.Domain.Collab.DocSync.applyRemote processDoc (Yession.Domain.Collab.DocSync.fullState peerDoc)
+                let scheduler, log =
+                    armedSchedulerOver processDoc [ blockStarted "b1" true (Principal.Peer ada); blockCompleted "b1" ] ignore
+                do! scheduler.Boot ()
+                match! startedTurns log with
+                | first :: _ ->
+                    match first.Cause with
+                    | TurnCause.TriggeredBy _ -> ()
+                    | other -> failwithf "the first turn after boot was %A, not the person's" other
+                | [] -> failwith "nothing ran at all"
             }
 
         testCaseAsync "a turn already failed is not failed again" <|
@@ -1383,7 +1410,7 @@ let private restartTests =
                         [ AgentTurnStarted { AgentTurnId = turnId; Cause = TurnCause.TriggeredBy humanMessageId }
                           AgentTurnFailed { AgentTurnId = turnId; Reason = "the model refused" } ]
                         ignore
-                do! scheduler.ReconcileAtBoot ()
+                do! scheduler.Boot ()
                 let! failed = failedTurns log
                 Expect.equal (List.length failed) 1 "the failure it already had is the whole account"
             }
