@@ -3341,6 +3341,81 @@ let private prReadyTests =
             }
     ]
 
+let private prDraftTests =
+    let drafting (stub: StubGitHubApi) = GitHubPrs.draftOver stub.Url GitHubPrs.Spending.unmetered
+    let mutations (stub: StubGitHubApi) =
+        stub.Posted |> Seq.map snd |> Seq.filter (fun body -> body.Contains "\"query\":\"mutation") |> List.ofSeq
+    let standingWhere (fields: string) =
+        sprintf
+            """{"data":{"repository":{"pullRequest":{"id":"PR_1",%s,"mergeStateStatus":"BLOCKED","isMergeQueueEnabled":true}}}}"""
+            fields
+
+    testList "making a pull request a draft" [
+        testCaseAsync "an open one is made a draft" <|
+            async {
+                let! stub = startStubGitHubApi ()
+                match! drafting stub (Some "token-abc") prOne with
+                | PrWatches.PrMarkedDraft pr -> Expect.equal (PrRef.render pr) "octo/hello#12" "the one asked about"
+                | other -> failwithf "expected it drafted, got %A" other
+                match mutations stub with
+                | [ sent ] -> Expect.stringContains sent "convertPullRequestToDraft" "drafting is what was asked for"
+                | sent -> failwithf "expected one mutation, got %A" sent
+            }
+
+        testCaseAsync "one already a draft is reported, and nothing is mutated" <|
+            async {
+                let! stub = startStubGitHubApi ()
+                stub.SetStanding (standingWhere """"isDraft":true,"state":"OPEN","merged":false,"autoMergeRequest":null,"mergeQueueEntry":null""")
+                match! drafting stub (Some "token-abc") prOne with
+                | PrWatches.PrDraftUnneeded (_, already) -> Expect.stringContains already "draft" "what stands"
+                | other -> failwithf "expected nothing to do, got %A" other
+                Expect.isEmpty (mutations stub) "and github was never asked"
+            }
+
+        // Drafting one on its way in would take it off its way in, and that is unmerge_pr's
+        // act to do by name — so it is left, and nothing is asked of github.
+        testCaseAsync "one armed to merge is left armed, and nothing is mutated" <|
+            async {
+                let! stub = startStubGitHubApi ()
+                stub.SetStanding (standingWhere """"isDraft":false,"state":"OPEN","merged":false,"autoMergeRequest":{"mergeMethod":"SQUASH"},"mergeQueueEntry":null""")
+                match! drafting stub (Some "token-abc") prOne with
+                | PrWatches.PrDraftOnItsWayIn _ -> ()
+                | other -> failwithf "expected it left on its way in, got %A" other
+                Expect.isEmpty (mutations stub) "and github was never asked"
+            }
+
+        testCaseAsync "one in the merge queue is left queued, and nothing is mutated" <|
+            async {
+                let! stub = startStubGitHubApi ()
+                stub.SetStanding (standingWhere """"isDraft":false,"state":"OPEN","merged":false,"autoMergeRequest":null,"mergeQueueEntry":{"id":"MQE_1"}""")
+                match! drafting stub (Some "token-abc") prOne with
+                | PrWatches.PrDraftOnItsWayIn _ -> ()
+                | other -> failwithf "expected it left on its way in, got %A" other
+                Expect.isEmpty (mutations stub) "and github was never asked"
+            }
+
+        testCaseAsync "one already merged is reported, and nothing is mutated" <|
+            async {
+                let! stub = startStubGitHubApi ()
+                stub.SetStanding (standingWhere """"isDraft":false,"state":"MERGED","merged":true,"autoMergeRequest":null,"mergeQueueEntry":null""")
+                match! drafting stub (Some "token-abc") prOne with
+                | PrWatches.PrDraftUnneeded (_, "merged") -> ()
+                | other -> failwithf "expected nothing to do, got %A" other
+                Expect.isEmpty (mutations stub) "and github was never asked"
+            }
+
+        testCaseAsync "what github would not draft comes back as what github said" <|
+            async {
+                let! stub = startStubGitHubApi ()
+                stub.SetMutationReply
+                    200
+                    """{"data":null,"errors":[{"type":"FORBIDDEN","message":"Resource not accessible by integration"}]}"""
+                match! drafting stub (Some "token-abc") prOne with
+                | PrWatches.PrDraftRefused said -> Expect.equal said "Resource not accessible by integration" "the diagnosis, passed through"
+                | other -> failwithf "expected a refusal, got %A" other
+            }
+    ]
+
 let private prWatchVerbTests =
     let ada = PeerRef (PeerId.create "ada" |> expect)
     /// Ada watching for herself, and the agent watching on her turn: two authorities, one
@@ -3373,6 +3448,7 @@ let private prWatchVerbTests =
                 (GitHubPrs.mergeOver stub.Url GitHubPrs.Spending.unmetered)
                 (GitHubPrs.unmergeOver stub.Url GitHubPrs.Spending.unmetered)
                 (GitHubPrs.readyOver stub.Url GitHubPrs.Spending.unmetered)
+                (GitHubPrs.draftOver stub.Url GitHubPrs.Spending.unmetered)
                 (fun _ -> async { return Some "token-abc" })
                 applied.Add
         service, log, applied
@@ -3557,6 +3633,17 @@ let private prWatchVerbTests =
                 Expect.isEmpty events "nothing was armed, so nothing is watched"
             }
 
+        testCaseAsync "drafting one on its way in names the tool that takes it back" <|
+            async {
+                let! stub = startStubGitHubApi ()
+                stub.SetStanding
+                    """{"data":{"repository":{"pullRequest":{"id":"PR_1","isDraft":false,"state":"OPEN","merged":false,"mergeStateStatus":"BLOCKED","isMergeQueueEnabled":false,"autoMergeRequest":{"mergeMethod":"SQUASH"},"mergeQueueEntry":null}}}}"""
+                let service, _, _ = serviceOver stub
+                match! service.Draft adasCredential prOne with
+                | Error said -> Expect.stringContains said "unmerge_pr" "the way out, named"
+                | Ok said -> failwithf "expected a refusal, got %s" said
+            }
+
         testCaseAsync "a merge done at once watches nothing" <|
             async {
                 let! stub = startStubGitHubApi ()
@@ -3594,7 +3681,7 @@ let private invokeProviderTool (capabilities: AgentCapabilities) (name: string) 
     | None -> async { return Error (sprintf "no provider tool named %s" name) }
 
 let private prAgentToolTests =
-    testList "the create_pr/ready_pr/merge_pr/unmerge_pr/watch_pr/unwatch_pr agent tools" [
+    testList "the create_pr/ready_pr/draft_pr/merge_pr/unmerge_pr/watch_pr/unwatch_pr agent tools" [
         // merge_pr. The method defaults on this side of the gate, so a call that names none
         // reaches the capability as a squash rather than as an absence it has to fill.
         let merging () =
@@ -3646,6 +3733,22 @@ let private prAgentToolTests =
                                       return Ok { Status = CommandRan "ready"; Tool = "ready_pr"; Summary = "s"; Handle = None }
                                   } } }
                 let! _ = invokeProviderTool capabilities "ready_pr" """{"repo":"octo/hello","number":12}"""
+                Expect.equal seen (Some ("octo/hello", 12)) "the repo and the number it named"
+            }
+        testCaseAsync "draft_pr reaches the capability with the repo and the number" <|
+            async {
+                let mutable seen : (string * int) option = None
+                let capabilities =
+                    { AgentCapabilities.none with
+                        Repos =
+                          { AgentCapabilities.none.Repos with
+                              DraftPr =
+                                fun repo number ->
+                                  async {
+                                      seen <- Some (RepoRef.value repo, number)
+                                      return Ok { Status = CommandRan "drafted"; Tool = "draft_pr"; Summary = "s"; Handle = None }
+                                  } } }
+                let! _ = invokeProviderTool capabilities "draft_pr" """{"repo":"octo/hello","number":12}"""
                 Expect.equal seen (Some ("octo/hello", 12)) "the repo and the number it named"
             }
         testCaseAsync "merge_pr hands the capability the method it was given" <|
@@ -4072,6 +4175,7 @@ let tests =
         Tag.needs "Merging a pull request" [ Tag.Ports ] (fun () -> prMergeTests)
         Tag.needs "Taking a pull request back" [ Tag.Ports ] (fun () -> prUnmergeTests)
         Tag.needs "Marking a pull request ready" [ Tag.Ports ] (fun () -> prReadyTests)
+        Tag.needs "Making a pull request a draft" [ Tag.Ports ] (fun () -> prDraftTests)
         Tag.needs "Watching a pull request" [ Tag.Ports ] (fun () -> prWatchVerbTests)
         Tag.needs "Per-actor credentials E2E" [ Tag.Ports; Tag.Native ] (fun () -> e2eTests)
     ]

@@ -5,12 +5,12 @@ module Yession.Host.PrWatches
 // how a session keeps looking: the cadence, the ETag bookkeeping, the in-flight guard, the
 // verbs that start and stop a watch, and the query all of it reads back through.
 //
-// The whole provider surface is five functions — `FetchPr`, one look; `OpenPr`, one
-// pull request opened; `ReadyPr`, a draft of one undrafted; `MergePr`, one merged or set
-// to merge; `UnmergePr`, that taken back — plus a `provider` label the error copy is
+// The whole provider surface is six functions — `FetchPr`, one look; `OpenPr`, one
+// pull request opened; `ReadyPr`, a draft of one undrafted; `DraftPr`, one drafted again;
+// `MergePr`, one merged or set to merge; `UnmergePr`, that taken back — plus a `provider` label the error copy is
 // written around, because "github rejected this credential" is a sentence a person has to
 // read and "the provider rejected this credential" is not. A second forge is a second
-// `fetchOver`, `openOver`, `readyOver`, `mergeOver`, `unmergeOver` and hook filter
+// `fetchOver`, `openOver`, `readyOver`, `draftOver`, `mergeOver`, `unmergeOver` and hook filter
 // (`GitHubPrs.fs` is the first), and nothing in this file changes to admit it.
 //
 // Polling, not webhooks, and that is a decision rather than a stopgap: a repo webhook
@@ -147,6 +147,21 @@ type PrReadyOutcome =
 
 /// THE SEAM for undrafting one, beside `MergePr`: what a draft needs before it can merge.
 type ReadyPr = string option -> PrRef -> Async<PrReadyOutcome>
+
+/// What came of turning one back into a draft — `PrReadyOutcome` the other way.
+type PrDraftOutcome =
+    | PrMarkedDraft of PrRef
+    /// Nothing was done: it is a draft already, or it has merged. The `add_repo` rule.
+    | PrDraftUnneeded of PrRef * already: string
+    /// It is on its way in — auto merge armed, or in the merge queue — and it is left
+    /// there. Drafting one would take it off its way in as a side effect nobody asked for
+    /// by name; taking it back is `UnmergePr`'s act, and a separate one on the timeline.
+    | PrDraftOnItsWayIn of PrRef * how: string
+    | PrDraftRefused of string
+    | PrDraftFailed of PrFetchFailure
+
+/// THE SEAM for drafting one again, beside `ReadyPr`.
+type DraftPr = string option -> PrRef -> Async<PrDraftOutcome>
 
 // --- the poller --------------------------------------------------------------------------
 
@@ -463,7 +478,9 @@ type PrService =
       Unmerge : CredentialFor -> PrRef -> Async<Result<string, string>>
       /// Mark a draft ready for review, on the credential of whoever's turn it is. Changes
       /// nothing about a watch: being a draft is not one of the things a watch reports.
-      Ready : CredentialFor -> PrRef -> Async<Result<string, string>> }
+      Ready : CredentialFor -> PrRef -> Async<Result<string, string>>
+      /// Turn one back into a draft — `Ready` the other way, on the same terms.
+      Draft : CredentialFor -> PrRef -> Async<Result<string, string>> }
 
 /// Build the watch verbs over the session's log and the poller they reconcile into.
 ///
@@ -479,6 +496,7 @@ let service
     (mergePr: MergePr)
     (unmergePr: UnmergePr)
     (readyPr: ReadyPr)
+    (draftPr: DraftPr)
     (resolveToken: CredentialFor -> Async<string option>)
     (refold: PrWatch list -> unit)
     : PrService =
@@ -652,6 +670,25 @@ let service
                     return Ok (sprintf "%s is already %s — nothing was changed" (PrRef.render pr) already)
                 | PrReadyRefused said -> return Error (sprintf "%s would not mark it ready: %s" provider said)
                 | PrReadyFailed failure -> return Error (cannotReach (PrRef.render pr) failure)
+            }
+      Draft =
+        fun credential pr ->
+            async {
+                let! token = resolveToken credential
+                match! draftPr token pr with
+                | PrMarkedDraft pr -> return Ok (sprintf "%s is a draft" (PrRef.render pr))
+                | PrDraftUnneeded (pr, already) ->
+                    return Ok (sprintf "%s is already %s — nothing was changed" (PrRef.render pr) already)
+                // The way out, named, as a draft `Merge` refuses names ready_pr.
+                | PrDraftOnItsWayIn (pr, how) ->
+                    return
+                        Error (
+                            sprintf
+                                "%s is %s, and is left there — take it back with unmerge_pr first if it should not land"
+                                (PrRef.render pr)
+                                how)
+                | PrDraftRefused said -> return Error (sprintf "%s would not make it a draft: %s" provider said)
+                | PrDraftFailed failure -> return Error (cannotReach (PrRef.render pr) failure)
             } }
 
 // --- the query -----------------------------------------------------------------------------
