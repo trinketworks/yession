@@ -57,7 +57,7 @@ let private endpointTests =
                 let offset (n: int64) = EventOffset.create n |> expect
 
                 // The cursor itself: no events, never cached, and it says where to look.
-                let! start = TestHttp.getUnredirected (at (EventsAfter None) mintedToken)
+                let! start = TestHttp.getUnredirected [] (at (EventsAfter None) mintedToken)
                 Expect.equal start.Status 307 "a cursor redirects rather than answering"
                 Expect.equal (TestHttp.requiredHeader "cache-control" start) "no-store" "where the events are is a thing that moves"
                 Expect.stringContains (TestHttp.requiredHeader "location" start) (sprintf "events/0-%d" (EventChunk.size - 1)) "to the first range"
@@ -90,7 +90,7 @@ let private endpointTests =
                 Expect.equal unreached.Status 404 "a range beyond the log does not exist yet"
 
                 // Current: nothing to keep, so nothing to give an address to.
-                let! current = TestHttp.getUnredirected (at (EventsAfter (Some (offset (2L * int64 EventChunk.size + 14L)))) mintedToken)
+                let! current = TestHttp.getUnredirected [] (at (EventsAfter (Some (offset (2L * int64 EventChunk.size + 14L)))) mintedToken)
                 Expect.equal current.Status 204 "a caller at the end is told it is current"
                 Expect.equal (TestHttp.requiredHeader "cache-control" current) "no-store" "and emptiness is never kept"
 

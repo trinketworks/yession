@@ -1137,7 +1137,15 @@ Async.StartImmediate (
                 match auth with
                 | Some a -> Some (GitHubRepos.routes a resolveGitHubToken githubApi sessionMount)
                 | None -> None
-            [ claudeRoutes; githubRoutes; queryRoutes; repoRoutes ]
+            // What the content pane draws from: the artifacts an agent has shared, by path.
+            // The only route here that answers with FILES, which is why it carries its own
+            // containment check and its own conservative headers — both inside the store,
+            // where the bytes are.
+            let contentRoutes =
+                match auth with
+                | Some a -> Some (Artifacts.routes a artifactsDir sessionMount)
+                | None -> None
+            [ claudeRoutes; githubRoutes; queryRoutes; repoRoutes; contentRoutes ]
             |> List.choose id
             |> function
                | [] -> None

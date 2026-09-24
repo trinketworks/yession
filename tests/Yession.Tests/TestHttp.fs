@@ -74,10 +74,12 @@ let get (url: string) : Async<Reply> = send [] url
 let getNoStore (headers: (string * string) list) (url: string) : Async<Reply> =
     send [ RequestProperties.Cache RequestCache.Nostore; headersOf headers ] url
 
-/// A GET with a redirect left UNFOLLOWED, so the route's own answer is observable rather
-/// than the answer of whatever it points at.
-let getUnredirected (url: string) : Async<Reply> =
-    send [ RequestProperties.Redirect RedirectMode.Manual ] url
+/// A GET with headers, and a redirect left UNFOLLOWED, so the route's own answer is
+/// observable rather than the answer of whatever it points at. The headers are here because
+/// a cookie-gated surface that redirects (the content surface) would otherwise need a second
+/// spelling of this one request.
+let getUnredirected (headers: (string * string) list) (url: string) : Async<Reply> =
+    send [ RequestProperties.Redirect RedirectMode.Manual; headersOf headers ] url
 
 /// A POST under `contentType`, with whatever other headers the route requires.
 let post (headers: (string * string) list) (contentType: string) (body: string) (url: string) : Async<Reply> =

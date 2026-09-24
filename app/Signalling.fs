@@ -306,7 +306,8 @@ let start
     // one declaration, and a route added there fails this build until it is handled here.
     // The connection-panel routes (`ClaudeStatus`/`Claude`, `GitHubStatus`/`GitHub`), the
     // repo picker's (`GitHubRepos`/`GitHubBranches`), the
-    // query stream and the model catalogue are the session's too but live in `extraRoutes`
+    // query stream, the content route (`Content`, served by the artifact store, which owns
+    // the containment check) and the model catalogue are the session's too but live in `extraRoutes`
     // (defined later in compile order), so they fall through to it exactly as an unknown
     // path does.
     let handler (req: IncomingMessage) (res: ServerResponse) =
@@ -500,6 +501,7 @@ let start
         | Some (GitHubBranches _)
         | Some (GitHubPullHead _)
         | Some Queries
+        | Some (Content _)
         | None -> handleWithExtraRoutes ()
 
     let server = createServer handler

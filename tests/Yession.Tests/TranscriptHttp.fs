@@ -59,7 +59,7 @@ let private endpointTests =
         testCaseAsync "a cursor with no position redirects to the range that starts the recording" <|
             async {
                 let! at, stop = serving 10
-                let! start = TestHttp.getUnredirected (at (TerminalTranscriptAfter (TerminalId.value terminal, None)) token)
+                let! start = TestHttp.getUnredirected [] (at (TerminalTranscriptAfter (TerminalId.value terminal, None)) token)
                 Expect.equal start.Status 307 "a cursor redirects rather than answering"
                 Expect.stringContains
                     (TestHttp.requiredHeader "location" start)
@@ -73,7 +73,7 @@ let private endpointTests =
                 // Where the lines are is the one thing on this surface allowed to change its
                 // mind, so it must not be stored anywhere — by the client or by a cache.
                 let! at, stop = serving 10
-                let! start = TestHttp.getUnredirected (at (TerminalTranscriptAfter (TerminalId.value terminal, None)) token)
+                let! start = TestHttp.getUnredirected [] (at (TerminalTranscriptAfter (TerminalId.value terminal, None)) token)
                 Expect.equal (TestHttp.requiredHeader "cache-control" start) "no-store" "a cursor is never cached"
                 do! stop ()
             }
@@ -83,7 +83,7 @@ let private endpointTests =
                 // The cookie-less path: a Node client authorizes with `?token=`, and a
                 // redirect drops the query — so the range would arrive unauthorized.
                 let! at, stop = serving 10
-                let! start = TestHttp.getUnredirected (at (TerminalTranscriptAfter (TerminalId.value terminal, None)) token)
+                let! start = TestHttp.getUnredirected [] (at (TerminalTranscriptAfter (TerminalId.value terminal, None)) token)
                 Expect.stringContains (TestHttp.requiredHeader "location" start) "token=" "so the range is reachable with what got here"
                 do! stop ()
             }
@@ -94,7 +94,7 @@ let private endpointTests =
                 // transcript line cannot carry its own index, so a client numbers an answer
                 // from what it ASKED — and this is what makes that true.
                 let! at, stop = serving 10
-                let! start = TestHttp.getUnredirected (at (TerminalTranscriptAfter (TerminalId.value terminal, Some 4)) token)
+                let! start = TestHttp.getUnredirected [] (at (TerminalTranscriptAfter (TerminalId.value terminal, Some 4)) token)
                 Expect.stringContains
                     (TestHttp.requiredHeader "location" start)
                     (sprintf "terminals/%s/5-10" (TerminalId.value terminal))
@@ -155,7 +155,7 @@ let private endpointTests =
                 // An empty range is a resource a client keeps, and "nothing yet" is exactly
                 // the thing that stops being true.
                 let! at, stop = serving 10
-                let! current = TestHttp.getUnredirected (at (TerminalTranscriptAfter (TerminalId.value terminal, Some 10)) token)
+                let! current = TestHttp.getUnredirected [] (at (TerminalTranscriptAfter (TerminalId.value terminal, Some 10)) token)
                 Expect.equal current.Status 204 "the caller has every line"
                 do! stop ()
             }
@@ -166,7 +166,7 @@ let private endpointTests =
                 // "There are no lines you have not seen" is the honest answer, and it is the
                 // same one a caller at the tail gets.
                 let! at, stop = serving 10
-                let! unknown = TestHttp.getUnredirected (at (TerminalTranscriptAfter ("term-never-opened", None)) token)
+                let! unknown = TestHttp.getUnredirected [] (at (TerminalTranscriptAfter ("term-never-opened", None)) token)
                 Expect.equal unknown.Status 204 "a cursor over nothing says there is nothing"
                 do! stop ()
             }
