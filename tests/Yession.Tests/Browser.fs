@@ -1205,7 +1205,7 @@ let internal serveStatic (root: string) : Serving =
 /// listener left bound by a failing case used to take the NEXT case with it — one failure,
 /// two red cases, and the second one a lie.
 let private editorCaseOn
-    (viewport: (int * int) option)
+    (context: BrowserNewContextOptions option)
     (name: string)
     (body: IPage -> Async<unit>)
     =
@@ -1217,14 +1217,11 @@ let private editorCaseOn
                 await (pw.Chromium.LaunchAsync (
                     BrowserTypeLaunchOptions (ExecutablePath = chromiumPath ())))
             let! page =
-                match viewport with
+                match context with
                 | None -> await (br.NewPageAsync ())
-                | Some (width, height) ->
+                | Some options ->
                     async {
-                        let! ctx =
-                            await (br.NewContextAsync (
-                                BrowserNewContextOptions (
-                                    ViewportSize = ViewportSize (Width = width, Height = height))))
+                        let! ctx = await (br.NewContextAsync options)
                         return! await (ctx.NewPageAsync ())
                     }
             page.SetDefaultTimeout 15000.0f
@@ -1245,7 +1242,19 @@ let private editorCase = editorCaseOn None
 /// A case at a stated viewport. `ViewportSize` alone, never `IsMobile`: that additionally asks
 /// Chromium to fit the layout to a device window, which measured here lands at 648px rather
 /// than 390 — the very lie the ui-exploration skill warns about, arriving through another door.
-let private editorCaseIn (width: int) (height: int) = editorCaseOn (Some (width, height))
+let private editorCaseIn (width: int) (height: int) =
+    editorCaseOn (Some (BrowserNewContextOptions (ViewportSize = ViewportSize (Width = width, Height = height))))
+
+/// A case on a TOUCH screen: the same honest viewport, and `HasTouch`, which is what takes
+/// hover away — Chromium answers `(hover: none)` for a touch device, as a phone does. Without
+/// it this browser is a phone-sized window with a mouse over it, and a rule written for a
+/// device that cannot hover is a rule no case here ever sees applied.
+let private editorCaseOnTouch (width: int) (height: int) =
+    editorCaseOn (
+        Some (
+            BrowserNewContextOptions (
+                ViewportSize = ViewportSize (Width = width, Height = height),
+                HasTouch = true)))
 
 /// How much narrower a message's ground is than the scrollport holding it — 0 when it runs
 /// edge to edge, and the width of the margins either side when it does not.
@@ -2764,9 +2773,9 @@ let editorTests =
                         """document.activeElement?.hasAttribute('data-item-actions') === true""")
                 return ()
             }
-        // A control revealed by hover is a control a keyboard cannot find unless focus reveals
-        // it too, and `opacity-0` keeps it in the tab order either way — so the failure is not
-        // an unreachable control but an INVISIBLE one that is nonetheless the focused thing.
+        // A control lifted by hover is a control a keyboard never sees lifted unless focus
+        // lifts it too, and a faint rest keeps it in the tab order either way — so the failure
+        // is not an unreachable control but a FAINT one that is nonetheless the focused thing.
         // Tabbed to for real, because `:focus-visible` is exactly the rule that does not fire
         // for a programmatic `focus()`.
         editorCaseIn 1440 900 "an item's actions show themselves to a keyboard that reaches them" <| fun page ->
@@ -2791,6 +2800,44 @@ let editorTests =
                     await (page.WaitForFunctionAsync
                         """getComputedStyle(document.querySelector('#shell [data-item-actions]:focus-visible'))
                              ?.opacity === '1'""")
+                return ()
+            }
+        // A phone never hovers, so an item's actions are either on the screen at rest or they
+        // are not on it at all — and they are also what marks where one message ends and the
+        // next begins in a run from one person. Every item, not the first: the fixture's
+        // sixteen one-liners under one author are exactly the dense run that needs it.
+        //
+        // Brought to the middle of the scrollport one at a time, so the sticky author line
+        // and the foot of the column are never what the hit-test lands on. What is asked of
+        // each is that it is painted (not transparent) and that its own centre belongs to it:
+        // a control under something else is a control a thumb cannot reach.
+        editorCaseOnTouch 390 844 "on a phone every item's actions are on the screen and under the thumb" <| fun page ->
+            async {
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-conversation] [data-item-actions]")
+                let! noHover = await (page.EvaluateAsync<bool> "() => matchMedia('(hover: none)').matches")
+                Expect.isTrue noHover "the page is laid out for a device that cannot hover"
+                let! asked =
+                    await (page.EvaluateAsync<int>
+                            "() => document.querySelectorAll('#shell [data-conversation] [data-item-actions]').length")
+                Expect.isTrue (asked > 1) (sprintf "the fixture draws a run of items to ask about (drew %d)" asked)
+                let! unreachable =
+                    await (page.EvaluateAsync<string[]>
+                            """() => {
+                                 const wrong = []
+                                 for (const control of document.querySelectorAll('#shell [data-conversation] [data-item-actions]')) {
+                                   control.scrollIntoView({ block: 'center' })
+                                   const box = control.getBoundingClientRect()
+                                   const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)
+                                   const opacity = Number(getComputedStyle(control).opacity)
+                                   if (opacity === 0 || !hit || !control.contains(hit))
+                                     wrong.push(control.getAttribute('data-item-actions') + ' (opacity ' + opacity + ')')
+                                 }
+                                 return wrong
+                               }""")
+                Expect.isEmpty
+                    unreachable
+                    (sprintf "every item's actions are painted and hit-test to themselves; these are not: %s"
+                        (String.concat ", " unreachable))
                 return ()
             }
         // A turn in flight, on the screen that had the least room for it. This is the phone
