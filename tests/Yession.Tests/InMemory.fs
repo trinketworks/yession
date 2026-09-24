@@ -276,7 +276,7 @@ let tests =
                 // words are all there, which is the promise.
                 do! a.Runner.WaitFor (fun m ->
                         match Map.tryFind ActorRef.Agent m.Presence with
-                        | Some p -> p.Focus.Field = ChapterName item.MessageId
+                        | Some p -> p.Focus |> Option.exists (fun f -> f.Field = ChapterName item.MessageId)
                         | None -> false)
                 do! a.Runner.WaitFor (fun m -> Chat.Chapters.name m.Synced.Chapters item = "Where it was settled")
                 // ...and it is gone when the typing is. A caret left by a writer that has
@@ -521,16 +521,18 @@ let tests =
                 a.Connection.ReportPresence (Some titleFocus)
                 do! b.Runner.WaitFor (fun m -> Map.containsKey (PeerRef a.Hello.PeerId) m.Presence)
                 Expect.equal
-                    (Map.tryFind (PeerRef a.Hello.PeerId) (b.Runner.Model ()).Presence |> Option.map (fun c -> c.Focus))
+                    (Map.tryFind (PeerRef a.Hello.PeerId) (b.Runner.Model ()).Presence |> Option.bind (fun c -> c.Focus))
                     (Some titleFocus)
                     "B sees A's title caret with the reported anchor/head"
                 // Ada moves into her own draft body: the field changes, and it still relays.
                 let bodyFocus : Focus = { Field = DraftBody a.Hello.PeerId; Pos = { Anchor = "BQY="; Head = "BQY=" } }
                 a.Connection.ReportPresence (Some bodyFocus)
                 do! b.Runner.WaitFor (fun m ->
-                        Map.tryFind (PeerRef a.Hello.PeerId) m.Presence |> Option.map (fun c -> c.Focus) = Some bodyFocus)
+                        Map.tryFind (PeerRef a.Hello.PeerId) m.Presence |> Option.bind (fun c -> c.Focus) = Some bodyFocus)
                 Expect.equal
-                    (Map.tryFind (PeerRef a.Hello.PeerId) (b.Runner.Model ()).Presence |> Option.map (fun c -> c.Focus.Field))
+                    (Map.tryFind (PeerRef a.Hello.PeerId) (b.Runner.Model ()).Presence
+                     |> Option.bind (fun c -> c.Focus)
+                     |> Option.map (fun f -> f.Field))
                     (Some (DraftBody a.Hello.PeerId))
                     "B sees A's caret move into the draft-body field"
                 // Ada leaves; the Host clears her cursor on the remaining peer.

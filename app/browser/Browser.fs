@@ -1098,6 +1098,24 @@ let private start () =
         // A caret moved: reported once per frame, to whichever connection there is by then.
         let sendFocus = Render.focusReporter (fun focus -> connectionRef |> Option.iter (fun c -> c.ReportPresence focus))
 
+        // What this peer has OPEN, reported off the model after every change. Deduplicated
+        // because a render happens on every keystroke and a pane that has not moved tells a
+        // collaborator nothing.
+        //
+        // The dedup remembers what THIS connection was told, and is cleared when there is no
+        // connection to tell: a view chosen before the channel opened — or held across a
+        // reconnect, which is the same thing — would otherwise be a state nobody was ever
+        // sent, and presence has no keepalive to correct it later. The next model change after
+        // the connection lands restates it, and connecting is itself a model change.
+        let mutable viewingSent : ViewRef option option = None
+        let sendViewing (viewing: ViewRef option) =
+            match connectionRef with
+            | Some connection when viewingSent <> Some viewing ->
+                viewingSent <- Some viewing
+                connection.ReportViewing viewing
+            | Some _ -> ()
+            | None -> viewingSent <- None
+
         // The collaborative text behind a field somebody's caret is in, for the fields worn by
         // a plain `<input>` — which report char offsets and so need the type to measure them
         // against. A body reports its own relative selection from inside its editor
@@ -1530,6 +1548,7 @@ let private start () =
             dispatchRef <- fun msg -> dispatch (Ylmish.Program.Message.User msg)
             latestModel <- model
             renderer.SetState model
+            sendViewing (ClientModel.viewing model)
             if not launchListingAsked && ClientModel.launchOffered model then
                 launchListingAsked <- true
                 actions.LaunchSearch model.Launch.Query

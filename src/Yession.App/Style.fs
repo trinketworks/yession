@@ -2297,6 +2297,11 @@ module Style =
     let draftEditors = "shrink-0 flex items-center gap-1 pr-1"
     let draftEditorDot = "inline-block w-1.5 h-1.5 rounded-full"
 
+    /// Who has this OPEN right now: one ring per peer, coloured the same way a caret is
+    /// (`EditorColour`) but hollow, because watching and typing are not the same claim. A
+    /// filled dot says somebody's cursor is in here; a ring says somebody is looking.
+    let paneViewerDot = "inline-block w-1.5 h-1.5 rounded-full border bg-transparent"
+
     /// Starts your own draft, collapsing whoever's is open — the escape hatch from joining.
     let draftNew =
         "self-end bg-transparent border-0 cursor-pointer px-4 py-2 " + caps

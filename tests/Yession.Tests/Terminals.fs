@@ -12,6 +12,7 @@ open Yjs
 open Yession.Domain
 open Yession.Domain.Sandboxes
 open Yession.Domain.Agent
+open Yession.Domain.Content
 open Yession.Domain.Link
 open Yession.Domain.Terminals
 open Yession.Domain.Collab
@@ -1751,11 +1752,21 @@ let private codecTests =
                         Focus =
                           Some
                               { Field = TerminalDraftBody (terminalA, ada)
-                                Pos = { Anchor = "AQI="; Head = "AwQ=" } } }
+                                Pos = { Anchor = "AQI="; Head = "AwQ=" } }
+                        Viewing = None }
                   Presence
                       { Who = PeerRef bob
                         DisplayName = "Bob"
-                        Focus = Some { Field = TerminalQueuedBody (queue "a1"); Pos = { Anchor = "AQI="; Head = "AQI=" } } } ]
+                        Focus = Some { Field = TerminalQueuedBody (queue "a1"); Pos = { Anchor = "AQI="; Head = "AQI=" } }
+                        Viewing = Some (ViewingTerminal terminalA) }
+                  // Viewing without a caret, and a file rather than a terminal: the two halves
+                  // are independent on the wire, and a content path is the half that has to
+                  // survive a round trip intact — it becomes a URL at the far end.
+                  Presence
+                      { Who = PeerRef bob
+                        DisplayName = "Bob"
+                        Focus = None
+                        Viewing = Some (ViewingFile (ContentRef.create "artifacts/chart.png/0000-7f2a91" |> expect)) } ]
             for frame in frames do
                 let encoded = Codec.toString codec frame
                 Expect.equal (Codec.fromString codec encoded) (Ok frame) ("round-trips: " + encoded)

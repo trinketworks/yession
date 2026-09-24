@@ -69,6 +69,16 @@ module Client =
           /// collaborative field), so collaborators see the cursor. Ephemeral presence — the
           /// Session Process relays it to other peers and never persists it.
           ReportPresence : Focus option -> unit
+          /// Broadcast what this peer has OPEN in the pane (or `None` when it has nothing on
+          /// screen), so collaborators can see who else is reading a file or a terminal.
+          ///
+          /// A second verb rather than a second argument to `ReportPresence`, because the two
+          /// halves are learned in different places at different moments — a caret from an
+          /// editor event, a view from the model after a render — and a caller made to supply
+          /// both would have to invent the half it does not know. They still leave as ONE
+          /// frame: the connection remembers the last of each, which is what makes "the peer
+          /// stopped typing" unable to erase "the peer is still watching".
+          ReportViewing : ViewRef option -> unit
           /// Ask the Session Process to open a terminal (Plan 13). The new terminal arrives
           /// as a `TerminalOpened` event, not as a response — one source of truth for a
           /// durable fact, and it is the one every peer already reads.
@@ -954,6 +964,23 @@ module Client =
                 requestIfBehind ()
             | _ -> ()
 
+        // Presence is ONE frame with two halves, reported from two places: the caret comes from
+        // an editor event, the view from the model after a render. The last of each is kept here
+        // so either can be restated without erasing the other — a peer that stops typing while
+        // still reading an artifact must not vanish from the pane it has open, and a peer that
+        // closes the pane must not lose its caret.
+        let mutable reportedFocus : Focus option = None
+        let mutable reportedViewing : ViewRef option = None
+        let sendPresence () =
+            // A browser is always a peer — the one party that is not is the Process itself.
+            Async.StartImmediate (
+                channel.Send (
+                    Presence
+                        { Who = ActorRef.PeerRef hello.PeerId
+                          DisplayName = hello.DisplayName
+                          Focus = reportedFocus
+                          Viewing = reportedViewing }))
+
         { Run =
             async {
                 try
@@ -1013,10 +1040,13 @@ module Client =
           ReportPresence =
             fun focus ->
                 // Presence carries who is editing so collaborators can label and colour the
-                // caret; the Session Process relays it to everyone else. A browser is always
-                // a peer — the one party that is not is the Process itself.
-                Async.StartImmediate (
-                    channel.Send (Presence { Who = ActorRef.PeerRef hello.PeerId; DisplayName = hello.DisplayName; Focus = focus }))
+                // caret; the Session Process relays it to everyone else.
+                reportedFocus <- focus
+                sendPresence ()
+          ReportViewing =
+            fun viewing ->
+                reportedViewing <- viewing
+                sendPresence ()
           OpenTerminal =
             fun title ->
                 Async.StartImmediate (channel.Send (Command (Request (RequestId.fresh (), OpenTerminal title))))

@@ -2308,18 +2308,44 @@ module Codec =
                 { Field = get.Required.Field "field" focusField.Decode
                   Pos = get.Required.Field "pos" cursorPos.Decode }) }
 
+    let private viewRef : Codec<ViewRef> =
+        { Encode =
+            (fun v ->
+                match v with
+                | ViewingFile ref -> Encode.object [ "kind", Encode.string "file"; "path", Encode.string (ContentRef.value ref) ]
+                | ViewingTerminal t -> Encode.object [ "kind", Encode.string "terminal"; "terminalId", terminalId.Encode t ])
+          Decode =
+            Decode.field "kind" Decode.string
+            |> Decode.andThen (function
+                | "file" ->
+                    // The path is re-CHECKED on the way in rather than trusted: a presence frame
+                    // comes from a peer, and a `ContentRef` is what the pane turns into a URL.
+                    Decode.field "path" Decode.string
+                    |> Decode.andThen (fun path ->
+                        match ContentRef.create path with
+                        | Ok ref -> Decode.succeed (ViewingFile ref)
+                        | Error reason -> Decode.fail reason)
+                | "terminal" -> Decode.field "terminalId" terminalId.Decode |> Decode.map ViewingTerminal
+                | other -> Decode.fail (sprintf "Unknown view ref: %s" other)) }
+
     let private presencePayload : Codec<PresencePayload> =
         { Encode =
             (fun (p: PresencePayload) ->
                 Encode.object
                     [ "who", actor.Encode p.Who
                       "displayName", Encode.string p.DisplayName
-                      "focus", Encode.option focus.Encode p.Focus ])
+                      "focus", Encode.option focus.Encode p.Focus
+                      "viewing", Encode.option viewRef.Encode p.Viewing ])
           Decode =
             Decode.object (fun get ->
                 { PresencePayload.Who = get.Required.Field "who" actor.Decode
                   PresencePayload.DisplayName = get.Required.Field "displayName" Decode.string
-                  PresencePayload.Focus = get.Required.Field "focus" (Decode.option focus.Decode) }) }
+                  PresencePayload.Focus = get.Required.Field "focus" (Decode.option focus.Decode)
+                  // OPTIONAL where the caret is required: a browser tab left open across a
+                  // deploy speaks the older frame, and a peer that cannot say what it is
+                  // viewing is a peer viewing nothing — not a presence frame to throw away,
+                  // which would take its caret down with it.
+                  PresencePayload.Viewing = get.Optional.Field "viewing" viewRef.Decode }) }
 
     /// A frame codec for any `'State` codec. The transport never inspects the state
     /// payload; the state codec belongs to the sync-boundary layer (Step 05).
