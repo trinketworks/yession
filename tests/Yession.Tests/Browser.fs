@@ -1256,6 +1256,46 @@ let private editorCaseOnTouch (width: int) (height: int) =
                 ViewportSize = ViewportSize (Width = width, Height = height),
                 HasTouch = true)))
 
+/// A side column shutting and opening again, with reduced motion asked for, starts no
+/// transition. The column is toggled by the class on `<html>` that the real client sets
+/// (`nav-alt` for the sidebar, `term-closed` for the terminals), since this harness wires no
+/// handler to the buttons that ask for it; `getAnimations()` flushes style, so a transition
+/// the toggle started is in its answer at once, with no waiting on a clock.
+let private columnHoldsStill (width: int) (height: int) (column: string) (rootClass: string) =
+    editorCaseIn width height (sprintf "with reduced motion the %s column does not move at %dpx" column width) <| fun page ->
+        async {
+            do! awaitU (page.EmulateMediaAsync (PageEmulateMediaOptions (ReducedMotion = ReducedMotion.Reduce)))
+            // The shell, by its composer: a shut column is zero wide, which a visibility wait
+            // on the column itself would read as never having arrived.
+            let! _ = await (page.WaitForSelectorAsync "#shell [data-draft-editor]")
+            // Settled first, so what is counted is what the toggle started. A pulse or a blink
+            // never finishes and is not waited for.
+            do! awaitU (
+                    page.EvaluateAsync
+                        """() => Promise.all(
+                             document.getAnimations()
+                               .filter(a => a.effect && a.effect.getComputedTiming().iterations !== Infinity)
+                               .map(a => a.finished.catch(() => null)))""")
+            let! moved =
+                await (page.EvaluateAsync<string[]>(
+                        """(cls) => {
+                             const started = () => document.getAnimations()
+                               .filter(a => a instanceof CSSTransition && a.playState !== 'finished')
+                               .map(a => (a.effect.target.getAttribute('class') || a.effect.target.tagName).slice(0, 60)
+                                         + ' (' + a.transitionProperty + ')')
+                             const root = document.documentElement.classList
+                             root.toggle(cls)
+                             const there = started()
+                             root.toggle(cls)
+                             return there.concat(started())
+                           }""", rootClass))
+            Expect.isEmpty
+                moved
+                (sprintf "toggling %s with reduced motion starts no transition; these started: %s"
+                    rootClass (String.concat ", " moved))
+            return ()
+        }
+
 /// How much narrower a message's ground is than the scrollport holding it — 0 when it runs
 /// edge to edge, and the width of the margins either side when it does not.
 ///
@@ -2971,8 +3011,7 @@ let editorTests =
                 // shell lays out, and a hit-test taken while it is on its way lands on the pane
                 // rather than on the column under it — the screen not having arrived yet, not a
                 // control a thumb cannot reach. Every animation that ends is waited for (a pulse
-                // or a blink never ends, and is not). Reduced motion would not do: the phone
-                // pane's slide does not honour it.
+                // or a blink never ends, and is not).
                 do! awaitU (
                         page.EvaluateAsync
                             """() => Promise.all(
@@ -3000,6 +3039,13 @@ let editorTests =
                         (String.concat ", " unreachable))
                 return ()
             }
+        // Reduced motion is honoured by the columns at both widths: a person who asked for no
+        // motion gets a drawer that appears rather than slides, and a column that shuts rather
+        // than sweeps shut. The phone one used to slide anyway.
+        columnHoldsStill 390 844 "terminals" "term-closed"
+        columnHoldsStill 390 844 "sidebar" "nav-alt"
+        columnHoldsStill 1440 900 "terminals" "term-closed"
+        columnHoldsStill 1440 900 "sidebar" "nav-alt"
         // A turn in flight, on the screen that had the least room for it. This is the phone
         // photographed in the report that started this: an author line, the word `streaming`
         // under it, an empty body, and a 48px band below saying "agent is responding" a third

@@ -784,6 +784,13 @@ module Style =
     /// The same room, paid in padding, by the column that is in normal flow.
     let degradedBarRoomPad = "max-md:[.is-degraded_&]:pt-12"
 
+    /// Reduced motion for a side column, whose transitions are all behind a breakpoint: the
+    /// width shutting on desktop (`md:`), the drawer sliding on a phone (`max-md:`). Tailwind
+    /// orders the stylesheet by variant, so a bare `motion-reduce:transition-none` is EMITTED
+    /// ABOVE both and loses to each; the cancellation has to carry the same breakpoint as the
+    /// transition it cancels (as `draftCommitBase` does, for the same reason).
+    let private reduceColumnMotion = "md:motion-reduce:transition-none max-md:motion-reduce:transition-none"
+
     /// The 280px column. It holds TWO faces — the workspace nav and settings (`navPane` /
     /// `settingsPane`) — because settings is a place you go, not a thing that covers what you
     /// were reading. Collapsing on desktop animates the column's width shut; on mobile the
@@ -795,7 +802,7 @@ module Style =
         + "max-md:fixed max-md:inset-y-0 max-md:left-0 max-md:w-[min(var(--spacing-side),84vw)] "
         + degradedBarRoom + " "
         + "max-md:transition-transform max-md:duration-200 max-md:ease-out max-md:-translate-x-[101%] "
-        + "max-md:[.nav-alt_&]:translate-x-0 motion-reduce:transition-none"
+        + "max-md:[.nav-alt_&]:translate-x-0 " + reduceColumnMotion
 
     /// One face of the column: the two are stacked in place and held at the column's full
     /// width, so nothing reflows while the column animates shut.
@@ -2407,7 +2414,7 @@ module Style =
         + "max-md:fixed max-md:inset-y-0 max-md:right-0 max-md:w-full max-md:border-l-0 "
         + degradedBarRoom + " "
         + "max-md:transition-transform max-md:duration-200 max-md:ease-out "
-        + "max-md:[.term-closed_&]:translate-x-[101%] motion-reduce:transition-none"
+        + "max-md:[.term-closed_&]:translate-x-[101%] " + reduceColumnMotion
 
     /// Held at the column's full width so nothing reflows while the column animates shut.
     let terminalPane = "absolute inset-0 md:w-[var(--term-w,var(--spacing-term))] w-term max-md:w-full flex flex-col"
