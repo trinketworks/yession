@@ -2141,7 +2141,7 @@ let private prOne = PrRef.create prRepo 12 |> expect
 let private topicDraft = PrDraft.create prRepo "topic" "master" "Add feature" (Some "why") false |> expect
 
 let private snapshotWith state checks route : PrSnapshot =
-    { State = state; Title = "Add feature"; HeadSha = "abc123"; Checks = checks; Route = route; Mergeable = None; Draft = false }
+    { State = state; Title = "Add feature"; HeadSha = "abc123"; Checks = checks; Route = route; Mergeable = None; Review = None; Behind = false; Draft = false }
 
 let private snapshotOf state checks : PrSnapshot = snapshotWith state checks None
 
@@ -3062,9 +3062,46 @@ let private prFetchTests =
                 let fetch = GitHubPrs.fetchOver stub.Url GitHubPrs.Spending.unmetered
                 let last =
                     { State = PrOpen; Title = "Add feature"; HeadSha = "abc123"; Checks = ChecksGreen
-                      Route = Some PrRoute.GitHubAutoMerge; Mergeable = Some true; Draft = false }
+                      Route = Some PrRoute.GitHubAutoMerge; Mergeable = Some true; Review = None; Behind = false
+                      Draft = false }
                 match! fetch (Some "token-abc") prOne PrWatches.PrEtags.none (Some last) with
                 | PrWatches.PrChanged (snapshot, _) -> Expect.equal snapshot.Route (Some PrRoute.GitHubAutoMerge) "carried"
+                | other -> failwithf "expected a snapshot, got %A" other
+            }
+
+        testCaseAsync "a review decision reaches the look" <|
+            async {
+                let! stub = startStubGitHubApi ()
+                stub.SetStanding
+                    """{"data":{"repository":{"pullRequest":{"autoMergeRequest":null,"mergeQueueEntry":null,"reviewDecision":"CHANGES_REQUESTED","mergeStateStatus":"BLOCKED"}}}}"""
+                let fetch = GitHubPrs.fetchOver stub.Url GitHubPrs.Spending.unmetered
+                match! fetch (Some "token-abc") prOne PrWatches.PrEtags.none None with
+                | PrWatches.PrChanged (snapshot, _) -> Expect.equal snapshot.Review (Some PrReview.ChangesRequested) "changes requested"
+                | other -> failwithf "expected a snapshot, got %A" other
+            }
+
+        testCaseAsync "a head behind a base that requires it up to date reaches the look as behind" <|
+            async {
+                let! stub = startStubGitHubApi ()
+                stub.SetStanding
+                    """{"data":{"repository":{"pullRequest":{"autoMergeRequest":null,"mergeQueueEntry":null,"reviewDecision":null,"mergeStateStatus":"BEHIND"}}}}"""
+                let fetch = GitHubPrs.fetchOver stub.Url GitHubPrs.Spending.unmetered
+                match! fetch (Some "token-abc") prOne PrWatches.PrEtags.none None with
+                | PrWatches.PrChanged (snapshot, _) -> Expect.isTrue snapshot.Behind "behind"
+                | other -> failwithf "expected a snapshot, got %A" other
+            }
+
+        testCaseAsync "a merge state github is still computing keeps the last behind" <|
+            async {
+                // UNKNOWN is GitHub working it out, routinely right after a push — the
+                // `Mergeable` rule: it does not un-know what it last computed.
+                let! stub = startStubGitHubApi ()
+                stub.SetStanding
+                    """{"data":{"repository":{"pullRequest":{"autoMergeRequest":null,"mergeQueueEntry":null,"reviewDecision":null,"mergeStateStatus":"UNKNOWN"}}}}"""
+                let fetch = GitHubPrs.fetchOver stub.Url GitHubPrs.Spending.unmetered
+                let last = { snapshotOf PrOpen ChecksGreen with Behind = true }
+                match! fetch (Some "token-abc") prOne PrWatches.PrEtags.none (Some last) with
+                | PrWatches.PrChanged (snapshot, _) -> Expect.isTrue snapshot.Behind "still behind"
                 | other -> failwithf "expected a snapshot, got %A" other
             }
 

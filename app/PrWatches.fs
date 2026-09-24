@@ -790,13 +790,15 @@ let private queryDef : QueryDef =
       Title = "Pull requests"
       Description =
         "The pull requests this session is watching, each with the last thing that \
-         happened to it — open, armed, queued, stalled, conflicted, merged or closed — how \
-         it is on its way in, the rollup of its checks, and whose credential the session \
-         reads it with. `armed` is auto merge armed, waiting on what the base branch \
-         requires; `queued` is in the merge queue; `stalled` is either of those and then \
-         neither while it is still open — disarmed, or ejected from the queue without \
-         merging. Transitions are announced on the timeline as they happen; this is the \
-         current state."
+         happened to it — open, armed, queued, stalled, conflicted, changes requested, \
+         behind, review required, merged or closed — how it is on its way in, the rollup \
+         of its checks, and whose credential the session reads it with. `armed` is auto \
+         merge armed, waiting on what the base branch requires; `queued` is in the merge \
+         queue; `stalled` is either of those and then neither while it is still open — \
+         disarmed, or ejected from the queue without merging. `behind` is a base branch \
+         that requires the head to be up to date with it, and it is not: update the \
+         branch. `review required` is waiting on an approving review. Transitions are \
+         announced on the timeline as they happen; this is the current state."
       Shape =
         Rows
             [ QueryColumn.create PrStatus.Columns.pr "pull request"
@@ -825,7 +827,9 @@ let private sinceView (at: DateTimeOffset) : string =
 let word (row: PrWatchRow) : string option =
     // State from the look just taken; the way in from the BASELINE, because stalled is a
     // fact about history and a snapshot can only say what is true right now.
-    row.Snapshot |> Option.map (fun snapshot -> PrStatus.word row.Known.Mergeable row.Known.WayIn snapshot.State)
+    row.Snapshot
+    |> Option.map (fun snapshot ->
+        PrStatus.word row.Known.Mergeable row.Known.WayIn snapshot.Review snapshot.Behind snapshot.State)
 
 /// The one line this session says about its pull requests — what the roster and the header
 /// strip both read, and the only place the mapping from rows to words lives.
@@ -874,7 +878,9 @@ let query (current: unit -> PrWatchers) : Queries.QueryRegistration =
                                        // Blocked until a rebase — the agent's to do, the
                                        // same attention a red suite earns, not a call for a
                                        // person the way a stall is.
-                                       | "conflicted" -> ToneBad
+                                       | "conflicted"
+                                       | "changes requested"
+                                       | "behind" -> ToneBad
                                        | "stalled" -> ToneBad
                                        | "armed"
                                        | "queued" -> ToneBusy

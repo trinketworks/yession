@@ -912,6 +912,8 @@ let private prSnapshot : PrSnapshot =
       Checks = ChecksPending
       Route = None
       Mergeable = None
+      Review = None
+      Behind = false
       Draft = false }
 
 let private watchedBy (authority: Authority) =

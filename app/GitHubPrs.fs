@@ -301,13 +301,27 @@ let private askGraphql
                 | Error e -> return Error (Failed (PrUnreadable (sprintf "unrecognised graphql reply: %s" e)))
     }
 
-/// How an open pull request is on its way in: `mergeQueueEntry` and `autoMergeRequest`,
-/// which REST does not have at all. REST's `auto_merge` looks like the second and is not
-/// enough on its own, because GitHub CLEARS it as the pull request enters the queue — so a
-/// watch reading only that saw every armed pull request that went on into the queue as
-/// having stopped, and said "stalled" about the way in working.
-let private routeQuery =
-    "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){autoMergeRequest{enabledAt} mergeQueueEntry{position state}}}}"
+/// What a look asks GraphQL about an open pull request, because REST does not have it:
+///
+/// - `mergeQueueEntry` and `autoMergeRequest` — how it is on its way in. REST's
+///   `auto_merge` looks like the second and is not enough on its own, because GitHub CLEARS
+///   it as the pull request enters the queue — so a watch reading only that saw every armed
+///   pull request that went on into the queue as having stopped, and said "stalled" about
+///   the way in working.
+/// - `reviewDecision` — what review has decided, null when nothing is asked of it.
+/// - `mergeStateStatus` — read for `BEHIND` alone: the rest of it is the checks, the
+///   draft and the conflict the look already reads, in another shape.
+let private lookQuery =
+    "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){autoMergeRequest{enabledAt} mergeQueueEntry{position state} reviewDecision mergeStateStatus}}}"
+
+/// What the GraphQL half of a look answered. Qualified, because its labels are the
+/// snapshot's own and a bare construction would build whichever was declared last.
+[<RequireQualifiedAccess>]
+type private Readiness =
+    { Route : PrRoute option
+      Review : PrReview option
+      /// `Some` when GitHub has computed it, `None` while it answers `UNKNOWN`.
+      Behind : bool option }
 
 let private queueStateDecoder : Decoder<GitHubQueueState> =
     Decode.string
@@ -319,20 +333,36 @@ let private queueStateDecoder : Decoder<GitHubQueueState> =
         | "LOCKED" -> Decode.succeed GitHubQueueState.Locked
         | other -> Decode.fail (sprintf "unknown merge queue entry state %s" other))
 
-/// `data.repository.pullRequest`, read to a route. The queue entry wins when both are
-/// present, because it is the further step — GitHub clears the arming as it enqueues, and
-/// a reply caught between the two is still a pull request in the queue.
-let private routeDecoder : Decoder<PrRoute option> =
+let private reviewDecoder : Decoder<PrReview> =
+    Decode.string
+    |> Decode.andThen (function
+        | "APPROVED" -> Decode.succeed PrReview.Approved
+        | "CHANGES_REQUESTED" -> Decode.succeed PrReview.ChangesRequested
+        | "REVIEW_REQUIRED" -> Decode.succeed PrReview.Required
+        | other -> Decode.fail (sprintf "unknown review decision %s" other))
+
+/// `data.repository.pullRequest`, read to its readiness. The queue entry wins over the
+/// arming when both are present, because it is the further step — GitHub clears the arming
+/// as it enqueues, and a reply caught between the two is still a pull request in the queue.
+let private readinessDecoder : Decoder<Readiness> =
     Decode.at
         [ "repository"; "pullRequest" ]
         (Decode.object (fun get ->
-            match get.Optional.Field "mergeQueueEntry" (Decode.object (fun entry ->
-                      entry.Required.Field "position" Decode.int, entry.Required.Field "state" queueStateDecoder)) with
-            | Some (position, state) -> Some (PrRoute.GitHubMergeQueue (position, state))
-            | None ->
-                if get.Optional.Field "autoMergeRequest" Decode.value |> Option.exists (fun v -> not (Decode.Helpers.isNullValue v))
-                then Some PrRoute.GitHubAutoMerge
-                else None))
+            let route =
+                match get.Optional.Field "mergeQueueEntry" (Decode.object (fun entry ->
+                          entry.Required.Field "position" Decode.int, entry.Required.Field "state" queueStateDecoder)) with
+                | Some (position, state) -> Some (PrRoute.GitHubMergeQueue (position, state))
+                | None ->
+                    if get.Optional.Field "autoMergeRequest" Decode.value |> Option.exists (fun v -> not (Decode.Helpers.isNullValue v))
+                    then Some PrRoute.GitHubAutoMerge
+                    else None
+            { Readiness.Route = route
+              Readiness.Review = get.Optional.Field "reviewDecision" reviewDecoder
+              Readiness.Behind =
+                match get.Optional.Field "mergeStateStatus" Decode.string with
+                | None
+                | Some "UNKNOWN" -> None
+                | Some status -> Some (status = "BEHIND") }))
 
 /// The fetch as it is composed against a real API base. The base is a PARAMETER for the
 /// reason `GitHubConnection.refusedAt` takes one: a suite needs somewhere to point it
@@ -398,11 +428,19 @@ let fetchOver (apiBase: string) (spending: Spending) : FetchPr =
                     // The third half, and the one that is not free: GraphQL has no
                     // conditional request, so each look at an OPEN pull request spends a
                     // point of the separate GraphQL budget. Only an open one is asked — a
-                    // merged pull request went through its route and a closed one is on none.
-                    // A reply that says nothing readable keeps the last route, the checks
-                    // rule: the pull request's own state is already in hand, and one missed
-                    // reading must not announce a stall nobody saw.
-                    let! route =
+                    // merged pull request went through its route and a closed one is on none,
+                    // and neither is waiting on a review or an update.
+                    //
+                    // What it cannot read it keeps from the last look, the checks rule: the
+                    // pull request's own state is already in hand, and one missed reading
+                    // must not announce a stall nobody saw. `Behind` keeps it too while
+                    // GitHub is still computing it, the `Mergeable` rule.
+                    let lastOpen = last |> Option.filter (fun s -> s.State = PrOpen)
+                    let kept =
+                        { Readiness.Route = lastOpen |> Option.bind (fun s -> s.Route)
+                          Readiness.Review = lastOpen |> Option.bind (fun s -> s.Review)
+                          Readiness.Behind = lastOpen |> Option.map (fun s -> s.Behind) }
+                    let! readiness =
                         match fields.State with
                         | PrOpen ->
                             async {
@@ -410,18 +448,17 @@ let fetchOver (apiBase: string) (spending: Spending) : FetchPr =
                                     [ "owner", Encode.string (RepoRef.owner pr.Repo)
                                       "name", Encode.string (RepoRef.repo pr.Repo)
                                       "number", Encode.int pr.Number ]
-                                match! askGraphql (apiBase.TrimEnd '/') spending bearer routeQuery variables routeDecoder with
-                                | Ok route -> return route
-                                | Error _ ->
-                                    return
-                                        match last with
-                                        | Some s when s.State = PrOpen -> s.Route
-                                        | _ -> None
+                                match! askGraphql (apiBase.TrimEnd '/') spending bearer lookQuery variables readinessDecoder with
+                                | Ok read -> return { read with Behind = read.Behind |> Option.orElse kept.Behind }
+                                | Error _ -> return kept
                             }
                         | PrMerged
-                        | PrClosed -> async.Return None
-                    let routeUnmoved = last |> Option.exists (fun s -> s.Route = route)
-                    if notModified prReply && notModified checksReply && routeUnmoved then
+                        | PrClosed -> async.Return { Readiness.Route = None; Readiness.Review = None; Readiness.Behind = None }
+                    let behind = readiness.Behind |> Option.defaultValue false
+                    let readinessUnmoved =
+                        last
+                        |> Option.exists (fun s -> s.Route = readiness.Route && s.Review = readiness.Review && s.Behind = behind)
+                    if notModified prReply && notModified checksReply && readinessUnmoved then
                         // All three unchanged: there is nothing to fold and nothing to say.
                         return PrUnchanged
                     else
@@ -447,8 +484,10 @@ let fetchOver (apiBase: string) (spending: Spending) : FetchPr =
                               Title = fields.Title
                               HeadSha = fields.HeadSha
                               Checks = checks
-                              Route = route
+                              Route = readiness.Route
                               Mergeable = fields.Mergeable
+                              Review = readiness.Review
+                              Behind = behind
                               Draft = fields.Draft }
                         // An ETag is replaced only by a half that actually answered with one.
                         // A 304 carries back the ETag we sent, so keeping the old one says the
