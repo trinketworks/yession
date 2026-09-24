@@ -644,6 +644,18 @@ let private hooksTemplate (access: PublicAccess) (endpoints: WebhookRelay.HookEn
 let mcpSection (views: ProcessManager.SessionView list) (declarations: McpDeclaration list) : string =
     Ssr.render (mcpTemplate views declarations)
 
+/// The page's content rail: the registry's measure, centred, inside the page's gutter. Worn
+/// by the header band's CONTENTS and by the sections under it, as one value, so the lockup
+/// and the table's left edge cannot drift apart.
+///
+/// The measure, not a reading column's. `name` is the only elastic column, and it gets
+/// whatever the fixed ones leave: at the 896px this used to be, five columns (name, id,
+/// created, status, and a rail carrying two controls) left it 38px and every session on the
+/// page rendered as a single letter and an ellipsis. 1152px leaves it 318px — wider than the
+/// 254px it had when there were four — and gives the MCP table's address column room it was
+/// already short of.
+let private pageRail = "max-w-6xl w-full mx-auto px-8 max-md:px-4"
+
 // The page keeps the workspace anatomy: the shared 88px header band (wordmark on the
 // common baseline, hairline below), then labelled sections on one left rail. The body
 // shell is `Style.app` (the visible viewport's height, overflow-hidden), so <main> owns the
@@ -660,16 +672,13 @@ let private bodyTemplate
         else html $"""<div class="pb-10">{hooksTemplate access hooks}</div>"""
     html $"""
         <main class="flex-1 min-w-0 overflow-y-auto">
-          <!-- The registry's measure, not a reading column's. `name` is the only elastic
-               column, and it gets whatever the fixed ones leave: at the 896px this used to
-               be, five columns (name, id, created, status, and a rail carrying two controls)
-               left it 38px and every session on the page rendered as a single letter and an
-               ellipsis. 1152px leaves it 318px — wider than the 254px it had when there were
-               four — and gives the MCP table's address column room it was already short of. -->
-          <div class="max-w-6xl w-full mx-auto flex flex-col px-8 max-md:px-4">
-            <!-- Sticky, and acrylic: the band floats over the registry as it scrolls under it,
-                 which is the one place on this page a surface sits over another. -->
-            <header class="h-[88px] shrink-0 flex items-end pb-5 border-b border-hair sticky top-0 z-10 {Style.acrylic}">
+          <!-- Sticky, and acrylic: the band floats over the registry as it scrolls under it,
+               which is the one place on this page a surface sits over another. It is a BAND,
+               running edge to edge of the viewport; only what is in it keeps to the rail.
+               Inset to the rail, it was a card whose edges stopped mid-canvas against the
+               black page — 168px short of each side at 1440. -->
+          <header class="h-[88px] shrink-0 border-b border-hair sticky top-0 z-10 {Style.acrylic}">
+            <div class="{pageRail} h-full flex items-end pb-5">
               <h1 class="{Style.lockup}"><span class="{Style.lockupMark}" aria-hidden="true">{Brand.mark}</span><span class="{Style.wordmark}">yession</span> <span class="{Style.label} pb-2">manager</span></h1>
               <!-- The Manager's own build, in the same faint mono step the rows use for
                    theirs. It belongs beside them because it is the same question asked of a
@@ -681,7 +690,9 @@ let private bodyTemplate
                    build while hiding every other's reads as the Manager's version banner —
                    which is the thing that was already there to be misread. -->
               <span class="font-terminal text-code-sm text-ink-faint tabular-nums ml-3 pb-0.5 max-xl:hidden" data-manager-build>{Version.current}</span>
-            </header>
+            </div>
+          </header>
+          <div class="{pageRail} flex flex-col">
             <div class="pt-6 pb-10">{tableTemplate query views}</div>
             <div class="pb-10">{mcpTemplate views declarations}</div>
             <!-- Only when there are any: a deployment that declared no hook endpoints has
