@@ -27,3 +27,8 @@ file from the same code at t = 1. Regenerate everything together; never hand-edi
 Colours, for anything that has to match the mark without embedding it: blue `#1ba1e2`, green
 `#a8dd00`; each runs to a hotter self, never to white — `#6fd8ff`, `#d8f54a` — and to a deep
 `#0f6ea3`, `#6f9a00`. These are the product's `--color-blue` and `--color-green`.
+
+Type: the wordmark is Noto Sans, the product's chrome and the agent's voice. A person's words —
+messages, drafts, the composer — are Source Serif 4 at 15px/350 (`--font-human` in
+`app/tailwind.css`, vendored in `app/fonts/`), so who is speaking is said by the face. Why the
+serif, and why 350, is in `docs/brand/README.md`.

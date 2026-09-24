@@ -9,6 +9,17 @@ Every mark is drawn in tokens `app/tailwind.css` already defines — `#a8dd00` (
 lockups are the same mark against `yession` set in Noto Sans 200, the weight the shell writes
 its wordmark in.
 
+Noto Sans is the brand's face and the machine's voice — the chrome, and the agent, which is part
+of it. It is not the product's only one: what a person writes — their messages, drafts and the
+composer — is set in Source Serif 4, at 15px and weight 350. Attribution is said by the typeface
+before the author line is read, and a serif drawn as Source Sans's companion keeps the
+difference one of class alone, so a conversation reads as one voice in two registers rather than
+two typefaces arguing. It is declared in `app/tailwind.css` (`@font-face 'Source Serif 4'` and
+the `--font-human` token, beside `--font-ui`/`--font-agent` for the sans) and vendored under
+`app/fonts/` (`source-serif-4-latin-{350,400,600}-normal.woff2`, SIL OFL 1.1); the 350 is an
+instance cut from the variable font, weighted by eye against Noto Sans 300 on black. The face
+story in full is the comment above those declarations. The terminal keeps Monaspace Neon.
+
 | File | Direction |
 | --- | --- |
 | `trifoil.svg` | Three peers 120° apart; the hub is a gap, not a joint. |
