@@ -100,6 +100,10 @@
     <Compile Include="Phase3.fs" />
     <Compile Include="EventsHttp.fs" />
     <Compile Include="TranscriptHttp.fs" />
+    <!-- The third surface of the same shape: a moving address that redirects to a fixed one,
+         where the fixed one is a file. Beside the other two, which it is deliberately the
+         shape of. -->
+    <Compile Include="ArtifactHttp.fs" />
     <Compile Include="Resilience.fs" />
     <Compile Include="Oidc.fs" />
     <Compile Include="Phase4.fs" />

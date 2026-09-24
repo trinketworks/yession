@@ -1,6 +1,7 @@
 namespace Yession.App
 
 open Yession.Domain
+open Yession.Domain.Content
 open Yession.Domain.Terminals
 
 #if FABLE_COMPILER
@@ -229,6 +230,25 @@ type SessionRoute =
     /// a ranged replay starts from. Immutable on the same argument the chunks are: a
     /// keyframe is written once, at a position that never moves.
     | TerminalKeyframe of terminal: string * seq: int
+    /// A file the session can SHOW: an artifact an agent shared, and a repo file when repo
+    /// browsing arrives. One route for the whole content root, because the pane's unit is a
+    /// path (`ContentRef`) rather than an artifact — a second concept here would be a second
+    /// route, a second gate and a second containment check to keep right.
+    ///
+    /// Two addresses answer differently, and the difference is the artifact store's
+    /// immutability showing through the HTTP surface: `artifacts/chart.png` is the NAME, which
+    /// resolves to whatever is latest and so can never be cached, while
+    /// `artifacts/chart.png/0003-7f2a91` is one version's bytes for good. The first answers
+    /// with a redirect to the second — the cursor-and-range shape the event log and the
+    /// transcripts already use, for the same reason: the address a client keeps is the one
+    /// whose bytes cannot change under it.
+    ///
+    /// Unlike the terminal routes, this carries a PARSED value rather than the raw segments. A
+    /// terminal id is looked up in a map, so an unparseable one is simply a terminal that does
+    /// not exist; a content path becomes a path on a FILESYSTEM, and one that could carry a
+    /// dot-segment would be a traversal a single forgetful reader away. `ContentRef` refuses
+    /// those at construction, so no route of this shape has ever held one.
+    | Content of ref: ContentRef
     /// One of the Claude panel's write actions.
     | Claude of action: ClaudeAction
     /// One of the GitHub panel's write actions.
@@ -262,6 +282,11 @@ module SessionRoute =
     /// (`WebApp.serviceWorker`) — the worker and the router agreeing by inspection is
     /// exactly what this type exists to prevent.
     let assetsPrefix = "assets/"
+
+    /// Where everything the pane can show is served from. One segment for the whole content
+    /// root, so `artifacts/…` and `repos/…` are directories under one address rather than two
+    /// routes that have to grow the same gate.
+    let private contentPrefix = "content/"
 
     /// A path inside the asset set, as a build emits it. Segments are ordinary file names, so
     /// anything outside that shape is simply not a route — which is also what keeps a path
@@ -311,6 +336,7 @@ module SessionRoute =
           | TerminalTranscriptAfter (terminal, Some after) -> sprintf "terminals/%s/after/%d" terminal after
           | TerminalTranscriptRange (terminal, first, last) -> sprintf "terminals/%s/%d-%d" terminal first last
           | TerminalKeyframe (terminal, seq) -> sprintf "terminals/%s/keyframes/%d" terminal seq
+          | Content ref -> contentPrefix + ContentRef.value ref
           | Claude action -> "claude/" + claudeSegment action
           | GitHub action -> "github/" + githubSegment action
           | GitHubRepos -> "github/repos"
@@ -390,6 +416,11 @@ module SessionRoute =
                     Some (TerminalTranscriptRange (terminal, f, l))
                 | _ -> None
             | _ -> None
+        // Whatever the content root holds, by path. `ContentRef.create` is the parse: a
+        // segment it refuses is not an address this session has, so the 404 happens here
+        // rather than at a filesystem that would have to be asked carefully.
+        | "GET", "content" :: path ->
+            ContentRef.create (String.concat "/" path) |> Result.toOption |> Option.map Content
         | "POST", [ "claude"; "begin" ] -> Some (Claude ClaudeAction.Begin)
         | "POST", [ "claude"; "complete" ] -> Some (Claude ClaudeAction.Complete)
         | "POST", [ "claude"; "token" ] -> Some (Claude ClaudeAction.Token)
@@ -515,6 +546,17 @@ module CachePolicy =
     /// the reason the ranges left: a keyframe is fetched only by a replay a person opened,
     /// so there is nothing to read back offline that they did not just ask for.
     let keyframe = "private, max-age=259200, immutable"
+
+    /// One VERSION of an artifact: bytes at an address that names which version they are, and
+    /// an artifact is never rewritten — so this is as immutable as a fingerprinted asset, and
+    /// `private` for the keyframe's reason. It matters more here than anywhere else on this
+    /// server: an image the pane shows would otherwise be re-fetched whole on every open.
+    let contentVersion = "private, max-age=31536000, immutable"
+
+    /// An artifact by NAME, which is the address that resolves to whatever is latest. Never
+    /// stored, because the whole point of the name is that what it points at moves — a cached
+    /// redirect would pin a viewer to the version that was current when they first looked.
+    let contentLatest = "no-store"
 
 /// The lifecycle acts the management page performs on ONE session, each a POST to
 /// `/sessions/{id}/<verb>`. Named apart from the routes so a row's control and the route it

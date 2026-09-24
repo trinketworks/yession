@@ -13,14 +13,18 @@ module Yession.Host.Artifacts
 // thing that buys is a crossing the bind mount already makes.
 
 open Fable.Core
+open Fable.Core.JsInterop
+open Fable.NodeExtras
 open Node.Api
 
+open Yession.App
 open Yession.Domain
 open Yession.Domain.Agent
 open Yession.Domain.Content
 open Yession.Domain.Sandboxes
 open Yession.Domain.Tools
 open Yession.Domain.Artifacts
+open Yession.Host.Interop
 open Yession.SessionProcess
 
 /// The most one shared file may weigh. Decimal, because `ContentSize.render` is decimal and
@@ -177,6 +181,105 @@ let query (artifactsDir: string) : Queries.QueryRegistration =
                                | None -> CellAbsent)
                               "address", CellText (ArtifactRef.url item.Ref) ])))
             } }
+
+// --- What the pane is shown (the HTTP read surface) -------------------------------------------
+
+/// Whether a path the store built still sits inside the store, after every symlink on it has
+/// been followed. `ContentRef` already refuses a dot-segment and `pathOf` is the only thing
+/// that builds one of these, so this is the downstream guard rather than the rule: it catches a
+/// LEAF that is a symlink out — something a sandbox with the store bind-mounted into it can
+/// make, and which no parse of the URL could ever see.
+let private containedIn (artifactsDir: string) (path: string) : bool =
+    let real (p: string) = try Some (fs.realpathSync (U2.Case1 p) |> string) with _ -> None
+    match real artifactsDir, real path with
+    | Some root, Some resolved -> resolved.StartsWith (root.TrimEnd '/' + "/")
+    | _ -> false
+
+/// What a browser is told about bytes it did not get from this build.
+///
+/// An artifact is a file somebody else chose the contents of, served from the session's OWN
+/// origin, which is where every cookie and every peer token in this session lives. So the type
+/// is the one the store recorded and never a sniffed one (`nosniff`), anything this build does
+/// not claim to know is an `octet-stream` download rather than a guess, and the sandboxing CSP
+/// is what makes an SVG — markup that can carry script, and the one image type that can —
+/// inert if somebody navigates straight at it instead of letting the pane draw it.
+let private headersFor (ref: ArtifactRef) (bytes: int64) =
+    let name = ArtifactRef.name ref
+    let contentType, disposition =
+        match ContentKind.ofMediaType (ArtifactRef.mediaType ref) with
+        | ContentKind.Image media -> media, sprintf "inline; filename=\"%s\"" name
+        | ContentKind.Download -> "application/octet-stream", sprintf "attachment; filename=\"%s\"" name
+    createObj
+        [ "content-type", box contentType
+          "content-length", box (string bytes)
+          "content-disposition", box disposition
+          "cache-control", box CachePolicy.contentVersion
+          "x-content-type-options", box "nosniff"
+          "content-security-policy", box "default-src 'none'; sandbox" ]
+
+let private notFound (res: ServerResponse) =
+    res.writeHead (404, createObj [ "content-type", box "text/plain"; "cache-control", box "no-store" ]) |> ignore
+    res.``end`` "not found"
+
+/// One version's bytes, piped rather than read: this is allowed to be 100 MB, and a slow
+/// viewer must not cost the session a copy of it in its heap.
+let private serveVersion (artifactsDir: string) (ref: ArtifactRef) (res: ServerResponse) =
+    let path = pathOf artifactsDir ref
+    match (if containedIn artifactsDir path then sizeOf path else None) with
+    | None -> notFound res
+    | Some bytes ->
+        res.writeHead (200, headersFor ref bytes) |> ignore
+        let file = openFileStream path
+        // The head has gone out, so there is no status left to say this with: a read that
+        // fails now can only end the response early, which is what a truncated body is. The
+        // alternative — buffering the file to be sure of it first — is the thing streaming is
+        // for.
+        file.onError (fun _ -> res.destroy ())
+        file.pipe res
+
+/// The session's content surface: everything the pane can show, by path.
+///
+/// Cookie-gated, exactly as the query stream is, and for the same reason — an artifact is
+/// session state, and everybody in the session reads it. No `?token=` leg: this answers a
+/// browser fetching an `<img>`, which carries the cookie, and a second way in would be a
+/// second thing to keep right on the surface that serves files.
+///
+/// Here rather than in `Signalling` with the event and transcript surfaces, because every
+/// decision in it is about THIS store: which addresses exist, what "latest" resolves to, and
+/// where the bytes are. The composition root is handed a handler, not the artifacts directory
+/// and instructions.
+let routes (auth: SessionAuth.Auth) (artifactsDir: string) (mount: string) : IncomingMessage -> ServerResponse -> bool =
+    fun req res ->
+        match SessionRoute.parseUnder mount req.``method`` (req.url.Split('?').[0]) with
+        | Some (SessionRoute.Content ref) ->
+            if (auth.IdentityOf req).IsNone then
+                res.writeHead (401, createObj [ "content-type", box "text/plain"; "cache-control", box "no-store" ]) |> ignore
+                res.``end`` "unauthorized"
+            else
+                match ContentRef.segments ref with
+                // A pinned version: these bytes, for good.
+                | [ _; _; _ ] ->
+                    match ArtifactRef.ofContent ref with
+                    | Ok version -> serveVersion artifactsDir version res
+                    | Error _ -> notFound res
+                // The NAME, which resolves to whatever is latest — and answers with a redirect
+                // to the address that holds it rather than with the bytes. The cursor-and-range
+                // shape the event log and the transcripts already use: what a client keeps is
+                // an address whose bytes cannot change under it, and what moves is never
+                // cached. An `<img>` follows this without knowing versions exist.
+                | [ root; name ] when root = ArtifactRef.root ->
+                    match ArtifactRef.latest (versions artifactsDir name) with
+                    | Some latest ->
+                        let target = RelativeUrl.under mount (SessionRoute.relative (SessionRoute.Content (ArtifactRef.content latest)))
+                        res.writeHead (307, createObj [ "location", box target; "cache-control", box CachePolicy.contentLatest ]) |> ignore
+                        res.``end`` ""
+                    | None -> notFound res
+                // The content root has one directory in it so far. A `repos/…` path is a real
+                // address this build cannot serve yet, and it 404s like any other.
+                | _ -> notFound res
+            true
+        | Some _
+        | None -> false
 
 /// Sharing artifacts, as the session does it: the copy in, and the two readings that make the
 /// versions addressable without one.

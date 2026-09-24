@@ -886,6 +886,25 @@ module Readables =
         stream.setEncoding BufferEncoding.Utf8 |> ignore
         onText stream handler
 
+[<AutoOpen>]
+module FileStreams =
+
+    /// A file as a stream to pipe somewhere — a response, usually. `Fable.Node` types
+    /// `createReadStream` as its own stream class, which is not the `Readable` everything that
+    /// moves bytes in this repository speaks, and the conversion would be an `unbox` at every
+    /// call site saying nothing about why it is safe.
+    ///
+    /// Streamed and not read whole because the files this serves are allowed to be 100 MB: a
+    /// `readFileSync` per request would hold the whole of one in this process's heap for as
+    /// long as the slowest viewer's connection lasts, and several at once is the session out
+    /// of memory. Piped, Node moves the bytes with backpressure and nothing here holds them.
+    ///
+    /// A file that cannot be opened fails on the stream's `error` event, not here — so a
+    /// caller pipes only after it has written a head it is willing to stand behind, or
+    /// destroys the response when it cannot.
+    [<Import("createReadStream", "node:fs")>]
+    let openFileStream (path: string) : Readable = jsNative
+
 /// The connection a message arrived on: the one thing read off it is who is at the other end.
 [<AllowNullLiteral>]
 type Socket =
