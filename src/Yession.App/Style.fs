@@ -1851,33 +1851,37 @@ module Style =
     /// agent's message streams, so a control anchored to its foot slides down the screen for
     /// as long as the answer is arriving — away from the pointer reaching for it.
     ///
-    /// Present but INVISIBLE until the pointer or the keyboard reaches the item: a control on
-    /// every line of a conversation would be the loudest thing in it, and one that vanished
-    /// from the tab order would be a control keyboard readers do not have. `opacity`, never
-    /// `hidden`, is what keeps both true at once — and the item is `group/item`, so hovering
-    /// anywhere on the message is what reveals it, not hovering the 20px it occupies.
+    /// FAINT at rest, and on every device: this is also where one message ends and the next
+    /// begins. A run of sends from one person sits under one author line with nothing between
+    /// the bodies but the gap, so "ok" after a paragraph read as that paragraph's last line.
+    /// A rule or a wider gap would say so too, and would cost every run of short messages its
+    /// density — people send a lot of them. The handle was already there, one per item and
+    /// level with its first line; it only had to stop being invisible to mark where each one
+    /// starts. It was `opacity-0` until the pointer or the keyboard reached the item, which
+    /// left that boundary unmarked for anyone just reading.
     ///
-    /// A device with no pointer never hovers, so on one it has to be on the screen or it does
-    /// not exist. Half strength there — enough to find, not enough to become the loudest
-    /// thing in a conversation.
+    /// Quiet enough that a column of them does not become the loudest thing in the
+    /// conversation, and full strength under the pointer, on focus, and while open — the
+    /// item is `group/item`, so hovering anywhere on the message lifts it, not hovering the
+    /// 24px it occupies. `opacity`, never `hidden`, so it never leaves the tab order.
     ///
-    /// `[@media(hover:none)]` is now the WHOLE story on a phone, not a fallback beside one. A
-    /// hold on the message used to open this menu as well, and that gesture is gone: every
-    /// platform binds a long press on text to selecting that text, so the two were one finger
-    /// meaning two things, and the reader lost the half only the platform can give. This
-    /// being permanently visible is what made the gesture affordable to drop.
+    /// One value for a device that hovers and one that cannot, where there used to be a
+    /// `[@media(hover:none)]` case beside an invisible rest: on a phone this is the ONLY way
+    /// to the menu. A hold on the message used to open it as well, and that gesture is gone:
+    /// every platform binds a long press on text to selecting that text, so the two were one
+    /// finger meaning two things, and the reader lost the half only the platform can give.
+    /// This being permanently visible is what made the gesture affordable to drop.
     /// `top-2 right-1` and not the corner it used to sit in: `top-2` is the ground's own top
     /// padding, so a 24px control there is centred on the 24px first line — the dots read as
     /// belonging to that line rather than floating above it.
     let itemActions =
         cls [ "absolute right-1 top-2 w-6 h-6 flex items-center justify-center"
               "bg-transparent cursor-pointer text-ink-faint hover:text-ink"
-              "opacity-0 group-hover/item:opacity-100 focus-visible:opacity-100"
-              "[@media(hover:none)]:opacity-60"
+              "opacity-60 group-hover/item:opacity-100 focus-visible:opacity-100"
               "transition-opacity duration-150 ease-out"
               focusRing ]
-    /// While its menu is open the control stays put: a menu hanging off something invisible
-    /// reads as a menu hanging off nothing.
+    /// While its menu is open the control is at full strength: a menu hanging off something
+    /// faint reads as a menu hanging off nothing.
     let itemActionsOpen = "opacity-100"
 
     /// The menu itself, hung under the control. `panel` rather than the page's ground,
