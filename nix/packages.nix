@@ -162,10 +162,15 @@ let
     cp ${../package-lock.json} "$out/package-lock.json"
   '';
 
-  npmDeps = pkgs.fetchNpmDeps {
-    src = npmManifests;
-    name = "yession-npm-deps";
-    hash = "sha256-OAaJfXve4YHULpUNnN9pWKUZXY93IIvzQq7ALWnEDn8=";
+  # One fetch per package, each pinned by the `integrity` package-lock.json already carries — so
+  # the lockfile IS the pin, and a dependency bump is `npm install` and nothing else. This was a
+  # single `fetchNpmDeps` FOD with a hand-kept hash of the whole cache, which went stale on every
+  # bump and could only be re-derived by building it and copying the mismatch back. Read at eval
+  # time from the files themselves, not from `npmManifests`: reading a derivation's output here
+  # would be import-from-derivation.
+  npmDeps = pkgs.importNpmLock {
+    package = lib.importJSON ../package.json;
+    packageLock = lib.importJSON ../package-lock.json;
   };
 
   # node_modules as a Nix artifact: the offline npm tree (npmConfigHook installs it from npmDeps
@@ -178,7 +183,7 @@ let
     name = "yession-node-modules";
     src = npmManifests;
     inherit npmDeps;
-    nativeBuildInputs = [ pkgs.nodejs_24 pkgs.npmHooks.npmConfigHook ];
+    nativeBuildInputs = [ pkgs.nodejs_24 pkgs.importNpmLock.npmConfigHook ];
     npmFlags = [ "--ignore-scripts" ];
     dontBuild = true;
     installPhase = ''
@@ -195,6 +200,11 @@ let
       rm -rf node_modules/node-pty
       cp -r ${node-pty} node_modules/node-pty
       chmod -R u+w node_modules/node-pty
+      # npm's hidden lockfile records each package's `resolved`, which importNpmLock pointed at
+      # its tarball in the store — so keeping it made every one of ~300 tarballs a runtime
+      # dependency of this tree, and of the installable that ships a pruned copy of it. It is a
+      # cache npm rebuilds from the tree itself when absent.
+      rm node_modules/.package-lock.json
       # Ship it AS `$out/node_modules` so that, once symlinked in, a package's realpath parent is
       # literally `node_modules` — Node resolves siblings (e.g. esbuild → @esbuild/linux-x64) only
       # by that name, so `$out/<pkgs>` directly would break self-resolution.
