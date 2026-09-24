@@ -26,7 +26,6 @@ open Yession.Domain.Chat
 open Yession.Domain.Sandboxes
 open Yession.Domain.Tools
 open Fable.BrowserExtras
-open Fable.YjsExtras
 open Fable.ProseMirror
 open Yession.App
 open Thoth.Json
@@ -292,12 +291,12 @@ let private countWritebacks (doc: Y.Doc) (syncKey: obj) : unit =
     let mutable writebacks = 0
     (harness ()).__docUpdates <- updates
     (harness ()).__writebacks <- writebacks
-    Updates.on doc (fun _ origin ->
+    doc.onUpdate (Y.UpdateHandler (fun _ origin _ _ ->
         updates <- updates + 1
         (harness ()).__docUpdates <- updates
         if System.Object.ReferenceEquals (origin, syncKey) then
             writebacks <- writebacks + 1
-            (harness ()).__writebacks <- writebacks)
+            (harness ()).__writebacks <- writebacks))
 
 /// The two docs' content and the two editors' rendered text, side by side. `docA`/`docB` are
 /// what the CRDT holds; `pmA`/`pmB` are what each editor actually put on screen. A gap between
