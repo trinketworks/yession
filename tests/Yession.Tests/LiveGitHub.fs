@@ -48,12 +48,21 @@ let tests =
                 Expect.equal canonical (Ok here) "the canonical name is the one asked"
             }
 
-        testCaseAsync "lists this repository's default branch among its branches" <|
+        // Paged, because GitHub lists branches by name and a busy repository has a page of
+        // `claude/...` ahead of `master` — which is the listing the branch picker pages too.
+        testCaseAsync "finds this repository's default branch by paging its branches" <|
             async {
-                let! branches = GitHubRepos.branchesOver api token here 1
-                match branches with
-                | Ok names -> Expect.contains names "master" "the default branch is listed"
-                | Error failure -> failwithf "the branches did not list: %A" failure
+                let rec seek (page: int) =
+                    async {
+                        match! GitHubRepos.branchesOver api token here page with
+                        | Error failure -> return failwithf "page %d did not list: %A" page failure
+                        | Ok [] -> return false
+                        | Ok names when List.contains "master" names -> return true
+                        | Ok _ when page >= 50 -> return false
+                        | Ok _ -> return! seek (page + 1)
+                    }
+                let! found = seek 1
+                Expect.isTrue found "the default branch is on one of the pages"
             }
 
         testCaseAsync "reads a merged pull request as merged" <|
