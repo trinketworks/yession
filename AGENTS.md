@@ -97,7 +97,7 @@ here) — the `Native` cap works too (see Testing).
 ## Build interface
 
 Every Yession build function lives in `tasks.fsx` — the complete, standalone build interface
-(`restore`/`build`/`start`/`dev`/`check`/`vm-check`/`verify`/`lint`/`version`/`stage`/`package`/
+(`restore`/`lock`/`build`/`start`/`dev`/`check`/`vm-check`/`verify`/`lint`/`version`/`stage`/`package`/
 `install-smoke`/`boot-smoke`/`example`/`clean`/`clean-docker`). The devenv scripts, the GitHub Actions
 workflows, and the Nix `outputs` are thin wrappers over it — throw devenv and CI away and
 `dotnet fsi tasks.fsx <verb>` still drives everything.

@@ -1929,6 +1929,19 @@ let private fixtures =
 let private fixtureProject name =
     Path.Combine ("analyzers", "fixtures", name, name + ".fsproj")
 
+// --- lock: rewrite every packages.lock.json --------------------------------------------------
+
+// The one restore allowed to change a lockfile. Directory.Build.props puts every restore in
+// locked mode, so a package added, removed or bumped fails the next build until this runs; a
+// global property on the command line outranks the one in the props file, and that is the
+// whole switch. Covers every project anything restores: the solution, and the analyzer fixtures
+// that live outside it.
+let private lock () =
+    let projects =
+        "Yession.slnx" :: (fixtures |> List.map (fun (_, name, _) -> fixtureProject name) |> List.distinct)
+    for project in projects do
+        exec "dotnet" [ "restore"; project; "--force-evaluate"; "-p:RestoreLockedMode=false" ]
+
 let private fixtureSource name file =
     Path.Combine (repoRoot, "analyzers", "fixtures", name, file)
 
@@ -2264,6 +2277,7 @@ let rest i = if argv.Length > i then argv.[i..] |> Array.toList else []
 match arg 1 with
 | Some "compile" -> compile ()
 | Some "restore" -> restore ()
+| Some "lock" -> lock ()
 | Some "build" -> build ()
 | Some "start" -> start ()
 | Some "dev" -> dev ()

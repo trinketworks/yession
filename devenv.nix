@@ -159,6 +159,9 @@ ${lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
   # nothing is lost. `"$@"` forwards args (e.g. `check Browser Ports Native --retry 1`).
 
   scripts.restore.exec = ''exec dotnet fsi tasks.fsx restore'';
+  # Rewrites every packages.lock.json after a NuGet package changes; every other restore is
+  # in locked mode and refuses to.
+  scripts.lock.exec = ''exec dotnet fsi tasks.fsx lock'';
   scripts.build.exec = ''exec dotnet fsi tasks.fsx build'';
   scripts.start.exec = ''exec dotnet fsi tasks.fsx start'';
   scripts.dev.exec = ''exec dotnet fsi tasks.fsx dev'';

@@ -25,6 +25,20 @@
       FOUND something is worth stopping.
     -->
     <WarningsNotAsErrors>$(WarningsNotAsErrors);NU1900</WarningsNotAsErrors>
+    <!--
+      Every project commits a packages.lock.json: the exact version and content hash of every
+      package it restores, transitive ones included. Directory.Packages.props pins what a
+      project ASKS for; the lockfile pins what it GETS, and its hashes are what the Nix build
+      fetches by, one package at a time.
+
+      Locked mode makes a restore that would change a lockfile fail instead, everywhere —
+      here, CI and the Nix sandbox alike — so a reference added without its lockfile is
+      caught by the next `build`, not by a derivation that cannot find a package offline.
+      Changing a package is `dotnet fsi tasks.fsx lock`, which is the one restore that may
+      rewrite them.
+    -->
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <RestoreLockedMode>true</RestoreLockedMode>
   </PropertyGroup>
 
 </Project>
