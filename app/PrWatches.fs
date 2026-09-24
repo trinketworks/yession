@@ -17,7 +17,8 @@ module Yession.Host.PrWatches
 // needs admin on every repo somebody wants watched, and inbound delivery needs a
 // deployment the provider can reach — which the loopback default is not. A settled watch
 // costs two conditional GETs that both answer 304, which is free (GitHub does not count
-// one against the rate limit), and it works in every deployment shape there is. `FetchPr`
+// one against the rate limit), plus, while it is open, one GraphQL query for its way in,
+// which is not — and it works in every deployment shape there is. `FetchPr`
 // is where a future push transport plugs in without anything downstream noticing.
 
 open System
@@ -60,7 +61,7 @@ type PrFetchFailure =
 
 type PrFetchOutcome =
     | PrChanged of PrSnapshot * PrEtags
-    /// Both conditional requests answered 304 — nothing to fold, nothing to say.
+    /// Nothing the look read has moved — nothing to fold, nothing to say.
     | PrUnchanged
     | PrFetchFailed of PrFetchFailure
 
@@ -97,7 +98,7 @@ type OpenPr = string option -> PrDraft -> Async<PrOpenOutcome>
 /// straight in, or into the merge queue where the base branch has one.
 type PrMergeOutcome =
     /// Auto merge is armed: the provider merges it when its checks pass and nothing else
-    /// stands in the way. What a watch reports as `queued`.
+    /// stands in the way. What a watch reports as `armed`.
     | PrMergeArmed of PrRef
     /// Mergeable now and the base branch has a merge queue, so it went into the queue.
     | PrMergeQueued of PrRef
@@ -123,7 +124,8 @@ type PrMergeOutcome =
 type MergePr = string option -> PrRef -> PrMergeMethod -> Async<PrMergeOutcome>
 
 /// What came of taking one back off its way in — `PrMergeOutcome` undone. A watch on it
-/// then reports `stalled`, which is the same fact whoever caused it: armed, and no longer.
+/// then reports `stalled`, which is the same fact whoever caused it: on its way in, and no
+/// longer.
 type PrUnmergeOutcome =
     /// Auto merge was armed and is not now.
     | PrMergeDisarmed of PrRef
@@ -239,7 +241,7 @@ type PrWatchRow =
       Watcher : Principal
       Snapshot : PrSnapshot option
       /// The durable baseline. Carried because `stalled` is a fact about HISTORY — a
-      /// snapshot alone can only say whether a pull request is queued right now, never
+      /// snapshot alone can only say whether a pull request is on its way in right now, never
       /// whether it used to be.
       Known : PrKnown
       /// When it last became what it is — see `PrWatch.Since`.
@@ -259,9 +261,11 @@ type PrWatchRow =
 /// closed, or a look that failed — waits the full minute, which is what the original sixty
 /// was chosen against: CI finishing, or a merge landing, and nobody acts on either sooner.
 ///
-/// The ledger, because only the fast cadence costs anything. A settled watch is two
-/// conditional requests that both answer 304, and GitHub does not count a 304 against the
-/// primary rate limit — so it is free at any interval. A pending watch is not: its checks
+/// The ledger. A settled watch is two conditional requests that both answer 304, and GitHub
+/// does not count a 304 against the primary rate limit — so that much is free at any
+/// interval. An OPEN one also asks GraphQL where it is on its way in (auto merge and the
+/// merge queue have no REST), which has no conditional form: one point a look, sixty an
+/// hour at the settled cadence, out of a separate five thousand. A pending watch spends more: its checks
 /// endpoint really is moving, so it spends four polls a minute out of five thousand an
 /// hour. That puts the practical ceiling around ten pull requests with live suites at once
 /// per credential, and it is the reason a pushed transport is worth having rather than
@@ -786,16 +790,19 @@ let private queryDef : QueryDef =
       Title = "Pull requests"
       Description =
         "The pull requests this session is watching, each with the last thing that \
-         happened to it — open, queued, stalled, merged or closed — the rollup of its \
-         checks, and whose credential the session reads it with. `queued` is auto merge \
-         armed; `stalled` is auto merge armed and no longer armed while it is still open, \
-         which is what a merge queue ejecting an entry looks like. Transitions are \
-         announced on the timeline as they happen; this is the current state."
+         happened to it — open, armed, queued, stalled, conflicted, merged or closed — how \
+         it is on its way in, the rollup of its checks, and whose credential the session \
+         reads it with. `armed` is auto merge armed, waiting on what the base branch \
+         requires; `queued` is in the merge queue; `stalled` is either of those and then \
+         neither while it is still open — disarmed, or ejected from the queue without \
+         merging. Transitions are announced on the timeline as they happen; this is the \
+         current state."
       Shape =
         Rows
             [ QueryColumn.create PrStatus.Columns.pr "pull request"
               QueryColumn.create "title" "title"
               QueryColumn.create PrStatus.Columns.state "state"
+              QueryColumn.create "route" "way in"
               QueryColumn.create "checks" "checks"
               QueryColumn.create "watcher" "watched by"
               QueryColumn.create PrStatus.Columns.status "status"
@@ -816,9 +823,9 @@ let private sinceView (at: DateTimeOffset) : string =
 /// first look: watched-but-not-yet-read is not a state, and guessing one would be a claim
 /// nobody made.
 let word (row: PrWatchRow) : string option =
-    // State from the look just taken; queue from the BASELINE, because stalled is a fact
-    // about history and a snapshot can only say what is true right now.
-    row.Snapshot |> Option.map (fun snapshot -> PrStatus.word row.Known.Mergeable row.Known.Queue snapshot.State)
+    // State from the look just taken; the way in from the BASELINE, because stalled is a
+    // fact about history and a snapshot can only say what is true right now.
+    row.Snapshot |> Option.map (fun snapshot -> PrStatus.word row.Known.Mergeable row.Known.WayIn snapshot.State)
 
 /// The one line this session says about its pull requests — what the roster and the header
 /// strip both read, and the only place the mapping from rows to words lives.
@@ -859,8 +866,8 @@ let query (current: unit -> PrWatchers) : Queries.QueryRegistration =
                                        said,
                                        match said with
                                        // Merged is the outcome somebody was waiting for;
-                                       // stalled is the one nobody is driving. Queued is
-                                       // in flight. Open and closed are the ordinary
+                                       // stalled is the one nobody is driving. Armed and
+                                       // queued are in flight. Open and closed are the ordinary
                                        // states and earn no colour — colouring every row
                                        // would be colouring none.
                                        | "merged" -> ToneOk
@@ -869,10 +876,18 @@ let query (current: unit -> PrWatchers) : Queries.QueryRegistration =
                                        // person the way a stall is.
                                        | "conflicted" -> ToneBad
                                        | "stalled" -> ToneBad
+                                       | "armed"
                                        | "queued" -> ToneBusy
                                        | _ -> ToneMuted)
                                // Watched, but not yet looked at — which is a different
                                // thing from a state, and says so rather than guessing one.
+                               | None -> CellAbsent)
+                              // The forge's own account of the way in — which queue, what
+                              // position, what it is waiting on — beside the one word the
+                              // state column reduces it to.
+                              "route",
+                              (match row.Snapshot |> Option.bind (fun s -> s.Route) with
+                               | Some route -> CellText (PrRoute.describe route)
                                | None -> CellAbsent)
                               "checks",
                               (match row.Snapshot with

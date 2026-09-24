@@ -426,7 +426,7 @@ let private frameSerializationTests =
                         Title = "Add feature"
                         HeadSha = "abc123"
                         Checks = ChecksPending
-                        Queued = true
+                        Route = Some (PrRoute.GitHubMergeQueue (2, GitHubQueueState.AwaitingChecks))
                         Mergeable = Some true
                         Draft = true }
                   |> expect
@@ -441,7 +441,7 @@ let private frameSerializationTests =
                         Title = "Old"
                         HeadSha = "def456"
                         Checks = ChecksNone
-                        Queued = false
+                        Route = None
                         Mergeable = None
                         Draft = false }
                   |> expect
@@ -526,6 +526,34 @@ let private frameSerializationTests =
             match Codec.fromString Codec.sessionEvent legacy |> expect with
             | PrWatched watched -> Expect.isFalse (PrWatched.initial watched).Draft "no draft field is not a draft"
             | other -> failwithf "expected a watch, got %A" other
+
+        testCase "a watch recorded before routes were read, armed, decodes as auto merge" <| fun () ->
+            // Wire compatibility: `queued` was GitHub's REST `auto_merge`, and nothing else.
+            let legacy =
+                """{"type":"prWatched","payload":{"messageId":"w1","pr":{"repo":"octo/hello","number":12},"initial":{"state":"open","title":"t","headSha":"abc","checks":"pending","queued":true,"mergeable":true},"author":{"kind":"peer","peerId":"ada"}}}"""
+            match Codec.fromString Codec.sessionEvent legacy |> expect with
+            | PrWatched watched -> Expect.equal (PrWatched.initial watched).Route (Some PrRoute.GitHubAutoMerge) "armed"
+            | other -> failwithf "expected a watch, got %A" other
+
+        testCase "a transition recorded as queued before the merge queue was told apart decodes as armed" <| fun () ->
+            // It was only ever auto merge arriving; `enqueued` is the queue's own word now.
+            let legacy =
+                """{"type":"prTransitioned","payload":{"messageId":"t1","pr":{"repo":"octo/hello","number":12},"transition":"queued","state":"open","checks":"green","watcher":{"kind":"peer","peerId":"ada"}}}"""
+            match Codec.fromString Codec.sessionEvent legacy |> expect with
+            | PrTransitioned p -> Expect.equal p.Transition PrTransition.Armed "armed"
+            | other -> failwithf "expected a transition, got %A" other
+
+        testCase "the way-in transitions round-trip" <| fun () ->
+            for t in [ PrTransition.Armed; PrTransition.Enqueued; PrTransition.Stalled ] do
+                let event =
+                    PrTransitioned
+                        { MessageId = MessageId.create "t1" |> expect
+                          Pr = { Repo = RepoRef.create "octo/hello" |> expect; Number = 12 }
+                          Transition = t
+                          State = PrOpen
+                          Checks = ChecksGreen
+                          Watcher = Principal.Peer (PeerId.create "ada" |> expect) }
+                Expect.equal (Codec.fromString Codec.sessionEvent (Codec.toString Codec.sessionEvent event) |> expect) event "round-trip"
 
         testCase "a MessageSent persisted before Phase 3 (no queueId field) still decodes" <| fun () ->
             // Wire compatibility: event-log lines written by earlier versions carry no
@@ -1169,13 +1197,17 @@ let private prWatchTests =
     let pr = PrRef.create repo 12 |> expect
     let ada = PeerId.create "ada" |> expect
     let bob = PeerId.create "bob" |> expect
-    let snapshotOf state checks queued : PrSnapshot =
-        { State = state; Title = "Add feature"; HeadSha = "abc123"; Checks = checks; Queued = queued; Mergeable = None; Draft = false }
-    let snapshot state checks : PrSnapshot = snapshotOf state checks false
-    /// The baseline as a watch that has never seen a queue reads it.
-    let known state checks : PrKnown = { State = state; Checks = checks; Queue = NotQueued; Mergeable = None; Draft = false }
-    /// ...and as one that has: auto merge armed, the last thing anybody was told.
-    let queued state checks : PrKnown = { State = state; Checks = checks; Queue = Queued; Mergeable = None; Draft = false }
+    let snapshotOf state checks route : PrSnapshot =
+        { State = state; Title = "Add feature"; HeadSha = "abc123"; Checks = checks; Route = route; Mergeable = None; Draft = false }
+    let snapshot state checks : PrSnapshot = snapshotOf state checks None
+    let autoMerge = Some PrRoute.GitHubAutoMerge
+    let inQueue position state = Some (PrRoute.GitHubMergeQueue (position, state))
+    /// The baseline as a watch that has never seen it on its way in reads it.
+    let known state checks : PrKnown = { State = state; Checks = checks; WayIn = PrWayIn.Idle; Mergeable = None; Draft = false }
+    /// ...as one that was last told auto merge is armed...
+    let armed state checks : PrKnown = { known state checks with WayIn = PrWayIn.Armed }
+    /// ...and as one that was last told it entered the merge queue.
+    let queued state checks : PrKnown = { known state checks with WayIn = PrWayIn.Queued }
     let started state checks : SessionEvent =
         PrWatched.create (msg "w1") (Authority.ofAuthor (Principal.Peer ada)) pr (snapshot state checks)
         |> expect
@@ -1276,27 +1308,46 @@ let private prWatchTests =
 
         testCase "auto merge arming is announced once" <| fun () ->
             Expect.equal
-                (PrTransitions.detect (known PrOpen ChecksGreen) (snapshotOf PrOpen ChecksGreen true))
-                [ PrTransition.Queued ] "it is on its way in with nobody needed"
+                (PrTransitions.detect (known PrOpen ChecksGreen) (snapshotOf PrOpen ChecksGreen autoMerge))
+                [ PrTransition.Armed ] "it is on its way in with nobody needed"
             Expect.equal
-                (PrTransitions.detect (queued PrOpen ChecksGreen) (snapshotOf PrOpen ChecksGreen true))
+                (PrTransitions.detect (armed PrOpen ChecksGreen) (snapshotOf PrOpen ChecksGreen autoMerge))
                 [] "and saying so again on every poll would be noise"
 
+        testCase "an armed pull request entering the merge queue is enqueued, not stalled" <| fun () ->
+            // GitHub clears auto merge as it enqueues, so a reading of the arming alone saw
+            // this as the arming going away — the way in working, reported as a stall.
+            Expect.equal
+                (PrTransitions.detect (armed PrOpen ChecksGreen) (snapshotOf PrOpen ChecksGreen (inQueue 1 GitHubQueueState.AwaitingChecks)))
+                [ PrTransition.Enqueued ] "the next step in"
+
+        testCase "an entry moving along the merge queue is not news" <| fun () ->
+            Expect.equal
+                (PrTransitions.detect (queued PrOpen ChecksGreen) (snapshotOf PrOpen ChecksGreen (inQueue 1 GitHubQueueState.Mergeable)))
+                [] "its position and state are the route's detail, not a transition"
+
         testCase "auto merge disarming on an open pull request is a stall" <| fun () ->
+            Expect.equal
+                (PrTransitions.detect (armed PrOpen ChecksGreen) (snapshot PrOpen ChecksGreen))
+                [ PrTransition.Stalled ] "somebody has to re-arm it"
+
+        testCase "an entry leaving the merge queue on an open pull request is a stall" <| fun () ->
             // What a merge queue ejecting an entry looks like from outside: the state does
             // not move, the checks do not move, it just stops being on its way in.
             Expect.equal
                 (PrTransitions.detect (queued PrOpen ChecksGreen) (snapshot PrOpen ChecksGreen))
-                [ PrTransition.Stalled ] "somebody has to re-arm it"
+                [ PrTransition.Stalled ] "somebody has to put it back"
+
+        testCase "a pull request that was never on its way in has not stalled" <| fun () ->
             Expect.equal
                 (PrTransitions.detect (known PrOpen ChecksGreen) (snapshot PrOpen ChecksGreen))
-                [] "a pull request that was never queued has not stalled"
+                [] "nothing was carrying it to stop"
 
-        testCase "a re-armed pull request is queued again" <| fun () ->
+        testCase "a re-armed pull request is armed again" <| fun () ->
             let stalled = PrTransitions.advance (queued PrOpen ChecksGreen) PrTransition.Stalled
             Expect.equal
-                (PrTransitions.detect stalled (snapshotOf PrOpen ChecksGreen true))
-                [ PrTransition.Queued ] "it is again true that nobody is needed"
+                (PrTransitions.detect stalled (snapshotOf PrOpen ChecksGreen autoMerge))
+                [ PrTransition.Armed ] "it is again true that nobody is needed"
 
         testCase "a queued pull request that merges is not also reported stalled" <| fun () ->
             // It left the queue by going through it. Reporting that as a stall would file
@@ -1368,19 +1419,20 @@ let private prWatchTests =
                 [ PrTransition.Merged ] "the merge is the whole news"
 
         testCase "a status word is the last thing that happened, worst first" <| fun () ->
-            Expect.equal (PrStatus.word None Queued PrOpen) "queued" "armed and waiting on machines"
-            Expect.equal (PrStatus.word None Stalled PrOpen) "stalled" "nobody driving"
-            Expect.equal (PrStatus.word None NotQueued PrOpen) "open" "the ordinary state"
-            Expect.equal (PrStatus.word None Queued PrMerged) "merged" "a merged PR has stopped caring what a queue thought"
-            Expect.equal (PrStatus.word None Queued PrClosed) "closed" "and so has a closed one"
+            Expect.equal (PrStatus.word None PrWayIn.Armed PrOpen) "armed" "waiting on its checks"
+            Expect.equal (PrStatus.word None PrWayIn.Queued PrOpen) "queued" "waiting on the queue"
+            Expect.equal (PrStatus.word None PrWayIn.Stalled PrOpen) "stalled" "nobody driving"
+            Expect.equal (PrStatus.word None PrWayIn.Idle PrOpen) "open" "the ordinary state"
+            Expect.equal (PrStatus.word None PrWayIn.Queued PrMerged) "merged" "a merged PR has stopped caring what a queue thought"
+            Expect.equal (PrStatus.word None PrWayIn.Queued PrClosed) "closed" "and so has a closed one"
 
         testCase "a computed conflict is the status word, over queued or stalled" <| fun () ->
-            Expect.equal (PrStatus.word (Some false) NotQueued PrOpen) "conflicted" "open and unmergeable"
-            Expect.equal (PrStatus.word (Some false) Queued PrOpen) "conflicted" "a queued PR that went dirty is the conflict, not the queue"
-            Expect.equal (PrStatus.word (Some false) Stalled PrOpen) "conflicted" "ejected FOR the conflict — name the fixable cause"
-            Expect.equal (PrStatus.word (Some true) Queued PrOpen) "queued" "computed clean does not shout conflict"
-            Expect.equal (PrStatus.word None NotQueued PrOpen) "open" "not-yet-computed is not a conflict"
-            Expect.equal (PrStatus.word (Some false) Queued PrMerged) "merged" "a merged PR's mergeability is moot"
+            Expect.equal (PrStatus.word (Some false) PrWayIn.Idle PrOpen) "conflicted" "open and unmergeable"
+            Expect.equal (PrStatus.word (Some false) PrWayIn.Queued PrOpen) "conflicted" "a queued PR that went dirty is the conflict, not the queue"
+            Expect.equal (PrStatus.word (Some false) PrWayIn.Stalled PrOpen) "conflicted" "ejected FOR the conflict — name the fixable cause"
+            Expect.equal (PrStatus.word (Some true) PrWayIn.Queued PrOpen) "queued" "computed clean does not shout conflict"
+            Expect.equal (PrStatus.word None PrWayIn.Idle PrOpen) "open" "not-yet-computed is not a conflict"
+            Expect.equal (PrStatus.word (Some false) PrWayIn.Queued PrMerged) "merged" "a merged PR's mergeability is moot"
 
         testCase "a conflict clause is added only to an open, computed-unmergeable description" <| fun () ->
             Expect.equal (PrSnapshot.conflictClause PrOpen (Some false)) ", conflicted" "the one that reads it"
@@ -1576,7 +1628,7 @@ let private prWatchTests =
         testCase "a watch and its news are chapters; letting it go is not" <| fun () ->
             let notable = ConversationItem.notable
             let envelopes =
-                [ PrWatched.create (msg "w1") (Authority.ofAuthor (Principal.Peer ada)) pr (snapshotOf PrOpen ChecksPending false)
+                [ PrWatched.create (msg "w1") (Authority.ofAuthor (Principal.Peer ada)) pr (snapshotOf PrOpen ChecksPending None)
                   |> expect
                   |> SessionEvent.PrWatched
                   SessionEvent.PrTransitioned

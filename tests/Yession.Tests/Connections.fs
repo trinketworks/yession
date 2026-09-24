@@ -2140,10 +2140,13 @@ let private prOne = PrRef.create prRepo 12 |> expect
 
 let private topicDraft = PrDraft.create prRepo "topic" "master" "Add feature" (Some "why") false |> expect
 
-let private snapshotWith state checks queued : PrSnapshot =
-    { State = state; Title = "Add feature"; HeadSha = "abc123"; Checks = checks; Queued = queued; Mergeable = None; Draft = false }
+let private snapshotWith state checks route : PrSnapshot =
+    { State = state; Title = "Add feature"; HeadSha = "abc123"; Checks = checks; Route = route; Mergeable = None; Draft = false }
 
-let private snapshotOf state checks : PrSnapshot = snapshotWith state checks false
+let private snapshotOf state checks : PrSnapshot = snapshotWith state checks None
+
+/// In the merge queue, next up.
+let private inQueue = Some (PrRoute.GitHubMergeQueue (1, GitHubQueueState.AwaitingChecks))
 
 /// A scripted `FetchPr`: hand it the outcomes a test wants, in order, and it records what
 /// it was asked with. The seam is the whole reason the poll fold is testable without a
@@ -2285,7 +2288,7 @@ let private prPollTests =
                 // as not-yet-due and the assertion below would pass for the wrong reason.
                 let mutable clock = DateTimeOffset (2026, 8, 27, 12, 0, 0, TimeSpan.Zero)
                 let poller = pollerOver (fun () -> clock) script.Fetch recorded (ResizeArray ())
-                poller.Apply [ watching { State = PrOpen; Checks = ChecksPending; Queue = NotQueued; Mergeable = None; Draft = false } ]
+                poller.Apply [ watching { State = PrOpen; Checks = ChecksPending; WayIn = PrWayIn.Idle; Mergeable = None; Draft = false } ]
                 let! first = poller.Poll ()
                 clock <- clock.AddSeconds 61.0
                 let! second = poller.Poll ()
@@ -2300,7 +2303,7 @@ let private prPollTests =
                 let recorded = RecordedTransitions ()
                 let script = scriptedFetch [ PrWatches.PrUnchanged ]
                 let poller = pollerOver fixedNow script.Fetch recorded (ResizeArray ())
-                poller.Apply [ watching { State = PrOpen; Checks = ChecksPending; Queue = NotQueued; Mergeable = None; Draft = false } ]
+                poller.Apply [ watching { State = PrOpen; Checks = ChecksPending; WayIn = PrWayIn.Idle; Mergeable = None; Draft = false } ]
                 let! moved = poller.Poll ()
                 Expect.isFalse moved "a 304 is not a change"
                 Expect.isEmpty recorded "and nothing to say about it"
@@ -2311,7 +2314,7 @@ let private prPollTests =
                 let rejected = ResizeArray<CredentialFor> ()
                 let script = scriptedFetch [ PrWatches.PrFetchFailed PrWatches.PrUnauthorized ]
                 let poller = pollerOver fixedNow script.Fetch (RecordedTransitions ()) rejected
-                poller.Apply [ watching { State = PrOpen; Checks = ChecksPending; Queue = NotQueued; Mergeable = None; Draft = false } ]
+                poller.Apply [ watching { State = PrOpen; Checks = ChecksPending; WayIn = PrWayIn.Idle; Mergeable = None; Draft = false } ]
                 let! moved = poller.Poll ()
                 Expect.isTrue moved "the row's status changed"
                 Expect.equal (List.ofSeq rejected) [ CredentialFor.Person ada ] "the watcher's credential is the one that was refused"
@@ -2328,7 +2331,7 @@ let private prPollTests =
                         [ PrWatches.PrChanged (snapshotOf PrOpen ChecksPending, PrWatches.PrEtags.none)
                           PrWatches.PrChanged (snapshotOf PrOpen ChecksGreen, PrWatches.PrEtags.none) ]
                 let poller = pollerOver (fun () -> clock) script.Fetch (RecordedTransitions ()) (ResizeArray ())
-                poller.Apply [ watching { State = PrOpen; Checks = ChecksPending; Queue = NotQueued; Mergeable = None; Draft = false } ]
+                poller.Apply [ watching { State = PrOpen; Checks = ChecksPending; WayIn = PrWayIn.Idle; Mergeable = None; Draft = false } ]
                 let! _ = poller.Poll ()
                 clock <- clock.AddSeconds 16.0
                 let! _ = poller.Poll ()
@@ -2343,7 +2346,7 @@ let private prPollTests =
                         [ PrWatches.PrChanged (snapshotOf PrOpen ChecksGreen, PrWatches.PrEtags.none)
                           PrWatches.PrChanged (snapshotOf PrOpen ChecksGreen, PrWatches.PrEtags.none) ]
                 let poller = pollerOver (fun () -> clock) script.Fetch (RecordedTransitions ()) (ResizeArray ())
-                poller.Apply [ watching { State = PrOpen; Checks = ChecksPending; Queue = NotQueued; Mergeable = None; Draft = false } ]
+                poller.Apply [ watching { State = PrOpen; Checks = ChecksPending; WayIn = PrWayIn.Idle; Mergeable = None; Draft = false } ]
                 let! _ = poller.Poll ()
                 clock <- clock.AddSeconds 16.0
                 let! _ = poller.Poll ()
@@ -2363,7 +2366,7 @@ let private prPollTests =
                         [ PrWatches.PrFetchFailed (PrWatches.PrUnreachable "network down")
                           PrWatches.PrChanged (snapshotOf PrOpen ChecksGreen, PrWatches.PrEtags.none) ]
                 let poller = pollerOver (fun () -> clock) script.Fetch (RecordedTransitions ()) (ResizeArray ())
-                poller.Apply [ watching { State = PrOpen; Checks = ChecksPending; Queue = NotQueued; Mergeable = None; Draft = false } ]
+                poller.Apply [ watching { State = PrOpen; Checks = ChecksPending; WayIn = PrWayIn.Idle; Mergeable = None; Draft = false } ]
                 let! _ = poller.Poll ()
                 clock <- clock.AddSeconds 16.0
                 let! _ = poller.Poll ()
@@ -2381,7 +2384,7 @@ let private prPollTests =
                         [ PrWatches.PrFetchFailed (PrWatches.PrRateLimited (Some resetAt))
                           PrWatches.PrChanged (snapshotOf PrOpen ChecksGreen, PrWatches.PrEtags.none) ]
                 let poller = pollerOver (fun () -> clock) script.Fetch (RecordedTransitions ()) (ResizeArray ())
-                poller.Apply [ watching { State = PrOpen; Checks = ChecksPending; Queue = NotQueued; Mergeable = None; Draft = false } ]
+                poller.Apply [ watching { State = PrOpen; Checks = ChecksPending; WayIn = PrWayIn.Idle; Mergeable = None; Draft = false } ]
                 let! _ = poller.Poll ()
                 let callsAfterLimit = script.Calls.Count
                 let! duringWindow = poller.Poll ()
@@ -2401,7 +2404,7 @@ let private prPollTests =
                         [ PrWatches.PrChanged (snapshotOf PrOpen ChecksGreen, PrWatches.PrEtags.none)
                           PrWatches.PrChanged (snapshotOf PrMerged ChecksGreen, PrWatches.PrEtags.none) ]
                 let poller = pollerOver (fun () -> clock) script.Fetch (RecordedTransitions ()) (ResizeArray ())
-                poller.Apply [ watching { State = PrOpen; Checks = ChecksPending; Queue = NotQueued; Mergeable = None; Draft = false } ]
+                poller.Apply [ watching { State = PrOpen; Checks = ChecksPending; WayIn = PrWayIn.Idle; Mergeable = None; Draft = false } ]
                 let! _ = poller.Poll ()
                 // Settled, so a tick a second later would not look. A delivery does.
                 clock <- clock.AddSeconds 1.0
@@ -2420,7 +2423,7 @@ let private prPollTests =
                 let resetAt = int (clock.AddMinutes(10.0).ToUnixTimeSeconds ())
                 let script = scriptedFetch [ PrWatches.PrFetchFailed (PrWatches.PrRateLimited (Some resetAt)) ]
                 let poller = pollerOver (fun () -> clock) script.Fetch (RecordedTransitions ()) (ResizeArray ())
-                poller.Apply [ watching { State = PrOpen; Checks = ChecksPending; Queue = NotQueued; Mergeable = None; Draft = false } ]
+                poller.Apply [ watching { State = PrOpen; Checks = ChecksPending; WayIn = PrWayIn.Idle; Mergeable = None; Draft = false } ]
                 let! _ = poller.Poll ()
                 let spent = script.Calls.Count
                 let! _ = poller.Poke prOne.Repo
@@ -2431,7 +2434,7 @@ let private prPollTests =
             async {
                 let script = scriptedFetch []
                 let poller = pollerOver fixedNow script.Fetch (RecordedTransitions ()) (ResizeArray ())
-                poller.Apply [ watching { State = PrOpen; Checks = ChecksPending; Queue = NotQueued; Mergeable = None; Draft = false } ]
+                poller.Apply [ watching { State = PrOpen; Checks = ChecksPending; WayIn = PrWayIn.Idle; Mergeable = None; Draft = false } ]
                 let other = RepoRef.create "someone/else" |> expect
                 let! moved = poller.Poke other
                 Expect.equal script.Calls.Count 0 "nothing on that repo is watched here"
@@ -2444,7 +2447,7 @@ let private prPollTests =
                 // the failing one, and finding it should not mean reading every row.
                 let script = scriptedFetch [ PrWatches.PrChanged (snapshotOf PrOpen ChecksRed, PrWatches.PrEtags.none) ]
                 let poller = pollerOver fixedNow script.Fetch (RecordedTransitions ()) (ResizeArray ())
-                poller.Apply [ watching { State = PrOpen; Checks = ChecksPending; Queue = NotQueued; Mergeable = None; Draft = false } ]
+                poller.Apply [ watching { State = PrOpen; Checks = ChecksPending; WayIn = PrWayIn.Idle; Mergeable = None; Draft = false } ]
                 let! _ = poller.Poll ()
                 match! (PrWatches.query (fun () -> poller)).Read () with
                 | Ok (RowsOf [ row ]) ->
@@ -2461,11 +2464,27 @@ let private prPollTests =
                 | other -> failwithf "expected one row, got %A" other
             }
 
-        testCaseAsync "the state cell says queued while auto merge holds it" <|
+        testCaseAsync "the state cell says armed while auto merge holds it" <|
             async {
-                let script = scriptedFetch [ PrWatches.PrChanged (snapshotWith PrOpen ChecksGreen true, PrWatches.PrEtags.none) ]
+                let script =
+                    scriptedFetch [ PrWatches.PrChanged (snapshotWith PrOpen ChecksPending (Some PrRoute.GitHubAutoMerge), PrWatches.PrEtags.none) ]
                 let poller = pollerOver fixedNow script.Fetch (RecordedTransitions ()) (ResizeArray ())
-                poller.Apply [ watching { State = PrOpen; Checks = ChecksPending; Queue = NotQueued; Mergeable = None; Draft = false } ]
+                poller.Apply [ watching { State = PrOpen; Checks = ChecksPending; WayIn = PrWayIn.Idle; Mergeable = None; Draft = false } ]
+                let! _ = poller.Poll ()
+                match! (PrWatches.query (fun () -> poller)).Read () with
+                | Ok (RowsOf [ row ]) ->
+                    Expect.equal
+                        (row |> List.tryFind (fun (key, _) -> key = "state") |> Option.map snd)
+                        (Some (CellStatus ("armed", ToneBusy)))
+                        "on its way in once its checks pass"
+                | other -> failwithf "expected one row, got %A" other
+            }
+
+        testCaseAsync "the state cell says queued while the merge queue holds it" <|
+            async {
+                let script = scriptedFetch [ PrWatches.PrChanged (snapshotWith PrOpen ChecksGreen inQueue, PrWatches.PrEtags.none) ]
+                let poller = pollerOver fixedNow script.Fetch (RecordedTransitions ()) (ResizeArray ())
+                poller.Apply [ watching { State = PrOpen; Checks = ChecksPending; WayIn = PrWayIn.Idle; Mergeable = None; Draft = false } ]
                 let! _ = poller.Poll ()
                 match! (PrWatches.query (fun () -> poller)).Read () with
                 | Ok (RowsOf [ row ]) ->
@@ -2476,13 +2495,13 @@ let private prPollTests =
                 | other -> failwithf "expected one row, got %A" other
             }
 
-        testCaseAsync "the state cell says stalled once auto merge stops holding it" <|
+        testCaseAsync "the state cell says stalled once the merge queue stops holding it" <|
             async {
                 // The ejection this feature exists to make visible: the pull request is
                 // still open, its checks are still green, and it is no longer going in.
                 let script = scriptedFetch [ PrWatches.PrChanged (snapshotOf PrOpen ChecksGreen, PrWatches.PrEtags.none) ]
                 let poller = pollerOver fixedNow script.Fetch (RecordedTransitions ()) (ResizeArray ())
-                poller.Apply [ watching { State = PrOpen; Checks = ChecksGreen; Queue = Queued; Mergeable = None; Draft = false } ]
+                poller.Apply [ watching { State = PrOpen; Checks = ChecksGreen; WayIn = PrWayIn.Queued; Mergeable = None; Draft = false } ]
                 let! _ = poller.Poll ()
                 match! (PrWatches.query (fun () -> poller)).Read () with
                 | Ok (RowsOf [ row ]) ->
@@ -2498,9 +2517,9 @@ let private prPollTests =
                 // What flows to the Manager's roster: a queued pull request whose base moved
                 // out from under it reads "conflicted", not "queued", so the row a person or
                 // the agent scans for is the one that needs a rebase.
-                let script = scriptedFetch [ PrWatches.PrChanged ({ snapshotWith PrOpen ChecksGreen true with Mergeable = Some false }, PrWatches.PrEtags.none) ]
+                let script = scriptedFetch [ PrWatches.PrChanged ({ snapshotWith PrOpen ChecksGreen inQueue with Mergeable = Some false }, PrWatches.PrEtags.none) ]
                 let poller = pollerOver fixedNow script.Fetch (RecordedTransitions ()) (ResizeArray ())
-                poller.Apply [ watching { State = PrOpen; Checks = ChecksGreen; Queue = Queued; Mergeable = None; Draft = false } ]
+                poller.Apply [ watching { State = PrOpen; Checks = ChecksGreen; WayIn = PrWayIn.Queued; Mergeable = None; Draft = false } ]
                 let! _ = poller.Poll ()
                 match! (PrWatches.query (fun () -> poller)).Read () with
                 | Ok (RowsOf [ row ]) ->
@@ -2513,10 +2532,10 @@ let private prPollTests =
 
         testCaseAsync "the line a session says about itself is made of the rows it can see" <|
             async {
-                let script = scriptedFetch [ PrWatches.PrChanged (snapshotWith PrOpen ChecksGreen true, PrWatches.PrEtags.none) ]
+                let script = scriptedFetch [ PrWatches.PrChanged (snapshotWith PrOpen ChecksGreen inQueue, PrWatches.PrEtags.none) ]
                 let poller = pollerOver fixedNow script.Fetch (RecordedTransitions ()) (ResizeArray ())
                 Expect.equal (PrWatches.summaryOf (poller.Rows ())) "" "a session watching nothing says nothing"
-                poller.Apply [ watching { State = PrOpen; Checks = ChecksPending; Queue = NotQueued; Mergeable = None; Draft = false } ]
+                poller.Apply [ watching { State = PrOpen; Checks = ChecksPending; WayIn = PrWayIn.Idle; Mergeable = None; Draft = false } ]
                 Expect.equal
                     (PrWatches.summaryOf (poller.Rows ()))
                     ""
@@ -2532,10 +2551,10 @@ let private prPollTests =
                 // leaving the summary quoting a state nothing is refreshing.
                 let script =
                     scriptedFetch
-                        [ PrWatches.PrChanged (snapshotWith PrOpen ChecksGreen true, PrWatches.PrEtags.none)
+                        [ PrWatches.PrChanged (snapshotWith PrOpen ChecksGreen inQueue, PrWatches.PrEtags.none)
                           PrWatches.PrFetchFailed PrWatches.PrUnauthorized ]
                 let poller = pollerOver fixedNow script.Fetch (RecordedTransitions ()) (ResizeArray ())
-                poller.Apply [ watching { State = PrOpen; Checks = ChecksPending; Queue = NotQueued; Mergeable = None; Draft = false } ]
+                poller.Apply [ watching { State = PrOpen; Checks = ChecksPending; WayIn = PrWayIn.Idle; Mergeable = None; Draft = false } ]
                 let! _ = poller.Poll ()
                 Expect.equal (PrWatches.summaryOf (poller.Rows ())) "#12 queued" "read once"
                 let! _ = poller.Poke prOne.Repo
@@ -2549,7 +2568,7 @@ let private prPollTests =
                 // settled watch's stamp must not creep forward every fifteen seconds.
                 let script = scriptedFetch [ PrWatches.PrChanged (snapshotOf PrOpen ChecksGreen, PrWatches.PrEtags.none) ]
                 let poller = pollerOver fixedNow script.Fetch (RecordedTransitions ()) (ResizeArray ())
-                poller.Apply [ watching { State = PrOpen; Checks = ChecksGreen; Queue = NotQueued; Mergeable = None; Draft = false } ]
+                poller.Apply [ watching { State = PrOpen; Checks = ChecksGreen; WayIn = PrWayIn.Idle; Mergeable = None; Draft = false } ]
                 let! _ = poller.Poll ()
                 match! (PrWatches.query (fun () -> poller)).Read () with
                 | Ok (RowsOf [ row ]) ->
@@ -2566,7 +2585,7 @@ let private prPollTests =
                 // last said is not suddenly wrong. Two facts, two cells.
                 let script = scriptedFetch [ PrWatches.PrFetchFailed PrWatches.PrUnauthorized ]
                 let poller = pollerOver fixedNow script.Fetch (RecordedTransitions ()) (ResizeArray ())
-                poller.Apply [ watching { State = PrOpen; Checks = ChecksPending; Queue = NotQueued; Mergeable = None; Draft = false } ]
+                poller.Apply [ watching { State = PrOpen; Checks = ChecksPending; WayIn = PrWayIn.Idle; Mergeable = None; Draft = false } ]
                 let! _ = poller.Poll ()
                 match! (PrWatches.query (fun () -> poller)).Read () with
                 | Ok (RowsOf [ row ]) ->
@@ -2580,7 +2599,7 @@ let private prPollTests =
             async {
                 let script = scriptedFetch [ PrWatches.PrChanged (snapshotOf PrOpen ChecksGreen, PrWatches.PrEtags.none) ]
                 let poller = pollerOver fixedNow script.Fetch (RecordedTransitions ()) (ResizeArray ())
-                poller.Apply [ watching { State = PrOpen; Checks = ChecksPending; Queue = NotQueued; Mergeable = None; Draft = false } ]
+                poller.Apply [ watching { State = PrOpen; Checks = ChecksPending; WayIn = PrWayIn.Idle; Mergeable = None; Draft = false } ]
                 match poller.Rows () with
                 | [ row ] -> Expect.isFalse row.Pushed "nothing has delivered yet"
                 | rows -> failwithf "expected one row, got %d" rows.Length
@@ -2638,10 +2657,10 @@ let private prPollTests =
                           PrWatches.PrUnchanged ]
                 let mutable clock = DateTimeOffset (2026, 8, 27, 12, 0, 0, TimeSpan.Zero)
                 let poller = pollerOver (fun () -> clock) script.Fetch (RecordedTransitions ()) (ResizeArray ())
-                poller.Apply [ watching { State = PrOpen; Checks = ChecksPending; Queue = NotQueued; Mergeable = None; Draft = false } ]
+                poller.Apply [ watching { State = PrOpen; Checks = ChecksPending; WayIn = PrWayIn.Idle; Mergeable = None; Draft = false } ]
                 let! _ = poller.Poll ()
                 // The same watch, re-applied: a boot rebuild or any watch/unwatch does this.
-                poller.Apply [ watching { State = PrOpen; Checks = ChecksGreen; Queue = NotQueued; Mergeable = None; Draft = false } ]
+                poller.Apply [ watching { State = PrOpen; Checks = ChecksGreen; WayIn = PrWayIn.Idle; Mergeable = None; Draft = false } ]
                 clock <- clock.AddSeconds 61.0
                 let! _ = poller.Poll ()
                 Expect.equal (snd script.Calls.[1]) etags "the second look quotes the etags the first was given"
@@ -2977,25 +2996,86 @@ let private prFetchTests =
                 | other -> failwithf "expected a snapshot, got %A" other
             }
 
-        testCaseAsync "auto merge, armed and disarmed, reaches the next look" <|
+        testCaseAsync "a pull request nothing is carrying has no route" <|
             async {
                 let! stub = startStubGitHubApi ()
                 let fetch = GitHubPrs.fetchOver stub.Url GitHubPrs.Spending.unmetered
-                // The default body carries no auto_merge at all, which is the same fact as
-                // a null one: nothing is going to merge this without a person.
                 match! fetch (Some "token-abc") prOne PrWatches.PrEtags.none None with
-                | PrWatches.PrChanged (snapshot, _) -> Expect.isFalse snapshot.Queued "absent means not armed"
+                | PrWatches.PrChanged (snapshot, _) -> Expect.equal snapshot.Route None "no arming, no queue entry"
                 | other -> failwithf "expected a snapshot, got %A" other
-                stub.SetPr
-                    """{"state":"open","merged":false,"title":"Add feature","head":{"sha":"abc123"},"mergeable":true,"auto_merge":{"merge_method":"squash"}}"""
+            }
+
+        testCaseAsync "auto merge armed reaches the look as auto merge" <|
+            async {
+                let! stub = startStubGitHubApi ()
+                stub.SetStanding
+                    """{"data":{"repository":{"pullRequest":{"autoMergeRequest":{"enabledAt":"2026-09-25T00:00:00Z"},"mergeQueueEntry":null}}}}"""
+                let fetch = GitHubPrs.fetchOver stub.Url GitHubPrs.Spending.unmetered
                 match! fetch (Some "token-abc") prOne PrWatches.PrEtags.none None with
-                | PrWatches.PrChanged (snapshot, _) -> Expect.isTrue snapshot.Queued "an object means armed"
+                | PrWatches.PrChanged (snapshot, _) -> Expect.equal snapshot.Route (Some PrRoute.GitHubAutoMerge) "armed"
                 | other -> failwithf "expected a snapshot, got %A" other
-                stub.SetPr
-                    """{"state":"open","merged":false,"title":"Add feature","head":{"sha":"abc123"},"mergeable":true,"auto_merge":null}"""
+            }
+
+        testCaseAsync "a merge queue entry reaches the look with its position and state" <|
+            async {
+                // What GitHub answers for a pull request in the queue: `autoMergeRequest` is
+                // null by then, because enqueueing cleared it — which is why the arming alone
+                // read every queued pull request as having stopped.
+                let! stub = startStubGitHubApi ()
+                stub.SetStanding
+                    """{"data":{"repository":{"pullRequest":{"autoMergeRequest":null,"mergeQueueEntry":{"position":2,"state":"AWAITING_CHECKS"}}}}}"""
+                let fetch = GitHubPrs.fetchOver stub.Url GitHubPrs.Spending.unmetered
                 match! fetch (Some "token-abc") prOne PrWatches.PrEtags.none None with
-                | PrWatches.PrChanged (snapshot, _) -> Expect.isFalse snapshot.Queued "an explicit null means not armed"
+                | PrWatches.PrChanged (snapshot, _) ->
+                    Expect.equal
+                        snapshot.Route
+                        (Some (PrRoute.GitHubMergeQueue (2, GitHubQueueState.AwaitingChecks)))
+                        "in the queue, second"
                 | other -> failwithf "expected a snapshot, got %A" other
+            }
+
+        testCaseAsync "a route that moves on an unchanged pull request still reaches the caller" <|
+            async {
+                // An ejection from the queue moves neither REST resource: both answer 304,
+                // and the only thing that changed is the entry being gone.
+                let! stub = startStubGitHubApi ()
+                stub.SetStanding
+                    """{"data":{"repository":{"pullRequest":{"autoMergeRequest":null,"mergeQueueEntry":{"position":1,"state":"QUEUED"}}}}}"""
+                let fetch = GitHubPrs.fetchOver stub.Url GitHubPrs.Spending.unmetered
+                let! first = fetch (Some "token-abc") prOne PrWatches.PrEtags.none None
+                let etags, seen =
+                    match first with
+                    | PrWatches.PrChanged (s, e) -> e, Some s
+                    | other -> failwithf "expected a snapshot, got %A" other
+                stub.SetStanding
+                    """{"data":{"repository":{"pullRequest":{"autoMergeRequest":null,"mergeQueueEntry":null}}}}"""
+                match! fetch (Some "token-abc") prOne etags seen with
+                | PrWatches.PrChanged (snapshot, _) -> Expect.equal snapshot.Route None "off the queue"
+                | other -> failwithf "expected a snapshot, got %A" other
+            }
+
+        testCaseAsync "a route reply it cannot read keeps the last route" <|
+            async {
+                // One unreadable reading must not announce a stall nobody saw.
+                let! stub = startStubGitHubApi ()
+                stub.SetStanding """{"data":{"repository":{"pullRequest":{"mergeQueueEntry":{"position":1,"state":"SIDEWAYS"}}}}}"""
+                let fetch = GitHubPrs.fetchOver stub.Url GitHubPrs.Spending.unmetered
+                let last =
+                    { State = PrOpen; Title = "Add feature"; HeadSha = "abc123"; Checks = ChecksGreen
+                      Route = Some PrRoute.GitHubAutoMerge; Mergeable = Some true; Draft = false }
+                match! fetch (Some "token-abc") prOne PrWatches.PrEtags.none (Some last) with
+                | PrWatches.PrChanged (snapshot, _) -> Expect.equal snapshot.Route (Some PrRoute.GitHubAutoMerge) "carried"
+                | other -> failwithf "expected a snapshot, got %A" other
+            }
+
+        testCaseAsync "a merged pull request is not asked for a route" <|
+            async {
+                // It went through its route; the GraphQL point would buy nothing.
+                let! stub = startStubGitHubApi ()
+                stub.SetPr """{"state":"closed","merged":true,"title":"Add feature","head":{"sha":"abc123"},"mergeable":null}"""
+                let fetch = GitHubPrs.fetchOver stub.Url GitHubPrs.Spending.unmetered
+                let! _ = fetch (Some "token-abc") prOne PrWatches.PrEtags.none None
+                Expect.isFalse (stub.Posted |> Seq.exists (fun (path, _) -> path = "/graphql")) "no graphql asked"
             }
 
         testCaseAsync "a merge at the provider reaches the next look" <|

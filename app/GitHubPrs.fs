@@ -39,7 +39,6 @@ type PrFields =
     { State : PrState
       Title : string
       HeadSha : string
-      Queued : bool
       Mergeable : bool option
       Draft : bool }
 
@@ -58,12 +57,6 @@ let prDecoder : Decoder<PrFields> =
             else PrOpen
           Title = get.Required.Field "title" Decode.string
           HeadSha = get.Required.At [ "head"; "sha" ] Decode.string
-          // `auto_merge` is an OBJECT when auto merge is armed and null when it is not, so
-          // its presence is the whole fact and none of its contents are read. Decoded as
-          // a raw value for exactly that reason: what is inside it (who armed it, which
-          // method, what commit message) would date this decoder against a shape nobody
-          // here depends on.
-          Queued = get.Optional.Field "auto_merge" Decode.value |> Option.exists (fun v -> not (Decode.Helpers.isNullValue v))
           // Null until GitHub has computed it, which it does lazily. Carried for display
           // and never for a transition — see `PrSnapshot.Mergeable`.
           Mergeable = get.Optional.Field "mergeable" (Decode.option Decode.bool) |> Option.flatten
@@ -236,6 +229,111 @@ module Spending =
         { Permit = fun () -> Resilience.Ledger.permit ledger (now ()) budget spend
           Learned = Resilience.Ledger.observed ledger }
 
+// --- asking GraphQL ----------------------------------------------------------------------
+// Where GitHub keeps what REST does not have: auto merge and the merge queue, which a look
+// reads and a merge acts on.
+
+/// What a GraphQL request sends: the REST headers with the merge-info preview in place of
+/// the versioned `accept`, which is what makes `mergeStateStatus` readable.
+let private graphqlHeaders (token: string) : (string * string) list =
+    sentHeaders token
+    |> List.map (fun (name, value) ->
+        if name = "accept" then name, "application/vnd.github.merge-info-preview+json" else name, value)
+
+/// One GraphQL error as GitHub reports it: a `type` (`NOT_FOUND`, `UNPROCESSABLE`, …) when it
+/// has one, and the sentence.
+type private GraphqlError = { Type : string option; Message : string }
+
+let private graphqlErrors : Decoder<GraphqlError list> =
+    Decode.field
+        "errors"
+        (Decode.list (
+            Decode.object (fun get ->
+                { Type = get.Optional.Field "type" Decode.string
+                  Message = get.Required.Field "message" Decode.string })))
+
+/// How a GraphQL request came to nothing: the provider read it and declined, in its words,
+/// or the same four facts a REST failure carries. Its own shape rather than either verb's
+/// outcome, because both the merge and its undoing ask the same way and each says no in its
+/// own vocabulary.
+type private GraphqlRefusal =
+    | Declined of string
+    | Failed of PrFetchFailure
+
+/// `POST /graphql` with one document and its variables, and the `data` read by `decoder`.
+///
+/// A GraphQL reply is 200 whether or not it did anything, and says no in `errors` — so the
+/// classification a REST status carries is read off the body here. A `NOT_FOUND` is the same
+/// fact a REST 404 is (gone, or a credential that cannot see it); every other error is the
+/// provider having READ the request and declined, which is an answer in its own words.
+let private askGraphql
+    (root: string)
+    (spending: Spending)
+    (token: string)
+    (document: string)
+    (variables: (string * JsonValue) list)
+    (decoder: Decoder<'a>)
+    : Async<Result<'a, GraphqlRefusal>> =
+    async {
+        let payload =
+            Encode.object [ "query", Encode.string document; "variables", Encode.object variables ]
+            |> Encode.toString 0
+        let! attempt =
+            Http.text
+                (root + "/graphql")
+                [ Fetch.Types.RequestProperties.Method Fetch.Types.HttpMethod.POST
+                  Http.headers (("content-type", "application/json") :: graphqlHeaders token)
+                  Fetch.Types.RequestProperties.Body (U3.Case3 payload) ]
+        let reply = replyOf attempt (fun _ -> "")
+        spending.Learned (allowanceIn reply)
+        if not (reply.Reachable && reply.Status >= 200 && reply.Status < 300) then
+            return Error (Failed (failureOf reply))
+        else
+            match Decode.fromString graphqlErrors reply.Body with
+            | Ok errors when not (List.isEmpty errors) ->
+                if errors |> List.exists (fun e -> e.Type = Some "NOT_FOUND") then
+                    return Error (Failed PrNotFound)
+                else
+                    return Error (Declined (errors |> List.map (fun e -> e.Message) |> String.concat "; "))
+            | _ ->
+                match Decode.fromString (Decode.field "data" decoder) reply.Body with
+                | Ok value -> return Ok value
+                | Error e -> return Error (Failed (PrUnreadable (sprintf "unrecognised graphql reply: %s" e)))
+    }
+
+/// How an open pull request is on its way in: `mergeQueueEntry` and `autoMergeRequest`,
+/// which REST does not have at all. REST's `auto_merge` looks like the second and is not
+/// enough on its own, because GitHub CLEARS it as the pull request enters the queue — so a
+/// watch reading only that saw every armed pull request that went on into the queue as
+/// having stopped, and said "stalled" about the way in working.
+let private routeQuery =
+    "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){autoMergeRequest{enabledAt} mergeQueueEntry{position state}}}}"
+
+let private queueStateDecoder : Decoder<GitHubQueueState> =
+    Decode.string
+    |> Decode.andThen (function
+        | "QUEUED" -> Decode.succeed GitHubQueueState.Queued
+        | "AWAITING_CHECKS" -> Decode.succeed GitHubQueueState.AwaitingChecks
+        | "MERGEABLE" -> Decode.succeed GitHubQueueState.Mergeable
+        | "UNMERGEABLE" -> Decode.succeed GitHubQueueState.Unmergeable
+        | "LOCKED" -> Decode.succeed GitHubQueueState.Locked
+        | other -> Decode.fail (sprintf "unknown merge queue entry state %s" other))
+
+/// `data.repository.pullRequest`, read to a route. The queue entry wins when both are
+/// present, because it is the further step — GitHub clears the arming as it enqueues, and
+/// a reply caught between the two is still a pull request in the queue.
+let private routeDecoder : Decoder<PrRoute option> =
+    Decode.at
+        [ "repository"; "pullRequest" ]
+        (Decode.object (fun get ->
+            match get.Optional.Field "mergeQueueEntry" (Decode.object (fun entry ->
+                      entry.Required.Field "position" Decode.int, entry.Required.Field "state" queueStateDecoder)) with
+            | Some (position, state) -> Some (PrRoute.GitHubMergeQueue (position, state))
+            | None ->
+                if get.Optional.Field "autoMergeRequest" Decode.value |> Option.exists (fun v -> not (Decode.Helpers.isNullValue v))
+                then Some PrRoute.GitHubAutoMerge
+                else None))
+
 /// The fetch as it is composed against a real API base. The base is a PARAMETER for the
 /// reason `GitHubConnection.refusedAt` takes one: a suite needs somewhere to point it
 /// that is not the live provider.
@@ -277,7 +375,6 @@ let fetchOver (apiBase: string) (spending: Spending) : FetchPr =
                                 { State = s.State
                                   Title = s.Title
                                   HeadSha = s.HeadSha
-                                  Queued = s.Queued
                                   Mergeable = s.Mergeable
                                   Draft = s.Draft }))
                     elif succeeded prReply then
@@ -298,8 +395,34 @@ let fetchOver (apiBase: string) (spending: Spending) : FetchPr =
                             fields.HeadSha
                     let! checksReply = getConditional checksUrl bearer etags.Checks
                     spending.Learned (allowanceIn checksReply)
-                    if notModified prReply && notModified checksReply then
-                        // Both halves unchanged: there is nothing to fold and nothing to say.
+                    // The third half, and the one that is not free: GraphQL has no
+                    // conditional request, so each look at an OPEN pull request spends a
+                    // point of the separate GraphQL budget. Only an open one is asked — a
+                    // merged pull request went through its route and a closed one is on none.
+                    // A reply that says nothing readable keeps the last route, the checks
+                    // rule: the pull request's own state is already in hand, and one missed
+                    // reading must not announce a stall nobody saw.
+                    let! route =
+                        match fields.State with
+                        | PrOpen ->
+                            async {
+                                let variables =
+                                    [ "owner", Encode.string (RepoRef.owner pr.Repo)
+                                      "name", Encode.string (RepoRef.repo pr.Repo)
+                                      "number", Encode.int pr.Number ]
+                                match! askGraphql (apiBase.TrimEnd '/') spending bearer routeQuery variables routeDecoder with
+                                | Ok route -> return route
+                                | Error _ ->
+                                    return
+                                        match last with
+                                        | Some s when s.State = PrOpen -> s.Route
+                                        | _ -> None
+                            }
+                        | PrMerged
+                        | PrClosed -> async.Return None
+                    let routeUnmoved = last |> Option.exists (fun s -> s.Route = route)
+                    if notModified prReply && notModified checksReply && routeUnmoved then
+                        // All three unchanged: there is nothing to fold and nothing to say.
                         return PrUnchanged
                     else
                         // A checks endpoint that says nothing readable does not fail the whole
@@ -324,7 +447,7 @@ let fetchOver (apiBase: string) (spending: Spending) : FetchPr =
                               Title = fields.Title
                               HeadSha = fields.HeadSha
                               Checks = checks
-                              Queued = fields.Queued
+                              Route = route
                               Mergeable = fields.Mergeable
                               Draft = fields.Draft }
                         // An ETag is replaced only by a half that actually answered with one.
@@ -471,74 +594,6 @@ let openOver (apiBase: string) (spending: Spending) : OpenPr =
 // standing calls for — which is the shape `gh pr merge` has, and for the same reason: "merge
 // this" is one intent, and which mechanism carries it out is the provider's fact, not the
 // caller's choice.
-
-/// What a GraphQL request sends: the REST headers with the merge-info preview in place of
-/// the versioned `accept`, which is what makes `mergeStateStatus` readable.
-let private graphqlHeaders (token: string) : (string * string) list =
-    sentHeaders token
-    |> List.map (fun (name, value) ->
-        if name = "accept" then name, "application/vnd.github.merge-info-preview+json" else name, value)
-
-/// One GraphQL error as GitHub reports it: a `type` (`NOT_FOUND`, `UNPROCESSABLE`, …) when it
-/// has one, and the sentence.
-type private GraphqlError = { Type : string option; Message : string }
-
-let private graphqlErrors : Decoder<GraphqlError list> =
-    Decode.field
-        "errors"
-        (Decode.list (
-            Decode.object (fun get ->
-                { Type = get.Optional.Field "type" Decode.string
-                  Message = get.Required.Field "message" Decode.string })))
-
-/// `POST /graphql` with one document and its variables, and the `data` read by `decoder`.
-///
-/// A GraphQL reply is 200 whether or not it did anything, and says no in `errors` — so the
-/// classification a REST status carries is read off the body here. A `NOT_FOUND` is the same
-/// fact a REST 404 is (gone, or a credential that cannot see it); every other error is the
-/// provider having READ the request and declined, which is an answer in its own words.
-/// How a GraphQL request came to nothing: the provider read it and declined, in its words,
-/// or the same four facts a REST failure carries. Its own shape rather than either verb's
-/// outcome, because both the merge and its undoing ask the same way and each says no in its
-/// own vocabulary.
-type private GraphqlRefusal =
-    | Declined of string
-    | Failed of PrFetchFailure
-
-let private askGraphql
-    (root: string)
-    (spending: Spending)
-    (token: string)
-    (document: string)
-    (variables: (string * JsonValue) list)
-    (decoder: Decoder<'a>)
-    : Async<Result<'a, GraphqlRefusal>> =
-    async {
-        let payload =
-            Encode.object [ "query", Encode.string document; "variables", Encode.object variables ]
-            |> Encode.toString 0
-        let! attempt =
-            Http.text
-                (root + "/graphql")
-                [ Fetch.Types.RequestProperties.Method Fetch.Types.HttpMethod.POST
-                  Http.headers (("content-type", "application/json") :: graphqlHeaders token)
-                  Fetch.Types.RequestProperties.Body (U3.Case3 payload) ]
-        let reply = replyOf attempt (fun _ -> "")
-        spending.Learned (allowanceIn reply)
-        if not (reply.Reachable && reply.Status >= 200 && reply.Status < 300) then
-            return Error (Failed (failureOf reply))
-        else
-            match Decode.fromString graphqlErrors reply.Body with
-            | Ok errors when not (List.isEmpty errors) ->
-                if errors |> List.exists (fun e -> e.Type = Some "NOT_FOUND") then
-                    return Error (Failed PrNotFound)
-                else
-                    return Error (Declined (errors |> List.map (fun e -> e.Message) |> String.concat "; "))
-            | _ ->
-                match Decode.fromString (Decode.field "data" decoder) reply.Body with
-                | Ok value -> return Ok value
-                | Error e -> return Error (Failed (PrUnreadable (sprintf "unrecognised graphql reply: %s" e)))
-    }
 
 /// Where a pull request stands, as far as merging it is concerned.
 type private MergeStanding =
@@ -1185,7 +1240,7 @@ let providerTools (capabilities: AgentCapabilities) : (ToolDescriptor * (string 
               })
       tool
           "merge_pr"
-          "Merge a pull request on GitHub, by whichever route its state allows: if its checks are still running it is set to merge automatically when they pass (auto merge, which watch_pr then reports as queued); if it is mergeable now and the base branch has a merge queue it goes into the queue; if it is mergeable now with no queue it is merged at once. The answer says which happened, and the session starts watching it (as watch_pr would) so the timeline says when it lands — or when a merge queue ejects it, which reads as stalled. One already armed, queued or merged is reported as such and nothing is changed, so calling it twice is safe. A draft does not merge: undraft it with ready_pr first. It spends the GitHub credential of whoever's turn this is: what lands on the base branch is theirs, and everyone in the session sees the act in the timeline. What GitHub will not do it says why in its own words — auto merge not allowed on the repository, a review still required, the method not allowed — and that sentence is what comes back."
+          "Merge a pull request on GitHub, by whichever route its state allows: if its checks are still running it is set to merge automatically when they pass (auto merge, which watch_pr then reports as armed); if it is mergeable now and the base branch has a merge queue it goes into the queue (reported as queued, as is an armed one once its checks pass and GitHub enqueues it); if it is mergeable now with no queue it is merged at once. The answer says which happened, and the session starts watching it (as watch_pr would) so the timeline says when it lands — or when a merge queue ejects it, which reads as stalled. One already armed, queued or merged is reported as such and nothing is changed, so calling it twice is safe. A draft does not merge: undraft it with ready_pr first. It spends the GitHub credential of whoever's turn this is: what lands on the base branch is theirs, and everyone in the session sees the act in the timeline. What GitHub will not do it says why in its own words — auto merge not allowed on the repository, a review still required, the method not allowed — and that sentence is what comes back."
           [ ToolField.required "repo" "string" "owner/name"
             ToolField.required "number" "integer" "the pull request number"
             ToolField.optional
@@ -1211,7 +1266,7 @@ let providerTools (capabilities: AgentCapabilities) : (ToolDescriptor * (string 
               })
       tool
           "watch_pr"
-          "Watch a pull request on GitHub. The session polls it and announces on the timeline when it merges, closes, reopens, when its checks pass or fail, and when auto merge is armed (queued) or stops being armed while it is still open (stalled — what a merge queue ejecting an entry looks like, which nothing else reports); the current state of every watched pull request is the pull_requests query. Reads it with the credential of whoever's turn this is, so a \"cannot see it\" on a pull request that exists means their GitHub credential cannot reach that repo. Watching one already watched reports its state and changes nothing."
+          "Watch a pull request on GitHub. The session polls it and announces on the timeline when it merges, closes, reopens, when its checks pass or fail, when auto merge is armed (armed), when it enters the merge queue (queued), and when it stops being on either while it is still open (stalled — disarmed, or ejected from the queue without merging, which nothing else reports); the current state of every watched pull request is the pull_requests query. Reads it with the credential of whoever's turn this is, so a \"cannot see it\" on a pull request that exists means their GitHub credential cannot reach that repo. Watching one already watched reports its state and changes nothing."
           [ ToolField.required "repo" "string" "owner/name"
             ToolField.required "number" "integer" "the pull request number" ]
           (fun args ->

@@ -1167,6 +1167,46 @@ module Codec =
                 | "red" -> Decode.succeed ChecksRed
                 | other -> Decode.fail (sprintf "Unknown checks rollup: %s" other)) }
 
+    let private gitHubQueueState : Codec<GitHubQueueState> =
+        { Encode =
+            (fun (state: GitHubQueueState) ->
+                match state with
+                | GitHubQueueState.Queued -> Encode.string "queued"
+                | GitHubQueueState.AwaitingChecks -> Encode.string "awaitingChecks"
+                | GitHubQueueState.Mergeable -> Encode.string "mergeable"
+                | GitHubQueueState.Unmergeable -> Encode.string "unmergeable"
+                | GitHubQueueState.Locked -> Encode.string "locked")
+          Decode =
+            Decode.string
+            |> Decode.andThen (function
+                | "queued" -> Decode.succeed GitHubQueueState.Queued
+                | "awaitingChecks" -> Decode.succeed GitHubQueueState.AwaitingChecks
+                | "mergeable" -> Decode.succeed GitHubQueueState.Mergeable
+                | "unmergeable" -> Decode.succeed GitHubQueueState.Unmergeable
+                | "locked" -> Decode.succeed GitHubQueueState.Locked
+                | other -> Decode.fail (sprintf "Unknown merge queue state: %s" other)) }
+
+    let private prRoute : Codec<PrRoute> =
+        { Encode =
+            (fun (route: PrRoute) ->
+                match route with
+                | PrRoute.GitHubAutoMerge -> Encode.object [ "kind", Encode.string "githubAutoMerge" ]
+                | PrRoute.GitHubMergeQueue (position, state) ->
+                    Encode.object
+                        [ "kind", Encode.string "githubMergeQueue"
+                          "position", Encode.int position
+                          "state", gitHubQueueState.Encode state ])
+          Decode =
+            Decode.field "kind" Decode.string
+            |> Decode.andThen (function
+                | "githubAutoMerge" -> Decode.succeed PrRoute.GitHubAutoMerge
+                | "githubMergeQueue" ->
+                    Decode.map2
+                        (fun position state -> PrRoute.GitHubMergeQueue (position, state))
+                        (Decode.field "position" Decode.int)
+                        (Decode.field "state" gitHubQueueState.Decode)
+                | other -> Decode.fail (sprintf "Unknown pull request route: %s" other)) }
+
     let private prSnapshot : Codec<PrSnapshot> =
         { Encode =
             fun (s: PrSnapshot) ->
@@ -1175,7 +1215,7 @@ module Codec =
                       "title", Encode.string s.Title
                       "headSha", Encode.string s.HeadSha
                       "checks", checksRollup.Encode s.Checks
-                      "queued", Encode.bool s.Queued
+                      "route", Encode.option prRoute.Encode s.Route
                       "mergeable", Encode.option Encode.bool s.Mergeable
                       "draft", Encode.bool s.Draft ]
           Decode =
@@ -1184,7 +1224,16 @@ module Codec =
                   PrSnapshot.Title = get.Required.Field "title" Decode.string
                   PrSnapshot.HeadSha = get.Required.Field "headSha" Decode.string
                   PrSnapshot.Checks = get.Required.Field "checks" checksRollup.Decode
-                  PrSnapshot.Queued = get.Required.Field "queued" Decode.bool
+                  // A snapshot recorded before routes were read carries `queued`, which was
+                  // GitHub's REST `auto_merge` and nothing else — so true is auto merge
+                  // armed, and a watch begun on a queued pull request then reads as armed
+                  // until its next look says which.
+                  PrSnapshot.Route =
+                      match get.Optional.Field "route" prRoute.Decode with
+                      | Some route -> Some route
+                      | None ->
+                          if get.Optional.Field "queued" Decode.bool = Some true then Some PrRoute.GitHubAutoMerge
+                          else None
                   PrSnapshot.Mergeable = get.Required.Field "mergeable" (Decode.option Decode.bool)
                   // Optional because a watch recorded before drafts were read has none: it
                   // reads as not a draft, so an undrafting it began over goes unannounced —
@@ -1200,7 +1249,8 @@ module Codec =
                 | PrTransition.Reopened -> Encode.string "reopened"
                 | PrTransition.ChecksPassed -> Encode.string "checksGreen"
                 | PrTransition.ChecksFailed -> Encode.string "checksRed"
-                | PrTransition.Queued -> Encode.string "queued"
+                | PrTransition.Armed -> Encode.string "armed"
+                | PrTransition.Enqueued -> Encode.string "enqueued"
                 | PrTransition.Stalled -> Encode.string "stalled"
                 | PrTransition.Conflicted -> Encode.string "conflicted"
                 | PrTransition.Resolved -> Encode.string "resolved"
@@ -1214,7 +1264,11 @@ module Codec =
                 | "reopened" -> Decode.succeed PrTransition.Reopened
                 | "checksGreen" -> Decode.succeed PrTransition.ChecksPassed
                 | "checksRed" -> Decode.succeed PrTransition.ChecksFailed
-                | "queued" -> Decode.succeed PrTransition.Queued
+                | "armed" -> Decode.succeed PrTransition.Armed
+                // What `armed` was written as before a merge queue was told apart from auto
+                // merge: it was only ever GitHub's REST `auto_merge` arriving.
+                | "queued" -> Decode.succeed PrTransition.Armed
+                | "enqueued" -> Decode.succeed PrTransition.Enqueued
                 | "stalled" -> Decode.succeed PrTransition.Stalled
                 | "conflicted" -> Decode.succeed PrTransition.Conflicted
                 | "resolved" -> Decode.succeed PrTransition.Resolved

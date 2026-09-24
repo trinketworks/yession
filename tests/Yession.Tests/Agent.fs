@@ -910,7 +910,7 @@ let private prSnapshot : PrSnapshot =
       Title = "Add feature"
       HeadSha = "abc"
       Checks = ChecksPending
-      Queued = false
+      Route = None
       Mergeable = None
       Draft = false }
 
