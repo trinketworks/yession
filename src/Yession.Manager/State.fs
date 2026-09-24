@@ -30,6 +30,17 @@ type SessionRecord =
       /// into it without a schema break.
       ArchivedAt : DateTimeOffset option }
 
+module SessionRecord =
+
+    /// Whether anybody has named this session yet. A session is created with no name — it
+    /// is named from inside itself (`ManagerState.setDisplayName`) — and until then its
+    /// `DisplayName` is its minted id, so an unnamed record carries one fact in two fields.
+    /// Asked HERE rather than by comparing the two at each surface, because spelling "no
+    /// name" as the id is this record's convention, and a reader that has to know it is a
+    /// reader that will one day spell it differently.
+    let isNamed (record: SessionRecord) : bool =
+        record.DisplayName <> SessionId.value record.SessionId
+
 type ManagerState =
     { /// Schema version — the migration hook for the eventual SQLite move.
       Version : int

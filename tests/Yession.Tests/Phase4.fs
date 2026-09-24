@@ -628,6 +628,27 @@ let private uiRenderTests =
             Expect.isTrue (crashed.Contains (Dom.attr Dom.Manager.status Dom.Manager.statusExited)) "a crash is visible"
             Expect.isTrue (crashed.Contains (sprintf "href=\"%s\"" openRoute)) "and a crashed session is relaunched by its name"
 
+        // A session is named from inside itself, so until it is, its name IS its id — and a
+        // row that printed the id again in the id column beside it said one thing twice. What
+        // is counted is the row's TEXT (every tag cut out), so the id in the row's hooks and
+        // the address it posts to, which nobody reads, do not count.
+        testCase "an unnamed session's row states its id once" <| fun () ->
+            let id = SessionId.value uiRecord.SessionId
+            let unnamed =
+                ManagerUi.sessionRow
+                    { Record = { uiRecord with DisplayName = id }; Status = ProcessManager.NotRunning; Summary = None }
+            let text = System.Text.RegularExpressions.Regex.Replace (unnamed, "<[^>]*>", " ")
+            let stated = System.Text.RegularExpressions.Regex.Matches (text, System.Text.RegularExpressions.Regex.Escape id)
+            Expect.equal stated.Count 1 "the id is on the row once, not once per column"
+
+        // The discriminating half: once the session has a name, the name and the id are two
+        // facts, and the row carries both — so the case above cannot pass by dropping the id.
+        testCase "a named session's row states its name and its id" <| fun () ->
+            let named = ManagerUi.sessionRow { Record = uiRecord; Status = ProcessManager.NotRunning; Summary = None }
+            let text = System.Text.RegularExpressions.Regex.Replace (named, "<[^>]*>", " ")
+            Expect.isTrue (text.Contains "UI &lt;Render&gt;") "the name"
+            Expect.isTrue (text.Contains (SessionId.value uiRecord.SessionId)) "and the id beside it"
+
         // The lifecycle rail carries the one verb a state admits, and Launch is not one of
         // them in any state: a control that duplicates the name link is a second way to do
         // the row's one act, and a stopped row that offered it had its way in split across
