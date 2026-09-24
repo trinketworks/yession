@@ -197,15 +197,22 @@ let private createdView (at: System.DateTimeOffset) : TemplateResult =
 /// the rail holds nothing taller than its 24px verbs. Rows that jump as processes start and
 /// stop make a list you cannot keep your place in, and put a control under a pointer that was
 /// aimed at its neighbour.
+///
+/// The id is stated ONCE. An unnamed session's name IS its id (`SessionRecord.isNamed`), so
+/// it is already on the row as the name cell's link, and the id cell beside it is left empty
+/// rather than repeating it verbatim — two columns carrying one value is a row that reads as
+/// two facts. A named session shows both, because then they are two. The cell stays, empty:
+/// the table is fixed-layout, and a row that dropped a cell would move every one after it.
 let private rowTemplate (view: ProcessManager.SessionView) : TemplateResult =
     let id = SessionId.value view.Record.SessionId
+    let idCell = if SessionRecord.isNamed view.Record then id else ""
     html $"""
         <tr class="border-b border-hair hover:bg-surface transition-colors" data-session="{id}">
           <td class="py-3 pr-4 align-middle" title="{view.Record.DisplayName}">
             <div class="truncate">{nameView view}</div>
             {stateLine view}
           </td>
-          <td class="py-3 pr-4 align-middle font-terminal text-code text-ink-faint truncate max-md:hidden">{id}</td>
+          <td class="py-3 pr-4 align-middle font-terminal text-code text-ink-faint truncate max-md:hidden">{idCell}</td>
           <td class="py-3 pr-4 align-middle font-terminal text-code text-ink-faint tabular-nums truncate max-md:hidden">{createdView view.Record.CreatedAt}</td>
           <td class="py-3 pl-4 align-middle">{actions view}</td>
         </tr>"""
