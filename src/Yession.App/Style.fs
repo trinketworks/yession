@@ -2073,6 +2073,21 @@ module Style =
     /// (`entityLink`) compose the same words, so a link is a link wherever it stands.
     let proseLink = "text-blue underline decoration-1 underline-offset-2 hover:text-blue-bright"
     let proseHr = "border-0 " + Stroke.dividerTop + " my-3"
+    /// A GFM table (`RichText`). The wrapper carries the horizontal scroll — WCAG 1.4.10's own
+    /// exemption from reflow is two-dimensional content such as a table, so a wide one scrolls
+    /// rather than shrinking its cells past reading — and the `[&:not(:first-child)]:mt-2`
+    /// rhythm lives here rather than on `proseTable`, since it is the wrapper that sits among
+    /// the other blocks.
+    let proseTableWrap = "overflow-x-auto [&:not(:first-child)]:mt-2"
+    let proseTable = "w-full border-collapse text-left align-top"
+    /// One border rule for header and body cells alike: `border-collapse` merges a header
+    /// cell's bottom edge with the hairline under the row below it, so the header never carries
+    /// a second, heavier rule of its own.
+    let proseTableCell = "px-2 py-1 border-b " + Stroke.hair
+    let proseTableHeaderCell = cls [ "font-semibold text-ink"; proseTableCell ]
+    let proseTableAlignLeft = "text-left"
+    let proseTableAlignCenter = "text-center"
+    let proseTableAlignRight = "text-right"
 
     // --- Interrupt: one verb, docked over the composer ---------------------------------------
     // The agent's activity strip used to live here: a 48px band carrying a pulse, the words

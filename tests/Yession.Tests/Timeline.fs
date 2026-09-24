@@ -2164,9 +2164,60 @@ let private contentChipTests =
             Expect.isTrue (rendered.Contains "target=\"_blank\"") "opened the way a link out of the session is"
     ]
 
+// --- A markdown table, rendered (RichText) -------------------------------------------------
+// Reuses `markerChip` from the content-chip tests above purely as a `chip` callback: none of
+// the markdown below names a `file:///` link, so it is never actually invoked.
+
+let private tableMarkdown =
+    "| Name | Qty | Price |\n\
+     | :--- | :---: | ---: |\n\
+     | Widget | 3 | $9.00 |"
+
+let private richTableTests =
+    testList "A markdown table, rendered" [
+
+        testCase "a GFM table renders as real table markup, not literal pipes" <| fun () ->
+            let rendered = Support.renderTemplate (RichText.render markerChip tableMarkdown)
+            Expect.isTrue (rendered.Contains "<table") "a table element"
+            Expect.isTrue (rendered.Contains ">Name<") "the header row's words read"
+            Expect.isTrue (rendered.Contains ">Widget<") "the body row's words read"
+            Expect.isFalse (rendered.Contains "| Name |") "the pipe syntax itself is transformed away"
+            Expect.isFalse (rendered.Contains ":---") "and so is the alignment row"
+
+        testCase "the header row carries column scope, the body row does not" <| fun () ->
+            let rendered = Support.renderTemplate (RichText.render markerChip tableMarkdown)
+            Expect.isTrue (rendered.Contains "<th scope=\"col\"") "a header cell names its column"
+            Expect.isFalse (rendered.Contains "<td scope") "a data cell claims no scope"
+
+        testCase "a column's alignment carries onto its cells, header and body alike" <| fun () ->
+            let rendered = Support.renderTemplate (RichText.render markerChip tableMarkdown)
+            let cellOf (needle: string) =
+                let at = rendered.IndexOf (">" + needle + "<")
+                let opens = (rendered.Substring (0, at)).LastIndexOf "<t"
+                rendered.Substring (opens, at - opens)
+            Expect.isTrue ((cellOf "Qty").Contains "text-center") "the centered column, header cell"
+            Expect.isTrue ((cellOf "3").Contains "text-center") "the centered column, body cell"
+            Expect.isTrue ((cellOf "Price").Contains "text-right") "the right-aligned column, header cell"
+            Expect.isTrue ((cellOf "$9.00").Contains "text-right") "the right-aligned column, body cell"
+            Expect.isFalse ((cellOf "Name").Contains "text-right") "the left column carries no alignment override"
+
+        testCase "a cell still formats the words inside it" <| fun () ->
+            let rendered =
+                Support.renderTemplate (RichText.render markerChip "| A |\n| --- |\n| **bold** and `code` |")
+            Expect.isTrue (rendered.Contains ">bold</strong>") "a mark inside a cell still renders"
+            Expect.isTrue (rendered.Contains ">code</code>") "so does inline code"
+
+        testCase "prose around a table is untouched" <| fun () ->
+            let rendered =
+                Support.renderTemplate (RichText.render markerChip ("before\n\n" + tableMarkdown + "\n\nafter"))
+            Expect.isTrue (rendered.Contains "before") "the paragraph before the table still reads"
+            Expect.isTrue (rendered.Contains "after") "and the one after it"
+    ]
+
 let tests =
     testList "Timeline and the pane (Plan 14)" [
         contentChipTests
+        richTableTests
         listTests
         sandboxTaskTests
         sandboxCauseTests

@@ -111,11 +111,13 @@ module ProseMirror =
     [<Emit("$0.marks")>]
     let nodeMarks (node: Node) : obj[] = jsNative
     /// The attributes the markdown schema puts on a node — a heading's `level`, an ordered
-    /// list's `order` — each an option because a node of another type carries neither.
+    /// list's `order`, a table cell's `align` — each an option because a node of another type
+    /// carries neither.
     [<AllowNullLiteral>]
     type NodeAttrs =
         abstract level : int option
         abstract order : int option
+        abstract align : string option
 
     /// A mark's attributes: a link's `href`, and nothing on any other mark.
     [<AllowNullLiteral>]
@@ -157,11 +159,105 @@ module ProseMirror =
 
         let heading (level: int) : NodeAttrs = unbox (createObj [ "level" ==> level ])
         let orderedList (order: int) : NodeAttrs = unbox (createObj [ "order" ==> order ])
+        let tableCell (align: string option) : NodeAttrs =
+            unbox (createObj [ "align" ==> (align |> Option.map box |> Option.defaultValue null) ])
 
     [<Emit("$0.type.name")>]
     let markTypeName (mark: obj) : string = jsNative
     /// A link mark's target, and nothing for a mark that is not a link.
     let markHref (mark: obj) : string option = (markAttrs mark).href
+
+    // --- GFM tables (read-only): the timeline's OWN schema + parser, never the editor's -----
+    // `mdParser`/`schema` above are what the composer edits with, and their commonmark
+    // tokenizer excludes GFM's `table` rule on purpose: editing a table needs
+    // `prosemirror-tables`' cell-selection machinery, which nothing here has. The timeline only
+    // READS Markdown (`RichText.render`), so it gets its own schema — the same nodes/marks,
+    // with `table`/`table_row`/`table_header`/`table_cell` appended — and its own tokenizer
+    // (commonmark plus `table` re-enabled), never sharing either with the composer: a body
+    // pasted or typed there still cannot hold a table, because nothing there knows how to edit
+    // one, while a table an agent writes still renders in the timeline that only reads it.
+
+    [<Import("Schema", "prosemirror-model")>]
+    let private schemaClass : obj = jsNative
+
+    /// `base.spec.nodes.append({...})`: prosemirror-model's own way to extend a schema's node
+    /// set without re-declaring the nodes it already has.
+    [<Emit("(function (Cls, b) { return new Cls({ nodes: b.spec.nodes.append({ \
+        table: { content: 'table_row+', group: 'block', isolating: true }, \
+        table_row: { content: '(table_header | table_cell)+' }, \
+        table_header: { content: 'inline*', attrs: { align: { default: null } } }, \
+        table_cell: { content: 'inline*', attrs: { align: { default: null } } } \
+    }), marks: b.spec.marks }) })($0, $1)")>]
+    let private appendTableNodes (cls: obj) (baseSchema: Schema) : Schema = jsNative
+
+    let private tableSchema : Schema = appendTableNodes schemaClass schema
+
+    /// `markdown-it`'s `exports` map points both Node and esbuild at the same `index.mjs`,
+    /// which has a real `export default` — unlike `@xterm/headless` (`Fable.Xterm`), where the
+    /// two platforms resolve different files and `ImportDefault` only works because one of them
+    /// is a CJS interop default. No such caveat here.
+    [<ImportDefault("markdown-it")>]
+    let private markdownItClass : obj = jsNative
+
+    /// The same `file:///` admission `admittingContentLinks` patches onto `mdParser`'s
+    /// tokenizer above, applied here to a tokenizer directly — a fresh instance has none of it,
+    /// and without it a `file:///artifacts/…` reference inside a table cell would fail
+    /// validation and read as plain text instead of the chip `RichText` draws it as elsewhere.
+    [<Emit("(function (t) { const inner = t.validateLink.bind(t); t.validateLink = url => inner(url) || /^file:\\/\\/\\//i.test(url.trim()); return t })($0)")>]
+    let private admittingContentLinksOnTokenizer (tokenizer: obj) : obj = jsNative
+
+    /// A FRESH tokenizer, never `mdParser`'s own: enabling `table` on the shared one would
+    /// hand the composer's paste path a `table_open` token its schema has no node for.
+    [<Emit("new $0('commonmark', { html: false }).enable('table')")>]
+    let private newTableTokenizerRaw (cls: obj) : obj = jsNative
+
+    let private newTableTokenizer (cls: obj) : obj = admittingContentLinksOnTokenizer (newTableTokenizerRaw cls)
+
+    [<Emit("$0.tokens")>]
+    let private parserTokens (p: MarkdownParser) : obj = jsNative
+
+    [<Emit("Object.assign({}, $0, $1)")>]
+    let private mergedTokens (baseTokens: obj) (extra: obj) : obj = jsNative
+
+    /// The raw `style` markdown-it's table rule puts on an aligned column's `th`/`td` tokens
+    /// (`text-align:left|center|right`), or `""` for a plain `---` column.
+    [<Emit("$0.attrGet('style') || ''")>]
+    let private cellStyleAttr (tok: obj) : string = jsNative
+
+    /// A cell's alignment, read off that style — decided here in F# rather than in the token
+    /// config below, which stays wiring: assembling somebody else's library, not reading one.
+    let private cellAlign (tok: obj) : string option =
+        let style = cellStyleAttr tok
+        if style.Contains "right" then Some "right"
+        elif style.Contains "center" then Some "center"
+        elif style.Contains "left" then Some "left"
+        else None
+
+    let private cellAttrs : System.Func<obj, obj[], int, NodeAttrs> =
+        System.Func<obj, obj[], int, NodeAttrs>(fun tok _ _ -> NodeAttrs.tableCell (cellAlign tok))
+
+    [<Import("MarkdownParser", "prosemirror-markdown")>]
+    let private markdownParserClass : obj = jsNative
+
+    [<Emit("new $0($1, $2, $3)")>]
+    let private newMarkdownParser (cls: obj) (schema: Schema) (tokenizer: obj) (tokens: obj) : MarkdownParser = jsNative
+
+    /// `thead`/`tbody` are pure grouping GFM adds around the header/body rows — the schema
+    /// above has no node for either, so both tokens are ignored and their rows land straight
+    /// in the table's own content, matching `table: "table_row+"`.
+    let private tableTokens : obj =
+        mergedTokens (parserTokens mdParser) (createObj [
+            "table" ==> createObj [ "block" ==> "table" ]
+            "thead" ==> createObj [ "ignore" ==> true ]
+            "tbody" ==> createObj [ "ignore" ==> true ]
+            "tr" ==> createObj [ "block" ==> "table_row" ]
+            "th" ==> createObj [ "block" ==> "table_header"; "getAttrs" ==> cellAttrs ]
+            "td" ==> createObj [ "block" ==> "table_cell"; "getAttrs" ==> cellAttrs ]
+        ])
+
+    /// The timeline's parser: the same Markdown dialect `mdParser` reads, extended with GFM
+    /// tables.
+    let tableMdParser : MarkdownParser = newMarkdownParser markdownParserClass tableSchema (newTableTokenizer markdownItClass) tableTokens
 
     // --- prosemirror-state / -view ---------------------------------------------------------
 
