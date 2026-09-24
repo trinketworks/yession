@@ -397,6 +397,9 @@ lint                         # actionlint over .github/workflows, then the F# an
 check --only "<text>"        # narrow BOTH runtimes to cases whose full name contains <text>.
                              #   Buys back the RUNNING, not the compiling: 66s -> 44s on the
                              #   cheap tier, and far more on a tier that spawns browsers.
+check Browser --runtime clr  # run ONE of the two runtimes (node | clr), and compile only what it
+                             #   needs. What the gate's `browser` tier runs: its Node suites are
+                             #   all the `node` tier's too (`VerifyTiers` holds it to that).
 ```
 
 `lint` is separate from `check` because it guards a different thing: source judged without

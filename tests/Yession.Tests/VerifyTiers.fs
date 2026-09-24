@@ -45,11 +45,29 @@ let private repoRoot () : string option =
         | root -> Some root
     with _ -> None
 
-/// One tier: what the job is called, and the capabilities it hands `check`.
+/// Which of the suite's two runtimes a tier runs (`check --runtime`). A tier that names none runs
+/// both.
+[<RequireQualifiedAccess>]
+type private Runtime =
+    | Node
+    | Clr
+
+/// One tier: what the job is called, the capabilities it hands `check`, and the runtime it
+/// confines itself to, if any.
 [<RequireQualifiedAccess>]
 type private Tier =
     { Name : string
-      Capabilities : string list }
+      Capabilities : string list
+      Runtime : Runtime option }
+
+/// A runtime this cannot name is a document this cannot read, not a tier that runs both: the
+/// second reading would count every suite as covered by a tier that `check` then refuses to start.
+let private runtime : Decoder<Runtime> =
+    Decode.string
+    |> Decode.andThen (function
+        | "node" -> Decode.succeed Runtime.Node
+        | "clr" -> Decode.succeed Runtime.Clr
+        | other -> Decode.fail (sprintf "`%s` is not a runtime `check` knows (node, clr)" other))
 
 let private tier : Decoder<Tier> =
     Decode.object (fun get ->
@@ -57,7 +75,8 @@ let private tier : Decoder<Tier> =
           Capabilities =
             (get.Required.Field "capabilities" Decode.string)
                 .Split ([| ' ' |], System.StringSplitOptions.RemoveEmptyEntries)
-            |> List.ofArray })
+            |> List.ofArray
+          Runtime = get.Optional.Field "runtime" runtime })
 
 /// A file this cannot read is a failure carrying the reason, never an empty list: an empty list is
 /// what a gate with no tiers looks like, and the two must not read the same.
@@ -79,14 +98,26 @@ let private gated (declarations: (string * Tag.Need list) list) =
     declarations
     |> List.filter (fun (_, need) -> need |> List.forall (fun n -> List.contains n Tag.allNeeds))
 
-/// Which tier runs this suite: one whose capabilities include every need it has. That is exactly
-/// `Tag.canRun` minus the runtime half, and the runtime half needs no checking — `Browser` is what
-/// pins a suite to the .NET CLR and is itself a capability, so a tier naming it runs that runtime
-/// and a tier that does not, does not.
+/// Which tier runs this suite: one whose capabilities include every need it has, AND that runs
+/// the runtime the suite lives on. That is `Tag.canRun` read against a tier instead of a process.
+///
+/// The runtime half used to need no checking, because `Browser` pins a suite to the .NET CLR and
+/// is itself a capability — a tier naming it ran that runtime, and every tier ran Node. Since a
+/// tier can confine itself to one (`check --runtime`), a Node suite admitted by the `browser`
+/// tier's capabilities is no longer run there, and counting it would be exactly the hole this
+/// file exists to refuse: a Node suite needing `Caddy` alone would read as covered and run
+/// nowhere.
 let private covers (tier: Tier) (need: Tag.Need list) =
-    need
-    |> List.forall (fun n ->
-        tier.Capabilities |> List.exists (fun name -> Tag.parseNeed name = Some n))
+    let onClr = List.contains Tag.Browser need
+    let runsIt =
+        match tier.Runtime with
+        | None -> true
+        | Some Runtime.Clr -> onClr
+        | Some Runtime.Node -> not onClr
+    runsIt
+    && need
+       |> List.forall (fun n ->
+           tier.Capabilities |> List.exists (fun name -> Tag.parseNeed name = Some n))
 
 let tests =
     testList "Verify tiers" [
@@ -153,8 +184,8 @@ let tests =
                              |> List.map (fun t -> sprintf "%s = %s" t.Name (String.concat " " t.Capabilities))
                              |> String.concat "; "))
 
-        // What `tasks.fsx` relies on to skip the Node runtime entirely for a measuring run: there
-        // is nothing to measure there, because measuring a render needs a real browser. That is a
+        // What `tasks.fsx bench` relies on to run the .NET CLR alone (`--runtime clr`): there is
+        // nothing to measure on Node, because measuring a render needs a real browser. That is a
         // fact about how the timing suites are declared, so it is pinned where they are declared
         // rather than assumed where the saving is taken.
         testCase "a measuring suite needs a browser to measure in" <| fun () ->
@@ -163,6 +194,6 @@ let tests =
                     Expect.isTrue
                         (List.contains Tag.Browser need)
                         (sprintf
-                            "`%s` needs Bench without Browser, so it would run on Node — where `check` no longer compiles the suite for a measuring run, because every Bench suite until now needed a browser"
+                            "`%s` needs Bench without Browser, so it would run on Node — which `bench` does not run at all (`--runtime clr`), because every Bench suite until now needed a browser"
                             label)
     ]

@@ -1097,10 +1097,34 @@ let private buildNodeSuite (capSet: Set<string>) : string =
     fable false "tests/Yession.Tests/Yession.Tests.fsproj" "tests/Yession.Tests/out"
     "tests/Yession.Tests/out/Main.js"
 
-let private runCheckOnce (requested: string list) =
+/// Which of the suite's two runtimes a run executes. Every suite runs on exactly one (`Tag`:
+/// `Browser` pins the .NET CLR, everything else is Node), so a run that names one executes only
+/// the suites that live there — and compiles only what they need.
+///
+/// This exists for the release gate, which is spread over several runners (`verify-tiers.json`).
+/// The `browser` tier asks for `Browser Native Srt Caddy`, and every Node suite those also admit is
+/// one the `node` tier runs anyway, under a superset of them; running them again cost that tier a
+/// Fable compile of the suite and a Node run whose every verdict was a duplicate. A capability
+/// could not say this, because a capability is what a BOX can host and this is which half of the
+/// work a run is for. `VerifyTiers` is what keeps the tiers honest about it.
+[<RequireQualifiedAccess>]
+type private Runtime =
+    | Node
+    | Clr
+
+let private runCheckOnce (requested: string list) (runtime: Runtime option) =
     let caps = requested
     requireCapabilities caps
     let capSet = Set.ofList caps
+    // Naming a runtime that the capabilities give nothing to do is a run that would print green
+    // having executed nothing, which is the shape of silence `requireCapabilities` refuses for a
+    // box; this refuses it for a request.
+    match runtime with
+    | Some Runtime.Clr when not (capSet.Contains "Browser") ->
+        failwith "check --runtime clr: the .NET CLR runs only the browser suites, and this run does not ask for Browser"
+    | Some Runtime.Node when capSet.Contains "Browser" ->
+        failwith "check --runtime node: this run asks for Browser, whose suites all run on the .NET CLR"
+    | _ -> ()
     let budgetMs = nodeBudgetMs capSet
     Environment.SetEnvironmentVariable ("YESSION_TEST_CAPS", String.concat " " caps)
     // The suite is told its own budget, because a case's deadline is spent out of it: a wait
@@ -1108,14 +1132,10 @@ let private runCheckOnce (requested: string list) =
     // runner down later (`Support.settledWithin`).
     Environment.SetEnvironmentVariable ("YESSION_TEST_BUDGET_MS", string budgetMs)
     progress (sprintf "capabilities: %s" (if List.isEmpty caps then "none (cheap tier)" else String.concat " " caps))
+    runtime |> Option.iter (fun r -> progress (sprintf "runtime: %A only" r))
 
-    // A MEASURING run (`Bench`) exercises the browser runtime alone. Every timing suite needs a
-    // real browser to time a render, so `Bench` is always declared beside `Browser` — which
-    // `Tag`'s own suite refuses to let drift, so this is a fact about the suite rather than a
-    // hope about it. Compiling the Node suite for it cost 84 seconds of Fable and bought a Node
-    // process with nothing in it to execute: the cheap-tier suites the run does not want (it is
-    // narrowed to one browser suite) and not one case that measures anything.
-    if capSet.Contains "Bench" then
+    if runtime = Some Runtime.Clr then
+        // The browser suites drive the product, not the suite's JS: build that alone.
         buildProduct capSet
     else
         let mainJs = buildNodeSuite capSet
@@ -1123,7 +1143,7 @@ let private runCheckOnce (requested: string list) =
         runNodeSuite mainJs caps budgetMs
 
     // The .NET CLR (Playwright) path — only when a Browser-tagged suite is enabled.
-    if capSet.Contains "Browser" then
+    if capSet.Contains "Browser" && runtime <> Some Runtime.Node then
         // No browser install step: Chromium comes from the environment
         // (PLAYWRIGHT_BROWSERS_PATH, set by devenv.nix from nixpkgs' playwright-driver), like
         // every other tool the suite needs. `check` used to shell out to `npx playwright
@@ -1215,7 +1235,10 @@ let private needsKeyringWrap (caps: string list) =
     && String.IsNullOrEmpty (Environment.GetEnvironmentVariable "DBUS_SESSION_BUS_ADDRESS")
     && Environment.GetEnvironmentVariable "YESSION_KEYRING_WRAPPED" <> "1"
 
-let private rerunUnderKeyring (caps: string list) : int =
+/// Re-run `check` inside the wrapper with the arguments it was given — ALL of them, because the
+/// re-exec is a fresh process and anything it is not told (a runtime, a narrowing) it does not
+/// know.
+let private rerunUnderKeyring (args: string list) : int =
     for tool in [ "dbus-run-session"; "gnome-keyring-daemon" ] do
         if runInherit repoRoot "bash" [ "-c"; sprintf "command -v %s >/dev/null" tool ] <> 0 then
             failwithf "check Keyring: %s not found — it backs the headless Secret Service (devenv provides it; see devenv.nix packages)" tool
@@ -1223,7 +1246,7 @@ let private rerunUnderKeyring (caps: string list) : int =
     File.WriteAllText (script, keyringWrapper)
     try
         Environment.SetEnvironmentVariable ("YESSION_KEYRING_WRAPPED", "1")
-        runInherit repoRoot "bash" ([ script; "dotnet"; "fsi"; "tasks.fsx"; "check" ] @ caps)
+        runInherit repoRoot "bash" ([ script; "dotnet"; "fsi"; "tasks.fsx"; "check" ] @ args)
     finally
         File.Delete script
 
@@ -1240,18 +1263,32 @@ let private takeOnly (args: string list) : string list * string option =
         | [] -> List.rev acc, only
     go [] None args
 
-// check [caps…] [--only <text>]. Default = cheap tier; each cap adds its suites (Browser,
-// Ports, Native, …). `--only` narrows BOTH runtimes to the cases whose full name contains the
-// text — the build is unchanged, so this buys back the running, not the compiling.
+/// Split `--runtime node|clr` out of the arguments, the same way `--only` is.
+let private takeRuntime (args: string list) : string list * Runtime option =
+    let rec go acc runtime remaining =
+        match remaining with
+        | "--runtime" :: "node" :: rest -> go acc (Some Runtime.Node) rest
+        | "--runtime" :: "clr" :: rest -> go acc (Some Runtime.Clr) rest
+        | "--runtime" :: other :: _ -> failwithf "check --runtime: `%s` is not a runtime (node, clr)" other
+        | [ "--runtime" ] -> failwith "check --runtime: name one (node, clr)"
+        | arg :: rest -> go (arg :: acc) runtime rest
+        | [] -> List.rev acc, runtime
+    go [] None args
+
+// check [caps…] [--only <text>] [--runtime node|clr]. Default = cheap tier; each cap adds its
+// suites (Browser, Ports, Native, …). `--only` narrows BOTH runtimes to the cases whose full name
+// contains the text — the build is unchanged, so this buys back the running, not the compiling.
+// `--runtime` runs one of them, and does buy back the compiling: see `Runtime`.
 // The gate runs once and is deterministic — the native WebRTC suites used to abort intermittently,
 // but that was a real defect (the addon carried its own C++ runtime; see nix/node-datachannel.nix),
 // now fixed, not inherent flakiness. A failure here is a genuine break, so don't paper it over.
 let check (args: string list) =
-    let caps, only = takeOnly args
+    let rest, only = takeOnly args
+    let caps, runtime = takeRuntime rest
     only |> Option.iter (fun text -> Environment.SetEnvironmentVariable ("YESSION_TEST_ONLY", text))
-    if needsKeyringWrap caps then exit (rerunUnderKeyring caps)
+    if needsKeyringWrap caps then exit (rerunUnderKeyring args)
     restore ()
-    runCheckOnce caps
+    runCheckOnce caps runtime
 
 /// The release gate: every capability, no exceptions. Takes the same trailing arguments `check`
 /// does — which in practice means `--only`, so a gate run by hand can be narrowed to the case
@@ -1562,8 +1599,12 @@ let private benchBaselines () : Map<string, float> =
 
 /// Run the measurement. Never judges: `bench-guard` does that, and the release deliberately
 /// wants the first without the second.
+///
+/// On the .NET CLR alone: every timing suite needs a real browser to time a render (`Verify
+/// tiers` refuses one that does not), so compiling the Node suite for a measuring run cost 84
+/// seconds of Fable and bought a Node process with not one case in it that measures anything.
 let bench (args: string list) =
-    check ([ "Browser"; "Bench"; "--only"; "Client performance" ] @ args)
+    check ([ "Browser"; "Bench"; "--runtime"; "clr"; "--only"; "Client performance" ] @ args)
     let now = measured ()
     match benchBaselines () with
     | b when Map.isEmpty b ->
