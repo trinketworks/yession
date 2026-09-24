@@ -691,6 +691,9 @@ let startFull
                     Read = files.Read
                     Search = files.Search
                     Find = files.Find }
+              // A denial here and a gated call once `bindFor` knows whose turn it is, like the
+              // file changes: sharing puts bytes everyone can see, so it passes the gate.
+              Artifacts = AgentCapabilities.none.Artifacts
               Tools =
                 { Record = toolUseLogFor turnId
                   // Snapshotted HERE, which is what makes a turn's tool list stable: a set

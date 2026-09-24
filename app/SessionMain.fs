@@ -200,6 +200,12 @@ let private secretsCapabilitiesFor (sessionId: SessionId) =
 // workspace a terminal opens in and not something this file can decide alone.
 let private reposDir = Sandboxes.SessionLayout.prepareReposDir dataDir
 
+// The session's artifacts directory, prepared at boot for the same reason and in the same
+// place: it is the other half of what every sandbox sees of this session's content root,
+// and a drop box that appeared only when something was first shared would be one the
+// sandboxes running by then could not see.
+let private artifactsDir = Sandboxes.SessionLayout.prepareArtifactsDir dataDir
+
 // Prepared HERE, at module scope beside the repos directory, because srt reads
 // `CLAUDE_CODE_TMPDIR` off this process at every wrap: it has to be settled before the
 // first sandbox is built, and every route to one goes through this file. Bound rather than
@@ -245,7 +251,7 @@ let private makeSandboxes
             | Error e -> Error e
             | Ok backend ->
 
-            let workSpec = Sandboxes.withSessionRepos reposDir backend requested
+            let workSpec = Sandboxes.withSessionShares reposDir artifactsDir backend requested
             // The backend's own container/volume namespace has to differ per sandbox, or two
             // of them under docker would fight over one container name — and now that a repo
             // can declare its own, two REPOS' same-named sandboxes would too. The rule lives
@@ -540,6 +546,11 @@ let mutable private terminals : SessionTerminals.SessionTerminals = SessionTermi
 /// that change one run through the gate, whose table is built here.
 let mutable private files : SessionFiles.SessionFiles = SessionFiles.unavailable
 
+/// The session's artifacts, composed below once the Host has opened the log they are recorded
+/// on. Unavailable until then, which is the honest answer for a session that cannot yet keep
+/// one — the same posture every cell here takes.
+let mutable private artifacts : Artifacts.SessionArtifacts = Artifacts.unavailable
+
 /// The block-queueing door, filled from the Host beside `terminals` for the same reason: a
 /// declared `setup:` becomes a command on the record, and the thing that puts one there is
 /// built by the Host, which owns the doc every queue entry is written into.
@@ -649,6 +660,7 @@ let private commandServices : Commands.CommandServices =
       WorkCheckout = fun repo declared -> Sandboxes.checkoutViewsAt declared reposDir repo
       Terminals = fun () -> terminals
       Files = fun () -> files
+      Artifacts = fun () -> artifacts
       RunCommand = fun () -> terminalCommands
       Prs = fun () -> prService
       Invalidate = fun name -> queryRegistry.Invalidate name
@@ -1013,7 +1025,11 @@ Async.StartImmediate (
                   ShellProfile.query (fun () -> terminals)
                   RepoSandboxes.query (fun () -> repoSandboxes)
                   McpClient.query (fun () -> mcpServers)
-                  PrWatches.query (fun () -> prWatchers) ]
+                  PrWatches.query (fun () -> prWatchers)
+                  // A directory read each time it is asked, so this one takes a path rather
+                  // than a cell: what has been shared is on the filesystem, and there is no
+                  // service in between that could answer differently.
+                  Artifacts.query artifactsDir ]
             match Queries.create registrations with
             | Ok registry -> queryRegistry <- registry
             | Error e -> failwithf "queries: %s" e
@@ -1243,6 +1259,21 @@ Async.StartImmediate (
         workSandboxes <- host.Sandboxes
         terminals <- host.Terminals
         files <- host.Files
+        // Composed here rather than in the Host, because the artifacts directory is this
+        // module's fact (`artifactsDir`, beside `reposDir`) and the Host is given a sandbox
+        // registry rather than the layout under it. Everything else it needs is the Host's,
+        // read from what it just handed back.
+        artifacts <-
+            Artifacts.create
+                log
+                artifactsDir
+                host.Sandboxes.EnvironmentFor
+                // The store as each sandbox sees it: the bind mount's target under docker, the
+                // directory itself otherwise — the same answer `withSessionShares` mounts by,
+                // so what the copy writes to is where this side then looks.
+                (fun _ -> Sandboxes.artifactsVisibleAt workBackend artifactsDir)
+                (fun sandbox -> ShellProfileProjection.workingDirectory sandbox (terminals.Profiles ()))
+                TerminalShell.posix
         terminalCommands <- host.TerminalCommands
         repoSandboxes <-
             RepoSandboxes.create

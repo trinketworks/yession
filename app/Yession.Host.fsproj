@@ -36,6 +36,11 @@
     <!-- The query registry (Plan 15). Before every capability that declares a query, and
          after Sse/SessionAuth, which are the only things its route needs. -->
     <Compile Include="Queries.fs" />
+    <!-- The artifacts an agent shares (the content pane). After Sandboxes.fs, whose layout
+         says where they are kept and how a sandbox reaches the directory, after Fs.fs, whose
+         rename is what publishes a version whole, and after Queries.fs, because what has been
+         shared is a query rather than a tool of its own. -->
+    <Compile Include="Artifacts.fs" />
     <Compile Include="Repos.fs" />
     <Compile Include="GitGateway.fs" />
     <!-- Reading `yession.yaml` off a checkout (Plan 27). After Repos.fs, which owns where a
