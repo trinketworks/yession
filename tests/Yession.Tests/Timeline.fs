@@ -429,8 +429,10 @@ let private paneTests =
                 (PaneTab.key (BlockTab (sameName, asBlock)))
                 "one name, two tabs"
 
-        testCase "every tab is about a terminal, whichever kind it is" <| fun () ->
-            // What the composer, the presence marks and the transcript reads are keyed by.
+        testCase "a tab is about a terminal only when it is a terminal's" <| fun () ->
+            // What the composer, the presence marks and the transcript reads are keyed by —
+            // and content has none, so the answer is an option rather than a terminal nobody
+            // selected.
             let stretch =
                 { Offset = EventOffset.create 9L |> expect
                   TerminalId = terminalB
@@ -440,9 +442,11 @@ let private paneTests =
                   Range = Some (1, 9)
                   StartedAt = epoch
                   EndedAt = epoch.AddMinutes 1.0 }
-            Expect.equal (PaneTab.terminal (TerminalTab terminalA)) terminalA "a terminal's own"
-            Expect.equal (PaneTab.terminal (BlockTab (terminalA, block "1"))) terminalA "a block's"
-            Expect.equal (PaneTab.terminal (StretchTab stretch)) terminalB "a stretch's"
+            let picture = Content.ContentRef.create "artifacts/chart.png/0000-ab12cd" |> expect
+            Expect.equal (PaneTab.terminal (TerminalTab terminalA)) (Some terminalA) "a terminal's own"
+            Expect.equal (PaneTab.terminal (BlockTab (terminalA, block "1"))) (Some terminalA) "a block's"
+            Expect.equal (PaneTab.terminal (StretchTab stretch)) (Some terminalB) "a stretch's"
+            Expect.equal (PaneTab.terminal (ContentTab picture)) None "a file's — there is none"
 
         testCase "a block tab renders the command and its output, read-only" <| fun () ->
             // Stage 2's deliverable: from the chunks the client already has, through the very

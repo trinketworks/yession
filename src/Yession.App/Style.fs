@@ -2480,6 +2480,20 @@ module Style =
     /// rather than a list of facts.
     let paneActions = "shrink-0 flex items-center gap-2 px-3 py-3 " + Stroke.dividerTop
 
+    // --- Content: a file the pane shows rather than a terminal ---------------------------
+
+    /// The box a picture sits in. Centred and scrollable, on the surface's own dim rather than
+    /// on white: an image with transparency or a pale edge needs a backdrop that says where the
+    /// picture stops, and a checkerboard would be a second thing to look at.
+    let contentImageBox =
+        "flex-1 min-h-0 overflow-auto flex items-center justify-center p-3 bg-surface-2"
+    /// The picture itself: fitted to the box, never upscaled past its own pixels — a 16px icon
+    /// stretched across a desktop pane is a blur presented as a fact.
+    let contentImage = "max-w-full max-h-full object-contain"
+    /// What a file the pane cannot draw gets instead: its name, its size, and the way to have
+    /// it. Centred like the empty pane, because it IS an empty pane — of this kind.
+    let contentDownload = "flex-1 flex flex-col items-center justify-center gap-3 px-6 text-center"
+
     // --- The terminal list (Plan 20, stage 0) --------------------------------------------
 
     /// The list's scroll box. It takes the pane's whole body, because the list IS the body

@@ -609,6 +609,9 @@ module Dom =
         let stretchIdle = "idle"
         /// What the pin mark is called, for anything that cannot see a blue glyph.
         let pinned = "pinned"
+        /// The way to HAVE a file the pane is showing — beside a picture, and instead of one
+        /// for a kind this build cannot draw.
+        let download = "Download"
         /// What a second activation of the tab you are on will do. A gesture has no control
         /// of its own to be labelled, so it says so from the tab it acts on.
         let pinHint = "Select again to pin this tab"
