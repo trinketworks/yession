@@ -6,8 +6,9 @@ module Yession.Host.GitHubPrs
 // this file. What is left here is the endpoints and their JSON — the two a look reads
 // (`fetchOver`, the whole of the `FetchPr` seam this side owns), the two that open one
 // (`openOver`: the list that keeps a repeated ask a question, then the create), the query
-// and three mutations that merge one (`mergeOver`) and the two that take it back
-// (`unmergeOver`) — and the one field path a delivery names its repo at. The cadence, the ETag bookkeeping, the verbs and
+// and three mutations that merge one (`mergeOver`), the two that take it back
+// (`unmergeOver`) and the one that undrafts it (`readyOver`) — and the one field path a
+// delivery names its repo at. The cadence, the ETag bookkeeping, the verbs and
 // the query are provider-neutral and live in `PrWatches.fs`; a second forge is a second copy
 // of this file, not a second poller.
 
@@ -540,6 +541,7 @@ type private MergeStanding =
       Id : string
       Merged : bool
       Closed : bool
+      IsDraft : bool
       /// `mergeStateStatus`: `CLEAN`, `BLOCKED`, `UNSTABLE`, … — whether it could go in now.
       MergeState : string
       /// The base branch has a merge queue, so "now" means "into the queue".
@@ -548,7 +550,7 @@ type private MergeStanding =
       InQueue : bool }
 
 let private standingQuery =
-    "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){id state merged mergeStateStatus isMergeQueueEnabled autoMergeRequest{mergeMethod} mergeQueueEntry{id}}}}"
+    "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){id state merged isDraft mergeStateStatus isMergeQueueEnabled autoMergeRequest{mergeMethod} mergeQueueEntry{id}}}}"
 
 /// `data.repository.pullRequest`, null when the number names nothing this credential can see —
 /// which GitHub also reports as a `NOT_FOUND` error, read first by `askGraphql`.
@@ -560,6 +562,7 @@ let private standingDecoder : Decoder<MergeStanding option> =
                 { Id = get.Required.Field "id" Decode.string
                   Merged = get.Required.Field "merged" Decode.bool
                   Closed = get.Required.Field "state" Decode.string = "CLOSED"
+                  IsDraft = get.Required.Field "isDraft" Decode.bool
                   MergeState = get.Required.Field "mergeStateStatus" Decode.string
                   QueueEnabled = get.Required.Field "isMergeQueueEnabled" Decode.bool
                   AutoMergeArmed = get.Optional.Field "autoMergeRequest" Decode.value |> Option.exists (fun v -> not (Decode.Helpers.isNullValue v))
@@ -645,6 +648,9 @@ let mergeOver (apiBase: string) (spending: Spending) : MergePr =
                     // Closed is GitHub's own state, read a moment ago; asking it to merge one
                     // would cost a request to be told the same thing in its words.
                     elif standing.Closed then return PrMergeRefused "it is closed — reopen it first"
+                    // Asked before any mutation, like closed: every route below refuses a
+                    // draft, and GitHub's sentence for it names the state, not the way out.
+                    elif standing.IsDraft then return PrMergeIsDraft pr
                     elif standing.InQueue then return PrMergeUnneeded (pr, "in the merge queue")
                     elif standing.AutoMergeArmed then return PrMergeUnneeded (pr, "armed to merge when its checks pass")
                     elif mergeableNow standing.MergeState && standing.QueueEnabled then
@@ -699,6 +705,37 @@ let unmergeOver (apiBase: string) (spending: Spending) : UnmergePr =
                         let! mutated = ask disableAutoMerge withId done'
                         return after (PrMergeDisarmed pr) mutated
                     else return PrUnmergeUnneeded (pr, "not on its way in")
+        }
+
+let private markReady =
+    "mutation($id:ID!){markPullRequestReadyForReview(input:{pullRequestId:$id}){clientMutationId}}"
+
+/// Undrafting one — `openOver`'s draft flag undone, and it asks first for `mergeOver`'s
+/// reason: the standing says whether there is a draft to undraft at all.
+let readyOver (apiBase: string) (spending: Spending) : ReadyPr =
+    fun token pr ->
+        async {
+            match spending.Permit () with
+            | Resilience.Hold until -> return PrReadyFailed (PrRateLimited (Some (until.ToUnixTimeSeconds ())))
+            | Resilience.Go ->
+                let bearer = Option.toObj token
+                let root = apiBase.TrimEnd '/'
+                let ask (document: string) (variables: (string * JsonValue) list) (decoder: Decoder<'a>) =
+                    askGraphql root spending bearer document variables decoder
+                let refused (refusal: GraphqlRefusal) =
+                    match refusal with
+                    | Declined said -> PrReadyRefused said
+                    | Failed failure -> PrReadyFailed failure
+                match! standingOf ask pr with
+                | Error refusal -> return refused refusal
+                | Ok standing ->
+                    if standing.Merged then return PrReadyUnneeded (pr, "merged")
+                    elif standing.Closed then return PrReadyRefused "it is closed — reopen it first"
+                    elif not standing.IsDraft then return PrReadyUnneeded (pr, "ready for review")
+                    else
+                        match! ask markReady [ "id", Encode.string standing.Id ] done' with
+                        | Ok () -> return PrMarkedReady pr
+                        | Error refusal -> return refused refusal
         }
 
 // --- the hook subscription -------------------------------------------------------------------
@@ -791,7 +828,7 @@ let hooks
             held
             |> List.tryPick (fun (repo, current) -> if current = Some id then Some repo else None) }
 
-// --- the agent tools: create_pr, merge_pr, unmerge_pr, watch_pr, unwatch_pr --------------
+// --- the agent tools: create_pr, ready_pr, merge_pr, unmerge_pr, watch_pr, unwatch_pr ----
 //
 // The GitHub-flavoured entries `AgentTools.fs`'s registry used to declare directly,
 // moved here for the reason this file's own header states: everything GitHub-specific
@@ -874,6 +911,14 @@ let private mergePr (capabilities: AgentCapabilities) (raw: string) (number: int
                 | Error e -> return sprintf "could not merge the pull request: %s" e
         })
 
+let private readyPr (capabilities: AgentCapabilities) (raw: string) (number: int) : Async<string> =
+    withRepo raw (fun repo ->
+        async {
+            match! capabilities.Repos.ReadyPr repo number with
+            | Ok outcome -> return AgentTools.renderCommandOutcome outcome
+            | Error e -> return sprintf "could not mark the pull request ready: %s" e
+        })
+
 let private unmergePr (capabilities: AgentCapabilities) (raw: string) (number: int) : Async<string> =
     withRepo raw (fun repo ->
         async {
@@ -924,7 +969,7 @@ let private mergeArgs (json: string) : Result<string * int * string, string> =
             get.Optional.Field "method" Decode.string |> Option.defaultValue "squash"))
         json
 
-/// The four tools, built from a turn's capabilities exactly the way `AgentTools.fs`'s
+/// The tools, built from a turn's capabilities exactly the way `AgentTools.fs`'s
 /// `verbs` builds every other one — descriptor paired with body, so a tool cannot be
 /// declared without being callable. Merged into the `yession` registry through
 /// `AgentCapabilities.Repos.ProviderTools`.
@@ -945,7 +990,7 @@ let providerTools (capabilities: AgentCapabilities) : (ToolDescriptor * (string 
             ToolField.optional
                 "draft"
                 "boolean"
-                "true to open it as a draft — on the record, and explicitly not asking for review yet" ]
+                "true to open it as a draft — on the record, and explicitly not asking for review yet. A draft cannot merge: ready_pr undrafts it when it is ready" ]
           (fun args ->
               async {
                   match prDraftArgs args with
@@ -954,8 +999,19 @@ let providerTools (capabilities: AgentCapabilities) : (ToolDescriptor * (string 
                       return! ok (createPr capabilities repo head onto title body draft)
               })
       tool
+          "ready_pr"
+          "Mark a draft pull request on GitHub ready for review — the undoing of create_pr's draft flag, and what a draft needs before merge_pr can take it. One that is not a draft, or has merged, is reported as such and nothing is changed, so calling it twice is safe. It spends the GitHub credential of whoever's turn this is, and everyone in the session sees the act in the timeline. What GitHub will not do it says why in its own words, and that sentence is what comes back."
+          [ ToolField.required "repo" "string" "owner/name"
+            ToolField.required "number" "integer" "the pull request number" ]
+          (fun args ->
+              async {
+                  match repoNumberArgs args with
+                  | Error e -> return Error e
+                  | Ok (repo, number) -> return! ok (readyPr capabilities repo number)
+              })
+      tool
           "merge_pr"
-          "Merge a pull request on GitHub, by whichever route its state allows: if its checks are still running it is set to merge automatically when they pass (auto merge, which watch_pr then reports as queued); if it is mergeable now and the base branch has a merge queue it goes into the queue; if it is mergeable now with no queue it is merged at once. The answer says which happened, and the session starts watching it (as watch_pr would) so the timeline says when it lands — or when a merge queue ejects it, which reads as stalled. One already armed, queued or merged is reported as such and nothing is changed, so calling it twice is safe. It spends the GitHub credential of whoever's turn this is: what lands on the base branch is theirs, and everyone in the session sees the act in the timeline. What GitHub will not do it says why in its own words — auto merge not allowed on the repository, a review still required, the method not allowed — and that sentence is what comes back."
+          "Merge a pull request on GitHub, by whichever route its state allows: if its checks are still running it is set to merge automatically when they pass (auto merge, which watch_pr then reports as queued); if it is mergeable now and the base branch has a merge queue it goes into the queue; if it is mergeable now with no queue it is merged at once. The answer says which happened, and the session starts watching it (as watch_pr would) so the timeline says when it lands — or when a merge queue ejects it, which reads as stalled. One already armed, queued or merged is reported as such and nothing is changed, so calling it twice is safe. A draft does not merge: undraft it with ready_pr first. It spends the GitHub credential of whoever's turn this is: what lands on the base branch is theirs, and everyone in the session sees the act in the timeline. What GitHub will not do it says why in its own words — auto merge not allowed on the repository, a review still required, the method not allowed — and that sentence is what comes back."
           [ ToolField.required "repo" "string" "owner/name"
             ToolField.required "number" "integer" "the pull request number"
             ToolField.optional

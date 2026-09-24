@@ -5,13 +5,13 @@ module Yession.Host.PrWatches
 // how a session keeps looking: the cadence, the ETag bookkeeping, the in-flight guard, the
 // verbs that start and stop a watch, and the query all of it reads back through.
 //
-// The whole provider surface is four functions — `FetchPr`, one look; `OpenPr`, one
-// pull request opened; `MergePr`, one merged or set to merge; `UnmergePr`, that taken
-// back — plus a `provider` label the error copy is written around, because "github
-// rejected this credential" is a sentence a person has to read and "the provider rejected
-// this credential" is not. A second forge is a second `fetchOver`, `openOver`, `mergeOver`,
-// `unmergeOver` and hook filter (`GitHubPrs.fs` is the first), and nothing in this file
-// changes to admit it.
+// The whole provider surface is five functions — `FetchPr`, one look; `OpenPr`, one
+// pull request opened; `ReadyPr`, a draft of one undrafted; `MergePr`, one merged or set
+// to merge; `UnmergePr`, that taken back — plus a `provider` label the error copy is
+// written around, because "github rejected this credential" is a sentence a person has to
+// read and "the provider rejected this credential" is not. A second forge is a second
+// `fetchOver`, `openOver`, `readyOver`, `mergeOver`, `unmergeOver` and hook filter
+// (`GitHubPrs.fs` is the first), and nothing in this file changes to admit it.
 //
 // Polling, not webhooks, and that is a decision rather than a stopgap: a repo webhook
 // needs admin on every repo somebody wants watched, and inbound delivery needs a
@@ -107,6 +107,11 @@ type PrMergeOutcome =
     /// already sits in the queue, or it is already merged — the `add_repo` rule, so a
     /// repeated ask is a question and its answer is the state.
     | PrMergeUnneeded of PrRef * already: string
+    /// It is a draft, and a draft does not merge. Its own case rather than the provider's
+    /// refusal passed through, because the provider's sentence ("Pull request is in draft")
+    /// names the state and not the way out — and the way out is a tool the agent HAS. Read
+    /// as prose, it sent an agent to ask a person for a click seven times over three hours.
+    | PrMergeIsDraft of PrRef
     /// The provider read the request and would not do it — the branch does not allow auto
     /// merge, the pull request is closed, a review is required. What it SAID, because
     /// that sentence is the diagnosis.
@@ -131,6 +136,17 @@ type PrUnmergeOutcome =
 
 /// THE SEAM for taking one back, beside `MergePr`.
 type UnmergePr = string option -> PrRef -> Async<PrUnmergeOutcome>
+
+/// What came of marking a draft ready for review — `OpenPr`'s draft flag undone.
+type PrReadyOutcome =
+    | PrMarkedReady of PrRef
+    /// Nothing was done: it was never a draft, or it has merged. The `add_repo` rule.
+    | PrReadyUnneeded of PrRef * already: string
+    | PrReadyRefused of string
+    | PrReadyFailed of PrFetchFailure
+
+/// THE SEAM for undrafting one, beside `MergePr`: what a draft needs before it can merge.
+type ReadyPr = string option -> PrRef -> Async<PrReadyOutcome>
 
 // --- the poller --------------------------------------------------------------------------
 
@@ -444,7 +460,10 @@ type PrService =
       /// Take one back off its way in: auto merge disarmed, or the queue entry pulled. The
       /// undoing of `Merge`, on the credential of whoever's turn it is. Changes nothing
       /// about the watch — a watch that saw it armed will say `stalled`, which is true.
-      Unmerge : CredentialFor -> PrRef -> Async<Result<string, string>> }
+      Unmerge : CredentialFor -> PrRef -> Async<Result<string, string>>
+      /// Mark a draft ready for review, on the credential of whoever's turn it is. Changes
+      /// nothing about a watch: being a draft is not one of the things a watch reports.
+      Ready : CredentialFor -> PrRef -> Async<Result<string, string>> }
 
 /// Build the watch verbs over the session's log and the poller they reconcile into.
 ///
@@ -459,6 +478,7 @@ let service
     (openPr: OpenPr)
     (mergePr: MergePr)
     (unmergePr: UnmergePr)
+    (readyPr: ReadyPr)
     (resolveToken: CredentialFor -> Async<string option>)
     (refold: PrWatch list -> unit)
     : PrService =
@@ -599,6 +619,14 @@ let service
                 // point of asking again rather than an apology for it.
                 | PrMergeUnneeded (pr, already) ->
                     return Ok (sprintf "%s is already %s — nothing was changed" (PrRef.render pr) already)
+                // The way out, named: the tool that undrafts it is in the same hands as this
+                // one, so nobody has to be asked for a click.
+                | PrMergeIsDraft pr ->
+                    return
+                        Error (
+                            sprintf
+                                "%s is a draft, and a draft does not merge — mark it ready for review with ready_pr, then merge it"
+                                (PrRef.render pr))
                 | PrMergeRefused said -> return Error (sprintf "%s would not merge it: %s" provider said)
                 | PrMergeFailed failure -> return Error (cannotReach (PrRef.render pr) failure)
             }
@@ -613,6 +641,17 @@ let service
                     return Ok (sprintf "%s is %s — nothing was changed" (PrRef.render pr) already)
                 | PrUnmergeRefused said -> return Error (sprintf "%s would not take it back: %s" provider said)
                 | PrUnmergeFailed failure -> return Error (cannotReach (PrRef.render pr) failure)
+            }
+      Ready =
+        fun credential pr ->
+            async {
+                let! token = resolveToken credential
+                match! readyPr token pr with
+                | PrMarkedReady pr -> return Ok (sprintf "%s is ready for review" (PrRef.render pr))
+                | PrReadyUnneeded (pr, already) ->
+                    return Ok (sprintf "%s is already %s — nothing was changed" (PrRef.render pr) already)
+                | PrReadyRefused said -> return Error (sprintf "%s would not mark it ready: %s" provider said)
+                | PrReadyFailed failure -> return Error (cannotReach (PrRef.render pr) failure)
             } }
 
 // --- the query -----------------------------------------------------------------------------

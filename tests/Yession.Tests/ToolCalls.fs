@@ -164,7 +164,8 @@ let private prsOpening (create: PrDraft -> Async<Result<string, string>>) : PrWa
       Unwatch = fun _ _ -> async { return Error "not part of this test" }
       Create = fun _ draft -> create draft
       Merge = fun _ _ _ -> async { return Error "not part of this test" }
-      Unmerge = fun _ _ -> async { return Error "not part of this test" } }
+      Unmerge = fun _ _ -> async { return Error "not part of this test" }
+      Ready = fun _ _ -> async { return Error "not part of this test" } }
 
 let private servicesOver (service: Repos.ReposService) : Commands.CommandServices =
     { Repos = fun () -> Some service
@@ -412,6 +413,27 @@ let private tests' =
                 let! answer = session.Call "unmerge_pr" """{"repo":"octo/hello","number":12}"""
                 Expect.equal (seen |> Option.map PrRef.render) (Some "octo/hello#12") "the pull request"
                 Expect.stringContains (answered answer) "will no longer merge on its own" "and the service's own words came back"
+            }
+
+        testCaseAsync "a ready_pr reaches the service with the pull request it named" <|
+            async {
+                let mutable seen : PrRef option = None
+                let session =
+                    openToolSession (
+                        { servicesOver (reposAnswering (fun _ -> async { return Error "not part of this test" })) with
+                            Prs =
+                              fun () ->
+                                Some (
+                                    { prsOpening (fun _ -> async { return Error "not part of this test" }) with
+                                        Ready =
+                                          fun _ pr ->
+                                            async {
+                                                seen <- Some pr
+                                                return Ok (sprintf "%s is ready for review" (PrRef.render pr))
+                                            } }) })
+                let! answer = session.Call "ready_pr" """{"repo":"octo/hello","number":12}"""
+                Expect.equal (seen |> Option.map PrRef.render) (Some "octo/hello#12") "the pull request"
+                Expect.stringContains (answered answer) "is ready for review" "and the service's own words came back"
             }
 
         // A repo name the domain refuses never reaches the gate, and the model is told what

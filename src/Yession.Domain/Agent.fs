@@ -556,6 +556,11 @@ type MergePr = RepoRef -> int -> PrMergeMethod -> Async<Result<CommandOutcome, s
 /// pulled. The undoing of `MergePr`, and the only one there is: what has landed has landed.
 type UnmergePr = RepoRef -> int -> Async<Result<CommandOutcome, string>>
 
+/// Mark a draft pull request ready for review — the undoing of `CreatePr`'s draft flag, and
+/// the only one there is. Without it a draft is a one-way door: `MergePr` cannot take a draft,
+/// and nothing else this session holds can turn one back into a pull request.
+type ReadyPr = RepoRef -> int -> Async<Result<CommandOutcome, string>>
+
 /// Fetch a repo's remote refs (prune, no submodules). The one network verb besides the
 /// clone itself; runs on the same per-invocation credential.
 type FetchRepo = RepoRef -> Async<Result<string, string>>
@@ -673,6 +678,8 @@ type RepoCapabilities =
       /// `merged`.
       MergePr : MergePr
       UnmergePr : UnmergePr
+      /// Undrafting one — what a draft `CreatePr` opened needs before `MergePr` can take it.
+      ReadyPr : ReadyPr
       /// Tools a provider adds beyond the generic verbs above -- GitHub's `create_pr`,
       /// `watch_pr`, `unwatch_pr` today, contributed by `app/GitHubPrs.fs` and nothing else
       /// in this list. The same seam `QueryCapabilities.Declared` already is for queries:
@@ -839,6 +846,7 @@ module AgentCapabilities =
               CreatePr = fun _ -> async { return Error "no repos capability" }
               MergePr = fun _ _ _ -> async { return Error "no repos capability" }
               UnmergePr = fun _ _ -> async { return Error "no repos capability" }
+              ReadyPr = fun _ _ -> async { return Error "no repos capability" }
               ProviderTools = [] }
           Sandboxes =
             { Start = fun _ _ -> async { return Error "no sandbox capability" }
