@@ -1360,6 +1360,59 @@ let private releaseTests =
                     afterTheEnd
                     "a doc update after the pump ended was still being sent — the connection's listener outlived it"
             }
+
+        testCaseAsync "presence reported before the handshake waits for it, and is not lost" <|
+            async {
+                // The browser holds the connection the moment `connect` returns — BEFORE `Run`
+                // has sent the hello — and reports what the pane shows on every render. So a
+                // presence frame can be asked for while the channel has said nothing yet, and
+                // the hello has to stay the first thing on the wire: the Session Process reads
+                // an unannounced peer's frame as a peer it does not know, and the connection
+                // dies there, which presents as a browser that never reaches Connected.
+                let doc = Y.Doc.Create ()
+                let local = peer "ada" "Ada"
+                let clientEnd, serverEnd = Yession.SessionProcess.InMemoryChannel.createPair<string> ()
+                let channel, sent = recordingOver clientEnd
+                let connection =
+                    Client.connect
+                        Client.ConnectOptions.defaults
+                        doc
+                        (BodyRegistry doc)
+                        (TextRegistry doc)
+                        { PeerId = local.PeerId; DisplayName = "Ada"; Token = "t" }
+                        ignore
+                        channel
+                // Reported before anything runs, which is exactly what a render does.
+                connection.ReportViewing (Some (ViewingTerminal (TerminalId.create "term-1" |> expect)))
+                Async.StartImmediate connection.Run
+
+                do! waitUntil "the connection announces itself" (fun () -> sent.Count > 0)
+                match Seq.head sent with
+                | Control (PeerHello _) -> ()
+                | other -> failwithf "the first frame on the wire was %A, not the hello" other
+                Expect.isFalse
+                    (sent |> Seq.exists (function Presence _ -> true | _ -> false))
+                    "presence jumped the handshake — the peer had not been announced yet"
+
+                // Accepted: the view reported while the channel was coming up is stated, rather
+                // than waiting for a pane change that may never come. Presence has no keepalive.
+                do!
+                    serverEnd.Send (
+                        Control (
+                            PeerAccepted
+                                { SessionId = SessionId.create "presence-handshake" |> expect
+                                  AssignedDisplayName = "Ada"
+                                  LatestOffset = None }))
+                do! waitUntil "the accepted connection states what it was told" (fun () ->
+                    sent |> Seq.exists (function Presence _ -> true | _ -> false))
+                let viewing =
+                    sent
+                    |> Seq.pick (function Presence p -> Some p.Viewing | _ -> None)
+                Expect.equal
+                    viewing
+                    (Some (ViewingTerminal (TerminalId.create "term-1" |> expect)))
+                    "the flushed frame carried the view that was reported before the handshake"
+            }
     ]
 
 // --- What the failure looks like ----------------------------------------------------------
