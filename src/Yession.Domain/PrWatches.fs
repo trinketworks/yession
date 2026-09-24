@@ -46,28 +46,41 @@ type PrKnown =
 /// invent their own vocabulary for the same fact — they read it from here.
 module PrStatus =
 
-    /// The last thing that happened to this pull request, in a single word.
-    /// On an open one a computed conflict wins, because it is the specific blocker and it
-    /// names its own fix (rebase) — a pull request ejected from the queue FOR a conflict is
-    /// both stalled and conflicted, and "conflicted" is the more useful of the two to show.
-    /// Otherwise the way in, because "armed", "queued" and "stalled" are the news; a merged
-    /// or closed pull request has stopped caring what any queue thought. `mergeable` is the
-    /// baseline's last COMPUTED value (`None` = never computed, never "clean"), so the word
-    /// does not flicker off "conflicted" during the window a push leaves it recomputing.
-    let word (mergeable: bool option) (wayIn: PrWayIn) (state: PrState) : string =
+    /// Where this pull request stands, in a single word.
+    ///
+    /// On an open one the words that NAME A FIX win, most specific first: a computed
+    /// conflict (rebase), changes requested (answer the review), behind (update the
+    /// branch). A pull request ejected from the queue FOR a conflict is both stalled and
+    /// conflicted, and "conflicted" is the more useful of the two to show. Then a stall,
+    /// then a review still required — which outranks the way in, because an armed pull
+    /// request waiting on an approval is waiting on a PERSON, and "armed" would say it is
+    /// waiting on machines. Then the way in itself. A merged or closed pull request has
+    /// stopped caring about any of it.
+    ///
+    /// `mergeable` and `wayIn` are the BASELINE's — the last computed mergeability, so the
+    /// word does not flicker off "conflicted" while a push is recomputed, and the way in,
+    /// because a stall is a fact about history. `review` and `behind` are the look's own:
+    /// the provider states them outright, and they are where it stands now.
+    let word
+        (mergeable: bool option)
+        (wayIn: PrWayIn)
+        (review: PrReview option)
+        (behind: bool)
+        (state: PrState)
+        : string =
         match state with
         | PrMerged -> "merged"
         | PrClosed -> "closed"
         | PrOpen ->
-            match mergeable with
-            | Some false -> "conflicted"
-            | Some true
-            | None ->
-                match wayIn with
-                | PrWayIn.Armed -> "armed"
-                | PrWayIn.Queued -> "queued"
-                | PrWayIn.Stalled -> "stalled"
-                | PrWayIn.Idle -> "open"
+            match mergeable, review, behind, wayIn with
+            | Some false, _, _, _ -> "conflicted"
+            | _, Some PrReview.ChangesRequested, _, _ -> "changes requested"
+            | _, _, true, _ -> "behind"
+            | _, _, _, PrWayIn.Stalled -> "stalled"
+            | _, Some PrReview.Required, _, _ -> "review required"
+            | _, _, _, PrWayIn.Armed -> "armed"
+            | _, _, _, PrWayIn.Queued -> "queued"
+            | _, _, _, PrWayIn.Idle -> "open"
 
     /// What a watch says when the session cannot currently read it — a dead credential, a
     /// pull request it cannot see, a rate-limit window. The panel's status column says
@@ -78,9 +91,22 @@ module PrStatus =
     /// Worst first. What "worst" means here is how much it wants a person: an unreachable
     /// watch is not being driven at all, a stalled pull request has nobody driving it, a
     /// conflicted one is blocked until somebody rebases — the agent can, so it ranks below a
-    /// stall — an open one is waiting on somebody, an armed one is waiting on its checks, a
-    /// queued one is waiting on the queue, and merged or closed is over.
-    let order : string list = [ unreachable; "stalled"; "conflicted"; "open"; "armed"; "queued"; "merged"; "closed" ]
+    /// stall — and so is one with changes requested or one behind its base, for the same
+    /// reason; one whose review is required is waiting on a person, an open one on
+    /// somebody, an armed one on its checks, a queued one on the queue, and merged or
+    /// closed is over.
+    let order : string list =
+        [ unreachable
+          "stalled"
+          "conflicted"
+          "changes requested"
+          "behind"
+          "review required"
+          "open"
+          "armed"
+          "queued"
+          "merged"
+          "closed" ]
 
     /// A pull request that is still owed. Merged and closed ones are history: they are why
     /// a summary of six watches can honestly be silent.

@@ -234,6 +234,23 @@ module PrRoute =
         | PrRoute.GitHubMergeQueue (position, state) ->
             sprintf "merge queue #%d, %s" position (GitHubQueueState.describe state)
 
+/// What review has decided about a pull request, as the forge sums it up — GitHub's
+/// `reviewDecision`. A snapshot carries `None` when there is no decision to report: the
+/// base branch asks for none and nobody has given one.
+[<RequireQualifiedAccess>]
+type PrReview =
+    | Approved
+    | ChangesRequested
+    /// The base branch requires an approving review and it does not have one yet.
+    | Required
+
+module PrReview =
+    let describe (review: PrReview) : string =
+        match review with
+        | PrReview.Approved -> "approved"
+        | PrReview.ChangesRequested -> "changes requested"
+        | PrReview.Required -> "review required"
+
 /// What one look at the provider answered. `Mergeable` is a THREE-valued fact and its
 /// third value is why it is handled with care: GitHub computes it lazily and answers
 /// `None` until it has, so `None` is "not known yet", never "mergeable". Only a COMPUTED
@@ -251,6 +268,16 @@ type PrSnapshot =
       /// off `PrOpen`: a merged pull request went through, and a closed one is not going.
       Route : PrRoute option
       Mergeable : bool option
+      /// What review has decided, or `None` when nothing is asked of it. Read for the
+      /// status word and never for a transition: it is where the pull request stands,
+      /// and a reviewer's verdict reaches whoever is waiting on it by the forge's own
+      /// notification.
+      Review : PrReview option
+      /// The base branch requires the head to be up to date with it, and it is not —
+      /// GitHub's `mergeStateStatus: BEHIND`. Blocked until somebody updates the branch,
+      /// which, like a conflict, is the agent's to do. Only a COMPUTED answer moves it;
+      /// the provider's "still working it out" keeps whatever it last said.
+      Behind : bool
       /// A draft: on the record, and not asking for review or a merge yet. Stated outright
       /// by the provider, like `Route`, so its movement is announced.
       Draft : bool }

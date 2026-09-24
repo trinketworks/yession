@@ -428,6 +428,8 @@ let private frameSerializationTests =
                         Checks = ChecksPending
                         Route = Some (PrRoute.GitHubMergeQueue (2, GitHubQueueState.AwaitingChecks))
                         Mergeable = Some true
+                        Review = Some PrReview.ChangesRequested
+                        Behind = true
                         Draft = true }
                   |> expect
                   |> PrWatched
@@ -443,6 +445,8 @@ let private frameSerializationTests =
                         Checks = ChecksNone
                         Route = None
                         Mergeable = None
+                        Review = None
+                        Behind = false
                         Draft = false }
                   |> expect
                   |> PrWatched
@@ -1198,7 +1202,7 @@ let private prWatchTests =
     let ada = PeerId.create "ada" |> expect
     let bob = PeerId.create "bob" |> expect
     let snapshotOf state checks route : PrSnapshot =
-        { State = state; Title = "Add feature"; HeadSha = "abc123"; Checks = checks; Route = route; Mergeable = None; Draft = false }
+        { State = state; Title = "Add feature"; HeadSha = "abc123"; Checks = checks; Route = route; Mergeable = None; Review = None; Behind = false; Draft = false }
     let snapshot state checks : PrSnapshot = snapshotOf state checks None
     let autoMerge = Some PrRoute.GitHubAutoMerge
     let inQueue position state = Some (PrRoute.GitHubMergeQueue (position, state))
@@ -1419,20 +1423,53 @@ let private prWatchTests =
                 [ PrTransition.Merged ] "the merge is the whole news"
 
         testCase "a status word is the last thing that happened, worst first" <| fun () ->
-            Expect.equal (PrStatus.word None PrWayIn.Armed PrOpen) "armed" "waiting on its checks"
-            Expect.equal (PrStatus.word None PrWayIn.Queued PrOpen) "queued" "waiting on the queue"
-            Expect.equal (PrStatus.word None PrWayIn.Stalled PrOpen) "stalled" "nobody driving"
-            Expect.equal (PrStatus.word None PrWayIn.Idle PrOpen) "open" "the ordinary state"
-            Expect.equal (PrStatus.word None PrWayIn.Queued PrMerged) "merged" "a merged PR has stopped caring what a queue thought"
-            Expect.equal (PrStatus.word None PrWayIn.Queued PrClosed) "closed" "and so has a closed one"
+            Expect.equal (PrStatus.word None PrWayIn.Armed None false PrOpen) "armed" "waiting on its checks"
+            Expect.equal (PrStatus.word None PrWayIn.Queued None false PrOpen) "queued" "waiting on the queue"
+            Expect.equal (PrStatus.word None PrWayIn.Stalled None false PrOpen) "stalled" "nobody driving"
+            Expect.equal (PrStatus.word None PrWayIn.Idle None false PrOpen) "open" "the ordinary state"
+            Expect.equal (PrStatus.word None PrWayIn.Queued None false PrMerged) "merged" "a merged PR has stopped caring what a queue thought"
+            Expect.equal (PrStatus.word None PrWayIn.Queued None false PrClosed) "closed" "and so has a closed one"
 
         testCase "a computed conflict is the status word, over queued or stalled" <| fun () ->
-            Expect.equal (PrStatus.word (Some false) PrWayIn.Idle PrOpen) "conflicted" "open and unmergeable"
-            Expect.equal (PrStatus.word (Some false) PrWayIn.Queued PrOpen) "conflicted" "a queued PR that went dirty is the conflict, not the queue"
-            Expect.equal (PrStatus.word (Some false) PrWayIn.Stalled PrOpen) "conflicted" "ejected FOR the conflict — name the fixable cause"
-            Expect.equal (PrStatus.word (Some true) PrWayIn.Queued PrOpen) "queued" "computed clean does not shout conflict"
-            Expect.equal (PrStatus.word None PrWayIn.Idle PrOpen) "open" "not-yet-computed is not a conflict"
-            Expect.equal (PrStatus.word (Some false) PrWayIn.Queued PrMerged) "merged" "a merged PR's mergeability is moot"
+            Expect.equal (PrStatus.word (Some false) PrWayIn.Idle None false PrOpen) "conflicted" "open and unmergeable"
+            Expect.equal (PrStatus.word (Some false) PrWayIn.Queued None false PrOpen) "conflicted" "a queued PR that went dirty is the conflict, not the queue"
+            Expect.equal (PrStatus.word (Some false) PrWayIn.Stalled None false PrOpen) "conflicted" "ejected FOR the conflict — name the fixable cause"
+            Expect.equal (PrStatus.word (Some true) PrWayIn.Queued None false PrOpen) "queued" "computed clean does not shout conflict"
+            Expect.equal (PrStatus.word None PrWayIn.Idle None false PrOpen) "open" "not-yet-computed is not a conflict"
+            Expect.equal (PrStatus.word (Some false) PrWayIn.Queued None false PrMerged) "merged" "a merged PR's mergeability is moot"
+
+        testCase "changes requested is the status word over the way in" <| fun () ->
+            Expect.equal
+                (PrStatus.word None PrWayIn.Armed (Some PrReview.ChangesRequested) false PrOpen)
+                "changes requested" "auto merge will wait for ever on a review that asked for changes"
+
+        testCase "a conflict outranks changes requested" <| fun () ->
+            Expect.equal
+                (PrStatus.word (Some false) PrWayIn.Idle (Some PrReview.ChangesRequested) false PrOpen)
+                "conflicted" "the rebase comes first, whatever the review said"
+
+        testCase "behind is the status word over a stall" <| fun () ->
+            Expect.equal
+                (PrStatus.word None PrWayIn.Stalled None true PrOpen)
+                "behind" "the specific fix — update the branch — over the general symptom"
+
+        testCase "an armed pull request waiting on an approval says review required" <| fun () ->
+            Expect.equal
+                (PrStatus.word None PrWayIn.Armed (Some PrReview.Required) false PrOpen)
+                "review required" "it is waiting on a person, not on machines"
+
+        testCase "an approval leaves the way in to say where it stands" <| fun () ->
+            Expect.equal
+                (PrStatus.word None PrWayIn.Queued (Some PrReview.Approved) false PrOpen)
+                "queued" "approved is not a blocker, so it is not the news"
+
+        testCase "a merged pull request's review and base are moot" <| fun () ->
+            Expect.equal
+                (PrStatus.word None PrWayIn.Idle (Some PrReview.ChangesRequested) true PrMerged)
+                "merged" "it went in"
+
+        testCase "a review still required wants a person more than an armed pull request" <| fun () ->
+            Expect.equal (PrStatus.worse "armed" "review required") "review required" "a person over machines"
 
         testCase "a conflict clause is added only to an open, computed-unmergeable description" <| fun () ->
             Expect.equal (PrSnapshot.conflictClause PrOpen (Some false)) ", conflicted" "the one that reads it"

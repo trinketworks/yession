@@ -1207,6 +1207,21 @@ module Codec =
                         (Decode.field "state" gitHubQueueState.Decode)
                 | other -> Decode.fail (sprintf "Unknown pull request route: %s" other)) }
 
+    let private prReview : Codec<PrReview> =
+        { Encode =
+            (fun (review: PrReview) ->
+                match review with
+                | PrReview.Approved -> Encode.string "approved"
+                | PrReview.ChangesRequested -> Encode.string "changesRequested"
+                | PrReview.Required -> Encode.string "required")
+          Decode =
+            Decode.string
+            |> Decode.andThen (function
+                | "approved" -> Decode.succeed PrReview.Approved
+                | "changesRequested" -> Decode.succeed PrReview.ChangesRequested
+                | "required" -> Decode.succeed PrReview.Required
+                | other -> Decode.fail (sprintf "Unknown review decision: %s" other)) }
+
     let private prSnapshot : Codec<PrSnapshot> =
         { Encode =
             fun (s: PrSnapshot) ->
@@ -1217,6 +1232,8 @@ module Codec =
                       "checks", checksRollup.Encode s.Checks
                       "route", Encode.option prRoute.Encode s.Route
                       "mergeable", Encode.option Encode.bool s.Mergeable
+                      "review", Encode.option prReview.Encode s.Review
+                      "behind", Encode.bool s.Behind
                       "draft", Encode.bool s.Draft ]
           Decode =
             Decode.object (fun get ->
@@ -1235,6 +1252,10 @@ module Codec =
                           if get.Optional.Field "queued" Decode.bool = Some true then Some PrRoute.GitHubAutoMerge
                           else None
                   PrSnapshot.Mergeable = get.Required.Field "mergeable" (Decode.option Decode.bool)
+                  // Both optional, because a watch recorded before readiness was read has
+                  // neither: no decision reported, and not known to be behind.
+                  PrSnapshot.Review = get.Optional.Field "review" prReview.Decode
+                  PrSnapshot.Behind = get.Optional.Field "behind" Decode.bool |> Option.defaultValue false
                   // Optional because a watch recorded before drafts were read has none: it
                   // reads as not a draft, so an undrafting it began over goes unannounced —
                   // the honest `Stalled` rule, since nobody watching saw it as a draft.
