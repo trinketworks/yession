@@ -319,12 +319,17 @@ module Scheduler =
                     let model = ProcessModel.applyEvents page.Events (ProcessModel.initial sessionId)
                     match model.Agent with
                     | AgentRuntimeState.Running turnId ->
+                        // The last thing the dead process wrote is when it was last heard
+                        // from — as close as the log can say to when it stopped.
+                        let lastHeardAt =
+                            page.Events |> List.tryLast |> Option.map (fun envelope -> envelope.Timestamp)
                         let! _ =
                             log.Append
                                 ActorRef.SessionProcess
                                 (AgentTurnFailed
                                     { AgentTurnId = turnId
-                                      Reason = "the session was restarted while this turn was running" })
+                                      Reason = "the session was restarted while this turn was running"
+                                      ProcessEnded = lastHeardAt |> Option.map (fun at -> { LastHeardAt = at }) })
                         ()
                     | AgentRuntimeState.Idle
                     | AgentRuntimeState.Failed _ -> ()

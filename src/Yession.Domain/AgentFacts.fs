@@ -69,6 +69,15 @@ and WakeReason =
     /// Attribution, never payload, like the rest: what changed arrives as the timeline note
     /// the transition already folded into, so the reason names only which pull request.
     | PrChanged of PrRef
+    /// The agent's previous turn was cut off: the process running it ended — a crash, a
+    /// deploy, the machine — and the next one found it in the log and failed it
+    /// (`AgentTurnFailed.ProcessEnded`). Nothing the agent was in the middle of reported back
+    /// to that turn, and nobody may be there to say "carry on", so the work would otherwise
+    /// stop silently. Owned by whoever the cut-off turn ran as, which is who asked for it.
+    ///
+    /// Once per turn: a resumed turn that is itself cut off owes nothing further, so a turn
+    /// that takes the process down with it cannot loop. That rule is `AgentWake`'s.
+    | CutOff of AgentTurnId
 
 and AgentContextBuilt =
     { AgentTurnId : AgentTurnId
@@ -114,7 +123,17 @@ and AgentMessageCompleted =
 
 and [<RequireQualifiedAccess>] AgentTurnFailed =
     { AgentTurnId : AgentTurnId
-      Reason : string }
+      Reason : string
+      /// `Some` when the turn failed because the process running it ENDED under it, found
+      /// and failed by the next one at boot, rather than failing on its own. Structured, so
+      /// what reads it — the wake that resumes such a turn, the signpost that says how long
+      /// the session was gone — never has to recognise a sentence.
+      ProcessEnded : ProcessEnded option }
+
+/// What is known about a process that ended mid-turn: when it was last heard from, which is
+/// the timestamp of the last thing it wrote to the log. The gap between that and the failure
+/// is how long nothing was running.
+and ProcessEnded = { LastHeardAt : System.DateTimeOffset }
 
 and AgentTurnInterrupted =
     { AgentTurnId : AgentTurnId

@@ -294,12 +294,18 @@ let private frameSerializationTests =
                   AgentTurnStarted { AgentTurnId = turnId; Cause = TurnCause.Woke CommandFinished }
                   AgentTurnStarted { AgentTurnId = turnId; Cause = TurnCause.Woke (StreamEnded (TerminalId.create "term-1" |> expect)) }
                   AgentTurnStarted { AgentTurnId = turnId; Cause = TurnCause.Woke (IntegrationLost (TerminalId.create "term-1" |> expect)) }
+                  AgentTurnStarted { AgentTurnId = turnId; Cause = TurnCause.Woke (CutOff turnId) }
                   AgentContextBuilt { AgentTurnId = turnId; MessageCount = 3 }
                   AgentMessageStarted { AgentTurnId = turnId; MessageId = messageId; Antecedent = None }
                   AgentMessageStarted { AgentTurnId = turnId; MessageId = messageId; Antecedent = Some (MessageId.create "msg-0" |> expect) }
                   AgentMessageDelta { AgentTurnId = turnId; MessageId = messageId; Delta = "d" }
                   AgentMessageCompleted { AgentTurnId = turnId; MessageId = messageId; Body = "done" }
-                  AgentTurnFailed { AgentTurnId = turnId; Reason = "overloaded" }
+                  AgentTurnFailed { AgentTurnId = turnId; Reason = "overloaded"; ProcessEnded = None }
+                  // A turn found cut off at boot: when its process was last heard from rides it.
+                  AgentTurnFailed
+                    { AgentTurnId = turnId
+                      Reason = "the session was restarted while this turn was running"
+                      ProcessEnded = Some { LastHeardAt = DateTimeOffset (2026, 9, 24, 12, 0, 0, TimeSpan.Zero) } }
                   AgentTurnInterrupted { AgentTurnId = turnId; RequestedBy = peerId }
                   EnvironmentNeedIdentified { Reason = "task"; AgentTurnId = Some turnId }
                   EnvironmentNeedIdentified { Reason = "task"; AgentTurnId = None }
