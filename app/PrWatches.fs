@@ -865,26 +865,7 @@ let query (current: unit -> PrWatchers) : Queries.QueryRegistration =
                               // still the word — the tone only says how loudly.
                               PrStatus.Columns.state,
                               (match word row with
-                               | Some said ->
-                                   CellStatus (
-                                       said,
-                                       match said with
-                                       // Merged is the outcome somebody was waiting for;
-                                       // stalled is the one nobody is driving. Armed and
-                                       // queued are in flight. Open and closed are the ordinary
-                                       // states and earn no colour — colouring every row
-                                       // would be colouring none.
-                                       | "merged" -> ToneOk
-                                       // Blocked until a rebase — the agent's to do, the
-                                       // same attention a red suite earns, not a call for a
-                                       // person the way a stall is.
-                                       | "conflicted"
-                                       | "changes requested"
-                                       | "behind" -> ToneBad
-                                       | "stalled" -> ToneBad
-                                       | "armed"
-                                       | "queued" -> ToneBusy
-                                       | _ -> ToneMuted)
+                               | Some said -> CellStatus (said, PrStatus.tone said)
                                // Watched, but not yet looked at — which is a different
                                // thing from a state, and says so rather than guessing one.
                                | None -> CellAbsent)
