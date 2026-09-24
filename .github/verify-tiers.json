@@ -1,7 +1,7 @@
 [
   {
     "tier": "node",
-    "capabilities": "Ports Native Docker LiveAgent Keyring Nix Srt Pty Serial Jumpstarter"
+    "capabilities": "Ports Native Docker LiveAgent LiveGitHub Keyring Nix Srt Pty Serial Jumpstarter"
   },
   {
     "tier": "browser",

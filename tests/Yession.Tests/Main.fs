@@ -52,6 +52,9 @@ let all =
         // Finding a repo is an HTTP conversation on both sides — the provider's listing and
         // the session's own gated route — with no in-memory stand-in for what the cases turn on.
         Tag.needs "GitHubRepos over HTTP" [ Tag.Ports ] (fun () -> GitHubRepos.portsTests)
+        // The same conversations against GitHub itself: what no stub can say is that the
+        // provider still answers the way the stubs were written to.
+        Tag.needs "GitHub, for real" [ Tag.LiveGitHub ] (fun () -> LiveGitHub.tests)
         // What each provider request says on the wire, and what this host makes of the
         // answer. Cheap because none of it needs a provider: these are the decisions taken
         // BEFORE a conversation, and they used to be unreachable inside `[<Emit>]` strings.

@@ -386,8 +386,8 @@ check Docker Dogfood         # + the self-hosting run: this repo's whole suite i
                              #   container, through the real docker backend). ~11 min warm, up to an hour cold; in NO scheduled
                              #   tier — run it when the container environment story changes,
                              #   locally or via a verify.yml dispatch naming both caps.
-verify                       # == check Browser Ports Native Docker LiveAgent Keyring Nix
-                             #    NixBuild Srt Pty Serial Jumpstarter Caddy. Release gate; what
+verify                       # == check Browser Ports Native Docker LiveAgent LiveGitHub
+                             #    Keyring Nix NixBuild Srt Pty Serial Jumpstarter Caddy. Release gate; what
                              #    CI runs on master (spread over the tiers in
                              #    .github/verify-tiers.json).
                              #    Takes check's trailing args, so `verify --only "<text>"` works.
@@ -671,6 +671,13 @@ Capabilities:
   file there"). The dev container has none, so ask for `Docker` here and the run refuses.
 - `LiveAgent` — real model credentials: `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN`.
   release.yml passes the repository secret; absent, a tier that asked for it fails.
+- `LiveGitHub` — a `GITHUB_TOKEN` GitHub accepts, probed by asking GitHub with it. The live
+  GitHub suite (`LiveGitHub.fs`) asks the real API what the product asks, read-only, against
+  this repository — the contract every stubbed GitHub suite assumes and none can check.
+  verify.yml passes the run's own `secrets.GITHUB_TOKEN`. In a Claude Code container the
+  variable is a placeholder the agent proxy swaps for the real credential, which is why it
+  works only through `HTTPS_PROXY` — as `check` and the product's requests both go. The
+  proxy authenticates EVERY request to GitHub, so an anonymous case cannot be run there.
 - `Keyring` — a usable OS credential manager (the secrets KEK lives there). On a desktop,
   `check Keyring` drives the genuine Keychain / Credential Manager / Secret Service; headless
   (this container, CI), it re-execs itself under a private D-Bus session + gnome-keyring

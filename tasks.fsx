@@ -887,6 +887,24 @@ let private ptyAvailable () =
           "const p=require('node-pty');const t=p.spawn('/bin/sh',['-c','exit 0'],{cols:80,rows:24});t.kill()" ]
 
 // The live agent suites need a real credential; the SDK reads either of these.
+// A GitHub token, and a GitHub that ACCEPTS it. Asked of this repository, which is public and
+// answers anybody — so a 200 with the token attached says the token is good (a bad one is a
+// 401 even here), not merely that the repository exists. HttpClient follows HTTPS_PROXY, which
+// is what lets a sandbox whose proxy holds the real credential behind a placeholder count.
+let private githubAccepts () =
+    match Environment.GetEnvironmentVariable "GITHUB_TOKEN" with
+    | null | "" -> false
+    | token ->
+        try
+            use client = new Net.Http.HttpClient (Timeout = TimeSpan.FromSeconds 30.0)
+            use request =
+                new Net.Http.HttpRequestMessage (Net.Http.HttpMethod.Get, "https://api.github.com/repos/trinketworks/yession")
+            request.Headers.UserAgent.ParseAdd "yession-check"
+            request.Headers.Authorization <- Net.Http.Headers.AuthenticationHeaderValue ("Bearer", token)
+            use response = client.Send request
+            response.IsSuccessStatusCode
+        with _ -> false
+
 let private agentCredentials () =
     [ "ANTHROPIC_API_KEY"; "CLAUDE_CODE_OAUTH_TOKEN" ]
     |> List.exists (fun name -> not (String.IsNullOrEmpty (Environment.GetEnvironmentVariable name)))
@@ -966,6 +984,9 @@ let private requireCapabilities (caps: string list) =
             "NixBuild: no `nix` on PATH"
           if List.contains "LiveAgent" caps && not (agentCredentials ()) then
             "LiveAgent: no ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN in the environment"
+          if List.contains "LiveGitHub" caps && not (githubAccepts ()) then
+            "LiveGitHub: no GITHUB_TOKEN, or GitHub refused it (a workflow passes "
+            + "secrets.GITHUB_TOKEN; a sandbox whose proxy holds the credential needs HTTPS_PROXY)"
           if List.contains "Pty" caps && not (ptyAvailable ()) then
             "Pty: node-pty could not open a pseudo-terminal (is the native addon built, and "
             + "does this box allow /dev/pts?)"
@@ -1027,6 +1048,7 @@ let private nodeBudgetMs (caps: Set<string>) =
     + allowing "Native" 30_000
     + allowing "Srt" 45_000
     + allowing "LiveAgent" 150_000
+    + allowing "LiveGitHub" 30_000
     + allowing "Docker" 150_000
     + allowing "Keyring" 45_000
     + allowing "Pty" 45_000
@@ -1316,7 +1338,7 @@ let check (args: string list) =
 /// being worked on without the caller having to restate the tier list and get it subtly wrong.
 let verify (args: string list) =
     check
-        ([ "Browser"; "Ports"; "Native"; "Docker"; "LiveAgent"; "Keyring"; "Nix"; "NixBuild"; "Srt"; "Pty"
+        ([ "Browser"; "Ports"; "Native"; "Docker"; "LiveAgent"; "LiveGitHub"; "Keyring"; "Nix"; "NixBuild"; "Srt"; "Pty"
            "Serial"; "Jumpstarter"; "Caddy" ]
          @ args)
 
