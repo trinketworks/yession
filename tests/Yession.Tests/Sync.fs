@@ -48,6 +48,18 @@ let private syncBoth (a: Y.Doc) (b: Y.Doc) =
     Y.applyUpdate (b, Y.encodeStateAsUpdate a)
     Y.applyUpdate (a, Y.encodeStateAsUpdate b)
 
+/// An entry in one of the codec's keyed roots, written the way a peer's update would arrive:
+/// straight onto the doc, under no origin anything here owns. The cases that use it write what
+/// no build of ours writes — that is the point — so writing it by hand is the only way to ask
+/// what the reader makes of it.
+let private entryIn (doc: Y.Doc) (root: string) (key: string) (fields: (string * obj) list) : unit =
+    let entry : Y.Map<obj> = Y.Map.Create ()
+    (doc.getMap root : Y.Map<obj>).set (key, box entry) |> ignore
+    fields |> List.iter (fun (field, value) -> entry.set (field, value) |> ignore)
+
+let private queueKeys (state: SyncedSessionState) : string list =
+    state.Queue |> Map.toList |> List.map (fst >> QueueId.value)
+
 // -----------------------------------------------------------------------------
 // Model tests — the codec through the public surface (program encode + doc decode).
 // -----------------------------------------------------------------------------
@@ -228,6 +240,70 @@ let private codecTests =
             match decoded.Pending |> Map.tryFind queueId with
             | Some entry -> Expect.isNone entry.Size "no viewport, no claim"
             | None -> failwith "the command was not queued at all"
+
+        // A replica with no binding of its own — the Session Process — only ever learns of a
+        // root by a peer's update, and Yjs leaves such a root an untyped placeholder until
+        // something asks for it by kind. The structural reader skips what it cannot place, so
+        // a read that did not type the roots first would see an empty doc here.
+        testCase "a replica with no binding reads what a peer wrote, without having touched it" <| fun () ->
+            let docA = Y.Doc.Create ()
+            let docB = Y.Doc.Create ()
+            let p = Harness.run (Client.makeProgram docA (ClientModel.init (peer "ada" "Ada")))
+            let terminal = TerminalId.create "term-a" |> expect
+            let queueId = QueueId.create "q-term" |> expect
+            p.Dispatch (user (EnsureTerminalDraftMsg (terminal, ada, queueId)))
+            p.Dispatch (user (SendTerminalDraftMsg (terminal, ada)))
+            Y.applyUpdate (docB, Y.encodeStateAsUpdate docA)
+
+            let decoded = SyncedStateSync.ofDoc docB |> Result.mapError (sprintf "%A") |> expect
+            Expect.isTrue (Map.containsKey queueId decoded.Pending) "the command Ada queued is in Grace's read"
+
+        // What a peer we do not control might have written. The doc is shared, so one garbled
+        // entry is a thing that happens; what must not happen is that it takes its neighbours
+        // with it, or that it reads as something it is not.
+        testCase "a queue entry whose order is not a number is left out, and its neighbour is not" <| fun () ->
+            let doc = Y.Doc.Create ()
+            entryIn doc "queue" "q-good" [ "author", box "ada"; "order", box 1.0 ]
+            entryIn doc "queue" "q-bad" [ "author", box "ada"; "order", box "3" ]
+
+            let decoded = SyncedStateSync.ofDoc doc |> Result.mapError (sprintf "%A") |> expect
+            Expect.equal (queueKeys decoded) [ "q-good" ] "only the entry that can be ordered is queued"
+
+        testCase "a scalar where a queue entry goes is left out rather than read as one" <| fun () ->
+            let doc = Y.Doc.Create ()
+            entryIn doc "queue" "q-good" [ "author", box "ada"; "order", box 1.0 ]
+            (doc.getMap "queue" : Y.Map<obj>).set ("q-scalar", box "not an entry") |> ignore
+
+            let decoded = SyncedStateSync.ofDoc doc |> Result.mapError (sprintf "%A") |> expect
+            Expect.equal (queueKeys decoded) [ "q-good" ] "the scalar is no entry"
+
+        testCase "a shared brief whose body is not text is no brief" <| fun () ->
+            let doc = Y.Doc.Create ()
+            (doc.getMap "sharedBrief" : Y.Map<obj>).set ("body", box 42.0) |> ignore
+
+            let decoded = SyncedStateSync.ofDoc doc |> Result.mapError (sprintf "%A") |> expect
+            Expect.isNone decoded.SharedBrief "a number is not what anybody wrote as the brief"
+
+        testCase "a chapter whose name is not text is left out, not named after its type" <| fun () ->
+            let doc = Y.Doc.Create ()
+            entryIn doc "chapters" "m-1" [ "opens", box "yes"; "name", box (Y.Map.Create () : Y.Map<obj>) ]
+
+            let decoded = SyncedStateSync.ofDoc doc |> Result.mapError (sprintf "%A") |> expect
+            Expect.isFalse
+                (Map.containsKey (MessageId.create "m-1" |> expect) decoded.Chapters)
+                "a map where the name goes is not a name"
+
+        // The one field whose unreadable value is documented as no claim rather than as a
+        // reason to drop what carries it (`pendingToDomain`): a terminal width.
+        testCase "a command whose width nobody can read is still queued, and claims no width" <| fun () ->
+            let doc = Y.Doc.Create ()
+            let author = ActorRef.token (Authority.author (Authority.ofAuthor (Principal.Peer ada)))
+            entryIn doc "pending" "q-term" [ "subject", box "terminal:term-a"; "author", box author; "order", box 1.0; "size", box 132.0 ]
+
+            let decoded = SyncedStateSync.ofDoc doc |> Result.mapError (sprintf "%A") |> expect
+            match decoded.Pending |> Map.tryFind (QueueId.create "q-term" |> expect) with
+            | Some act -> Expect.isNone act.Size "a number is not a width anybody claimed"
+            | None -> failwith "the command was dropped over its width"
 
         // A second menu cannot be open, and that is the FIELD's promise rather than a
         // behaviour: `ItemMenu` is one slot, so opening one is writing it. There is no case

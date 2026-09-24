@@ -4,13 +4,12 @@ open Yession.Domain
 
 // Rich-text bodies. A draft/queue body is a structured ProseMirror document held as a Yjs
 // `XmlFragment`. It is a top-level named root on the doc, keyed by `BodyKey`, NOT nested
-// inside the `drafts`/`queue` maps and NOT declared in the Ylmish schema. Two reasons the
-// body stays out of the Ylmish-encoded state:
-//   1. a custom nested in a keyed `Encode.map` cannot round-trip Ylmish's structural decode
-//      (it never yields `ElCustom`), so the value would never decode anyway; and
-//   2. Ylmish's structural reader walks a `Y.XmlFragment` as a plain object and recurses into
-//      its cyclic internals — so an XmlFragment reachable anywhere in the decoded tree crashes
-//      the decode. Keeping bodies as sibling roots (never in the decoded tree) avoids both.
+// inside the `drafts`/`queue` maps and NOT declared in the Ylmish schema, because a custom
+// nested in a keyed `Encode.map` cannot round-trip Ylmish's structural decode (it never yields
+// `ElCustom`), so the value would never decode anyway. The structural reader skips a fragment
+// it meets, so sibling fragment roots sit beside the codec's roots without disturbing a read.
+// (It used to walk one as a plain object into its cyclic internals, which was a second reason
+// the session document was read by hand; Ylmish 1.0.0-beta0227 retired that one.)
 // The body is therefore a CRDT the app co-manages on the doc — synced by the same update
 // transport as everything else, and read by the Session Process straight from the doc (it has
 // no Ylmish binding). `getXmlFragment key` is idempotent and merges by name, so every replica
