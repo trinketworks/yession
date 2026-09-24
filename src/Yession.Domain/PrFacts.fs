@@ -114,6 +114,56 @@ type PrState =
     | PrMerged
     | PrClosed
 
+/// Which pull requests a listing asks for, by where they stand.
+[<RequireQualifiedAccess>]
+type PrListState =
+    | Open
+    | Closed
+    | Merged
+    | All
+
+/// One listing of a repo's pull requests: which, from which branch, and how many. Built only
+/// by `PrQuery.create`, so a limit a provider would refuse, or a state word nobody speaks, is
+/// refused here — before a request is spent on it — in words the caller can act on.
+type PrQuery =
+    private
+        { QState : PrListState
+          QHead : string option
+          QLimit : int }
+
+module PrQuery =
+
+    /// The most one listing returns. A provider pages beyond it; a listing is for looking,
+    /// and a turn reading a hundred rows is a turn that should have narrowed the question.
+    let maxLimit = 50
+
+    let defaultLimit = 20
+
+    let create (state: string option) (head: string option) (limit: int option) : Result<PrQuery, string> =
+        let state =
+            match state |> Option.map (fun s -> s.Trim().ToLowerInvariant ()) with
+            | None
+            | Some ""
+            | Some "open" -> Ok PrListState.Open
+            | Some "closed" -> Ok PrListState.Closed
+            | Some "merged" -> Ok PrListState.Merged
+            | Some "all" -> Ok PrListState.All
+            | Some other -> Error (sprintf "'%s' is not a pull request state — open, closed, merged or all" other)
+        let limit =
+            match limit with
+            | None -> Ok defaultLimit
+            | Some n when n >= 1 && n <= maxLimit -> Ok n
+            | Some n -> Error (sprintf "a listing returns 1 to %d pull requests, not %d" maxLimit n)
+        let head = head |> Option.map (fun h -> h.Trim ()) |> Option.filter (fun h -> h <> "")
+        match state, limit with
+        | Error e, _
+        | _, Error e -> Error e
+        | Ok state, Ok limit -> Ok { QState = state; QHead = head; QLimit = limit }
+
+    let state (q: PrQuery) = q.QState
+    let head (q: PrQuery) = q.QHead
+    let limit (q: PrQuery) = q.QLimit
+
 module PrState =
     let describe (state: PrState) : string =
         match state with

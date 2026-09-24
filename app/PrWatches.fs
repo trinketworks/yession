@@ -163,6 +163,74 @@ type PrDraftOutcome =
 /// THE SEAM for drafting one again, beside `ReadyPr`.
 type DraftPr = string option -> PrRef -> Async<PrDraftOutcome>
 
+/// One pull request as a listing found it — any of a repo's, watched or not. The provider's
+/// own vocabulary (GitHub's `mergeStateStatus`, its queue) is already reduced to the facts
+/// here, so the sentence below is written once for every forge.
+type PrListed =
+    { Pr : PrRef
+      Title : string
+      /// Whose it is, by the provider's handle; `None` for an account that no longer exists.
+      Author : string option
+      Head : string
+      Base : string
+      State : PrState
+      Draft : bool
+      Checks : ChecksRollup
+      /// The same three-valued fact `PrSnapshot.Mergeable` is: `None` is not computed yet.
+      Mergeable : bool option
+      /// On its way in without anybody further, and how — "in the merge queue", "armed to
+      /// merge when its checks pass" — or `None`.
+      OnItsWayIn : string option }
+
+/// THE SEAM for listing a repo's pull requests: the credential, the repo, which ones.
+type ListPrs = string option -> RepoRef -> PrQuery -> Async<Result<PrListed list, PrFetchFailure>>
+
+/// A listing as the agent reads it: a line saying what was asked and how much came back,
+/// then one line per pull request. Pure, and here rather than in the verb, so the sentence
+/// is testable without a provider.
+let renderListing (repo: RepoRef) (query: PrQuery) (rows: PrListed list) : string =
+    let which =
+        match PrQuery.state query with
+        | PrListState.Open -> "open "
+        | PrListState.Closed -> "closed "
+        | PrListState.Merged -> "merged "
+        | PrListState.All -> ""
+    let from = PrQuery.head query |> Option.map (sprintf " from %s") |> Option.defaultValue ""
+    let line (row: PrListed) =
+        let facts =
+            [ yield PrState.describe row.State
+              if row.Draft then yield "draft"
+              if row.State = PrOpen then
+                  yield ChecksRollup.describe row.Checks
+                  if row.Mergeable = Some false then yield "conflicted"
+                  match row.OnItsWayIn with
+                  | Some how -> yield how
+                  | None -> () ]
+        sprintf
+            "%s %s — %s -> %s%s; %s"
+            (PrRef.render row.Pr)
+            row.Title
+            row.Head
+            row.Base
+            (row.Author |> Option.map (sprintf ", by %s") |> Option.defaultValue "")
+            (String.concat ", " facts)
+    match rows with
+    | [] -> sprintf "no %spull requests on %s%s" which (RepoRef.value repo) from
+    | rows ->
+        let count = List.length rows
+        let header =
+            sprintf
+                "%d %spull request%s on %s%s, most recently updated first%s"
+                count
+                which
+                (if count = 1 then "" else "s")
+                (RepoRef.value repo)
+                from
+                // A full page may not be all of them, and a reader that assumes it is has
+                // been told less than it thinks. Said, with the two ways to see the rest.
+                (if count = PrQuery.limit query then " — possibly more; narrow with head or raise limit" else "")
+        String.concat "\n" (header :: List.map line rows)
+
 // --- the poller --------------------------------------------------------------------------
 
 /// One watched pull request as the `pull_requests` query reports it.
@@ -480,7 +548,10 @@ type PrService =
       /// nothing about a watch: being a draft is not one of the things a watch reports.
       Ready : CredentialFor -> PrRef -> Async<Result<string, string>>
       /// Turn one back into a draft — `Ready` the other way, on the same terms.
-      Draft : CredentialFor -> PrRef -> Async<Result<string, string>> }
+      Draft : CredentialFor -> PrRef -> Async<Result<string, string>>
+      /// Any of a repo's pull requests, as they stand now. A read: records nothing, and
+      /// watches nothing.
+      List : CredentialFor -> RepoRef -> PrQuery -> Async<Result<string, string>> }
 
 /// Build the watch verbs over the session's log and the poller they reconcile into.
 ///
@@ -497,6 +568,7 @@ let service
     (unmergePr: UnmergePr)
     (readyPr: ReadyPr)
     (draftPr: DraftPr)
+    (listPrs: ListPrs)
     (resolveToken: CredentialFor -> Async<string option>)
     (refold: PrWatch list -> unit)
     : PrService =
@@ -689,6 +761,14 @@ let service
                                 how)
                 | PrDraftRefused said -> return Error (sprintf "%s would not make it a draft: %s" provider said)
                 | PrDraftFailed failure -> return Error (cannotReach (PrRef.render pr) failure)
+            }
+      List =
+        fun credential repo query ->
+            async {
+                let! token = resolveToken credential
+                match! listPrs token repo query with
+                | Ok rows -> return Ok (renderListing repo query rows)
+                | Error failure -> return Error (cannotReach (RepoRef.value repo) failure)
             } }
 
 // --- the query -----------------------------------------------------------------------------

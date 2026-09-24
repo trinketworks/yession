@@ -7,8 +7,9 @@ module Yession.Host.GitHubPrs
 // (`fetchOver`, the whole of the `FetchPr` seam this side owns), the two that open one
 // (`openOver`: the list that keeps a repeated ask a question, then the create), the query
 // and three mutations that merge one (`mergeOver`), the two that take it back
-// (`unmergeOver`), the one that undrafts it (`readyOver`) and the one that drafts it again
-// (`draftOver`) — and the one field path a delivery names its repo at. The cadence, the ETag bookkeeping, the verbs and
+// (`unmergeOver`), the one that undrafts it (`readyOver`), the one that drafts it again
+// (`draftOver`) and the query that lists a repo's (`listOver`) — and the one field path a
+// delivery names its repo at. The cadence, the ETag bookkeeping, the verbs and
 // the query are provider-neutral and live in `PrWatches.fs`; a second forge is a second copy
 // of this file, not a second poller.
 
@@ -711,6 +712,89 @@ let unmergeOver (apiBase: string) (spending: Spending) : UnmergePr =
                     else return PrUnmergeUnneeded (pr, "not on its way in")
         }
 
+let private listQuery =
+    "query($owner:String!,$name:String!,$states:[PullRequestState!],$head:String,$first:Int!){repository(owner:$owner,name:$name){pullRequests(states:$states,headRefName:$head,first:$first,orderBy:{field:UPDATED_AT,direction:DESC}){nodes{number title isDraft state merged headRefName baseRefName author{login} mergeStateStatus autoMergeRequest{mergeMethod} mergeQueueEntry{id} commits(last:1){nodes{commit{statusCheckRollup{state}}}}}}}}"
+
+/// The rollup GitHub states for a head commit, in this side's words. `null` — no checks
+/// reported at all — is `ChecksNone`, as `rollupOf` has it for the REST look; `EXPECTED` is
+/// a required check that has not started, which is pending, not absent.
+let private rollupNamed (state: string option) : ChecksRollup =
+    match state with
+    | None -> ChecksNone
+    | Some "SUCCESS" -> ChecksGreen
+    | Some ("FAILURE" | "ERROR") -> ChecksRed
+    | Some _ -> ChecksPending
+
+/// One `pullRequests` node, `None` for a number `PrRef.create` refuses.
+let private listedDecoder (repo: RepoRef) : Decoder<PrListed option> =
+    Decode.object (fun get ->
+        let number = get.Required.Field "number" Decode.int
+        let merged = get.Required.Field "merged" Decode.bool
+        let mergeState = get.Required.Field "mergeStateStatus" Decode.string
+        let present (field: string) =
+            get.Optional.Field field Decode.value |> Option.exists (fun v -> not (Decode.Helpers.isNullValue v))
+        let rollup =
+            get.Optional.At [ "commits"; "nodes" ] (Decode.list (Decode.at [ "commit"; "statusCheckRollup" ] (Decode.option (Decode.field "state" Decode.string))))
+            |> Option.bind List.tryLast
+            |> Option.flatten
+        match PrRef.create repo number with
+        | Error _ -> None
+        | Ok pr ->
+            Some
+                { Pr = pr
+                  Title = get.Required.Field "title" Decode.string
+                  Author = get.Optional.At [ "author"; "login" ] Decode.string
+                  Head = get.Required.Field "headRefName" Decode.string
+                  Base = get.Required.Field "baseRefName" Decode.string
+                  State =
+                    if merged then PrMerged
+                    elif get.Required.Field "state" Decode.string = "CLOSED" then PrClosed
+                    else PrOpen
+                  Draft = get.Required.Field "isDraft" Decode.bool
+                  Checks = rollupNamed rollup
+                  // `mergeableNow`'s three are mergeable; `DIRTY` is the computed conflict;
+                  // everything else (`BLOCKED`, `BEHIND`, `UNKNOWN`, `DRAFT`) says nothing
+                  // about whether the two branches merge, so it is not computed here.
+                  Mergeable =
+                    if mergeableNow mergeState then Some true
+                    elif mergeState = "DIRTY" then Some false
+                    else None
+                  OnItsWayIn =
+                    if present "mergeQueueEntry" then Some "in the merge queue"
+                    elif present "autoMergeRequest" then Some "armed to merge when its checks pass"
+                    else None })
+
+/// Listing a repo's pull requests, composed against a real API base like the verbs above.
+let listOver (apiBase: string) (spending: Spending) : ListPrs =
+    fun token repo query ->
+        async {
+            match spending.Permit () with
+            | Resilience.Hold until -> return Error (PrRateLimited (Some (until.ToUnixTimeSeconds ())))
+            | Resilience.Go ->
+                let states =
+                    match PrQuery.state query with
+                    | PrListState.Open -> Encode.list [ Encode.string "OPEN" ]
+                    | PrListState.Closed -> Encode.list [ Encode.string "CLOSED" ]
+                    | PrListState.Merged -> Encode.list [ Encode.string "MERGED" ]
+                    // No filter is GitHub's "all of them".
+                    | PrListState.All -> Encode.nil
+                let variables =
+                    [ "owner", Encode.string (RepoRef.owner repo)
+                      "name", Encode.string (RepoRef.repo repo)
+                      "states", states
+                      "head", (PrQuery.head query |> Option.map Encode.string |> Option.defaultValue Encode.nil)
+                      "first", Encode.int (PrQuery.limit query) ]
+                let decoder =
+                    Decode.at
+                        [ "repository"; "pullRequests"; "nodes" ]
+                        (Decode.list (listedDecoder repo) |> Decode.map (List.choose id))
+                match! askGraphql (apiBase.TrimEnd '/') spending (Option.toObj token) listQuery variables decoder with
+                | Ok rows -> return Ok rows
+                | Error (Failed failure) -> return Error failure
+                // A query GitHub read and declined is a failure to read, said in its words.
+                | Error (Declined said) -> return Error (PrUnreadable said)
+        }
+
 let private convertToDraft =
     "mutation($id:ID!){convertPullRequestToDraft(input:{pullRequestId:$id}){clientMutationId}}"
 
@@ -865,7 +949,8 @@ let hooks
             held
             |> List.tryPick (fun (repo, current) -> if current = Some id then Some repo else None) }
 
-// --- the agent tools: create_pr, ready_pr, draft_pr, merge_pr, unmerge_pr, watch_pr, unwatch_pr
+// --- the agent tools: list_prs, create_pr, ready_pr, draft_pr, merge_pr, unmerge_pr, watch_pr,
+// unwatch_pr
 //
 // The GitHub-flavoured entries `AgentTools.fs`'s registry used to declare directly,
 // moved here for the reason this file's own header states: everything GitHub-specific
@@ -964,6 +1049,14 @@ let private draftPr (capabilities: AgentCapabilities) (raw: string) (number: int
             | Error e -> return sprintf "could not make the pull request a draft: %s" e
         })
 
+let private listPrs (capabilities: AgentCapabilities) (raw: string) (query: PrQuery) : Async<string> =
+    withRepo raw (fun repo ->
+        async {
+            match! capabilities.Repos.ListPrs repo query with
+            | Ok listing -> return listing
+            | Error e -> return sprintf "could not list the pull requests: %s" e
+        })
+
 let private unmergePr (capabilities: AgentCapabilities) (raw: string) (number: int) : Async<string> =
     withRepo raw (fun repo ->
         async {
@@ -1004,6 +1097,18 @@ let private prDraftArgs (json: string) : Result<string * string * string * strin
             get.Optional.Field "draft" Decode.bool |> Option.defaultValue false))
         json
 
+/// `list_prs`' four: the repo, and which of its pull requests — read into a `PrQuery` by the
+/// domain, which is where a state word or a limit is refused.
+let private listArgs (json: string) : Result<string * PrQuery, string> =
+    readArgs
+        (Decode.object (fun get ->
+            get.Required.Field "repo" Decode.string,
+            get.Optional.Field "state" Decode.string,
+            get.Optional.Field "head" Decode.string,
+            get.Optional.Field "limit" Decode.int))
+        json
+    |> Result.bind (fun (repo, state, head, limit) -> PrQuery.create state head limit |> Result.map (fun q -> repo, q))
+
 /// `merge_pr`'s three: the pair above, and how the commits should land — `squash` unless
 /// said otherwise, for `PrMergeMethod.create`'s reason.
 let private mergeArgs (json: string) : Result<string * int * string, string> =
@@ -1022,6 +1127,19 @@ let providerTools (capabilities: AgentCapabilities) : (ToolDescriptor * (string 
     let tool name description fields body : ToolDescriptor * (string -> Async<Result<ToolAnswer, string>>) =
         ToolDescriptor.create AgentTools.Namespace name description (ToolSchema.ofFields fields), body
     [ tool
+          "list_prs"
+          "List a repository's pull requests on GitHub as they stand right now — any of them, whoever opened them, watched or not: number, title, branches, author, and for an open one whether it is a draft, its checks, whether it conflicts, and whether it is on its way in (armed to merge, or in the merge queue). Most recently updated first. A look, not a watch: it changes nothing and says nothing further — watch_pr is how to be told when one changes, and the pull_requests query is the ones this session already watches. Reads with the GitHub credential of whoever's turn this is, so a \"cannot see it\" on a repo that exists means their credential cannot reach it."
+          [ ToolField.required "repo" "string" "owner/name"
+            ToolField.optional "state" "string" "\"open\" (the default), \"closed\", \"merged\" or \"all\""
+            ToolField.optional "head" "string" "only those from this branch, e.g. \"claude/fix-the-thing\""
+            ToolField.optional "limit" "integer" "how many, 1 to 50; 20 unless said" ]
+          (fun args ->
+              async {
+                  match listArgs args with
+                  | Error e -> return Error e
+                  | Ok (repo, query) -> return! ok (listPrs capabilities repo query)
+              })
+      tool
           "create_pr"
           "Open a pull request on GitHub, from a branch that is already pushed. The commits have to be up there first — push from a terminal with execute_command; this opens the pull request and nothing else. It answers with the number, as `owner/repo#n`, which is what watch_pr takes: this session says nothing further about a pull request nobody watches. Opening one that is already open from the same branch onto the same base changes nothing and reports the one that exists, so calling it twice is safe. It spends the GitHub credential of whoever's turn this is, so a \"cannot see it\" on a repo that exists means their credential cannot reach that repo — say so rather than retrying; everyone in the session sees the pull request open in the timeline. What GitHub will not open it says why in its own words — no commits between the two branches, a head branch it cannot find — and that sentence is what comes back."
           [ ToolField.required "repo" "string" "owner/name"

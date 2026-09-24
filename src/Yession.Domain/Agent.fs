@@ -561,6 +561,11 @@ type UnmergePr = RepoRef -> int -> Async<Result<CommandOutcome, string>>
 /// and nothing else this session holds can turn one back into a pull request.
 type ReadyPr = RepoRef -> int -> Async<Result<CommandOutcome, string>>
 
+/// List a repo's pull requests as the provider has them now — any of them, watched or not,
+/// on the turn human's credential. A READ, like `Status`: it changes nothing, so it takes no
+/// gate, and what comes back is text.
+type ListPrs = RepoRef -> PrQuery -> Async<Result<string, string>>
+
 /// Turn an open pull request back into a draft — `ReadyPr` the other way: on the record,
 /// and no longer asking for review.
 type DraftPr = RepoRef -> int -> Async<Result<CommandOutcome, string>>
@@ -684,6 +689,8 @@ type RepoCapabilities =
       UnmergePr : UnmergePr
       /// Undrafting one — what a draft `CreatePr` opened needs before `MergePr` can take it.
       ReadyPr : ReadyPr
+      /// Any of a repo's pull requests, as they stand — the look `WatchPr` is not.
+      ListPrs : ListPrs
       DraftPr : DraftPr
       /// Tools a provider adds beyond the generic verbs above -- GitHub's `create_pr`,
       /// `watch_pr`, `unwatch_pr` today, contributed by `app/GitHubPrs.fs` and nothing else
@@ -852,6 +859,7 @@ module AgentCapabilities =
               MergePr = fun _ _ _ -> async { return Error "no repos capability" }
               UnmergePr = fun _ _ -> async { return Error "no repos capability" }
               ReadyPr = fun _ _ -> async { return Error "no repos capability" }
+              ListPrs = fun _ _ -> async { return Error "no repos capability" }
               DraftPr = fun _ _ -> async { return Error "no repos capability" }
               ProviderTools = [] }
           Sandboxes =

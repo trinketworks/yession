@@ -3416,6 +3416,61 @@ let private prDraftTests =
             }
     ]
 
+let private prListTests =
+    let listing (stub: StubGitHubApi) = GitHubPrs.listOver stub.Url GitHubPrs.Spending.unmetered
+    let octo = RepoRef.create "octo/hello" |> expect
+    let answering (nodes: string list) =
+        sprintf """{"data":{"repository":{"pullRequests":{"nodes":[%s]}}}}""" (String.concat "," nodes)
+    let variables (stub: StubGitHubApi) =
+        stub.Posted |> Seq.map snd |> Seq.last
+
+    testList "listing a repo's pull requests" [
+        testCaseAsync "each pull request comes back with what it is doing" <|
+            async {
+                let! stub = startStubGitHubApi ()
+                stub.SetStanding (
+                    answering
+                        [ """{"number":7,"title":"Add feature","isDraft":true,"state":"OPEN","merged":false,"headRefName":"topic","baseRefName":"master","author":{"login":"ada"},"mergeStateStatus":"DRAFT","autoMergeRequest":null,"mergeQueueEntry":null,"commits":{"nodes":[{"commit":{"statusCheckRollup":{"state":"SUCCESS"}}}]}}"""
+                          """{"number":8,"title":"Other","isDraft":false,"state":"OPEN","merged":false,"headRefName":"other","baseRefName":"master","author":null,"mergeStateStatus":"DIRTY","autoMergeRequest":null,"mergeQueueEntry":{"id":"MQE_1"},"commits":{"nodes":[{"commit":{"statusCheckRollup":null}}]}}""" ])
+                match! listing stub (Some "token-abc") octo (PrQuery.create None None None |> expect) with
+                | Ok [ first; second ] ->
+                    Expect.equal (PrRef.render first.Pr) "octo/hello#7" "the number, on the repo asked about"
+                    Expect.isTrue first.Draft "a draft is a draft"
+                    Expect.equal first.Checks ChecksGreen "its checks"
+                    Expect.equal first.Author (Some "ada") "whose"
+                    Expect.equal second.Mergeable (Some false) "a computed conflict"
+                    Expect.equal second.OnItsWayIn (Some "in the merge queue") "and on its way in"
+                | other -> failwithf "expected two, got %A" other
+            }
+
+        testCaseAsync "open is what github is asked for unless told otherwise" <|
+            async {
+                let! stub = startStubGitHubApi ()
+                stub.SetStanding (answering [])
+                let! _ = listing stub (Some "token-abc") octo (PrQuery.create None None None |> expect)
+                Expect.stringContains (variables stub) "\"states\":[\"OPEN\"]" "open ones"
+            }
+
+        testCaseAsync "all of them asks github for no state at all" <|
+            async {
+                let! stub = startStubGitHubApi ()
+                stub.SetStanding (answering [])
+                let! _ = listing stub (Some "token-abc") octo (PrQuery.create (Some "all") (Some "topic") None |> expect)
+                Expect.stringContains (variables stub) "\"states\":null" "no filter is github's all"
+                Expect.stringContains (variables stub) "\"head\":\"topic\"" "and the branch, as asked"
+            }
+
+        testCaseAsync "a repo the credential cannot see is not found, the way a look says it" <|
+            async {
+                let! stub = startStubGitHubApi ()
+                stub.SetStanding
+                    """{"data":{"repository":null},"errors":[{"type":"NOT_FOUND","path":["repository"],"message":"Could not resolve to a Repository with the name 'octo/hello'."}]}"""
+                match! listing stub (Some "token-abc") octo (PrQuery.create None None None |> expect) with
+                | Error PrWatches.PrNotFound -> ()
+                | other -> failwithf "expected not found, got %A" other
+            }
+    ]
+
 let private prWatchVerbTests =
     let ada = PeerRef (PeerId.create "ada" |> expect)
     /// Ada watching for herself, and the agent watching on her turn: two authorities, one
@@ -3449,6 +3504,7 @@ let private prWatchVerbTests =
                 (GitHubPrs.unmergeOver stub.Url GitHubPrs.Spending.unmetered)
                 (GitHubPrs.readyOver stub.Url GitHubPrs.Spending.unmetered)
                 (GitHubPrs.draftOver stub.Url GitHubPrs.Spending.unmetered)
+                (GitHubPrs.listOver stub.Url GitHubPrs.Spending.unmetered)
                 (fun _ -> async { return Some "token-abc" })
                 applied.Add
         service, log, applied
@@ -4150,6 +4206,81 @@ let private panelFoldTests =
             Expect.equal model.GitHub.Pending (Pending.Refused Pending.unseen) "and so did github"
     ]
 
+/// What a listing asks for, and what it says — pure, so no capability.
+let private prListingTests =
+    let octo = RepoRef.create "octo/hello" |> expect
+    let query state head limit = PrQuery.create state head limit |> expect
+    let row number : PrWatches.PrListed =
+        { Pr = PrRef.create octo number |> expect
+          Title = "Add feature"
+          Author = Some "ada"
+          Head = "topic"
+          Base = "master"
+          State = PrOpen
+          Draft = false
+          Checks = ChecksGreen
+          Mergeable = Some true
+          OnItsWayIn = None }
+
+    testList "listing pull requests" [
+        testCase "a listing asks for twenty open ones unless told otherwise" <| fun () ->
+            let q = query None None None
+            Expect.equal (PrQuery.state q, PrQuery.head q, PrQuery.limit q) (PrListState.Open, None, 20) "open, any branch, twenty"
+
+        testCase "a state nobody speaks is refused in words that name the ones they do" <| fun () ->
+            match PrQuery.create (Some "pending") None None with
+            | Error e -> Expect.stringContains e "open, closed, merged or all" "the words that work"
+            | Ok _ -> failwith "expected a refusal"
+
+        testCase "a limit past what one listing returns is refused, not clamped" <| fun () ->
+            Expect.isError (PrQuery.create None None (Some 51)) "over the most"
+            Expect.isError (PrQuery.create None None (Some 0)) "and under the least"
+
+        // A draft is the fact that stopped one agent for three hours: a listing that did
+        // not say so would read as "open, green, mergeable" and send it to merge_pr again.
+        testCase "a draft in a listing says it is a draft" <| fun () ->
+            let said = PrWatches.renderListing octo (query None None None) [ { row 875 with Draft = true } ]
+            Expect.stringContains said "octo/hello#875" "which one"
+            Expect.stringContains said "draft" "and that it is a draft"
+
+        testCase "a full page says there may be more" <| fun () ->
+            let said = PrWatches.renderListing octo (query None None (Some 2)) [ row 1; row 2 ]
+            Expect.stringContains said "possibly more" "a page that could be all of them is not claimed to be"
+
+        testCase "an empty listing says what it looked for" <| fun () ->
+            let said = PrWatches.renderListing octo (query None (Some "topic") None) []
+            Expect.stringContains said "no open pull requests on octo/hello from topic" "nothing, and where it looked"
+
+        testCaseAsync "list_prs reaches the capability with the query it was given" <| async {
+            let mutable seen : (string * PrQuery) option = None
+            let capabilities =
+                { AgentCapabilities.none with
+                    Repos =
+                      { AgentCapabilities.none.Repos with
+                          ListPrs =
+                            fun repo q ->
+                              async {
+                                  seen <- Some (RepoRef.value repo, q)
+                                  return Ok "listed"
+                              } } }
+            let! _ = invokeProviderTool capabilities "list_prs" """{"repo":"octo/hello","state":"all","head":"topic","limit":5}"""
+            match seen with
+            | Some (repo, q) ->
+                Expect.equal (repo, PrQuery.state q, PrQuery.head q, PrQuery.limit q) ("octo/hello", PrListState.All, Some "topic", 5) "as written"
+            | None -> failwith "the capability was never reached" }
+
+        testCaseAsync "a list_prs the domain refuses never reaches the capability" <| async {
+            let mutable reached = false
+            let capabilities =
+                { AgentCapabilities.none with
+                    Repos =
+                      { AgentCapabilities.none.Repos with
+                          ListPrs = fun _ _ -> async { reached <- true; return Ok "listed" } } }
+            let! answer = invokeProviderTool capabilities "list_prs" """{"repo":"octo/hello","limit":500}"""
+            Expect.isError answer "refused"
+            Expect.isFalse reached "and nothing was asked" }
+    ]
+
 let tests =
     testList "Connections" [
         panelTests
@@ -4166,6 +4297,7 @@ let tests =
         prPollTests
         prHookTests
         prAgentToolTests
+        prListingTests
         Tag.needs "Broker service" [ Tag.Ports ] (fun () -> brokerTests)
         Tag.needs "Connection control routes" [ Tag.Ports ] (fun () -> routeTests)
         Tag.needs "GitHub sign-in routes" [ Tag.Ports ] (fun () -> githubRouteTests)
@@ -4176,6 +4308,7 @@ let tests =
         Tag.needs "Taking a pull request back" [ Tag.Ports ] (fun () -> prUnmergeTests)
         Tag.needs "Marking a pull request ready" [ Tag.Ports ] (fun () -> prReadyTests)
         Tag.needs "Making a pull request a draft" [ Tag.Ports ] (fun () -> prDraftTests)
+        Tag.needs "Listing a repo's pull requests" [ Tag.Ports ] (fun () -> prListTests)
         Tag.needs "Watching a pull request" [ Tag.Ports ] (fun () -> prWatchVerbTests)
         Tag.needs "Per-actor credentials E2E" [ Tag.Ports; Tag.Native ] (fun () -> e2eTests)
     ]
