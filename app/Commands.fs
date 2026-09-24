@@ -947,6 +947,13 @@ let private repoCapabilitiesFor
                       // The READS take no gate and no approver: they change nothing, so there is
                       // nothing to approve and nothing to resume.
                       Fetch = service.FetchRepo (Repos.agentCaller turnActor)
+                      // A read of pull requests, on the same credential a gated PR verb would
+                      // spend — read off the same authority, so the two cannot differ.
+                      ListPrs =
+                        fun repo query ->
+                          match services.Prs () with
+                          | Some prs -> prs.List (Authority.credential (Authority.agentFor turnActor)) repo query
+                          | None -> async { return Error "this session cannot read pull requests" }
                       Status = service.RepoStatus
                       Log = service.RepoLog
                       Diff = service.RepoDiff } }

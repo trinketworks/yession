@@ -166,7 +166,8 @@ let private prsOpening (create: PrDraft -> Async<Result<string, string>>) : PrWa
       Merge = fun _ _ _ -> async { return Error "not part of this test" }
       Unmerge = fun _ _ -> async { return Error "not part of this test" }
       Ready = fun _ _ -> async { return Error "not part of this test" }
-      Draft = fun _ _ -> async { return Error "not part of this test" } }
+      Draft = fun _ _ -> async { return Error "not part of this test" }
+      List = fun _ _ _ -> async { return Error "not part of this test" } }
 
 let private servicesOver (service: Repos.ReposService) : Commands.CommandServices =
     { Repos = fun () -> Some service
