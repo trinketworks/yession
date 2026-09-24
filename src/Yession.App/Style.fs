@@ -1206,10 +1206,7 @@ module Style =
 
     /// The float's own slot: positioning, the scrim, and the show/hide `Render.fs` toggles (a
     /// scroll-distance fact, not model state — see there for why), kept off the button itself
-    /// so toggling it can never fight the button's own `flex` layout for which `display` wins.
-    /// Centred rather than cornered, unlike `terminalLiveFloat`: that one is a status line a
-    /// reader glances at, this is a CONTROL a thumb has to reach, and centred is reachable
-    /// with either hand on a phone.
+    /// so toggling it can never fight the button's own layout for which `display` wins.
     ///
     /// The scrim fades to `bg` and NOT to `surface`: the timeline draws no fill of its own, so
     /// what a line of prose actually sits on down there is the canvas `mainColumn` inherits.
@@ -1221,17 +1218,13 @@ module Style =
     /// `pointer-events-none`, with the button taking them back: the slot is a full-width strip
     /// lying over live text, and a scrim that swallowed a tap or a selection would take more
     /// from the reader than the contrast it buys.
+    ///
+    /// `px-8` is the timeline's own padding, so the rail inside it has the reading column's
+    /// geometry exactly — see `chatJumpToLatestRail`. None on a phone, where the grounds bleed
+    /// to the screen's edges and the column they draw is the whole width.
     let chatJumpToLatestSlot =
-        "hidden absolute inset-x-0 bottom-0 z-10 flex justify-center pointer-events-none "
+        "hidden absolute inset-x-0 bottom-0 z-10 pointer-events-none px-8 max-md:px-0 "
         + "pt-12 pb-4 bg-linear-to-t from-bg/90 to-transparent"
-
-    /// The button in that slot: the chat's twin of `terminalLiveFloat`'s solid ground —
-    /// opaque so it reads over whatever text is scrolling under it, no rounded corners
-    /// because this product draws none (see `itemGround`).
-    let chatJumpToLatest =
-        cls [ "pointer-events-auto flex items-center justify-center p-2.5 bg-surface"
-              "text-ink-dim hover:text-ink cursor-pointer transition-colors"
-              Stroke.ring; Stroke.rim; focusRing ]
 
     /// How wide anything in the timeline is allowed to get.
     ///
@@ -1246,6 +1239,30 @@ module Style =
     /// Uncapped on a phone, where the screen is already narrower than any measure worth
     /// setting and the grounds inside it run edge to edge (`itemGround`).
     let readingColumn = "max-w-[38rem]"
+
+    /// The reading column again, drawn in the slot so the button can be placed against the
+    /// column's edge rather than against the window's.
+    ///
+    /// It used to be centred, as a control a thumb reaches with either hand — and a centred
+    /// opaque square over a column of prose covers whatever line is under it. Measured on a
+    /// phone it hid 22px of a paragraph. So it stands where no text is: beside the column on
+    /// a desktop, and on a phone, where there is no beside, in the strip every item keeps
+    /// free for its actions handle (`itemGround`'s `pr-8`), which no message's words enter.
+    let chatJumpToLatestRail = cls [ readingColumn; "max-md:max-w-none relative h-8" ]
+
+    /// The button on that rail: the chat's twin of `terminalLiveFloat`'s solid ground —
+    /// opaque so it reads over whatever is scrolling under it, no rounded corners because
+    /// this product draws none (see `itemGround`).
+    ///
+    /// 32px square, which is the width of that strip: `left-full` puts it just past the
+    /// column on a desktop (in the gutter, or in the timeline's own 32px padding when the
+    /// column fills the pane), and `right-0` on a phone puts it exactly over the strip, its
+    /// centre on the same line as every handle above it.
+    let chatJumpToLatest =
+        cls [ "pointer-events-auto absolute bottom-0 left-full max-md:left-auto max-md:right-0"
+              "w-8 h-8 flex items-center justify-center bg-surface"
+              "text-ink-dim hover:text-ink cursor-pointer transition-colors"
+              Stroke.ring; Stroke.rim; focusRing ]
 
     /// One actor's consecutive run — their messages, the commands they ran, the tools they
     /// called — under ONE author line. Attribution is said where it CHANGES, which is how a
