@@ -909,17 +909,11 @@ let startFull
         // reads the projection — and before the terminal drain, which must not try to run a
         // command in a terminal that is gone.
         do! terminals.ReconcileAtBoot ()
-        // And the turn that process was running, for the same reason: the log still holds it
-        // open, and nothing else will ever close it.
-        do! scheduler.ReconcileAtBoot ()
-        // The boot half of the same arm: a completion the previous process never acted on is
-        // still owed, and the wake re-derives it from the log rather than losing it.
-        scheduler.Wake ()
-
-        // The boot drain (Step 19): a replayed doc may hold entries that were pending
-        // at the crash (consume them now) or already consumed but not yet removed (the
-        // crash window — the log-anchored dedup repairs them without re-consuming).
-        drain ()
+        // And the turn that process was running, then what people queued, then what the log
+        // still owes — in that order, which is the scheduler's to keep (`Scheduler.Boot`).
+        // The drain also repairs the crash window (Step 19): a replayed doc may hold entries
+        // already consumed but not yet removed, and the log-anchored dedup re-consumes none.
+        do! scheduler.Boot ()
         drainTerminals ()
 
         let mutable endWaiters : (unit -> unit) list = []

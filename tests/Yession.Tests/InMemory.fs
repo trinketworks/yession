@@ -48,7 +48,7 @@ let tests =
 
         // The Host is what puts the scheduler's boot repair in front of the first drain, and
         // only a Host booted over the log a dead process left can say it does. The rule
-        // itself is the scheduler's (`Scheduler.ReconcileAtBoot`, pinned in `Agent.fs`).
+        // itself is the scheduler's (`Scheduler.Boot`, pinned in `Agent.fs`).
         testCaseAsync "a Host booted over a turn the previous process died under closes it, and a client sees it end" <|
             async {
                 let log = InMemoryEventLog.create (sid ()) (fun () -> System.DateTimeOffset.UtcNow)

@@ -60,9 +60,19 @@ module Scheduler =
           /// therefore over: it is ended here, as a failure that names the restart, ANCHORED
           /// WHERE IT STOPPED — the same shape a turn that fails on its own leaves behind.
           ///
-          /// Called once at boot, BEFORE the first drain: a message queued behind the dead
-          /// turn would otherwise start a second turn beside one the log still holds open.
-          ReconcileAtBoot : unit -> Async<unit> }
+          /// That is the first of the three things boot does, in the one order they may
+          /// happen, which is why they are one member and not three a caller sequences:
+          ///
+          /// 1. The dead turn is ended, BEFORE anything drains — a message queued behind it
+          ///    would otherwise start a second turn beside one the log still holds open.
+          /// 2. What people queued while nothing was running drains next, because a person
+          ///    outranks a wake (the rule every turn's end already follows). The other way
+          ///    round, a completion owed from before the stop took the slot, and somebody who
+          ///    had asked a question waited behind the agent reading its own news.
+          /// 3. Then the wake, for what the log still owes. When the drain started a turn the
+          ///    slot is taken and this does nothing — that turn's digest carries the news, and
+          ///    its end re-reads the log for anything still owed.
+          Boot : unit -> Async<unit> }
 
     /// Create the scheduler for one session. `initialConsumed` seeds the log-anchored
     /// dedup set (every QueueId already named by a `MessageSent` in the durable log —
@@ -324,4 +334,10 @@ module Scheduler =
           RequestInterrupt = requestInterrupt
           RunningTurn = fun () -> running |> Option.map (fun t -> t.TurnId)
           Wake = wake
-          ReconcileAtBoot = reconcileAtBoot }
+          Boot =
+            fun () ->
+                async {
+                    do! reconcileAtBoot ()
+                    drain ()
+                    wake ()
+                } }
