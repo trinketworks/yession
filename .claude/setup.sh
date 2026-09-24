@@ -73,7 +73,7 @@ export https_proxy="\${https_proxy:-\${HTTPS_PROXY:-}}"
 # builders off exactly that path, and this wrapper inherits the caller's environment, so it
 # has to be unset rather than merely not set.
 #
-# The symptom this fixes is \`fetchNpmDeps\` being unable to fetch anything, which made
+# The symptom this fixes is the npm tarball fetches being unable to fetch anything, which made
 # adding one npm dependency look impossible in this container.
 unset no_proxy NO_PROXY
 export PATH="\$HOME/.nix-profile/bin:\$PATH"
@@ -90,9 +90,9 @@ fi
 . "$nix_sh"
 
 # The yession cachix cache, so a store path this container lost is SUBSTITUTED instead of
-# rebuilt — above all the ~800MB yession-npm-deps FOD, whose rebuild fetches the srt git
-# dependency from codeload.github.com, a host the sandbox proxy blocks; without this line
-# one garbage collection strands the container. CI pushes every closure it builds there
+# rebuilt — above all the multi-gigabyte node_modules tree and the NuGet FOD, whose rebuilds
+# refetch every package from the registries; without this line one garbage collection costs
+# the container its next several minutes. CI pushes every closure it builds there
 # (cachix-action in the workflows) and the cache is public, so this only names what already
 # exists. extra-*, so cache.nixos.org stays. Here in the shared section rather than the
 # install block so the SessionStart hook repairs a container set up before this existed.
