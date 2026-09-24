@@ -608,19 +608,11 @@ module SyncedStateSync =
 
     /// The queue key an author's draft will become when sent, read from the doc — the same value
     /// for every co-editor, which is what makes concurrent sends merge instead of duplicating.
-    /// `None` when there is no slot (nothing published to send).
+    /// `None` when there is no slot (nothing published to send), or one whose `queueId` does
+    /// not decode — read through `ofDoc`, so the send and every other reader agree on which
+    /// slots are drafts.
     let draftQueueId (doc: Yjs.Y.Doc) (author: PeerId) : QueueId option =
-        if not (doc.share.has "drafts") then None
-        else
-            match (doc.getMap "drafts" : Yjs.Y.Map<obj>).get (PeerId.value author) with
-            | Some entryObj when not (isNull entryObj) ->
-                (unbox<Yjs.Y.Map<obj>> entryObj).get "queueId"
-                |> Option.map (unbox<string>)
-                |> Option.bind (fun value ->
-                    match QueueId.create value with
-                    | Ok id -> Some id
-                    | Error _ -> None)
-            | _ -> None
+        (ofDoc doc).Drafts |> Map.tryFind author |> Option.map (fun draft -> draft.QueueId)
 
     // --- Terminals (Plan 13) -----------------------------------------------------------
     //
@@ -646,17 +638,9 @@ module SyncedStateSync =
     /// The queue key an author's terminal draft becomes when sent — the same value for every
     /// co-editor, which is what makes concurrent sends merge into one entry.
     let terminalDraftQueueId (doc: Yjs.Y.Doc) (terminal: TerminalId) (author: PeerId) : QueueId option =
-        if not (doc.share.has "terminalDrafts") then None
-        else
-            match (doc.getMap "terminalDrafts" : Yjs.Y.Map<obj>).get (TerminalDraftKey.make terminal author) with
-            | Some entryObj when not (isNull entryObj) ->
-                (unbox<Yjs.Y.Map<obj>> entryObj).get "queueId"
-                |> Option.map (unbox<string>)
-                |> Option.bind (fun value ->
-                    match QueueId.create value with
-                    | Ok id -> Some id
-                    | Error _ -> None)
-            | _ -> None
+        (ofDoc doc).TerminalDrafts
+        |> Map.tryFind (terminal, author)
+        |> Option.map (fun draft -> draft.QueueId)
 
     /// Put a command in a terminal's queue, from the Session Process, in ONE transaction:
     /// the command's text root and the entry that names it (Plan 13).
