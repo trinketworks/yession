@@ -2820,6 +2820,18 @@ let editorTests =
                     await (page.EvaluateAsync<int>
                             "() => document.querySelectorAll('#shell [data-conversation] [data-item-actions]').length")
                 Expect.isTrue (asked > 1) (sprintf "the fixture draws a run of items to ask about (drew %d)" asked)
+                // Settled first. On a phone the terminals pane slides off to the side as the
+                // shell lays out, and a hit-test taken while it is on its way lands on the pane
+                // rather than on the column under it — the screen not having arrived yet, not a
+                // control a thumb cannot reach. Every animation that ends is waited for (a pulse
+                // or a blink never ends, and is not). Reduced motion would not do: the phone
+                // pane's slide does not honour it.
+                do! awaitU (
+                        page.EvaluateAsync
+                            """() => Promise.all(
+                                 document.getAnimations()
+                                   .filter(a => a.effect && a.effect.getComputedTiming().iterations !== Infinity)
+                                   .map(a => a.finished.catch(() => null)))""")
                 let! unreachable =
                     await (page.EvaluateAsync<string[]>
                             """() => {
@@ -2830,7 +2842,8 @@ let editorTests =
                                    const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)
                                    const opacity = Number(getComputedStyle(control).opacity)
                                    if (opacity === 0 || !hit || !control.contains(hit))
-                                     wrong.push(control.getAttribute('data-item-actions') + ' (opacity ' + opacity + ')')
+                                     wrong.push(control.getAttribute('data-item-actions') + ' (opacity ' + opacity
+                                       + ', under ' + (hit ? hit.outerHTML.slice(0, 80) : 'nothing') + ')')
                                  }
                                  return wrong
                                }""")
