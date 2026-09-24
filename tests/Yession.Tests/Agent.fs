@@ -894,7 +894,8 @@ let private prSnapshot : PrSnapshot =
       HeadSha = "abc"
       Checks = ChecksPending
       Queued = false
-      Mergeable = None }
+      Mergeable = None
+      Draft = false }
 
 let private watchedBy (authority: Authority) =
     PrWatched.create (MessageId.create "w1" |> expect) authority watchedPr prSnapshot
