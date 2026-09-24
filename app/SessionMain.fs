@@ -966,7 +966,10 @@ Async.StartImmediate (
                                           Transition = transition
                                           State = snapshot.State
                                           Checks = snapshot.Checks
-                                          Watcher = watcher })
+                                          Watcher = watcher
+                                          // When it happened, where GitHub says — the half of
+                                          // `WatchChanged` only the look that found it knows.
+                                          OccurredAt = PrTransition.occurredAt snapshot.Times transition })
                             ()
                 }
             prWatchers <-

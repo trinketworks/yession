@@ -436,7 +436,11 @@ let private frameSerializationTests =
                         Mergeable = Some true
                         Review = Some PrReview.ChangesRequested
                         Behind = true
-                        Draft = true }
+                        Draft = true
+                        Times =
+                          { MergedAt = None
+                            ClosedAt = None
+                            ChecksSettledAt = Some (DateTimeOffset (2026, 9, 25, 8, 0, 0, TimeSpan.Zero)) } }
                   |> expect
                   |> PrWatched
                   // The agent's watch, on the turn human's credential: the two halves
@@ -453,7 +457,7 @@ let private frameSerializationTests =
                         Mergeable = None
                         Review = None
                         Behind = false
-                        Draft = false }
+                        Draft = false; Times = PrTimes.none }
                   |> expect
                   |> PrWatched
                   PrUnwatched
@@ -466,7 +470,7 @@ let private frameSerializationTests =
                       Transition = PrTransition.ChecksFailed
                       State = PrOpen
                       Checks = ChecksRed
-                      Watcher = Principal.Peer peerId } ]
+                      Watcher = Principal.Peer peerId; OccurredAt = Some (DateTimeOffset (2026, 9, 25, 8, 0, 0, TimeSpan.Zero)) } ]
             for event in everyCase do
                 let env = { sampleEnvelope with Event = event }
                 let roundTripped =
@@ -524,7 +528,7 @@ let private frameSerializationTests =
                           Transition = t
                           State = PrOpen
                           Checks = ChecksGreen
-                          Watcher = Principal.Peer (PeerId.create "ada" |> expect) }
+                          Watcher = Principal.Peer (PeerId.create "ada" |> expect); OccurredAt = None }
                 Expect.equal (Codec.fromString Codec.sessionEvent (Codec.toString Codec.sessionEvent event) |> expect) event "round-trip"
 
         testCase "a watch recorded before drafts were read decodes as not a draft" <| fun () ->
@@ -562,7 +566,7 @@ let private frameSerializationTests =
                           Transition = t
                           State = PrOpen
                           Checks = ChecksGreen
-                          Watcher = Principal.Peer (PeerId.create "ada" |> expect) }
+                          Watcher = Principal.Peer (PeerId.create "ada" |> expect); OccurredAt = None }
                 Expect.equal (Codec.fromString Codec.sessionEvent (Codec.toString Codec.sessionEvent event) |> expect) event "round-trip"
 
         testCase "a MessageSent persisted before Phase 3 (no queueId field) still decodes" <| fun () ->
@@ -1201,6 +1205,64 @@ let private chapterTests =
             Expect.isNone (Chapters.shaped "   \n  ") "nothing usable, nothing returned"
     ]
 
+/// The contract every watched change keeps, and the one thing that reads it today: whether
+/// a change was noticed long after it happened.
+let private watchChangedTests =
+    let repo = RepoRef.create "octo/hello" |> expect
+    let pr = PrRef.create repo 12 |> expect
+    let ada = Principal.Peer (PeerId.create "ada" |> expect)
+    let noticedAt = DateTimeOffset (2026, 9, 25, 9, 0, 0, TimeSpan.Zero)
+    let merged (occurredAt: DateTimeOffset option) : SessionEvent =
+        PrTransitioned
+            { MessageId = MessageId.create "t1" |> expect
+              Pr = pr
+              Transition = PrTransition.Merged
+              State = PrMerged
+              Checks = ChecksGreen
+              Watcher = ada
+              OccurredAt = occurredAt }
+    let recorded (offset: int64) (event: SessionEvent) : EventEnvelope<SessionEvent> =
+        { EventId = EventId.fresh ()
+          SessionId = SessionId.create "watch-session" |> expect
+          Offset = EventOffset.create offset |> expect
+          Actor = ActorRef.System
+          Timestamp = noticedAt
+          Event = event }
+    /// What the timeline says about the one change — the sentence the screen shows and the
+    /// agent is given, one and the same (`ConversationItem.said`).
+    let said (event: SessionEvent) =
+        let projection, _ = ConversationProjection.applyEvents None [ recorded 1L event ] ConversationProjection.empty
+        projection.Items |> List.map ConversationItem.said |> String.concat "\n"
+
+    testList "What every watched change keeps" [
+        testCase "a pull request's change keeps the contract, with when it happened" <| fun () ->
+            let at = noticedAt.AddHours -8.0
+            match Watching.WatchChanged.ofEvent (merged (Some at)) with
+            | Some change ->
+                Expect.equal change.Watcher ada "whose watch noticed"
+                Expect.equal change.OccurredAt (Some at) "and when it happened at the source"
+            | None -> failwith "a pull request's change is a watched change"
+
+        // After an outage the first look finds eight hours of news at once. Recorded now, it
+        // would read as happening now; the sentence says when it really did.
+        testCase "a change noticed long after it happened says so" <| fun () ->
+            Expect.stringContains (said (merged (Some (noticedAt.AddHours -8.0)))) "happened 8h before it was noticed" "the gap, in the sentence"
+
+        testCase "a change noticed on time says nothing more" <| fun () ->
+            Expect.isFalse ((said (merged (Some (noticedAt.AddSeconds -20.0)))).Contains "before it was noticed") "a look's own rhythm is not late"
+
+        testCase "a change whose source gave no time says nothing more" <| fun () ->
+            Expect.isFalse ((said (merged None)).Contains "before it was noticed") "not knowing is not lateness"
+
+        testCase "each change is dated by the time that belongs to it" <| fun () ->
+            let merged = noticedAt.AddHours -3.0
+            let settled = noticedAt.AddHours -5.0
+            let times = { MergedAt = Some merged; ClosedAt = Some merged; ChecksSettledAt = Some settled }
+            Expect.equal (PrTransition.occurredAt times PrTransition.Merged) (Some merged) "a merge, when it merged"
+            Expect.equal (PrTransition.occurredAt times PrTransition.ChecksPassed) (Some settled) "a verdict, when the checks settled"
+            Expect.equal (PrTransition.occurredAt times PrTransition.Conflicted) None "a computed conflict has no time of its own"
+    ]
+
 let private prWatchTests =
     let msg n = MessageId.create n |> expect
     let repo = RepoRef.create "octo/hello" |> expect
@@ -1208,7 +1270,7 @@ let private prWatchTests =
     let ada = PeerId.create "ada" |> expect
     let bob = PeerId.create "bob" |> expect
     let snapshotOf state checks route : PrSnapshot =
-        { State = state; Title = "Add feature"; HeadSha = "abc123"; Checks = checks; Route = route; Mergeable = None; Review = None; Behind = false; Draft = false }
+        { State = state; Title = "Add feature"; HeadSha = "abc123"; Checks = checks; Route = route; Mergeable = None; Review = None; Behind = false; Draft = false; Times = PrTimes.none }
     let snapshot state checks : PrSnapshot = snapshotOf state checks None
     let autoMerge = Some PrRoute.GitHubAutoMerge
     let inQueue position state = Some (PrRoute.GitHubMergeQueue (position, state))
@@ -1224,7 +1286,7 @@ let private prWatchTests =
         |> PrWatched
     let transitioned transition state checks : SessionEvent =
         PrTransitioned
-            { MessageId = msg "t1"; Pr = pr; Transition = transition; State = state; Checks = checks; Watcher = Principal.Peer ada }
+            { MessageId = msg "t1"; Pr = pr; Transition = transition; State = state; Checks = checks; Watcher = Principal.Peer ada; OccurredAt = None }
     /// The projection folds ENVELOPES, because when a watch last moved is the envelope's
     /// timestamp and nothing in a payload says it. Minute-apart stamps, so a test can tell
     /// which event a `Since` came from.
@@ -1680,7 +1742,7 @@ let private prWatchTests =
                       Transition = PrTransition.Merged
                       State = PrMerged
                       Checks = ChecksGreen
-                      Watcher = Principal.Peer ada }
+                      Watcher = Principal.Peer ada; OccurredAt = None }
                   SessionEvent.PrUnwatched { MessageId = msg "w3"; Pr = pr; Actor = PeerRef ada } ]
                 |> List.mapi (fun i event ->
                     { EventId = EventId.fresh ()
@@ -3479,6 +3541,7 @@ let tests =
         repoTests
         chapterTests
         namingTests
+        watchChangedTests
         prWatchTests
         deliveryFilterTests
         deliveryDocumentTests

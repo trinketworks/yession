@@ -43,6 +43,9 @@
     <Compile Include="AgentFacts.fs" />
     <Compile Include="TerminalsFacts.fs" />
     <Compile Include="Events.fs" />
+    <!-- What every watched thing's change keeps, whatever kind it is: after Events.fs, whose
+         cases it reads, and before Acts.fs, whose sentences it lengthens. -->
+    <Compile Include="WatchChanges.fs" />
     <Compile Include="Attribution.fs" />
     <Compile Include="MeProbe.fs" />
     <!-- Terminal output as styled text, and the durable transcript that records it.

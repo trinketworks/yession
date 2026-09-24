@@ -1243,7 +1243,12 @@ module Codec =
                       "mergeable", Encode.option Encode.bool s.Mergeable
                       "review", Encode.option prReview.Encode s.Review
                       "behind", Encode.bool s.Behind
-                      "draft", Encode.bool s.Draft ]
+                      "draft", Encode.bool s.Draft
+                      "times",
+                      Encode.object
+                          [ "mergedAt", Encode.option timestamp.Encode s.Times.MergedAt
+                            "closedAt", Encode.option timestamp.Encode s.Times.ClosedAt
+                            "checksSettledAt", Encode.option timestamp.Encode s.Times.ChecksSettledAt ] ]
           Decode =
             Decode.object (fun get ->
                 { PrSnapshot.State = get.Required.Field "state" prState.Decode
@@ -1268,7 +1273,17 @@ module Codec =
                   // Optional because a watch recorded before drafts were read has none: it
                   // reads as not a draft, so an undrafting it began over goes unannounced —
                   // the honest `Stalled` rule, since nobody watching saw it as a draft.
-                  PrSnapshot.Draft = get.Optional.Field "draft" Decode.bool |> Option.defaultValue false }) }
+                  PrSnapshot.Draft = get.Optional.Field "draft" Decode.bool |> Option.defaultValue false
+                  // Optional throughout: a baseline recorded before times were read has none,
+                  // and they only ever date a change — they never decide one.
+                  PrSnapshot.Times =
+                      get.Optional.Field
+                          "times"
+                          (Decode.object (fun t ->
+                              { MergedAt = t.Optional.Field "mergedAt" timestamp.Decode
+                                ClosedAt = t.Optional.Field "closedAt" timestamp.Decode
+                                ChecksSettledAt = t.Optional.Field "checksSettledAt" timestamp.Decode }))
+                      |> Option.defaultValue PrTimes.none }) }
 
     let private prTransition : Codec<PrTransition> =
         { Encode =
@@ -1350,7 +1365,8 @@ module Codec =
                       "transition", prTransition.Encode p.Transition
                       "state", prState.Encode p.State
                       "checks", checksRollup.Encode p.Checks
-                      "watcher", principal.Encode p.Watcher ]
+                      "watcher", principal.Encode p.Watcher
+                      "occurredAt", Encode.option timestamp.Encode p.OccurredAt ]
           Decode =
             Decode.object (fun get ->
                 { PrTransitioned.MessageId = get.Required.Field "messageId" messageId.Decode
@@ -1358,7 +1374,10 @@ module Codec =
                   PrTransitioned.Transition = get.Required.Field "transition" prTransition.Decode
                   PrTransitioned.State = get.Required.Field "state" prState.Decode
                   PrTransitioned.Checks = get.Required.Field "checks" checksRollup.Decode
-                  PrTransitioned.Watcher = get.Required.Field "watcher" principal.Decode }) }
+                  PrTransitioned.Watcher = get.Required.Field "watcher" principal.Decode
+                  // Absent on every change recorded before the source's time was read, which
+                  // reads as not knowing it — never as having happened when it was written.
+                  PrTransitioned.OccurredAt = get.Optional.Field "occurredAt" timestamp.Decode }) }
 
     let private sandboxSetupQueued : Codec<SandboxSetupQueued> =
         { Encode =

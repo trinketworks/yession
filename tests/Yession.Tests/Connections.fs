@@ -2141,7 +2141,7 @@ let private prOne = PrRef.create prRepo 12 |> expect
 let private topicDraft = PrDraft.create prRepo "topic" "master" "Add feature" (Some "why") false |> expect
 
 let private snapshotWith state checks route : PrSnapshot =
-    { State = state; Title = "Add feature"; HeadSha = "abc123"; Checks = checks; Route = route; Mergeable = None; Review = None; Behind = false; Draft = false }
+    { State = state; Title = "Add feature"; HeadSha = "abc123"; Checks = checks; Route = route; Mergeable = None; Review = None; Behind = false; Draft = false; Times = PrTimes.none }
 
 let private snapshotOf state checks : PrSnapshot = snapshotWith state checks None
 
@@ -2253,6 +2253,22 @@ let private prPollTests =
             let plain = """{"state":"open","merged":false,"title":"WIP","head":{"sha":"d00d"}}"""
             Expect.isTrue (Decode.fromString GitHubPrs.prDecoder draft |> expect).Draft "a stated draft is carried"
             Expect.isFalse (Decode.fromString GitHubPrs.prDecoder plain |> expect).Draft "no draft field is not a draft"
+
+        testCase "a merged pull request is dated by when github says it merged" <| fun () ->
+            let body = """{"state":"closed","merged":true,"merged_at":"2026-09-25T01:00:00Z","closed_at":"2026-09-25T01:00:00Z","title":"T","head":{"sha":"d00d"}}"""
+            let fields = Decode.fromString GitHubPrs.prDecoder body |> expect
+            Expect.equal fields.MergedAt (Some (DateTimeOffset (2026, 9, 25, 1, 0, 0, TimeSpan.Zero))) "github's own clock"
+
+        testCase "checks are dated when the last of them finished, and not while any runs" <| fun () ->
+            let settled =
+                """{"check_runs":[{"status":"completed","conclusion":"success","completed_at":"2026-09-25T01:00:00Z"},{"status":"completed","conclusion":"success","completed_at":"2026-09-25T02:00:00Z"}]}"""
+            let running =
+                """{"check_runs":[{"status":"completed","conclusion":"success","completed_at":"2026-09-25T01:00:00Z"},{"status":"in_progress","conclusion":null,"completed_at":null}]}"""
+            Expect.equal
+                (Decode.fromString GitHubPrs.checksSettledDecoder settled |> expect)
+                (Some (DateTimeOffset (2026, 9, 25, 2, 0, 0, TimeSpan.Zero)))
+                "the verdict is as late as its last run"
+            Expect.equal (Decode.fromString GitHubPrs.checksSettledDecoder running |> expect) None "no verdict yet, no time"
 
         testCase "the checks rollup is pending until every run has completed" <| fun () ->
             Expect.equal (GitHubPrs.rollupOf []) ChecksNone "a commit with no checks has none, not pending forever"
@@ -2635,7 +2651,7 @@ let private prPollTests =
                           Transition = PrTransition.ChecksPassed
                           State = PrOpen
                           Checks = ChecksGreen
-                          Watcher = ada }) ]
+                          Watcher = ada; OccurredAt = None }) ]
                 |> List.fold PrWatchesProjection.applyEvent PrWatchesProjection.empty
             let poller =
                 pollerOver fixedNow (scriptedFetch []).Fetch (RecordedTransitions ()) (ResizeArray ())
@@ -3063,7 +3079,7 @@ let private prFetchTests =
                 let last =
                     { State = PrOpen; Title = "Add feature"; HeadSha = "abc123"; Checks = ChecksGreen
                       Route = Some PrRoute.GitHubAutoMerge; Mergeable = Some true; Review = None; Behind = false
-                      Draft = false }
+                      Draft = false; Times = PrTimes.none }
                 match! fetch (Some "token-abc") prOne PrWatches.PrEtags.none (Some last) with
                 | PrWatches.PrChanged (snapshot, _) -> Expect.equal snapshot.Route (Some PrRoute.GitHubAutoMerge) "carried"
                 | other -> failwithf "expected a snapshot, got %A" other

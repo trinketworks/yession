@@ -1,5 +1,6 @@
 namespace Yession.Domain.Chat
 
+open Yession.Domain.Watching
 open Yession.Domain
 open Yession.Domain.Agent
 open Yession.Domain.Prs
@@ -617,6 +618,14 @@ module ConversationProjection =
 
     let private noted messageId actor act envelope proj = causedNote messageId None actor act envelope proj
 
+    /// An act that reports a watched change, wrapped to say it was noticed late when it was
+    /// (`Lateness`). Keyed off the event's `WatchChanged` contract rather than its kind, so a
+    /// watch of a new kind is late the same way the moment it keeps the contract.
+    let private noticed (envelope: EventEnvelope<SessionEvent>) (act: Act) : Act =
+        match Lateness.ofEnvelope envelope with
+        | Some late -> Act.Noticed (late, act)
+        | None -> act
+
     /// An act that RESOLVES a running one in place — the same id, a settled status and the
     /// facts of how it settled. A log written before the running half existed has no such
     /// item, so the act is appended as it always was; an id is either there or not, so the
@@ -884,7 +893,7 @@ module ConversationProjection =
         // Attributed to the WATCHER rather than the envelope's System: the person whose
         // watch noticed is who the news is for, and whose name it should wear.
         | SessionEvent.PrTransitioned p ->
-            proj |> noted p.MessageId (Principal.toActor p.Watcher) (Act.PrTransitioned p) envelope
+            proj |> noted p.MessageId (Principal.toActor p.Watcher) (noticed envelope (Act.PrTransitioned p)) envelope
         | AgentMessageStarted a ->
             // A message that follows another is that other one's close: the model has moved
             // on, so what the antecedent streamed is what it said. Only a streaming item
