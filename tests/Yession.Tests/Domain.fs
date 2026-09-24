@@ -243,17 +243,18 @@ let private frameSerializationTests =
           Control (PeerRejected "bad token")
           Control Ping
           Control Pong
-          Presence { Who = PeerRef peerId; DisplayName = "Ada"; Focus = Some { Field = Title; Pos = { Anchor = "AQI="; Head = "AwQ=" } } }
-          Presence { Who = PeerRef peerId; DisplayName = "Ada"; Focus = Some { Field = DraftBody peerId; Pos = { Anchor = "AQI="; Head = "AQI=" } } }
-          Presence { Who = PeerRef peerId; DisplayName = "Ada"; Focus = Some { Field = QueueBody (QueueId.create "q-1" |> expect); Pos = { Anchor = "AQI="; Head = "AwQ=" } } }
+          Presence { Who = PeerRef peerId; DisplayName = "Ada"; Focus = Some { Field = Title; Pos = { Anchor = "AQI="; Head = "AwQ=" } }; Viewing = None }
+          Presence { Who = PeerRef peerId; DisplayName = "Ada"; Focus = Some { Field = DraftBody peerId; Pos = { Anchor = "AQI="; Head = "AQI=" } }; Viewing = None }
+          Presence { Who = PeerRef peerId; DisplayName = "Ada"; Focus = Some { Field = QueueBody (QueueId.create "q-1" |> expect); Pos = { Anchor = "AQI="; Head = "AwQ=" } }; Viewing = None }
           Presence
             { Who = PeerRef peerId
               DisplayName = "Ada"
               Focus =
                 Some
                     { Field = ChapterName (MessageId.create "msg-1" |> expect)
-                      Pos = { Anchor = "AQI="; Head = "AwQ=" } } }
-          Presence { Who = PeerRef peerId; DisplayName = "Ada"; Focus = None } ]
+                      Pos = { Anchor = "AQI="; Head = "AwQ=" } }
+              Viewing = None }
+          Presence { Who = PeerRef peerId; DisplayName = "Ada"; Focus = None; Viewing = None } ]
 
     testList "Session frame serialization" [
         testCase "every session frame variant round-trips unchanged" <| fun () ->

@@ -19,6 +19,7 @@ open Yjs
 open Ylmish
 open Yession.Domain
 open Yession.Domain.Agent
+open Yession.Domain.Content
 open Yession.Domain.Link
 open Yession.Domain.Collab
 open Yession.Domain.Chat
@@ -1019,8 +1020,8 @@ let private composerTests =
             let model =
                 mine
                 |> withDrafts [ grace ]
-                |> ClientModel.update (RemotePresenceMsg { Who = PeerRef ivy; DisplayName = "keen-fox"; Focus = Some (focus grace) })
-                |> ClientModel.update (RemotePresenceMsg { Who = PeerRef grace; DisplayName = "brave-owl"; Focus = Some (focus ada) })
+                |> ClientModel.update (RemotePresenceMsg { Who = PeerRef ivy; DisplayName = "keen-fox"; Focus = Some (focus grace); Viewing = None })
+                |> ClientModel.update (RemotePresenceMsg { Who = PeerRef grace; DisplayName = "brave-owl"; Focus = Some (focus ada); Viewing = None })
             Expect.equal (ClientModel.editorsOf grace model) [ PeerRef ivy, "keen-fox" ] "only carets in THAT draft count"
             Expect.equal (ClientModel.editorsOf ada model) [ PeerRef grace, "brave-owl" ] "a peer in your draft shows in yours"
 
@@ -1070,16 +1071,26 @@ let private titlePresenceTests =
 
         testCase "RemotePresenceMsg adds, updates, and clears a peer's cursor" <| fun () ->
             let focusAt (a: string) : Focus = { Field = Title; Pos = { Anchor = a; Head = a } }
-            let added = ClientModel.update (RemotePresenceMsg { Who = PeerRef bob; DisplayName = "brave-owl"; Focus = Some (focusAt "aa") }) base'
-            Expect.equal (Map.tryFind (PeerRef bob) added.Presence) (Some { DisplayName = "brave-owl"; Focus = focusAt "aa" }) "the peer's caret is recorded"
-            let moved = ClientModel.update (RemotePresenceMsg { Who = PeerRef bob; DisplayName = "brave-owl"; Focus = Some (focusAt "bb") }) added
-            Expect.equal (Map.tryFind (PeerRef bob) moved.Presence |> Option.map (fun c -> c.Focus.Pos.Anchor)) (Some "bb") "the caret moves"
-            let cleared = ClientModel.update (RemotePresenceMsg { Who = PeerRef bob; DisplayName = ""; Focus = None }) moved
-            Expect.isFalse (Map.containsKey (PeerRef bob) cleared.Presence) "a cleared cursor removes the peer"
+            let typing (f: Focus option) : PresencePayload = { Who = PeerRef bob; DisplayName = "brave-owl"; Focus = f; Viewing = None }
+            let added = ClientModel.update (RemotePresenceMsg (typing (Some (focusAt "aa")))) base'
+            Expect.equal (Map.tryFind (PeerRef bob) added.Presence) (Some { DisplayName = "brave-owl"; Focus = Some (focusAt "aa"); Viewing = None }) "the peer's caret is recorded"
+            let moved = ClientModel.update (RemotePresenceMsg (typing (Some (focusAt "bb")))) added
+            Expect.equal (Map.tryFind (PeerRef bob) moved.Presence |> Option.bind (fun c -> c.Focus) |> Option.map (fun f -> f.Pos.Anchor)) (Some "bb") "the caret moves"
+            let cleared = ClientModel.update (RemotePresenceMsg { Who = PeerRef bob; DisplayName = ""; Focus = None; Viewing = None }) moved
+            Expect.isFalse (Map.containsKey (PeerRef bob) cleared.Presence) "a peer with neither caret nor view is forgotten"
+
+        // The reason `Focus` became an option: a reader has no caret anywhere, and the old
+        // "no caret means gone" rule would drop them the moment they stopped typing.
+        testCase "RemotePresenceMsg keeps a peer who is only viewing" <| fun () ->
+            let ref' = ContentRef.create "artifacts/chart.png/0000-7f2a91" |> expect
+            let viewing = ClientModel.update (RemotePresenceMsg { Who = PeerRef bob; DisplayName = "brave-owl"; Focus = None; Viewing = Some (ViewingFile ref') }) base'
+            Expect.equal (Map.tryFind (PeerRef bob) viewing.Presence |> Option.bind (fun c -> c.Viewing)) (Some (ViewingFile ref')) "a peer with no caret is present while they hold something open"
+            let closed = ClientModel.update (RemotePresenceMsg { Who = PeerRef bob; DisplayName = "brave-owl"; Focus = None; Viewing = None }) viewing
+            Expect.isFalse (Map.containsKey (PeerRef bob) closed.Presence) "closing the pane with no caret forgets them"
 
         testCase "RemotePresenceMsg ignores the local peer's own cursor" <| fun () ->
             let focus : Focus = { Field = Title; Pos = { Anchor = "aa"; Head = "aa" } }
-            let next = ClientModel.update (RemotePresenceMsg { Who = PeerRef base'.Peer.PeerId; DisplayName = "Ada"; Focus = Some focus }) base'
+            let next = ClientModel.update (RemotePresenceMsg { Who = PeerRef base'.Peer.PeerId; DisplayName = "Ada"; Focus = Some focus; Viewing = None }) base'
             Expect.isFalse (Map.containsKey (PeerRef base'.Peer.PeerId) next.Presence) "you never render your own remote caret"
     ]
 

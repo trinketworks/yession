@@ -69,6 +69,16 @@ module Client =
           /// collaborative field), so collaborators see the cursor. Ephemeral presence — the
           /// Session Process relays it to other peers and never persists it.
           ReportPresence : Focus option -> unit
+          /// Broadcast what this peer has OPEN in the pane (or `None` when it has nothing on
+          /// screen), so collaborators can see who else is reading a file or a terminal.
+          ///
+          /// A second verb rather than a second argument to `ReportPresence`, because the two
+          /// halves are learned in different places at different moments — a caret from an
+          /// editor event, a view from the model after a render — and a caller made to supply
+          /// both would have to invent the half it does not know. They still leave as ONE
+          /// frame: the connection remembers the last of each, which is what makes "the peer
+          /// stopped typing" unable to erase "the peer is still watching".
+          ReportViewing : ViewRef option -> unit
           /// Ask the Session Process to open a terminal (Plan 13). The new terminal arrives
           /// as a `TerminalOpened` event, not as a response — one source of truth for a
           /// durable fact, and it is the one every peer already reads.
@@ -922,6 +932,33 @@ module Client =
                     }
                 Async.StartImmediate (readFrom (readPositionOf terminal))
 
+        // Presence is ONE frame with two halves, reported from two places: the caret comes from
+        // an editor event, the view from the model after a render. The last of each is kept here
+        // so either can be restated without erasing the other — a peer that stops typing while
+        // still reading an artifact must not vanish from the pane it has open, and a peer that
+        // closes the pane must not lose its caret.
+        //
+        // Nothing goes out before this connection has been ACCEPTED, and the rule lives here
+        // rather than in whatever calls `ReportViewing`: the first frame on a channel has to be
+        // the hello (`Connection.run`), and a caller holding the connection object cannot know
+        // whether the handshake has happened yet — the browser sets it the moment `connect`
+        // returns, before `Run` has sent anything. A view reported before then is not dropped,
+        // it is REMEMBERED and sent on acceptance, because a peer that opened a pane while the
+        // channel was still coming up is viewing it just as much as one who opened it after.
+        let mutable reportedFocus : Focus option = None
+        let mutable reportedViewing : ViewRef option = None
+        let mutable presenceAllowed = false
+        let sendPresence () =
+            // A browser is always a peer — the one party that is not is the Process itself.
+            if presenceAllowed then
+                Async.StartImmediate (
+                    channel.Send (
+                        Presence
+                            { Who = ActorRef.PeerRef hello.PeerId
+                              DisplayName = hello.DisplayName
+                              Focus = reportedFocus
+                              Viewing = reportedViewing }))
+
         let dispatchAndConsume (msg: ClientMsg) =
             dispatch msg
             match msg with
@@ -947,6 +984,12 @@ module Client =
                 // predates the update listener, so push it explicitly. Full-state
                 // updates are idempotent, so this is always safe.
                 Async.StartImmediate (channel.Send (State (StateSync (DocSync.fullState doc))))
+                // Accepted: presence may speak now, and whatever was reported while the channel
+                // was coming up is restated once rather than waiting for the next caret move or
+                // pane change — presence has no keepalive, so a frame nobody sent is a peer
+                // nobody sees.
+                presenceAllowed <- true
+                if reportedFocus.IsSome || reportedViewing.IsSome then sendPresence ()
                 latestKnown <- EventOffset.maxOption latestKnown accepted.LatestOffset
                 requestIfBehind ()
             | EventsAvailableMsg latest ->
@@ -1013,10 +1056,13 @@ module Client =
           ReportPresence =
             fun focus ->
                 // Presence carries who is editing so collaborators can label and colour the
-                // caret; the Session Process relays it to everyone else. A browser is always
-                // a peer — the one party that is not is the Process itself.
-                Async.StartImmediate (
-                    channel.Send (Presence { Who = ActorRef.PeerRef hello.PeerId; DisplayName = hello.DisplayName; Focus = focus }))
+                // caret; the Session Process relays it to everyone else.
+                reportedFocus <- focus
+                sendPresence ()
+          ReportViewing =
+            fun viewing ->
+                reportedViewing <- viewing
+                sendPresence ()
           OpenTerminal =
             fun title ->
                 Async.StartImmediate (channel.Send (Command (Request (RequestId.fresh (), OpenTerminal title))))

@@ -212,11 +212,19 @@ type ComposerChoice =
     | Own
     | Joined of PeerId
 
-/// A remote peer's live caret+selection: the peer's name (for the cursor label) plus its
-/// `Focus` — which collaborative field it is in and its position there. Ephemeral presence,
-/// delivered over `Presence` frames — never synced through Yjs, never durable. The peer's
-/// colour is derived from its id (`EditorColour`), not carried.
-type RemotePresence = { DisplayName : string; Focus : Focus }
+/// Where a remote peer IS: the peer's name (for the cursor label), the `Focus` its caret is in
+/// when it is in one, and what it has open in the pane. Ephemeral presence, delivered over
+/// `Presence` frames — never synced through Yjs, never durable. The peer's colour is derived
+/// from its id (`EditorColour`), not carried.
+///
+/// Both halves are optional and an entry exists while EITHER holds, because they are genuinely
+/// independent: someone reading an artifact is typing nowhere, and someone typing in the
+/// composer has no pane open. `Focus` stopped being total when viewing arrived, and every site
+/// that assumed a present peer had a caret is a site the compiler named.
+type RemotePresence =
+    { DisplayName : string
+      Focus : Focus option
+      Viewing : ViewRef option }
 
 /// One terminal's live transcript as this client has it (Plan 13). Records are keyed by
 /// their sequence number, which makes application idempotent by construction: the same
@@ -322,6 +330,17 @@ module PaneTab =
         | BlockTab (id, _) -> Some id
         | StretchTab stretch -> Some stretch.TerminalId
         | ContentTab _ -> None
+
+    /// What having this tab up says to everyone else (`ViewRef`) — the one place a tab becomes
+    /// a thing to be present AT. Every terminal-shaped tab reports the terminal, because a
+    /// reader who wants to know who else is here is asking about the terminal and not about
+    /// which of its blocks each of them has scrolled to.
+    let view =
+        function
+        | TerminalTab id -> ViewingTerminal id
+        | BlockTab (id, _) -> ViewingTerminal id
+        | StretchTab stretch -> ViewingTerminal stretch.TerminalId
+        | ContentTab ref -> ViewingFile ref
 
     /// Whether this tab is a LIVE terminal's, given the terminals as they stand (Plan 20,
     /// stage 1) — what the strip may keep.
@@ -1050,7 +1069,7 @@ module ClientModel =
     let editorsOf (peer: PeerId) (model: ClientModel) : (ActorRef * string) list =
         model.Presence
         |> Map.toList
-        |> List.filter (fun (_, presence) -> presence.Focus.Field = DraftBody peer)
+        |> List.filter (fun (_, presence) -> presence.Focus |> Option.exists (fun f -> f.Field = DraftBody peer))
         |> List.map (fun (editor, presence) -> editor, presence.DisplayName)
 
     /// Whether this client is keeping a tab.
@@ -1126,6 +1145,35 @@ module ClientModel =
     /// addressing a terminal nobody selected.
     let selectedTerminal (model: ClientModel) : TerminalId option =
         selectedPane model |> Option.bind PaneTab.terminal
+
+    /// What this peer has open, as presence names it — what the browser reports to everyone
+    /// else. A DERIVATION rather than a field, so what collaborators are told and what is on
+    /// this screen cannot drift: there is one answer and the render and the report read it.
+    ///
+    /// `None` while the list covers the pane, and that is the honest answer rather than an
+    /// oversight — the census is up, the tab is not on screen, and telling someone you are
+    /// reading their image while you are looking at a list of terminals is a claim this cannot
+    /// support. The subject survives everywhere else (`selectedPane`) because the composer and
+    /// the strip are about what you are working WITH; this is about what you can SEE.
+    let viewing (model: ClientModel) : ViewRef option =
+        match model.Pane with
+        | None | Some (OnList _) -> None
+        | Some (OnTab _) -> selectedPane model |> Option.map PaneTab.view
+
+    /// Who else has this open right now, by their live presence — never the local peer, who is
+    /// not their own audience. Ordered by name, so a row of faces does not reshuffle when a
+    /// map's internal order changes.
+    ///
+    /// Takes a `ViewRef` rather than a tab, so the pane's header, a tab in the strip and a row
+    /// in the list all ask the same question of the same value — and a terminal gets this the
+    /// day it lands rather than as a second mechanism for the same fact.
+    let viewersOf (what: ViewRef) (model: ClientModel) : (ActorRef * string) list =
+        model.Presence
+        |> Map.toList
+        |> List.filter (fun (who, presence) ->
+            who <> ActorRef.PeerRef model.Peer.PeerId && presence.Viewing = Some what)
+        |> List.map (fun (who, presence) -> who, presence.DisplayName)
+        |> List.sortBy (fun (who, name) -> name, ActorRef.token who)
 
     /// The transcript length this client's rewind pinned, while the terminal is still LIVE
     /// (Plan 14, stage 7). Resolved rather than read raw, for the same reason `selectedPane`
@@ -1474,7 +1522,8 @@ module ClientModel =
     let terminalEditorsOf (terminal: TerminalId) (author: PeerId) (model: ClientModel) : (ActorRef * string) list =
         model.Presence
         |> Map.toList
-        |> List.filter (fun (_, presence) -> presence.Focus.Field = TerminalDraftBody (terminal, author))
+        |> List.filter (fun (_, presence) ->
+            presence.Focus |> Option.exists (fun f -> f.Field = TerminalDraftBody (terminal, author)))
         |> List.map (fun (editor, presence) -> editor, presence.DisplayName)
 
     // --- Where everyone is ------------------------------------------------------------------
@@ -1522,7 +1571,11 @@ module ClientModel =
         model.Presence
         |> Map.toList
         |> List.filter (fun (who, _) -> who <> ActorRef.PeerRef model.Peer.PeerId)
-        |> List.map (fun (who, presence) -> who, presence.DisplayName, presence.Focus.Field)
+        // A peer present only because a pane is open is not EDITING anything, so it is absent
+        // from this list rather than carried with a made-up field. Where it is showing is
+        // `viewersOf`, which the pane renders.
+        |> List.choose (fun (who, presence) ->
+            presence.Focus |> Option.map (fun focus -> who, presence.DisplayName, focus.Field))
         |> List.sortBy (fun (who, name, _) -> name, ActorRef.token who)
 
     /// The terminal a focus is in, when it is in one. A composer slot names its terminal
@@ -1876,11 +1929,18 @@ module ClientModel =
             // Never render your own remote caret; a cleared focus removes the entry.
             if payload.Who = ActorRef.PeerRef model.Peer.PeerId then model
             else
+                // The entry goes when the peer is nowhere AT ALL — no caret and no pane. A
+                // cleared caret used to mean "forget them", and with viewing on the same frame
+                // that would drop a reader the moment they stopped typing, which is precisely
+                // the peer this feature exists to show.
                 let presence =
-                    match payload.Focus with
-                    | Some focus ->
-                        Map.add payload.Who { DisplayName = payload.DisplayName; Focus = focus } model.Presence
-                    | None -> Map.remove payload.Who model.Presence
+                    match payload.Focus, payload.Viewing with
+                    | None, None -> Map.remove payload.Who model.Presence
+                    | focus, viewing ->
+                        Map.add
+                            payload.Who
+                            { DisplayName = payload.DisplayName; Focus = focus; Viewing = viewing }
+                            model.Presence
                 { model with Presence = presence }
         | EnsureDraftMsg (peerId, queueId) ->
             // Materialise the slot keyed by `peerId` (author only) if absent, so the codec

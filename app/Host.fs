@@ -766,7 +766,11 @@ let startFull
                                 let at = Fable.ProseMirror.ProseMirror.relPosFromTypeIndex (box text) index |> Fable.ProseMirror.ProseMirror.encodeRel
                                 { Field = fieldOf subject; Pos = { Anchor = at; Head = at } }))
                     broadcastPresence
-                        { Who = ActorRef.Agent; DisplayName = Yession.App.Dom.Text.agent; Focus = focus } }
+                        // The agent writes; it never has a pane open, so it views nothing.
+                        { Who = ActorRef.Agent
+                          DisplayName = Yession.App.Dom.Text.agent
+                          Focus = focus
+                          Viewing = None } }
 
         let nameThings =
             Names.create
@@ -1009,8 +1013,14 @@ let startFull
                             return
                                 fun () ->
                                     connections <- Map.remove connectionId connections
-                                    // Clear this peer's cursor on every remaining peer.
-                                    let gone = { Who = ActorRef.PeerRef peerId; DisplayName = ""; Focus = None }
+                                    // Clear this peer's cursor AND what it was viewing on every
+                                    // remaining peer: a departed reader's ring is as stale as its
+                                    // caret, and presence has no keepalive to expire either.
+                                    let gone =
+                                        { Who = ActorRef.PeerRef peerId
+                                          DisplayName = ""
+                                          Focus = None
+                                          Viewing = None }
                                     recordCaret gone
                                     broadcastPresenceExcept connectionId gone
                                     // ...and release every terminal it was holding. A lease

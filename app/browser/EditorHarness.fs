@@ -1447,7 +1447,8 @@ do
                 RemotePresenceMsg
                     { Who = ActorRef.PeerRef peerId
                       DisplayName = "brave-owl"
-                      Focus = Some { Field = ChapterName messageId; Pos = { Anchor = at anchor; Head = at head } } })
+                      Focus = Some { Field = ChapterName messageId; Pos = { Anchor = at anchor; Head = at head } }
+                      Viewing = None })
         | _ -> ())
     (harness ()).__record <- System.Action<_, _, _, _> (fun id seq kind data ->
         match TerminalId.create id, TranscriptKind.parse kind with

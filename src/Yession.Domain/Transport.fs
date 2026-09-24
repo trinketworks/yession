@@ -2,6 +2,7 @@ namespace Yession.Domain.Link
 
 open Yession.Domain
 
+open Yession.Domain.Content
 open Yession.Domain.Terminals
 
 /// The multiplexed session transport protocol. These are pure protocol shapes shared by
@@ -196,6 +197,23 @@ type CursorPos = { Anchor : string; Head : string }
 
 type Focus = { Field : FocusField; Pos : CursorPos }
 
+/// What a peer has OPEN in the content pane — the other half of presence, and the answer to
+/// "who else is looking at this". A caret says where someone is TYPING; this says what they
+/// have in front of them, which a reader has no other way to learn: a shared artifact and a
+/// terminal recording are both things you open alone.
+///
+/// One type over both kinds because the pane is one pane: it shows a terminal or it shows a
+/// file, never both, so the peers viewing a tab are found by one comparison rather than by a
+/// per-kind register that each new kind of content would have to be added to. A repo file
+/// arrives as a `ContentRef` and needs nothing here.
+type ViewRef =
+    /// A file under the session's content root — an artifact version today.
+    | ViewingFile of ContentRef
+    /// A terminal, whatever face of it is up: its screen, one block, one stretch. The
+    /// distinction is what the viewer is reading, not what they have open, and a dot beside
+    /// a terminal that says "and they are three blocks down it" is noise.
+    | ViewingTerminal of TerminalId
+
 /// Ephemeral presence: where a peer's caret+selection is. Relayed peer-to-peer by the Session
 /// Process (never durable, never in Yjs, never an event) so a collaborator's cursor is visible
 /// while they edit. `Focus = None` when the peer's caret is nowhere collaborative, or the peer
@@ -218,7 +236,12 @@ type PresencePayload =
       /// the compiler enumerates; the alias costs a wrong answer somewhere nobody is looking.
       Who : ActorRef
       DisplayName : string
-      Focus : Focus option }
+      Focus : Focus option
+      /// What this peer has open in the pane, or `None` when the pane is closed or covered.
+      /// Carried on the SAME frame as the caret because they are one fact — where a peer is —
+      /// and two frames would need two clear-on-leave rules that could disagree. Ephemeral
+      /// exactly as the caret is: the peer going clears both.
+      Viewing : ViewRef option }
 
 /// Every message exchanged over the session transport is one of these multiplexed frames.
 type SessionFrame<'State> =

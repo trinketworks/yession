@@ -750,15 +750,19 @@ let create (deps: Deps) : Renderer =
     let cursorsFor (key: string) : Editor.RemoteBodyCursor list =
         match fieldOfKey key, latest with
         | Some field, Some model ->
+            // A peer with no caret (viewing but not typing) is in `Presence` and belongs in no
+            // body — the option is the difference, so choose rather than filter-then-read.
             model.Presence
             |> Map.toList
-            |> List.filter (fun (_, p) -> p.Focus.Field = field)
-            |> List.map (fun (peerId, p) ->
-                ({ Colour = EditorColour.ofEditor peerId
-                   Selection = EditorColour.translucent peerId
-                   Name = p.DisplayName
-                   Anchor = p.Focus.Pos.Anchor
-                   Head = p.Focus.Pos.Head } : Editor.RemoteBodyCursor))
+            |> List.choose (fun (peerId, p) ->
+                match p.Focus with
+                | Some focus when focus.Field = field ->
+                    Some ({ Colour = EditorColour.ofEditor peerId
+                            Selection = EditorColour.translucent peerId
+                            Name = p.DisplayName
+                            Anchor = focus.Pos.Anchor
+                            Head = focus.Pos.Head } : Editor.RemoteBodyCursor)
+                | _ -> None)
         | _ -> []
 
     // Catch-up is the normal state for a moment after anything happens — your own send
@@ -843,9 +847,9 @@ let create (deps: Deps) : Renderer =
                 Some (sprintf "input[data-chapter-name=\"%s\"]" (MessageId.value messageId))
             | DraftBody _ | QueueBody _ | TerminalDraftBody _ | TerminalQueuedBody _ -> None
         for (who, p) in Map.toList model.Presence do
-            match selectorOf p.Focus.Field with
-            | Some selector ->
-                match ProseMirror.absIndexInDoc doc p.Focus.Pos.Anchor, ProseMirror.absIndexInDoc doc p.Focus.Pos.Head with
+            match p.Focus |> Option.bind (fun f -> selectorOf f.Field |> Option.map (fun s -> s, f)) with
+            | Some (selector, focus) ->
+                match ProseMirror.absIndexInDoc doc focus.Pos.Anchor, ProseMirror.absIndexInDoc doc focus.Pos.Head with
                 | Some a, Some h -> placeInputCursor selector (ActorRef.token who) a h
                 | _ -> ()
             | None -> ()

@@ -148,7 +148,12 @@ let private representativeModel : ClientModel =
           Feed = FeedLive
           MissingBefore = None }
       Agent = { ActiveTurn = Some turnId }
-      Presence = Map.ofList [ PeerRef bob, { DisplayName = "brave-owl"; Focus = { Field = Title; Pos = { Anchor = "AQI="; Head = "AwQ=" } } } ]
+      Presence =
+        Map.ofList
+            [ PeerRef bob,
+              { DisplayName = "brave-owl"
+                Focus = Some { Field = Title; Pos = { Anchor = "AQI="; Head = "AwQ=" } }
+                Viewing = None } ]
       // The roster names a draft's author even when they are not here: a label, never a peer id.
       Peers = Map.ofList [ ada, "swift-heron"; bob, "brave-owl" ]
       Attribution = Attribution.empty
@@ -333,7 +338,8 @@ let private joinedComposerModel : ClientModel =
             Map.ofList
                 [ PeerRef bob,
                   { DisplayName = "brave-owl"
-                    Focus = { Field = DraftBody bob; Pos = { Anchor = "AQI="; Head = "AQI=" } } } ]
+                    Focus = Some { Field = DraftBody bob; Pos = { Anchor = "AQI="; Head = "AQI=" } }
+                    Viewing = None } ]
         Composer = Joined bob }
 
 /// The same session with bob typing in the terminal (Plan 13, stage 2e) — live mode as every
@@ -2158,7 +2164,11 @@ let private presenceTests =
         let withBobIn (field: FocusField) =
             { representativeModel with
                 Presence =
-                    Map.ofList [ PeerRef bob, { DisplayName = "brave-owl"; Focus = { Field = field; Pos = { Anchor = "AQI="; Head = "AQI=" } } } ] }
+                    Map.ofList
+                        [ PeerRef bob,
+                          { DisplayName = "brave-owl"
+                            Focus = Some { Field = field; Pos = { Anchor = "AQI="; Head = "AQI=" } }
+                            Viewing = None } ] }
 
         testCase "a peer is in the roster with where they are" <| fun () ->
             let html = Support.render (withBobIn Title)
@@ -2211,7 +2221,8 @@ let private presenceTests =
                             Map.ofList
                                 [ PeerRef bob,
                                   { DisplayName = "brave-owl"
-                                    Focus = { Field = ChapterName messageId; Pos = { Anchor = "AQI="; Head = "AQI=" } } } ] }
+                                    Focus = Some { Field = ChapterName messageId; Pos = { Anchor = "AQI="; Head = "AQI=" } }
+                                    Viewing = None } ] }
             Expect.isTrue
                 (html.Contains
                     (Dom.hookText (Dom.attr Dom.Hooks.peerAt Dom.Text.atChapter) (Dom.Text.namingChapter "The rollback")))
@@ -2232,7 +2243,8 @@ let private presenceTests =
                             Map.ofList
                                 [ PeerRef bob,
                                   { DisplayName = "brave-owl"
-                                    Focus = { Field = ChapterName here; Pos = { Anchor = "AQI="; Head = "AQI=" } } } ] }
+                                    Focus = Some { Field = ChapterName here; Pos = { Anchor = "AQI="; Head = "AQI=" } }
+                                    Viewing = None } ] }
             let ruleOf (messageId: MessageId) =
                 let opens = html.IndexOf (Dom.attr Dom.Hooks.chapterRule (MessageId.value messageId))
                 html.Substring (opens, html.IndexOf ("</div>", opens) - opens)
@@ -2688,7 +2700,12 @@ let private semanticsTests =
             let model =
                 { representativeModel with
                     Peers = Map.ofList [ bob, "quiet-otter" ]
-                    Presence = Map.ofList [ PeerRef bob, { DisplayName = "quiet-otter"; Focus = { Field = Title; Pos = { Anchor = "AQI="; Head = "AwQ=" } } } ]
+                    Presence =
+                        Map.ofList
+                            [ PeerRef bob,
+                              { DisplayName = "quiet-otter"
+                                Focus = Some { Field = Title; Pos = { Anchor = "AQI="; Head = "AwQ=" } }
+                                Viewing = None } ]
                     Attribution = { Attribution.empty with PeerUsers = Map.ofList [ bob, carol ]; UserPeers = Map.ofList [ carol, bob ] }
                     Conversation =
                         { Items =

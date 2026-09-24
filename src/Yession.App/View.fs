@@ -1327,7 +1327,7 @@ module View =
         let cursors =
             model.Presence
             |> Map.toList
-            |> List.filter (fun (_, p) -> p.Focus.Field = Title)
+            |> List.filter (fun (_, p) -> p.Focus |> Option.exists (fun f -> f.Field = Title))
             |> List.map (fun (who, p) -> remoteCursor who p)
         html $"""
             <header class="{Style.header}">
@@ -2605,7 +2605,7 @@ module View =
             let cursors =
                 model.Presence
                 |> Map.toList
-                |> List.filter (fun (_, p) -> p.Focus.Field = ChapterName item.MessageId)
+                |> List.filter (fun (_, p) -> p.Focus |> Option.exists (fun f -> f.Field = ChapterName item.MessageId))
                 |> List.map (fun (who, p) -> remoteCursor who p)
             html $"""
                 <div class="{Style.chapterRule}" data-chapter-rule="{MessageId.value item.MessageId}">
@@ -3573,6 +3573,19 @@ module View =
             match selected with
             | Some chosen -> PaneTab.key chosen = PaneTab.key tab
             | None -> false
+        // Who else has this tab open, on the tab itself — the answer to "am I the only one
+        // looking at this", which a reader has no other way to learn. Keyed by `ViewRef`, so a
+        // terminal tab, a block of it and an artifact all ask one question of one value.
+        //
+        // `excluding` is whoever is already drawn here as an EDITOR: a peer typing in a
+        // terminal is also watching it, and two marks for one person reads as two people.
+        let viewerDots (excluding: ActorRef list) (tab: PaneTab) =
+            ClientModel.viewersOf (PaneTab.view tab) model
+            |> List.filter (fun (who, _) -> not (List.contains who excluding))
+            |> List.map (fun (who, name) ->
+                html $"""
+                    <span class="{Style.paneViewerDot}" style="border-color:{EditorColour.ofEditor who}"
+                          title="{name} is watching" data-pane-viewer="{ActorRef.token who}"></span>""")
         let terminalTabButton (activate: unit -> unit) (pinMark: TemplateResult) (pinnedAttr: string) (hint: string) (view: TerminalView) =
             let on = isOn (TerminalTab view.TerminalId)
             let key = PaneTab.key (TerminalTab view.TerminalId)
@@ -3583,12 +3596,14 @@ module View =
             // Who is in THIS terminal, on its tab — the same presence the roster reports, put
             // where you would look for it. Without it, a collaborator typing a command in a
             // terminal you are not showing is visible nowhere in this column.
+            let editors = ClientModel.editorsInTerminal view.TerminalId model
             let peers =
-                ClientModel.editorsInTerminal view.TerminalId model
-                |> List.map (fun (who, name) ->
-                    html $"""
-                        <span class="{Style.draftEditorDot}" style="background:{EditorColour.ofEditor who}"
-                              title="{name}" data-terminal-tab-peer="{ActorRef.token who}"></span>""")
+                (editors
+                 |> List.map (fun (who, name) ->
+                     html $"""
+                         <span class="{Style.draftEditorDot}" style="background:{EditorColour.ofEditor who}"
+                               title="{name}" data-terminal-tab-peer="{ActorRef.token who}"></span>"""))
+                @ viewerDots (editors |> List.map fst) (TerminalTab view.TerminalId)
             // Two literal spellings of one button, because lit-html cannot inject an
             // attribute NAME through a hole — and the open/closed hooks must stay apart:
             // there is nothing to run in a closed terminal, only something to read.
@@ -3630,7 +3645,7 @@ module View =
                         data-pane-tab="{PaneTab.key tab}" title="{hint}"
                         data-pane-tab-pinned="{pinnedAttr}"
                         aria-selected="{if on then "true" else "false"}" tabindex="{if on then "0" else "-1"}"
-                        @click={Ev(fun _ -> activate ())}>{label}{pinMark}</button>"""
+                        @click={Ev(fun _ -> activate ())}>{label}{pinMark}<span class="{Style.terminalTabPeers}">{viewerDots [] tab}</span></button>"""
         /// Activating the tab you are ALREADY on is how a tab gets kept, or released.
         ///
         /// The pin used to be a second button beside every keepable tab. On a touch screen
