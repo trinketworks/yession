@@ -1006,6 +1006,7 @@ Async.StartImmediate (
                         (GitHubPrs.openOver githubApi (githubSpending Resilience.Foreground))
                         (GitHubPrs.mergeOver githubApi (githubSpending Resilience.Foreground))
                         (GitHubPrs.unmergeOver githubApi (githubSpending Resilience.Foreground))
+                        (GitHubPrs.readyOver githubApi (githubSpending Resilience.Foreground))
                         resolveGitHubToken
                         reconcileWatches)
         // The query registry (Plan 15): every read-only view this session declares, in

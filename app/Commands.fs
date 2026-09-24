@@ -144,6 +144,7 @@ let private switchBranchTool = "switch_branch"
 let private createPrTool = "create_pr"
 let private mergePrTool = "merge_pr"
 let private unmergePrTool = "unmerge_pr"
+let private readyPrTool = "ready_pr"
 let private watchPrTool = "watch_pr"
 let private unwatchPrTool = "unwatch_pr"
 let private startWorkSandboxTool = "start_work_sandbox"
@@ -404,6 +405,23 @@ let dispatch (services: CommandServices) : CommandDispatch =
                         | Ok pr -> return! service.Unmerge (Authority.credential invocation.Authority) pr
                 | Some _, other ->
                     return Error (sprintf "unmerge_pr takes a repo and a number, got %d arguments" (List.length other))
+            }
+
+          readyPrTool,
+          fun (invocation: GatedInvocation) ->
+            async {
+                match services.Prs (), decodeArgs invocation.Args with
+                | None, _ -> return Error "this session cannot mark pull requests ready"
+                | Some service, [ repo; number ] ->
+                    match RepoRef.create repo, System.Int32.TryParse number with
+                    | Error e, _ -> return Error (sprintf "not a repo name: %s" e)
+                    | _, (false, _) -> return Error "not a pull request number"
+                    | Ok repo, (true, number) ->
+                        match PrRef.create repo number with
+                        | Error e -> return Error e
+                        | Ok pr -> return! service.Ready (Authority.credential invocation.Authority) pr
+                | Some _, other ->
+                    return Error (sprintf "ready_pr takes a repo and a number, got %d arguments" (List.length other))
             }
 
           watchPrTool,
@@ -884,6 +902,12 @@ let private repoCapabilitiesFor
                               unmergePrTool
                               [ RepoRef.value repo; string number ]
                               (sprintf "unmerge_pr %s#%d" (RepoRef.value repo) number)
+                      ReadyPr =
+                        fun repo number ->
+                          gated
+                              readyPrTool
+                              [ RepoRef.value repo; string number ]
+                              (sprintf "ready_pr %s#%d" (RepoRef.value repo) number)
                       WatchPr =
                         fun repo number ->
                           gated
@@ -902,7 +926,7 @@ let private repoCapabilitiesFor
                       Status = service.RepoStatus
                       Log = service.RepoLog
                       Diff = service.RepoDiff } }
-        // GitHub's tools (`create_pr`, `merge_pr`, `unmerge_pr`, `watch_pr`, `unwatch_pr`) are declared
+        // GitHub's tools (`create_pr`, `ready_pr`, `merge_pr`, `unmerge_pr`, `watch_pr`, `unwatch_pr`) are declared
         // here, against the GATED verbs just bound above, rather than in `AgentTools.fs`
         // (Plan 16, part A cont'd): everything GitHub-specific about a session's pull
         // requests lives in `GitHubPrs.fs` and nowhere else.
