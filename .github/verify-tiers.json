@@ -5,7 +5,8 @@
   },
   {
     "tier": "browser",
-    "capabilities": "Browser Native Srt Caddy"
+    "capabilities": "Browser Native Srt Caddy",
+    "runtime": "clr"
   },
   {
     "tier": "nix",

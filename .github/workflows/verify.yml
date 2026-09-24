@@ -194,6 +194,9 @@ jobs:
           # The tier's capabilities take the same route, because on a dispatch they ARE that
           # string.
           CAPABILITIES: ${{ matrix.capabilities }}
+          # A tier that runs one of the suite's two runtimes says which (`check --runtime`); a
+          # tier that names none runs both, as a dispatch does.
+          RUNTIME: ${{ matrix.runtime }}
           ONLY: ${{ inputs.only }}
         # On this headless runner `check` self-wraps in a private D-Bus session +
         # gnome-keyring (both provided by devenv) to stand in for a desktop Secret
@@ -207,6 +210,9 @@ jobs:
           # and `check` takes them as separate arguments.
           # shellcheck disable=SC2086
           set -- check $CAPABILITIES
+          if [ -n "$RUNTIME" ]; then
+            set -- "$@" --runtime "$RUNTIME"
+          fi
           if [ -n "$ONLY" ]; then
             set -- "$@" --only "$ONLY"
           fi
