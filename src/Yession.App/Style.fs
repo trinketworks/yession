@@ -1476,13 +1476,15 @@ module Style =
     let causeSaid = "flex items-baseline text-small leading-[inherit] text-ink-faint"
     /// The link of a chain, above the act's chevron: shorter than a line, and reaching up
     /// through the act's top padding to meet the rail the act above draws (`causeRail`). Its
-    /// line is a box, as the rail is, with only the head drawn over its foot.
-    let causeChainMark = "col-start-1 -mt-2 h-5.5 relative flex justify-center text-edge"
+    /// line is a box, as the rail is, with only the head drawn over its foot. The bottom
+    /// padding holds the head off the chevron by the gap the corner mark keeps (~12px).
+    let causeChainMark = "col-start-1 -mt-2 h-5.5 pb-1.5 relative flex justify-center text-edge"
     let causeChainBody = "w-px h-full bg-current"
-    let causeChainHead = "absolute bottom-0 left-1/2 -translate-x-1/2"
+    let causeChainHead = "absolute bottom-1.5 left-1/2 -translate-x-1/2"
     /// The line from an act's chevron down to the next link of its chain: the gutter's centre,
     /// through the rows under the headline and on through the gap between the two acts.
-    let causeRail = "col-start-1 row-span-2 justify-self-center w-px -mb-2.5 bg-edge"
+    /// Starts the same ~12px under the chevron that the head stops above the next one.
+    let causeRail = "col-start-1 row-span-2 justify-self-center w-px mt-1.5 -mb-2.5 bg-edge"
     let causeJump =
         cls [ "flex bg-transparent border-0 p-0 cursor-pointer hover:text-ink focus-visible:text-ink"; focusRing ]
     /// The same quiet line as `replyRef`, but a real control — it jumps to the message it
