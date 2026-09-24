@@ -2204,6 +2204,16 @@ module View =
         // MARK, because the sentence holds links and a link cannot sit inside a button.
         // `data-cause-ref` / `data-cause-chain` are the hooks a test finds them by.
         let causeLinks = ConversationItem.causeLinks model.Conversation.Items
+        // The acts a chain continues below: each draws the rail from its chevron down to the
+        // next link's mark, so the chain is one line rather than marks spaced along a gutter.
+        let chainedOn =
+            model.Conversation.Items
+            |> List.pairwise
+            |> List.choose (fun (above, item) ->
+                match Map.tryFind item.MessageId causeLinks with
+                | Some CauseLink.Chained -> Some above.MessageId
+                | _ -> None)
+            |> Set.ofList
         let causeLine (item: ConversationItem) =
             let line (mark: TemplateResult) (said: TemplateResult list) (hook: string) =
                 html $"""
@@ -2240,7 +2250,7 @@ module View =
             | Some CauseLink.Chained ->
                 html $"""
                     <div class="{Style.causeRow}" data-cause-chain>
-                      <span class="{Style.causeChainMark}" aria-hidden="true">{Icon.chained}</span>
+                      <span class="{Style.causeChainMark}" aria-hidden="true"><span class="{Style.causeChainBody}"></span>{Icon.chained}</span>
                       <span class="{Style.srOnly}">{Dom.Text.causeChained}</span>
                     </div>"""
             | Some CauseLink.Unlinked
@@ -2280,6 +2290,11 @@ module View =
             // instead: an act in flight is not one to unfold, and its account is about to
             // change under the reader anyway.
             let key = FoldKey.Act item.MessageId
+            let rail =
+                if Set.contains item.MessageId chainedOn then
+                    html $"""<span class="{Style.causeRail}" aria-hidden="true"></span>"""
+                else
+                    Lit.nothing
             let arrow =
                 match item.Status with
                 | ConversationItemStatus.Running -> Lit.nothing
@@ -2301,6 +2316,7 @@ module View =
                   {running}
                   {arrow}
                   <span class="{Style.cls [ Style.foldContent; Style.actNoteText ]}">{Entity.phrase model by title}{whom} {failedMark}</span>
+                  {rail}
                   <div class="{Style.cls [ Style.foldContent; Style.actNoteShown ]}">{shown}</div>
                   {fold}
                 </article>"""
