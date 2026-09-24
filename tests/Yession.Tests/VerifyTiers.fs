@@ -46,11 +46,12 @@ let private repoRoot () : string option =
     with _ -> None
 
 /// Which of the suite's two runtimes a tier runs (`check --runtime`). A tier that names none runs
-/// both.
+/// both; `Neither` runs no suite at all, only the `NixBuild` build.
 [<RequireQualifiedAccess>]
 type private Runtime =
     | Node
     | Clr
+    | Neither
 
 /// One tier: what the job is called, the capabilities it hands `check`, and the runtime it
 /// confines itself to, if any.
@@ -67,7 +68,8 @@ let private runtime : Decoder<Runtime> =
     |> Decode.andThen (function
         | "node" -> Decode.succeed Runtime.Node
         | "clr" -> Decode.succeed Runtime.Clr
-        | other -> Decode.fail (sprintf "`%s` is not a runtime `check` knows (node, clr)" other))
+        | "none" -> Decode.succeed Runtime.Neither
+        | other -> Decode.fail (sprintf "`%s` is not a runtime `check` knows (node, clr, none)" other))
 
 let private tier : Decoder<Tier> =
     Decode.object (fun get ->
@@ -114,6 +116,7 @@ let private covers (tier: Tier) (need: Tag.Need list) =
         | None -> true
         | Some Runtime.Clr -> onClr
         | Some Runtime.Node -> not onClr
+        | Some Runtime.Neither -> false
     runsIt
     && need
        |> List.forall (fun n ->
@@ -183,6 +186,23 @@ let tests =
                             (tiers
                              |> List.map (fun t -> sprintf "%s = %s" t.Name (String.concat " " t.Capabilities))
                              |> String.concat "; "))
+
+        // The rule above reads suites, and a capability can be the gate's without being any suite's:
+        // `NixBuild` is the build of the installable itself, which `check` runs rather than a case
+        // declaring it. Dropping it from every tier would leave each suite covered and the release
+        // gate never once building what it ships. So the tiers together must also NAME everything
+        // `verify` means.
+        testCase "every capability the gate means is asked for by one of its tiers" <| fun () ->
+            match declaredTiers () with
+            | [] -> ()   // the population case above is what says this
+            | tiers ->
+                let named = tiers |> List.collect (fun tier -> tier.Capabilities |> List.choose Tag.parseNeed)
+                for need in Tag.allNeeds do
+                    Expect.isTrue
+                        (List.contains need named)
+                        (sprintf
+                            "no tier asks for `%A`, which `verify` means — so the release gate never exercises it. Add it to a tier in .github/verify-tiers.json"
+                            need)
 
         // What `tasks.fsx bench` relies on to run the .NET CLR alone (`--runtime clr`): there is
         // nothing to measure on Node, because measuring a render needs a real browser. That is a

@@ -962,6 +962,8 @@ let private requireCapabilities (caps: string list) =
             "Docker: no daemon answers `docker info` (is it running, is DOCKER_HOST right?)"
           if List.contains "Nix" caps && not (nixAvailable ()) then
             "Nix: no `nix` on PATH"
+          if List.contains "NixBuild" caps && not (nixAvailable ()) then
+            "NixBuild: no `nix` on PATH"
           if List.contains "LiveAgent" caps && not (agentCredentials ()) then
             "LiveAgent: no ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN in the environment"
           if List.contains "Pty" caps && not (ptyAvailable ()) then
@@ -1107,10 +1109,16 @@ let private buildNodeSuite (capSet: Set<string>) : string =
 /// Fable compile of the suite and a Node run whose every verdict was a duplicate. A capability
 /// could not say this, because a capability is what a BOX can host and this is which half of the
 /// work a run is for. `VerifyTiers` is what keeps the tiers honest about it.
+///
+/// `Neither` (`--runtime none`) is the run that is not a suite at all: `NixBuild`, which builds
+/// the installable from the working tree and boots it. That is minutes of work no suite shares,
+/// and the gate's `nix` tier used to pay a product build, a suite compile and a cheap-tier Node run
+/// ahead of it — every one of them repeated, verdict for verdict, by the `node` tier.
 [<RequireQualifiedAccess>]
 type private Runtime =
     | Node
     | Clr
+    | Neither
 
 let private runCheckOnce (requested: string list) (runtime: Runtime option) =
     let caps = requested
@@ -1124,6 +1132,8 @@ let private runCheckOnce (requested: string list) (runtime: Runtime option) =
         failwith "check --runtime clr: the .NET CLR runs only the browser suites, and this run does not ask for Browser"
     | Some Runtime.Node when capSet.Contains "Browser" ->
         failwith "check --runtime node: this run asks for Browser, whose suites all run on the .NET CLR"
+    | Some Runtime.Neither when caps <> [ "NixBuild" ] ->
+        failwith "check --runtime none: runs no suite, so NixBuild is the only thing it can be asked for"
     | _ -> ()
     let budgetMs = nodeBudgetMs capSet
     Environment.SetEnvironmentVariable ("YESSION_TEST_CAPS", String.concat " " caps)
@@ -1132,18 +1142,26 @@ let private runCheckOnce (requested: string list) (runtime: Runtime option) =
     // runner down later (`Support.settledWithin`).
     Environment.SetEnvironmentVariable ("YESSION_TEST_BUDGET_MS", string budgetMs)
     progress (sprintf "capabilities: %s" (if List.isEmpty caps then "none (cheap tier)" else String.concat " " caps))
-    runtime |> Option.iter (fun r -> progress (sprintf "runtime: %A only" r))
+    runtime
+    |> Option.iter (fun r ->
+        progress (
+            match r with
+            | Runtime.Neither -> "runtime: none (no suite runs)"
+            | r -> sprintf "runtime: %A only" r))
 
-    if runtime = Some Runtime.Clr then
-        // The browser suites drive the product, not the suite's JS: build that alone.
-        buildProduct capSet
-    else
+    match runtime with
+    // The derivation builds its own source, offline, in its sandbox: nothing here feeds it.
+    | Some Runtime.Neither -> ()
+    // The browser suites drive the product, not the suite's JS: build that alone.
+    | Some Runtime.Clr -> buildProduct capSet
+    | Some Runtime.Node
+    | None ->
         let mainJs = buildNodeSuite capSet
         progress (sprintf "running the Node suite (budget %ds)" (budgetMs / 1000))
         runNodeSuite mainJs caps budgetMs
 
     // The .NET CLR (Playwright) path — only when a Browser-tagged suite is enabled.
-    if capSet.Contains "Browser" && runtime <> Some Runtime.Node then
+    if capSet.Contains "Browser" && (runtime = None || runtime = Some Runtime.Clr) then
         // No browser install step: Chromium comes from the environment
         // (PLAYWRIGHT_BROWSERS_PATH, set by devenv.nix from nixpkgs' playwright-driver), like
         // every other tool the suite needs. `check` used to shell out to `npx playwright
@@ -1178,10 +1196,12 @@ let private runCheckOnce (requested: string list) (runtime: Runtime option) =
         exec "dotnet" [ "run"; "--project"; "tests/Yession.Tests/Yession.Tests.fsproj" ]
 
     // Last, because it is the long pole (a cold NuGet FOD fetch plus the whole compile again,
-    // offline, inside the sandbox) and because the suites are the sharper signal. The Node run
-    // above already asserted what the derivation is allowed to SEE (NixSource.fs); this asserts
-    // that what it sees still builds and boots.
-    if capSet.Contains "Nix" then
+    // offline, inside the sandbox) and because the suites are the sharper signal. `Nix` asserts
+    // what the derivation is allowed to SEE (NixSource.fs); this asserts that what it sees still
+    // builds and boots. Two capabilities because they are two costs: the first is an evaluation
+    // that belongs beside the suites that build the tree it reads, the second is minutes of
+    // sandboxed compile that belongs on a runner of its own.
+    if capSet.Contains "NixBuild" then
         progress "building the Nix package from the working tree"
         buildNixPackage ()
 
@@ -1269,8 +1289,9 @@ let private takeRuntime (args: string list) : string list * Runtime option =
         match remaining with
         | "--runtime" :: "node" :: rest -> go acc (Some Runtime.Node) rest
         | "--runtime" :: "clr" :: rest -> go acc (Some Runtime.Clr) rest
-        | "--runtime" :: other :: _ -> failwithf "check --runtime: `%s` is not a runtime (node, clr)" other
-        | [ "--runtime" ] -> failwith "check --runtime: name one (node, clr)"
+        | "--runtime" :: "none" :: rest -> go acc (Some Runtime.Neither) rest
+        | "--runtime" :: other :: _ -> failwithf "check --runtime: `%s` is not a runtime (node, clr, none)" other
+        | [ "--runtime" ] -> failwith "check --runtime: name one (node, clr, none)"
         | arg :: rest -> go (arg :: acc) runtime rest
         | [] -> List.rev acc, runtime
     go [] None args
@@ -1295,8 +1316,8 @@ let check (args: string list) =
 /// being worked on without the caller having to restate the tier list and get it subtly wrong.
 let verify (args: string list) =
     check
-        ([ "Browser"; "Ports"; "Native"; "Docker"; "LiveAgent"; "Keyring"; "Nix"; "Srt"; "Pty"; "Serial"
-           "Jumpstarter"; "Caddy" ]
+        ([ "Browser"; "Ports"; "Native"; "Docker"; "LiveAgent"; "Keyring"; "Nix"; "NixBuild"; "Srt"; "Pty"
+           "Serial"; "Jumpstarter"; "Caddy" ]
          @ args)
 
 // --- vm-check: run a Node test tier on a Linux target -----------------------------------------

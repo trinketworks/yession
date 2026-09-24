@@ -106,7 +106,7 @@ The derivations themselves (`nix/packages.nix`) have three consumers, and the di
 between them is which SOURCE they build: `flake.nix` and `devenv.nix` both build a store copy
 of the repo (git-filtered for the flake, whole-directory for devenv), while
 `nix/worktree.nix` evaluates in place, against the tree as it stands — `nix build --file
-nix/worktree.nix nix|npm|staged|nugetDeps`. That last route is what `check Nix` drives and the
+nix/worktree.nix nix|npm|staged|nugetDeps`. That last route is what `check Nix NixBuild` drives and the
 only one that can catch a `src` filter that has stopped matching what git tracks.
 
 **No new helper scripts.** New build/dev/repo functionality is a `tasks.fsx` verb, not a shell
@@ -372,8 +372,10 @@ check Keyring                # + the OS-credential-manager suite. Headless, chec
                              #   itself under a private D-Bus session + gnome-keyring.
 check Srt                    # + the sandbox escape probes: read/write/egress denial through
                              #   real bubblewrap. See Srt below for this container's profile.
-check Nix                    # + the build-source contract, then builds the installable from
-                             #   the WORKING TREE and boots it. Minutes; the only gate on it.
+check Nix                    # + the build-source contract: what the derivations may SEE of
+                             #   the working tree (a `nix eval`; seconds).
+check NixBuild --runtime none # builds the installable from the WORKING TREE and boots it, and
+                             #   runs no suite. Minutes; the only gate on it.
 check Jumpstarter            # + our MCP client driven against the Python example's provider,
                              #   over two real child processes. Needs uv and a CPython.
 check Browser Native Caddy   # + the fronted deployment: the proxy example's Caddyfile, for
@@ -384,9 +386,10 @@ check Docker Dogfood         # + the self-hosting run: this repo's whole suite i
                              #   container, through the real docker backend). ~11 min warm, up to an hour cold; in NO scheduled
                              #   tier — run it when the container environment story changes,
                              #   locally or via a verify.yml dispatch naming both caps.
-verify                       # == check Browser Ports Native Docker LiveAgent Keyring Nix Srt
-                             #    Pty Serial Jumpstarter Caddy. Release gate; what CI runs on
-                             #    master.
+verify                       # == check Browser Ports Native Docker LiveAgent Keyring Nix
+                             #    NixBuild Srt Pty Serial Jumpstarter Caddy. Release gate; what
+                             #    CI runs on master (spread over the tiers in
+                             #    .github/verify-tiers.json).
                              #    Takes check's trailing args, so `verify --only "<text>"` works.
 lint                         # actionlint over .github/workflows, then the F# analyzers over
                              #   every project in Yession.slnx. Runs first in the PR gate.
@@ -723,9 +726,12 @@ Capabilities:
   Every CI route (`nix build .#yession`, darwin-package, package-nix) evaluates a flake, whose
   source copy git already filtered — so a `src` filter that lets the dev shell's `node_modules`
   symlink or 176MB of `obj/`/Fable output into the derivation is green everywhere in CI and
-  broken on the laptop. `check Nix` asserts the source contract (`NixSource.fs`), then builds
-  `nix/worktree.nix` and boot-smokes the result — which is also what re-checks the NuGet FOD
-  hash, the other thing a devenv-only `check` cannot see.
+  broken on the laptop. `check Nix` asserts the source contract (`NixSource.fs`) against the
+  tree this run built; `NixBuild` builds `nix/worktree.nix` and boot-smokes the result — which
+  is also what re-checks the NuGet FOD hash, the other thing a devenv-only `check` cannot see.
+  Two capabilities because they are two costs: the contract is an evaluation that belongs
+  beside the suites that built the tree it reads, the build is minutes of sandboxed compile
+  that belongs on a runner of its own.
 
 To eyeball a rich-editor change in a real browser without any of the WebRTC machinery:
 `check Browser` (drives Chromium against `tests/browser/editor-harness.html`). The full
