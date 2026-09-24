@@ -124,7 +124,7 @@ type ConversationItem =
 /// How an act's cause is drawn, read off the act above it (`ConversationItem.causeLinks`).
 [<RequireQualifiedAccess>]
 type CauseLink =
-    /// Nothing to draw: no cause, or the cause is the item directly above.
+    /// Nothing to draw: no cause, or the cause is the item directly above, by the same author.
     | Unlinked
     /// The cause, drawn above the act.
     | Drawn of Cause
@@ -159,7 +159,9 @@ module ConversationItem =
     /// How each act's cause is drawn, keyed by the act. One pass over `items` in screen
     /// order, because a link is a fact about an act AND the one above it:
     ///
-    /// - the cause is the item directly above → nothing; the eye already sees it.
+    /// - the cause is the item directly above, by the same author → nothing; the eye already
+    ///   sees it. A different author puts that author's header between the two, and the
+    ///   link is no longer something the eye can see, so it is drawn.
     /// - the act above has the same cause → a link in its chain, so the cause is said once
     ///   over a run of acts it produced (a repo's ask and each sandbox it starts).
     /// - otherwise → the cause, drawn.
@@ -174,7 +176,7 @@ module ConversationItem =
         let linkOf (above: ConversationItem option) (item: ConversationItem) =
             match item.CausedBy, above with
             | None, _ -> CauseLink.Unlinked
-            | Some (Cause.Item target), Some a when a.MessageId = target -> CauseLink.Unlinked
+            | Some (Cause.Item target), Some a when a.MessageId = target && a.Author = item.Author -> CauseLink.Unlinked
             | Some cause, Some a when isAct a && a.CausedBy = Some cause -> CauseLink.Chained
             | Some cause, _ -> CauseLink.Drawn cause
         items
