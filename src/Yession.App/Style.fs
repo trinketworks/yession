@@ -416,6 +416,19 @@ module Style =
               "transition-colors"; focusRing ]
     let btnIconBare = cls [ btnIconBareBase; "text-ink-faint hover:text-ink" ]
     let btnIconBareDanger = cls [ btnIconBareBase; "text-ink-faint hover:text-err" ]
+    /// The same verb where it is the only control a row offers a thumb — the Manager's
+    /// archive, which on a phone is the one per-row target there is. 24px is WCAG 2.5.8's
+    /// minimum exactly and far under a comfortable touch target, so the HIT area is 44px
+    /// while the glyph, the box and the row stay as they were: an empty `::before` reaches
+    /// 10px past the box on every side, and a press on a pseudo-element is a press on its
+    /// element. The box itself stays 24px on purpose — it is what the focus ring is drawn
+    /// round, and a ring round the 44px area crowded the verb beside it and the screen's
+    /// edge. Not the default, because the other bare icons ride in pairs (the queue's up
+    /// and down) whose areas would overlap; a site wearing this keeps 10px clear of its
+    /// neighbour so the area it grows never lands on one.
+    let btnIconBareTouch =
+        cls [ btnIconBareBase; "relative before:absolute before:-inset-2.5 before:content-['']"
+              "text-ink-faint hover:text-ink" ]
 
     /// The borderless verb as a WORD rather than an icon, for a row whose verb has no glyph
     /// that says it (stop, unarchive). Same rule, same box height, same rest and hover tones
