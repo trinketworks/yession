@@ -138,6 +138,52 @@ module ChecksRollup =
         | ChecksGreen -> "checks green"
         | ChecksRed -> "checks red"
 
+/// Where an entry in a GitHub merge queue has got to — GitHub's `MergeQueueEntryState`, in
+/// its own five words, because they are its facts and a forge-neutral paraphrase of them
+/// would be a guess about what a second forge's queue means.
+[<RequireQualifiedAccess>]
+type GitHubQueueState =
+    /// Waiting its turn.
+    | Queued
+    /// Its merge group is being built and tested.
+    | AwaitingChecks
+    /// Its merge group passed: it lands when the entries ahead of it do.
+    | Mergeable
+    /// Its merge group failed. GitHub removes it; the next look will find it off the queue.
+    | Unmergeable
+    /// The queue is locked, and nothing in it moves until somebody unlocks it.
+    | Locked
+
+module GitHubQueueState =
+    let describe (state: GitHubQueueState) : string =
+        match state with
+        | GitHubQueueState.Queued -> "waiting its turn"
+        | GitHubQueueState.AwaitingChecks -> "awaiting checks"
+        | GitHubQueueState.Mergeable -> "about to merge"
+        | GitHubQueueState.Unmergeable -> "failed its merge group"
+        | GitHubQueueState.Locked -> "queue locked"
+
+/// How an open pull request is on its way in without anybody further being needed, in the
+/// words of the forge carrying it. Named per forge rather than in a common vocabulary,
+/// because the mechanisms are not the same thing twice: GitHub arms auto merge and then
+/// ENQUEUES, clearing the arming as it does; GitLab's auto merge and merge train are their
+/// own pair with their own states. A second forge adds its own cases here, and the one
+/// neutral question every rule above asks — armed, or queued? — is `PrTransitions.wayInOf`.
+[<RequireQualifiedAccess>]
+type PrRoute =
+    /// Auto merge armed and not yet in a queue: it merges, or enters the merge queue, when
+    /// what the base branch requires has passed.
+    | GitHubAutoMerge
+    /// An entry in the base branch's merge queue, at a position (1 is next).
+    | GitHubMergeQueue of position: int * state: GitHubQueueState
+
+module PrRoute =
+    let describe (route: PrRoute) : string =
+        match route with
+        | PrRoute.GitHubAutoMerge -> "auto merge armed"
+        | PrRoute.GitHubMergeQueue (position, state) ->
+            sprintf "merge queue #%d, %s" position (GitHubQueueState.describe state)
+
 /// What one look at the provider answered. `Mergeable` is a THREE-valued fact and its
 /// third value is why it is handled with care: GitHub computes it lazily and answers
 /// `None` until it has, so `None` is "not known yet", never "mergeable". Only a COMPUTED
@@ -149,13 +195,14 @@ type PrSnapshot =
       Title : string
       HeadSha : string
       Checks : ChecksRollup
-      /// Is this pull request on its way in without anybody further being needed — auto
-      /// merge armed, the merge queue holding it? Unlike `Mergeable` this one IS a fact
-      /// the provider states outright rather than computes lazily, so it is announced.
-      Queued : bool
+      /// How it is on its way in without anybody further being needed, or `None` when
+      /// nothing is carrying it. Unlike `Mergeable` this IS a fact the provider states
+      /// outright rather than computes lazily, so its movement is announced. Always `None`
+      /// off `PrOpen`: a merged pull request went through, and a closed one is not going.
+      Route : PrRoute option
       Mergeable : bool option
       /// A draft: on the record, and not asking for review or a merge yet. Stated outright
-      /// by the provider, like `Queued`, so its movement is announced.
+      /// by the provider, like `Route`, so its movement is announced.
       Draft : bool }
 
 module PrSnapshot =
@@ -182,13 +229,19 @@ type PrTransition =
     | Reopened
     | ChecksPassed
     | ChecksFailed
-    /// Auto merge armed: from here it lands without anybody doing anything.
-    | Queued
-    /// Auto merge armed and no longer armed, on a pull request still open. What a merge
-    /// queue does when it ejects an entry, and the reason this case exists: the ejection
-    /// itself raises nothing anywhere — the state does not move, the checks do not move,
-    /// the pull request simply stops being on its way in. Somebody has to re-arm it, and
-    /// until this was said nobody was told.
+    /// Armed to merge when its requirements pass (GitHub's auto merge): from here it lands
+    /// without anybody doing anything.
+    | Armed
+    /// Entered a merge queue. On GitHub this is what an armed pull request does once its
+    /// checks pass — auto merge clears as the entry appears — so it is the NEXT step on the
+    /// way in, never a step off it.
+    | Enqueued
+    /// On its way in and no longer, on a pull request still open: auto merge disarmed, or
+    /// the entry gone from the queue without merging. What a merge queue ejecting an entry
+    /// looks like, and the reason this case exists: the ejection itself raises nothing
+    /// anywhere — the state does not move, the checks do not move, the pull request simply
+    /// stops being carried. Somebody has to re-arm it, and until this was said nobody was
+    /// told.
     | Stalled
     /// The base moved under the branch and the two no longer merge — a conflict the
     /// provider has now COMPUTED (`mergeable = false`), not the `null` it answers while it
@@ -222,7 +275,8 @@ module PrTransition =
         | PrTransition.Reopened -> "reopened"
         | PrTransition.ChecksPassed -> "checks passed"
         | PrTransition.ChecksFailed -> "checks failed"
-        | PrTransition.Queued -> "queued"
+        | PrTransition.Armed -> "armed to merge"
+        | PrTransition.Enqueued -> "queued to merge"
         | PrTransition.Stalled -> "stalled"
         | PrTransition.Conflicted -> "conflicted"
         | PrTransition.Resolved -> "conflict resolved"
@@ -304,10 +358,11 @@ module PrWatched =
     let particulars (p: PrWatched) : Phrase list =
         [ Phrase.text (
               sprintf
-                  "%s, %s%s"
+                  "%s, %s%s%s"
                   (PrState.describe p.PwInitial.State)
                   (ChecksRollup.describe p.PwInitial.Checks)
-                  (PrSnapshot.conflictClause p.PwInitial.State p.PwInitial.Mergeable)) ]
+                  (PrSnapshot.conflictClause p.PwInitial.State p.PwInitial.Mergeable)
+                  (p.PwInitial.Route |> Option.map (PrRoute.describe >> sprintf ", %s") |> Option.defaultValue "")) ]
 
 type PrUnwatched =
     { MessageId : MessageId

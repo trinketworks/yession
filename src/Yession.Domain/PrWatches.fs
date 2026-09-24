@@ -10,14 +10,19 @@ open Yession.Domain
 /// re-folds the same log and re-announces nothing, while a change that happened during
 /// the downtime is still detected, because the log still says the state before it.
 
-/// Where a pull request stands with the thing that would merge it for us.
+/// Where a pull request stands with the thing that would merge it for us — the one neutral
+/// question every rule here asks of a forge's `PrRoute`: nothing is carrying it, it is
+/// armed to merge when its requirements pass, or it is in a queue that merges in order.
 ///
-/// `Stalled` is not something a provider reports — it is `Queued` followed by not queued,
-/// on a pull request still open, which is what a merge queue ejecting an entry looks like
-/// from outside. So it can only be known from HISTORY, which is why it lives in the
-/// baseline rather than in the snapshot.
-type PrQueue =
-    | NotQueued
+/// `Stalled` is not something a provider reports — it is `Armed` or `Queued` followed by
+/// neither, on a pull request still open, which is what a merge queue ejecting an entry
+/// looks like from outside. So it can only be known from HISTORY, which is why it lives in
+/// the baseline rather than in the snapshot. Armed followed by queued is NOT a stall: on
+/// GitHub that is the way in working, since entering the queue clears the arming.
+[<RequireQualifiedAccess>]
+type PrWayIn =
+    | Idle
+    | Armed
     | Queued
     | Stalled
 
@@ -29,7 +34,7 @@ type PrQueue =
 type PrKnown =
     { State : PrState
       Checks : ChecksRollup
-      Queue : PrQueue
+      WayIn : PrWayIn
       /// The last COMPUTED mergeability, or `None` if the provider has never answered one
       /// for this watch yet. Never set to `None` by a fresh look that came back `None`: a
       /// provider still recomputing does not un-know what it last computed.
@@ -41,15 +46,15 @@ type PrKnown =
 /// invent their own vocabulary for the same fact — they read it from here.
 module PrStatus =
 
-    /// The last thing that happened to this pull request, in a single past-tense word.
+    /// The last thing that happened to this pull request, in a single word.
     /// On an open one a computed conflict wins, because it is the specific blocker and it
     /// names its own fix (rebase) — a pull request ejected from the queue FOR a conflict is
     /// both stalled and conflicted, and "conflicted" is the more useful of the two to show.
-    /// Otherwise queue first, because "queued" and "stalled" are the news; a merged or
-    /// closed pull request has stopped caring what any queue thought. `mergeable` is the
+    /// Otherwise the way in, because "armed", "queued" and "stalled" are the news; a merged
+    /// or closed pull request has stopped caring what any queue thought. `mergeable` is the
     /// baseline's last COMPUTED value (`None` = never computed, never "clean"), so the word
     /// does not flicker off "conflicted" during the window a push leaves it recomputing.
-    let word (mergeable: bool option) (queue: PrQueue) (state: PrState) : string =
+    let word (mergeable: bool option) (wayIn: PrWayIn) (state: PrState) : string =
         match state with
         | PrMerged -> "merged"
         | PrClosed -> "closed"
@@ -58,10 +63,11 @@ module PrStatus =
             | Some false -> "conflicted"
             | Some true
             | None ->
-                match queue with
-                | Queued -> "queued"
-                | Stalled -> "stalled"
-                | NotQueued -> "open"
+                match wayIn with
+                | PrWayIn.Armed -> "armed"
+                | PrWayIn.Queued -> "queued"
+                | PrWayIn.Stalled -> "stalled"
+                | PrWayIn.Idle -> "open"
 
     /// What a watch says when the session cannot currently read it — a dead credential, a
     /// pull request it cannot see, a rate-limit window. The panel's status column says
@@ -72,9 +78,9 @@ module PrStatus =
     /// Worst first. What "worst" means here is how much it wants a person: an unreachable
     /// watch is not being driven at all, a stalled pull request has nobody driving it, a
     /// conflicted one is blocked until somebody rebases — the agent can, so it ranks below a
-    /// stall — an open one is waiting on somebody, a queued one is waiting on machines, and
-    /// merged or closed is over.
-    let order : string list = [ unreachable; "stalled"; "conflicted"; "open"; "queued"; "merged"; "closed" ]
+    /// stall — an open one is waiting on somebody, an armed one is waiting on its checks, a
+    /// queued one is waiting on the queue, and merged or closed is over.
+    let order : string list = [ unreachable; "stalled"; "conflicted"; "open"; "armed"; "queued"; "merged"; "closed" ]
 
     /// A pull request that is still owed. Merged and closed ones are history: they are why
     /// a summary of six watches can honestly be silent.
@@ -168,16 +174,25 @@ type PrWatchesProjection = { Watches : PrWatch list }
 
 module PrTransitions =
 
+    /// The neutral reading of a forge's route: armed, or queued. Every forge's cases land
+    /// here and nowhere else, so a second forge's route is one more arm of this match and
+    /// no rule below it changes.
+    let wayInOf (route: PrRoute option) : PrWayIn =
+        match route with
+        | None -> PrWayIn.Idle
+        | Some PrRoute.GitHubAutoMerge -> PrWayIn.Armed
+        | Some (PrRoute.GitHubMergeQueue _) -> PrWayIn.Queued
+
     /// The baseline a watch starts from: its `Initial` snapshot, reduced to what
     /// transitions are detected on.
     ///
-    /// A watch that begins on an already-ejected pull request reads `NotQueued`, not
+    /// A watch that begins on an already-ejected pull request reads `Idle`, not
     /// `Stalled`, and that is honest: nobody watching saw it fall out, and claiming
     /// otherwise would announce a stall that this session cannot know happened.
     let knownOf (snapshot: PrSnapshot) : PrKnown =
         { State = snapshot.State
           Checks = snapshot.Checks
-          Queue = (if snapshot.Queued then Queued else NotQueued)
+          WayIn = wayInOf snapshot.Route
           Mergeable = snapshot.Mergeable
           Draft = snapshot.Draft }
 
@@ -190,15 +205,16 @@ module PrTransitions =
         | PrTransition.Reopened -> { known with State = PrOpen }
         | PrTransition.ChecksPassed -> { known with Checks = ChecksGreen }
         | PrTransition.ChecksFailed -> { known with Checks = ChecksRed }
-        | PrTransition.Queued -> { known with Queue = Queued }
-        | PrTransition.Stalled -> { known with Queue = Stalled }
+        | PrTransition.Armed -> { known with WayIn = PrWayIn.Armed }
+        | PrTransition.Enqueued -> { known with WayIn = PrWayIn.Queued }
+        | PrTransition.Stalled -> { known with WayIn = PrWayIn.Stalled }
         | PrTransition.Conflicted -> { known with Mergeable = Some false }
         | PrTransition.Resolved -> { known with Mergeable = Some true }
         | PrTransition.ReadyForReview -> { known with Draft = false }
         | PrTransition.Drafted -> { known with Draft = true }
 
     /// What a fresh snapshot means against the last recorded baseline: at most one state
-    /// transition, at most one checks transition and at most one queue transition, in
+    /// transition, at most one checks transition and at most one way-in transition, in
     /// that order.
     ///
     /// Only ARRIVALS at green or red are checks news — a new push resetting checks to
@@ -227,18 +243,21 @@ module PrTransitions =
                 | _, ChecksRed -> [ PrTransition.ChecksFailed ]
                 | _ -> []
             | PrMerged | PrClosed -> []
-        // Queue news, on the same terms as checks news and for the same reason: a merged
+        // Way-in news, on the same terms as checks news and for the same reason: a merged
         // pull request left the queue by going through it, and saying "stalled" about that
-        // would be reporting the success as a failure. A re-arm after a stall announces
-        // `Queued` again, because it is again true that nobody is needed.
-        let queue =
+        // would be reporting the success as a failure. Armed to queued is the next step in,
+        // announced as the step it is; a stall is being carried by NOTHING. A re-arm after
+        // a stall is announced again, because it is again true that nobody is needed.
+        let wayIn =
             match stateAfter.State with
             | PrOpen ->
-                match known.Queue, fresh.Queued with
-                | Queued, true -> []
-                | _, true -> [ PrTransition.Queued ]
-                | Queued, false -> [ PrTransition.Stalled ]
-                | _, false -> []
+                match known.WayIn, wayInOf fresh.Route with
+                | PrWayIn.Armed, PrWayIn.Armed
+                | PrWayIn.Queued, PrWayIn.Queued -> []
+                | _, PrWayIn.Armed -> [ PrTransition.Armed ]
+                | _, PrWayIn.Queued -> [ PrTransition.Enqueued ]
+                | (PrWayIn.Armed | PrWayIn.Queued), _ -> [ PrTransition.Stalled ]
+                | _ -> []
             | PrMerged | PrClosed -> []
         // Mergeability news, and the one axis whose fresh value can be UNKNOWN. `None` is
         // the provider still computing the merge (routinely, right after a push), so it
@@ -269,7 +288,7 @@ module PrTransitions =
                 | false, true -> [ PrTransition.Drafted ]
                 | _ -> []
             | PrMerged | PrClosed -> []
-        state @ checks @ queue @ merge @ draft
+        state @ checks @ wayIn @ merge @ draft
 
 module PrWatchesProjection =
 
