@@ -86,7 +86,7 @@ let private diedOf (code: int) : string =
 
 // Run a command capturing stdout (fails on non-zero); used where the output is a value.
 //
-// A failure carries what the command PRINTED. `compile` builds the solution through this, and
+// A failure carries what the command PRINTED. `compile` restores the solution through this, and
 // a build that cannot restore a package inside the Nix sandbox — a NuGet reference added
 // without re-deriving the fixed-output cache's hash — failed as one line, `dotnet build
 // Yession.slnx failed (1)`, with the NU1101 that named the package captured and discarded.
@@ -418,15 +418,28 @@ let private buildAssets (outDir: string) (minify: bool) =
         if not (File.Exists (Path.Combine (root, AssetFile.path file))) then
             failwithf "%s is declared in AssetFile but no producer wrote it" (AssetFile.path file)
 
+// RESTORED, not built. Fable reads each project's restore (`obj/project.assets.json`, which
+// `packageGraph` hashes before it runs) and cracks every referenced project from source; it never
+// loads an assembly `dotnet build` wrote. This used to build the whole solution anyway — the
+// suite, the analyzers, the tools and the examples, CLR-compiled for nothing that ships — which
+// was about a minute and a half of every `stage`: inside the Nix sandbox on both architectures,
+// in `package`, and ahead of the Node and browser suites in every `check` that stages.
+//
+// Type-checking every project for .NET is still done, by the verbs whose job it is: `build`
+// below, `check`, and `lint`, which all run on every pull request.
 let compile () =
     printfn "compiling F# -> JS"
-    run "dotnet" [ "build"; "Yession.slnx" ] |> ignore
+    run "dotnet" [ "restore"; "Yession.slnx" ] |> ignore
     fable true "app/main/Yession.Host.Main.fsproj" "app/out"
     fable true "app/browser/Yession.Browser.fsproj" "app/out/browser"
     buildAssets "app/out/public" true
 
+// The whole solution, for .NET, and then the JS. `lint` sends its reader here when the source did
+// not compile, so this has to report what the compiler says about EVERY project — a fault in the
+// suite or an analyzer included — and not only about the two that compile to what ships.
 let build () =
     restore ()
+    run "dotnet" [ "build"; "Yession.slnx" ] |> ignore
     compile ()
 
 // --- start / dev: run the Session Process locally --------------------------------------------
