@@ -2,6 +2,7 @@ namespace Yession.Domain.Prs
 
 open System
 open Yession.Domain
+open Yession.Domain.Tools
 
 /// The session's watched pull requests, projected from events — `ReposProjection`'s
 /// sibling, and the durable half of transition detection. The poller compares fresh
@@ -87,6 +88,27 @@ module PrStatus =
     /// WHICH; a one-line summary has room only for the fact that nobody is driving this
     /// one, and for a worse reason than a stall.
     let unreachable : string = "unreachable"
+
+    /// How loudly a status word is said, on every surface that says one — the
+    /// `pull_requests` table, the session's header strip — so the same word is never red
+    /// in one and grey in the other. The word is still the word; this is only volume.
+    ///
+    /// Loud is anything waiting on somebody to ACT: a stall nobody is driving, and the
+    /// three that name their fix (conflicted, changes requested, behind). Busy is on its
+    /// way in, waiting on machines. Merged is the outcome somebody was waiting for. The
+    /// rest — open, review required, closed — are ordinary, and colouring every row would
+    /// be colouring none. A word this module has never heard of recedes.
+    let tone (word: string) : QueryTone =
+        match word with
+        | "merged" -> ToneOk
+        | "stalled"
+        | "conflicted"
+        | "changes requested"
+        | "behind" -> ToneBad
+        | said when said = unreachable -> ToneBad
+        | "armed"
+        | "queued" -> ToneBusy
+        | _ -> ToneMuted
 
     /// Worst first. What "worst" means here is how much it wants a person: an unreachable
     /// watch is not being driven at all, a stalled pull request has nobody driving it, a

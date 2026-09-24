@@ -943,6 +943,16 @@ module View =
               {controls}
             </section>"""
 
+    /// The one place a tone becomes an ink. Exhaustive on purpose: a fifth tone fails
+    /// the build HERE, where somebody has to choose a colour and prove its contrast,
+    /// rather than rendering as whatever the fall-through happened to be.
+    let private ink (tone: QueryTone) : string =
+        match tone with
+        | ToneOk -> Style.toneOk
+        | ToneBusy -> Style.toneBusy
+        | ToneBad -> Style.toneBad
+        | ToneMuted -> Style.toneMuted
+
     /// The generated read surface (Plan 15): ONE renderer for every query this session
     /// declares, now and later. Registering a query is what puts it on this screen —
     /// nobody writes a panel, which is the whole reason the surface is generated rather
@@ -959,15 +969,6 @@ module View =
             |> List.tryFind (fun (key, _) -> key = column.Key)
             |> Option.map snd
             |> Option.defaultValue CellAbsent
-        // The one place a tone becomes an ink. Exhaustive on purpose: a fifth tone fails
-        // the build HERE, where somebody has to choose a colour and prove its contrast,
-        // rather than rendering as whatever the fall-through happened to be.
-        let ink (tone: QueryTone) =
-            match tone with
-            | ToneOk -> Style.toneOk
-            | ToneBusy -> Style.toneBusy
-            | ToneBad -> Style.toneBad
-            | ToneMuted -> Style.toneMuted
         let face (cell: QueryCell) =
             match cell with
             | CellStatus (_, tone) -> Style.queryValueIn (ink tone)
@@ -1299,13 +1300,10 @@ module View =
         match PrStatus.summarize standings with
         | "" -> Lit.nothing
         | line ->
+            // The worst live word's tone — `PrStatus.tone`, the same volume the table
+            // behind this strip says that word at.
             let worst = standings |> List.map snd |> List.filter PrStatus.live
-            let tone =
-                match worst |> List.fold (fun acc word -> PrStatus.worse acc word) "closed" with
-                | "stalled" -> Style.toneBad
-                | word when word = PrStatus.unreachable -> Style.toneBad
-                | "queued" -> Style.toneBusy
-                | _ -> Style.toneMuted
+            let tone = worst |> List.fold PrStatus.worse "closed" |> PrStatus.tone |> ink
             html $"""
                 <button type="button" class="{Style.prStripIn tone}" aria-label="Pull requests"
                         data-pr-strip @click={Ev(fun _ -> actions.ToggleSettings ())}>{line}</button>"""

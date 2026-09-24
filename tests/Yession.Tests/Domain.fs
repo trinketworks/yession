@@ -1536,6 +1536,12 @@ let private prWatchTests =
                 (PrStatus.word None PrWayIn.Idle (Some PrReview.ChangesRequested) true PrMerged)
                 "merged" "it went in"
 
+        testCase "every status word that wants somebody to act is said loudly" <| fun () ->
+            // One volume per word, read by the table and the header strip alike: a word
+            // that is red in one and grey in the other is a surface understating it.
+            for word in [ "stalled"; "conflicted"; "changes requested"; "behind"; PrStatus.unreachable ] do
+                Expect.equal (PrStatus.tone word) ToneBad (sprintf "%s wants somebody" word)
+
         testCase "a review still required wants a person more than an armed pull request" <| fun () ->
             Expect.equal (PrStatus.worse "armed" "review required") "review required" "a person over machines"
 
