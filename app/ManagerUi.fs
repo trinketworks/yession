@@ -49,7 +49,8 @@ module private Col =
     /// table's Withdraw).
     let actions = "w-[128px]"
     /// The session rail carries two BORDERLESS verbs at most: a word (`stop`, or `unarchive`,
-    /// the longer of the two at 83px in the caps voice) and the 24px archive icon, 8px apart,
+    /// the longer of the two at 83px in the caps voice) and the 24px archive icon, 10px apart
+    /// (its 44px hit area overhangs the box by 10, into that gap and the page's gutter),
     /// plus the cell's left gutter. Everything the rail gave up when its verbs lost their
     /// rectangles, the name gained: on a 390px phone the name has 238px where it had 160.
     let rail = "w-[128px]"
@@ -166,10 +167,12 @@ let private actions (view: ProcessManager.SessionView) : TemplateResult =
                 html $"""<button type="button" class="{Style.btnBareDanger}" data-stop="{id}" data-post="{posts SessionVerb.Stop}">Stop</button>"""
             | ProcessManager.NotRunning
             | ProcessManager.Exited _ -> html $""""""
+        // 10px apart rather than 8: the archive's hit area reaches 10px past its box
+        // (`btnIconBareTouch`), and at 8 its first two pixels would sit over Stop.
         html $"""
-            <div class="flex items-center justify-end gap-2">
+            <div class="flex items-center justify-end gap-2.5">
               {verb}
-              <button type="button" class="{Style.btnIconBare}" data-archive="{id}" data-post="{posts SessionVerb.Archive}"
+              <button type="button" class="{Style.btnIconBareTouch}" data-archive="{id}" data-post="{posts SessionVerb.Archive}"
                       aria-label="Archive {name}" title="Archive {name}">{Icon.archive}</button>
             </div>"""
 
