@@ -1074,9 +1074,63 @@ let private liveClone =
         }
     ]
 
+// --- [Ports]: what git does with a credential under a policy's env --------------------------
+
+/// Whether git hands a credential that worked to a helper configured BEFORE the policy's own
+/// git config — which is where the helpers git bakes in sit (its system config, and Apple's
+/// extra one). The system config is swapped for a file naming a helper that writes down what
+/// it is given; `git credential approve` is what git runs after a request with a credential
+/// succeeds, so it is exactly the store that printed "failed to store: -60008" under srt.
+let private helperIsHandedUnder (policyEnv: Map<string, string>) : bool =
+    let root = mkdtemp ()
+    let log = sprintf "%s/helper.log" root
+    let helper = sprintf "%s/helper.sh" root
+    TestFiles.write helper (sprintf "#!/bin/sh\ncat >> '%s'\n" log)
+    TestFiles.makeExecutable helper
+    let system = sprintf "%s/gitconfig" root
+    TestFiles.write system (sprintf "[credential]\n\thelper = %s\n" helper)
+    let gitConfig = policyEnv |> Map.filter (fun name _ -> name.StartsWith "GIT_CONFIG_")
+    execFileSync
+        "git"
+        [ "credential"; "approve" ]
+        { SyncOptions.none with
+            Input = Some "protocol=http\nhost=localhost:3128\nusername=srt\npassword=proxy-token\n\n"
+            Env =
+              ChildEnv.Adding (
+                  gitConfig
+                  |> Map.add "GIT_CONFIG_SYSTEM" system
+                  |> Map.add "GIT_CONFIG_GLOBAL" "/dev/null") }
+    |> ignore
+    TestFiles.exists log && (TestFiles.read log).Contains "proxy-token"
+
+let private credentialHelperTests =
+    let policyOn backend =
+        Sandboxes.policyFor
+            backend (Sandboxes.limitsFor backend Node.Base.Platform.Darwin) Map.empty Map.empty None None None
+            []
+            Set.empty
+            EnvironmentSpec.defaults
+        |> expect
+    testList "a sandbox's git and credential helpers" [
+        // The control, so the case below can fail: with no policy git config at all, the
+        // baked-in helper IS handed the credential.
+        testCase "git hands a credential that worked to its configured helper" <| fun () ->
+            Expect.isTrue (helperIsHandedUnder Map.empty) "the baked-in helper is asked to store it"
+
+        testCase "under srt, no configured helper is handed the proxy's credential" <| fun () ->
+            Expect.isFalse (helperIsHandedUnder (policyOn SrtBackend).Env) "srt's proxy token goes to no helper"
+
+        // What the gateway appends later (`withGitConfig provision.GitConfig`) must not undo
+        // it: appended entries follow the reset, and a reset is only undone by a helper.
+        testCase "a forwarded credential's git config does not bring a helper back" <| fun () ->
+            let env = (policyOn SrtBackend).Env |> Sandboxes.withGitConfig (GitGateway.gitConfig "home" 65025 "cap")
+            Expect.isFalse (helperIsHandedUnder env) "still no helper"
+    ]
+
 let tests =
     testList "GitIntegration" [
         pureTests
+        Tag.needs "A sandbox's git and credential helpers" [ Tag.Ports ] (fun () -> credentialHelperTests)
         layoutTests
         Tag.needs "Repo verbs (srt)" [ Tag.Srt ] (fun () -> srtTests)
         Tag.needs
