@@ -426,7 +426,8 @@ let private frameSerializationTests =
                         HeadSha = "abc123"
                         Checks = ChecksPending
                         Queued = true
-                        Mergeable = Some true }
+                        Mergeable = Some true
+                        Draft = true }
                   |> expect
                   |> PrWatched
                   // The agent's watch, on the turn human's credential: the two halves
@@ -440,7 +441,8 @@ let private frameSerializationTests =
                         HeadSha = "def456"
                         Checks = ChecksNone
                         Queued = false
-                        Mergeable = None }
+                        Mergeable = None
+                        Draft = false }
                   |> expect
                   |> PrWatched
                   PrUnwatched
@@ -497,7 +499,13 @@ let private frameSerializationTests =
             Expect.equal
                 (Codec.fromString Codec.sessionEvent (stored "resolved") |> expect |> transitionOf)
                 PrTransition.Resolved "resolved decodes"
-            for t in [ PrTransition.Conflicted; PrTransition.Resolved ] do
+            Expect.equal
+                (Codec.fromString Codec.sessionEvent (stored "readyForReview") |> expect |> transitionOf)
+                PrTransition.ReadyForReview "readyForReview decodes"
+            Expect.equal
+                (Codec.fromString Codec.sessionEvent (stored "drafted") |> expect |> transitionOf)
+                PrTransition.Drafted "drafted decodes"
+            for t in [ PrTransition.Conflicted; PrTransition.Resolved; PrTransition.ReadyForReview; PrTransition.Drafted ] do
                 let event =
                     PrTransitioned
                         { MessageId = MessageId.create "t1" |> expect
@@ -507,6 +515,16 @@ let private frameSerializationTests =
                           Checks = ChecksGreen
                           Watcher = Principal.Peer (PeerId.create "ada" |> expect) }
                 Expect.equal (Codec.fromString Codec.sessionEvent (Codec.toString Codec.sessionEvent event) |> expect) event "round-trip"
+
+        testCase "a watch recorded before drafts were read decodes as not a draft" <| fun () ->
+            // Wire compatibility: every existing log's watches carry no `draft`, and one
+            // unreadable baseline would fail the whole log open.
+            // A stored line, as written: the agent's watch on a draft it had just opened.
+            let legacy =
+                """{"type":"prWatched","payload":{"messageId":"05cca7f2-8b14-4c13-9e96-6dc3c41e9e31","pr":{"repo":"trinketworks/yession","number":875},"initial":{"state":"open","title":"feat(artifacts): serve a shared artifact over the content route","headSha":"4e14219ff7c5b91cfa38a03e352daffc40f0ee45","checks":"pending","queued":false,"mergeable":true},"author":{"kind":"agent"},"onBehalfOf":{"kind":"user","sub":"ada@example.com"}}}"""
+            match Codec.fromString Codec.sessionEvent legacy |> expect with
+            | PrWatched watched -> Expect.isFalse (PrWatched.initial watched).Draft "no draft field is not a draft"
+            | other -> failwithf "expected a watch, got %A" other
 
         testCase "a MessageSent persisted before Phase 3 (no queueId field) still decodes" <| fun () ->
             // Wire compatibility: event-log lines written by earlier versions carry no
@@ -1151,12 +1169,12 @@ let private prWatchTests =
     let ada = PeerId.create "ada" |> expect
     let bob = PeerId.create "bob" |> expect
     let snapshotOf state checks queued : PrSnapshot =
-        { State = state; Title = "Add feature"; HeadSha = "abc123"; Checks = checks; Queued = queued; Mergeable = None }
+        { State = state; Title = "Add feature"; HeadSha = "abc123"; Checks = checks; Queued = queued; Mergeable = None; Draft = false }
     let snapshot state checks : PrSnapshot = snapshotOf state checks false
     /// The baseline as a watch that has never seen a queue reads it.
-    let known state checks : PrKnown = { State = state; Checks = checks; Queue = NotQueued; Mergeable = None }
+    let known state checks : PrKnown = { State = state; Checks = checks; Queue = NotQueued; Mergeable = None; Draft = false }
     /// ...and as one that has: auto merge armed, the last thing anybody was told.
-    let queued state checks : PrKnown = { State = state; Checks = checks; Queue = Queued; Mergeable = None }
+    let queued state checks : PrKnown = { State = state; Checks = checks; Queue = Queued; Mergeable = None; Draft = false }
     let started state checks : SessionEvent =
         PrWatched.create (msg "w1") (Authority.ofAuthor (Principal.Peer ada)) pr (snapshot state checks)
         |> expect
@@ -1327,6 +1345,26 @@ let private prWatchTests =
             Expect.equal
                 (PrTransitions.detect (known PrMerged ChecksGreen) { snapshot PrMerged ChecksGreen with Mergeable = Some false })
                 [] "a merged pull request's mergeability is not actionable from here"
+
+        // What wakes whoever was waiting on a draft: nothing else moves when a person
+        // clicks Ready for review — not the state, not the checks.
+        testCase "a draft marked ready for review is announced" <| fun () ->
+            Expect.equal
+                (PrTransitions.detect { known PrOpen ChecksGreen with Draft = true } (snapshot PrOpen ChecksGreen))
+                [ PrTransition.ReadyForReview ] "the click, said"
+
+        testCase "one turned back into a draft is announced, so a second undrafting is too" <| fun () ->
+            let drafted = PrTransitions.detect (known PrOpen ChecksGreen) { snapshot PrOpen ChecksGreen with Draft = true }
+            Expect.equal drafted [ PrTransition.Drafted ] "not yet, said"
+            let baseline = drafted |> List.fold PrTransitions.advance (known PrOpen ChecksGreen)
+            Expect.equal
+                (PrTransitions.detect baseline (snapshot PrOpen ChecksGreen))
+                [ PrTransition.ReadyForReview ] "and ready again is news again"
+
+        testCase "a draft that merged says merged, not ready for review" <| fun () ->
+            Expect.equal
+                (PrTransitions.detect { known PrOpen ChecksGreen with Draft = true } (snapshot PrMerged ChecksGreen))
+                [ PrTransition.Merged ] "the merge is the whole news"
 
         testCase "a status word is the last thing that happened, worst first" <| fun () ->
             Expect.equal (PrStatus.word None Queued PrOpen) "queued" "armed and waiting on machines"

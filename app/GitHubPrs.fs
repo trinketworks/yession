@@ -38,7 +38,8 @@ type PrFields =
       Title : string
       HeadSha : string
       Queued : bool
-      Mergeable : bool option }
+      Mergeable : bool option
+      Draft : bool }
 
 /// What `GET /repos/{o}/{r}/pulls/{n}` says, reduced to what a snapshot carries.
 ///
@@ -63,7 +64,8 @@ let prDecoder : Decoder<PrFields> =
           Queued = get.Optional.Field "auto_merge" Decode.value |> Option.exists (fun v -> not (Decode.Helpers.isNullValue v))
           // Null until GitHub has computed it, which it does lazily. Carried for display
           // and never for a transition — see `PrSnapshot.Mergeable`.
-          Mergeable = get.Optional.Field "mergeable" (Decode.option Decode.bool) |> Option.flatten })
+          Mergeable = get.Optional.Field "mergeable" (Decode.option Decode.bool) |> Option.flatten
+          Draft = get.Optional.Field "draft" Decode.bool |> Option.defaultValue false })
 
 /// The same resource, read for where the pull request comes FROM: `head.repo.full_name`
 /// rather than the repository the link named, because a pull request from a fork has its
@@ -274,7 +276,8 @@ let fetchOver (apiBase: string) (spending: Spending) : FetchPr =
                                   Title = s.Title
                                   HeadSha = s.HeadSha
                                   Queued = s.Queued
-                                  Mergeable = s.Mergeable }))
+                                  Mergeable = s.Mergeable
+                                  Draft = s.Draft }))
                     elif succeeded prReply then
                         Decode.fromString prDecoder prReply.Body
                         |> Result.map Some
@@ -320,7 +323,8 @@ let fetchOver (apiBase: string) (spending: Spending) : FetchPr =
                               HeadSha = fields.HeadSha
                               Checks = checks
                               Queued = fields.Queued
-                              Mergeable = fields.Mergeable }
+                              Mergeable = fields.Mergeable
+                              Draft = fields.Draft }
                         // An ETag is replaced only by a half that actually answered with one.
                         // A 304 carries back the ETag we sent, so keeping the old one says the
                         // same thing without depending on the provider echoing it.

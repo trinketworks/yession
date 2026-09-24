@@ -153,7 +153,10 @@ type PrSnapshot =
       /// merge armed, the merge queue holding it? Unlike `Mergeable` this one IS a fact
       /// the provider states outright rather than computes lazily, so it is announced.
       Queued : bool
-      Mergeable : bool option }
+      Mergeable : bool option
+      /// A draft: on the record, and not asking for review or a merge yet. Stated outright
+      /// by the provider, like `Queued`, so its movement is announced.
+      Draft : bool }
 
 module PrSnapshot =
 
@@ -200,6 +203,16 @@ type PrTransition =
     /// `Conflicted`, so a watch that announced the conflict can say when the work that
     /// answered it took — and a re-arm is worth it again.
     | Resolved
+    /// A draft marked ready for review. News because a draft cannot merge, so whoever was
+    /// waiting on it — an agent that opened it as a draft and must not merge it until
+    /// somebody says so — has nothing else to wake it: the checks do not move, the state
+    /// does not move. An agent once told a person "one click and I unwind the rest" and
+    /// was never told the click had happened.
+    | ReadyForReview
+    /// Ready for review turned back into a draft: somebody saying "not yet". The other side
+    /// of `ReadyForReview`, so the baseline follows the pull request both ways and a second
+    /// undrafting is announced like the first.
+    | Drafted
 
 module PrTransition =
     let describe (transition: PrTransition) : string =
@@ -213,6 +226,8 @@ module PrTransition =
         | PrTransition.Stalled -> "stalled"
         | PrTransition.Conflicted -> "conflicted"
         | PrTransition.Resolved -> "conflict resolved"
+        | PrTransition.ReadyForReview -> "ready for review"
+        | PrTransition.Drafted -> "back to draft"
 
 // --- event payloads (the RepoFacts shape: MessageId + payload + attribution) -----------
 

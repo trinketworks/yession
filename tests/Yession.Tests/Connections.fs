@@ -2141,7 +2141,7 @@ let private prOne = PrRef.create prRepo 12 |> expect
 let private topicDraft = PrDraft.create prRepo "topic" "master" "Add feature" (Some "why") false |> expect
 
 let private snapshotWith state checks queued : PrSnapshot =
-    { State = state; Title = "Add feature"; HeadSha = "abc123"; Checks = checks; Queued = queued; Mergeable = None }
+    { State = state; Title = "Add feature"; HeadSha = "abc123"; Checks = checks; Queued = queued; Mergeable = None; Draft = false }
 
 let private snapshotOf state checks : PrSnapshot = snapshotWith state checks false
 
@@ -2245,6 +2245,12 @@ let private prPollTests =
             Expect.equal opened.Mergeable (Some true) "a stated mergeable is carried"
             Expect.equal ended.State PrClosed "closed without a merge is closed"
 
+        testCase "a draft decodes as a draft, and one saying nothing as not" <| fun () ->
+            let draft = """{"state":"open","merged":false,"draft":true,"title":"WIP","head":{"sha":"d00d"}}"""
+            let plain = """{"state":"open","merged":false,"title":"WIP","head":{"sha":"d00d"}}"""
+            Expect.isTrue (Decode.fromString GitHubPrs.prDecoder draft |> expect).Draft "a stated draft is carried"
+            Expect.isFalse (Decode.fromString GitHubPrs.prDecoder plain |> expect).Draft "no draft field is not a draft"
+
         testCase "the checks rollup is pending until every run has completed" <| fun () ->
             Expect.equal (GitHubPrs.rollupOf []) ChecksNone "a commit with no checks has none, not pending forever"
             Expect.equal
@@ -2279,7 +2285,7 @@ let private prPollTests =
                 // as not-yet-due and the assertion below would pass for the wrong reason.
                 let mutable clock = DateTimeOffset (2026, 8, 27, 12, 0, 0, TimeSpan.Zero)
                 let poller = pollerOver (fun () -> clock) script.Fetch recorded (ResizeArray ())
-                poller.Apply [ watching { State = PrOpen; Checks = ChecksPending; Queue = NotQueued; Mergeable = None } ]
+                poller.Apply [ watching { State = PrOpen; Checks = ChecksPending; Queue = NotQueued; Mergeable = None; Draft = false } ]
                 let! first = poller.Poll ()
                 clock <- clock.AddSeconds 61.0
                 let! second = poller.Poll ()
@@ -2294,7 +2300,7 @@ let private prPollTests =
                 let recorded = RecordedTransitions ()
                 let script = scriptedFetch [ PrWatches.PrUnchanged ]
                 let poller = pollerOver fixedNow script.Fetch recorded (ResizeArray ())
-                poller.Apply [ watching { State = PrOpen; Checks = ChecksPending; Queue = NotQueued; Mergeable = None } ]
+                poller.Apply [ watching { State = PrOpen; Checks = ChecksPending; Queue = NotQueued; Mergeable = None; Draft = false } ]
                 let! moved = poller.Poll ()
                 Expect.isFalse moved "a 304 is not a change"
                 Expect.isEmpty recorded "and nothing to say about it"
@@ -2305,7 +2311,7 @@ let private prPollTests =
                 let rejected = ResizeArray<CredentialFor> ()
                 let script = scriptedFetch [ PrWatches.PrFetchFailed PrWatches.PrUnauthorized ]
                 let poller = pollerOver fixedNow script.Fetch (RecordedTransitions ()) rejected
-                poller.Apply [ watching { State = PrOpen; Checks = ChecksPending; Queue = NotQueued; Mergeable = None } ]
+                poller.Apply [ watching { State = PrOpen; Checks = ChecksPending; Queue = NotQueued; Mergeable = None; Draft = false } ]
                 let! moved = poller.Poll ()
                 Expect.isTrue moved "the row's status changed"
                 Expect.equal (List.ofSeq rejected) [ CredentialFor.Person ada ] "the watcher's credential is the one that was refused"
@@ -2322,7 +2328,7 @@ let private prPollTests =
                         [ PrWatches.PrChanged (snapshotOf PrOpen ChecksPending, PrWatches.PrEtags.none)
                           PrWatches.PrChanged (snapshotOf PrOpen ChecksGreen, PrWatches.PrEtags.none) ]
                 let poller = pollerOver (fun () -> clock) script.Fetch (RecordedTransitions ()) (ResizeArray ())
-                poller.Apply [ watching { State = PrOpen; Checks = ChecksPending; Queue = NotQueued; Mergeable = None } ]
+                poller.Apply [ watching { State = PrOpen; Checks = ChecksPending; Queue = NotQueued; Mergeable = None; Draft = false } ]
                 let! _ = poller.Poll ()
                 clock <- clock.AddSeconds 16.0
                 let! _ = poller.Poll ()
@@ -2337,7 +2343,7 @@ let private prPollTests =
                         [ PrWatches.PrChanged (snapshotOf PrOpen ChecksGreen, PrWatches.PrEtags.none)
                           PrWatches.PrChanged (snapshotOf PrOpen ChecksGreen, PrWatches.PrEtags.none) ]
                 let poller = pollerOver (fun () -> clock) script.Fetch (RecordedTransitions ()) (ResizeArray ())
-                poller.Apply [ watching { State = PrOpen; Checks = ChecksPending; Queue = NotQueued; Mergeable = None } ]
+                poller.Apply [ watching { State = PrOpen; Checks = ChecksPending; Queue = NotQueued; Mergeable = None; Draft = false } ]
                 let! _ = poller.Poll ()
                 clock <- clock.AddSeconds 16.0
                 let! _ = poller.Poll ()
@@ -2357,7 +2363,7 @@ let private prPollTests =
                         [ PrWatches.PrFetchFailed (PrWatches.PrUnreachable "network down")
                           PrWatches.PrChanged (snapshotOf PrOpen ChecksGreen, PrWatches.PrEtags.none) ]
                 let poller = pollerOver (fun () -> clock) script.Fetch (RecordedTransitions ()) (ResizeArray ())
-                poller.Apply [ watching { State = PrOpen; Checks = ChecksPending; Queue = NotQueued; Mergeable = None } ]
+                poller.Apply [ watching { State = PrOpen; Checks = ChecksPending; Queue = NotQueued; Mergeable = None; Draft = false } ]
                 let! _ = poller.Poll ()
                 clock <- clock.AddSeconds 16.0
                 let! _ = poller.Poll ()
@@ -2375,7 +2381,7 @@ let private prPollTests =
                         [ PrWatches.PrFetchFailed (PrWatches.PrRateLimited (Some resetAt))
                           PrWatches.PrChanged (snapshotOf PrOpen ChecksGreen, PrWatches.PrEtags.none) ]
                 let poller = pollerOver (fun () -> clock) script.Fetch (RecordedTransitions ()) (ResizeArray ())
-                poller.Apply [ watching { State = PrOpen; Checks = ChecksPending; Queue = NotQueued; Mergeable = None } ]
+                poller.Apply [ watching { State = PrOpen; Checks = ChecksPending; Queue = NotQueued; Mergeable = None; Draft = false } ]
                 let! _ = poller.Poll ()
                 let callsAfterLimit = script.Calls.Count
                 let! duringWindow = poller.Poll ()
@@ -2395,7 +2401,7 @@ let private prPollTests =
                         [ PrWatches.PrChanged (snapshotOf PrOpen ChecksGreen, PrWatches.PrEtags.none)
                           PrWatches.PrChanged (snapshotOf PrMerged ChecksGreen, PrWatches.PrEtags.none) ]
                 let poller = pollerOver (fun () -> clock) script.Fetch (RecordedTransitions ()) (ResizeArray ())
-                poller.Apply [ watching { State = PrOpen; Checks = ChecksPending; Queue = NotQueued; Mergeable = None } ]
+                poller.Apply [ watching { State = PrOpen; Checks = ChecksPending; Queue = NotQueued; Mergeable = None; Draft = false } ]
                 let! _ = poller.Poll ()
                 // Settled, so a tick a second later would not look. A delivery does.
                 clock <- clock.AddSeconds 1.0
@@ -2414,7 +2420,7 @@ let private prPollTests =
                 let resetAt = int (clock.AddMinutes(10.0).ToUnixTimeSeconds ())
                 let script = scriptedFetch [ PrWatches.PrFetchFailed (PrWatches.PrRateLimited (Some resetAt)) ]
                 let poller = pollerOver (fun () -> clock) script.Fetch (RecordedTransitions ()) (ResizeArray ())
-                poller.Apply [ watching { State = PrOpen; Checks = ChecksPending; Queue = NotQueued; Mergeable = None } ]
+                poller.Apply [ watching { State = PrOpen; Checks = ChecksPending; Queue = NotQueued; Mergeable = None; Draft = false } ]
                 let! _ = poller.Poll ()
                 let spent = script.Calls.Count
                 let! _ = poller.Poke prOne.Repo
@@ -2425,7 +2431,7 @@ let private prPollTests =
             async {
                 let script = scriptedFetch []
                 let poller = pollerOver fixedNow script.Fetch (RecordedTransitions ()) (ResizeArray ())
-                poller.Apply [ watching { State = PrOpen; Checks = ChecksPending; Queue = NotQueued; Mergeable = None } ]
+                poller.Apply [ watching { State = PrOpen; Checks = ChecksPending; Queue = NotQueued; Mergeable = None; Draft = false } ]
                 let other = RepoRef.create "someone/else" |> expect
                 let! moved = poller.Poke other
                 Expect.equal script.Calls.Count 0 "nothing on that repo is watched here"
@@ -2438,7 +2444,7 @@ let private prPollTests =
                 // the failing one, and finding it should not mean reading every row.
                 let script = scriptedFetch [ PrWatches.PrChanged (snapshotOf PrOpen ChecksRed, PrWatches.PrEtags.none) ]
                 let poller = pollerOver fixedNow script.Fetch (RecordedTransitions ()) (ResizeArray ())
-                poller.Apply [ watching { State = PrOpen; Checks = ChecksPending; Queue = NotQueued; Mergeable = None } ]
+                poller.Apply [ watching { State = PrOpen; Checks = ChecksPending; Queue = NotQueued; Mergeable = None; Draft = false } ]
                 let! _ = poller.Poll ()
                 match! (PrWatches.query (fun () -> poller)).Read () with
                 | Ok (RowsOf [ row ]) ->
@@ -2459,7 +2465,7 @@ let private prPollTests =
             async {
                 let script = scriptedFetch [ PrWatches.PrChanged (snapshotWith PrOpen ChecksGreen true, PrWatches.PrEtags.none) ]
                 let poller = pollerOver fixedNow script.Fetch (RecordedTransitions ()) (ResizeArray ())
-                poller.Apply [ watching { State = PrOpen; Checks = ChecksPending; Queue = NotQueued; Mergeable = None } ]
+                poller.Apply [ watching { State = PrOpen; Checks = ChecksPending; Queue = NotQueued; Mergeable = None; Draft = false } ]
                 let! _ = poller.Poll ()
                 match! (PrWatches.query (fun () -> poller)).Read () with
                 | Ok (RowsOf [ row ]) ->
@@ -2476,7 +2482,7 @@ let private prPollTests =
                 // still open, its checks are still green, and it is no longer going in.
                 let script = scriptedFetch [ PrWatches.PrChanged (snapshotOf PrOpen ChecksGreen, PrWatches.PrEtags.none) ]
                 let poller = pollerOver fixedNow script.Fetch (RecordedTransitions ()) (ResizeArray ())
-                poller.Apply [ watching { State = PrOpen; Checks = ChecksGreen; Queue = Queued; Mergeable = None } ]
+                poller.Apply [ watching { State = PrOpen; Checks = ChecksGreen; Queue = Queued; Mergeable = None; Draft = false } ]
                 let! _ = poller.Poll ()
                 match! (PrWatches.query (fun () -> poller)).Read () with
                 | Ok (RowsOf [ row ]) ->
@@ -2494,7 +2500,7 @@ let private prPollTests =
                 // the agent scans for is the one that needs a rebase.
                 let script = scriptedFetch [ PrWatches.PrChanged ({ snapshotWith PrOpen ChecksGreen true with Mergeable = Some false }, PrWatches.PrEtags.none) ]
                 let poller = pollerOver fixedNow script.Fetch (RecordedTransitions ()) (ResizeArray ())
-                poller.Apply [ watching { State = PrOpen; Checks = ChecksGreen; Queue = Queued; Mergeable = None } ]
+                poller.Apply [ watching { State = PrOpen; Checks = ChecksGreen; Queue = Queued; Mergeable = None; Draft = false } ]
                 let! _ = poller.Poll ()
                 match! (PrWatches.query (fun () -> poller)).Read () with
                 | Ok (RowsOf [ row ]) ->
@@ -2510,7 +2516,7 @@ let private prPollTests =
                 let script = scriptedFetch [ PrWatches.PrChanged (snapshotWith PrOpen ChecksGreen true, PrWatches.PrEtags.none) ]
                 let poller = pollerOver fixedNow script.Fetch (RecordedTransitions ()) (ResizeArray ())
                 Expect.equal (PrWatches.summaryOf (poller.Rows ())) "" "a session watching nothing says nothing"
-                poller.Apply [ watching { State = PrOpen; Checks = ChecksPending; Queue = NotQueued; Mergeable = None } ]
+                poller.Apply [ watching { State = PrOpen; Checks = ChecksPending; Queue = NotQueued; Mergeable = None; Draft = false } ]
                 Expect.equal
                     (PrWatches.summaryOf (poller.Rows ()))
                     ""
@@ -2529,7 +2535,7 @@ let private prPollTests =
                         [ PrWatches.PrChanged (snapshotWith PrOpen ChecksGreen true, PrWatches.PrEtags.none)
                           PrWatches.PrFetchFailed PrWatches.PrUnauthorized ]
                 let poller = pollerOver fixedNow script.Fetch (RecordedTransitions ()) (ResizeArray ())
-                poller.Apply [ watching { State = PrOpen; Checks = ChecksPending; Queue = NotQueued; Mergeable = None } ]
+                poller.Apply [ watching { State = PrOpen; Checks = ChecksPending; Queue = NotQueued; Mergeable = None; Draft = false } ]
                 let! _ = poller.Poll ()
                 Expect.equal (PrWatches.summaryOf (poller.Rows ())) "#12 queued" "read once"
                 let! _ = poller.Poke prOne.Repo
@@ -2543,7 +2549,7 @@ let private prPollTests =
                 // settled watch's stamp must not creep forward every fifteen seconds.
                 let script = scriptedFetch [ PrWatches.PrChanged (snapshotOf PrOpen ChecksGreen, PrWatches.PrEtags.none) ]
                 let poller = pollerOver fixedNow script.Fetch (RecordedTransitions ()) (ResizeArray ())
-                poller.Apply [ watching { State = PrOpen; Checks = ChecksGreen; Queue = NotQueued; Mergeable = None } ]
+                poller.Apply [ watching { State = PrOpen; Checks = ChecksGreen; Queue = NotQueued; Mergeable = None; Draft = false } ]
                 let! _ = poller.Poll ()
                 match! (PrWatches.query (fun () -> poller)).Read () with
                 | Ok (RowsOf [ row ]) ->
@@ -2560,7 +2566,7 @@ let private prPollTests =
                 // last said is not suddenly wrong. Two facts, two cells.
                 let script = scriptedFetch [ PrWatches.PrFetchFailed PrWatches.PrUnauthorized ]
                 let poller = pollerOver fixedNow script.Fetch (RecordedTransitions ()) (ResizeArray ())
-                poller.Apply [ watching { State = PrOpen; Checks = ChecksPending; Queue = NotQueued; Mergeable = None } ]
+                poller.Apply [ watching { State = PrOpen; Checks = ChecksPending; Queue = NotQueued; Mergeable = None; Draft = false } ]
                 let! _ = poller.Poll ()
                 match! (PrWatches.query (fun () -> poller)).Read () with
                 | Ok (RowsOf [ row ]) ->
@@ -2574,7 +2580,7 @@ let private prPollTests =
             async {
                 let script = scriptedFetch [ PrWatches.PrChanged (snapshotOf PrOpen ChecksGreen, PrWatches.PrEtags.none) ]
                 let poller = pollerOver fixedNow script.Fetch (RecordedTransitions ()) (ResizeArray ())
-                poller.Apply [ watching { State = PrOpen; Checks = ChecksPending; Queue = NotQueued; Mergeable = None } ]
+                poller.Apply [ watching { State = PrOpen; Checks = ChecksPending; Queue = NotQueued; Mergeable = None; Draft = false } ]
                 match poller.Rows () with
                 | [ row ] -> Expect.isFalse row.Pushed "nothing has delivered yet"
                 | rows -> failwithf "expected one row, got %d" rows.Length
@@ -2632,10 +2638,10 @@ let private prPollTests =
                           PrWatches.PrUnchanged ]
                 let mutable clock = DateTimeOffset (2026, 8, 27, 12, 0, 0, TimeSpan.Zero)
                 let poller = pollerOver (fun () -> clock) script.Fetch (RecordedTransitions ()) (ResizeArray ())
-                poller.Apply [ watching { State = PrOpen; Checks = ChecksPending; Queue = NotQueued; Mergeable = None } ]
+                poller.Apply [ watching { State = PrOpen; Checks = ChecksPending; Queue = NotQueued; Mergeable = None; Draft = false } ]
                 let! _ = poller.Poll ()
                 // The same watch, re-applied: a boot rebuild or any watch/unwatch does this.
-                poller.Apply [ watching { State = PrOpen; Checks = ChecksGreen; Queue = NotQueued; Mergeable = None } ]
+                poller.Apply [ watching { State = PrOpen; Checks = ChecksGreen; Queue = NotQueued; Mergeable = None; Draft = false } ]
                 clock <- clock.AddSeconds 61.0
                 let! _ = poller.Poll ()
                 Expect.equal (snd script.Calls.[1]) etags "the second look quotes the etags the first was given"

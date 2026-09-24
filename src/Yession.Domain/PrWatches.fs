@@ -33,7 +33,8 @@ type PrKnown =
       /// The last COMPUTED mergeability, or `None` if the provider has never answered one
       /// for this watch yet. Never set to `None` by a fresh look that came back `None`: a
       /// provider still recomputing does not un-know what it last computed.
-      Mergeable : bool option }
+      Mergeable : bool option
+      Draft : bool }
 
 /// The one word for where a pull request stands, and how loudly to say it. ONE home,
 /// because the settings panel, the roster summary and the header strip must not each
@@ -177,7 +178,8 @@ module PrTransitions =
         { State = snapshot.State
           Checks = snapshot.Checks
           Queue = (if snapshot.Queued then Queued else NotQueued)
-          Mergeable = snapshot.Mergeable }
+          Mergeable = snapshot.Mergeable
+          Draft = snapshot.Draft }
 
     /// Advance a baseline by one announced transition — the projection's fold, and the
     /// poller's, so the two cannot disagree about what has been said.
@@ -192,6 +194,8 @@ module PrTransitions =
         | PrTransition.Stalled -> { known with Queue = Stalled }
         | PrTransition.Conflicted -> { known with Mergeable = Some false }
         | PrTransition.Resolved -> { known with Mergeable = Some true }
+        | PrTransition.ReadyForReview -> { known with Draft = false }
+        | PrTransition.Drafted -> { known with Draft = true }
 
     /// What a fresh snapshot means against the last recorded baseline: at most one state
     /// transition, at most one checks transition and at most one queue transition, in
@@ -255,7 +259,17 @@ module PrTransitions =
                 | Some false, Some true -> [ PrTransition.Resolved ]
                 | _, Some true -> []
             | PrMerged | PrClosed -> []
-        state @ checks @ queue @ merge
+        // Draft news, suppressed off `PrOpen` for the checks reason: a merged pull request
+        // stopped being a draft by merging, which is not a second thing to say.
+        let draft =
+            match stateAfter.State with
+            | PrOpen ->
+                match known.Draft, fresh.Draft with
+                | true, false -> [ PrTransition.ReadyForReview ]
+                | false, true -> [ PrTransition.Drafted ]
+                | _ -> []
+            | PrMerged | PrClosed -> []
+        state @ checks @ queue @ merge @ draft
 
 module PrWatchesProjection =
 

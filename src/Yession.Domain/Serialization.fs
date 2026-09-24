@@ -1176,7 +1176,8 @@ module Codec =
                       "headSha", Encode.string s.HeadSha
                       "checks", checksRollup.Encode s.Checks
                       "queued", Encode.bool s.Queued
-                      "mergeable", Encode.option Encode.bool s.Mergeable ]
+                      "mergeable", Encode.option Encode.bool s.Mergeable
+                      "draft", Encode.bool s.Draft ]
           Decode =
             Decode.object (fun get ->
                 { PrSnapshot.State = get.Required.Field "state" prState.Decode
@@ -1184,7 +1185,11 @@ module Codec =
                   PrSnapshot.HeadSha = get.Required.Field "headSha" Decode.string
                   PrSnapshot.Checks = get.Required.Field "checks" checksRollup.Decode
                   PrSnapshot.Queued = get.Required.Field "queued" Decode.bool
-                  PrSnapshot.Mergeable = get.Required.Field "mergeable" (Decode.option Decode.bool) }) }
+                  PrSnapshot.Mergeable = get.Required.Field "mergeable" (Decode.option Decode.bool)
+                  // Optional because a watch recorded before drafts were read has none: it
+                  // reads as not a draft, so an undrafting it began over goes unannounced —
+                  // the honest `Stalled` rule, since nobody watching saw it as a draft.
+                  PrSnapshot.Draft = get.Optional.Field "draft" Decode.bool |> Option.defaultValue false }) }
 
     let private prTransition : Codec<PrTransition> =
         { Encode =
@@ -1198,7 +1203,9 @@ module Codec =
                 | PrTransition.Queued -> Encode.string "queued"
                 | PrTransition.Stalled -> Encode.string "stalled"
                 | PrTransition.Conflicted -> Encode.string "conflicted"
-                | PrTransition.Resolved -> Encode.string "resolved")
+                | PrTransition.Resolved -> Encode.string "resolved"
+                | PrTransition.ReadyForReview -> Encode.string "readyForReview"
+                | PrTransition.Drafted -> Encode.string "drafted")
           Decode =
             Decode.string
             |> Decode.andThen (function
@@ -1211,6 +1218,8 @@ module Codec =
                 | "stalled" -> Decode.succeed PrTransition.Stalled
                 | "conflicted" -> Decode.succeed PrTransition.Conflicted
                 | "resolved" -> Decode.succeed PrTransition.Resolved
+                | "readyForReview" -> Decode.succeed PrTransition.ReadyForReview
+                | "drafted" -> Decode.succeed PrTransition.Drafted
                 | other -> Decode.fail (sprintf "Unknown pull request transition: %s" other)) }
 
     /// The watcher is not on the wire: it is derived from the authority by the one rule
