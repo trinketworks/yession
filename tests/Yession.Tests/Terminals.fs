@@ -2202,7 +2202,7 @@ let private managerTests =
                 let log = newLog ()
                 let environment, _ = scriptedEnvironment (fun _ -> [], 0)
                 let openTranscript, _, _, _, readTranscript = recordingTranscripts ()
-                let terminals, _, _ = makeTerminals log environment openTranscript readTranscript [ terminalA; terminalB ]
+                let terminals, _, _ = makeTerminals log environment openTranscript readTranscript [ terminalA, None; terminalB, None ]
                 Expect.isTrue (terminals.IsOpen terminalA) "before boot reconciliation it still reads as open"
                 do! terminals.ReconcileAtBoot ()
                 let! events = eventsOf log
@@ -2210,6 +2210,40 @@ let private managerTests =
                     events |> List.choose (function SessionEvent.TerminalClosed e -> Some e.TerminalId | _ -> None)
                 Expect.equal (closed |> List.map TerminalId.value) [ "term-a"; "term-b" ] "both are closed"
                 Expect.isFalse (terminals.IsOpen terminalA) "and no longer open"
+            }
+
+        // The catch-up promise for work in flight: a command the dead process was running is
+        // ENDED, before the terminal it ran in is closed, so nothing reads as running forever
+        // and whoever was waiting on it is owed the news.
+        testCaseAsync "a block running when the process died is ended at boot, before its terminal closes" <|
+            async {
+                let log = newLog ()
+                let environment, _ = scriptedEnvironment (fun _ -> [], 0)
+                let openTranscript, _, _, _, readTranscript = recordingTranscripts ()
+                let running = BlockId.create "b-cut" |> expect
+                let terminals, _, _ = makeTerminals log environment openTranscript readTranscript [ terminalA, Some running; terminalB, None ]
+                do! terminals.ReconcileAtBoot ()
+                let! events = eventsOf log
+                let ends =
+                    events
+                    |> List.choose (function
+                        | SessionEvent.TerminalBlockCompleted e -> Some (sprintf "completed %s %s" (TerminalId.value e.TerminalId) (BlockId.value e.BlockId))
+                        | SessionEvent.TerminalClosed e -> Some (sprintf "closed %s" (TerminalId.value e.TerminalId))
+                        | _ -> None)
+                Expect.equal ends [ "completed term-a b-cut"; "closed term-a"; "closed term-b" ] "the block ends, then its terminal; the idle one only closes"
+            }
+
+        testCaseAsync "a block the restart cut off ends as not having finished" <|
+            async {
+                let log = newLog ()
+                let environment, _ = scriptedEnvironment (fun _ -> [], 0)
+                let openTranscript, _, _, _, readTranscript = recordingTranscripts ()
+                let terminals, _, _ = makeTerminals log environment openTranscript readTranscript [ terminalA, Some (BlockId.create "b-cut" |> expect) ]
+                do! terminals.ReconcileAtBoot ()
+                let! events = eventsOf log
+                match events |> List.tryPick (function SessionEvent.TerminalBlockCompleted e -> Some e.Result | _ -> None) with
+                | Some (CommandExecutionFailed _) -> ()
+                | other -> failwithf "expected it ended as cut off, got %A" other
             }
 
         testCaseAsync "a block in a terminal that closed under it does nothing at all" <|

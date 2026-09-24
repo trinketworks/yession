@@ -407,7 +407,9 @@ let startFull
                 // The gate on every block (Plan 23). The bypass until an AI-driven
                 // classifier exists; this root supplies it and computes nothing.
                 Classifier.approveAll
-                (replayedTerminals |> Projection.openTerminals |> List.map (fun t -> t.TerminalId))
+                (replayedTerminals
+                 |> Projection.openTerminals
+                 |> List.map (fun t -> t.TerminalId, Projection.runningBlock t |> Option.map (fun b -> b.BlockId)))
                 replayedProfiles
 
         // Files read by asking the sandbox, resolved where a terminal there would resolve
