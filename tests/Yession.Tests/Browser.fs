@@ -1259,6 +1259,94 @@ let [<Literal>] private groundSpare =
          return port.clientWidth - item.getBoundingClientRect().width
        }"""
 
+/// Wait for the "jump to latest" control to be on the screen — hit-tested at its own centre,
+/// so a control that is present, shown and buried under something else does not count.
+let private jumpShown (page: IPage) =
+    async {
+        let! _ =
+            await (page.WaitForFunctionAsync
+                    """(() => {
+                         const control = document.querySelector('#shell [data-jump-to-latest] button')
+                         const box = control.getBoundingClientRect()
+                         if (box.width === 0) return false
+                         const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)
+                         return !!hit && control.contains(hit)
+                       })()""")
+        return ()
+    }
+
+/// Scroll the conversation back to its start, which is far enough from the latest message
+/// for the control to be offered, and wait for it.
+let private scrolledAwayFromLatest (page: IPage) =
+    async {
+        let! _ = await (page.WaitForSelectorAsync "#shell [data-conversation] [data-message-body]")
+        // The harness page is taller than the viewport, so the conversation's own box is
+        // brought into view first; then its scroll goes back to the start.
+        do! awaitU (
+                page.EvaluateAsync
+                    """() => {
+                         const conversation = document.querySelector('#shell [data-conversation]')
+                         conversation.parentElement.scrollIntoView({ block: 'end' })
+                         conversation.scrollTop = 0
+                       }""")
+        do! jumpShown page
+    }
+
+/// Every line of a message's words the "jump to latest" control lies over, and whether any
+/// line of words runs level with it at all — the second half is what keeps the first from
+/// being vacuous, since a control with nothing beside it covers nothing wherever it stands.
+/// Lines rather than boxes: a message's box runs the column's width whatever it says, and
+/// what the control must not hide is the words in it.
+let [<Literal>] private wordsUnderJump =
+    """() => {
+         const control = document.querySelector('#shell [data-jump-to-latest] button').getBoundingClientRect()
+         const covered = [], level = []
+         for (const body of document.querySelectorAll('#shell [data-conversation] [data-message-body]')) {
+           const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT)
+           while (walker.nextNode()) {
+             const text = walker.currentNode
+             if (!text.textContent.trim()) continue
+             const range = document.createRange()
+             range.selectNodeContents(text)
+             for (const line of range.getClientRects()) {
+               if (line.width === 0 || line.top >= control.bottom || line.bottom <= control.top) continue
+               level.push(text.textContent.trim().slice(0, 40))
+               if (line.left < control.right && line.right > control.left) covered.push(text.textContent.trim().slice(0, 40))
+             }
+           }
+         }
+         return JSON.stringify({ covered, level: level.length })
+       }"""
+
+/// The "jump to latest" control, shown, and the words beside it: none of them under it.
+///
+/// Where the scroll stops decides what is level with the control, and a tool run or a chip
+/// there would leave nothing to ask about — so a message from the middle of the column, far
+/// enough from the end that the control stays shown, is brought level with it first.
+let private jumpCoversNoWords (page: IPage) =
+    async {
+        do! scrolledAwayFromLatest page
+        do! awaitU (
+                page.EvaluateAsync
+                    """() => {
+                         const conversation = document.querySelector('#shell [data-conversation]')
+                         const control = document.querySelector('#shell [data-jump-to-latest] button').getBoundingClientRect()
+                         const body = conversation.querySelector("[data-message-id='msg-filler-8'] [data-message-body]")
+                         const range = document.createRange()
+                         range.selectNodeContents(body)
+                         const line = [...range.getClientRects()].find(r => r.width > 0 && r.height < 40)
+                         conversation.scrollTop += (line.top + line.bottom) / 2 - (control.top + control.bottom) / 2
+                       }""")
+        do! jumpShown page
+        let! report = await (page.EvaluateAsync<string> wordsUnderJump)
+        use doc = System.Text.Json.JsonDocument.Parse report
+        let level = doc.RootElement.GetProperty("level").GetInt32 ()
+        let covered = [ for e in doc.RootElement.GetProperty("covered").EnumerateArray () -> e.GetString () ]
+        Expect.isTrue (level > 0) "a message's words run level with the control, so there is something it could cover"
+        Expect.isEmpty covered (sprintf "the control lies over these words: %s" (String.concat " | " covered))
+        return ()
+    }
+
 let editorTests =
     testList "Editor rendering (browser)" [
         editorCase "Markdown typed in the rich editor renders formatted and round-trips to Markdown" <| fun page ->
@@ -2717,6 +2805,16 @@ let editorTests =
                     (sprintf "the ground runs to within %fpx of a 1440px window" spare)
                 return ()
             }
+        // The "jump to latest" control is an opaque square floating over a scrolling column,
+        // so wherever it stands it hides what is under it. Centred, it stood on the prose:
+        // measured on a phone it covered 22px of a paragraph. Markup cannot see that — the
+        // control is in the document and so are the words, whichever is on top.
+        //
+        // A phone only. The screen where a line of words runs the whole width is the one
+        // that can fail this; at 1440 the fixture's lines stop short of where the centred
+        // control stood, so a desktop case passed with the old placement as well and would
+        // have been a case that cannot go red.
+        editorCaseIn 390 844 "the jump to the latest message covers none of the words on a phone" <| jumpCoversNoWords
         // Dismissing a menu with the keyboard is where focus goes to `body` if nobody puts it
         // back — the failure the WCAG floor names, hit on the very first Escape, and one no
         // rendered string can see: the markup after a close is identical whether the cursor

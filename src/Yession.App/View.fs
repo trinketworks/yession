@@ -2777,8 +2777,10 @@ module View =
             <div class="{Style.chatRegion}">
               <section class="{Style.timeline}" data-conversation>{body}</section>
               <div class="{Style.chatJumpToLatestSlot}" data-jump-to-latest>
-                <button type="button" class="{Style.chatJumpToLatest}" aria-label="{Dom.Text.jumpToLatest}"
-                        @click={Ev(fun _ -> actions.ScrollToLatest ())}>{Icon.down}</button>
+                <div class="{Style.chatJumpToLatestRail}">
+                  <button type="button" class="{Style.chatJumpToLatest}" aria-label="{Dom.Text.jumpToLatest}"
+                          @click={Ev(fun _ -> actions.ScrollToLatest ())}>{Icon.down}</button>
+                </div>
               </div>
             </div>"""
 
