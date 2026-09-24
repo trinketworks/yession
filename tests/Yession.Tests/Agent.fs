@@ -295,7 +295,7 @@ let private turnTests =
                 let! events = eventsOf log
                 Expect.equal
                     (List.last events)
-                    (AgentTurnFailed { AgentTurnId = turnId; Reason = "boom" })
+                    (AgentTurnFailed { AgentTurnId = turnId; Reason = "boom"; ProcessEnded = None })
                     "the failure is an event"
             }
 
@@ -450,7 +450,7 @@ let private turnTests =
                     None
                     [ envelope 0L (AgentMessageStarted { AgentTurnId = turnId; MessageId = agentMessageId; Antecedent = None })
                       envelope 1L (AgentMessageDelta { AgentTurnId = turnId; MessageId = agentMessageId; Delta = "partial" })
-                      envelope 2L (AgentTurnFailed { AgentTurnId = turnId; Reason = "overloaded" }) ]
+                      envelope 2L (AgentTurnFailed { AgentTurnId = turnId; Reason = "overloaded"; ProcessEnded = None }) ]
                     ConversationProjection.empty
             Expect.equal
                 (projection.Items |> List.map (fun i -> i.Content, i.Status))
@@ -477,7 +477,7 @@ let private turnTests =
                 ConversationProjection.applyEvents
                     None
                     [ envelope 0L (AgentMessageStarted { AgentTurnId = turnId; MessageId = agentMessageId; Antecedent = None })
-                      envelope 1L (AgentTurnFailed { AgentTurnId = turnId; Reason = "agent run ended: error_during_execution" }) ]
+                      envelope 1L (AgentTurnFailed { AgentTurnId = turnId; Reason = "agent run ended: error_during_execution"; ProcessEnded = None }) ]
                     ConversationProjection.empty
             Expect.equal
                 (projection.Items |> List.map (fun i -> i.Content, i.Status))
@@ -495,7 +495,7 @@ let private turnTests =
                 ConversationProjection.applyEvents
                     None
                     [ envelope 1L (AgentMessageStarted { AgentTurnId = turnId; MessageId = agentMessageId; Antecedent = None })
-                      envelope 9L (AgentTurnFailed { AgentTurnId = turnId; Reason = "Reached maximum number of turns (32)" }) ]
+                      envelope 9L (AgentTurnFailed { AgentTurnId = turnId; Reason = "Reached maximum number of turns (32)"; ProcessEnded = None }) ]
                     ConversationProjection.empty
             Expect.equal
                 (projection.Items |> List.map (fun i -> EventOffset.value i.Offset))
@@ -511,7 +511,7 @@ let private turnTests =
                     None
                     [ envelope 1L (AgentMessageStarted { AgentTurnId = turnId; MessageId = agentMessageId; Antecedent = None })
                       envelope 2L (AgentMessageDelta { AgentTurnId = turnId; MessageId = agentMessageId; Delta = "on it" })
-                      envelope 9L (AgentTurnFailed { AgentTurnId = turnId; Reason = "overloaded" }) ]
+                      envelope 9L (AgentTurnFailed { AgentTurnId = turnId; Reason = "overloaded"; ProcessEnded = None }) ]
                     ConversationProjection.empty
             Expect.equal
                 (projection.Items |> List.map (fun i -> EventOffset.value i.Offset, (ConversationItem.said i)))
@@ -525,7 +525,7 @@ let private turnTests =
                 ConversationProjection.applyEvents
                     None
                     [ envelope 0L (AgentTurnStarted { AgentTurnId = turnId; Cause = TurnCause.TriggeredBy humanMessageId })
-                      envelope 1L (AgentTurnFailed { AgentTurnId = turnId; Reason = "context build failed" }) ]
+                      envelope 1L (AgentTurnFailed { AgentTurnId = turnId; Reason = "context build failed"; ProcessEnded = None }) ]
                     ConversationProjection.empty
             Expect.equal
                 (projection.Items |> List.map (fun i -> i.Author, i.Content, i.Status))
@@ -772,6 +772,58 @@ let private toolFinished (block: string option) =
           Outcome = Yession.Domain.Tools.ToolCallOk
           Block = block |> Option.map (fun n -> BlockId.create n |> expect)
           Result = None }
+
+/// What a boot writes for the turn a dead process was running.
+let private cutOff (id: AgentTurnId) =
+    AgentTurnFailed
+        { AgentTurnId = id
+          Reason = "the session was restarted while this turn was running"
+          ProcessEnded = Some { LastHeardAt = DateTimeOffset (2026, 9, 24, 12, 0, 0, TimeSpan.Zero) } }
+
+let private askedBy (who: Principal) =
+    MessageSent { MessageId = humanMessageId; QueueId = None; Author = who; Body = "do a thing" }
+
+let private startedFor (id: AgentTurnId) (cause: TurnCause) = AgentTurnStarted { AgentTurnId = id; Cause = cause }
+
+let private resumeTests =
+    let second = AgentTurnId.create "turn-2" |> expect
+    testList "A turn the session stopped under" [
+        testCase "is owed its resumption, as whoever asked for it" <| fun () ->
+            Expect.equal
+                (AgentWake.pendingReason [ askedBy (Principal.Peer ada); startedFor turnId (TurnCause.TriggeredBy humanMessageId); cutOff turnId ])
+                (Some (CutOff turnId, Principal.Peer ada))
+                "the work resumes on the credential it was running on"
+
+        // The loop guard: a turn that takes the process down with it must not come back for ever.
+        testCase "resumed and cut off again, is owed nothing further" <| fun () ->
+            Expect.isNone
+                (AgentWake.pendingReason
+                    [ askedBy (Principal.Peer ada)
+                      startedFor turnId (TurnCause.TriggeredBy humanMessageId)
+                      cutOff turnId
+                      startedFor second (TurnCause.Woke (CutOff turnId))
+                      cutOff second ])
+                "one resumption per cut"
+
+        testCase "a turn that failed on its own is owed nothing" <| fun () ->
+            Expect.isNone
+                (AgentWake.pendingReason
+                    [ askedBy (Principal.Peer ada)
+                      startedFor turnId (TurnCause.TriggeredBy humanMessageId)
+                      AgentTurnFailed { AgentTurnId = turnId; Reason = "the model refused"; ProcessEnded = None } ])
+                "its failure is its answer"
+
+        // A woken turn records no actor of its own; it ran as whoever the wake was owed to.
+        testCase "a woken turn that was cut off resumes as whoever the wake ran for" <| fun () ->
+            Expect.equal
+                (AgentWake.pendingReason
+                    [ blockStarted "b1" true (Principal.Peer ada)
+                      blockCompleted "b1"
+                      startedFor turnId (TurnCause.Woke CommandFinished)
+                      cutOff turnId ])
+                (Some (CutOff turnId, Principal.Peer ada))
+                "the owner of the wake it was"
+    ]
 
 let private wakeTests =
     testList "The wake (Plan 20, stage 2)" [
@@ -1208,7 +1260,7 @@ let private attributionTests =
                 ConversationProjection.applyEvents
                     None
                     [ started (Some CommandFinished)
-                      envelope 1L (AgentTurnFailed { AgentTurnId = turnId; Reason = "no credential" }) ]
+                      envelope 1L (AgentTurnFailed { AgentTurnId = turnId; Reason = "no credential"; ProcessEnded = None }) ]
                     ConversationProjection.empty
             Expect.equal
                 (projection.Items |> List.map (fun i -> i.Woke))
@@ -1405,12 +1457,22 @@ let private restartTests =
                 | [] -> failwith "nothing ran at all"
             }
 
+        testCaseAsync "is resumed at boot once it is failed" <|
+            async {
+                let scheduler, log =
+                    armedScheduler [ askedBy (Principal.Peer ada); startedFor turnId (TurnCause.TriggeredBy humanMessageId) ] ignore
+                do! scheduler.Boot ()
+                match! startedTurns log with
+                | [ _; resumed ] -> Expect.equal resumed.Cause (TurnCause.Woke (CutOff turnId)) "the next turn picks up the one that was cut"
+                | other -> failwithf "expected the dead turn and its resumption, got %d turns" (List.length other)
+            }
+
         testCaseAsync "a turn already failed is not failed again" <|
             async {
                 let scheduler, log =
                     armedScheduler
                         [ AgentTurnStarted { AgentTurnId = turnId; Cause = TurnCause.TriggeredBy humanMessageId }
-                          AgentTurnFailed { AgentTurnId = turnId; Reason = "the model refused" } ]
+                          AgentTurnFailed { AgentTurnId = turnId; Reason = "the model refused"; ProcessEnded = None } ]
                         ignore
                 do! scheduler.Boot ()
                 let! failed = failedTurns log
@@ -1978,6 +2040,7 @@ let tests =
         schemaTests
         argumentTests
         failureReasonTests
+        resumeTests
         wakeTests
         modelChoiceTests
         vocabularyTests

@@ -591,11 +591,25 @@ let private promptOf (context: AgentContextPack) : string =
     // your build finished" — would put words in somebody's mouth on a shared transcript. It
     // is told what it is, and the terminal activity above is what it acts on.
     | None ->
+        let why =
+            match context.Woke with
+            | Some (CutOff _) ->
+                "You are running because your previous turn was cut off: the session stopped while it was running, so whatever you were in the middle of did not finish, and nothing you were waiting on reported back to it. Check where things actually stand before you continue — a command may have stopped half-way, a push may not have landed — then pick up where you left off, and say that you are resuming."
+            | Some (PrChanged _) ->
+                "You are running because a pull request watched here changed state — the conversation above says how. Say what it means for what you were doing, and carry on."
+            | Some (IntegrationLost _) ->
+                "You are running because a terminal you had a command running in stopped reporting, so nothing will say how that command ended — the terminal activity above is what is known. Decide what to do about it, and say so."
+            | Some (StreamEnded _) ->
+                "You are running because the stream behind a terminal you were working in has ended — the terminal activity above is the last of it. Say what it means for what you were doing."
+            | Some CommandFinished
+            | None ->
+                "You are running because work you started in the background finished — the terminal activity above is that work. Carry on with it, and say what it means for what you were doing."
         sprintf
-            "Conversation so far:\n%s%s%s\n\nNobody has said anything new. You are running because work you started in the background finished — the terminal activity above is that work. Carry on with it, and say what it means for what you were doing."
+            "Conversation so far:\n%s%s%s\n\nNobody has said anything new. %s"
             transcript
             terminals
             repoNotes
+            why
 
 /// Every tool ONE turn can reach, assembled once: the session's own registry, plus a
 /// namespace per MCP server it was given (Plan 17), wrapped in the audit seam (Plan 16,

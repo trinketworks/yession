@@ -322,7 +322,8 @@ module Codec =
                     Encode.object [ "kind", Encode.string "streamEnded"; "terminalId", terminalId.Encode id ]
                 | IntegrationLost id ->
                     Encode.object [ "kind", Encode.string "integrationLost"; "terminalId", terminalId.Encode id ]
-                | PrChanged pr -> Encode.object [ "kind", Encode.string "prChanged"; "pr", prRef.Encode pr ])
+                | PrChanged pr -> Encode.object [ "kind", Encode.string "prChanged"; "pr", prRef.Encode pr ]
+                | CutOff turn -> Encode.object [ "kind", Encode.string "cutOff"; "agentTurnId", agentTurnId.Encode turn ])
           Decode =
             Decode.field "kind" Decode.string
             |> Decode.andThen (function
@@ -330,6 +331,7 @@ module Codec =
                 | "streamEnded" -> Decode.field "terminalId" terminalId.Decode |> Decode.map StreamEnded
                 | "integrationLost" -> Decode.field "terminalId" terminalId.Decode |> Decode.map IntegrationLost
                 | "prChanged" -> Decode.field "pr" prRef.Decode |> Decode.map PrChanged
+                | "cutOff" -> Decode.field "agentTurnId" agentTurnId.Decode |> Decode.map CutOff
                 | other -> Decode.fail (sprintf "Unknown wake reason: %s" other)) }
 
     let private agentTurnStarted : Codec<AgentTurnStarted> =
@@ -426,13 +428,20 @@ module Codec =
     let private agentTurnFailed : Codec<AgentTurnFailed> =
         { Encode =
             fun (p: AgentTurnFailed) ->
-                Encode.object
+                Encode.object (
                     [ "agentTurnId", agentTurnId.Encode p.AgentTurnId
                       "reason", Encode.string p.Reason ]
+                    @ (match p.ProcessEnded with
+                       | Some ended -> [ "processEnded", Encode.object [ "lastHeardAt", timestamp.Encode ended.LastHeardAt ] ]
+                       | None -> []))
           Decode =
             Decode.object (fun get ->
                 { AgentTurnFailed.AgentTurnId = get.Required.Field "agentTurnId" agentTurnId.Decode
-                  AgentTurnFailed.Reason = get.Required.Field "reason" Decode.string }) }
+                  AgentTurnFailed.Reason = get.Required.Field "reason" Decode.string
+                  // Optional on the wire: every failure written before this carries none, and
+                  // reads as one the turn came to on its own.
+                  AgentTurnFailed.ProcessEnded =
+                    get.Optional.Field "processEnded" (Decode.object (fun p -> { LastHeardAt = p.Required.Field "lastHeardAt" timestamp.Decode })) }) }
 
     let private agentTurnInterrupted : Codec<AgentTurnInterrupted> =
         { Encode =

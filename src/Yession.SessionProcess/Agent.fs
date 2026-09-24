@@ -205,6 +205,10 @@ module AgentTurn =
                       Conversation = conversation
                       TurnActor = turnActor
                       CurrentMessage = currentMessage
+                      Woke =
+                        match trigger with
+                        | FromMessage _ -> None
+                        | FromWake (reason, _) -> Some reason
                       Terminals = terminals
                       Repos = repos
                       Model = model
@@ -262,7 +266,7 @@ module AgentTurn =
                         | Some u -> emitUsage turnId u
                         | None -> ()
                     | AgentFailed (reason, usage) ->
-                        do! append (AgentTurnFailed { AgentTurnId = turnId; Reason = reason })
+                        do! append (AgentTurnFailed { AgentTurnId = turnId; Reason = reason; ProcessEnded = None })
                         // Usage after the durable event, exactly as the completion above:
                         // the turn that reaches this branch is typically the one that ran
                         // longest, so reporting nothing for it is where a session's cost
@@ -272,5 +276,5 @@ module AgentTurn =
                         | None -> ()
             with e ->
                 if not (signal.IsAborted ()) then
-                    do! append (AgentTurnFailed { AgentTurnId = turnId; Reason = e.Message })
+                    do! append (AgentTurnFailed { AgentTurnId = turnId; Reason = e.Message; ProcessEnded = None })
         }

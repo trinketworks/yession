@@ -37,6 +37,10 @@ type AgentContextPack =
       /// turn nothing asked for: the agent was woken because work it started finished, and
       /// there is no message to point at. What moved arrives through `Terminals` either way.
       CurrentMessage : ConversationItem option
+      /// Why a turn nobody asked for is running, so it can be told. `None` exactly when
+      /// `CurrentMessage` is `Some`. The prompt used to say "work you started in the
+      /// background finished" to every woken turn — true for one reason of five.
+      Woke           : WakeReason option
       /// What the session's terminals did since the previous turn (Plan 13, stage 3a).
       /// A SEPARATE field, deliberately: a command someone ran is not something someone
       /// said, so folding blocks into `Conversation` would make the chat log a place
@@ -973,12 +977,16 @@ module AgentWake =
     /// much each changes what the agent should do next: an integration loss means its queue is
     /// HELD and nothing further will arrive; a stream ending means a source it was reading is
     /// gone; a completion is ordinary news.
+    ///
+    /// A turn cut off outranks them all: the agent was in the middle of something, and every
+    /// other reason is news ABOUT work — this one is the work.
     let private rank =
         function
-        | IntegrationLost _ -> 0
-        | StreamEnded _ -> 1
-        | CommandFinished -> 2
-        | PrChanged _ -> 3
+        | CutOff _ -> 0
+        | IntegrationLost _ -> 1
+        | StreamEnded _ -> 2
+        | CommandFinished -> 3
+        | PrChanged _ -> 4
 
     /// Why a turn is owed and who it would run as, or `None` when nothing is.
     let pendingReason (events: SessionEvent list) : (WakeReason * Principal) option =
@@ -1001,6 +1009,23 @@ module AgentWake =
                 | SessionEvent.TerminalOpened e when Option.isNone e.Sandbox -> Some (TerminalId.value e.TerminalId)
                 | _ -> None)
             |> Set.ofList
+        // Who said each message: the actor of a turn it triggered.
+        let authors =
+            events
+            |> List.choose (function
+                | MessageSent m -> Some (MessageId.value m.MessageId, m.Author)
+                | _ -> None)
+            |> Map.ofList
+        // What the debts so far come to, as a wake would take them: the held background
+        // completions folded in with their precedence. Asked at the END, and also at each
+        // woken turn's start — which is how that turn's actor is known without recording it.
+        let settled (pendingCommands: (string * Principal) list) owed =
+            match pendingCommands with
+            | (_, owner) :: _ -> better (CommandFinished, owner) owed
+            | [] -> owed
+        // Each turn's actor and cause, by turn id: what a cut-off turn resumes AS, and
+        // whether it was itself a resumption (the loop guard).
+        let turns : Map<string, Principal option * TurnCause> ref = ref Map.empty
         events
         |> List.fold
             (fun (background: Map<string, Principal>, lastAgent: Map<string, Principal>, pendingCommands: (string * Principal) list, owed) event ->
@@ -1008,7 +1033,24 @@ module AgentWake =
                 // A new turn takes everything before it: whatever those blocks did, that
                 // turn's digest reported it. `lastAgent` is NOT reset — it is not a debt, it
                 // is who the agent has been in that terminal, and that outlives the turn.
-                | AgentTurnStarted _ -> Map.empty, lastAgent, [], None
+                | AgentTurnStarted started ->
+                    let actor =
+                        match started.Cause with
+                        | TurnCause.TriggeredBy message -> Map.tryFind (MessageId.value message) authors
+                        | TurnCause.Woke _ -> settled pendingCommands owed |> Option.map snd
+                    turns.Value <- Map.add (AgentTurnId.value started.AgentTurnId) (actor, started.Cause) turns.Value
+                    Map.empty, lastAgent, [], None
+                // A turn the process ended under, found and failed at boot, is owed its
+                // resumption as whoever it ran for — unless it was a resumption itself, which
+                // is what stops a turn that takes the process down from looping. One that
+                // failed on its own owes nothing: the failure is its answer.
+                | AgentTurnFailed failed when Option.isSome failed.ProcessEnded ->
+                    let owed =
+                        match Map.tryFind (AgentTurnId.value failed.AgentTurnId) turns.Value with
+                        | Some (_, TurnCause.Woke (CutOff _)) -> owed
+                        | Some (Some actor, _) -> better (CutOff failed.AgentTurnId, actor) owed
+                        | _ -> owed
+                    background, lastAgent, pendingCommands, owed
                 | SessionEvent.TerminalBlockStarted b ->
                     let lastAgent =
                         match Authority.onBehalfOf b.Authority with
@@ -1076,10 +1118,7 @@ module AgentWake =
         // The background commands nobody retracted are the ones the agent walked away from:
         // fold them into `owed` now, with the same precedence and first-completed-wins
         // coalescing they had when they were owed the instant they completed.
-        |> fun (_, _, pendingCommands, owed) ->
-            match pendingCommands with
-            | (_, owner) :: _ -> better (CommandFinished, owner) owed
-            | [] -> owed
+        |> fun (_, _, pendingCommands, owed) -> settled pendingCommands owed
 
     /// The principal a woken turn would run AS, for the readers that do not need the reason.
     let pending (events: SessionEvent list) : Principal option = pendingReason events |> Option.map snd
