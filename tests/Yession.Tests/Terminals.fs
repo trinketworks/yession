@@ -1926,7 +1926,7 @@ let private mintFrom (ids: string list) =
         if remaining.Count > 1 then remaining.RemoveAt 0
         next
 
-let private makeTerminalsOn (clock: Clock) (principalFor: PeerId -> Principal) (loans: SessionTerminals.BlockLoans) attach classifier (log: EventLog<SessionEvent>) environment openTranscript readTranscript openAtBoot profilesAtBoot =
+let private makeTerminalsOn (mayOweWake: unit -> unit) (clock: Clock) (principalFor: PeerId -> Principal) (loans: SessionTerminals.BlockLoans) attach classifier (log: EventLog<SessionEvent>) environment openTranscript readTranscript openAtBoot profilesAtBoot =
     let mintTerminal = mintFrom [ "term-a"; "term-b"; "term-c"; "term-d"; "term-e"; "term-f" ]
     let mintBlock = mintFrom [ "b-1"; "b-2"; "b-3" ]
     let records = ResizeArray<TerminalId * int * TranscriptRecord> ()
@@ -1959,6 +1959,7 @@ let private makeTerminalsOn (clock: Clock) (principalFor: PeerId -> Principal) (
             // (`TerminalScheduler`), and wiring a real one here would test the scheduler twice
             // while making every manager assertion depend on it.
             ignore
+            mayOweWake
             attach
             classifier
             openAtBoot
@@ -1972,7 +1973,7 @@ let private makeTerminalsFrom attach classifier log environment openTranscript r
     // Nobody is attributed and nothing is lent: a peer stays a peer and a block runs on
     // what its shell has, which is what every case but the attribution and loan ones is
     // written against.
-    makeTerminalsOn { Clock.system with Now = fixedClock } Principal.Peer SessionTerminals.BlockLoans.none attach classifier log environment openTranscript readTranscript openAtBoot profilesAtBoot
+    makeTerminalsOn ignore { Clock.system with Now = fixedClock } Principal.Peer SessionTerminals.BlockLoans.none attach classifier log environment openTranscript readTranscript openAtBoot profilesAtBoot
 
 /// A manager where SOME peers are bound to users — the Process's `Attribution` stand-in,
 /// for the cases about what a block's authority becomes at the durable append — and whose
@@ -1983,7 +1984,7 @@ let private makeTerminalsBound (bound: (PeerId * UserId) list) (loans: SessionTe
         match Map.tryFind peer users with
         | Some user -> Principal.User user
         | None -> Principal.Peer peer
-    makeTerminalsOn { Clock.system with Now = fixedClock } principalFor loans AttachTerminal.unavailable classifier log environment openTranscript readTranscript [] ShellProfileProjection.empty
+    makeTerminalsOn ignore { Clock.system with Now = fixedClock } principalFor loans AttachTerminal.unavailable classifier log environment openTranscript readTranscript [] ShellProfileProjection.empty
 
 /// A lender that records what it was asked and answers with what it was given — the
 /// `BlockLoans` a case about the block's line, or about who a loan is asked for, hands in.
@@ -2244,6 +2245,33 @@ let private managerTests =
                 match events |> List.tryPick (function SessionEvent.TerminalBlockCompleted e -> Some e.Result | _ -> None) with
                 | Some (CommandExecutionFailed _) -> ()
                 | other -> failwithf "expected it ended as cut off, got %A" other
+            }
+
+        // A terminal closing can end a stream an agent was reading, which it is owed news of.
+        testCaseAsync "a close is followed by a look for the wake" <|
+            async {
+                let log = newLog ()
+                let environment, _ = scriptedEnvironment (fun _ -> [], 0)
+                let openTranscript, _, _, _, readTranscript = recordingTranscripts ()
+                let mutable looks = 0
+                let terminals, _, _ =
+                    makeTerminalsOn
+                        (fun () -> looks <- looks + 1)
+                        { Clock.system with Now = fixedClock }
+                        Principal.Peer
+                        SessionTerminals.BlockLoans.none
+                        AttachTerminal.unavailable
+                        Classifier.approveAll
+                        log
+                        environment
+                        openTranscript
+                        readTranscript
+                        []
+                        ShellProfileProjection.empty
+                let! opened = terminals.Open (PeerRef ada) (SandboxShell SandboxRef.defaultRef) (TerminalTitle.fromProse "build")
+                let before = looks
+                let! _ = terminals.Close (opened |> expect) "closed by a peer"
+                Expect.isTrue (looks > before) "the wake was told to look"
             }
 
         testCaseAsync "a block in a terminal that closed under it does nothing at all" <|
@@ -3837,14 +3865,14 @@ let private lateMarkingShell () =
 /// A block typed at a late-marking shell and its detector left to fire: the terminal is lost,
 /// and what the case gets back is the fact that said so, the moment the line went in, and
 /// the shell's marks to type at will.
-let private lostOverALateShellLent (loans: SessionTerminals.BlockLoans) =
+let private lostOverALateShellWaking (mayOweWake: unit -> unit) (loans: SessionTerminals.BlockLoans) =
     async {
         let log = newLog ()
         let shell, mark = lateMarkingShell ()
         let clock = virtualClock (fixedClock ())
         let openTranscript, _, _, _, readTranscript = recordingTranscripts ()
         let terminals, _, _ =
-            makeTerminalsOn clock.Clock Principal.Peer loans AttachTerminal.unavailable Classifier.approveAll log shell openTranscript readTranscript [] ShellProfileProjection.empty
+            makeTerminalsOn mayOweWake clock.Clock Principal.Peer loans AttachTerminal.unavailable Classifier.approveAll log shell openTranscript readTranscript [] ShellProfileProjection.empty
         let! opened = terminals.Open (PeerRef ada) (SandboxShell SandboxRef.defaultRef) (TerminalTitle.fromProse "build")
         let id = opened |> expect
         let writtenAt = clock.Clock.Now ()
@@ -3860,10 +3888,21 @@ let private lostOverALateShellLent (loans: SessionTerminals.BlockLoans) =
         return terminals, id, log, clock, mark, writtenAt, lost
     }
 
+let private lostOverALateShellLent (loans: SessionTerminals.BlockLoans) = lostOverALateShellWaking ignore loans
+
 let private lostOverALateShell () = lostOverALateShellLent SessionTerminals.BlockLoans.none
 
 let private lostEvidenceTests =
     testList "What a loss says about itself" [
+        // The loss is a debt the wake reads (an agent whose queue is HELD is owed a turn), and
+        // this manager is the only thing that knows it just happened.
+        testCaseAsync "a loss is followed by a look for the wake" <|
+            async {
+                let mutable looks = 0
+                let! _ = lostOverALateShellWaking (fun () -> looks <- looks + 1) SessionTerminals.BlockLoans.none
+                Expect.isTrue (looks > 0) "the wake was told to look"
+            }
+
         // The fact without this read the same for a shell somebody had replaced and one that
         // answered ten seconds late over a container's stream: both said lost, one wrongly,
         // and telling them apart took the cast file, the event log and a stopwatch.
@@ -4011,7 +4050,7 @@ let private shellProfileTests =
                 let clock = virtualClock (fixedClock ())
                 let openTranscript, linesOf, _, _, readTranscript = recordingTranscripts ()
                 let terminals, _, _ =
-                    makeTerminalsOn clock.Clock Principal.Peer SessionTerminals.BlockLoans.none AttachTerminal.unavailable Classifier.approveAll log mute openTranscript readTranscript [] ShellProfileProjection.empty
+                    makeTerminalsOn ignore clock.Clock Principal.Peer SessionTerminals.BlockLoans.none AttachTerminal.unavailable Classifier.approveAll log mute openTranscript readTranscript [] ShellProfileProjection.empty
                 let! opened = terminals.Open (PeerRef ada) (SandboxShell SandboxRef.defaultRef) (TerminalTitle.fromProse "build")
                 let id = opened |> expect
                 let said () =

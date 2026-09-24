@@ -341,6 +341,9 @@ let startFull
         // Assigned once the terminal scheduler exists, below. The terminal manager is built
         // first (the scheduler consumes it), and it needs to wake the drain when a lease ends.
         let mutable reDrainTerminals : unit -> unit = ignore
+        // The same shape of forward reference for the wake: the scheduler is built from
+        // things the terminal manager is built first for.
+        let mutable wakeScheduler : unit -> unit = ignore
         let mintBlockId () =
             match BlockId.create (string (Guid.NewGuid ())) with
             | Ok id -> id
@@ -400,6 +403,7 @@ let startFull
                 // cycle needs: a lease that ends inside the manager — the alt-screen flip, a
                 // dropped peer — has nothing the scheduler could have observed.
                 (fun () -> reDrainTerminals ())
+                (fun () -> wakeScheduler ())
                 // How a foreign stream is reached (Plan 16, part D). One implementation, not
                 // a configurable one: the wire is part of the seam's contract, so a second
                 // way to attach would be a second contract nobody wrote down.
@@ -712,6 +716,7 @@ let startFull
             Scheduler.create sessionId doc log runAgent capabilitiesFor emitUsage mintTurnId mintMessageId principalFor transcripts.ReadRange guidance initialConsumed
         let drain () = scheduler.Drain ()
         let requestInterrupt = scheduler.RequestInterrupt
+        wakeScheduler <- scheduler.Wake
 
         // A terminal block finishing is the one thing outside the agent's own turn that can
         // make the log owe it a turn nobody asked for (Plan 20, stage 2). The terminal

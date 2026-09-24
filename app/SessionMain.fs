@@ -1046,6 +1046,11 @@ Async.StartImmediate (
         // broadcast uses, and for the same reason: the subscription is opened before the
         // thing it notifies exists.
         let panelsChanged : (unit -> unit) ref = ref ignore
+        // And the wake, by the same forward reference: a frame that moves the status can make
+        // a turn the log already owes runnable — the agent had no credential at boot, or lost
+        // it — and nothing else would look again until some unrelated event did. A frame
+        // that owes nothing costs one read of the log; frames are rare.
+        let wakeAgent : (unit -> unit) ref = ref ignore
         match controlChannel with
         | Some (url, secret) ->
             ControlClient.subscribeConnections url secret (fun list ->
@@ -1078,7 +1083,8 @@ Async.StartImmediate (
                     Async.StartImmediate (foldFor FoldCause.Connected arrived)
                     // And every open drawer is told, which is the whole of what the panels
                     // used to be probed for.
-                    panelsChanged.Value ())
+                    panelsChanged.Value ()
+                    wakeAgent.Value ())
             |> ignore
         | None -> ()
         // The connection panels as a read model, pushed on the read stream. Both builders
@@ -1270,6 +1276,7 @@ Async.StartImmediate (
         workSandboxes <- host.Sandboxes
         terminals <- host.Terminals
         files <- host.Files
+        wakeAgent.Value <- host.Wake
         // Composed here rather than in the Host, because the artifacts directory is this
         // module's fact (`artifactsDir`, beside `reposDir`) and the Host is given a sandbox
         // registry rather than the layout under it. Everything else it needs is the Host's,
