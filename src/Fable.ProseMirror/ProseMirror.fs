@@ -70,7 +70,7 @@ module ProseMirror =
     /// Applied to the parser rather than at a call site because every parse wants the same
     /// answer: the composer that accepts a pasted body and the timeline that renders one have
     /// to agree, or a link survives being typed and vanishes being read.
-    [<Emit("(p => { const inner = p.tokenizer.validateLink.bind(p.tokenizer); p.tokenizer.validateLink = url => inner(url) || /^file:\\/\\/\\//i.test(url.trim()); return p })($0)")>]
+    [<Emit("(function (p) { const inner = p.tokenizer.validateLink.bind(p.tokenizer); p.tokenizer.validateLink = url => inner(url) || /^file:\\/\\/\\//i.test(url.trim()); return p })($0)")>]
     let private admittingContentLinks (parser: MarkdownParser) : MarkdownParser = jsNative
 
     let mdParser : MarkdownParser = admittingContentLinks defaultMdParser
