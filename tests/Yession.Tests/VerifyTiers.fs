@@ -201,7 +201,7 @@ let tests =
                     Expect.isTrue
                         (List.contains need named)
                         (sprintf
-                            "no tier asks for `%A`, which `verify` means — so the release gate never exercises it. Add it to a tier in .github/verify-tiers.json."
+                            "no tier asks for `%A`, which `verify` means — so the release gate never exercises it. Add it to a tier in .github/verify-tiers.json"
                             need)
 
         // What `tasks.fsx bench` relies on to run the .NET CLR alone (`--runtime clr`): there is
