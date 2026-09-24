@@ -39,7 +39,9 @@ type Need =
     | Docker      // a reachable Docker daemon
     | LiveAgent   // real model credentials
     | Keyring     // a usable OS credential manager (Keychain / Credential Manager / Secret Service)
-    | Nix         // the nix CLI, to evaluate/build this repo's derivations against the working tree
+    | Nix         // the nix CLI, to evaluate this repo's derivations against the working tree
+    | NixBuild    // consent to BUILD the installable from the working tree and boot it: minutes of
+                  // sandboxed compile. No suite needs it; `check` runs the build (tasks.fsx).
     | Srt         // OS-level confinement: bubblewrap + socat on Linux, Seatbelt on macOS
     | Pty         // the native `node-pty` addon — a real pseudo-terminal, not a pipe
     | Serial      // a real serial engine: the `serialport` addon, `udevadm`, and socat for a PTY pair
@@ -67,7 +69,7 @@ let private getEnv (name: string) : string =
 // first substitutes, which is tens of minutes buying a proof the gate already has piecewise —
 // it is asked for by name (`check Docker Dogfood`, or a `verify.yml` dispatch naming both) when
 // the container environment story changes.
-let allNeeds = [ Browser; Ports; Native; Docker; LiveAgent; Keyring; Nix; Srt; Pty; Serial; Jumpstarter; Caddy ]
+let allNeeds = [ Browser; Ports; Native; Docker; LiveAgent; Keyring; Nix; NixBuild; Srt; Pty; Serial; Jumpstarter; Caddy ]
 
 let parseNeed (s: string) : Need option =
     match s.Trim().ToLowerInvariant () with
@@ -78,6 +80,7 @@ let parseNeed (s: string) : Need option =
     | "liveagent" -> Some LiveAgent
     | "keyring"   -> Some Keyring
     | "nix"       -> Some Nix
+    | "nixbuild"  -> Some NixBuild
     | "srt"       -> Some Srt
     | "pty"       -> Some Pty
     | "serial"    -> Some Serial
