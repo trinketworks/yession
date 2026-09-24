@@ -921,6 +921,13 @@ module SessionTerminals =
         // and unlike block completion, a lease can end from inside here (the alt-screen flip,
         // a dropped peer) where the scheduler has nothing to observe.
         (reDrain: unit -> unit)
+        // Told right after this manager records something the WAKE reads outside a block's
+        // completion: a shell that stopped answering, a terminal that closed (a stream a
+        // source produced ending is news to an agent that was reading it). Whether anything
+        // is owed is the wake's rule (`AgentWake`), asked of the log — this only says "look
+        // now". Without it those debts sat in the log until some unrelated event looked: a
+        // block elsewhere finishing, a turn ending, a restart.
+        (mayOweWake: unit -> unit)
         // How a foreign byte stream is reached (Plan 16, part D). Injected like every other
         // capability, so a session given no provider simply cannot attach one — rather than
         // carrying a client for a thing it will never talk to.
@@ -1813,6 +1820,7 @@ module SessionTerminals =
                     // says so, on the record, and it is told now rather than at the next doc
                     // update — which, for a queue nobody is writing to, is never.
                     reDrain ()
+                    mayOweWake ()
                     return Ok ()
             }
 
@@ -2070,6 +2078,7 @@ module SessionTerminals =
                                                                             Due = writtenAt + integrationWindow
                                                                             Said = said } })
                                                       reDrain ()
+                                                      mayOweWake ()
                                               }))
                                     return result
                                 }

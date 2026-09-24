@@ -167,6 +167,7 @@ let private withShellTerminal
                     // What a peer would be told; this fixture has none.
                     ignore
                     (fun () -> reDrains <- reDrains + 1)
+                    ignore
                     AttachTerminal.unavailable
                     Classifier.approveAll
                     []
