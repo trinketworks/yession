@@ -829,19 +829,18 @@ module DocSync =
     open Fable.Core
     open Yjs
 
-    [<Import("toBase64", "lib0/buffer")>]
-    let private toBase64 (bytes: JS.Uint8Array) : string = jsNative
+    let private toBase64 = Lib0.Buffer.toBase64
+    let private fromBase64 = Lib0.Buffer.fromBase64
 
-    [<Import("fromBase64", "lib0/buffer")>]
-    let private fromBase64 (s: string) : JS.Uint8Array = jsNative
-
-    /// Register a doc listener and get back the way to stop it. ONE verb, because `off`
-    /// only removes a listener when handed the very function reference `on` was given —
-    /// a caller who kept the handler and remembered to pass it again is a caller who can
-    /// forget. The disposer closes over it, so there is nothing left to get wrong.
+    /// Register a doc listener and get back the way to stop it. ONE verb, because
+    /// `offUpdate` only removes a listener when handed the very `UpdateHandler` instance
+    /// `onUpdate` was given — a caller who kept the handler and remembered to pass it again
+    /// is a caller who can forget. The disposer closes over it, so there is nothing left to
+    /// get wrong.
     let private onUpdate (doc: Y.Doc) (handler: JS.Uint8Array -> obj -> unit) : unit -> unit =
-        Fable.YjsExtras.Updates.on doc handler
-        fun () -> Fable.YjsExtras.Updates.off doc handler
+        let registered = Y.UpdateHandler (fun update origin _ _ -> handler update origin)
+        doc.onUpdate registered
+        fun () -> doc.offUpdate registered
 
     /// The origin tag under which remote payloads are applied, letting the local-update
     /// broadcast tell relayed changes from locally-originated ones. An IDENTITY, told apart

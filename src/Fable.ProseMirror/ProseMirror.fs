@@ -395,10 +395,8 @@ module ProseMirror =
     let relPosFromTypeIndex (typ: obj) (index: int) : obj = jsNative
     [<Import("createAbsolutePositionFromRelativePosition", "yjs")>]
     let private createAbsPos (rp: obj) (doc: Y.Doc) : obj = jsNative
-    [<Import("toBase64", "lib0/buffer")>]
-    let private toBase64 (b: JS.Uint8Array) : string = jsNative
-    [<Import("fromBase64", "lib0/buffer")>]
-    let private fromBase64 (s: string) : JS.Uint8Array = jsNative
+    let private toBase64 = Lib0.Buffer.toBase64
+    let private fromBase64 = Lib0.Buffer.fromBase64
 
     /// A relative position -> its base64 wire form.
     let encodeRel (relPos: obj) : string = toBase64 (encodeRelPos relPos)
