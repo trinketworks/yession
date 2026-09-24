@@ -1463,17 +1463,19 @@ module Style =
     /// quiet voice as a reply's ref, but the sentence holds references (some of them links),
     /// so the jump is the MARK alone — a link cannot sit inside a button.
     let causeRow = "contents"
-    let causeMark = "col-start-1 h-[1lh] flex items-center justify-center text-mark"
+    /// The marks linking acts wear `edge`, the controls' rim: a line, not text, and OPAQUE —
+    /// a chain's pieces meet across two rows, and a translucent line doubles where they touch.
+    let causeMark = "col-start-1 h-[1lh] flex items-center justify-center text-edge"
     let causeSaid = "flex items-baseline text-small leading-[inherit] text-ink-faint"
     /// The link of a chain, above the act's chevron: shorter than a line, and reaching up
     /// through the act's top padding to meet the rail the act above draws (`causeRail`). Its
     /// line is a box, as the rail is, with only the head drawn over its foot.
-    let causeChainMark = "col-start-1 -mt-2 h-5.5 relative flex justify-center text-mark"
+    let causeChainMark = "col-start-1 -mt-2 h-5.5 relative flex justify-center text-edge"
     let causeChainBody = "w-px h-full bg-current"
     let causeChainHead = "absolute bottom-0 left-1/2 -translate-x-1/2"
     /// The line from an act's chevron down to the next link of its chain: the gutter's centre,
     /// through the rows under the headline and on through the gap between the two acts.
-    let causeRail = "col-start-1 row-span-2 justify-self-center w-px -mb-2.5 bg-mark"
+    let causeRail = "col-start-1 row-span-2 justify-self-center w-px -mb-2.5 bg-edge"
     let causeJump =
         cls [ "flex bg-transparent border-0 p-0 cursor-pointer hover:text-ink focus-visible:text-ink"; focusRing ]
     /// The same quiet line as `replyRef`, but a real control — it jumps to the message it
