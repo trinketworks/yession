@@ -75,7 +75,7 @@ let private codecTests =
             // is asserted separately, through the registry.
             Body.author registry p ada "hello world"
 
-            let decoded = SyncedStateSync.ofDoc doc |> Result.mapError (sprintf "%A") |> expect
+            let decoded = SyncedStateSync.ofDoc doc
             Expect.equal decoded (p.Model ()).Synced "the doc decodes back to exactly the model's synced state"
             Expect.equal (Body.draft registry ada) (Some "hello world") "the body fragment holds the composed markdown"
 
@@ -88,7 +88,7 @@ let private codecTests =
             let p = Harness.run (Client.makeProgram doc (ClientModel.init (peer "ada" "Ada")))
             let chosen = ModelId.create "a-model" |> expect
             p.Dispatch (user (SetModelMsg (Some chosen)))
-            let decoded = SyncedStateSync.ofDoc doc |> Result.mapError (sprintf "%A") |> expect
+            let decoded = SyncedStateSync.ofDoc doc
             Expect.equal decoded.Model (Some chosen) "the doc carries what was picked"
 
         testCase "unpicking a model hands the choice back to the provider" <| fun () ->
@@ -96,11 +96,11 @@ let private codecTests =
             let p = Harness.run (Client.makeProgram doc (ClientModel.init (peer "ada" "Ada")))
             p.Dispatch (user (SetModelMsg (Some (ModelId.create "a-model" |> expect))))
             p.Dispatch (user (SetModelMsg None))
-            let decoded = SyncedStateSync.ofDoc doc |> Result.mapError (sprintf "%A") |> expect
+            let decoded = SyncedStateSync.ofDoc doc
             Expect.equal decoded.Model None "the register is gone, which IS the default"
 
         testCase "an empty doc decodes to the empty synced state (decode-empty = init)" <| fun () ->
-            let decoded = SyncedStateSync.ofDoc (Y.Doc.Create ()) |> Result.mapError (sprintf "%A") |> expect
+            let decoded = SyncedStateSync.ofDoc (Y.Doc.Create ())
             Expect.equal decoded SyncedSessionState.empty "no drafts, no shared brief"
 
         testCase "the doc contains drafts but never the conversation projection" <| fun () ->
@@ -140,7 +140,7 @@ let private codecTests =
                 "the published draft carries the key it will become — what every co-editor's send writes"
             Expect.equal (Body.send registry p ada) (Some queueId) "and the send goes in under exactly that key"
 
-            let decoded = SyncedStateSync.ofDoc doc |> Result.mapError (sprintf "%A") |> expect
+            let decoded = SyncedStateSync.ofDoc doc
             Expect.equal decoded (p.Model ()).Synced "the doc decodes back to exactly the model's synced state"
             Expect.isFalse (Map.containsKey ada decoded.Drafts) "the draft left the drafts map"
             let entry = decoded.Queue |> Map.find queueId
@@ -200,7 +200,7 @@ let private codecTests =
             p.Dispatch (user (EnsureTerminalDraftMsg (terminal, ada, queueId)))
             p.Dispatch (user (SendTerminalDraftMsg (terminal, ada)))
 
-            let decoded = SyncedStateSync.ofDoc doc |> Result.mapError (sprintf "%A") |> expect
+            let decoded = SyncedStateSync.ofDoc doc
             Expect.equal
                 (decoded.Pending |> Map.tryFind queueId |> Option.bind (fun entry -> entry.Size))
                 (Some { Cols = 132; Rows = 43 })
@@ -236,7 +236,7 @@ let private codecTests =
             p.Dispatch (user (EnsureTerminalDraftMsg (terminal, ada, queueId)))
             p.Dispatch (user (SendTerminalDraftMsg (terminal, ada)))
 
-            let decoded = SyncedStateSync.ofDoc doc |> Result.mapError (sprintf "%A") |> expect
+            let decoded = SyncedStateSync.ofDoc doc
             match decoded.Pending |> Map.tryFind queueId with
             | Some entry -> Expect.isNone entry.Size "no viewport, no claim"
             | None -> failwith "the command was not queued at all"
@@ -255,7 +255,7 @@ let private codecTests =
             p.Dispatch (user (SendTerminalDraftMsg (terminal, ada)))
             Y.applyUpdate (docB, Y.encodeStateAsUpdate docA)
 
-            let decoded = SyncedStateSync.ofDoc docB |> Result.mapError (sprintf "%A") |> expect
+            let decoded = SyncedStateSync.ofDoc docB
             Expect.isTrue (Map.containsKey queueId decoded.Pending) "the command Ada queued is in Grace's read"
 
         // What a peer we do not control might have written. The doc is shared, so one garbled
@@ -266,7 +266,7 @@ let private codecTests =
             entryIn doc "queue" "q-good" [ "author", box "ada"; "order", box 1.0 ]
             entryIn doc "queue" "q-bad" [ "author", box "ada"; "order", box "3" ]
 
-            let decoded = SyncedStateSync.ofDoc doc |> Result.mapError (sprintf "%A") |> expect
+            let decoded = SyncedStateSync.ofDoc doc
             Expect.equal (queueKeys decoded) [ "q-good" ] "only the entry that can be ordered is queued"
 
         testCase "a scalar where a queue entry goes is left out rather than read as one" <| fun () ->
@@ -274,21 +274,21 @@ let private codecTests =
             entryIn doc "queue" "q-good" [ "author", box "ada"; "order", box 1.0 ]
             (doc.getMap "queue" : Y.Map<obj>).set ("q-scalar", box "not an entry") |> ignore
 
-            let decoded = SyncedStateSync.ofDoc doc |> Result.mapError (sprintf "%A") |> expect
+            let decoded = SyncedStateSync.ofDoc doc
             Expect.equal (queueKeys decoded) [ "q-good" ] "the scalar is no entry"
 
         testCase "a shared brief whose body is not text is no brief" <| fun () ->
             let doc = Y.Doc.Create ()
             (doc.getMap "sharedBrief" : Y.Map<obj>).set ("body", box 42.0) |> ignore
 
-            let decoded = SyncedStateSync.ofDoc doc |> Result.mapError (sprintf "%A") |> expect
+            let decoded = SyncedStateSync.ofDoc doc
             Expect.isNone decoded.SharedBrief "a number is not what anybody wrote as the brief"
 
         testCase "a chapter whose name is not text is left out, not named after its type" <| fun () ->
             let doc = Y.Doc.Create ()
             entryIn doc "chapters" "m-1" [ "opens", box "yes"; "name", box (Y.Map.Create () : Y.Map<obj>) ]
 
-            let decoded = SyncedStateSync.ofDoc doc |> Result.mapError (sprintf "%A") |> expect
+            let decoded = SyncedStateSync.ofDoc doc
             Expect.isFalse
                 (Map.containsKey (MessageId.create "m-1" |> expect) decoded.Chapters)
                 "a map where the name goes is not a name"
@@ -300,7 +300,7 @@ let private codecTests =
             let author = ActorRef.token (Authority.author (Authority.ofAuthor (Principal.Peer ada)))
             entryIn doc "pending" "q-term" [ "subject", box "terminal:term-a"; "author", box author; "order", box 1.0; "size", box 132.0 ]
 
-            let decoded = SyncedStateSync.ofDoc doc |> Result.mapError (sprintf "%A") |> expect
+            let decoded = SyncedStateSync.ofDoc doc
             match decoded.Pending |> Map.tryFind (QueueId.create "q-term" |> expect) with
             | Some act -> Expect.isNone act.Size "a number is not a width anybody claimed"
             | None -> failwith "the command was dropped over its width"
@@ -341,7 +341,7 @@ let private codecTests =
             let messageId = MessageId.create "msg-1" |> expect
             p.Dispatch (user (EventsPageMsg (said messageId "ship it")))
             p.Dispatch (user (ToggleChapterMsg messageId))
-            let decoded = SyncedStateSync.ofDoc doc |> Result.mapError (sprintf "%A") |> expect
+            let decoded = SyncedStateSync.ofDoc doc
             Expect.equal
                 (decoded.Chapters |> Map.tryFind messageId |> Option.map (fun mark -> mark.Opens))
                 (Some true)
@@ -357,7 +357,7 @@ let private codecTests =
             p.Dispatch (user (EventsPageMsg (said messageId "ship it")))
             p.Dispatch (user (ToggleChapterMsg messageId))
             p.Dispatch (user (ToggleChapterMsg messageId))
-            let decoded = SyncedStateSync.ofDoc doc |> Result.mapError (sprintf "%A") |> expect
+            let decoded = SyncedStateSync.ofDoc doc
             Expect.equal
                 (decoded.Chapters |> Map.tryFind messageId |> Option.map (fun mark -> mark.Opens))
                 (Some false)
@@ -375,7 +375,7 @@ let private codecTests =
             p.Dispatch (user (ToggleChapterMsg messageId))
             let seeded = (p.Model ()).Synced.Chapters |> Map.find messageId
             p.Dispatch (user (EditChapterNameMsg (messageId, Text.edit "Where it was settled" seeded.Name)))
-            let decoded = SyncedStateSync.ofDoc doc |> Result.mapError (sprintf "%A") |> expect
+            let decoded = SyncedStateSync.ofDoc doc
             Expect.equal
                 (decoded.Chapters |> Map.tryFind messageId |> Option.map (fun mark -> Text.toString mark.Name))
                 (Some "Where it was settled")
@@ -445,7 +445,7 @@ let private codecTests =
                 (SyncedStateSync.nameSubject doc (NamingSubject.Chapter messageId) "ship it" "Where it was settled")
                 "Where it was settled"
                 "it still wore the guess, so the words went in and now stand"
-            let decoded = SyncedStateSync.ofDoc doc |> Result.mapError (sprintf "%A") |> expect
+            let decoded = SyncedStateSync.ofDoc doc
             Expect.equal
                 (decoded.Chapters |> Map.tryFind messageId |> Option.map (fun mark -> Text.toString mark.Name))
                 (Some "Where it was settled")
@@ -507,7 +507,7 @@ let private codecTests =
                 (SyncedStateSync.nameSubject doc (NamingSubject.Chapter messageId) "ship it" "Where it was settled")
                 "Mine"
                 "it answers what stands, which is theirs — and is what the session records"
-            let decoded = SyncedStateSync.ofDoc doc |> Result.mapError (sprintf "%A") |> expect
+            let decoded = SyncedStateSync.ofDoc doc
             Expect.equal
                 (decoded.Chapters |> Map.tryFind messageId |> Option.map (fun mark -> Text.toString mark.Name))
                 (Some "Mine")
@@ -522,7 +522,7 @@ let private codecTests =
             let messageId = MessageId.create "msg-1" |> expect
             p.Dispatch (user (EventsPageMsg (said messageId "ship it")))
             p.Dispatch (user (ToggleChapterMsg messageId))
-            let decoded = SyncedStateSync.ofDoc doc |> Result.mapError (sprintf "%A") |> expect
+            let decoded = SyncedStateSync.ofDoc doc
             Expect.equal decoded.Chapters (p.Model ()).Synced.Chapters "the doc decodes back to exactly what was marked"
 
         testCase "the collaborative title round-trips through the codec" <| fun () ->
@@ -531,7 +531,7 @@ let private codecTests =
             let p = Harness.run (Client.makeProgram doc (ClientModel.init (peer "ada" "Ada")))
             p.Dispatch (user (EditTitleMsg (Text.insert 0 "Launch plan" (p.Model ()).Synced.Title)))
 
-            let decoded = SyncedStateSync.ofDoc doc |> Result.mapError (sprintf "%A") |> expect
+            let decoded = SyncedStateSync.ofDoc doc
             Expect.equal decoded (p.Model ()).Synced "the doc decodes back to exactly the model's synced state"
             Expect.equal (Text.toString decoded.Title) "Launch plan" "the title crossed the boundary"
             Expect.isTrue (doc.share.has "title") "the title anchors to a named text root"

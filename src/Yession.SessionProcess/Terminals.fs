@@ -2822,10 +2822,7 @@ module TerminalScheduler =
         let mutable consumed = initialConsumed
 
         let rec drain () =
-            match SyncedStateSync.ofDoc doc with
-            | Error _ -> ()
-            | Ok synced ->
-
+            let synced = SyncedStateSync.ofDoc doc
             if Map.isEmpty synced.Pending then () else
 
                 let plan =
@@ -2877,19 +2874,17 @@ module TerminalScheduler =
                         })
 
         let reclaimIdleLeases () =
-            match SyncedStateSync.ofDoc doc with
-            | Error _ -> ()
-            | Ok synced ->
-                let holdOf terminal =
-                    TerminalQueueDrain.holdOf
-                        consumed
-                        (terminals.Busy ())
-                        (terminals.Leased ())
-                        (terminals.Lost ())
-                        terminals.IsOpen
-                        synced.Pending
-                        terminal
-                Async.StartImmediate (terminals.ReclaimIdle holdOf)
+            let synced = SyncedStateSync.ofDoc doc
+            let holdOf terminal =
+                TerminalQueueDrain.holdOf
+                    consumed
+                    (terminals.Busy ())
+                    (terminals.Leased ())
+                    (terminals.Lost ())
+                    terminals.IsOpen
+                    synced.Pending
+                    terminal
+            Async.StartImmediate (terminals.ReclaimIdle holdOf)
 
         { Drain = drain; ReclaimIdleLeases = reclaimIdleLeases }
 
@@ -2969,7 +2964,7 @@ module TerminalCommands =
         (doc: Yjs.Y.Doc)
         (terminals: SessionTerminals.SessionTerminals)
         (projection: unit -> Projection)
-        (syncedOf: unit -> Result<SyncedSessionState, Ylmish.Codec.Error list>)
+        (syncedOf: unit -> SyncedSessionState)
         (readOutput: TerminalId -> int -> int option -> string)
         /// The session's agent terminal, opened on first use with `reason` as its TITLE — so
         /// the strip says "running the test suite" rather than "agent", which is what the
@@ -3000,30 +2995,25 @@ module TerminalCommands =
 
         let observe (terminal: TerminalId) (handle: QueueId) : TerminalCommandWait.Observation =
             let block = blockFor handle |> Option.map snd
-            match syncedOf () with
-            | Error _ ->
-                // A doc that will not decode says nothing about this request. Keep waiting on
-                // whatever the log shows rather than declaring the entry gone.
-                { Block = block; InQueue = true; IsHead = false; Hold = None; Interactive = terminals.Interactive terminal }
-            | Ok synced ->
-                let consumed = consumed ()
-                let head =
-                    TerminalQueueOrder.sortedFor terminal synced.Pending
-                    |> List.filter (fun e -> not (Set.contains (QueueId.value e.QueueId) consumed))
-                    |> List.tryHead
-                { Block = block
-                  InQueue = Map.containsKey handle synced.Pending
-                  IsHead = (head |> Option.map (fun e -> e.QueueId)) = Some handle
-                  Hold =
-                    TerminalQueueDrain.holdOf
-                        consumed
-                        (terminals.Busy ())
-                        (terminals.Leased ())
-                        (terminals.Lost ())
-                        terminals.IsOpen
-                        synced.Pending
-                        terminal
-                  Interactive = terminals.Interactive terminal }
+            let synced = syncedOf ()
+            let consumed = consumed ()
+            let head =
+                TerminalQueueOrder.sortedFor terminal synced.Pending
+                |> List.filter (fun e -> not (Set.contains (QueueId.value e.QueueId) consumed))
+                |> List.tryHead
+            { Block = block
+              InQueue = Map.containsKey handle synced.Pending
+              IsHead = (head |> Option.map (fun e -> e.QueueId)) = Some handle
+              Hold =
+                TerminalQueueDrain.holdOf
+                    consumed
+                    (terminals.Busy ())
+                    (terminals.Leased ())
+                    (terminals.Lost ())
+                    terminals.IsOpen
+                    synced.Pending
+                    terminal
+              Interactive = terminals.Interactive terminal }
 
         let outcomeOf (terminal: TerminalId) (handle: QueueId) (status: TerminalCommandStatus) =
             let block = blockFor handle |> Option.map snd
@@ -3088,10 +3078,10 @@ module TerminalCommands =
                             | Some (InSandbox sandbox) -> return! agentTerminal sandbox request.Command
                             | None -> return! agentTerminal SandboxRef.defaultRef request.Command
                         }
-                    match terminal, syncedOf () with
-                    | Error reason, _ -> return Error reason
-                    | Ok _, Error _ -> return Error "the session's collaborative state could not be read"
-                    | Ok terminal, Ok synced ->
+                    match terminal with
+                    | Error reason -> return Error reason
+                    | Ok terminal ->
+                        let synced = syncedOf ()
                         let handle = mintQueueId ()
                         // Visible to every peer the instant this lands — before any waiting —
                         // because the point of the one door is that what the agent is about to
@@ -3131,9 +3121,7 @@ module TerminalCommands =
                     match blockFor handle with
                     | Some (terminal, _) -> Some terminal
                     | None ->
-                        match syncedOf () with
-                        | Ok synced -> synced.Pending |> Map.tryFind handle |> Option.map (fun act -> act.Terminal)
-                        | Error _ -> None
+                        (syncedOf ()).Pending |> Map.tryFind handle |> Option.map (fun act -> act.Terminal)
                 match terminal with
                 | None -> return Error "no such command"
                 // Resumed under the same two-phase policy, which is what makes a late approval

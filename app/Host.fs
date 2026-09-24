@@ -825,6 +825,10 @@ let startFull
         //
         // Drafts and presence are deliberately NOT inputs: they belong to a connected
         // peer, so they are already covered by the first condition.
+        let hasQueuedWork () =
+            let synced = SyncedStateSync.ofDoc doc
+            not (Map.isEmpty synced.Queue) || not (Map.isEmpty synced.Pending)
+
         let isBusy () =
             not (Map.isEmpty connections)
             || Option.isSome (scheduler.RunningTurn ())
@@ -832,12 +836,7 @@ let startFull
             // watching — a long build is exactly the case an outside observer would get
             // wrong, and reaping the session would kill the build.
             || not (Set.isEmpty (terminals.Busy ()))
-            || (match SyncedStateSync.ofDoc doc with
-                | Ok synced -> not (Map.isEmpty synced.Queue) || not (Map.isEmpty synced.Pending)
-                | // A doc that will not decode is a session in trouble, and stopping it
-                  // out from under its owner is the wrong response to that. Hold it busy
-                  // and let something that understands the failure deal with it.
-                  Error _ -> true)
+            || hasQueuedWork ()
 
         // Transitions go out at once, so idleness starts counting the moment the last peer
         // leaves and a returning one cancels the countdown without waiting for a tick. The
@@ -869,13 +868,10 @@ let startFull
         | Some report ->
             let mutable lastReported = ""
             DocSync.onAnyUpdate doc (fun () ->
-                match SyncedStateSync.ofDoc doc with
-                | Ok synced ->
-                    let title = (Ylmish.Text.toString synced.Title).Trim ()
-                    if title <> "" && title <> lastReported then
-                        lastReported <- title
-                        Async.StartImmediate (report title)
-                | Error _ -> ())
+                let title = (Ylmish.Text.toString (SyncedStateSync.ofDoc doc).Title).Trim ()
+                if title <> "" && title <> lastReported then
+                    lastReported <- title
+                    Async.StartImmediate (report title))
         | None -> ()
 
         // Manager→Session notifications (the reverse leg of the control RPC): subscribe
