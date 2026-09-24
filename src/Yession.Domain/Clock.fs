@@ -44,3 +44,11 @@ module Clock =
                     if not stopped then beat ()
             })
         fun () -> stopped <- true
+
+    /// `every`, with its first beat NOW rather than an interval from now — for a beat that
+    /// catches something up, where the first one is the one that matters most. A watch
+    /// resumed at boot holds only what the log last said; waiting a whole interval to look
+    /// again is an interval of saying nothing about a world that may have moved for hours.
+    let everyFromNow (clock: Clock) (interval: TimeSpan) (beat: unit -> unit) : unit -> unit =
+        beat ()
+        every clock interval beat

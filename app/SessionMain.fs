@@ -1421,7 +1421,9 @@ Async.StartImmediate (
                 | None -> ())
         // ...and keep asking, because a delivery is an accelerator and not a guarantee:
         // where no hook is configured, or one is missed, the interval is the whole answer.
-        Clock.every clock PrWatches.TickInterval (fun () ->
+        // The first look is at once: after a stop it is the catch-up — every watch compared
+        // against what the log last recorded — and there is nothing to wait an interval for.
+        Clock.everyFromNow clock PrWatches.TickInterval (fun () ->
             Async.StartImmediate (
                 async {
                     let! moved = prWatchers.Poll ()

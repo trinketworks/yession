@@ -4414,8 +4414,30 @@ let private prListingTests =
             Expect.isFalse reached "and nothing was asked" }
     ]
 
+
+/// The beat a catch-up hangs off: its first look is the one that matters most.
+let private clockTests =
+    testList "Beats on the session's clock" [
+        testCase "a beat from now beats at once, and then at every interval" <| fun () ->
+            let clock = virtualClock (DateTimeOffset (2026, 9, 25, 0, 0, 0, TimeSpan.Zero))
+            let mutable beats = 0
+            let stop = Clock.everyFromNow clock.Clock (TimeSpan.FromSeconds 15.0) (fun () -> beats <- beats + 1)
+            Expect.equal beats 1 "before the clock has moved at all"
+            clock.Advance (TimeSpan.FromSeconds 15.0)
+            Expect.equal beats 2 "and again an interval later"
+            stop ()
+
+        testCase "a plain beat waits its first interval" <| fun () ->
+            let clock = virtualClock (DateTimeOffset (2026, 9, 25, 0, 0, 0, TimeSpan.Zero))
+            let mutable beats = 0
+            let stop = Clock.every clock.Clock (TimeSpan.FromSeconds 15.0) (fun () -> beats <- beats + 1)
+            Expect.equal beats 0 "nothing until the interval has passed"
+            stop ()
+    ]
+
 let tests =
     testList "Connections" [
+        clockTests
         panelTests
         panelFoldTests
         panelWireTests
