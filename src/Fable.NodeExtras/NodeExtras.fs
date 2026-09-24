@@ -1014,6 +1014,19 @@ module HttpClient =
         let options = createObj [ "method" ==> ``method``; "headers" ==> createObj headers ]
         if url.StartsWith "https:" then overHttps url options onResponse else overHttp url options onResponse
 
+// --- The environment's outbound proxy ----------------------------------------------------------
+
+[<AutoOpen>]
+module Proxies =
+
+    /// `http.setGlobalProxyFromEnv()` (Node 24.14): from here on, `fetch` and
+    /// `http(s).request` go through the proxy `process.env` names (`HTTPS_PROXY`,
+    /// `HTTP_PROXY`, past whatever `NO_PROXY` exempts), read at the moment of the call.
+    /// Process-wide, because Node's global dispatcher is. Answers the function that puts the
+    /// previous dispatcher back.
+    [<Import("setGlobalProxyFromEnv", "node:http")>]
+    let setGlobalProxyFromEnv () : (unit -> unit) = jsNative
+
 // --- A port nothing else is on -----------------------------------------------------------------
 
 /// A `node:net` server as a PROBE uses one: bound to port 0, asked what the OS chose, and

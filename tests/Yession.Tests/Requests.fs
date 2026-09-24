@@ -241,3 +241,40 @@ let tests =
     testList
         "Requests"
         [ reasonTests; mcpTests; claudeTests; githubRequestTests; githubStatusTests; signallingTests ]
+
+// --- through the proxy the environment names ----------------------------------------------
+
+/// A stand-in proxy: it counts the connections it is asked to carry and refuses each one, so
+/// nothing leaves this machine. The host it is asked for is `.invalid`, which no resolver
+/// answers — a request that went direct instead fails at DNS and is never counted.
+let private proxyTests =
+    testList "a request through the environment's proxy" [
+
+        testCaseAsync "goes through the proxy HTTPS_PROXY names" <|
+            async {
+                let carried = ref 0
+                let proxy =
+                    Fable.NodeExtras.NetServers.createNetServerAnswering (fun connection ->
+                        carried.Value <- carried.Value + 1
+                        connection.close "HTTP/1.1 502 Bad Gateway\r\n\r\n")
+                do! Async.FromContinuations (fun (listening, _, _) -> proxy.listen (0, "127.0.0.1", listening))
+                let at = sprintf "http://127.0.0.1:%d" (Fable.NodeExtras.NetServers.boundPort proxy)
+                try
+                    let! _ =
+                        Support.withEnv
+                            [ "HTTPS_PROXY", Some at; "https_proxy", Some at; "NO_PROXY", None; "no_proxy", None ]
+                            (fun () ->
+                                async {
+                                    Http.followEnvironmentProxy ()
+                                    return! Http.text "https://proxy-probe.invalid/" [ Http.deadline 5000.0 ]
+                                })
+                    ()
+                finally
+                    // The environment is back as it was by now; so is what requests follow.
+                    Http.followEnvironmentProxy ()
+                    proxy.close ()
+                Expect.equal carried.Value 1 "the request was carried by the proxy, not sent direct"
+            }
+    ]
+
+let portsTests = testList "Requests over a socket" [ proxyTests ]

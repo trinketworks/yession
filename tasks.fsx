@@ -530,7 +530,7 @@ let private packageJson (version: string) =
 %s
   },
   "files": ["bin/", "manager.js", "session.js", "assets/", "README.md"],
-  "engines": { "node": ">=24" },
+  "engines": { "node": ">=24.14" },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "%s",
     "@anthropic-ai/sandbox-runtime": "%s",
