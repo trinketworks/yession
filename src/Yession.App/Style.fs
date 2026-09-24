@@ -1224,7 +1224,7 @@ module Style =
     /// says things like `/home/user/.yession/sessions/AAZFRYD.../repos`, so a token wider than
     /// the column is the ordinary case, not the pathological one. `overflow-wrap` inherits, so
     /// the rule is stated once for everything the timeline will ever hold.
-    /// The leading gap is the first child's MARGIN, not this box's padding, and that is load
+    /// The leading gap is IN FLOW, not this box's padding, and that is load
     /// bearing rather than a spelling preference. A sticky child's `top-0` pins it to this
     /// scroller's padding box — so a top padding here is a strip the pinned author line can
     /// never reach, and scrolled text rides up through it above the name. Carried in flow
@@ -1238,9 +1238,22 @@ module Style =
     /// at the column's edge, which is a defect a reader can see and name; sliding the whole
     /// conversation under the header is one they cannot. It hides nothing from the test that
     /// pins this: `scrollWidth` still counts what is clipped.
+    ///
+    /// BOTTOM-ALIGNED while the conversation is shorter than the column: the newest thing said
+    /// sits by the composer it was typed into, and the empty space goes above the first
+    /// message rather than between the last one and the composer (three short messages on a
+    /// 1440x900 screen used to end 598px above it). What takes the space is a `::before` that GROWS —
+    /// a flex item, so the column's own gap follows it and IS the leading gap, and zero high
+    /// once the conversation fills the column, so a long one scrolls from its start exactly
+    /// as before. Not `justify-end`: overflow pushed past the START edge of a scroller is
+    /// unreachable in some engines, so a long conversation would lose its top. The first
+    /// child's own margin goes to zero so nothing stacks on top of that gap (a chapter rule
+    /// opening the conversation brings a margin of its own); on a phone the gap is 20 and the
+    /// leading gap 16, hence the `-mb-1`.
     let timeline =
-        "flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-8 pb-6 flex flex-col gap-6 [&>*:first-child]:mt-6 "
-        + "max-md:px-4 max-md:pb-4 max-md:gap-5 max-md:[&>*:first-child]:mt-4 break-words"
+        "flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-8 pb-6 flex flex-col gap-6 "
+        + "before:grow [&>*:first-child]:mt-0 "
+        + "max-md:px-4 max-md:pb-4 max-md:gap-5 max-md:before:-mb-1 break-words"
 
     /// The box `timeline` floats its "jump to latest" over — mirrors `terminalReplayRegion`'s
     /// reason for existing: `timeline` IS the scroller, so an `absolute` child of it would
@@ -1333,7 +1346,7 @@ module Style =
     /// box at all.
     ///
     /// What it was reaching for is real, and `timeline` now holds it: the column's leading gap
-    /// is the first child's margin rather than the scroller's padding, so `top-0` pins this
+    /// is carried in flow rather than as the scroller's padding, so `top-0` pins this
     /// line flush to the scrollport's own top edge and there is no strip left above the name
     /// for scrolled text to show through. The rule that fixes it lives with the box that
     /// creates it, which is why it is stated there and not compensated for here.
