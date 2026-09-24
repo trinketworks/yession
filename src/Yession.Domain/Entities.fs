@@ -32,9 +32,15 @@ type EntityRef =
     | Sandbox of SandboxRef
     /// A pull request, `owner/repo#12`.
     | Pr of PrRef
-    /// One version of one artifact — a thing the session can SHOW, and the first reference that
-    /// leads somewhere inside the session rather than out of it.
-    | Artifact of ArtifactRef
+    /// A file under the session's content root — a thing the session can SHOW, and the first
+    /// reference that leads somewhere INSIDE the session rather than out of it.
+    ///
+    /// A content path and not an `ArtifactRef`, because the two addresses a reader meets are
+    /// both paths and only one of them is an artifact version: a fold names the pinned
+    /// `artifacts/chart.png/0003-7f2a91`, a message body links the resolving
+    /// `artifacts/chart.png`, and `repos/octo/hello/README.md` is the same chip the day
+    /// something serves it. What each is CALLED is read back off the path (`Entity.name`).
+    | Content of ContentRef
 
 module EntityRef =
 
@@ -55,11 +61,11 @@ module EntityRef =
         | EntityRef.Sandbox sandbox -> SandboxRef.render sandbox
         // `owner/repo#12`, as the gates, queries and notes have always spelled one.
         | EntityRef.Pr pr -> PrRef.render pr
-        // The pinned `file:///artifacts/chart.png/0003-7f2a91`: the version, not the name, so an
-        // agent quoting this back has said which bytes — and the same spelling a message body
-        // links to, which is what lets a link in prose and a reference in a fold draw as one
-        // chip.
-        | EntityRef.Artifact artifact -> ArtifactRef.url artifact
+        // The `file:///` URL, which for an artifact a fold names is the PINNED version rather
+        // than the name — so an agent quoting this back has said which bytes. It is the same
+        // spelling a message body links to, which is what lets a link in prose and a reference
+        // in a fold draw as one chip.
+        | EntityRef.Content ref -> ContentRef.url ref
 
 /// One piece of a sentence: words, or a thing the words are about.
 [<RequireQualifiedAccess>]

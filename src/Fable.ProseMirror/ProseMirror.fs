@@ -52,8 +52,28 @@ module ProseMirror =
 
     [<Import("schema", "prosemirror-markdown")>]
     let schema : Schema = jsNative
+
     [<Import("defaultMarkdownParser", "prosemirror-markdown")>]
-    let mdParser : MarkdownParser = jsNative
+    let private defaultMdParser : MarkdownParser = jsNative
+
+    /// markdown-it refuses a link by SCHEME before anything sees it: `javascript:`,
+    /// `vbscript:`, `data:` and `file:` never become links at all — they stay literal text.
+    /// Three of those are refused because a page that followed one would run somebody else's
+    /// script. `file:` is refused because on the open web it names the reader's own disk.
+    ///
+    /// Here it does not. `file:///` is how this product spells a reference to something the
+    /// SESSION holds, and a renderer decides what one means: a path it recognises draws as a
+    /// reference, and a path it does not is refused there and shown as words (`RichText`). So
+    /// the scheme is admitted to the parse and nothing else is — the other three stay refused,
+    /// and no `file:` URL becomes an href to a disk on the way through.
+    ///
+    /// Applied to the parser rather than at a call site because every parse wants the same
+    /// answer: the composer that accepts a pasted body and the timeline that renders one have
+    /// to agree, or a link survives being typed and vanishes being read.
+    [<Emit("(p => { const inner = p.tokenizer.validateLink.bind(p.tokenizer); p.tokenizer.validateLink = url => inner(url) || /^file:\\/\\/\\//i.test(url.trim()); return p })($0)")>]
+    let private admittingContentLinks (parser: MarkdownParser) : MarkdownParser = jsNative
+
+    let mdParser : MarkdownParser = admittingContentLinks defaultMdParser
 
     /// `schema.nodes[name]` / `schema.marks[name]`: the type under that name, and nothing when
     /// the schema declares none — which the option says, where a JS truthiness test used to be

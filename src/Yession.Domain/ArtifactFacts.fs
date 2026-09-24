@@ -37,7 +37,7 @@ module ArtifactShared =
     /// `file:///` address it can quote straight back into a tool.
     let phrase (a: ArtifactShared) : Phrase =
         [ Segment.Text (verb a + " artifact ")
-          Segment.Ref (EntityRef.Artifact a.Ref)
+          Segment.Ref (EntityRef.Content (ArtifactRef.content a.Ref))
           Segment.Text (sprintf " (%s)" (ContentSize.render a.Bytes)) ]
 
     /// What the headline holds back: which version this is, and only when it is not the first —
