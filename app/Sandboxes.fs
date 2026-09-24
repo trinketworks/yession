@@ -806,8 +806,21 @@ let policyFor
                     | Some existing -> String.concat ":" directories + ":" + existing
                 Map.add "PATH" combined grantedEnv
         match backend with
-        | HostBackend
-        | SrtBackend -> mergeEnv (mergeEnv inherited fromGrants) resolved
+        | HostBackend -> mergeEnv (mergeEnv inherited fromGrants) resolved
+        // No credential helper for git under srt, and APPENDED after the spec rather than
+        // under it, because this is confinement and not a default. srt routes egress through
+        // its own proxy and names it with a credential in the URL
+        // (`HTTP_PROXY=http://<user>:<token>@localhost:<port>`), and git hands a proxy
+        // credential that worked to every configured helper to STORE — so each push and
+        // fetch offered srt's proxy token to `osxkeychain`, which both the nix git and
+        // Apple's bake in and neither `GIT_CONFIG_SYSTEM` nor `GIT_CONFIG_GLOBAL` reaches.
+        // Seatbelt refused the keychain, and git printed "fatal: failed to store: -60008"
+        // over every successful fetch; with the keychain reachable, the token would have
+        // landed in the operator's login keychain. A sandbox's git has no use for a helper
+        // anyway: github.com is reached through the gateway, which carries the credential
+        // itself. An empty value is git's own spelling for "forget the helpers configured
+        // before this", the same entry `Repos.hardenedEnv` gives the session's own git.
+        | SrtBackend -> mergeEnv (mergeEnv inherited fromGrants) resolved |> withGitConfig [ "credential.helper", "" ]
         | DockerBackend -> mergeEnv (mergeEnv dockerBaseline fromGrants) resolved
     Ok
         { ReadPaths = grantedReads
