@@ -40,7 +40,10 @@ type PrFields =
       Title : string
       HeadSha : string
       Mergeable : bool option
-      Draft : bool }
+      Draft : bool
+      /// When GitHub says it merged and closed — its own clock, dating what a look finds.
+      MergedAt : DateTimeOffset option
+      ClosedAt : DateTimeOffset option }
 
 /// What `GET /repos/{o}/{r}/pulls/{n}` says, reduced to what a snapshot carries.
 ///
@@ -60,7 +63,9 @@ let prDecoder : Decoder<PrFields> =
           // Null until GitHub has computed it, which it does lazily. Carried for display
           // and never for a transition — see `PrSnapshot.Mergeable`.
           Mergeable = get.Optional.Field "mergeable" (Decode.option Decode.bool) |> Option.flatten
-          Draft = get.Optional.Field "draft" Decode.bool |> Option.defaultValue false })
+          Draft = get.Optional.Field "draft" Decode.bool |> Option.defaultValue false
+          MergedAt = get.Optional.Field "merged_at" (Decode.option Codec.timestamp.Decode) |> Option.flatten
+          ClosedAt = get.Optional.Field "closed_at" (Decode.option Codec.timestamp.Decode) |> Option.flatten })
 
 /// The same resource, read for where the pull request comes FROM: `head.repo.full_name`
 /// rather than the repository the link named, because a pull request from a fork has its
@@ -84,6 +89,18 @@ let checkRunsDecoder : Decoder<(string * string option) list> =
             Decode.object (fun get ->
                 get.Required.Field "status" Decode.string,
                 get.Optional.Field "conclusion" (Decode.option Decode.string) |> Option.flatten)))
+
+/// When a commit's checks last reached a verdict: the latest `completed_at`, once every run
+/// has one. `None` while any is still running, or for a commit with no runs at all — there
+/// is no verdict to date. Read beside `checkRunsDecoder` rather than folded into it, because
+/// the rollup is a verdict and this only ever dates one.
+let checksSettledDecoder : Decoder<DateTimeOffset option> =
+    Decode.field
+        "check_runs"
+        (Decode.list (Decode.object (fun get -> get.Optional.Field "completed_at" (Decode.option Codec.timestamp.Decode) |> Option.flatten)))
+    |> Decode.map (fun completions ->
+        if List.isEmpty completions || completions |> List.exists Option.isNone then None
+        else completions |> List.choose id |> List.max |> Some)
 
 /// Fold every check run on a commit into the one word a watcher acts on.
 ///
@@ -406,7 +423,9 @@ let fetchOver (apiBase: string) (spending: Spending) : FetchPr =
                                   Title = s.Title
                                   HeadSha = s.HeadSha
                                   Mergeable = s.Mergeable
-                                  Draft = s.Draft }))
+                                  Draft = s.Draft
+                                  MergedAt = s.Times.MergedAt
+                                  ClosedAt = s.Times.ClosedAt }))
                     elif succeeded prReply then
                         Decode.fromString prDecoder prReply.Body
                         |> Result.map Some
@@ -488,7 +507,21 @@ let fetchOver (apiBase: string) (spending: Spending) : FetchPr =
                               Mergeable = fields.Mergeable
                               Review = readiness.Review
                               Behind = behind
-                              Draft = fields.Draft }
+                              Draft = fields.Draft
+                              Times =
+                                { MergedAt = fields.MergedAt
+                                  ClosedAt = fields.ClosedAt
+                                  // The checks rule again: what this look could not read, it
+                                  // keeps from the last one on the same head.
+                                  ChecksSettledAt =
+                                    if succeeded checksReply then
+                                        match Decode.fromString checksSettledDecoder checksReply.Body with
+                                        | Ok settled -> settled
+                                        | Error _ -> None
+                                    else
+                                        match last with
+                                        | Some s when s.HeadSha = fields.HeadSha -> s.Times.ChecksSettledAt
+                                        | _ -> None } }
                         // An ETag is replaced only by a half that actually answered with one.
                         // A 304 carries back the ETag we sent, so keeping the old one says the
                         // same thing without depending on the provider echoing it.

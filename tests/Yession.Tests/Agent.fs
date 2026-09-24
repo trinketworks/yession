@@ -966,7 +966,7 @@ let private prSnapshot : PrSnapshot =
       Mergeable = None
       Review = None
       Behind = false
-      Draft = false }
+      Draft = false; Times = PrTimes.none }
 
 let private watchedBy (authority: Authority) =
     PrWatched.create (MessageId.create "w1" |> expect) authority watchedPr prSnapshot
@@ -982,7 +982,7 @@ let private prTransitioned transition =
           Transition = transition
           State = PrMerged
           Checks = ChecksGreen
-          Watcher = prWatcher }
+          Watcher = prWatcher; OccurredAt = None }
 
 let private prUnwatched =
     SessionEvent.PrUnwatched
