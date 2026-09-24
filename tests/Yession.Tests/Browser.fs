@@ -2574,6 +2574,37 @@ let editorTests =
                 Expect.isTrue (renders >= 10) (sprintf "records landed while the scroll ran — %d renders" renders)
                 return ()
             }
+        // A conversation shorter than its column ends where the next message is typed. Top
+        // aligned, three messages on a 1440x900 screen ended 598px above the composer, with the
+        // empty space between the newest line and the field answering it. Only a laid-out
+        // page knows where the last item landed; the markup is identical either way.
+        //
+        // The shortest conversation the harness draws (the scroll scenario's, with no filler)
+        // on a tall desktop screen, which leaves it a few hundred pixels short of the column.
+        // That it fits is asserted, because a conversation that fills the column ends at its
+        // foot however it is aligned, and the case would pass for nothing.
+        editorCaseIn 1440 1200 "a short conversation ends by the composer, not at the top of the column" <| fun page ->
+            async {
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-conversation] [data-message-id]")
+                do! awaitU (page.EvaluateAsync "() => { window.__benchScrollBegin(0, 0, 16, true); window.__benchScrollEnd() }")
+                let! report =
+                    await (page.EvaluateAsync<string>
+                            """() => {
+                                 const conversation = document.querySelector('#shell [data-conversation]')
+                                 const last = conversation.lastElementChild.getBoundingClientRect()
+                                 const foot = conversation.getBoundingClientRect().bottom
+                                   - parseFloat(getComputedStyle(conversation).paddingBottom)
+                                 return JSON.stringify({
+                                   fits: conversation.scrollHeight <= conversation.clientHeight,
+                                   gap: foot - last.bottom })
+                               }""")
+                use doc = System.Text.Json.JsonDocument.Parse report
+                let fits = doc.RootElement.GetProperty("fits").GetBoolean ()
+                let gap = doc.RootElement.GetProperty("gap").GetDouble ()
+                Expect.isTrue fits "the conversation is shorter than its column, so where it ends is a choice"
+                Expect.isTrue (abs gap < 1.0) (sprintf "the last item ends %.0fpx above the column's foot" gap)
+                return ()
+            }
         // The name on a rule is an INPUT at rest, which is a promise no markup test can
         // settle: a field that renders but never takes a keystroke, or one whose value the
         // next render puts back, reads in the DOM exactly like one that works. So this types
