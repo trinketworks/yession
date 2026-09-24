@@ -1756,6 +1756,24 @@ let editorTests =
                 do! waitFor "the particulars to hide once folded" page (visibility + " === 'hidden'")
             }
 
+        // The arrow used to be the only thing that toggled — a square a thumb can miss on a
+        // phone, on a line that is otherwise most title. A press anywhere on that line reaches
+        // the same fold now (`View.foldClickRow`), and this presses the TITLE, deliberately not
+        // `[data-fold]`, to prove the row itself is the control rather than the arrow alone.
+        editorCase "tapping the row, not only the arrow, unfolds it and folds it back" <| fun page ->
+            async {
+                do! awaitU (page.EvaluateAsync "() => window.__acts()")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-act-note] [data-fold]")
+                let visibility = "getComputedStyle(document.querySelector('#shell [data-act-note] [data-fold-body]')).visibility"
+                do! waitFor "the particulars to start hidden" page (visibility + " === 'hidden'")
+                let clickTitle =
+                    "() => document.querySelector('#shell [data-act-note] [data-fold]').nextElementSibling.click()"
+                do! awaitU (page.EvaluateAsync clickTitle)
+                do! waitFor "a press on the title unfolds it" page (visibility + " === 'visible'")
+                do! awaitU (page.EvaluateAsync clickTitle)
+                do! waitFor "and a second press folds it back" page (visibility + " === 'hidden'")
+            }
+
         // Terminal work in the chat, and the pane's tabs (Plan 14, stages 1-2). Host-free,
         // like the editor and the replay beside it: what needs a real browser here is not the
         // Session Process but the DOM swaps — where FOCUS goes when a chip in the chat opens

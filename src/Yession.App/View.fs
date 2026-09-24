@@ -2165,15 +2165,43 @@ module View =
         // One pair of hooks for every fold — `data-fold` on the control and `data-fold-body`
         // on what it opens, each carrying the key, and `data-fold-open` saying which way it
         // is — because a test that walks one fold walks them all.
+        //
+        // The button itself carries no `@click` — `foldClickRow` below is where the toggle
+        // is dispatched, once, on the row a caller wraps it into. A press ON the arrow still
+        // works: a native `click` fires there and bubbles to that one listener the same as a
+        // press anywhere else on the line does. A caller that forgot to wrap it would get an
+        // inert arrow rather than a silently-fine one, which is the point — there is no
+        // second path to the toggle to fall back to.
         let foldArrow (key: FoldKey) (mark: TemplateResult) (label: string) =
             let opened = Set.contains key model.OpenFolds
             html $"""
                 <button type="button" class="{Style.fold}"
                         aria-expanded="{if opened then "true" else "false"}" aria-controls="fold-{FoldKey.value key}"
-                        aria-label="{label}" data-fold="{FoldKey.value key}"
-                        @click={Ev(fun _ -> dispatch (ToggleFoldMsg key))}>
+                        aria-label="{label}" data-fold="{FoldKey.value key}">
                   <span class="{if opened then Style.foldMarkOpen else Style.foldMark}">{mark}</span>
                 </button>"""
+        // The row the arrow rides in, made ONE control: a press anywhere on it toggles the
+        // same fold the arrow alone used to — the arrow is a square a thumb can miss, the
+        // title beside it is most of the line, and the design already agreed they were one
+        // thing (`foldArrow`'s doc). `display:contents` (`Style.foldClick`) is why the grid
+        // (`Style.foldRow`) still lands the arrow and the title on their own columns: the
+        // wrapper does not lay out, it only carries the one listener.
+        //
+        // `wanted` is the caller's escape hatch for the one case a row can hold something
+        // that must keep its OWN click: an act's title can carry a real `<a>` (an entity
+        // reference), and a link inside a button is invalid — this stays a `<div>` for
+        // exactly that reason. Everywhere else passes `alwaysToggle`.
+        let alwaysToggle (_: Browser.Types.Event) = true
+        let notOnLink (e: Browser.Types.Event) =
+            match (e.target :?> Browser.Types.Element).closest "a" with
+            | Some _ -> false
+            | None -> true
+        let foldClickRow (key: FoldKey) (wanted: Browser.Types.Event -> bool) (children: TemplateResult list) =
+            html $"""
+                <div class="{Style.foldClick}" data-fold-row="{FoldKey.value key}"
+                     @click={Ev(fun (e: Browser.Types.Event) -> if wanted e then dispatch (ToggleFoldMsg key))}>
+                  {children}
+                </div>"""
         // What unfolds sits UNDER the title, in the content column — an act's particulars, a
         // call's input and output. `foldBodyWide` is the exception that earns itself: a run's
         // items are fold rows of their own, and spanning both columns is what puts their
@@ -2295,12 +2323,6 @@ module View =
                     html $"""<span class="{Style.causeRail}" aria-hidden="true"></span>"""
                 else
                     Lit.nothing
-            let arrow =
-                match item.Status with
-                | ConversationItemStatus.Running -> Lit.nothing
-                | Complete | Streaming | ConversationItemStatus.Failed ->
-                    foldArrow key Icon.right Dom.Text.details
-            let fold = foldBody key Style.actNoteFoldInner folded
             // Who the act was for, after the deed: "started sandbox dev for Ada". The author
             // alone would name a repo's file or the agent and stop there. Its own box, so a
             // narrow screen puts it on its own line rather than wrapping mid-clause — and
@@ -2309,13 +2331,24 @@ module View =
                 match ConversationItem.forWhom model.Conversation.Items item with
                 | [] -> Lit.nothing
                 | clause -> html $"""<span class="{Style.actNoteFor}" data-act-for>{Entity.phrase model by clause}</span>"""
+            let titleSpan =
+                html $"""<span class="{Style.cls [ Style.foldContent; Style.actNoteText; Style.foldClickable ]}">{Entity.phrase model by title}{whom} {failedMark}</span>"""
+            // A press on the title toggles the same fold the arrow does — `notOnLink`
+            // because the title itself can hold a real `<a>` (an entity reference, e.g. the
+            // repo a `RepoAdded` names): that press means "go there", not "fold this up",
+            // and a `<div>` rather than a `<button>` here is exactly what lets the two
+            // coexist (a link cannot sit inside a button).
+            let header =
+                match item.Status with
+                | ConversationItemStatus.Running -> html $"""{running}{titleSpan}"""
+                | Complete | Streaming | ConversationItemStatus.Failed ->
+                    foldClickRow key notOnLink [ foldArrow key Icon.right Dom.Text.details; titleSpan ]
+            let fold = foldBody key Style.actNoteFoldInner folded
             html $"""
                 <article class="{Style.actNote}" data-message-id="{MessageId.value item.MessageId}" tabindex="-1" data-act-note data-act-status="{messageStatusLabel item.Status}" data-message-author="{Entity.actorToken item.Author}">
                   {itemActions item}
                   {causeLine item}
-                  {running}
-                  {arrow}
-                  <span class="{Style.cls [ Style.foldContent; Style.actNoteText ]}">{Entity.phrase model by title}{whom} {failedMark}</span>
+                  {header}
                   {rail}
                   <div class="{Style.cls [ Style.foldContent; Style.actNoteShown ]}">{shown}</div>
                   {fold}
@@ -2512,15 +2545,19 @@ module View =
                   output ]
             let arrow = foldArrow key Icon.right Dom.Text.details
             let body = foldBody key Style.chatToolIo io
+            let header =
+                foldClickRow key alwaysToggle
+                    [ arrow
+                      html $"""
+                        <div class="{Style.cls [ Style.foldContent; Style.chatToolCall; Style.foldClickable ]}">
+                          {title}
+                          <span class="{Style.chatToolStatus}">{rendered}</span>
+                        </div>""" ]
             html $"""
                 <div class="{container}"
                      data-chat-tool="{ToolUseId.value use'.ToolUseId}"
                      data-chat-tool-status="{status}">
-                  {arrow}
-                  <div class="{Style.cls [ Style.foldContent; Style.chatToolCall ]}">
-                    {title}
-                    <span class="{Style.chatToolStatus}">{rendered}</span>
-                  </div>
+                  {header}
                   {body}
                 </div>"""
         // One call on the rail: "used yession/x", its outcome, and its fold opening straight
@@ -2554,10 +2591,13 @@ module View =
                 | _ -> FoldKey.ToolRun (ToolUseId.create (AgentTurnId.value turn) |> Result.defaultWith failwith)
             let arrow = foldArrow key Icon.rights Dom.Text.details
             let body = foldBodyWide key Style.chatToolRunInner entries
+            let header =
+                foldClickRow key alwaysToggle
+                    [ arrow
+                      html $"""<span class="{Style.cls [ Style.foldContent; Style.chatToolRunText; Style.foldClickable ]}">{WorkRun.summary items}</span>""" ]
             html $"""
                 <div class="{Style.chatToolRun}" data-chat-tool-run="{AgentTurnId.value turn}">
-                  {arrow}
-                  <span class="{Style.cls [ Style.foldContent; Style.chatToolRunText ]}">{WorkRun.summary items}</span>
+                  {header}
                   {body}
                 </div>"""
         // One agent burst: the commands one turn ran, in one row (Plan 20, stage 4). The
@@ -2592,13 +2632,17 @@ module View =
             let body =
                 foldBodyWide key Style.chatTaskCardInner
                     (lines |> List.map (fun ((terminalId, block), _) -> blockChip terminalId block))
+            let header =
+                foldClickRow key alwaysToggle
+                    [ arrow
+                      html $"""
+                        <span class="{Style.cls [ Style.chatTaskSummary; Style.foldClickable ]}">
+                          <span class="{Style.chatChipText}">ran {commands}</span>
+                          {counts}
+                        </span>""" ]
             html $"""
                 <div class="{Style.chatTaskCard}" data-chat-task-card="{AgentTurnId.value turn}">
-                  {arrow}
-                  <span class="{Style.chatTaskSummary}">
-                    <span class="{Style.chatChipText}">ran {commands}</span>
-                    {counts}
-                  </span>
+                  {header}
                   {body}
                 </div>"""
         // Where a chapter opens: a rule across the column carrying what it is called, above
