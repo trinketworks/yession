@@ -481,9 +481,17 @@ module SyncedStateSync =
     /// until something here asks for it by kind, and the structural reader skips what it
     /// cannot place — so without this, a doc that had only ever been written to by a peer
     /// would read as empty.
-    let ofDoc (doc: Yjs.Y.Doc) : Result<SyncedSessionState, Error list> =
+    ///
+    /// Answers the state and not a `Result`, because `decode` cannot refuse: the structural
+    /// read of a doc is always an object, and every field of it goes through `slot`, which
+    /// turns what does not decode into absence. An `Error` here is Ylmish breaking that
+    /// contract, not a peer garbling the doc — the "Sync boundary" cases pin that every
+    /// garbled shape still reads — so it fails loudly rather than reading as empty.
+    let ofDoc (doc: Yjs.Y.Doc) : SyncedSessionState =
         materializeRoots doc
-        Decode.run () decode doc
+        match Decode.run () decode doc with
+        | Ok synced -> synced
+        | Error errors -> failwithf "the session document's decoder refused a doc it is total over: %A" errors
 
     /// The origin tag on the Session Process's own doc writes (the drain's removals),
     /// distinct from the remote-apply origin so they broadcast like any local update.
@@ -507,10 +515,7 @@ module SyncedStateSync =
     /// every doc update. That saved walking roots the same process already walks on the same
     /// update — the title report runs `ofDoc` per update — and it was a second reader of the
     /// chapters with casts of its own, which is the thing that lets two readers disagree.
-    let chaptersOf (doc: Yjs.Y.Doc) : Map<MessageId, ChapterMark> =
-        match ofDoc doc with
-        | Ok synced -> synced.Chapters
-        | Error _ -> Map.empty
+    let chaptersOf (doc: Yjs.Y.Doc) : Map<MessageId, ChapterMark> = (ofDoc doc).Chapters
 
     /// The live text a naming subject is written in, when the doc has one.
     ///

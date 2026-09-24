@@ -27,11 +27,6 @@ let private expect =
     | Ok v -> v
     | Error e -> failwith e
 
-/// The structural doc read, which fails with a codec error list rather than a string.
-let private syncedOf (doc: Y.Doc) : SyncedSessionState =
-    match SyncedStateSync.ofDoc doc with
-    | Ok synced -> synced
-    | Error e -> failwithf "the doc would not decode: %A" e
 
 let private sessionId = SessionId.create "terminal-tests" |> expect
 let private terminalA = TerminalId.create "term-a" |> expect
@@ -2334,7 +2329,7 @@ let private schedulerTests =
                 let startedEvent =
                     events |> List.pick (function SessionEvent.TerminalBlockStarted e -> Some e | _ -> None)
                 Expect.equal startedEvent.Command "echo ok" "the queued command ran"
-                let synced = syncedOf doc
+                let synced = SyncedStateSync.ofDoc doc
                 Expect.isTrue (Map.isEmpty synced.Pending) "and its entry left the doc once consumed"
             }
 
@@ -2362,7 +2357,7 @@ let private schedulerTests =
                 let refused = events |> List.choose (function SessionEvent.TerminalCommandRejected r -> Some r | _ -> None)
                 Expect.equal (refused |> List.map (fun r -> r.Command, r.Reason)) [ "echo late", Some "the terminal was closed before it ran" ] "refused, and the record says why"
                 Expect.isEmpty (events |> List.choose (function SessionEvent.TerminalBlockStarted e -> Some e | _ -> None)) "nothing ran"
-                Expect.isTrue (Map.isEmpty (syncedOf doc).Pending) "and the entry left the doc"
+                Expect.isTrue (Map.isEmpty (SyncedStateSync.ofDoc doc).Pending) "and the entry left the doc"
             }
 
         testCaseAsync "the agent's command runs the moment it drains — nothing parks" <|
@@ -2381,7 +2376,7 @@ let private schedulerTests =
                 scheduler.Drain ()
                 do! Async.Sleep 20
                 Expect.equal (List.length (List.ofSeq spawned)) 1 "it ran, with nobody asked"
-                Expect.isTrue (Map.isEmpty (syncedOf doc).Pending) "and nothing is left parked"
+                Expect.isTrue (Map.isEmpty (SyncedStateSync.ofDoc doc).Pending) "and nothing is left parked"
             }
 
         testCaseAsync "a rejecting classifier records the refusal and the queue advances" <|
@@ -2417,7 +2412,7 @@ let private schedulerTests =
                 let started =
                     events |> List.pick (function SessionEvent.TerminalBlockStarted e -> Some e | _ -> None)
                 Expect.equal started.Command "echo ok" "and the entry behind it ran"
-                Expect.isTrue (Map.isEmpty (syncedOf doc).Pending) "nothing is left parked"
+                Expect.isTrue (Map.isEmpty (SyncedStateSync.ofDoc doc).Pending) "nothing is left parked"
             }
 
         testCaseAsync "the classifier reads the text as it stands at the drain, and who wrote it" <|
@@ -2469,7 +2464,7 @@ let private schedulerTests =
                 scheduler.Drain ()
                 do! Async.Sleep 20
                 Expect.isEmpty (List.ofSeq spawned) "it does not run a second time"
-                let synced = syncedOf doc
+                let synced = SyncedStateSync.ofDoc doc
                 Expect.isTrue (Map.isEmpty synced.Pending) "and the leftover is cleaned out of the doc"
             }
     ]
@@ -2620,7 +2615,7 @@ let private syncTests =
         testCase "a terminal queue entry survives a doc round-trip" <| fun () ->
             let doc = Y.Doc.Create ()
             SyncedStateSync.enqueueTerminalCommand doc (queue "a1") terminalA (Authority.agentFor (Principal.Peer ada)) 3.0 "git status" false false
-            let synced = syncedOf doc
+            let synced = SyncedStateSync.ofDoc doc
             let entry = synced.Pending |> Map.find (queue "a1")
             Expect.equal entry.Terminal terminalA "the entry names its terminal"
             Expect.equal
@@ -2637,7 +2632,7 @@ let private syncTests =
             let doc = Y.Doc.Create ()
             SyncedStateSync.enqueueTerminalCommand doc (queue "a1") terminalA (Authority.agentFor (Principal.Peer ada)) 1.0 "npx create-thing" false true
             SyncedStateSync.enqueueTerminalCommand doc (queue "a2") terminalA (Authority.agentFor (Principal.Peer ada)) 2.0 "ls" false false
-            let synced = syncedOf doc
+            let synced = SyncedStateSync.ofDoc doc
             Expect.isTrue (synced.Pending |> Map.find (queue "a1")).Stdin "asked for, and read back"
             Expect.isFalse (synced.Pending |> Map.find (queue "a2")).Stdin "not asked for"
 
@@ -2649,7 +2644,7 @@ let private syncTests =
             let doc = Y.Doc.Create ()
             SyncedStateSync.enqueueTerminalCommand doc (queue "a1") terminalA (Authority.agentFor (Principal.Peer ada)) 1.0 "ls" false false
             legacyPendingInDoc doc "q-cmd" "command:add_repo" "agent"
-            let synced = syncedOf doc
+            let synced = SyncedStateSync.ofDoc doc
             Expect.isTrue (Map.containsKey (queue "a1") synced.Pending) "the terminal entry survives"
             Expect.equal (Map.count synced.Pending) 1 "and the parked command act does not"
 
@@ -2661,7 +2656,7 @@ let private syncTests =
             SyncedStateSync.enqueueTerminalCommand doc (queue "a1") terminalA (Authority.agentFor (Principal.Peer ada)) 1.0 "x" false false
             setQueuedFieldInDoc doc (queue "a1") "approvedBy" "bob"
             setQueuedFieldInDoc doc (queue "a1") "rejectedBy" "bob"
-            let synced = syncedOf doc
+            let synced = SyncedStateSync.ofDoc doc
             Expect.isTrue (Map.containsKey (queue "a1") synced.Pending) "the entry still decodes"
 
         testCase "the composer slot key round-trips both ids" <| fun () ->

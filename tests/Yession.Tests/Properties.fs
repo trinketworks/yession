@@ -171,11 +171,8 @@ let private runSchedule (ops: ScheduleOp list) : CaseResult =
 
     /// The oracle's prediction for the next drain, from the shadow replica.
     let expectedBatch () : (string * string) list =
-        match SyncedStateSync.ofDoc shadowDoc with
-        | Error _ -> []
-        | Ok s ->
-            (QueueDrain.plan (consumedNow ()) s.Queue).Batch
-            |> List.map (fun m -> QueueId.value m.QueueId, SyncedStateSync.queuedBodyMarkdown shadowDoc m.QueueId)
+        (QueueDrain.plan (consumedNow ()) (SyncedStateSync.ofDoc shadowDoc).Queue).Batch
+        |> List.map (fun m -> QueueId.value m.QueueId, SyncedStateSync.queuedBodyMarkdown shadowDoc m.QueueId)
 
     /// Run an action that may drain, recording predicted vs actual consumption.
     let checkedDrain (expected: (string * string) list) (action: unit -> unit) =
@@ -309,9 +306,8 @@ let private runSchedule (ops: ScheduleOp list) : CaseResult =
             deliverToPeer i
 
     let queueViewOfDoc (doc: Y.Doc) =
-        match SyncedStateSync.ofDoc doc with
-        | Ok s -> QueueOrder.sorted s.Queue |> List.map (fun m -> QueueId.value m.QueueId, SyncedStateSync.queuedBodyMarkdown doc m.QueueId)
-        | Error e -> failwithf "decode failed at quiescence: %A" e
+        QueueOrder.sorted (SyncedStateSync.ofDoc doc).Queue
+        |> List.map (fun m -> QueueId.value m.QueueId, SyncedStateSync.queuedBodyMarkdown doc m.QueueId)
 
     { Events = List.ofSeq recorded
       DrainRecords = List.ofSeq drainRecords
@@ -391,7 +387,7 @@ let private runDraftSchedule (ops: DraftOp list) : (string * string) list * Peer
                     "a send removes exactly the sender's slot"
             | None -> ()   // an empty slot: send is a no-op, nothing enqueued
     ops |> List.iter apply
-    let decoded = SyncedStateSync.ofDoc doc |> Result.mapError (sprintf "%A") |> expect
+    let decoded = SyncedStateSync.ofDoc doc
     List.ofSeq snapshots, owner, decoded, doc
 
 let private draftInvariant4 =

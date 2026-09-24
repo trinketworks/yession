@@ -100,12 +100,9 @@ module Scheduler =
 
         // Which model the next turn runs on, read from the doc each time a turn starts —
         // the same register the picker writes, so changing it takes effect on the next turn
-        // with nothing to restart. A doc that will not decode is not a reason to refuse a
-        // turn: it reads as no choice, which is the provider's default.
-        let selectedModel () : ModelId option =
-            match SyncedStateSync.ofDoc doc with
-            | Ok synced -> synced.Model
-            | Error _ -> None
+        // with nothing to restart. A register that will not decode reads as no choice,
+        // which is the provider's default.
+        let selectedModel () : ModelId option = (SyncedStateSync.ofDoc doc).Model
 
         let mutable consumed = initialConsumed
         let mutable generation = 0
@@ -129,10 +126,8 @@ module Scheduler =
         // guards the pre-turn synchronous section.
         let rec drain () =
             if drainBusy || Option.isSome running then () else
-            match SyncedStateSync.ofDoc doc with
-            | Error _ -> ()
-            | Ok synced when Map.isEmpty synced.Queue -> ()
-            | Ok synced ->
+            let synced = SyncedStateSync.ofDoc doc
+            if Map.isEmpty synced.Queue then () else
                 let plan = QueueDrain.plan consumed synced.Queue
                 if List.isEmpty plan.Batch then
                     // Everything present is already in the log (a crash between

@@ -115,7 +115,7 @@ let private expectSingleFlight (kinds: string list) : unit =
         | _ -> running <- false
 
 let private hostQueue (h: Host.SessionHost) : Map<QueueId, QueuedMessage> =
-    (SyncedStateSync.ofDoc h.Doc |> Result.mapError (sprintf "%A") |> expect).Queue
+    (SyncedStateSync.ofDoc h.Doc).Queue
 
 let private raceTests =
     testList "Queue races (drain is the linearization point)" [
@@ -473,7 +473,7 @@ let private docPersistenceTests =
                 Expect.isTrue (Map.isEmpty (hostQueue h2)) "the queue is empty after the boot drain"
                 release2 ()
 
-                let synced = SyncedStateSync.ofDoc h2.Doc |> Result.mapError (sprintf "%A") |> expect
+                let synced = SyncedStateSync.ofDoc h2.Doc
                 Expect.equal
                     (synced.Drafts |> Map.tryFind oPeer |> Option.map (fun _ -> SyncedStateSync.draftBodyMarkdown h2.Doc oPeer))
                     (Some "durable words")
@@ -513,7 +513,7 @@ let private docPersistenceTests =
 
                 // Second life: the replay sweeps the empty slot, and only that.
                 let! h2 = Host.startFull Clock.system (fun () -> None) (fun _ -> None) None None (Some (openLog ())) (Some (DocStore.openStore docPath)) None None None (fun _ _ -> ()) None McpClient.McpConnections.none None sessionId None "" None false None 0
-                let synced = SyncedStateSync.ofDoc h2.Doc |> Result.mapError (sprintf "%A") |> expect
+                let synced = SyncedStateSync.ofDoc h2.Doc
                 Expect.isFalse (Map.containsKey idlePeer synced.Drafts) "the empty slot is gone after the replay"
                 Expect.equal
                     (synced.Drafts |> Map.tryFind writerPeer |> Option.map (fun _ -> SyncedStateSync.draftBodyMarkdown h2.Doc writerPeer))
@@ -539,7 +539,7 @@ let private docPersistenceTests =
                 TestFiles.append docPath "////////"
 
                 let! h2 = Host.startFull Clock.system (fun () -> None) (fun _ -> None) None None (Some (openLog ())) (Some (DocStore.openStore docPath)) None None None (fun _ _ -> ()) None McpClient.McpConnections.none None sessionId None "" None false None 0
-                let synced = SyncedStateSync.ofDoc h2.Doc |> Result.mapError (sprintf "%A") |> expect
+                let synced = SyncedStateSync.ofDoc h2.Doc
                 Expect.equal
                     (synced.Drafts |> Map.tryFind oPeer |> Option.map (fun _ -> SyncedStateSync.draftBodyMarkdown h2.Doc oPeer))
                     (Some "acknowledged")
