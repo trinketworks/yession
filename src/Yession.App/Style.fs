@@ -1410,6 +1410,18 @@ module Style =
     /// the arrow. `min-w-0` so a long line truncates inside the column rather than widening
     /// it.
     let foldContent = "col-start-2 min-w-0"
+    /// The wrapper a fold's header wears so a press anywhere on the LINE — not only the
+    /// arrow's own square — toggles it (`View.foldClickRow`). `display:contents` is the
+    /// whole trick: the wrapper lays out as if it were not there, so the grid still sees
+    /// the arrow and the title as its two direct children and `foldRow`'s columns hold —
+    /// what the wrapper adds is a single delegated `click`, one listener over both instead
+    /// of one on the arrow alone that a title press could never reach.
+    let foldClick = "contents"
+    /// The cue that the wrapper above is real: without it the row LOOKS like plain text
+    /// wearing an arrow, and a pointer never learns the text is part of the same control.
+    /// Only on the pieces the wrapper actually holds — never on `foldBody`'s own classes,
+    /// which sit outside it and open nothing further by being pressed.
+    let foldClickable = "cursor-pointer"
     /// The arrow's cell: one line of the row's own box, whatever the title is set in. Named
     /// into the gutter, so a row drawn above the title (an act's cause) cannot push it over.
     let fold =
