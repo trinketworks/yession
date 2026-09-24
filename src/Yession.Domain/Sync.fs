@@ -193,9 +193,29 @@ module SyncedStateSync =
               "model", Encode.option encodeModel a.Model
               "chapters", Encode.map encodeChapter (a.Chapters :> amap<_, _>) ]
 
+    /// Every entry of a keyed map that decodes, and none that does not. An entry that fails is
+    /// SKIPPED rather than failing the map around it, which is what plain `Decode.map` does: the
+    /// doc is shared with peers we do not control, and one garbled entry must not take its
+    /// neighbours with it. The same rule the `*ToDomain` functions below apply to identifiers,
+    /// one level down.
+    let private entries (entry: Decoder<'m, 'a>) : Decoder<'m, HashMap<string, 'a>> =
+        Decode.object {
+            let! decoded = Decode.map (Decode.attempt entry)
+            return decoded |> HashMap.choose (fun _ outcome -> outcome)
+        }
+
+    /// A slot holding something other than what this codec writes there reads as absent — the
+    /// same answer as a slot nobody wrote. `Decode.object.optional` alone gives the second answer
+    /// and fails on the first.
+    let private slot (key: string) (value: Decoder<'m, 'a>) : Decoder<'m, 'a option> =
+        Decode.object {
+            let! found = Decode.object.optional key (Decode.attempt value)
+            return Option.flatten found
+        }
+
     /// The doc-side field shapes, before identifier validation. Bodies are omitted here: they
     /// are top-level `Y.XmlFragment` roots the app resolves via the `BodyRegistry`, never part
-    /// of the decoded tree (a fragment reachable there would crash the structural reader).
+    /// of the decoded tree — the structural reader skips a Y type it has no case for.
     type private QueuedFields =
         { Author : string
           Order : float }
@@ -260,7 +280,9 @@ module SyncedStateSync =
             let! order = Decode.object.optional "order" Decode.float
             let! background = Decode.object.optional "background" Decode.string
             let! stdin = Decode.object.optional "stdin" Decode.string
-            let! size = Decode.object.optional "size" Decode.string
+            // The one field read through `slot` rather than failing its entry: a width nobody
+            // can read is NO claim (`pendingToDomain`), not a reason to drop the command.
+            let! size = slot "size" Decode.string
             return
                 { Subject = subject
                   OnBehalfOf = onBehalfOf
@@ -387,16 +409,20 @@ module SyncedStateSync =
 
     /// Decode the synced state out of a doc. Total, and decode-empty = init: on an empty
     /// doc every optional comes back `None` and this returns `SyncedSessionState.empty`.
+    ///
+    /// Total over a doc a peer garbled, too: every slot goes through `slot` and every keyed
+    /// map through `entries`, so what does not decode is absent rather than fatal. That is
+    /// the browser's binding and the Session Process's `ofDoc` alike — one reader, one answer.
     let decode<'m> : Decoder<'m, SyncedSessionState> =
         Decode.object {
-            let! drafts = Decode.object.optional "drafts" (Decode.map decodeDraft)
-            let! queue = Decode.object.optional "queue" (Decode.map decodeQueued)
-            let! title = Decode.object.optional "title" Decode.text
-            let! brief = Decode.object.optional "sharedBrief" decodeBrief
-            let! terminalDrafts = Decode.object.optional "terminalDrafts" (Decode.map decodeTerminalDraft)
-            let! pending = Decode.object.optional "pending" (Decode.map decodePendingAct)
-            let! model = Decode.object.optional "model" Decode.string
-            let! chapters = Decode.object.optional "chapters" (Decode.map decodeChapter)
+            let! drafts = slot "drafts" (entries decodeDraft)
+            let! queue = slot "queue" (entries decodeQueued)
+            let! title = slot "title" Decode.text
+            let! brief = slot "sharedBrief" decodeBrief
+            let! terminalDrafts = slot "terminalDrafts" (entries decodeTerminalDraft)
+            let! pending = slot "pending" (entries decodePendingAct)
+            let! model = slot "model" Decode.string
+            let! chapters = slot "chapters" (entries decodeChapter)
             return
                 { Drafts = drafts |> Option.map draftsToDomain |> Option.defaultValue Map.empty
                   Queue = queue |> Option.map queueToDomain |> Option.defaultValue Map.empty
@@ -428,24 +454,6 @@ module SyncedStateSync =
         if doc.share.has "pending" then (doc.getMap "pending" : Yjs.Y.Map<obj>) |> ignore
         if doc.share.has "chapters" then (doc.getMap "chapters" : Yjs.Y.Map<obj>) |> ignore
 
-    /// Read one string field off a keyed-map entry, `""` when absent — the shape every
-    /// structural read below repeats.
-    let private entryString (entry: Yjs.Y.Map<obj>) (field: string) : string =
-        entry.get field |> Option.map (unbox<string>) |> Option.defaultValue ""
-
-    /// The same read for a field whose absence is a fact the domain keeps: `None` when the
-    /// entry has no such key, rather than a `""` a reader would have to tell from a real one.
-    let private entryStringOpt (entry: Yjs.Y.Map<obj>) (field: string) : string option =
-        entry.get field |> Option.map (unbox<string>)
-
-    /// A nested collaborative text off an entry — a `Y.Text` the entry holds, not a string.
-    /// Empty when the entry has no such key, which is what a chapter written before names
-    /// reads as.
-    let private entryText (entry: Yjs.Y.Map<obj>) (field: string) : Text =
-        entry.get field
-        |> Option.map (fun value -> Text.ofString ((unbox<Yjs.Y.Text> value).toString ()))
-        |> Option.defaultValue Text.empty
-
     /// The live `Y.Text` a chapter's name IS, found by the message its chapter opens at —
     /// what a caret in that name is measured against (`FocusField.ChapterName`).
     ///
@@ -465,89 +473,17 @@ module SyncedStateSync =
             |> Option.filter (isNull >> not)
             |> Option.map unbox<Yjs.Y.Text>
 
-    /// Fold every entry of a named root map through `read`. Absent root = empty.
-    let private foldRoot (doc: Yjs.Y.Doc) (root: string) (read: Yjs.Y.Map<obj> -> 'a) : HashMap<string, 'a> =
-        if not (doc.share.has root) then HashMap.empty
-        else
-            let m : Yjs.Y.Map<obj> = doc.getMap root
-            (HashMap.empty, mapKeys m)
-            ||> Array.fold (fun acc k ->
-                match m.get k with
-                | Some entryObj when not (isNull entryObj) -> HashMap.add k (read (unbox<Yjs.Y.Map<obj>> entryObj)) acc
-                | _ -> acc)
-
-    /// Read the synced state currently in a doc (the decode direction alone — used by the
-    /// Session Process, which observes the doc without running its own Ylmish binding).
+    /// Read the synced state currently in a doc — the decode direction alone, for the Session
+    /// Process, which observes the doc without running a Ylmish binding of its own. The same
+    /// `decode` the browser's binding runs, so the two cannot disagree about what a doc says.
     ///
-    /// This reads the codec's named roots (`drafts`/`queue`/`title`/`sharedBrief`) directly and
-    /// structurally, rather than through a whole-doc structural decode. Rich bodies are sibling
-    /// `Y.XmlFragment` roots (RichText.fs), and Ylmish's structural reader walks a fragment as a
-    /// cyclic plain object — so a whole-doc read crashes the instant any body exists. Reading the
-    /// known roots by hand sidesteps the body roots entirely. Total: an entry with an invalid id
-    /// is skipped (`draftsToDomain`/`queueToDomain`); an absent root reads as empty.
+    /// The roots are typed first: a root a *remote* update created is an untyped placeholder
+    /// until something here asks for it by kind, and the structural reader skips what it
+    /// cannot place — so without this, a doc that had only ever been written to by a peer
+    /// would read as empty.
     let ofDoc (doc: Yjs.Y.Doc) : Result<SyncedSessionState, Error list> =
         materializeRoots doc
-        let draftsH =
-            if doc.share.has "drafts" then
-                let m : Yjs.Y.Map<obj> = doc.getMap "drafts"
-                (HashMap.empty, mapKeys m)
-                ||> Array.fold (fun acc k ->
-                    match m.get k with
-                    | Some entryObj when not (isNull entryObj) ->
-                        let entry = unbox<Yjs.Y.Map<obj>> entryObj
-                        HashMap.add k (entry.get "queueId" |> Option.map (unbox<string>)) acc
-                    | _ -> acc)
-            else HashMap.empty
-        let queueH =
-            if doc.share.has "queue" then
-                let m : Yjs.Y.Map<obj> = doc.getMap "queue"
-                (HashMap.empty, mapKeys m)
-                ||> Array.fold (fun acc k ->
-                    match m.get k with
-                    | Some entryObj when not (isNull entryObj) ->
-                        let entry = unbox<Yjs.Y.Map<obj>> entryObj
-                        let author = entry.get "author" |> Option.map (unbox<string>) |> Option.defaultValue ""
-                        let order = entry.get "order" |> Option.map (unbox<float>) |> Option.defaultValue 0.0
-                        HashMap.add k { Author = author; Order = order } acc
-                    | _ -> acc)
-            else HashMap.empty
-        let title =
-            if doc.share.has "title" then Text.ofString ((doc.getText "title").toString ()) else Text.empty
-        let brief =
-            if doc.share.has "sharedBrief" then
-                match (doc.getMap "sharedBrief" : Yjs.Y.Map<obj>).get "body" with
-                | Some b when not (isNull b) -> Some { SharedBrief.Body = unbox<string> b }
-                | _ -> None
-            else None
-        let terminalDraftsH =
-            foldRoot doc "terminalDrafts" (fun entry -> entry.get "queueId" |> Option.map (unbox<string>))
-        let pendingH =
-            foldRoot doc "pending" (fun entry ->
-                { Subject = entryString entry "subject"
-                  OnBehalfOf = entryStringOpt entry "onBehalfOf"
-                  Author = entryString entry "author"
-                  Order = entry.get "order" |> Option.map (unbox<float>) |> Option.defaultValue 0.0
-                  Background = entryStringOpt entry "background"
-                  Stdin = entryStringOpt entry "stdin"
-                  Size = entryStringOpt entry "size" })
-        let chaptersH =
-            foldRoot doc "chapters" (fun entry -> entryStringOpt entry "opens", entryText entry "name")
-        // Off the ARGLESS root map, not off a named root: a top-level register lives there
-        // (see `encodeModel`), so `doc.getMap "model"` would silently mint an empty map and
-        // read back as "nobody has chosen" for ever.
-        let model =
-            match (doc.getMap () : Yjs.Y.Map<obj>).get "model" with
-            | Some id when not (isNull id) -> Some (unbox<string> id)
-            | _ -> None
-        Ok
-            { Drafts = draftsToDomain draftsH
-              Queue = queueToDomain queueH
-              Title = title
-              SharedBrief = brief
-              TerminalDrafts = terminalDraftsToDomain terminalDraftsH
-              Pending = pendingToDomain pendingH
-              Model = modelToDomain model
-              Chapters = chaptersToDomain chaptersH }
+        Decode.run () decode doc
 
     /// The origin tag on the Session Process's own doc writes (the drain's removals),
     /// distinct from the remote-apply origin so they broadcast like any local update.
@@ -565,14 +501,16 @@ module SyncedStateSync =
                     ids |> List.iter (fun id -> queue.delete (QueueId.value id))),
                 processOrigin)
 
-    /// The chapters a doc holds, without reading the rest of it.
+    /// The chapters a doc holds, read through `ofDoc`.
     ///
-    /// `ofDoc` answers this too, and reads everything else on the way. What asks for this asks
-    /// on every doc update — a keystroke in somebody's draft, a terminal record landing — so
-    /// what it costs is the only reason it is a function of its own.
+    /// This used to read the chapters root alone, by hand, because what asks for it asks on
+    /// every doc update. That saved walking roots the same process already walks on the same
+    /// update — the title report runs `ofDoc` per update — and it was a second reader of the
+    /// chapters with casts of its own, which is the thing that lets two readers disagree.
     let chaptersOf (doc: Yjs.Y.Doc) : Map<MessageId, ChapterMark> =
-        foldRoot doc "chapters" (fun entry -> entryStringOpt entry "opens", entryText entry "name")
-        |> chaptersToDomain
+        match ofDoc doc with
+        | Ok synced -> synced.Chapters
+        | Error _ -> Map.empty
 
     /// The live text a naming subject is written in, when the doc has one.
     ///

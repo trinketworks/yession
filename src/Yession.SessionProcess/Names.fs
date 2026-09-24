@@ -91,8 +91,8 @@ module Names =
         /// the first pass, because a session that has looked at nothing has to look once.
         let mutable lastSeen : (string * Map<MessageId, ChapterMark> * EventOffset option) option = None
 
-        /// Everything a pass would answer against, cheaply: one small structural read of the
-        /// chapters root and the offset the log is already keeping.
+        /// Everything a pass would answer against: the title, the doc's chapters and the
+        /// offset the log is already keeping.
         let here () =
             SyncedStateSync.nameOf doc NamingSubject.Title, SyncedStateSync.chaptersOf doc, latestOffset ()
 
