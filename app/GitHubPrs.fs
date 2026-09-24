@@ -7,8 +7,8 @@ module Yession.Host.GitHubPrs
 // (`fetchOver`, the whole of the `FetchPr` seam this side owns), the two that open one
 // (`openOver`: the list that keeps a repeated ask a question, then the create), the query
 // and three mutations that merge one (`mergeOver`), the two that take it back
-// (`unmergeOver`) and the one that undrafts it (`readyOver`) — and the one field path a
-// delivery names its repo at. The cadence, the ETag bookkeeping, the verbs and
+// (`unmergeOver`), the one that undrafts it (`readyOver`) and the one that drafts it again
+// (`draftOver`) — and the one field path a delivery names its repo at. The cadence, the ETag bookkeeping, the verbs and
 // the query are provider-neutral and live in `PrWatches.fs`; a second forge is a second copy
 // of this file, not a second poller.
 
@@ -711,6 +711,39 @@ let unmergeOver (apiBase: string) (spending: Spending) : UnmergePr =
                     else return PrUnmergeUnneeded (pr, "not on its way in")
         }
 
+let private convertToDraft =
+    "mutation($id:ID!){convertPullRequestToDraft(input:{pullRequestId:$id}){clientMutationId}}"
+
+/// Drafting one again — `readyOver` the other way, asking first for the same reason. One on
+/// its way in is left there: see `PrDraftOnItsWayIn`.
+let draftOver (apiBase: string) (spending: Spending) : DraftPr =
+    fun token pr ->
+        async {
+            match spending.Permit () with
+            | Resilience.Hold until -> return PrDraftFailed (PrRateLimited (Some (until.ToUnixTimeSeconds ())))
+            | Resilience.Go ->
+                let bearer = Option.toObj token
+                let root = apiBase.TrimEnd '/'
+                let ask (document: string) (variables: (string * JsonValue) list) (decoder: Decoder<'a>) =
+                    askGraphql root spending bearer document variables decoder
+                let refused (refusal: GraphqlRefusal) =
+                    match refusal with
+                    | Declined said -> PrDraftRefused said
+                    | Failed failure -> PrDraftFailed failure
+                match! standingOf ask pr with
+                | Error refusal -> return refused refusal
+                | Ok standing ->
+                    if standing.Merged then return PrDraftUnneeded (pr, "merged")
+                    elif standing.Closed then return PrDraftRefused "it is closed — reopen it first"
+                    elif standing.IsDraft then return PrDraftUnneeded (pr, "a draft")
+                    elif standing.InQueue then return PrDraftOnItsWayIn (pr, "in the merge queue")
+                    elif standing.AutoMergeArmed then return PrDraftOnItsWayIn (pr, "armed to merge when its checks pass")
+                    else
+                        match! ask convertToDraft [ "id", Encode.string standing.Id ] done' with
+                        | Ok () -> return PrMarkedDraft pr
+                        | Error refusal -> return refused refusal
+        }
+
 let private markReady =
     "mutation($id:ID!){markPullRequestReadyForReview(input:{pullRequestId:$id}){clientMutationId}}"
 
@@ -832,7 +865,7 @@ let hooks
             held
             |> List.tryPick (fun (repo, current) -> if current = Some id then Some repo else None) }
 
-// --- the agent tools: create_pr, ready_pr, merge_pr, unmerge_pr, watch_pr, unwatch_pr ----
+// --- the agent tools: create_pr, ready_pr, draft_pr, merge_pr, unmerge_pr, watch_pr, unwatch_pr
 //
 // The GitHub-flavoured entries `AgentTools.fs`'s registry used to declare directly,
 // moved here for the reason this file's own header states: everything GitHub-specific
@@ -923,6 +956,14 @@ let private readyPr (capabilities: AgentCapabilities) (raw: string) (number: int
             | Error e -> return sprintf "could not mark the pull request ready: %s" e
         })
 
+let private draftPr (capabilities: AgentCapabilities) (raw: string) (number: int) : Async<string> =
+    withRepo raw (fun repo ->
+        async {
+            match! capabilities.Repos.DraftPr repo number with
+            | Ok outcome -> return AgentTools.renderCommandOutcome outcome
+            | Error e -> return sprintf "could not make the pull request a draft: %s" e
+        })
+
 let private unmergePr (capabilities: AgentCapabilities) (raw: string) (number: int) : Async<string> =
     withRepo raw (fun repo ->
         async {
@@ -1004,7 +1045,7 @@ let providerTools (capabilities: AgentCapabilities) : (ToolDescriptor * (string 
               })
       tool
           "ready_pr"
-          "Mark a draft pull request on GitHub ready for review — the undoing of create_pr's draft flag, and what a draft needs before merge_pr can take it. One that is not a draft, or has merged, is reported as such and nothing is changed, so calling it twice is safe. It spends the GitHub credential of whoever's turn this is, and everyone in the session sees the act in the timeline. What GitHub will not do it says why in its own words, and that sentence is what comes back."
+          "Mark a draft pull request on GitHub ready for review — the undoing of create_pr's draft flag, and what a draft needs before merge_pr can take it; draft_pr is the other way. One that is not a draft, or has merged, is reported as such and nothing is changed, so calling it twice is safe. It spends the GitHub credential of whoever's turn this is, and everyone in the session sees the act in the timeline. What GitHub will not do it says why in its own words, and that sentence is what comes back."
           [ ToolField.required "repo" "string" "owner/name"
             ToolField.required "number" "integer" "the pull request number" ]
           (fun args ->
@@ -1012,6 +1053,17 @@ let providerTools (capabilities: AgentCapabilities) : (ToolDescriptor * (string 
                   match repoNumberArgs args with
                   | Error e -> return Error e
                   | Ok (repo, number) -> return! ok (readyPr capabilities repo number)
+              })
+      tool
+          "draft_pr"
+          "Turn an open pull request on GitHub back into a draft — ready_pr the other way: still on the record, no longer asking for review. Not how to hold a merge: a pull request nobody calls merge_pr on does not merge. One on its way in (auto merge armed, or in the merge queue) is left there and the answer says so — take it back with unmerge_pr first. One that is already a draft, or has merged, is reported as such and nothing is changed, so calling it twice is safe. It spends the GitHub credential of whoever's turn this is, and everyone in the session sees the act in the timeline. What GitHub will not do it says why in its own words, and that sentence is what comes back."
+          [ ToolField.required "repo" "string" "owner/name"
+            ToolField.required "number" "integer" "the pull request number" ]
+          (fun args ->
+              async {
+                  match repoNumberArgs args with
+                  | Error e -> return Error e
+                  | Ok (repo, number) -> return! ok (draftPr capabilities repo number)
               })
       tool
           "merge_pr"
