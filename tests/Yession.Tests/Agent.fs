@@ -781,6 +781,23 @@ let private wakeTests =
                 (AgentWake.due [ turnStarted "1"; blockStarted "b1" true (Principal.Peer ada); blockCompleted "b1" ])
                 "nobody was waiting on it, so somebody has to be told"
 
+        // What boot writes for a background command the dead process was running
+        // (`SessionTerminals.ReconcileAtBoot`): the block ended as cut off, then its terminal
+        // closed. The agent that walked away from it is owed the news that it never finished.
+        testCase "a background command a restart cut off owes the agent a turn" <| fun () ->
+            Expect.equal
+                (AgentWake.pendingReason
+                    [ turnStarted "1"
+                      blockStarted "b1" true (Principal.Peer ada)
+                      SessionEvent.TerminalBlockCompleted
+                          { TerminalId = TerminalId.create "term-a" |> expect
+                            BlockId = BlockId.create "b1" |> expect
+                            Result = CommandExecutionFailed "the session stopped while it was running"
+                            ToSeq = 4 }
+                      SessionEvent.TerminalClosed { TerminalId = TerminalId.create "term-a" |> expect; Reason = "session restarted" } ])
+                (Some (CommandFinished, Principal.Peer ada))
+                "as whoever it ran for"
+
         testCase "a foreground command that finished owes nothing" <| fun () ->
             // Somebody WAS waiting: the tool call that queued it is what carries the outcome
             // back, and waking a turn to re-report it would be the second channel this

@@ -69,6 +69,47 @@ let tests =
                 do! host.Stop ()
             }
 
+        // The same catch-up for a COMMAND: the log says a background block was running in a
+        // terminal the dead process held. What must survive the restart is the DEBT — the
+        // agent walked away from that command and is owed word that it never finished. (A
+        // client already stops showing it as running when its terminal closes; that guard
+        // is the projection's, and says nothing to the agent.)
+        testCaseAsync "a Host booted over a command the previous process died under owes the agent its end" <|
+            async {
+                let log = InMemoryEventLog.create (sid ()) (fun () -> System.DateTimeOffset.UtcNow)
+                let terminal = TerminalId.create "term-cut" |> expect
+                let ada = PeerId.create "ada-before" |> expect
+                let! _ =
+                    log.Append
+                        (PeerRef ada)
+                        (SessionEvent.TerminalOpened
+                            { TerminalId = terminal
+                              OpenedBy = PeerRef ada
+                              Title = TerminalTitle.fromProse "build"
+                              Sandbox = Some SandboxRef.defaultRef
+                              Renewable = false })
+                let! _ =
+                    log.Append
+                        (PeerRef ada)
+                        (SessionEvent.TerminalBlockStarted
+                            { TerminalId = terminal
+                              BlockId = BlockId.create "b-cut" |> expect
+                              QueueId = None
+                              // The agent's, on Ada's turn: a command it set running and walked away from.
+                              Authority = Authority.agentFor (Principal.Peer ada)
+                              Command = "make"
+                              FromSeq = 0
+                              Background = true })
+                let! host = Host.startWithEnvironment None None (Some log) (sid ()) 0
+                let! page = log.Read None System.Int32.MaxValue
+                let events = page.Events |> List.map (fun e -> e.Event)
+                Expect.equal
+                    (AgentWake.pendingReason events |> Option.map fst)
+                    (Some CommandFinished)
+                    "the agent is owed the command it was waiting on"
+                do! host.Stop ()
+            }
+
         testCaseAsync "a sent rich draft drains through the Host into both timelines as its markdown body" <|
             async {
                 let! host = Host.start (sid ()) 0

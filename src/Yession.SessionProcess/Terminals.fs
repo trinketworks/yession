@@ -931,7 +931,10 @@ module SessionTerminals =
         // block without classification would be the second door the classifier exists to
         // close — and an async decision taken before the busy mark could reorder the queue.
         (classifier: Classifier)
-        (openAtBoot: TerminalId list)
+        // The terminals the log still calls open, each with the block it says was RUNNING
+        // there — a command whose process died with the last one, and whose end nobody
+        // recorded. `ReconcileAtBoot` ends both.
+        (openAtBoot: (TerminalId * BlockId option) list)
         // Where a shell opened in each sandbox starts, folded from the same durable replay
         // that produced `openAtBoot` (Plan 25). Taken at creation rather than read from the
         // log here, because the log is read once at boot and this is one of the things that
@@ -1048,7 +1051,9 @@ module SessionTerminals =
         /// that opens shells, rather than above it: a profile a caller had to remember to
         /// apply would not be a profile.
         let mutable profiles = profilesAtBoot
-        let mutable leftOpen : Set<string> = openAtBoot |> List.map TerminalId.value |> Set.ofList
+        let mutable leftOpen : Set<string> = openAtBoot |> List.map (fst >> TerminalId.value) |> Set.ofList
+        let runningAtBoot : Map<string, BlockId> =
+            openAtBoot |> List.choose (fun (id, block) -> block |> Option.map (fun b -> TerminalId.value id, b)) |> Map.ofList
 
         /// The sandbox a terminal's shell lives in. `default` for one this process has no
         /// live record of — which is every terminal a previous process left open, and they
@@ -2477,7 +2482,25 @@ module SessionTerminals =
                 // open until this moment.
                 for key in Set.toList leftOpen do
                     match TerminalId.create key with
-                    | Ok id -> do! append (SessionEvent.TerminalClosed { TerminalId = id; Reason = "session restarted" })
+                    | Ok id ->
+                        // A block still running there ENDS first, and says how: without it the
+                        // block reads as running forever, the turn it belonged to is never
+                        // told, and a background command the agent was waiting on owes it
+                        // nothing — so the agent never learns its work was cut off. Ended as a
+                        // completion, it is news through the rule every completion already
+                        // follows (`AgentWake`), and its output up to the stop stays readable:
+                        // the range runs to the end of what the transcript recorded.
+                        match Map.tryFind key runningAtBoot with
+                        | Some block ->
+                            do!
+                                append (
+                                    SessionEvent.TerminalBlockCompleted
+                                        { TerminalId = id
+                                          BlockId = block
+                                          Result = CommandExecutionFailed "the session stopped while it was running"
+                                          ToSeq = readTranscript id 0 None |> List.length })
+                        | None -> ()
+                        do! append (SessionEvent.TerminalClosed { TerminalId = id; Reason = "session restarted" })
                     | Error _ -> ()
                 leftOpen <- Set.empty
             }
