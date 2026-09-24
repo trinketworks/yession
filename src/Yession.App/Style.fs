@@ -1463,18 +1463,19 @@ module Style =
     /// quiet voice as a reply's ref, but the sentence holds references (some of them links),
     /// so the jump is the MARK alone — a link cannot sit inside a button.
     let causeRow = "contents"
-    let causeMark = "col-start-1 h-[1lh] flex items-center justify-center text-ink-faint opacity-60"
+    let causeMark = "col-start-1 h-[1lh] flex items-center justify-center text-mark"
     let causeSaid = "flex items-baseline text-small leading-[inherit] text-ink-faint"
     /// The link of a chain, above the act's chevron: shorter than a line, and reaching up
-    /// through the act's top padding to meet the rail the act above draws (`causeRail`).
-    let causeChainMark = "col-start-1 -mt-2 h-5.5 flex flex-col items-center text-ink-faint opacity-60"
-    let causeChainBody = "w-px flex-1 bg-current"
+    /// through the act's top padding to meet the rail the act above draws (`causeRail`). Its
+    /// line is a box, as the rail is, with only the head drawn over its foot.
+    let causeChainMark = "col-start-1 -mt-2 h-5.5 relative flex justify-center text-mark"
+    let causeChainBody = "w-px h-full bg-current"
+    let causeChainHead = "absolute bottom-0 left-1/2 -translate-x-1/2"
     /// The line from an act's chevron down to the next link of its chain: the gutter's centre,
-    /// the stroke of the marks, through the rows under the headline and on through the gap
-    /// between the two acts.
-    let causeRail = "col-start-1 row-span-2 justify-self-center w-px -mb-2.5 bg-current text-ink-faint opacity-60"
+    /// through the rows under the headline and on through the gap between the two acts.
+    let causeRail = "col-start-1 row-span-2 justify-self-center w-px -mb-2.5 bg-mark"
     let causeJump =
-        cls [ "flex bg-transparent border-0 p-0 cursor-pointer hover:opacity-100 hover:text-ink focus-visible:opacity-100"; focusRing ]
+        cls [ "flex bg-transparent border-0 p-0 cursor-pointer hover:text-ink focus-visible:text-ink"; focusRing ]
     /// The same quiet line as `replyRef`, but a real control — it jumps to the message it
     /// quotes. Borderless and transparent (it rides above the body, not a box of its own),
     /// brightening under the pointer and wearing the shared focus ring so a keyboard reaches

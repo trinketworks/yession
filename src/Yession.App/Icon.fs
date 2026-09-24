@@ -39,8 +39,9 @@ module Icon =
     let private causeHeadPath = "M6 10.5 L8 12.5 L10 10.5"
     /// From the sentence on the right, left and then down into the act below.
     let private causedPath = "M14 3.5 L8 3.5 L8 12.5 " + causeHeadPath
-    /// The last stretch of a chain's line, from the top of the cell into the act below.
-    let private chainedPath = "M8 0 L8 12.5 " + causeHeadPath
+    /// A chain's head alone, tip at the foot of the box: its line is drawn by the page, in one
+    /// piece with the rail above it, so no stem here can sit a sub-pixel off that line.
+    let private chainedPath = "M6 13.5 L8 15.5 L10 13.5"
     let private leftPath = "M9.75 3.5 L5.25 8 L9.75 12.5"
     let private rightPath = "M6.25 3.5 L10.75 8 L6.25 12.5"
     /// Two chevrons, one behind the other: the mark of a disclosure with SEVERAL things

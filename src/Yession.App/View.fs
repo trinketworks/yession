@@ -2278,7 +2278,7 @@ module View =
             | Some CauseLink.Chained ->
                 html $"""
                     <div class="{Style.causeRow}" data-cause-chain>
-                      <span class="{Style.causeChainMark}" aria-hidden="true"><span class="{Style.causeChainBody}"></span>{Icon.chained}</span>
+                      <span class="{Style.causeChainMark}" aria-hidden="true"><span class="{Style.causeChainBody}"></span><span class="{Style.causeChainHead}">{Icon.chained}</span></span>
                       <span class="{Style.srOnly}">{Dom.Text.causeChained}</span>
                     </div>"""
             | Some CauseLink.Unlinked

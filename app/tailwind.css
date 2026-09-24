@@ -141,6 +141,10 @@
      it, and the theme-contrast test lists it as such; green-deep clears and may carry text.
      The two grounds are a 950-step tint of each hue, for the avatars' dark squares. */
   --color-edge: #2e2e2e;
+  /* The marks that link acts (a cause's arrows, a chain's rail): ink-faint at 60% on
+     black, as PAINT rather than an alpha — the pieces of one line meet in two different
+     rows, and a translucent line doubles wherever they touch. Never text. */
+  --color-mark: #4e4e4e;
   --color-blue-bright: #6fd8ff;
   --color-green-bright: #d8f54a;
   --color-blue-deep: #0f6ea3;
