@@ -1065,7 +1065,7 @@ let private nodeBudgetMs (caps: Set<string>) =
 // Every nix build CI runs goes through a flake, and a flake source copy is what git tracks —
 // so no CI job has ever built the tree a developer actually has, and nothing outside this gate
 // notices when the two diverge (a `node_modules` symlink from the dev shell landing in the
-// derivation; a NuGet FOD hash that no longer matches what a restore produces). release.yml's
+// derivation; a dotnet-tools FOD hash that no longer matches what a tool restore produces). release.yml's
 // package-nix job stays the check of the pure consumer route; this is the check of yours.
 let private buildNixPackage () =
     // A build IS a boot: the derivation's `installCheckPhase` runs every bin it wrapped and
@@ -1217,7 +1217,7 @@ let private runCheckOnce (requested: string list) (runtime: Runtime option) =
             |> Option.iter (fun node -> Environment.SetEnvironmentVariable ("PLAYWRIGHT_NODEJS_PATH", node))
         exec "dotnet" [ "run"; "--project"; "tests/Yession.Tests/Yession.Tests.fsproj" ]
 
-    // Last, because it is the long pole (a cold NuGet FOD fetch plus the whole compile again,
+    // Last, because it is the long pole (a cold NuGet fetch plus the whole compile again,
     // offline, inside the sandbox) and because the suites are the sharper signal. `Nix` asserts
     // what the derivation is allowed to SEE (NixSource.fs); this asserts that what it sees still
     // builds and boots. Two capabilities because they are two costs: the first is an evaluation

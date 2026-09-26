@@ -10,7 +10,7 @@
 # `--file` evaluates in place: nothing is copied but the filtered `src` itself. Usage:
 #
 #   nix build --file nix/worktree.nix nix        # the installable, from the tree as it stands
-#   nix build --file nix/worktree.nix nugetDeps  # re-derive the NuGet FOD hash
+#   nix build --file nix/worktree.nix nugetTools # re-derive the dotnet tools FOD hash
 #   nix eval  --file nix/worktree.nix staged.src # what the build actually sees
 #
 # nixpkgs is the one flake.lock pins, read straight out of the lock rather than re-pinned here,
