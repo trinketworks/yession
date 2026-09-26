@@ -191,14 +191,18 @@ let private allowanceIn (reply: FetchReply) : Resilience.Allowance =
             Resilience.Seen (remaining, DateTimeOffset.FromUnixTimeSeconds resetEpoch)
         | _ -> Resilience.Unknown
 
-/// What a status GitHub answered with means for a look, and the one number that comes with
-/// it — `x-ratelimit-reset`, which is the only thing a caller can do something with.
-let failureAt (status: int) (reset: string) : PrFetchFailure =
+/// What a status GitHub answered with means, and the one number that comes with it —
+/// `x-ratelimit-reset`, which is the only thing a caller can do something with. The one
+/// reading of a GitHub status in this host: `GitHubRepos.failureAt` is this, projected.
+///
+/// A 403 is "too many" only when GitHub says so — a spent budget (`x-ratelimit-remaining:
+/// 0`) or a secondary limit, whose message names it. Every other 403 is "not allowed", and
+/// reporting that as a rate limit told a person to wait for a window that would change
+/// nothing, while a watch held off for fifteen minutes at a time.
+let failureAt (status: int) (reset: string) (remaining: string) (body: string) : PrFetchFailure =
     if status = 401 then PrUnauthorized
     elif status = 404 then PrNotFound
-    // 403 and 429 are both how GitHub says "too many"; a 403 for any other reason
-    // (scopes, a blocked App) is also not something a retry sooner would fix, so the
-    // wait it implies is the safe reading either way.
+    elif status = 403 && remaining <> "0" && not (body.Contains "rate limit") then PrForbidden
     elif status = 403 || status = 429 then
         // `Int64`, as `allowanceIn` above already reads the same header: a unix second is
         // past `Int32.MaxValue` from January 2038, and an `Int32.TryParse` of one answers
@@ -209,7 +213,8 @@ let failureAt (status: int) (reset: string) : PrFetchFailure =
 
 /// A reply that never arrived carries why in place of a body; everything else is a status.
 let private failureOf (reply: FetchReply) : PrFetchFailure =
-    if not reply.Reachable then PrUnreachable reply.Body else failureAt reply.Status reply.Reset
+    if not reply.Reachable then PrUnreachable reply.Body
+    else failureAt reply.Status reply.Reset reply.Remaining reply.Body
 
 /// What a look may spend, and where what it learns is kept.
 ///
