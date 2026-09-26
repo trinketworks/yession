@@ -1469,6 +1469,30 @@ let editorTests =
                 Expect.equal afterSend broken "Ctrl+Enter sent without touching the document"
             }
 
+        // The prompt an empty composer shows is a node decoration: an attribute on the empty
+        // paragraph that the stylesheet paints from, so it is never text anyone can select,
+        // copy or send. The harness host is not a `[data-rich-body]`, so nothing paints here;
+        // what is read is the hook the stylesheet reads.
+        editorCase "an empty composer offers its prompt without it becoming content" <| fun page ->
+            async {
+                let! _ = await (page.WaitForSelectorAsync "#host .ProseMirror [data-placeholder]")
+                let! prompt =
+                    await (page.EvaluateAsync<string>
+                        "() => document.querySelector('#host .ProseMirror [data-placeholder]').getAttribute('data-placeholder')")
+                let! text = await (page.EvaluateAsync<string> "() => document.querySelector('#host .ProseMirror').textContent")
+                Expect.equal prompt Yession.App.Dom.Text.composerPlaceholder "the empty composer carries its prompt"
+                Expect.equal text "" "and the prompt is not in the document"
+            }
+
+        editorCase "a composer written in stops offering its prompt" <| fun page ->
+            async {
+                let! _ = await (page.WaitForSelectorAsync "#host .ProseMirror [data-placeholder]")
+                do! awaitU (page.ClickAsync ".ProseMirror")
+                do! awaitU (page.Keyboard.TypeAsync "x")
+                let! _ = await (page.WaitForFunctionAsync "!document.querySelector('#host .ProseMirror [data-placeholder]')")
+                return ()
+            }
+
         editorCase "a remote peer's selection renders as a caret widget, label, and highlight" <| fun page ->
             async {
                 let! _ = await (page.WaitForSelectorAsync ".ProseMirror")
