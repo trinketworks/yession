@@ -58,6 +58,7 @@
          ETag bookkeeping, the watch verbs and the query. Beside the other services
          Commands.fs runs against, and after Queries.fs, whose registration type it answers
          with. -->
+    <Compile Include="Watches.fs" />
     <Compile Include="PrWatches.fs" />
     <!-- What GitHub adds to that: the two REST endpoints, their JSON, and the field path a
          delivery names its repo at. After PrWatch.fs, whose `FetchPr` it satisfies. It

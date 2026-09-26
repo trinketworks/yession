@@ -287,38 +287,12 @@ let SettledIntervalMs = 60000
 /// `McpClient.PollInterval` makes.
 let TickInterval = System.TimeSpan.FromMilliseconds (float PendingIntervalMs)
 
-type private WatchEntry =
-    { Pr : PrRef
-      Watcher : Principal
-      mutable Known : PrKnown
-      /// Overwritten from the projection beside `Known`, and only from there: the two are
-      /// halves of one fact — what was last recorded, and when.
-      mutable Since : DateTimeOffset
-      mutable Snapshot : PrSnapshot option
-      mutable Etags : PrEtags
-      mutable Health : string option
-      /// Set when the provider said to come back later; the epoch second it named.
-      mutable SkipUntilEpoch : int64 option
-      /// The epoch second this watch is next due, from what its last look found. Zero
-      /// until it has had one, which is what makes a fresh watch due immediately.
-      ///
-      /// Distinct from `SkipUntilEpoch` because they are different facts: that one is the
-      /// provider telling us to come back later, this one is our own cadence. Either can
-      /// hold a watch, and the later of the two wins by simply both being checked.
-      mutable DueAtEpoch : int64
-      /// Is a look at this watch in flight? One push delivers several events within a
-      /// second, and two overlapping looks could each `detect` the same transition and
-      /// record it twice — so a poke arriving mid-look is remembered rather than raced.
-      mutable InFlight : bool
-      /// A poke that arrived while a look was in flight. The completing look runs once
-      /// more for it, which collapses a burst into at most one extra look.
-      mutable PokeAgain : bool
-      /// Has a delivery ever reached this watch? Reported in the query, because "is my hook
-      /// wired up?" is otherwise unanswerable from anywhere: a working hook and a missing
-      /// one look identical apart from latency, and latency is what nobody measures.
-      mutable Pushed : bool }
-
 /// Every pull request this session watches, and what it last learned about them.
+///
+/// Qualified for `Watches.Watchers`' reason: the engine's face and this one carry the
+/// same four labels, and a bare construction would pick between them by declaration
+/// order.
+[<RequireQualifiedAccess>]
 type PrWatchers =
     { /// Reconcile against the projection — at boot, and after every watch or unwatch.
       /// An unchanged entry keeps its ETags and its last snapshot (the `McpConnections`
@@ -366,156 +340,70 @@ let create
     (record: Principal -> PrRef -> PrSnapshot -> PrTransition list -> Async<unit>)
     : PrWatchers =
 
-    let mutable entries : WatchEntry list = []
+    /// What a failed look says, and whether the provider said when to come back. The
+    /// provider naming a reset beats any backoff invented here; a rate limit that named none
+    /// waits a window's worth. The rest set no hold: the next look is the ordinary cadence's,
+    /// and a reply this session cannot read is the provider working and us not understanding
+    /// it, which no wait fixes.
+    let refusal (nowEpoch: int64) (failure: PrFetchFailure) : Watches.Refusal =
+        let health =
+            match failure with
+            | PrUnauthorized -> sprintf "%s rejected this credential" provider
+            | PrNotFound ->
+                sprintf "%s cannot see this pull request — it may be gone, or the credential cannot reach it" provider
+            | PrRateLimited _ -> sprintf "rate limited by %s — waiting for the window to reset" provider
+            | PrForbidden -> sprintf "%s does not let this credential read this pull request" provider
+            | PrUnreadable reason -> sprintf "%s answered with something this session could not read: %s" provider reason
+            | PrUnreachable reason -> reason
+        { Health = health
+          HoldUntilEpoch =
+            match failure with
+            | PrRateLimited reset -> Some (defaultArg reset (nowEpoch + 900L))
+            | PrUnauthorized | PrNotFound | PrForbidden | PrUnreadable _ | PrUnreachable _ -> None
+          CredentialRejected = (failure = PrUnauthorized) }
 
-    let apply (watches: PrWatch list) : unit =
-        entries <-
-            watches
-            |> List.map (fun watch ->
-                match entries |> List.tryFind (fun e -> e.Pr = watch.Pr && e.Watcher = watch.Watcher) with
-                // Kept, ETags and all — the projection's baseline still wins, because a
-                // recorded transition advanced both and they cannot disagree.
-                | Some existing ->
-                    existing.Known <- watch.Known
-                    existing.Since <- watch.Since
-                    existing
-                | None ->
-                    { Pr = watch.Pr
-                      Watcher = watch.Watcher
-                      Known = watch.Known
-                      Since = watch.Since
-                      Snapshot = None
-                      Etags = PrEtags.none
-                      Health = None
-                      SkipUntilEpoch = None
-                      DueAtEpoch = 0L
-                      InFlight = false
-                      PokeAgain = false
-                      Pushed = false })
+    /// A pull request as a kind of watch: GitHub's look, the transitions its facts define,
+    /// and the two cadences above.
+    let kind : Watches.Kind<PrRef, PrSnapshot, PrKnown, PrEtags, PrTransition> =
+        { Look =
+            fun token pr etags last nowEpoch ->
+                async {
+                    match! fetch token pr etags last with
+                    | PrChanged (snapshot, etags) -> return Watches.Read (snapshot, etags)
+                    | PrUnchanged -> return Watches.Unmoved
+                    | PrFetchFailed failure -> return Watches.Refused (refusal nowEpoch failure)
+                }
+          Detect = PrTransitions.detect
+          Advance = PrTransitions.advance
+          // A watch whose checks are pending is the one somebody is waiting on; everything
+          // else — settled, merged, closed, or a look that failed — waits the full minute, so
+          // a watch that cannot be read does not hammer at the fast cadence.
+          DueIn =
+            fun reading ->
+                match reading |> Option.map (fun s -> s.Checks) with
+                | Some ChecksPending -> int64 PendingIntervalMs / 1000L
+                | _ -> int64 SettledIntervalMs / 1000L
+          NoCursor = PrEtags.none
+          Record = record }
 
-    /// How long until this watch is next due, given what a look just found. `None` is a
-    /// look that produced no rollup — a failure — and waits the slow interval like a
-    /// settled one, so a watch that cannot be read does not hammer at the fast cadence.
-    let dueIn (checks: ChecksRollup option) : int64 =
-        match checks with
-        | Some ChecksPending -> int64 PendingIntervalMs / 1000L
-        | _ -> int64 SettledIntervalMs / 1000L
+    let watchers = Watches.create now resolveToken onUnauthorized kind
 
-    let pollEntry (force: bool) (entry: WatchEntry) : Async<bool> =
-        async {
-            let nowEpoch = (now ()).ToUnixTimeSeconds ()
-            let heldByProvider = entry.SkipUntilEpoch |> Option.exists (fun until -> until > nowEpoch)
-            // A poke overrides OUR cadence and never the provider's hold — asking inside a
-            // window the provider already named would spend a request to be refused.
-            if heldByProvider || (not force && entry.DueAtEpoch > nowEpoch) then return false
-            else
-                entry.SkipUntilEpoch <- None
-                let! token = resolveToken (CredentialFor.Person entry.Watcher)
-                let! outcome = fetch token entry.Pr entry.Etags entry.Snapshot
-                // Whatever the look found, this watch has had its turn: the next one is
-                // scheduled from what it now knows, so a suite finishing drops the watch
-                // back to the slow cadence on the very poll that noticed.
-                let schedule (checks: ChecksRollup option) =
-                    entry.DueAtEpoch <- nowEpoch + dueIn checks
-                match outcome with
-                | PrUnchanged ->
-                    schedule (entry.Snapshot |> Option.map (fun s -> s.Checks))
-                    return false
-                | PrChanged (snapshot, etags) ->
-                    let transitions = PrTransitions.detect entry.Known snapshot
-                    if not (List.isEmpty transitions) then
-                        do! record entry.Watcher entry.Pr snapshot transitions
-                        entry.Known <- transitions |> List.fold PrTransitions.advance entry.Known
-                    let moved = entry.Snapshot <> Some snapshot || entry.Health <> None
-                    entry.Snapshot <- Some snapshot
-                    entry.Etags <- etags
-                    entry.Health <- None
-                    schedule (Some snapshot.Checks)
-                    return moved
-                | PrFetchFailed failure ->
-                    let health =
-                        match failure with
-                        | PrUnauthorized -> sprintf "%s rejected this credential" provider
-                        | PrNotFound ->
-                            sprintf
-                                "%s cannot see this pull request — it may be gone, or the credential cannot reach it"
-                                provider
-                        | PrRateLimited _ -> sprintf "rate limited by %s — waiting for the window to reset" provider
-                        | PrForbidden -> sprintf "%s does not let this credential read this pull request" provider
-                        | PrUnreadable reason ->
-                            sprintf "%s answered with something this session could not read: %s" provider reason
-                        | PrUnreachable reason -> reason
-                    match failure with
-                    | PrUnauthorized -> do! onUnauthorized (CredentialFor.Person entry.Watcher)
-                    | PrRateLimited reset ->
-                        // The provider names the moment it will answer again, which beats any
-                        // backoff invented here. Absent, wait a window's worth.
-                        entry.SkipUntilEpoch <-
-                            Some (defaultArg reset ((now ()).ToUnixTimeSeconds () + 900L))
-                    // Neither says to come back later, so neither sets a hold: the next
-                    // poll is the ordinary cadence's. A reply this session cannot read is
-                    // the provider working and us not understanding it, which no wait fixes.
-                    | PrNotFound | PrForbidden | PrUnreadable _ | PrUnreachable _ -> ()
-                    let moved = entry.Health <> Some health
-                    entry.Health <- Some health
-                    schedule None
-                    return moved
-        }
-
-    /// One look at one watch, with the in-flight bookkeeping around it. A poke that lands
-    /// while a look is running is remembered and served by that look when it finishes, so a
-    /// push delivering five events in a second costs one extra look rather than five — and,
-    /// more importantly, never two overlapping ones recording the same transition twice.
-    let rec look (force: bool) (entry: WatchEntry) : Async<bool> =
-        async {
-            if force then entry.Pushed <- true
-            if entry.InFlight then
-                entry.PokeAgain <- entry.PokeAgain || force
-                return false
-            else
-                entry.InFlight <- true
-                let! moved = pollEntry force entry
-                entry.InFlight <- false
-                if entry.PokeAgain then
-                    entry.PokeAgain <- false
-                    let! again = look true entry
-                    return moved || again
-                else
-                    return moved
-        }
-
-    { Apply = apply
-      Poll =
-        fun () ->
-            async {
-                let mutable moved = false
-                // A snapshot of the list, so a watch added mid-tick is picked up by the
-                // next one rather than mutating what this one is walking.
-                for entry in List.ofSeq entries do
-                    let! entryMoved = look false entry
-                    moved <- moved || entryMoved
-                return moved
-            }
-      Poke =
-        fun repo ->
-            async {
-                let mutable moved = false
-                for entry in entries |> List.filter (fun e -> e.Pr.Repo = repo) do
-                    let! entryMoved = look true entry
-                    moved <- moved || entryMoved
-                return moved
-            }
+    { Apply =
+        fun watches ->
+            watchers.Apply (watches |> List.map (fun w -> { Watches.Watch.Key = w.Pr; Watches.Watch.Watcher = w.Watcher; Watches.Watch.Known = w.Known; Watches.Watch.Since = w.Since }))
+      Poll = watchers.Poll
+      Poke = fun repo -> watchers.Poke (fun pr -> pr.Repo = repo)
       Rows =
         fun () ->
-            entries
-            |> List.map (fun e ->
-                { Pr = e.Pr
-                  Watcher = e.Watcher
-                  Snapshot = e.Snapshot
-                  Known = e.Known
-                  Since = e.Since
-                  Pushed = e.Pushed
-                  Health = e.Health }) }
+            watchers.Rows ()
+            |> List.map (fun row ->
+                { Pr = row.Key
+                  Watcher = row.Watcher
+                  Snapshot = row.Snapshot
+                  Known = row.Known
+                  Since = row.Since
+                  Pushed = row.Pushed
+                  Health = row.Health }) }
 
 // --- the watch verbs ----------------------------------------------------------------------
 
