@@ -294,6 +294,42 @@ type SessionArtifacts =
       /// Every name, with its latest version.
       Names : unit -> (string * ArtifactRef) list }
 
+/// What `weigh` asks the sandbox. Every answer it can give is one this side named: left to
+/// report for itself the shell says `sh: 1: cannot open /x: No such file`, which is true, and
+/// written for whoever wrote the shell rather than for the agent that must now decide what to
+/// do instead. These exit codes are that decision, taken here where it can be tested.
+let weighScript =
+    "if [ ! -e \"$1\" ]; then exit 3
+     elif [ -d \"$1\" ]; then exit 4
+     elif [ ! -r \"$1\" ]; then exit 5
+     else wc -c < \"$1\"
+     fi"
+
+/// How big the file is, or why the agent cannot have it — every refusal names the path, the
+/// sandbox it was looked for in, and what to do instead, because the agent reads this and acts.
+let weighed (sandbox: SandboxRef) (path: string) (code: int, out: string, err: string) : Result<int64, string> =
+    match code with
+    | 0 ->
+        match System.Int64.TryParse ((out: string).Trim ()) with
+        | true, bytes -> Ok bytes
+        | false, _ -> Error (sprintf "could not tell how big %s is" path)
+    | 3 ->
+        Error (
+            sprintf
+                "there is no %s in sandbox '%s' — share a path that exists there, and name the sandbox if the file is in another one"
+                path
+                (SandboxRef.render sandbox))
+    | 4 ->
+        Error (
+            sprintf
+                "%s is a directory, and an artifact is one file — share the file inside it, or archive it and share that"
+                path)
+    | 5 -> Error (sprintf "%s is not readable in sandbox '%s'" path (SandboxRef.render sandbox))
+    | _ ->
+        match (err: string).Trim () with
+        | "" -> Error (sprintf "%s is not a file sandbox '%s' can read" path (SandboxRef.render sandbox))
+        | said -> Error (sprintf "could not tell how big %s is: %s" path said)
+
 let unavailable : SessionArtifacts =
     { SessionArtifacts.Share = fun _ _ _ _ -> async { return Error "this session has nowhere to keep artifacts" }
       SessionArtifacts.Versions = fun _ -> []
@@ -355,18 +391,9 @@ let create
     /// arrives after 100 MB has been written is a refusal that already cost what it was for.
     let weigh (sandbox: SandboxRef) (path: string) : Async<Result<int64, string>> =
         async {
-            match! run sandbox "an artifact was shared" "wc -c < \"$1\"" [ path ] with
+            match! run sandbox "an artifact was shared" weighScript [ path ] with
             | Error reason -> return Error reason
-            | Ok (0, out, _) ->
-                match System.Int64.TryParse (out.Trim ()) with
-                | true, bytes -> return Ok bytes
-                | false, _ -> return Error (sprintf "could not tell how big %s is" path)
-            | Ok (_, _, err) ->
-                let said = err.Trim ()
-                return
-                    Error (
-                        if said = "" then sprintf "%s is not a file this sandbox can read" path
-                        else said)
+            | Ok answer -> return weighed sandbox path answer
         }
 
     /// The bytes, copied by the SANDBOX into the store — which it can do because the store is

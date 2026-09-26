@@ -879,6 +879,18 @@ let private artifactTests =
 
     let firstVersion (name: string) = ArtifactRef.first name stamp
 
+    let sandboxNamed name =
+        match SandboxName.create name with
+        | Ok n -> SandboxRef.create SessionOwned n
+        | Error e -> failwithf "sandbox name: %s" e
+
+    /// The refusal, which is the thing under test — a weighing that answered with a size when it
+    /// was asked about a path that is not there would be the fault, not a bad message.
+    let expectError (result: Result<int64, string>) =
+        match result with
+        | Error said -> said
+        | Ok bytes -> failwithf "expected a refusal, got %d bytes" bytes
+
     testList
         "artifacts"
         [ testCaseAsync "a share_artifact answers with the address the store minted" <|
@@ -918,6 +930,44 @@ let private artifactTests =
                 let! answer = session.Call "share_artifact" """{"path":"big.iso"}"""
                 Expect.stringContains (answered answer) "at most 100 MB" "the cap, as the store said it"
             }
+
+          // What the sandbox's shell says about a path is written for whoever wrote the shell
+          // (`sh: 1: cannot open /x: No such file`). The agent reads this and decides what to do
+          // next, so every answer the question can have is one this side named.
+          testList
+              "weighing the file the caller named"
+              [ test "a byte count is the size" {
+                    Expect.equal
+                        (Artifacts.weighed SandboxRef.defaultRef "out/chart.png" (0, "2048\n", ""))
+                        (Ok 2048L)
+                        "what wc counted"
+                }
+
+                test "a path that is not there says so, and where it looked" {
+                    let said = expectError (Artifacts.weighed (sandboxNamed "dev") "out/chart.png" (3, "", ""))
+                    Expect.stringContains said "out/chart.png" "the path the caller named"
+                    Expect.stringContains said "'dev'" "the sandbox it was looked for in — the file may be in another"
+                    Expect.isFalse (said.Contains "sh:") "not the shell's own complaint"
+                }
+
+                test "a directory says what an artifact is instead" {
+                    let said = expectError (Artifacts.weighed SandboxRef.defaultRef "out" (4, "", ""))
+                    Expect.stringContains said "one file" "an artifact is a file, and the agent has to pick one"
+                }
+
+                test "a file it cannot read is not a file that is missing" {
+                    let said = expectError (Artifacts.weighed SandboxRef.defaultRef "/root/key" (5, "", ""))
+                    Expect.stringContains said "not readable" "which is a different thing to do about"
+                }
+
+                // An exit code nothing here anticipated is the one case where the shell knows more
+                // than this side does, so its words are kept — under a sentence that says what was
+                // being attempted.
+                test "an answer nobody anticipated keeps what the shell said" {
+                    let said = expectError (Artifacts.weighed SandboxRef.defaultRef "out/chart.png" (126, "", "Permission denied\n"))
+                    Expect.stringContains said "Permission denied" "the shell's words"
+                    Expect.stringContains said "how big out/chart.png is" "and what was being asked"
+                } ]
         ]
 
 let tests = testList "Tool calls" [ tests'; fileTests; artifactTests; launchTests ]
