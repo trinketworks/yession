@@ -50,6 +50,13 @@ type CommandServices =
       /// the view of the session's own sandboxes, where their answers are acted on,
       /// and a repo's sandbox is a container with a view of its own.
       WorkCheckout : RepoRef -> string option -> CheckoutViews
+      /// What the checkouts declare their sandboxes to be, as the last fold read it (Plan 27);
+      /// empty in a session with nothing to fold.
+      ///
+      /// Needed because a repo's sandbox is its FILE's to describe, and the tool that names
+      /// one carries a declaration with nothing in it — so a start given the caller's
+      /// declaration verbatim came up, or refused, as something the repo never wrote.
+      DeclaredSandboxes : unit -> (SandboxRef * SandboxDecl) list
       /// The terminal manager, which owns the shell profile (Plan 25).
       Terminals : unit -> SessionTerminals.SessionTerminals
       /// The files inside each sandbox, for the two commands that change one.
@@ -966,7 +973,54 @@ let private repoCapabilitiesFor
 
 /// The turn's sandbox commands (Plan 15, stage 2) and the shell profile (Plan 25), bound to
 /// the acting party.
-let private sandboxCapabilitiesFor (turnActor: Principal) (capabilities: AgentCapabilities) : AgentCapabilities =
+/// A repo's sandbox is its file's to describe, so a start that names one starts it as the
+/// file says. The caller's declaration contributes the one thing the file cannot know —
+/// which of this session's credentials to forward — and contributes it by UNION: a repo that
+/// asked for a credential does not stop needing it because somebody restarted the sandbox
+/// without naming it.
+///
+/// Resolved where the gated call is MINTED, not where it is carried out, so what the gate
+/// records and shows to whoever approves it is what will actually run.
+///
+/// A name no file declares is refused here, naming what that repo does declare — the fold
+/// would otherwise start it from an empty declaration and refuse it further down for having
+/// no container, which reads as a complaint about a `yession.yaml` that declares one.
+let private declarationFor
+    (services: CommandServices)
+    (name: SandboxRef)
+    (asked: SandboxDecl)
+    : Result<SandboxDecl, string> =
+    match SandboxRef.scope name with
+    | SessionOwned -> Ok asked
+    | RepoOwned repo ->
+        let declared = services.DeclaredSandboxes ()
+        match declared |> List.tryFind (fun (ref, _) -> ref = name) with
+        | Some (_, decl) ->
+            Ok { decl with Forward = ConnectionName.normalise (decl.Forward @ asked.Forward) |> List.map ConnectionName.value }
+        | None ->
+            let siblings =
+                declared
+                |> List.filter (fun (ref, _) -> SandboxRef.scope ref = RepoOwned repo)
+                |> List.map (fst >> SandboxRef.render)
+            match siblings with
+            | [] ->
+                Error (
+                    sprintf
+                        "%s declares no sandboxes — a repo's work sandbox comes from its yession.yaml, and `repo_config` says what this session made of that file"
+                        (RepoRef.value repo))
+            | names ->
+                Error (
+                    sprintf
+                        "%s declares no sandbox named '%s' — it declares %s"
+                        (RepoRef.value repo)
+                        (SandboxName.value (SandboxRef.name name))
+                        (String.concat ", " names))
+
+let private sandboxCapabilitiesFor
+    (services: CommandServices)
+    (turnActor: Principal)
+    (capabilities: AgentCapabilities)
+    : AgentCapabilities =
     let gated (tool: string) (args: string list) (summary: string) =
         capabilities.RunGated
             { Tool = tool
@@ -977,7 +1031,11 @@ let private sandboxCapabilitiesFor (turnActor: Principal) (capabilities: AgentCa
         Sandboxes =
           { capabilities.Sandboxes with
               Start =
-                fun name decl -> capabilities.RunGated (startWorkSandboxCall (Authority.agentFor turnActor) None name decl)
+                fun name decl ->
+                  match declarationFor services name decl with
+                  | Error e -> async { return Error e }
+                  | Ok decl ->
+                      capabilities.RunGated (startWorkSandboxCall (Authority.agentFor turnActor) None name decl)
               Stop =
                 fun name ->
                   gated
@@ -1045,6 +1103,6 @@ let private artifactCapabilitiesFor (turnActor: Principal) (capabilities: AgentC
 let bindFor (services: CommandServices) (turnActor: Principal) (capabilities: AgentCapabilities) : AgentCapabilities =
     capabilities
     |> repoCapabilitiesFor services turnActor
-    |> sandboxCapabilitiesFor turnActor
+    |> sandboxCapabilitiesFor services turnActor
     |> fileCapabilitiesFor turnActor
     |> artifactCapabilitiesFor turnActor
