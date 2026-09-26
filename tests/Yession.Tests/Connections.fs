@@ -4454,6 +4454,7 @@ let private watchEngineTests =
           Watches.Kind.Advance = fun _ change -> change
           Watches.Kind.DueIn = fun _ -> 60L
           Watches.Kind.NoCursor = ()
+          Watches.Kind.Describe = fun key -> sprintf "counter %d" key
           Watches.Kind.Record = fun _ key _ changes -> async { recorded.Add (key, changes) } }
     let engine (kind: Watches.Kind<int, int, int, unit, int>) =
         Watches.create (fun () -> started) (fun _ -> async { return None }) (fun _ -> async { return () }) kind
