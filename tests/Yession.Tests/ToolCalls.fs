@@ -630,6 +630,42 @@ let private tests' =
                 Expect.isFalse (text.Contains "container") "not a complaint about a container the file declares"
             }
 
+        // `dev` is what an agent writes after reading "started sandbox octo/hello:dev".
+        // Every verb that reaches a RUNNING sandbox already reads it that way; starting was
+        // the one door that did not, so a bare name whose repo sandbox had been stopped made
+        // a NEW session-owned sandbox with none of the file's container — silently, under a
+        // name that says it is the repo's.
+        testCaseAsync "a bare name the session does not hold is the one sandbox a repo declares by it" <|
+            async {
+                let mutable asked : SandboxRequest option = None
+                let session = openToolSession (declaringDev (fun request -> asked <- Some request))
+                let! answer = session.Call "start_work_sandbox" """{"name":"dev"}"""
+                Expect.stringContains (answered answer) "octo/hello:dev" "the repo's sandbox, said in full"
+                let spec : EnvironmentSpec = (Option.get asked).Spec
+                Expect.equal
+                    (SandboxRuntime.describe spec.Runtime)
+                    "ghcr.io/octo/dev:3"
+                    "started as the file declares it, not as an empty session sandbox"
+            }
+
+        // Two checkouts declaring `dev` is a name with two meanings, and picking either is
+        // picking for the caller. Refuse, naming both, so the next ask can say which.
+        testCaseAsync "a bare name two repos declare is refused naming both" <|
+            async {
+                let services = declaringDev ignore
+                let other = SandboxRef.parse "octo/world:dev" |> expect
+                let session =
+                    openToolSession
+                        { services with
+                            DeclaredSandboxes =
+                                fun () -> services.DeclaredSandboxes () @ [ other, SandboxDecl.empty ] }
+                let! answer = session.Call "start_work_sandbox" """{"name":"dev"}"""
+                let text = answered answer
+                Expect.stringContains text "ambiguous" "the name means two things"
+                Expect.stringContains text "octo/hello:dev" "one of them"
+                Expect.stringContains text "octo/world:dev" "and the other"
+            }
+
     ]
 
 // --- a person's first repo -----------------------------------------------------------------
