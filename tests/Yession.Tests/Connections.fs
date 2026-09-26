@@ -4435,9 +4435,82 @@ let private clockTests =
             stop ()
     ]
 
+/// The engine every kind of watch shares, driven by a kind that is not a pull request — a
+/// counter at a source — so what is pinned is the engine, and a second kind is shown to need
+/// nothing but its own five parts.
+let private watchEngineTests =
+    let ada = Principal.Peer (PeerId.create "ada" |> expect)
+    let started = DateTimeOffset (2026, 9, 25, 0, 0, 0, TimeSpan.Zero)
+    /// A source whose value the case sets, and a record of what the engine recorded.
+    let counterKind (source: int ref) (refusal: Watches.Refusal option ref) (recorded: ResizeArray<int * int list>) =
+        { Watches.Kind.Look =
+            fun _ _ _ _ _ ->
+                async {
+                    match refusal.Value with
+                    | Some r -> return Watches.Refused r
+                    | None -> return Watches.Read (source.Value, ())
+                }
+          Watches.Kind.Detect = fun (known: int) (fresh: int) -> if fresh <> known then [ fresh ] else []
+          Watches.Kind.Advance = fun _ change -> change
+          Watches.Kind.DueIn = fun _ -> 60L
+          Watches.Kind.NoCursor = ()
+          Watches.Kind.Record = fun _ key _ changes -> async { recorded.Add (key, changes) } }
+    let engine (kind: Watches.Kind<int, int, int, unit, int>) =
+        Watches.create (fun () -> started) (fun _ -> async { return None }) (fun _ -> async { return () }) kind
+    let watching (known: int) : Watches.Watch<int, int> list =
+        [ { Key = 7; Watcher = ada; Known = known; Since = started } ]
+
+    testList "The watch engine" [
+        // Catch-up is not a path of its own: a process that starts over a log looks at once,
+        // and compares against what the log last knew — so what moved while nothing was
+        // running is found the way a routine look finds anything.
+        testCaseAsync "the first look after a restart finds what moved since the log's last word" <|
+            async {
+                let recorded = ResizeArray ()
+                let watchers = engine (counterKind (ref 5) (ref None) recorded)
+                watchers.Apply (watching 3)
+                let! moved = watchers.Poll ()
+                Expect.isTrue moved "a query has something new to show"
+                Expect.equal (List.ofSeq recorded) [ 7, [ 5 ] ] "the change from the log's 3 to the source's 5, recorded"
+            }
+
+        testCaseAsync "a watch this process has not looked at shows no reading at all" <|
+            async {
+                let watchers = engine (counterKind (ref 5) (ref None) (ResizeArray ()))
+                watchers.Apply (watching 3)
+                Expect.isNone (List.exactlyOne (watchers.Rows ())).Snapshot "the log's last word is not a reading of the world"
+            }
+
+        testCaseAsync "nothing is looked at twice within its cadence" <|
+            async {
+                let recorded = ResizeArray ()
+                let source = ref 5
+                let watchers = engine (counterKind source (ref None) recorded)
+                watchers.Apply (watching 3)
+                let! _ = watchers.Poll ()
+                source.Value <- 9
+                let! _ = watchers.Poll ()
+                Expect.equal (List.ofSeq recorded) [ 7, [ 5 ] ] "not due again until its cadence says"
+            }
+
+        testCaseAsync "a hold the source named is kept, pokes included" <|
+            async {
+                let recorded = ResizeArray ()
+                let refusal = ref (Some { Watches.Refusal.Health = "rate limited"; Watches.Refusal.HoldUntilEpoch = Some (started.ToUnixTimeSeconds () + 600L); Watches.Refusal.CredentialRejected = false })
+                let watchers = engine (counterKind (ref 5) refusal recorded)
+                watchers.Apply (watching 3)
+                let! _ = watchers.Poll ()
+                refusal.Value <- None
+                let! _ = watchers.Poke (fun _ -> true)
+                Expect.isEmpty (List.ofSeq recorded) "nothing asked inside the window the source named"
+                Expect.equal (List.exactlyOne (watchers.Rows ())).Health (Some "rate limited") "and the reason is what the row says"
+            }
+    ]
+
 let tests =
     testList "Connections" [
         clockTests
+        watchEngineTests
         panelTests
         panelFoldTests
         panelWireTests
