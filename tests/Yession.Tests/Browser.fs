@@ -1952,6 +1952,49 @@ let editorTests =
         // The document-level check the case above makes cannot see this: the timeline's own
         // scrollbox absorbs the overflow, so `documentElement.scrollWidth` stays honest while
         // the conversation is unreadable. What is asserted is the column, and only the column.
+        // Typing into the composer with a phone keyboard up never scrolls the page past the
+        // shell. Photographed on iOS as a band of empty page between the composer and the
+        // keyboard, which stayed after the keyboard went: ProseMirror's scroll-to-caret
+        // scrolled the WINDOW, measured against the visual viewport's height without its
+        // offset, so a caret the platform had already brought into view was scrolled for
+        // again — on a send (the cleared draft) and on typing, neither of which the update
+        // loop sees.
+        //
+        // A keyboard is the visual viewport shrinking under a layout that does not, which a
+        // page scale is here. iOS also lets the page scroll into the keyboard's height; the
+        // room below the shell stands in for that, and is the room the double scroll spent.
+        editorCaseIn 390 844 "typing in the composer with the keyboard up never scrolls the page past the shell" <| fun page ->
+            async {
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-draft-editor] .ProseMirror")
+                do! awaitU (
+                        page.EvaluateAsync
+                            """() => {
+                                 const room = document.createElement('div')
+                                 room.style.height = '400px'
+                                 document.body.appendChild(room)
+                                 document.getElementById('shell').scrollIntoView({ block: 'end' })
+                               }""")
+                do! awaitU (page.ClickAsync "#shell [data-draft-editor] .ProseMirror")
+                let! cdp = await (page.Context.NewCDPSessionAsync page)
+                let scale = Collections.Generic.Dictionary<string, obj> ()
+                scale.["pageScaleFactor"] <- box 1.6
+                let! _ = await (cdp.SendAsync ("Emulation.setPageScaleFactor", scale))
+                let! _ = await (page.WaitForFunctionAsync "visualViewport.height < innerHeight")
+
+                // How far the visible area runs past the shell's foot, in CSS pixels: the gap.
+                let pastShell () =
+                    page.EvaluateAsync<float>
+                        """() => {
+                             const shell = document.getElementById('shell').getBoundingClientRect()
+                             return (visualViewport.offsetTop + visualViewport.height) - shell.bottom
+                           }"""
+                    |> await
+                do! awaitU (page.Keyboard.TypeAsync "one")
+                do! awaitU (page.Keyboard.PressAsync "Enter")
+                do! awaitU (page.Keyboard.TypeAsync "two")
+                let! typed = pastShell ()
+                Expect.isTrue (typed <= 1.0) (sprintf "typing left %.0fpx of page under the shell" typed)
+            }
         editorCaseIn 390 844 "a message no line break fits inside never scrolls the timeline sideways" <| fun page ->
             async {
                 let! width = await (page.EvaluateAsync<int> "() => window.innerWidth")
