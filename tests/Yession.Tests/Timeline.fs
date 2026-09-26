@@ -2168,6 +2168,73 @@ let private contentChipTests =
             Expect.isTrue (rendered.Contains "target=\"_blank\"") "opened the way a link out of the session is"
     ]
 
+/// A stretch in which nothing was running, drawn as a break in the page. What has to hold
+/// however the break is styled: it is a break and not something somebody said, it offers BOTH
+/// readings of its time, the reading is a press away and reversible, and the control says what
+/// it does even though its visible words are only a duration.
+let private sessionBreakTests =
+    let cameBack = DateTimeOffset (2026, 9, 25, 13, 0, 0, TimeSpan.Zero)
+    /// A resumption stamped `at'`, `hours` after the previous process was last heard from. The
+    /// envelope's time is one end of the gap, so it cannot be left to a fixture default.
+    let resumption (id: string) (offset: int64) (hours: float) (at': DateTimeOffset) =
+        { EventId = EventId.fresh ()
+          SessionId = sessionId
+          Offset = EventOffset.create offset |> expect
+          Actor = ActorRef.SessionProcess
+          Timestamp = at'
+          Event = SessionResumed { MessageId = message id; LastHeardAt = at'.AddHours -hours } }
+    let showing (reading: string) = Dom.attr Dom.Hooks.sessionBreak reading
+    let press (id: string) (model: ClientModel) = ClientModel.update (ToggleBreakTimeMsg (message id)) model
+    let oneBreak () = clientOf [ resumption "r" 1L 7.0 cameBack ]
+
+    testList "A break where the session was away" [
+        testCase "a resumption draws a break saying how long, in words" <| fun () ->
+            let html = Support.render (oneBreak ())
+            Expect.isTrue (html.Contains (showing Dom.Text.breakElapsed)) "a break, showing how long it was"
+            Expect.stringContains html "7 hours later" "spelled out, because the label is only the duration"
+
+        // It is drawn as a break INSTEAD of an act note, not as well as: the sentence the agent
+        // is given still says it, and the same words in a line of the chat would say it twice.
+        testCase "the break replaces the act note rather than joining it" <| fun () ->
+            let html = Support.render (oneBreak ())
+            Expect.isFalse (html.Contains "session resumed after being stopped for") "not also a line in the chat"
+
+        // Hovering must answer without changing anything, so the moment is on the control from
+        // the start rather than swapped in with the label.
+        testCase "the break carries the moment before anything is pressed" <| fun () ->
+            Expect.stringContains
+                (Support.render (oneBreak ()))
+                (Dom.attr "title" (Moment.stamp cameBack))
+                "the moment is there to hover"
+
+        testCase "pressing it shows the moment, and pressing again puts the duration back" <| fun () ->
+            let pressed = Support.render (press "r" (oneBreak ()))
+            Expect.isTrue (pressed.Contains (showing Dom.Text.breakMoment)) "now reading as a moment"
+            Expect.stringContains pressed (Moment.stamp cameBack) "and the moment is what it says"
+            let again = Support.render (press "r" (press "r" (oneBreak ())))
+            Expect.isTrue (again.Contains (showing Dom.Text.breakElapsed)) "and back to how long"
+
+        // The visible words are "7 hours later", which announces neither that it is a control
+        // nor what pressing it does. Both have to be said where a keyboard and a screen reader
+        // can reach them.
+        testCase "its label is a control that says what pressing it does" <| fun () ->
+            let html = Support.render (oneBreak ())
+            Expect.stringContains html (Dom.attr "aria-label" Dom.Text.sessionBreakShowMoment) "what a press will do"
+            Expect.stringContains html "<button" "a real button, so Tab and Enter reach it"
+            Expect.stringContains
+                (Support.render (press "r" (oneBreak ())))
+                (Dom.attr "aria-label" Dom.Text.sessionBreakShowElapsed)
+                "and what the next press will"
+
+        // Two breaks are two questions. This is what the set in the model buys over one slot,
+        // and the only case that can tell the two apart.
+        testCase "answering one break leaves the other alone" <| fun () ->
+            let model = clientOf [ resumption "first" 1L 7.0 cameBack; resumption "second" 2L 2.0 (cameBack.AddHours 9.0) ]
+            let html = Support.render (press "first" model)
+            Expect.stringContains html "2 hours later" "the break nobody pressed still reads as a duration"
+            Expect.stringContains html (Moment.stamp cameBack) "and the pressed one as a moment"
+    ]
+
 let tests =
     testList "Timeline and the pane (Plan 14)" [
         contentChipTests
@@ -2175,6 +2242,7 @@ let tests =
         sandboxTaskTests
         sandboxCauseTests
         replyRefRenderTests
+        sessionBreakTests
         pinTests
         orderTests
         toolTests

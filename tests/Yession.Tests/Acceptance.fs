@@ -202,6 +202,7 @@ let private representativeModel : ClientModel =
       TerminalsOpen = true
       ItemMenu = None
       OpenFolds = Set.empty
+      DatedBreaks = Set.empty
       Copied = None
       // The pane shows a TAB by default; the list is what the cases below turn on.
       Claude =
