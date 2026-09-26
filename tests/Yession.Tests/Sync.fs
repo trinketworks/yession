@@ -425,6 +425,19 @@ let private codecTests =
                 (SyncedStateSync.chapterNameText doc "msg-elsewhere")
                 "no chapter, no text"
 
+        // What a peer wrote where a name goes is not a name because of where it sits. A
+        // caret measured against a map, or an edit inserted into one, is the fault arriving
+        // somewhere else entirely — so a name that is not text is no text, as it is to `decode`.
+        testCase "a chapter whose name is not text has no name text" <| fun () ->
+            let doc = Y.Doc.Create ()
+            entryIn doc "chapters" "msg-1" [ "opens", box "yes"; "name", box (Y.Map.Create () : Y.Map<obj>) ]
+            Expect.isNone (SyncedStateSync.chapterNameText doc "msg-1") "a map is not a name"
+
+        testCase "a chapter that is not an entry has no name text" <| fun () ->
+            let doc = Y.Doc.Create ()
+            (doc.getMap "chapters" : Y.Map<obj>).set ("msg-1", box "not an entry") |> ignore
+            Expect.isNone (SyncedStateSync.chapterNameText doc "msg-1") "a scalar holds no name"
+
         // And the thing that could break every caret in a name at once, silently: the name
         // has to stay the SAME text as it is edited. A re-flush that minted a fresh `Y.Text`
         // would leave collaborators' positions resolving to nothing, while the name went on
