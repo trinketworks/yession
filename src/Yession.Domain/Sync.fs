@@ -439,7 +439,7 @@ module SyncedStateSync =
 
     /// The map's keys, drained from the iterator Yjs answers with.
     let private mapKeys (m: Yjs.Y.Map<obj>) : string[] =
-        JS.Constructors.Array.from (unbox<string seq> (m.keys ()))
+        JS.Constructors.Array.from (m.keys ())
 
     /// Yjs materializes root types created by a *remote* update as untyped placeholders
     /// until they are first `get` locally; a structural read of such a doc would miss
