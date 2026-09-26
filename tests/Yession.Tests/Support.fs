@@ -16,6 +16,7 @@ open Fable.Core
 open Fable.Pyxpecto
 open Yjs
 open Yession.Domain
+open Yession.Domain.Chat
 open Yession.Domain.Sandboxes
 open Yession.Domain.Link
 open Yession.Domain.Collab
@@ -186,6 +187,39 @@ let runInSandbox
 /// Render the client view to an HTML string for markup assertions — through the very
 /// renderer the served bootstrap uses (`Ssr`), so tests exercise the shipped SSR path.
 /// The view's `ViewActions` are no-ops (handlers fire on live browser events only).
+/// A log without the session's own account of its life: that it started, and that it came
+/// back after being away. Every case asking "what did this peer append?" or "what did that
+/// turn write?" means this — a fresh session's log opens with `SessionStarted` before anybody
+/// could have appended anything, so a case comparing whole logs would be pinning the session's
+/// lifecycle in the middle of an assertion about something else.
+///
+/// Deliberately not a filter over kinds in general: these two are the only events nothing in
+/// the session asked for, and a case that wanted to ignore anything more would be saying it
+/// does not know what it is asserting.
+let appended (events: SessionEvent list) : SessionEvent list =
+    events
+    |> List.filter (fun event ->
+        match event with
+        | SessionStarted _
+        | SessionResumed _ -> false
+        | _ -> true)
+
+/// This client's timeline without the session's own note that it came back — `appended`'s rule
+/// on the other side of the wire. (That it STARTED never reaches the projection at all, so
+/// there is nothing to drop for it here.) Only that one act is dropped, never acts in general: a
+/// repo added or a command refused is something that happened in the session, and a case listing
+/// the timeline wants to see it.
+let timelineOf (model: ClientModel) : Chat.ConversationItem list =
+    model.Conversation.Items
+    |> List.filter (fun item ->
+        match item.Content with
+        | ItemContent.Act (Act.SessionResumed _) -> false
+        | _ -> true)
+
+/// What was said on it, in order — the form most cases want.
+let saidOn (model: ClientModel) : string list =
+    timelineOf model |> List.map Chat.ConversationItem.said
+
 let render (model: ClientModel) : string = Ssr.renderModel model
 
 /// One template, rendered the same way — for a piece of the view that can be asked about

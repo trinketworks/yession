@@ -17,29 +17,48 @@ open Yession.Domain.Repos
 /// deterministic scripted runner are interchangeable (docs/design.md §1 "Capabilities
 /// are scoped, not ambient", "Verification is automated end-to-end").
 
-/// Everything the agent is given for one turn. Phase 1: no tools, no environment.
+/// One resumption, both ends of the gap it names: when the session came back, and when the
+/// process before it was last heard from. A pair rather than a span because the prompt says
+/// all three numbers, and a span cannot be asked what it was measured between.
+type Resumption =
+    { At : System.DateTimeOffset
+      LastHeardAt : System.DateTimeOffset }
+
 /// What the log says about the session's own time: when it began, and when it last came back
 /// after being stopped. The agent is told both, because an agent that does not know a night
 /// passed reads "checks pending" from before it as if it were a minute old.
+///
+/// Both are read from the EVENT that states them, never from a position in the list. A log's
+/// first envelope is the session's start only while every caller passes the whole log, which
+/// is a habit and not an invariant — and this function cannot tell a log from a page of one,
+/// so it would answer a window's beginning as a session's and no reader could tell. A named
+/// event is found wherever it sits, and absent it the answer is `None` rather than a guess.
 type SessionHistory =
     { StartedAt : System.DateTimeOffset option
-      /// When the session last resumed, and when it was last heard from before that.
-      LastResumed : (System.DateTimeOffset * System.DateTimeOffset) option }
+      LastResumed : Resumption option }
 
 module SessionHistory =
 
     let none : SessionHistory = { StartedAt = None; LastResumed = None }
 
     let ofEnvelopes (envelopes: EventEnvelope<SessionEvent> list) : SessionHistory =
-        { StartedAt = envelopes |> List.tryHead |> Option.map (fun e -> e.Timestamp)
+        { StartedAt =
+            envelopes
+            |> List.tryPick (fun e ->
+                match e.Event with
+                | SessionStarted _ -> Some e.Timestamp
+                | _ -> None)
+          // The LAST resumption: a log holds one per boot, and what the agent is told is
+          // where this process came in.
           LastResumed =
             envelopes
-            |> List.tryFindBack (fun e -> match e.Event with SessionResumed _ -> true | _ -> false)
-            |> Option.bind (fun e ->
+            |> List.rev
+            |> List.tryPick (fun e ->
                 match e.Event with
-                | SessionResumed r -> Some (e.Timestamp, r.LastHeardAt)
+                | SessionResumed r -> Some { At = e.Timestamp; LastHeardAt = r.LastHeardAt }
                 | _ -> None) }
 
+/// Everything the agent is given for one turn. Phase 1: no tools, no environment.
 type AgentContextPack =
     { SessionId      : SessionId
       Conversation   : ConversationItem list

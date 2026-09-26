@@ -575,7 +575,9 @@ let private e2eTests =
                 // The client's timeline gains the sent message and then the agent's
                 // completed response — all consumed as events.
                 do! a.Runner.WaitFor (fun m ->
-                        let said = m.Conversation.Items |> List.map (fun i -> (i.Author, ConversationItem.said i, i.Status))
+                        // `timelineOf`, not every item: the session's note that it started is
+                        // an item and is nobody's turn, and this is about whose words these are.
+                        let said = Support.timelineOf m |> List.map (fun i -> (i.Author, ConversationItem.said i, i.Status))
                         said = [ (PeerRef (peer "ada" "Ada").PeerId, "hi agent", Complete)
                                  (ActorRef.Agent, "You said: hi agent", Complete) ]
                         && m.Agent.ActiveTurn = None)
@@ -810,7 +812,9 @@ let private sessionTimeTests =
         testCase "a turn after a stop is told how long the session was away" <| fun () ->
             let prompt =
                 Yession.Host.Agent.promptOf
-                    (context { StartedAt = None; LastResumed = Some (now.AddMinutes -5.0, now.AddMinutes -5.0 |> fun t -> t.AddHours -9.0) })
+                    (context
+                        { StartedAt = None
+                          LastResumed = Some { At = now.AddMinutes -5.0; LastHeardAt = now.AddMinutes -5.0 |> fun t -> t.AddHours -9.0 } })
             Expect.stringContains prompt "after being stopped for 9h" "the gap it was away for"
     ]
 

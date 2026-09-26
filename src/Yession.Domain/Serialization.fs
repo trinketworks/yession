@@ -228,11 +228,11 @@ module Codec =
             | Ok authority -> Decode.succeed authority
             | Error reason -> Decode.fail reason)
 
-    let private sessionCreated : Codec<SessionCreated> =
-        { Encode = fun (p: SessionCreated) -> Encode.object [ "sessionId", sessionId.Encode p.SessionId ]
+    let private sessionStarted : Codec<SessionStarted> =
+        { Encode = fun (p: SessionStarted) -> Encode.object [ "messageId", messageId.Encode p.MessageId ]
           Decode =
             Decode.object (fun get ->
-                { SessionCreated.SessionId = get.Required.Field "sessionId" sessionId.Decode }) }
+                { SessionStarted.MessageId = get.Required.Field "messageId" messageId.Decode }) }
 
     let private peerJoined : Codec<PeerJoined> =
         { Encode =
@@ -1804,8 +1804,8 @@ module Codec =
         { Encode =
             (fun e ->
                 match e with
-                | SessionCreated p ->
-                    Encode.object [ "type", Encode.string "sessionCreated"; "payload", sessionCreated.Encode p ]
+                | SessionStarted p ->
+                    Encode.object [ "type", Encode.string "sessionStarted"; "payload", sessionStarted.Encode p ]
                 | PeerJoined p ->
                     Encode.object [ "type", Encode.string "peerJoined"; "payload", peerJoined.Encode p ]
                 | PeerLeft p ->
@@ -1934,7 +1934,7 @@ module Codec =
             Decode.field "type" Decode.string
             |> Decode.andThen (fun t ->
                 match t with
-                | "sessionCreated" -> Decode.field "payload" sessionCreated.Decode |> Decode.map SessionCreated
+                | "sessionStarted" -> Decode.field "payload" sessionStarted.Decode |> Decode.map SessionStarted
                 | "peerJoined" -> Decode.field "payload" peerJoined.Decode |> Decode.map PeerJoined
                 | "peerLeft" -> Decode.field "payload" peerLeft.Decode |> Decode.map PeerLeft
                 | "messageSent" -> Decode.field "payload" messageSent.Decode |> Decode.map MessageSent

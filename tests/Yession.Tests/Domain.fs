@@ -74,7 +74,7 @@ let private envelopeSerializationTests =
           Offset = EventOffset.zero
           Actor = PeerRef peerId
           Timestamp = DateTimeOffset(2026, 6, 14, 10, 30, 0, TimeSpan.FromHours 10.0)
-          Event = SessionCreated { SessionCreated.SessionId = sessionId } }
+          Event = SessionStarted { MessageId = MessageId.create "msg-started" |> expect } }
 
     testList "Envelope serialization" [
         testCase "EventEnvelope<SessionEvent> round-trips through serialization unchanged" <| fun () ->
@@ -171,8 +171,14 @@ let private notableAct : Act =
 
 let private conversationProjectionTests =
     let sessionId = SessionId.create "session-proj" |> expect
+    let peerId = PeerId.create "ada" |> expect
 
-    /// Ordered envelopes with the given offsets, all SessionCreated.
+    /// Ordered envelopes with the given offsets. The EVENT is presence, deliberately: these
+    /// cases are about offsets — that folding twice changes nothing, that an overlapping page
+    /// adds no items — so the fixture must contribute no conversation items of its own, or the
+    /// assertions are about whatever it does contribute. (It used to be `SessionCreated`, for
+    /// this reason; that event now says a session STARTED and is folded, so presence took over
+    /// the job.)
     let envelopes (offsets: int64 list) : EventEnvelope<SessionEvent> list =
         offsets
         |> List.map (fun n ->
@@ -181,7 +187,7 @@ let private conversationProjectionTests =
               Offset = EventOffset.create n |> expect
               Actor = SessionProcess
               Timestamp = DateTimeOffset(2026, 6, 14, 0, 0, 0, TimeSpan.Zero)
-              Event = SessionCreated { SessionCreated.SessionId = sessionId } })
+              Event = PeerJoined { PeerId = peerId; DisplayName = "swift-heron"; User = None } })
 
     testList "Conversation projection" [
         testCase "folding a fixed ordered sequence is deterministic" <| fun () ->
@@ -224,7 +230,7 @@ let private frameSerializationTests =
           Offset = offset
           Actor = PeerRef peerId
           Timestamp = DateTimeOffset(2026, 6, 14, 0, 0, 0, TimeSpan.Zero)
-          Event = SessionCreated { SessionCreated.SessionId = sessionId } }
+          Event = SessionStarted { MessageId = MessageId.create "msg-started" |> expect } }
 
     let samplePage : EventPage<SessionEvent> =
         { Events = [ sampleEnvelope ]; LastOffset = Some offset; IsEnd = true }
@@ -282,7 +288,7 @@ let private frameSerializationTests =
             // list is caught by the exhaustive-match warning in the projection instead,
             // so keep the two in step when adding events.
             let everyCase : SessionEvent list =
-                [ SessionCreated { SessionCreated.SessionId = sessionId }
+                [ SessionStarted { MessageId = MessageId.create "msg-started" |> expect }
                   PeerJoined { PeerId = peerId; DisplayName = "Ada"; User = None }
                   PeerLeft { PeerId = peerId }
                   MessageSent { MessageId = messageId; QueueId = None; Author = Principal.Peer peerId; Body = "hi" }
@@ -1206,9 +1212,10 @@ let private chapterTests =
             Expect.isNone (Chapters.shaped "   \n  ") "nothing usable, nothing returned"
     ]
 
-/// The contract every watched change keeps, and the one thing that reads it today: whether
-/// a change was noticed long after it happened.
-let private sessionResumedTests =
+/// The session's own account of its life: that it began, that it came back, and what a turn
+/// is told about both. (The doc comment this replaced described the watch contract — it was
+/// copied from the suite below and never said anything about these cases.)
+let private sessionLifecycleTests =
     let resumedAt = DateTimeOffset (2026, 9, 25, 13, 0, 0, TimeSpan.Zero)
     let lastHeard = resumedAt.AddHours -9.0
     let resumed = SessionResumed { MessageId = MessageId.create "r1" |> expect; LastHeardAt = lastHeard }
@@ -1219,22 +1226,50 @@ let private sessionResumedTests =
           Actor = ActorRef.SessionProcess
           Timestamp = time
           Event = event }
-    testList "A session that was away" [
+    let started = SessionStarted { MessageId = MessageId.create "s1" |> expect }
+    let saidIn (projection: ConversationProjection) =
+        projection.Items |> List.map ConversationItem.said |> String.concat "\n"
+    testList "A session's own account of its life" [
+        // Deliberately NOT a line on the timeline: every session has one, it is always first,
+        // and a reader looking at the top of a timeline already knows the session started. What
+        // the event is for is the history a turn is told, below.
+        testCase "starting puts nothing on the timeline" <| fun () ->
+            let projection, _ = ConversationProjection.applyEvents None [ at 0L lastHeard started ] ConversationProjection.empty
+            Expect.isEmpty projection.Items "lifecycle, not something said"
+
         testCase "says so on the timeline, with how long it was stopped" <| fun () ->
             let projection, _ = ConversationProjection.applyEvents None [ at 1L resumedAt resumed ] ConversationProjection.empty
-            Expect.stringContains
-                (projection.Items |> List.map ConversationItem.said |> String.concat "\n")
-                "stopped for 9h"
-                "the gap, in words the screen and the agent share"
+            Expect.stringContains (saidIn projection) "stopped for 9h" "the gap, in words the screen and the agent share"
 
-        testCase "its history is when it began and when it last came back" <| fun () ->
+        // What this replaced asserted that `StartedAt` was the timestamp of whatever envelope
+        // came first — an `McpServerAvailable`, in its own fixture. That was the defect, not
+        // the contract: the answer is read from the event that states it.
+        testCase "it began when the session said it did, not when the first event happened" <| fun () ->
             let began = lastHeard.AddDays -1.0
             let history =
                 SessionHistory.ofEnvelopes
-                    [ at 0L began (McpServerAvailable { MessageId = MessageId.create "m" |> expect; Name = McpServerName.create "serial" |> expect })
+                    [ at 0L (began.AddMinutes -1.0) (McpServerAvailable { MessageId = MessageId.create "m" |> expect; Name = McpServerName.create "serial" |> expect })
+                      at 1L began (SessionStarted { MessageId = MessageId.create "msg-started" |> expect })
+                      at 2L resumedAt resumed ]
+            Expect.equal history.StartedAt (Some began) "the SessionStarted envelope's time, not the earlier event's"
+
+        // A page of a log is not a log, and this cannot tell them apart — so absent the event
+        // it says nothing rather than offering the window's beginning as the session's.
+        testCase "a history with no start event claims no start" <| fun () ->
+            let history =
+                SessionHistory.ofEnvelopes
+                    [ at 0L lastHeard (McpServerAvailable { MessageId = MessageId.create "m" |> expect; Name = McpServerName.create "serial" |> expect }) ]
+            Expect.isNone history.StartedAt "no event said so"
+
+        // Two of them, or the name is a claim the fixture cannot support: one resumption
+        // satisfies "the last resumption" and "any resumption" alike.
+        testCase "it last came back at the LATEST resumption, with since when" <| fun () ->
+            let earlier = SessionResumed { MessageId = MessageId.create "r0" |> expect; LastHeardAt = lastHeard.AddDays -2.0 }
+            let history =
+                SessionHistory.ofEnvelopes
+                    [ at 0L (resumedAt.AddDays -1.0) earlier
                       at 1L resumedAt resumed ]
-            Expect.equal history.StartedAt (Some began) "the first thing it wrote"
-            Expect.equal history.LastResumed (Some (resumedAt, lastHeard)) "and the last time it came back, with since when"
+            Expect.equal history.LastResumed (Some { At = resumedAt; LastHeardAt = lastHeard }) "the later one, both ends of its gap"
     ]
 
 let private watchChangedTests =
@@ -3602,7 +3637,7 @@ let tests =
         repoTests
         chapterTests
         namingTests
-        sessionResumedTests
+        sessionLifecycleTests
         watchChangedTests
         prWatchTests
         deliveryFilterTests

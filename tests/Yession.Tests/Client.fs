@@ -90,7 +90,12 @@ let tests =
                 do! connected
                 Expect.equal model.Connection Connected "model reaches Connected"
                 Expect.equal model.Peer.DisplayName "Grace" "assigned display name reflected"
-                Expect.equal model.EventConsumer.LatestKnownOffset (Some EventOffset.zero) "latest-known offset = joined offset 0"
+                // The session's own start is offset 0, written before any peer can be accepted,
+                // so the offset a joiner is told — and catches up to — is the one past it.
+                Expect.equal
+                    model.EventConsumer.LatestKnownOffset
+                    (EventOffset.create 1L |> Result.toOption)
+                    "latest-known offset = the log's end when this peer joined"
                 Expect.equal model.EventConsumer.LastProcessedOffset None "nothing consumed yet"
                 Expect.isTrue model.EventConsumer.IsCatchingUp "catch-up active while behind the known offset"
 

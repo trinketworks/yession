@@ -800,7 +800,7 @@ let private e2eTests =
                 let settled (m: ClientModel) =
                     Map.isEmpty m.Synced.Queue
                     && not (Map.containsKey ada m.Synced.Drafts)
-                    && (m.Conversation.Items |> List.map (fun i -> (ConversationItem.said i))) = [ "ship it" ]
+                    && Support.saidOn m = [ "ship it" ]
                 do! a.Runner.WaitFor settled
                 do! b.Runner.WaitFor settled
 
@@ -858,7 +858,7 @@ let private e2eTests =
                 let! b = reconnect b
                 do! b.Runner.WaitFor (fun m ->
                         not m.EventConsumer.IsCatchingUp
-                        && (m.Conversation.Items |> List.map (fun i -> (ConversationItem.said i))) = [ "ship it"; "while you were away" ])
+                        && Support.saidOn m = [ "ship it"; "while you were away" ])
 
                 // E2E-7: unsent draft content lives in the draft, never in the timeline —
                 // the conversation comes from the projection alone.

@@ -588,12 +588,12 @@ let promptOf (context: AgentContextPack) : string =
             context.History.StartedAt |> Option.map (fun t -> sprintf " This session started %s." (stamp t)) |> Option.defaultValue ""
         let resumed =
             context.History.LastResumed
-            |> Option.map (fun (at, since) ->
+            |> Option.map (fun r ->
                 sprintf
                     " It last resumed %s, after being stopped for %s (last active %s)."
-                    (stamp at)
-                    (Elapsed.describe (at - since))
-                    (stamp since))
+                    (stamp r.At)
+                    (Elapsed.describe (r.At - r.LastHeardAt))
+                    (stamp r.LastHeardAt))
             |> Option.defaultValue ""
         sprintf "It is now %s.%s%s\n\n" (stamp context.Now) started resumed
     match context.CurrentMessage with

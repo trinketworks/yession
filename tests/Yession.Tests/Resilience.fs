@@ -659,7 +659,10 @@ let private stalled (m: ClientModel) =
     | FeedStalled _ -> true
     | _ -> false
 
-let private bodies (m: ClientModel) = m.Conversation.Items |> List.map (fun i -> (Yession.Domain.Chat.ConversationItem.said i))
+/// What is on the timeline, minus the session's own notes about itself (`Support.saidOn`):
+/// these cases are about a transport dropping and catching back up, not about the log's first
+/// line.
+let private bodies (m: ClientModel) = Support.saidOn m
 
 let private feedFailureTests =
     testList "A client whose history feed fails" [
