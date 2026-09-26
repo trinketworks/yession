@@ -26,6 +26,8 @@ open Yession.Domain.Chat
 open Yession.Domain.Tools
 open Yession.Domain.Chat
 open Yession.Domain.Files
+open Yession.Domain.Content
+open Yession.Domain.Artifacts
 open Yession.App
 open Yession.Tests.Support
 
@@ -1929,6 +1931,49 @@ let private terminalListTests =
                 "a closed terminal has a row that opens it"
     ]
 
+// Artifacts in the same panel. What is pinned is REACHABILITY: an artifact is otherwise
+// findable only by its chip in a message, so one shared long enough ago to have scrolled out
+// of the conversation would be addressable and unreachable at once.
+let private contentListTests =
+    testList "The list panel's artifacts" [
+        let listed (model: ClientModel) = Support.render { model with Pane = Some (OnList (model.Pane |> Option.bind PaneMode.onTab)) }
+        let stamp = ArtifactStamp.ofActor ActorRef.Agent
+        let shareOf (name: string) : ConversationItem =
+            { MessageId = MessageId.create ("msg-" + name) |> expect
+              Author = ActorRef.Agent
+              Content =
+                ItemContent.Act (
+                    Act.ArtifactShared
+                        { ArtifactShared.MessageId = MessageId.create ("msg-" + name) |> expect
+                          ArtifactShared.Ref = ArtifactRef.first name stamp |> expect
+                          ArtifactShared.MediaType = Some "image/png"
+                          ArtifactShared.Bytes = 2_048L
+                          ArtifactShared.Digest = ContentDigest.create (String.replicate 64 "a") |> expect
+                          ArtifactShared.Actor = ActorRef.Agent })
+              Status = Complete
+              Offset = EventOffset.create 1L |> expect
+              Woke = None; CausedBy = None }
+        let withShare (name: string) =
+            { representativeModel with
+                Conversation = { representativeModel.Conversation with Items = [ shareOf name ] } }
+
+        testCase "an artifact the session holds has a row that opens it in the pane" <| fun () ->
+            let html = listed (withShare "chart.png")
+            Expect.isTrue
+                (html.Contains (Dom.attr Dom.Hooks.artifactListRow "artifacts/chart.png/0000-e7f1a6"))
+                "the row names the version it opens, so the panel and the pane address one thing"
+            Expect.isTrue (html.Contains "chart.png") "and reads as the artifact's name, not its path"
+            Expect.isFalse
+                ((listed representativeModel).Contains Dom.Hooks.artifactListRow)
+                "a session that has shared nothing grows no rows"
+
+        // The headings exist to tell two kinds apart. Over terminals alone, "Terminals" names
+        // the only thing on screen — a word that says nothing and costs a line.
+        testCase "the sections are named only when there are two kinds to tell apart" <| fun () ->
+            Expect.isTrue ((listed (withShare "chart.png")).Contains "Artifacts") "both kinds present, both named"
+            Expect.isFalse ((listed representativeModel).Contains ">Terminals<") "terminals alone need no heading"
+    ]
+
 // The offer to bring a stopped session back (Plan 11). It replaces the connection status
 // word, so the thing to pin is WHEN it appears — a button with nowhere to go, or one shown
 // over a session that is merely reconnecting, are both worse than the plain status.
@@ -2828,6 +2873,7 @@ let tests =
         uiChecklistTests
         agentTurnTests
         terminalListTests
+        contentListTests
         presenceTests
         syncStatusTests
         chromeTests

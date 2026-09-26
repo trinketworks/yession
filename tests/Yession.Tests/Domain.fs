@@ -3529,6 +3529,31 @@ let private artifactTests =
                 Expect.equal (ConversationItem.headline item) "shared artifact file:///artifacts/chart.png/0000-7f2a91 (1.50 kB)" "the act, on the timeline"
                 Expect.equal item.Author ActorRef.Agent "attributed to whoever shared it"
             | items -> failwithf "expected one act, got %d" (List.length items)
+
+        // What the list panel reads. Derived from the acts rather than kept beside them, so
+        // this is the whole rule: one row per NAME at its newest version, newest share first.
+        testCase "the artifacts a session holds are one row per name, at the version last shared" <| fun () ->
+            let at (offset: int64) (event: SessionEvent) : EventEnvelope<SessionEvent> =
+                { EventId = EventId.fresh ()
+                  SessionId = SessionId.create "session-1" |> expect
+                  Offset = EventOffset.create offset |> expect
+                  Actor = ActorRef.Agent
+                  Timestamp = DateTimeOffset (2026, 9, 24, 0, 0, 0, TimeSpan.Zero)
+                  Event = event }
+            let named (name: string) (seq: int) =
+                shared (ArtifactRef.create name seq stamp |> expect)
+            let proj, _ =
+                ConversationProjection.applyEvents
+                    None
+                    [ at 1L (named "chart.png" 0)
+                      at 2L (named "notes.log" 0)
+                      at 3L (named "chart.png" 1) ]
+                    ConversationProjection.empty
+            Expect.equal
+                (ConversationProjection.artifacts proj |> List.map (fun a -> ArtifactRef.content a.Ref |> ContentRef.value))
+                [ "artifacts/chart.png/0001-7f2a91"; "artifacts/notes.log/0000-7f2a91" ]
+                "the updated one is one row at its new version, and it comes first for being the most recent share"
+            Expect.equal (ConversationProjection.artifacts ConversationProjection.empty) [] "a session that has shared nothing offers no rows"
     ]
 
 let tests =

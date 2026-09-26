@@ -417,6 +417,11 @@ module Dom =
         /// play affordance would otherwise be — an audit trail's hole is said, never left to
         /// look like a terminal that printed nothing.
         let terminalListGone = "data-terminal-list-gone"
+        /// An artifact's row in that same list, carrying the content path it opens. The list is
+        /// the ONLY way to reach an artifact whose chip has scrolled out of the conversation,
+        /// which is why the section exists at all — and why the hook is on the row's control
+        /// rather than on a wrapper: it is a button, operable from the keyboard by construction.
+        let artifactListRow = "data-artifact-list-row"
 
     /// Observable text/value tokens the session view emits (labels and status words that
     /// tests assert exactly — never free-text message bodies, which are model data).
