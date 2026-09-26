@@ -3227,11 +3227,14 @@ module View =
     /// (`ReplayIsTheRead`) has no text behind it, and a terminal with nothing recorded has no
     /// recording to go to. Both are rules about the terminal, asked here rather than decided
     /// here.
+    /// `None` rather than an empty render, because the answer is read by the action row, which
+    /// must know whether it has anything to draw at all: a row that cannot tell "no verbs" from
+    /// "a verb that rendered nothing" draws a bordered strip saying there are no controls.
     let private terminalWatchToggle
         (dispatch: ClientMsg -> unit)
         (model: ClientModel)
         (view: TerminalView)
-        : TemplateResult =
+        : TemplateResult option =
         let tab = TerminalTab view.TerminalId
         let feed = ClientModel.terminalFeed view.TerminalId model
         let rewound = ClientModel.isRewound view.TerminalId model
@@ -3249,14 +3252,15 @@ module View =
             elif ClientModel.playable tab model then Some ("watch", "Watch", Some (Watching tab))
             else None
         match offer with
-        | None -> Lit.nothing
+        | None -> None
         | Some (face, label, next) ->
-            html $"""
-                <button type="button" class="{Style.terminalBarAct}" data-terminal-watch="{face}"
+            Some (
+                html $"""
+                <button type="button" class="{Style.btn}" data-terminal-watch="{face}"
                         @click={Ev(fun _ ->
                                       match next with
                                       | Some mode -> dispatch (ShowInPaneMsg mode)
-                                      | None -> dispatch (RewindTerminalMsg view.TerminalId))}>{label}</button>"""
+                                      | None -> dispatch (RewindTerminalMsg view.TerminalId))}>{label}</button>""")
 
     let private terminalClosedBand (model: ClientModel) (view: TerminalView) : TemplateResult =
         let feed = ClientModel.terminalFeed view.TerminalId model
@@ -3381,50 +3385,11 @@ module View =
         | Some block ->
             let tab = BlockTab (terminalId, blockId)
             let playing = ClientModel.playsRecording tab model
-            // The reader's OTHER question about this command: not what it printed, which the
-            // text above already answers, but what was going on around it. That is a question
-            // about POSITION, and the answer is more of the same text — the terminal's own
-            // history, scrolled to this command — not a recording of it.
-            //
-            // It used to be "play whole terminal", which answered a text question with a
-            // video, mounted a player twenty seconds of dead air away from the command it
-            // named, and left the reader with no way back to the block they stepped out of.
-            // Watching from here is still one press away: this moves them, and the toggle
-            // below is then the same toggle, at the command they were sent to.
-            let showInTerminal =
-                if List.isEmpty (Projection.tryFind terminalId model.Terminals
-                                 |> Option.map (fun v -> v.Blocks)
-                                 |> Option.defaultValue []) then Lit.nothing
-                else
-                    html $"""
-                        <button type="button" class="{Style.btn}" data-pane-show-in-terminal="{BlockId.value blockId}"
-                                @click={Ev(fun _ ->
-                                              dispatch (ShowInPaneMsg (ReadingAt (terminalId, blockId)))
-                                              actions.RevealBlock terminalId blockId
-                                              actions.FocusPane ())}>Show in terminal</button>"""
-            // Text, then the recording behind one press — the same rule the terminal's own
-            // panel follows, because a block IS the case that made it: a command and its
-            // result, printed, needed no player of the same two lines under it.
-            //
-            // ONE control rather than a pair, so the press that swaps the body leaves focus
-            // where it was: it is the same button in the same slot, saying the other thing.
-            // Offered only where there is something to play, which for a block means it ran
-            // and finished — a refusal never ran, and a recording still being written has no
-            // end to replay to.
-            let watchToggle =
-                if not (ClientModel.playable tab model) then Lit.nothing
-                else
-                    let face = if playing then "output" else "watch"
-                    let label = if playing then "Show output" else "Watch"
-                    html $"""
-                        <button type="button" class="{Style.btn}" data-pane-watch="{face}"
-                                @click={Ev(fun _ ->
-                                              dispatch (ShowInPaneMsg (if playing then Reading tab else Watching tab)))}>{label}</button>"""
-            // A bordered strip with nothing in it is a control bar that says there are no
-            // controls. An open terminal's block has no whole recording to step out into, and
-            // a refusal has nothing to play.
-            let actionsRow =
-                html $"""<div class="{Style.paneActions}">{watchToggle}{showInTerminal}</div>"""
+            // What this block affords — the recording of it, and its place in the terminal's
+            // own history — is the ACTION ROW's, at the bottom of the column with every other
+            // kind's verbs (`paneActionsView`). It used to be a strip of this body's own, which
+            // is how a reader who had learnt where "download" lives under a picture found
+            // nothing in that place under a command.
             let body =
                 if playing then replayMount "Command output, played" tab
                 else
@@ -3443,7 +3408,6 @@ module View =
                     </div>
                   </div>
                   {body}
-                  {actionsRow}
                 </section>"""
 
     /// A stretch's facts: who held the terminal, for how long, and how it ended. The
@@ -3494,15 +3458,21 @@ module View =
     /// it), so the browser fetches the bytes itself with the session cookie it already has.
     /// A pinned artifact version is immutable at its address, which is what lets an `<img>`
     /// be right without this knowing that versions exist.
+    /// The way to HAVE the file, wherever it is offered. `download` names it the way a person
+    /// knows it, not the way it is addressed: saved from a pinned version the browser would
+    /// otherwise write `0003-7f2a91` to disk.
+    let private contentDownloadLink (ref: ContentRef) : TemplateResult =
+        let url = RelativeUrl.inDocument DocumentBase.shell (SessionRoute.relative (SessionRoute.Content ref))
+        html $"""
+            <a class="{Style.btn}" href="{url}" download="{ContentRef.fileName ref}"
+               data-content-download="{ContentRef.value ref}">{Dom.Text.download}</a>"""
+
     let private paneContentView (ref: ContentRef) : TemplateResult =
         let url = RelativeUrl.inDocument DocumentBase.shell (SessionRoute.relative (SessionRoute.Content ref))
         let name = ContentRef.fileName ref
-        // `download` names the file the way a person knows it, not the way it is addressed:
-        // saved from a pinned version the browser would otherwise write `0003-7f2a91` to disk.
-        let save =
-            html $"""
-                <a class="{Style.btn}" href="{url}" download="{name}"
-                   data-content-download="{ContentRef.value ref}">{Dom.Text.download}</a>"""
+        // The download is NOT here: it is a verb about the thing on screen, and those are the
+        // action row's, at the bottom of the column whatever kind is showing. A file that
+        // carried its own copy would be the one kind whose verbs moved when you opened it.
         match ContentKind.ofMediaType (ContentMedia.ofRef ref) with
         | ContentKind.Image _ ->
             html $"""
@@ -3510,7 +3480,6 @@ module View =
                   <div class="{Style.contentImageBox}">
                     <img class="{Style.contentImage}" src="{url}" alt="{name}" data-content-image="{ContentRef.value ref}">
                   </div>
-                  <div class="{Style.paneActions}">{save}</div>
                 </section>"""
         | ContentKind.Download ->
             html $"""
@@ -3518,9 +3487,85 @@ module View =
                   <div class="{Style.contentDownload}">
                     <span class="{Style.entityMark}" aria-hidden="true">{Icon.fileSm}</span>
                     <span class="{Style.small}">{name}</span>
-                    {save}
                   </div>
                 </section>"""
+
+    /// The pane's ACTION ROW: the acts about the thing on screen, in one place at the bottom of
+    /// the column whatever kind that thing is — take a terminal's keyboard, watch its
+    /// recording, step from a block to its place in the history, have a file.
+    ///
+    /// They were in three places, one per kind: a terminal's in the head, a block's inside its
+    /// own body, a file's inside its own body. Three places is three things for a reader to
+    /// learn, and the cost is paid by whoever learnt one of them — having found `Download`
+    /// under a picture, they look under a command and find nothing there.
+    ///
+    /// ABSENT rather than empty when the selected tab affords nothing: a bordered strip with no
+    /// controls in it is a control bar saying there are none. That is why the verbs are built
+    /// as a LIST and the row asks whether it is empty, rather than each verb rendering its own
+    /// nothing into a strip that is drawn regardless.
+    let private paneActionsView
+        (actions: ViewActions)
+        (dispatch: ClientMsg -> unit)
+        (model: ClientModel)
+        (tab: PaneTab)
+        : TemplateResult =
+        let verbs =
+            match tab with
+            | TerminalTab id ->
+                match Projection.tryFind id model.Terminals with
+                | None -> []
+                | Some view ->
+                    // Taking the keyboard changes what this terminal IS, not what the next
+                    // command says, so it is an act about the terminal. The STEAL — taking it
+                    // from whoever holds it — stays on the lease bar, where the name of the
+                    // person you would be taking it from is.
+                    let take =
+                        if not view.IsOpen || Option.isSome view.Lease then []
+                        else
+                            [ html $"""
+                                <button type="button" class="{Style.btn}" data-terminal-take="{TerminalId.value view.TerminalId}"
+                                        @click={Ev(fun _ -> actions.TakeTerminal view.TerminalId)}>{Dom.Text.takeControl}</button>""" ]
+                    take @ Option.toList (terminalWatchToggle dispatch model view)
+            | BlockTab (terminalId, blockId) ->
+                let blocks =
+                    Projection.tryFind terminalId model.Terminals
+                    |> Option.map (fun v -> v.Blocks)
+                    |> Option.defaultValue []
+                let playing = ClientModel.playsRecording tab model
+                // ONE control rather than a pair, so the press that swaps the body leaves focus
+                // where it was: the same button in the same slot, saying the other thing.
+                // Offered only where there is something to play — a refusal never ran, and a
+                // recording still being written has no end to replay to.
+                let watch =
+                    if not (ClientModel.playable tab model) then []
+                    else
+                        let face = if playing then "output" else "watch"
+                        let label = if playing then "Show output" else "Watch"
+                        [ html $"""
+                            <button type="button" class="{Style.btn}" data-pane-watch="{face}"
+                                    @click={Ev(fun _ ->
+                                                  dispatch (ShowInPaneMsg (if playing then Reading tab else Watching tab)))}>{label}</button>""" ]
+                // The reader's OTHER question about this command: not what it printed, which
+                // the body already answers, but what was going on around it. Text answers it —
+                // the terminal's own history, scrolled here — so there has to be a history.
+                let showInTerminal =
+                    if List.isEmpty blocks then []
+                    else
+                        [ html $"""
+                            <button type="button" class="{Style.btn}" data-pane-show-in-terminal="{BlockId.value blockId}"
+                                    @click={Ev(fun _ ->
+                                                  dispatch (ShowInPaneMsg (ReadingAt (terminalId, blockId)))
+                                                  actions.RevealBlock terminalId blockId
+                                                  actions.FocusPane ())}>Show in terminal</button>""" ]
+                watch @ showInTerminal
+            // A stretch is always its recording and it plays without being asked: there is no
+            // other read of it to offer, and nothing to step out to.
+            | StretchTab _ -> []
+            | ContentTab ref -> [ contentDownloadLink ref ]
+        if List.isEmpty verbs then Lit.nothing
+        else
+            html $"""
+                <div class="{Style.paneActions}" data-pane-actions="{PaneTab.key tab}">{verbs}</div>"""
 
     /// The terminal LIST (Plan 20, stage 0): every terminal the session has ever had, and
     /// every verb one of them affords.
@@ -3913,31 +3958,16 @@ module View =
                          data-pane-panel="{PaneTab.key tab}">
                       {inner}
                     </div>"""
-        // The acts that are about the terminal rather than about the command you are
-        // writing.
-        let properties =
+        // The acts about the thing on screen are the ACTION ROW's, at the foot of the column
+        // (`paneActionsView`) — a terminal's take and watch used to be here in the head, which
+        // put one kind's verbs somewhere no other kind's could follow. The head keeps what it
+        // is: a readout of which thing this is, and the two ways out of it.
+        //
+        // Not while the LIST is showing: the row states what the selected tab affords, and the
+        // list is not that tab — its rows carry their own verbs, from the same fold.
+        let paneActions =
             match selected with
-            | Some (TerminalTab id) ->
-                match Projection.tryFind id model.Terminals with
-                | None -> Lit.nothing
-                | Some view ->
-                    // Taking the keyboard changes what this terminal IS, not what the next
-                    // command says, so it belongs here rather than over the command line. The
-                    // STEAL — taking it from whoever holds it — stays on the lease bar, where
-                    // the name of the person you would be taking it from is.
-                    let take =
-                        if not view.IsOpen || Option.isSome view.Lease then Lit.nothing
-                        else
-                            html $"""
-                                <button type="button" class="{Style.terminalBarAct}" data-terminal-take="{TerminalId.value view.TerminalId}"
-                                        @click={Ev(fun _ -> actions.TakeTerminal view.TerminalId)}>take</button>"""
-                    // The one control between this terminal's two reads, in one slot whatever
-                    // it is doing (Plan 25, stage 3). In the bar rather than in the content
-                    // because it is an act about the TERMINAL, and because live mode has no
-                    // spatial home for it: what is on screen there is a screen, not a
-                    // scrollback, so there is no top of the history to scroll up to.
-                    let watch = terminalWatchToggle dispatch model view
-                    html $"""<span class="{Style.terminalBarActs}">{take}{watch}</span>"""
+            | Some tab when not (ClientModel.showsList model) -> paneActionsView actions dispatch model tab
             | _ -> Lit.nothing
         // The bar names the SELECTED tab, which is the thing a reader cannot work out for
         // themselves. It used to say "terminals" — the largest text on a phone screen, telling
@@ -4005,7 +4035,6 @@ module View =
               <div class="{Style.terminalPane}">
                 <div class="{Style.terminalHead}">
                   <span class="{Style.terminalHeadName}">{paneName}</span>
-                  {properties}
                   {listToggle}
                   <button type="button" class="{Style.navChevronForward}" aria-label="Back to the chat"
                           data-terminal-toggle="hide"
@@ -4018,6 +4047,7 @@ module View =
                 </div>
                 {if ClientModel.showsList model then Lit.nothing else strip}
                 {if ClientModel.showsList model then terminalListView actions dispatch model else body ()}
+                {paneActions}
               </div>
             </aside>"""
 
