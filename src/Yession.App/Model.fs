@@ -10,6 +10,7 @@ open Yession.Domain.Collab
 open Yession.Domain.Tools
 open Yession.Domain.Chat
 open Yession.Domain.Content
+open Yession.Domain.Artifacts
 open Yession.Domain.Prs
 
 /// The Browser Client Elmish model and update loop shell. It holds a single typed
@@ -1476,6 +1477,15 @@ module ClientModel =
     let terminalRows (model: ClientModel) : TerminalView list =
         let opened, closed = model.Terminals.Terminals |> List.partition (fun t -> t.IsOpen)
         opened @ List.rev closed
+
+    /// Every artifact the session holds, latest version first shared first — what the list
+    /// panel offers beside the terminals, and the only way to reach one whose chip has scrolled
+    /// out of the conversation.
+    ///
+    /// Read straight off the conversation projection (`ConversationProjection.artifacts`), so
+    /// the panel and the timeline cannot disagree about what exists: both are the same fold.
+    let artifactRows (model: ClientModel) : ArtifactShared list =
+        ConversationProjection.artifacts model.Conversation
 
     /// A terminal's queued commands in run order.
     let terminalQueue (terminal: TerminalId) (model: ClientModel) : PendingAct list =

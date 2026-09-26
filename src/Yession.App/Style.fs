@@ -2610,6 +2610,21 @@ module Style =
     /// session with no terminals is one fact however you arrive at it.
     let terminalListEmpty = "flex-1 flex flex-col items-center justify-center gap-3 px-6 text-center"
 
+    /// What a section of the list is called. Quiet and small: the rows are the content, and a
+    /// heading that competed with them would make a list of three terminals read as two lists.
+    /// Present only when there is more than one kind to tell apart (`listSections`).
+    let listSectionLabel =
+        cls [ "px-3 pt-3 pb-1 font-ui font-semibold text-label tracking-caps uppercase text-ink-faint select-none" ]
+
+    /// An artifact's row: mark, name, size. Same grid as a terminal's, so the two sections read
+    /// as one list of things rather than two designs — the middle column is what differs, and
+    /// it is a name in both.
+    let artifactListRow = terminalListRow
+
+    /// The size beside an artifact's name — the one fact that decides whether to open it here
+    /// or take it away, so it is on the row rather than behind it.
+    let artifactListSize = "shrink-0 font-ui font-light text-small text-ink-faint tabular-nums"
+
     /// The block history's scroll box, and the stream inside it.
     ///
     /// A terminal grows DOWNWARD from the top and the viewport rides the tail. Those are two
