@@ -91,6 +91,16 @@ and SessionNamed =
       /// rather than a case to invent: an unattributed launch has no person behind it.
       OnBehalfOf : Principal option }
 
+/// A session beginning: the first process to boot over this log, which found nothing in it.
+/// Written by the process itself, so the log's account of its own life starts with the one
+/// thing that always happened rather than being inferred from whatever event came first.
+///
+/// It names no session. The log IS one session's log and every event in it is that session's,
+/// so an id in here would be a copy of the thing holding it — and a copy is a second place
+/// for the answer to be wrong.
+and SessionStarted =
+    { MessageId : MessageId }
+
 /// The session process started over a log a previous one wrote: after an idle stop, a
 /// restart, a crash, an outage. Recorded by the new process first thing, so the timeline and
 /// the agent both know there was a stretch in which nothing was running — and how long, which

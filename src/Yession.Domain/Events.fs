@@ -23,10 +23,11 @@ type EventEnvelope<'event> =
       Timestamp : DateTimeOffset
       Event     : 'event }
 
-/// The single, append-only session event type. New cases are added per delivery step;
-/// foundations define only `SessionCreated`.
+/// The single, append-only session event type. New cases are added per delivery step.
 type SessionEvent =
-    | SessionCreated of SessionCreated
+    /// This log's first process found nothing in it: the session is beginning. Its pair is
+    /// `SessionResumed`, and exactly one of the two is written at every boot.
+    | SessionStarted of SessionStarted
     // Control/presence facts appended by the Session Process on connect/disconnect (Step 03).
     | PeerJoined of PeerJoined
     | PeerLeft of PeerLeft
@@ -174,8 +175,6 @@ type SessionEvent =
     | PrUnwatched of PrUnwatched
     | PrTransitioned of PrTransitioned
 
-and [<RequireQualifiedAccess>] SessionCreated =
-    { SessionId : SessionId }
 
 
 

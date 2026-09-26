@@ -32,6 +32,27 @@ let private agentActing =
 
 let private sid () = SessionId.create "in-memory-session" |> expect
 
+/// Every lifecycle fact the log holds, in order: what the session has said about its own life
+/// and nothing else. A list, because the invariant worth pinning is exhaustive — exactly one of
+/// these is written per boot — and asserting the ABSENCE of one is satisfied by a boot that
+/// wrote nothing at all, which is the bug it was supposed to catch.
+let private lifecycleIn (events: EventEnvelope<SessionEvent> list) =
+    events
+    |> List.choose (fun e ->
+        match e.Event with
+        | SessionStarted _ -> Some "started"
+        | SessionResumed _ -> Some "resumed"
+        | _ -> None)
+
+/// The item saying exactly this. Named rather than positioned, so what a case operates on is
+/// what its own `WaitFor` just waited for — a session's own notes are items too, so the
+/// timeline's head is no longer the first message anybody sent.
+let private itemSaying (text: string) (model: ClientModel) =
+    model.Conversation.Items
+    |> List.tryFind (fun i -> Chat.ConversationItem.said i = text)
+    |> Option.defaultWith (fun () -> failwithf "nothing on the timeline says %s" text)
+
+
 let tests =
     testList "In-memory transport (cheap E2E through the real Host)" [
         testCaseAsync "two clients converge on the title through the Host's State relay" <|
@@ -129,15 +150,28 @@ let tests =
                 do! host.Stop ()
             }
 
-        testCaseAsync "a Host booted over an empty log resumes nothing" <|
+        // The other half of the decision above. A session beginning has nothing to have been
+        // away from, so a resumption here would be a gap measured from nothing.
+        testCaseAsync "a Host booted over an empty log starts the session, and resumes nothing" <|
             async {
                 let log = InMemoryEventLog.create (sid ()) (fun () -> System.DateTimeOffset.UtcNow)
                 let! host = Host.startWithEnvironment None None (Some log) (sid ()) 0
                 let! after = log.Read None System.Int32.MaxValue
-                Expect.isFalse
-                    (after.Events |> List.exists (fun e -> match e.Event with SessionResumed _ -> true | _ -> false))
-                    "a session starting for the first time was never away"
+                Expect.equal (lifecycleIn after.Events) [ "started" ] "one lifecycle fact, and it is the start"
                 do! host.Stop ()
+            }
+
+        // The session began ONCE. A second process says it came back — never that it started
+        // again, which would put two beginnings in one life.
+        testCaseAsync "a second Host over the same log resumes, and does not start the session again" <|
+            async {
+                let log = InMemoryEventLog.create (sid ()) (fun () -> System.DateTimeOffset.UtcNow)
+                let! first = Host.startWithEnvironment None None (Some log) (sid ()) 0
+                do! first.Stop ()
+                let! second = Host.startWithEnvironment None None (Some log) (sid ()) 0
+                let! after = log.Read None System.Int32.MaxValue
+                Expect.equal (lifecycleIn after.Events) [ "started"; "resumed" ] "began once, came back once"
+                do! second.Stop ()
             }
 
         testCaseAsync "a sent rich draft drains through the Host into both timelines as its markdown body" <|
@@ -156,7 +190,7 @@ let tests =
                 a.Connection.SendDraft ada
                 let settled (m: ClientModel) =
                     Map.isEmpty m.Synced.Queue
-                    && (m.Conversation.Items |> List.map (fun i -> (Yession.Domain.Chat.ConversationItem.said i))) = [ "# ship it" ]
+                    && Support.saidOn m = [ "# ship it" ]
                 do! a.Runner.WaitFor settled
                 do! b.Runner.WaitFor settled
                 do! host.Stop ()
@@ -179,7 +213,7 @@ let tests =
                 do! compose a ada "ship it"
                 a.Connection.SendDraft ada
                 do! a.Runner.WaitFor (fun m -> m.Conversation.Items |> List.exists (fun i -> (Yession.Domain.Chat.ConversationItem.said i) = "ship it"))
-                let item = (a.Runner.Model ()).Conversation.Items |> List.head
+                let item = itemSaying "ship it" (a.Runner.Model ())
                 // Ada divides the session here. The chapter is made wearing the guess, which
                 // is what the process finds and what it is allowed to replace.
                 a.Runner.Dispatch (user (ToggleChapterMsg item.MessageId))
@@ -211,7 +245,7 @@ let tests =
                 do! compose a ada "ship it"
                 a.Connection.SendDraft ada
                 do! a.Runner.WaitFor (fun m -> m.Conversation.Items |> List.exists (fun i -> (Yession.Domain.Chat.ConversationItem.said i) = "ship it"))
-                let item = (a.Runner.Model ()).Conversation.Items |> List.head
+                let item = itemSaying "ship it" (a.Runner.Model ())
                 a.Runner.Dispatch (user (ToggleChapterMsg item.MessageId))
                 do! a.Runner.WaitFor (fun m -> Chat.Chapters.name m.Synced.Chapters item = "Where it was settled")
                 // More doc updates, of the kind a session makes constantly: somebody typing.
@@ -240,7 +274,7 @@ let tests =
                 do! compose a ada "run tests"
                 a.Connection.SendDraft ada
                 do! a.Runner.WaitFor (fun m -> m.Conversation.Items |> List.exists (fun i -> (Yession.Domain.Chat.ConversationItem.said i) = "run tests"))
-                let item = (a.Runner.Model ()).Conversation.Items |> List.head
+                let item = itemSaying "run tests" (a.Runner.Model ())
                 a.Runner.Dispatch (user (ToggleChapterMsg item.MessageId))
                 do! a.Runner.WaitFor (fun m -> Chat.Chapters.name m.Synced.Chapters item = "Name from 1")
                 // ...and then the substance, inside the same chapter.
@@ -273,13 +307,13 @@ let tests =
                 do! compose a ada "run tests"
                 a.Connection.SendDraft ada
                 do! a.Runner.WaitFor (fun m -> m.Conversation.Items |> List.exists (fun i -> (Yession.Domain.Chat.ConversationItem.said i) = "run tests"))
-                let item = (a.Runner.Model ()).Conversation.Items |> List.head
+                let item = itemSaying "run tests" (a.Runner.Model ())
                 a.Runner.Dispatch (user (ToggleChapterMsg item.MessageId))
                 do! a.Runner.WaitFor (fun m -> Chat.Chapters.name m.Synced.Chapters item = "Where it was settled")
                 // Twice the material, so it is re-read — and answered with the same words.
                 do! compose a ada "the auth middleware drops the refresh token"
                 a.Connection.SendDraft ada
-                do! a.Runner.WaitFor (fun m -> List.length m.Conversation.Items = 2)
+                do! a.Runner.WaitFor (fun m -> List.length (Support.timelineOf m) = 2)
                 do! a.Runner.WaitFor (fun _ -> asked.Count = 2)
                 Expect.equal (Chat.Chapters.name (a.Runner.Model ()).Synced.Chapters item) "Where it was settled" "unchanged, as the answer said"
                 // A draft keystroke afterwards: the material has not doubled again, and the
@@ -312,7 +346,7 @@ let tests =
                 do! compose a ada "run tests"
                 a.Connection.SendDraft ada
                 do! a.Runner.WaitFor (fun m -> m.Conversation.Items |> List.exists (fun i -> (Yession.Domain.Chat.ConversationItem.said i) = "run tests"))
-                let item = (a.Runner.Model ()).Conversation.Items |> List.head
+                let item = itemSaying "run tests" (a.Runner.Model ())
                 a.Runner.Dispatch (user (ToggleChapterMsg item.MessageId))
                 do! a.Runner.WaitFor (fun m -> Chat.Chapters.name m.Synced.Chapters item = "Where it was settled")
                 // Ada does not like it, and says so.
@@ -322,7 +356,7 @@ let tests =
                 // ...and then says twice as much, which would otherwise be worth re-reading.
                 do! compose a ada "the auth middleware drops the refresh token"
                 a.Connection.SendDraft ada
-                do! a.Runner.WaitFor (fun m -> List.length m.Conversation.Items = 2)
+                do! a.Runner.WaitFor (fun m -> List.length (Support.timelineOf m) = 2)
                 Expect.equal (Chat.Chapters.name (a.Runner.Model ()).Synced.Chapters item) "Mine" "theirs, and nothing wrote over it"
                 Expect.equal asked.Count 1 "and it was not even asked again"
                 do! host.Stop ()
@@ -341,7 +375,7 @@ let tests =
                 do! compose a ada "ship it"
                 a.Connection.SendDraft ada
                 do! a.Runner.WaitFor (fun m -> m.Conversation.Items |> List.exists (fun i -> (Yession.Domain.Chat.ConversationItem.said i) = "ship it"))
-                let item = (a.Runner.Model ()).Conversation.Items |> List.head
+                let item = itemSaying "ship it" (a.Runner.Model ())
                 a.Runner.Dispatch (user (ToggleChapterMsg item.MessageId))
                 // A caret of the session's own, in the field it is writing — seen BEFORE the
                 // words are all there, which is the promise.
@@ -375,7 +409,7 @@ let tests =
                 do! compose a ada "ship it"
                 a.Connection.SendDraft ada
                 do! a.Runner.WaitFor (fun m -> m.Conversation.Items |> List.exists (fun i -> (Yession.Domain.Chat.ConversationItem.said i) = "ship it"))
-                let item = (a.Runner.Model ()).Conversation.Items |> List.head
+                let item = itemSaying "ship it" (a.Runner.Model ())
                 // Bob's caret goes into the chapter's name BEFORE the chapter is opened, so
                 // the pass that the opening wakes finds him already there. Ordered this way
                 // deliberately: opening is what makes the chapter owed a name, and a caret
@@ -416,7 +450,7 @@ let tests =
                 do! compose a ada "ship it"
                 a.Connection.SendDraft ada
                 do! a.Runner.WaitFor (fun m -> m.Conversation.Items |> List.exists (fun i -> (Yession.Domain.Chat.ConversationItem.said i) = "ship it"))
-                let item = (a.Runner.Model ()).Conversation.Items |> List.head
+                let item = itemSaying "ship it" (a.Runner.Model ())
                 let subject = Chat.NamingSubject.Chapter item.MessageId
                 a.Runner.Dispatch (user (ToggleChapterMsg item.MessageId))
                 // Part of the way through: the typing is parked on the clock mid-name.
@@ -483,7 +517,7 @@ let tests =
                 do! compose a ada "ship it"
                 a.Connection.SendDraft ada
                 do! a.Runner.WaitFor (fun m -> m.Conversation.Items |> List.exists (fun i -> (Yession.Domain.Chat.ConversationItem.said i) = "ship it"))
-                let item = (a.Runner.Model ()).Conversation.Items |> List.head
+                let item = itemSaying "ship it" (a.Runner.Model ())
                 a.Runner.Dispatch (user (ToggleChapterMsg item.MessageId))
                 do! a.Runner.WaitFor (fun m -> Chat.Chapters.opens m.Synced.Chapters item)
                 Expect.equal (Chat.Chapters.name (a.Runner.Model ()).Synced.Chapters item) "ship it" "the guess, as before"
@@ -514,7 +548,7 @@ let tests =
                 let settled (m: ClientModel) =
                     Map.isEmpty m.Synced.Queue
                     && not (Map.containsKey ada m.Synced.Drafts)
-                    && (m.Conversation.Items |> List.map (fun i -> (Yession.Domain.Chat.ConversationItem.said i))) = [ "we should ask it to re-run the migration" ]
+                    && Support.saidOn m = [ "we should ask it to re-run the migration" ]
                 do! a.Runner.WaitFor settled
                 do! b.Runner.WaitFor settled
                 let! page = host.Log.Read None System.Int32.MaxValue

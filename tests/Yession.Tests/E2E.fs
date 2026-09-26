@@ -14,6 +14,7 @@ open Yession.Domain
 open Yession.Domain.Link
 open Yession.SessionProcess
 open Yession.Host
+open Yession.Tests.Support
 
 let private expect =
     function
@@ -25,10 +26,13 @@ let private peerId = PeerId.create "ada" |> expect
 let private joined = PeerJoined { PeerId = peerId; DisplayName = "Ada"; User = None }
 let private left = PeerLeft { PeerId = peerId }
 
+/// What the PEERS put in the log — `appended`, because every case below compares this
+/// against a list of presence events and the session's own note that it started is not one of
+/// them.
 let private eventsOf (host: Host.SessionHost) : Async<SessionEvent list> =
     async {
         let! page = host.Log.Read None Int32.MaxValue
-        return page.Events |> List.map (fun e -> e.Event)
+        return page.Events |> List.map (fun e -> e.Event) |> appended
     }
 
 // A single shared host for the whole E2E suite; the tests run sequentially.
@@ -61,7 +65,10 @@ let tests =
                 | Some (Control (PeerAccepted a)) ->
                     Expect.equal a.SessionId sessionId "session id"
                     Expect.equal a.AssignedDisplayName "Ada" "assigned name"
-                    Expect.equal a.LatestOffset (Some EventOffset.zero) "joined offset is 0"
+                    // Not offset 0: the session writes its own start before it can accept a
+                    // peer, so the log's end — which is what a joiner needs for catch-up — is
+                    // one past it.
+                    Expect.equal a.LatestOffset (EventOffset.create 1L |> Result.toOption) "the joined offset is the log's end"
                 | other -> failwithf "expected PeerAccepted, got %A" other
                 let! events = eventsOf h
                 Expect.equal events [ joined ] "only PeerJoined after handshake"

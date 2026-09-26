@@ -10,7 +10,7 @@ module Bootstrap =
     /// Smoke helper proving the shared domain vocabulary is reachable from the process.
     let describe (event: SessionEvent) : string =
         match event with
-        | SessionCreated _ -> "session-created"
+        | SessionStarted _ -> "session-started"
         | PeerJoined _ -> "peer-joined"
         | PeerLeft _ -> "peer-left"
         | MessageSent _ -> "message-sent"

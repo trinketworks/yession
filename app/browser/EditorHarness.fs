@@ -1135,7 +1135,7 @@ let private launchModel : ClientModel =
           Timestamp = System.DateTimeOffset (2026, 9, 12, 0, 0, 0, System.TimeSpan.Zero)
           Event = event }
     let events =
-        [ at 0L (SessionCreated { SessionCreated.SessionId = sessionId })
+        [ at 0L (SessionStarted { MessageId = MessageId.create "msg-started" |> expect })
           at 1L (PeerJoined { PeerId = peerId; DisplayName = "swift-heron"; User = None }) ]
     ClientModel.init { PeerId = peerId; DisplayName = "swift-heron" }
     |> ClientModel.update

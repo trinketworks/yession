@@ -71,7 +71,9 @@ let private clientAt (latest: int64) (events: EventEnvelope<SessionEvent> list) 
         (EventsPageMsg { Events = events; LastOffset = events |> List.tryLast |> Option.map (fun e -> e.Offset); IsEnd = true })
 
 /// A fresh session: created, one peer in — nothing on the timeline.
-let private fresh = [ at 0L (SessionCreated { SessionCreated.SessionId = sessionId }); at 1L (PeerJoined { PeerId = ada; DisplayName = "swift-heron"; User = None }) ]
+let private fresh =
+    [ at 0L (SessionStarted { MessageId = MessageId.create "msg-started" |> expect })
+      at 1L (PeerJoined { PeerId = ada; DisplayName = "swift-heron"; User = None }) ]
 
 let private launch (msg: LaunchMsg) (model: ClientModel) = ClientModel.update (LaunchMsg msg) model
 

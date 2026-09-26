@@ -923,14 +923,16 @@ let startFull
         // the log is describing something that no longer exists. Close them before anything
         // reads the projection — and before the terminal drain, which must not try to run a
         // command in a terminal that is gone.
-        // First, that the session was away at all — before the reconciles below write what
-        // being away cut off, so the timeline reads in the order it happened. A log with
-        // nothing in it is a session starting for the first time, and resumes nothing.
-        match lastHeardAt with
-        | Some at ->
-            let! _ = log.Append ActorRef.SessionProcess (SessionResumed { MessageId = mintMessageId (); LastHeardAt = at })
-            ()
-        | None -> ()
+        // First, what this boot is — before the reconciles below write what being away cut
+        // off, so the timeline reads in the order it happened. Exactly one of the two, decided
+        // by the one thing that tells them apart: a log with something in it was left by a
+        // previous process, and an empty one is a session beginning.
+        let! _ =
+            log.Append
+                ActorRef.SessionProcess
+                (match lastHeardAt with
+                 | Some at -> SessionResumed { MessageId = mintMessageId (); LastHeardAt = at }
+                 | None -> SessionStarted { MessageId = mintMessageId () })
         do! terminals.ReconcileAtBoot ()
         // And the turn that process was running, then what people queued, then what the log
         // still owes — in that order, which is the scheduler's to keep (`Scheduler.Boot`).
