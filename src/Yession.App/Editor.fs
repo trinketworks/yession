@@ -69,13 +69,11 @@ module Editor =
         System.Func<string[], NodeAttrs>(fun m -> NodeAttrs.heading m.[1].Length)
 
     /// `event.clipboardData.getData(fmt)`, or `None` when the event carries no clipboard at
-    /// all. ProseMirror hands `handlePaste` an untyped event; `Browser.Types` already says what
-    /// one is, so the absence is answered in F# rather than by a ternary in a string — and it is
-    /// answered as an absence: an event with no clipboard and a clipboard holding nothing for
-    /// this format are two different facts, and an empty string would be the last place they
-    /// could still be told apart.
-    let private clipboard (event: obj) (fmt: string) : string option =
-        let data = (unbox<Browser.Types.ClipboardEvent> event).clipboardData
+    /// all — answered as an absence: an event with no clipboard and a clipboard holding
+    /// nothing for this format are two different facts, and an empty string would be the last
+    /// place they could still be told apart.
+    let private clipboard (event: Browser.Types.ClipboardEvent) (fmt: string) : string option =
+        let data = event.clipboardData
         if isNullOrUndefined data then None else Some (data.getData fmt)
 
     /// Inline mark rule: when `**b**` / `*i*` / `` `c` `` is completed at the cursor, replace
@@ -114,7 +112,7 @@ module Editor =
         m "strong" |> Option.iter (fun t -> rules.Add (markRule "(?:\\*\\*|__)([^*_]+)(?:\\*\\*|__)$" t))
         m "em" |> Option.iter (fun t -> rules.Add (markRule "(?:^|[^*_])(?:\\*|_)([^*_]+)(?:\\*|_)$" t))
         m "code" |> Option.iter (fun t -> rules.Add (markRule "`([^`]+)`$" t))
-        inputRules (createObj [ "rules" ==> rules.ToArray () ])
+        inputRules (rules.ToArray ())
 
     /// A LINE BREAK inside the current block: a `hard_break`, which Markdown serializes as a
     /// trailing backslash and parses straight back — so the break survives the round trip into
@@ -151,32 +149,40 @@ module Editor =
     ///
     /// A body with nothing to send (a queued message being edited in place) passes `None` for
     /// `onSubmit` and binds no send key: an action that does not exist gets no shortcut.
-    let private editorKeymap (onSubmit: (unit -> unit) option) : obj =
-        let keys = createObj []
-        keys?("Mod-z") <- yUndo
-        keys?("Mod-y") <- yRedo
-        keys?("Mod-Shift-z") <- yRedo
-        // A mark the schema does not declare gets no key: an unbound key is honest, and one
-        // toggling a mark that is not there is not.
-        markType schema "strong" |> Option.iter (fun strong -> keys?("Mod-b") <- toggleMark strong)
-        markType schema "em" |> Option.iter (fun em -> keys?("Mod-i") <- toggleMark em)
+    let private editorKeymap (onSubmit: (unit -> unit) option) : KeyBindings =
         // What a plain Enter always meant in prose: split the list item when in one, else
         // whatever ProseMirror's own Enter does.
         let listItem = nodeType schema "list_item"
         let newParagraph =
             match listItem with
-            | Some li -> chain (splitListItem li) (baseEnter baseKeymap)
-            | None -> baseEnter baseKeymap
-        listItem
-        |> Option.iter (fun li ->
-            keys?("Tab") <- sinkListItem li
-            keys?("Shift-Tab") <- liftListItem li
-            keys?("Mod-[") <- liftListItem li
-            keys?("Mod-]") <- sinkListItem li)
-        lineBreak () |> Option.iter (fun command -> keys?("Shift-Enter") <- command)
-        keys?("Enter") <- newParagraph
-        onSubmit |> Option.iter (fun submit -> keys?("Mod-Enter") <- effectCommand submit)
-        keys
+            | Some li -> chain (splitListItem li) baseKeymap.Enter
+            | None -> baseKeymap.Enter
+        KeyBindings.ofList [
+            Chord.withMod (Key.Char 'z'), yUndo
+            Chord.withMod (Key.Char 'y'), yRedo
+            Chord.withModShift (Key.Char 'z'), yRedo
+            // A mark the schema does not declare gets no key: an unbound key is honest, and
+            // one toggling a mark that is not there is not.
+            match markType schema "strong" with
+            | Some strong -> Chord.withMod (Key.Char 'b'), toggleMark strong
+            | None -> ()
+            match markType schema "em" with
+            | Some em -> Chord.withMod (Key.Char 'i'), toggleMark em
+            | None -> ()
+            match listItem with
+            | Some li ->
+                Chord.plain Key.Tab, sinkListItem li
+                Chord.withShift Key.Tab, liftListItem li
+                Chord.withMod (Key.Char '['), liftListItem li
+                Chord.withMod (Key.Char ']'), sinkListItem li
+            | None -> ()
+            match lineBreak () with
+            | Some command -> Chord.withShift Key.Enter, command
+            | None -> ()
+            Chord.plain Key.Enter, newParagraph
+            match onSubmit with
+            | Some submit -> Chord.withMod Key.Enter, effectCommand submit
+            | None -> () ]
 
     // --- Presence: report the local selection, overlay remote ones -------------------------
 
@@ -273,7 +279,7 @@ module Editor =
     /// Plain-text (Markdown) paste -> parsed as Markdown; HTML paste falls through to
     /// ProseMirror's normal clipboard handling.
     let private handlePaste =
-        System.Func<EditorView, obj, bool>(fun view event ->
+        System.Func<EditorView, Browser.Types.ClipboardEvent, bool>(fun view event ->
             if clipboard event "text/html" |> Option.exists (fun html -> html <> "") then false
             else
                 match clipboard event "text/plain" with
@@ -361,7 +367,7 @@ module Editor =
         // Nothing to prompt in a body you cannot type in, on the same rule that drops the
         // send binding there: a read-only editor is a rendering, not an invitation.
         let prompt = if readOnly then "" else placeholder
-        let state = createState (createObj [ "schema" ==> schema; "plugins" ==> plugins fragment report submit prompt ])
+        let state = createState schema (plugins fragment report submit prompt)
         let view =
             createView host (jsOptions<EditorProps> (fun props ->
                 props.state <- state
