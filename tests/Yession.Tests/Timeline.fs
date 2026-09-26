@@ -1410,7 +1410,7 @@ let private listTests =
             // census would have them press twice for one intention.
             let model =
                 clientOf [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (opened terminalB "logs") ]
-                |> ClientModel.update ToggleTerminalListMsg
+                |> ClientModel.update ToggleContentListMsg
                 |> ClientModel.update (ShowInPaneMsg (Reading (TerminalTab terminalB)))
             Expect.isFalse (ClientModel.showsList model) "the list stepped aside"
             Expect.equal
@@ -1429,7 +1429,7 @@ let private listTests =
                 clientOf [ at 1L 0.0 (opened terminalA "build")
                            at 2L 1.0 (started terminalA "1" byAda "make" 1)
                            at 3L 2.0 (completed terminalA "1" (CommandSucceeded 0) 3) ]
-                |> ClientModel.update ToggleTerminalListMsg
+                |> ClientModel.update ToggleContentListMsg
                 |> ClientModel.update (ShowInPaneMsg (Reading (BlockTab (terminalA, block "1"))))
             Expect.isFalse (ClientModel.showsList model) "the census stepped aside"
             Expect.equal
@@ -1442,7 +1442,7 @@ let private listTests =
             // had just taken — a verb whose whole effect was to leave the list.
             let model =
                 withRecords (clientOf [ at 1L 0.0 (opened terminalA "shell") ])
-                |> ClientModel.update ToggleTerminalListMsg
+                |> ClientModel.update ToggleContentListMsg
                 |> ClientModel.update (RewindTerminalMsg terminalA)
             Expect.isFalse (ClientModel.showsList model) "the census stepped aside"
             Expect.isTrue (ClientModel.isRewound terminalA model) "and the reader is behind live"
@@ -1464,8 +1464,8 @@ let private listTests =
             let model =
                 withRecords (clientOf [ at 1L 0.0 (opened terminalA "shell") ])
                 |> ClientModel.update (RewindTerminalMsg terminalA)
-                |> ClientModel.update ToggleTerminalListMsg
-                |> ClientModel.update ToggleTerminalListMsg
+                |> ClientModel.update ToggleContentListMsg
+                |> ClientModel.update ToggleContentListMsg
             Expect.isFalse (ClientModel.showsList model) "back on the tab"
             Expect.isTrue (ClientModel.isRewound terminalA model) "still behind live, where they left off"
 
@@ -1474,7 +1474,7 @@ let private listTests =
             // shut, so the toggle brings it with it.
             let model = clientOf [ at 1L 0.0 (opened terminalA "build") ]
             Expect.isFalse model.TerminalsOpen "the column starts shut"
-            let listed = ClientModel.update ToggleTerminalListMsg model
+            let listed = ClientModel.update ToggleContentListMsg model
             Expect.isTrue (ClientModel.showsList listed) "the list is showing"
             Expect.isTrue listed.TerminalsOpen "and the column came with it"
     ]

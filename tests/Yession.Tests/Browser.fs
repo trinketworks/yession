@@ -638,7 +638,7 @@ let tests =
             async {
                 // The column starts shut, so the header control is the way back in — and
                 // that this can find it is the test that one exists at all.
-                do! awaitU (pageA.Locator("[data-terminal-toggle='show']").First.ClickAsync ())
+                do! awaitU (pageA.Locator("[data-content-toggle='show']").First.ClickAsync ())
                 // `.First`: a session with no terminal open offers "new" twice — in the tab
                 // strip and in the empty state — and either will do.
                 do! awaitU (pageA.Locator("[data-terminal-new]").First.ClickAsync ())
@@ -820,7 +820,7 @@ let tests =
                         | _ -> return failwithf "the render counter answered '%s', which is not a count" settled
                     }
 
-                do! awaitU (page.Locator("[data-terminal-toggle='show']").First.ClickAsync ())
+                do! awaitU (page.Locator("[data-content-toggle='show']").First.ClickAsync ())
                 do! awaitU (page.Locator("[data-terminal-new]").First.ClickAsync ())
                 let! _ = await (page.WaitForFunctionAsync "!!document.querySelector('[data-terminal-tab]')")
 
@@ -907,7 +907,7 @@ let tests =
                 // is there and there are no terminals yet. (It used to ask whether something
                 // before it had left the column open, which is a question a case that arranges
                 // its own session does not have.)
-                do! awaitU (page.Locator("[data-terminal-toggle='show']").First.ClickAsync ())
+                do! awaitU (page.Locator("[data-content-toggle='show']").First.ClickAsync ())
                 do! awaitU (page.Locator("[data-terminal-new]").First.ClickAsync ())
                 do! awaitU (page.Locator("[data-terminal-new]").First.ClickAsync ())
                 do!
@@ -1921,14 +1921,14 @@ let editorTests =
                 // The pane starts off screen, as it does for a fresh client.
                 let! _ =
                     await (page.WaitForFunctionAsync
-                        "document.querySelector('#shell [data-terminal-panel]').getBoundingClientRect().left >= window.innerWidth - 1")
+                        "document.querySelector('#shell [data-content-panel]').getBoundingClientRect().left >= window.innerWidth - 1")
 
                 // A chip brings it on, and it takes the WHOLE column.
                 do! awaitU (page.ClickAsync "#shell [data-chat-block]")
                 let! _ =
                     await (page.WaitForFunctionAsync
                         """(() => {
-                             const r = document.querySelector('#shell [data-terminal-panel]').getBoundingClientRect()
+                             const r = document.querySelector('#shell [data-content-panel]').getBoundingClientRect()
                              return r.left <= 1 && Math.round(r.width) === window.innerWidth
                            })()""")
                 // …with the tab strip retained, which is what keeps phone and desktop one
@@ -1959,10 +1959,10 @@ let editorTests =
 
                 // And the way back to the chat is a control, not a dismissal: it returns
                 // focus to the chip that opened the pane.
-                do! awaitU (page.ClickAsync "#shell [data-terminal-toggle='hide']")
+                do! awaitU (page.ClickAsync "#shell [data-content-toggle='hide']")
                 let! _ =
                     await (page.WaitForFunctionAsync
-                        "document.querySelector('#shell [data-terminal-panel]').getBoundingClientRect().left >= window.innerWidth - 1")
+                        "document.querySelector('#shell [data-content-panel]').getBoundingClientRect().left >= window.innerWidth - 1")
                 let! _ = await (page.WaitForFunctionAsync """document.activeElement?.hasAttribute('data-chat-block') === true""")
                 return ()
             }
@@ -2292,7 +2292,7 @@ let editorTests =
                 // Waited for on the CONTROL, never on the panel: a shut pane is `w-0`, which
                 // Playwright reports as hidden, so waiting for the panel to be visible before
                 // opening it waits for something that only happens afterwards.
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-terminal-toggle='show']")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-content-toggle='show']")
                 // This page carries two other fixtures ABOVE the shell — the editor host and
                 // the player — so the shell starts a viewport and a half down. Every control
                 // in it is reachable by scroll, which is fine for a person and a trap for a
@@ -2305,7 +2305,7 @@ let editorTests =
                                    const el = document.getElementById(id)
                                    if (el) el.style.display = 'none'
                                  }
-                                 document.querySelector('#shell [data-terminal-toggle="show"]').click()
+                                 document.querySelector('#shell [data-content-toggle="show"]').click()
                                  return true
                                }""")
                 // Read on `aria-valuenow`, not on the rendered width.
@@ -2370,7 +2370,7 @@ let editorTests =
                     await (page.WaitForFunctionAsync
                             """() => {
                                  const h = document.querySelector('#shell [data-term-resize]')
-                                 const pane = document.querySelector('#shell [data-terminal-panel]')
+                                 const pane = document.querySelector('#shell [data-content-panel]')
                                  const said = Number(h.getAttribute('aria-valuenow'))
                                  return Math.abs(pane.getBoundingClientRect().width - said) <= 1
                                }""")
@@ -2384,7 +2384,7 @@ let editorTests =
         editorCase "the holder types into the live screen, and the keys reach it as a pty expects" <| fun page ->
             async {
                 // The column starts shut, as it does for a fresh client.
-                do! awaitU (page.ClickAsync "#shell [data-terminal-toggle='show']")
+                do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
                 // The terminal the harness holds the lease on renders its screen, and the
                 // screen shows what the program drew.
                 do! awaitU (page.ClickAsync "#shell [data-terminal-tab='term-live']")
@@ -2441,7 +2441,7 @@ let editorTests =
                 // `term-harness` is the pane's opening tab, and it holds no lease: a terminal
                 // in block mode, which is where somebody who wants to type is standing. Not
                 // clicked — activating the tab you are already on is the PIN gesture.
-                do! awaitU (page.ClickAsync "#shell [data-terminal-toggle='show']")
+                do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-terminal-take='term-harness']")
 
                 // The press that hands this peer the lease — and removes itself doing it.
@@ -2463,7 +2463,7 @@ let editorTests =
         // somebody's caret out of the message they are writing.
         editorCase "a terminal going live does not take the keyboard from what someone is writing" <| fun page ->
             async {
-                do! awaitU (page.ClickAsync "#shell [data-terminal-toggle='show']")
+                do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-terminal-take='term-harness']")
 
                 // Somebody's keyboard is somewhere else in the pane — on the splitter, which
@@ -2489,7 +2489,7 @@ let editorTests =
         // whether Alt was down when a key went by.
         editorCase "word-navigation keys reach the pty as the escape sequences they are" <| fun page ->
             async {
-                do! awaitU (page.ClickAsync "#shell [data-terminal-toggle='show']")
+                do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
                 do! awaitU (page.ClickAsync "#shell [data-terminal-tab='term-live']")
                 let screen = "#shell [data-terminal-screen='term-live']"
                 let! _ = await (page.WaitForSelectorAsync screen)
@@ -2520,7 +2520,7 @@ let editorTests =
         // line, and would have read 79 for both back when the snapshot carried no size.
         editorCase "the live screen is the shape the process says it is" <| fun page ->
             async {
-                do! awaitU (page.ClickAsync "#shell [data-terminal-toggle='show']")
+                do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
                 do! awaitU (page.ClickAsync "#shell [data-terminal-tab='term-live']")
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-terminal-screen='term-live']")
 
@@ -2561,7 +2561,7 @@ let editorTests =
         // rather than because anything was dispatched.
         editorCaseIn 1440 900 "a pane the reader resized tells the pty its new width" <| fun page ->
             async {
-                do! awaitU (page.ClickAsync "#shell [data-terminal-toggle='show']")
+                do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
                 do! awaitU (page.ClickAsync "#shell [data-terminal-tab='term-live']")
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-terminal-screen='term-live']")
 
@@ -2588,7 +2588,7 @@ let editorTests =
         // at all, and that the number follows the reader's own splitter.
         editorCaseIn 1440 900 "a pane showing blocks measures itself, with no lease to report through" <| fun page ->
             async {
-                do! awaitU (page.ClickAsync "#shell [data-terminal-toggle='show']")
+                do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
                 let! _ =
                     await (
                         page.WaitForSelectorAsync
@@ -3360,7 +3360,7 @@ let editorTests =
         // and that playing off the pinned end catches the reader back up to live by itself.
         editorCase "a live terminal rewinds to its pinned edge, and playing off it catches back up" <| fun page ->
             async {
-                do! awaitU (page.ClickAsync "#shell [data-terminal-toggle='show']")
+                do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
                 do! awaitU (page.ClickAsync "#shell [data-terminal-tab='term-live']")
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-terminal-screen='term-live']")
 
@@ -3517,12 +3517,12 @@ let editorTests =
         // on `body`. That is the WCAG floor, not a nicety.
         editorCase "the list opens a terminal and hands focus to the pane it replaced itself with" <| fun page ->
             async {
-                do! awaitU (page.ClickAsync "#shell [data-terminal-toggle='show']")
-                do! awaitU (page.ClickAsync "#shell [data-terminal-list-toggle='list']")
+                do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
+                do! awaitU (page.ClickAsync "#shell [data-content-list-toggle='list']")
 
                 // One surface at a time: the tablist promises a panel showing one of its
                 // tabs, and it must not be left standing over a list that replaced it.
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-terminal-list]")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-content-list]")
                 let! _ = await (page.WaitForFunctionAsync """!document.querySelector("#shell [role='tablist']")""")
 
                 // Every terminal the session has is reachable here, whether or not the strip
@@ -3538,7 +3538,7 @@ let editorTests =
                 // for when the pressed control leaves the document.
                 do! awaitU (page.FocusAsync "#shell [data-terminal-list-row='term-live']")
                 do! awaitU (page.Keyboard.PressAsync "Enter")
-                let! _ = await (page.WaitForFunctionAsync """!document.querySelector('#shell [data-terminal-list]')""")
+                let! _ = await (page.WaitForFunctionAsync """!document.querySelector('#shell [data-content-list]')""")
                 let! _ =
                     await (page.WaitForFunctionAsync
                         """document.querySelector('#shell [data-pane-panel]')?.getAttribute('data-pane-panel') === 'terminal:term-live'""")
@@ -4284,7 +4284,7 @@ let mountedTests =
             "the session is gone, the page is still there, and so is what its terminal printed"
             (fun page ->
                 async {
-                    do! awaitU (page.Locator("[data-terminal-toggle='show']").First.ClickAsync ())
+                    do! awaitU (page.Locator("[data-content-toggle='show']").First.ClickAsync ())
                     do! awaitU (page.Locator("[data-terminal-new]").First.ClickAsync ())
                     let composerInput = "[data-terminal-input^='term-draft:']:not([readonly])"
                     let! _ = await (page.WaitForSelectorAsync composerInput)
@@ -4299,7 +4299,7 @@ let mountedTests =
                     // The column starts shut on a fresh load, so this also says the replayed
                     // records are there to be shown BEFORE anyone opens it — which is what a
                     // store read before the network buys.
-                    do! awaitU (page.Locator("[data-terminal-toggle='show']").First.ClickAsync ())
+                    do! awaitU (page.Locator("[data-content-toggle='show']").First.ClickAsync ())
                     do! waitFor "the terminal output to come back offline" page terminalPrinted
                 }))
     ]
