@@ -146,7 +146,7 @@ let
     dontFixup = true;
     outputHashMode = "recursive";
     outputHashAlgo = "sha256";
-    outputHash = "sha256-KeaLxfaz+obQXC/2kc1yv+BMq1jagv5WxxJfJg+S0Oc=";
+    outputHash = "sha256-xmgErxclwMtc5Iv2agBtoG4qD8cgIf8Q+pRn72S8gY4=";
   };
 
   # The npm manifests, alone. What `node_modules` IS depends on these two files and the addon —
