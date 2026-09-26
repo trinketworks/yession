@@ -125,7 +125,7 @@
         "dependencies": {
           "Fable.BrowserExtras": "[1.0.0, )",
           "Fable.Core": "[5.2.0, )",
-          "Fable.Yjs": "[1.0.0-beta0231, )"
+          "Fable.Yjs": "[1.0.0-beta0233, )"
         }
       },
       "fable.sandboxruntime": {
@@ -160,11 +160,11 @@
           "Fable.Elmish": "[4.2.0, )",
           "Fable.Lit": "[1.4.2, )",
           "Fable.ProseMirror": "[1.0.0, )",
-          "Fable.Yjs": "[1.0.0-beta0231, )",
+          "Fable.Yjs": "[1.0.0-beta0233, )",
           "Thoth.Json": "[10.5.1, )",
           "Thoth.Json.Net": "[12.0.0, )",
           "Yession.Domain": "[1.0.0, )",
-          "Ylmish": "[1.0.0-beta0231, )"
+          "Ylmish": "[1.0.0-beta0233, )"
         }
       },
       "yession.domain": {
@@ -172,10 +172,10 @@
         "dependencies": {
           "FSharp.Data.Adaptive": "[1.2.26, )",
           "Fable.Core": "[5.2.0, )",
-          "Fable.Yjs": "[1.0.0-beta0231, )",
+          "Fable.Yjs": "[1.0.0-beta0233, )",
           "Thoth.Json": "[10.5.1, )",
           "Thoth.Json.Net": "[12.0.0, )",
-          "Ylmish": "[1.0.0-beta0231, )"
+          "Ylmish": "[1.0.0-beta0233, )"
         }
       },
       "yession.host": {
@@ -200,7 +200,7 @@
           "Fable.SandboxRuntime": "[1.0.0, )",
           "Fable.Xterm": "[1.0.0, )",
           "Fable.Yaml": "[1.0.0, )",
-          "Fable.Yjs": "[1.0.0-beta0231, )",
+          "Fable.Yjs": "[1.0.0-beta0233, )",
           "Fable.Zod": "[1.0.0, )",
           "Thoth.Json": "[10.5.1, )",
           "Thoth.Json.Net": "[12.0.0, )",
@@ -209,7 +209,7 @@
           "Yession.Manager": "[1.0.0, )",
           "Yession.Oidc": "[1.0.0, )",
           "Yession.SessionProcess": "[1.0.0, )",
-          "Ylmish": "[1.0.0-beta0231, )"
+          "Ylmish": "[1.0.0-beta0233, )"
         }
       },
       "yession.manager": {
@@ -315,9 +315,9 @@
       },
       "Fable.Yjs": {
         "type": "CentralTransitive",
-        "requested": "[1.0.0-beta0231, )",
-        "resolved": "1.0.0-beta0231",
-        "contentHash": "3XRyXA16xYx8yStiyounVMJHbDBRG69jK+SQpsMR/f2xouCJWgxm2mCGTZlFa+dhTLAFepfYj4x+UKmK9iD9LQ==",
+        "requested": "[1.0.0-beta0233, )",
+        "resolved": "1.0.0-beta0233",
+        "contentHash": "hfKj6LZex/wF4JXtx94ju/KT5fX2aY07NCbQ06SpBxOtMWUTx42v0RPpnPwO2InE40nzjG7NRVtDRhLHe21Www==",
         "dependencies": {
           "FSharp.Core": "7.0.200",
           "Fable.Browser.Dom": "2.10.1",
@@ -356,14 +356,14 @@
       },
       "Ylmish": {
         "type": "CentralTransitive",
-        "requested": "[1.0.0-beta0231, )",
-        "resolved": "1.0.0-beta0231",
-        "contentHash": "eTH2LG+uxfoF3EmcelzPmOYvhSaEfSK9/lpWWNlwGOjvZNoE1K+k/6ETZz2EIw+tcscDYQOMARFTknpyo9PVRQ==",
+        "requested": "[1.0.0-beta0233, )",
+        "resolved": "1.0.0-beta0233",
+        "contentHash": "NZVhDmvZX2T9WArzGQvBClKGyYdzncM8mMm4HTy/6V3TFrYfTs3lJb7RAEtCxq/hLHTXsI7M7TOLEZTNKY0ohQ==",
         "dependencies": {
           "FSharp.Core": "7.0.200",
           "FSharp.Data.Adaptive": "1.2.26",
           "Fable.Elmish": "4.2.0",
-          "Fable.Yjs": "1.0.0-beta0231"
+          "Fable.Yjs": "1.0.0-beta0233"
         }
       }
     }
