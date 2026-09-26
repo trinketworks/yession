@@ -63,7 +63,7 @@ module ProseMirror =
         /// Asked with the current state; `false` renders without an edit surface.
         abstract editable : System.Func<EditorState, bool> with get, set
         /// `true` when the paste was handled and ProseMirror's own handling must not run.
-        abstract handlePaste : System.Func<EditorView, obj, bool> with get, set
+        abstract handlePaste : System.Func<EditorView, Browser.Types.ClipboardEvent, bool> with get, set
         /// Called in place of ProseMirror's scroll-to-caret after a transaction that asked for
         /// one; `true` when it was handled and the default walk must not run.
         abstract handleScrollToSelection : System.Func<EditorView, bool> with get, set
@@ -188,11 +188,21 @@ module ProseMirror =
 
     // --- prosemirror-state / -view ---------------------------------------------------------
 
+    /// What `EditorState.create` is handed — the fields this repository sets. Built by
+    /// `createState`, which is the only thing that needs its shape.
+    type [<AllowNullLiteral>] private EditorStateConfig =
+        abstract schema : Schema with get, set
+        abstract plugins : Plugin[] with get, set
+
     [<Import("EditorState", "prosemirror-state")>]
     let private editorStateClass : obj = jsNative
     [<Emit("$0.create($1)")>]
-    let private stateCreate (cls: obj) (config: obj) : EditorState = jsNative
-    let createState (config: obj) : EditorState = stateCreate editorStateClass config
+    let private stateCreate (cls: obj) (config: EditorStateConfig) : EditorState = jsNative
+    /// A fresh state over `schema`, running `plugins` in order.
+    let createState (schema: Schema) (plugins: Plugin[]) : EditorState =
+        stateCreate editorStateClass (jsOptions<EditorStateConfig> (fun config ->
+            config.schema <- schema
+            config.plugins <- plugins))
 
     [<Import("EditorView", "prosemirror-view")>]
     let private editorViewClass : obj = jsNative
@@ -202,19 +212,81 @@ module ProseMirror =
 
     // --- prosemirror-keymap / -commands ----------------------------------------------------
 
+    /// A key as prosemirror-keymap names it. Only the keys this repository binds are cases;
+    /// a printable one is its own character, written as it appears UNSHIFTED (`'z'`, `'['`),
+    /// because Shift is a modifier on the chord and not a different key.
+    [<RequireQualifiedAccess>]
+    type Key =
+        | Char of char
+        | Enter
+        | Tab
+
+    /// The modifiers held with a key. `Mod` is Cmd on macOS and Ctrl everywhere else — the
+    /// platform's own "command" modifier, which prosemirror-keymap resolves at keydown.
+    [<RequireQualifiedAccess>]
+    type Modifiers =
+        | None
+        | Mod
+        | Shift
+        | ModShift
+
+    /// A keystroke a command is bound to: a key and what is held with it.
+    type Chord = Chord of Modifiers * Key
+
+    [<RequireQualifiedAccess>]
+    module Chord =
+
+        let plain (key: Key) : Chord = Chord (Modifiers.None, key)
+        let withMod (key: Key) : Chord = Chord (Modifiers.Mod, key)
+        let withShift (key: Key) : Chord = Chord (Modifiers.Shift, key)
+        let withModShift (key: Key) : Chord = Chord (Modifiers.ModShift, key)
+
+        /// The name prosemirror-keymap reads for this chord — `Mod-Shift-z`, `Shift-Enter`.
+        /// Spelled here and nowhere else, so a key name typed by hand at a call site cannot
+        /// miss the grammar and quietly bind nothing.
+        let name (Chord (modifiers, key)) : string =
+            let prefix =
+                match modifiers with
+                | Modifiers.None -> ""
+                | Modifiers.Mod -> "Mod-"
+                | Modifiers.Shift -> "Shift-"
+                | Modifiers.ModShift -> "Mod-Shift-"
+            let key =
+                match key with
+                | Key.Char c -> string c
+                | Key.Enter -> "Enter"
+                | Key.Tab -> "Tab"
+            prefix + key
+
+    /// A set of key bindings, as prosemirror-keymap takes them. Opaque: built only by
+    /// `KeyBindings.ofList`, or handed over whole by ProseMirror (`baseKeymap`).
+    type KeyBindings = interface end
+
+    [<RequireQualifiedAccess>]
+    module KeyBindings =
+
+        /// Bindings from chords to commands. A chord listed twice is bound to the later
+        /// command, as assigning the same key twice always was.
+        let ofList (bindings: (Chord * Command) list) : KeyBindings =
+            unbox (createObj [ for chord, command in bindings -> Chord.name chord ==> command ])
+
+    /// ProseMirror's own bindings for a bare editor, and the one of them this repository
+    /// hands on by name.
+    type BaseKeymap =
+        inherit KeyBindings
+        /// What plain Enter does in a bare ProseMirror — split the block, make a paragraph,
+        /// lift an empty one, break a line inside code. Read off `baseKeymap` rather than
+        /// reassembled from its four parts, so rebinding Enter can hand the ORIGINAL
+        /// behaviour to another key without a second definition of it drifting from
+        /// ProseMirror's.
+        abstract Enter : Command
+
     [<Import("keymap", "prosemirror-keymap")>]
-    let keymap (bindings: obj) : Plugin = jsNative
+    let keymap (bindings: KeyBindings) : Plugin = jsNative
     [<Import("baseKeymap", "prosemirror-commands")>]
-    let baseKeymap : obj = jsNative
+    let baseKeymap : BaseKeymap = jsNative
     [<Import("toggleMark", "prosemirror-commands")>]
     let toggleMark (mark: MarkType) : Command = jsNative
-
-    /// What plain Enter does in a bare ProseMirror — split the block, make a paragraph,
-    /// lift an empty one, break a line inside code. Read off `baseKeymap` rather than
-    /// reassembled from its four parts, so rebinding Enter can hand the ORIGINAL behaviour
-    /// to another key without a second definition of it drifting from ProseMirror's.
-    [<Emit("$0.Enter")>]
-    let baseEnter (bindings: obj) : Command = jsNative
 
     /// `chainCommands(a, b)`: try `a`, fall through to `b` when it declines. Variadic in JS,
     /// so it is called explicitly rather than imported as a curried F# function.
@@ -254,8 +326,15 @@ module ProseMirror =
 
     // --- prosemirror-inputrules ------------------------------------------------------------
 
+    /// What `inputRules` is handed: the rules, tried in order.
+    type [<AllowNullLiteral>] private InputRulesConfig =
+        abstract rules : InputRule[] with get, set
+
     [<Import("inputRules", "prosemirror-inputrules")>]
-    let inputRules (config: obj) : Plugin = jsNative
+    let private inputRulesFn (config: InputRulesConfig) : Plugin = jsNative
+    /// A plugin that runs `rules` against text as it is typed.
+    let inputRules (rules: InputRule[]) : Plugin =
+        inputRulesFn (jsOptions<InputRulesConfig> (fun config -> config.rules <- rules))
     [<Import("wrappingInputRule", "prosemirror-inputrules")>]
     let wrappingInputRule (regexp: obj) (nodeType: NodeType) : InputRule = jsNative
     /// What ProseMirror hands an input rule's callbacks is the REGEX MATCH that fired it, and
