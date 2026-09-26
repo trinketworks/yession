@@ -64,6 +64,7 @@ module Bootstrap =
         | SessionEvent.ToolUseStarted _ -> "tool-use-started"
         | SessionEvent.ToolUseFinished _ -> "tool-use-finished"
         | SessionEvent.McpServerAvailable _ -> "mcp-server-available"
+        | SessionEvent.SessionResumed _ -> "session-resumed"
         | SessionEvent.McpServerUnavailable _ -> "mcp-server-unavailable"
         | SessionEvent.PrWatched _ -> "pr-watched"
         | SessionEvent.PrUnwatched _ -> "pr-unwatched"

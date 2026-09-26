@@ -161,6 +161,9 @@ type SessionEvent =
     // before needs to know why. So the question part C asked applies: not "did the agent
     // do it" but "does a future turn need to be told?".
     | McpServerAvailable of McpServerNoted
+    // The session process started over a log a previous one wrote: the session was away, and
+    // for how long. Written first thing at boot by the process itself.
+    | SessionResumed of SessionResumed
     | McpServerUnavailable of McpServerNoted
     // Watched pull requests: durable facts about PRs this session keeps an eye on. The
     // watch is an attributed act like a repo add; a transition is the session observing

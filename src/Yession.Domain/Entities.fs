@@ -100,3 +100,12 @@ module Phrase =
             match segment with
             | Segment.Ref entity -> Some entity
             | Segment.Text _ -> None)
+
+/// A stretch of time as a person says it at a glance: the largest unit that fits — "8h",
+/// "25m", "3d". One spelling for every sentence that says how long, so the gap a resumed
+/// session names and the lateness a watched change carries read alike.
+module Elapsed =
+    let describe (span: System.TimeSpan) : string =
+        if span.TotalDays >= 1.0 then sprintf "%dd" (int span.TotalDays)
+        elif span.TotalHours >= 1.0 then sprintf "%dh" (int span.TotalHours)
+        else sprintf "%dm" (max 1 (int span.TotalMinutes))

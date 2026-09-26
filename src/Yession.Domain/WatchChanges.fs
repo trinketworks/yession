@@ -47,15 +47,9 @@ module Lateness =
         let late = recordedAt - occurredAt
         if late >= threshold then Some late else None
 
-    /// A duration as a person says it at a glance: the largest unit that fits.
-    let describe (late: TimeSpan) : string =
-        if late.TotalDays >= 1.0 then sprintf "%dd" (int late.TotalDays)
-        elif late.TotalHours >= 1.0 then sprintf "%dh" (int late.TotalHours)
-        else sprintf "%dm" (max 1 (int late.TotalMinutes))
-
     /// What a change's sentence gains when it was noticed late.
     let phrase (late: TimeSpan) : Phrase =
-        [ Segment.Text (sprintf " — happened %s before it was noticed" (describe late)) ]
+        [ Segment.Text (sprintf " — happened %s before it was noticed" (Elapsed.describe late)) ]
 
     /// How late a recorded event was noticed, when it keeps the watch contract and was.
     let ofEnvelope (envelope: EventEnvelope<SessionEvent>) : TimeSpan option =

@@ -91,7 +91,25 @@ and SessionNamed =
       /// rather than a case to invent: an unattributed launch has no person behind it.
       OnBehalfOf : Principal option }
 
+/// The session process started over a log a previous one wrote: after an idle stop, a
+/// restart, a crash, an outage. Recorded by the new process first thing, so the timeline and
+/// the agent both know there was a stretch in which nothing was running — and how long, which
+/// is the distance between this event's envelope and `LastHeardAt`. What happened out in the
+/// world meanwhile arrives as its own facts (a watched change says when it really happened);
+/// this is the session's own half: that it was away.
+and SessionResumed =
+    { MessageId : MessageId
+      /// When the previous process was last heard from: the timestamp of the last event it
+      /// wrote. As close as the log can come to when it stopped.
+      LastHeardAt : System.DateTimeOffset }
+
 // --- What each chat act SAYS (see RepoFacts.fs for why the prose lives beside the event) ---
+
+module SessionResumed =
+
+    /// Said with the gap, which only the envelope's time can give: this record holds one end.
+    let phrase (resumedAt: System.DateTimeOffset) (r: SessionResumed) : Phrase =
+        Phrase.text (sprintf "session resumed after being stopped for %s" (Elapsed.describe (resumedAt - r.LastHeardAt)))
 
 module CommandRefused =
 
