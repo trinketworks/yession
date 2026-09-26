@@ -55,6 +55,10 @@ type Kind<'Key, 'Snapshot, 'Known, 'Cursor, 'Change> =
       DueIn : 'Snapshot option -> int64
       /// The cursor a watch starts with, before any look.
       NoCursor : 'Cursor
+      /// How this watch is NAMED in a line a person reads — `owner/repo#12` for a pull
+      /// request. The engine says nothing about what a watch is ON; this is the one thing
+      /// it has to borrow from the kind to be able to say anything at all.
+      Describe : 'Key -> string
       /// Make what moved durable: whose watch, which key, the reading, and the changes. The
       /// engine calls this and only then advances what it knows, so what it knows never
       /// runs ahead of what the log says.
@@ -179,6 +183,8 @@ let create
                         do! kind.Record entry.Watcher entry.Key snapshot changes
                         entry.Known <- changes |> List.fold kind.Advance entry.Known
                     let moved = entry.Snapshot <> Some snapshot || entry.Health <> None
+                    if entry.Health.IsSome then
+                        printfn "[watch] %s can be read again" (kind.Describe entry.Key)
                     entry.Snapshot <- Some snapshot
                     entry.Cursor <- cursor
                     entry.Health <- None
@@ -188,6 +194,20 @@ let create
                     if refusal.CredentialRejected then do! onUnauthorized (CredentialFor.Person entry.Watcher)
                     entry.HoldUntilEpoch <- refusal.HoldUntilEpoch
                     let moved = entry.Health <> Some refusal.Health
+                    // Said when it CHANGES, and in pairs: a watch looks every minute, so a
+                    // line per failed look is a line a minute for as long as nobody is
+                    // reading. The health string lives only in this process and in the
+                    // query's status cell, so a session that has restarted takes the reason
+                    // with it — and until then a summary can say `#905 unreachable` with
+                    // nothing anywhere to say why or since when. An unpaired line is the
+                    // whole diagnosis: the failure that started it, and no recovery under it.
+                    //
+                    // Stdout rather than stderr, because the Manager forwards a session's
+                    // stdout line by line under a `[session <pid>]` prefix and INHERITS its
+                    // stderr (`Spawn.fs`) — so a stderr line from one of five sessions lands
+                    // in the log naming none of them, and a watch line has to say whose.
+                    if moved then
+                        printfn "[watch] %s cannot be read: %s" (kind.Describe entry.Key) refusal.Health
                     entry.Health <- Some refusal.Health
                     schedule None
                     return moved

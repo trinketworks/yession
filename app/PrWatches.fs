@@ -384,6 +384,7 @@ let create
                 | Some ChecksPending -> int64 PendingIntervalMs / 1000L
                 | _ -> int64 SettledIntervalMs / 1000L
           NoCursor = PrEtags.none
+          Describe = PrRef.render
           Record = record }
 
     let watchers = Watches.create now resolveToken onUnauthorized kind
