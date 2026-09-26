@@ -648,12 +648,16 @@ module private Target =
             // there — a phone viewport most of all — is a layout nobody will ever get.
             buildAssets "tests/browser/out" false
 
+/// What this process has made, or is making. Once per PROCESS rather than per `make`, because a
+/// verb that makes the tools before it probes the box and then makes what its suites need is
+/// asking for the tools once, not twice.
+let private started = Collections.Concurrent.ConcurrentDictionary<Target, Lazy<Threading.Tasks.Task>> ()
+
 /// Make these targets and everything they stand on: each once, each the moment what it needs
 /// exists. Fails only after everything already started has finished, naming every target that
 /// could not be made — a compile error in the suite must not hide behind one in the client, and
 /// a compile killed half way by somebody else's failure leaves a tree nobody should read.
 let make (targets: Target list) =
-    let started = Collections.Concurrent.ConcurrentDictionary<Target, Lazy<Threading.Tasks.Task>> ()
     let failed = Collections.Concurrent.ConcurrentQueue<Target * exn> ()
     let rec made (target: Target) : Threading.Tasks.Task =
         let start (target: Target) =
@@ -678,6 +682,9 @@ let make (targets: Target list) =
     try
         Threading.Tasks.Task.WhenAll(targets |> List.map made |> Array.ofList).Wait ()
     with :? AggregateException ->
+        // A target this process already failed to make, asked for again, fails again with nothing
+        // of this call's own to report.
+        if failed.IsEmpty then failwith "make: something this needs could not be made earlier in this run"
         // Only the targets whose OWN making failed: everything above one of them failed with the
         // same exception, and saying so again would read as more faults than there are.
         for target, ex in failed do
