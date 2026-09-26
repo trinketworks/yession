@@ -985,18 +985,49 @@ let private repoCapabilitiesFor
 /// A name no file declares is refused here, naming what that repo does declare — the fold
 /// would otherwise start it from an empty declaration and refuse it further down for having
 /// no container, which reads as a complaint about a `yession.yaml` that declares one.
-let private declarationFor
+///
+/// It also settles WHICH sandbox a bare name means, which is the same question one step
+/// earlier. `dev` is what an agent writes after reading "started sandbox octo/hello:dev",
+/// and when this session holds no sandbox of its own by that name and exactly one checkout
+/// declares one, there is nothing else it could mean — `WorkSandboxes.resolve` already reads
+/// it that way for every verb that reaches a RUNNING sandbox. Starting was the one door that
+/// did not: a bare `dev` whose repo sandbox was stopped fell through to a new session-owned
+/// sandbox with none of the file's container, silently, under a name that says it is the
+/// repo's. Two checkouts declaring `dev` is ambiguous and refuses, naming both.
+///
+/// Answers the REF as well as the declaration, because the two are one decision: a name that
+/// resolved to a repo's sandbox must be started as that repo's, and the gated call has to
+/// carry the resolved name or the approval shows one sandbox and the start makes another.
+let private startAs
     (services: CommandServices)
     (name: SandboxRef)
     (asked: SandboxDecl)
-    : Result<SandboxDecl, string> =
+    : Result<SandboxRef * SandboxDecl, string> =
+    let declared =
+        services.DeclaredSandboxes ()
+        |> List.filter (fun (ref, _) -> SandboxRef.scope ref <> SessionOwned)
+    let asDeclared (ref: SandboxRef) (decl: SandboxDecl) =
+        Ok (ref, { decl with Forward = ConnectionName.normalise (decl.Forward @ asked.Forward) |> List.map ConnectionName.value })
     match SandboxRef.scope name with
-    | SessionOwned -> Ok asked
+    | SessionOwned ->
+        // The session's own name wins when it has one: `start_work_sandbox "dev"` in a
+        // session that already runs a `dev` is that sandbox being re-asked for, and
+        // redirecting it at a repo's would answer about a sandbox nobody named.
+        let held = (services.Sandboxes ()).Listed ()
+        if held |> List.exists (fun entry -> entry.Ref = name) then Ok (name, asked)
+        else
+            match declared |> List.filter (fun (ref, _) -> SandboxRef.name ref = SandboxRef.name name) with
+            | [ (ref, decl) ] -> asDeclared ref decl
+            | [] -> Ok (name, asked)
+            | ambiguous ->
+                Error (
+                    sprintf
+                        "'%s' is ambiguous — %s each declare a sandbox by that name; name the one you mean in full"
+                        (SandboxName.value (SandboxRef.name name))
+                        (ambiguous |> List.map (fst >> SandboxRef.render) |> String.concat ", "))
     | RepoOwned repo ->
-        let declared = services.DeclaredSandboxes ()
         match declared |> List.tryFind (fun (ref, _) -> ref = name) with
-        | Some (_, decl) ->
-            Ok { decl with Forward = ConnectionName.normalise (decl.Forward @ asked.Forward) |> List.map ConnectionName.value }
+        | Some (ref, decl) -> asDeclared ref decl
         | None ->
             let siblings =
                 declared
@@ -1032,9 +1063,9 @@ let private sandboxCapabilitiesFor
           { capabilities.Sandboxes with
               Start =
                 fun name decl ->
-                  match declarationFor services name decl with
+                  match startAs services name decl with
                   | Error e -> async { return Error e }
-                  | Ok decl ->
+                  | Ok (name, decl) ->
                       capabilities.RunGated (startWorkSandboxCall (Authority.agentFor turnActor) None name decl)
               Stop =
                 fun name ->
