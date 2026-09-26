@@ -878,8 +878,8 @@ type ClientMsg =
     /// to look it up first could look it up wrong, or forget, and the rule belongs with the
     /// state it governs.
     | RewindTerminalMsg of TerminalId
-    /// Open or close the terminals column.
-    | ToggleTerminalsMsg
+    /// Open or close the content column.
+    | ToggleContentMsg
     /// Open this item's actions menu, or shut it if it is the one already open. A toggle
     /// rather than an open, because the control that sends it is the same control either
     /// way — pressing the ellipsis a second time has to put the menu away.
@@ -898,8 +898,8 @@ type ClientMsg =
     /// so this is dispatched only where the write SUCCEEDED. A confirmation the reducer
     /// could set on its own would be a claim about a clipboard nothing here has read.
     | CopiedMsg of string option
-    /// Show the terminal list, or go back to the read it covered (Plan 20, stage 0).
-    | ToggleTerminalListMsg
+    /// Show the content list, or go back to the read it covered (Plan 20, stage 0).
+    | ToggleContentListMsg
     /// Ensure the composer slot for (terminal, author) exists, carrying the queue key it
     /// becomes when sent. The author's own call, exactly as for a message draft.
     | EnsureTerminalDraftMsg of TerminalId * PeerId * QueueId
@@ -2127,7 +2127,7 @@ module ClientModel =
             if isPinned tab model then
                 { model with Pins = model.Pins |> List.filter (fun pinned -> PaneTab.key pinned <> key) }
             else { model with Pins = model.Pins @ [ tab ] }
-        | ToggleTerminalsMsg ->
+        | ToggleContentMsg ->
             { model with TerminalsOpen = not model.TerminalsOpen }
         | ToggleItemMenuMsg messageId ->
             // Opening one is writing the field, so opening a second shuts the first without
@@ -2141,7 +2141,7 @@ module ClientModel =
                 else Set.add key model.OpenFolds
             { model with OpenFolds = next }
         | CopiedMsg copied -> { model with Copied = copied }
-        | ToggleTerminalListMsg ->
+        | ToggleContentListMsg ->
             // Going to the list KEEPS the read it covers, so coming back resumes it — a
             // rewind included, which is the one thing the boolean did right. The column comes
             // with it: reaching the list from a shut column is exactly the case where a

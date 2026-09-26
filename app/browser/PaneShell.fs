@@ -275,7 +275,7 @@ module private Split =
     /// grow to 932px on a 1440 screen and left the conversation 228px — its title truncated to a
     /// single letter and its commands gone. Ask the two columns how wide they actually are.
     let widest () : float =
-        match find "[data-terminal-panel]", find "[data-conversation]" with
+        match find "[data-content-panel]", find "[data-conversation]" with
         | Some pane, Some chat ->
             let spare =
                 pane.getBoundingClientRect().width + chat.getBoundingClientRect().width - minChat
@@ -303,7 +303,7 @@ module private Split =
     let current () : float =
         match System.Double.TryParse (styleProperty root "--term-w" |> trimPx) with
         | true, said when said > 0.0 -> said
-        | _ -> find "[data-terminal-panel]" |> Option.map (fun pane -> pane.getBoundingClientRect().width) |> Option.defaultValue minPane
+        | _ -> find "[data-content-panel]" |> Option.map (fun pane -> pane.getBoundingClientRect().width) |> Option.defaultValue minPane
 
     /// The width to start at: what was remembered, else the design token, else the floor.
     ///

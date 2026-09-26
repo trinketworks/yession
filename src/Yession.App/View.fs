@@ -1309,14 +1309,14 @@ module View =
                 <button type="button" class="{Style.prStripIn tone}" aria-label="Pull requests"
                         data-pr-strip @click={Ev(fun _ -> actions.ToggleSettings ())}>{line}</button>"""
 
-    /// The way back into the terminals column once it is shut. Present only while it IS
+    /// The way back into the content column once it is shut. Present only while it IS
     /// shut, so there are never two controls for the one column on screen at once.
-    let private terminalsReopen (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
+    let private contentReopen (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
         if model.TerminalsOpen then Lit.nothing
         else
             html $"""
-                <button type="button" class="{Style.terminalReopen}" aria-label="Show terminals"
-                        data-terminal-toggle="show" @click={Ev(fun _ -> dispatch ToggleTerminalsMsg)}>{Icon.left}terminals</button>"""
+                <button type="button" class="{Style.terminalReopen}" aria-label="Show the content pane"
+                        data-content-toggle="show" @click={Ev(fun _ -> dispatch ToggleContentMsg)}>{Icon.left}content</button>"""
 
     let private header (actions: ViewActions) (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
         let titleStr = Ylmish.Text.toString model.Synced.Title
@@ -1354,7 +1354,7 @@ module View =
               <div class="{Style.headerAside}">
                 {prStrip actions model}
                 {agentAbsence actions model.Claude}
-                {terminalsReopen dispatch model}
+                {contentReopen dispatch model}
               </div>
               {catchUpBar model}
             </header>"""
@@ -3580,7 +3580,7 @@ module View =
     /// blue dot is a command running, a peer's own colour is that peer typing, a play outline
     /// is a recording, and the one state with no glyph — a recording the cap ate — is the only
     /// one that says a word, in the voice this design keeps for facts that are wrong.
-    let private terminalListView (actions: ViewActions) (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
+    let private contentListView (actions: ViewActions) (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
         let row (view: TerminalView) =
             let id = TerminalId.value view.TerminalId
             let affords = ClientModel.affordances view model
@@ -3687,7 +3687,7 @@ module View =
         match terminals, artifacts with
         | [], [] ->
             html $"""
-                <div class="{Style.terminalListEmpty}" data-terminal-list>
+                <div class="{Style.contentListEmpty}" data-content-list>
                   <span class="font-terminal text-[28px] leading-8 text-ink-faint select-none" aria-hidden="true">$</span>
                   <button type="button" class="{Style.btnPrimary}" data-terminal-new
                           @click={Ev(fun _ -> actions.OpenTerminal "terminal")}>New terminal</button>
@@ -3696,20 +3696,25 @@ module View =
             let items = rows |> List.map row
             let files = shared |> List.map artifactRow
             html $"""
-                <div class="{Style.terminalListBody}" data-terminal-list role="list"
-                     aria-label="Every terminal and artifact in this session">
+                <div class="{Style.contentListBody}" data-content-list role="list"
+                     aria-label="Everything in this session">
                   {if List.isEmpty rows then Lit.nothing else heading "Terminals"}
                   {items}
                   {if List.isEmpty shared then Lit.nothing else heading "Artifacts"}
                   {files}
                 </div>"""
 
-    /// The side pane: a tab strip over three kinds of thing — a terminal, a block's
-    /// read-only view, and a stretch's replay (Plan 14, stage 2).
+    /// The content pane: a tab strip over four kinds of thing — a terminal, a block's
+    /// read-only view, a stretch's replay (Plan 14, stage 2), and a file shared into the
+    /// session. Kind is a mark on the tab rather than a mode over the strip: the strip answers
+    /// "what am I holding open", where kind is incidental, and a segmented control there would
+    /// make you choose a kind before choosing a thing — and hide a running build behind a mode
+    /// while you look at a picture. The LIST behind the toggle is where kind is the axis, and
+    /// it groups by kind for exactly the same reason.
     ///
     /// Every terminal the session has ever had is furniture in the strip; the read-only tabs
     /// are the ones this client opened by tapping a chip, and only those can be closed.
-    let private terminals (actions: ViewActions) (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
+    let private contentPane (actions: ViewActions) (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
         let tabs = ClientModel.paneTabs model
         let selected = ClientModel.selectedPane model
         let isOn (tab: PaneTab) =
@@ -3975,7 +3980,10 @@ module View =
         let paneName =
             match selected with
             | Some tab -> tabLabel tab
-            | None -> "terminals"
+            // Nothing is selected, so the name has to describe the SURFACE — and the surface
+            // holds more than terminals now. "Everything here" says what the list behind the
+            // toggle will show, which is the only thing left to say at that moment.
+            | None -> "everything here"
         // The strip's kill and its attach-again are GONE (Plan 20, stage 1): both are verbs
         // about a terminal rather than about which tab you are reading, and both now live on
         // that terminal's row in the list, offered from the one fold that decides what a
@@ -3990,7 +3998,7 @@ module View =
         let strip =
             html $"""
                 <div class="{Style.terminalTabs}">
-                  <div class="{Style.terminalTabList}" role="tablist" aria-label="Terminals and recordings"
+                  <div class="{Style.terminalTabList}" role="tablist" aria-label="Open content"
                        @keydown={Ev(fun (e: Browser.Types.Event) ->
                                         let pressed = e :?> Browser.Types.KeyboardEvent
                                         moveTabFocus pressed
@@ -4020,33 +4028,33 @@ module View =
             let showingList = ClientModel.showsList model
             html $"""
                 <button type="button" class="{Style.cls [ Style.btnIcon; "w-8 h-8 ml-auto" ]}"
-                        data-terminal-list-toggle="{if showingList then "pane" else "list"}"
+                        data-content-list-toggle="{if showingList then "pane" else "list"}"
                         aria-pressed="{if showingList then "true" else "false"}"
-                        aria-label="Every terminal in this session"
-                        @click={Ev(fun _ -> dispatch ToggleTerminalListMsg)}>{Icon.list}</button>"""
+                        aria-label="Everything in this session"
+                        @click={Ev(fun _ -> dispatch ToggleContentListMsg)}>{Icon.list}</button>"""
         html $"""
-            <aside class="{Style.terminalPanel}" data-terminal-panel>
+            <aside class="{Style.contentPanel}" data-content-panel>
               <!-- The split, as a real separator: `aria-valuenow` and the arrow keys are what
                    make a splitter reachable without a pointer, and the shell keeps the value
                    in step (`PaneShell.installPaneResize`). -->
               <div class="{Style.terminalResize}" data-term-resize role="separator" tabindex="0"
-                   aria-orientation="vertical" aria-label="Resize the terminals column"
+                   aria-orientation="vertical" aria-label="Resize the content column"
                    aria-valuemin="320" aria-valuenow="420" aria-valuemax="1080"></div>
               <div class="{Style.terminalPane}">
                 <div class="{Style.terminalHead}">
                   <span class="{Style.terminalHeadName}">{paneName}</span>
                   {listToggle}
                   <button type="button" class="{Style.navChevronForward}" aria-label="Back to the chat"
-                          data-terminal-toggle="hide"
+                          data-content-toggle="hide"
                           @click={Ev(fun _ ->
-                                        dispatch ToggleTerminalsMsg
+                                        dispatch ToggleContentMsg
                                         // On a phone this control IS the way back, and it is
                                         // about to leave the screen — so focus goes where the
                                         // reader came from, exactly as closing a tab does.
                                         selected |> Option.iter (PaneTab.key >> actions.FocusChat))}>{Icon.right}</button>
                 </div>
                 {if ClientModel.showsList model then Lit.nothing else strip}
-                {if ClientModel.showsList model then terminalListView actions dispatch model else body ()}
+                {if ClientModel.showsList model then contentListView actions dispatch model else body ()}
                 {paneActions}
               </div>
             </aside>"""
@@ -4072,5 +4080,5 @@ module View =
               {interrupt actions model}
               {drafts actions dispatch model}
             </div>
-            {terminals actions dispatch model}
+            {contentPane actions dispatch model}
             </div>"""

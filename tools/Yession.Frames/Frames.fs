@@ -284,7 +284,7 @@ let private instrument = """{
       conn: document.querySelector('[data-connection]')?.getAttribute('data-connection') ?? null,
       termClosed: document.documentElement.classList.contains('term-closed'),
       title: document.title,
-      pane: rect('[data-terminal-panel]'), chat: rect('[data-conversation]'), composer: rect('[data-draft-editor]'),
+      pane: rect('[data-content-panel]'), chat: rect('[data-conversation]'), composer: rect('[data-draft-editor]'),
       picker: rect('[data-repo-picker]'), catchUp: rect('[data-catch-up-bar]'), loading: rect('[data-history-loading]'),
       chatScroll: c ? [c.scrollTop | 0, c.scrollHeight, c.clientHeight] : null,
       items: document.querySelectorAll('[data-conversation] > *').length,
@@ -318,12 +318,12 @@ let private instrument = """{
   window.addEventListener('resize', () => __log.push({ t: t(), resize: [innerWidth, innerHeight] }))
   new MutationObserver((ms) => { for (const m of ms) if (m.target === document.documentElement) __log.push({ t: t(), attr: m.attributeName, was: m.oldValue, now: m.target.getAttribute(m.attributeName) }) })
     .observe(document, { subtree: true, attributes: true, attributeOldValue: true, attributeFilter: ['class'] })
-  const panesIn = (n) => n.nodeType !== 1 ? [] : n.matches('[data-terminal-panel]') ? [n] : [...n.querySelectorAll('[data-terminal-panel]')]
+  const panesIn = (n) => n.nodeType !== 1 ? [] : n.matches('[data-content-panel]') ? [n] : [...n.querySelectorAll('[data-content-panel]')]
   new MutationObserver((ms) => { for (const m of ms) { for (const n of m.addedNodes) for (const p of panesIn(n)) __log.push({ t: t(), pane: 'added', id: idOf(p) }); for (const n of m.removedNodes) for (const p of panesIn(n)) __log.push({ t: t(), pane: 'removed', id: idOf(p) }) } })
     .observe(document, { subtree: true, childList: true })
   globalThis.__frames = []
   const tick = () => {
-    const pane = document.querySelector('[data-terminal-panel]'); const app = document.querySelector('#app')
+    const pane = document.querySelector('[data-content-panel]'); const app = document.querySelector('#app')
     const cs = pane ? getComputedStyle(pane) : null
     stamp('r' + renders + ' t' + t())
     __frames.push([t(), document.documentElement ? document.documentElement.className : '', idOf(pane), pane ? Math.round(pane.getBoundingClientRect().left) : -1, cs ? cs.translate : '',

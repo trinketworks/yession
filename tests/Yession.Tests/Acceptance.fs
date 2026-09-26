@@ -581,10 +581,10 @@ let private uiChecklistTests =
                   "queue reorder up", Dom.attr Dom.Hooks.queueUp "queue-ui"
                   "queue reorder down", Dom.attr Dom.Hooks.queueDown "queue-ui"
                   "queue delete", Dom.attr Dom.Hooks.queueDelete "queue-ui"
-                  // Terminals (Plan 13): the panel, the terminal it is showing, the block
-                  // that ran with its exit status, and the composer that queues the next
+                  // The content pane (Plan 13): the column, the terminal it is showing, the
+                  // block that ran with its exit status, and the composer that queues the next
                   // command.
-                  "terminals panel", Dom.Hooks.terminalPanel
+                  "content panel", Dom.Hooks.contentPanel
                   "terminal tab", Dom.attr Dom.Hooks.terminalTab "term-ui"
                   "new terminal", Dom.Hooks.terminalNew
                   "terminal block", Dom.attr Dom.Hooks.terminalBlock "block-ui"

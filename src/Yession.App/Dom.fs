@@ -42,10 +42,10 @@ module Dom =
     /// so the look and the aim are one declaration. Worn by the Manager's Create so far.
     let press = "data-press"
 
-    /// The class on the shell ROOT (`<html>`) that says the terminals column is shut. Written
+    /// The class on the shell ROOT (`<html>`) that says the content column is shut. Written
     /// by two hands — the server into the first paint (`Ssr.page`) and the browser after every
     /// render (`PaneShell.setOpen`) — from the one model field, `TerminalsOpen`; the name is
-    /// here so those two cannot drift apart. `Style.terminalPanel` spells it a third time,
+    /// here so those two cannot drift apart. `Style.contentPanel` spells it a third time,
     /// inside Tailwind variants, which have to be literal to be generated at all.
     let termClosedClass = "term-closed"
 
@@ -241,11 +241,14 @@ module Dom =
         // the session has stopped and this deployment can bring it back.
         let sessionGone = "data-session-gone"
         let sessionReopen = "data-session-reopen"
-        // Terminals (Plan 13): the column, its strip of open terminals, the blocks that have
-        // run, and the composer that queues the next command. The composer's hooks mirror the
-        // message composer's, because the interaction is the same one.
-        let terminalPanel = "data-terminal-panel"
-        let terminalToggle = "data-terminal-toggle"
+        // The CONTENT column (Plan 13): the pane itself and the control that shows or hides it.
+        // One surface over several kinds of thing — a terminal, a block, a recording, a file —
+        // so the column is named after what it holds rather than after the first kind it held.
+        let contentPanel = "data-content-panel"
+        let contentToggle = "data-content-toggle"
+        // Terminals: the strip's terminal tabs, the blocks that have run, and the composer that
+        // queues the next command. The composer's hooks mirror the message composer's, because
+        // the interaction is the same one.
         let terminalTab = "data-terminal-tab"
         /// One per peer whose caret is in THAT terminal, on its tab — the strip's share of
         /// the same presence the roster reports.
@@ -407,12 +410,14 @@ module Dom =
         /// How far behind live the rewound reader is, growing as the terminal keeps
         /// printing under them.
         let terminalBehind = "data-terminal-behind"
-        /// The terminal LIST (Plan 20, stage 0): every terminal the session has ever had,
-        /// and every verb one of them affords. The toggle carries `list`/`pane` — the face
-        /// it will show, so the browser can hand focus to whichever control replaces the one
-        /// just pressed, exactly as the nav and settings toggles do.
-        let terminalList = "data-terminal-list"
-        let terminalListToggle = "data-terminal-list-toggle"
+        /// The content LIST (Plan 20, stage 0): everything this pane can show — every terminal
+        /// the session has ever had with every verb one of them affords, and every artifact
+        /// shared into it — grouped by kind, because kind is the axis you browse along. The
+        /// toggle carries `list`/`pane` — the face it will show, so the browser can hand focus
+        /// to whichever control replaces the one just pressed, exactly as the nav and settings
+        /// toggles do.
+        let contentList = "data-content-list"
+        let contentListToggle = "data-content-list-toggle"
         /// One row, carrying its terminal's id — and the control that shows that terminal,
         /// so a row is keyboard-operable by construction rather than by a handler on a div.
         let terminalListRow = "data-terminal-list-row"

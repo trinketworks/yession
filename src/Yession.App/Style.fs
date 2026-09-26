@@ -2411,7 +2411,7 @@ module Style =
     /// 20 columns short of the 80 a terminal prints; rather than guess a better number for
     /// everybody, the split is draggable and remembered (`PaneShell.installPaneResize`). The
     /// transition is suppressed while dragging, or the column chases the pointer a frame late.
-    let terminalPanel =
+    let contentPanel =
         "relative w-term md:w-[var(--term-w,var(--spacing-term))] shrink-0 bg-panel h-full overflow-hidden z-40 flex flex-col "
         + Stroke.dividerLeft + " "
         + "md:transition-[width] md:duration-200 md:ease-out md:[.term-resizing_&]:transition-none "
@@ -2576,12 +2576,12 @@ module Style =
     /// it. Centred like the empty pane, because it IS an empty pane — of this kind.
     let contentDownload = "flex-1 flex flex-col items-center justify-center gap-3 px-6 text-center"
 
-    // --- The terminal list (Plan 20, stage 0) --------------------------------------------
+    // --- The content list (Plan 20, stage 0) ---------------------------------------------
 
     /// The list's scroll box. It takes the pane's whole body, because the list IS the body
     /// while it is showing — not a drawer over a terminal, which would leave two surfaces
     /// arguing about which one the reader is in.
-    let terminalListBody = "flex-1 min-h-0 overflow-y-auto flex flex-col"
+    let contentListBody = "flex-1 min-h-0 overflow-y-auto flex flex-col"
 
     /// One row: state, name, verbs. A grid rather than a flex row so the names line up down
     /// the list whatever their state marks are — a ragged left edge is what makes a list of
@@ -2607,8 +2607,8 @@ module Style =
     let terminalListVerbs = "flex items-center gap-1 shrink-0"
 
     /// The list's own empty state: the same idle prompt the empty pane wears, because a
-    /// session with no terminals is one fact however you arrive at it.
-    let terminalListEmpty = "flex-1 flex flex-col items-center justify-center gap-3 px-6 text-center"
+    /// session with nothing to show is one fact however you arrive at it.
+    let contentListEmpty = "flex-1 flex flex-col items-center justify-center gap-3 px-6 text-center"
 
     /// What a section of the list is called. Quiet and small: the rows are the content, and a
     /// heading that competed with them would make a list of three terminals read as two lists.
