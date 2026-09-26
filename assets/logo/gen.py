@@ -71,7 +71,7 @@ def plan(g=0.11, d=0.5):
 H, GK, DD = 1.3, 0.11, 0.5                       # block height, kerf, panel depth (block = 1)
 A = 1.0 + GK/2
 TARGET = (-A/2, -A/2, H/2)                       # the cube's centre
-DIST, UP1, PHI0, PHI1 = 2.0, 2.0, 90.0, 46.0     # the wide lens: eye 2 away, aimed 2 above, 46° up
+DIST, UP1, PHI1 = 2.0, 2.0, 46.0               # the wide lens: eye 2 away, aimed 2 above, 46° up
 LAMP = (-2.11, -1.42, 4.0)                       # one fixed point light, behind-left and high
 CUBE, PL, PR = plan(GK, DD)
 def prisms_at(delta):
@@ -129,47 +129,24 @@ def ramp(t, a, b): return bez((t-a)/(b-a))
 # ---- the intro, and the mark as its last frame ----------------------------------------------
 class Intro:
     """Every keyframe is the same scene at one instant; the file carries them as baked SMIL values
-    on uniform keyTimes, so the easing lives in the samples and nothing on the page knows the curve."""
-    def __init__(self, N=48, dur=2.4, delta=0.1, panels=(0.3, 1.0), fx=(0.0, 0.4), camera=(0.08, 1.0),
-                 clarity=0.6, backs=0.45, rim=1.3, spill=0.5, bloom=0.3, agent=0.8, dolly=2.0,
-                 margin=3.0, start_pad=15.5, end_pad=7.0):
-        self.__dict__.update({k: v for k, v in locals().items() if k != "self"})
-        self.cam1 = fit(Lens(PHI1, DIST, UP1, target=TARGET), prisms_at(0.0), pad=end_pad)
-        self.cam0 = fit(Lens(PHI0, DIST, 0.0, target=TARGET), prisms_at(0.0)[:1], pad=start_pad)
-        self.w0, self.w1 = self.top_width(self.cam0), self.top_width(self.cam1)
-        # the collaborators may only fade in while, at their far position, they are wholly inside
-        # the frame with room for their glow: nothing arrives cropped
-        def inside(t):
-            c = self.rig(ramp(t, *camera))
-            pts = [c.project((x, y, z)) for poly, z0, z1, _ in prisms_at(delta)[1:] for x, y in poly for z in (z0, z1)]
-            return all(margin <= v <= 64 - margin for p in pts for v in p)
-        grid = [k/400 for k in range(401)]; ok = [inside(t) for t in grid]
-        self.gate = next((t for t, o in zip(grid, ok) if o and all(ok[grid.index(t):])), None)
-        assert self.gate is not None and panels[0] >= self.gate, f"panels start at {panels[0]:.0%} but fit the frame only from {self.gate}"
-    @staticmethod
-    def top_width(c):
-        top = [c.project((x, y, H)) for x, y in ((-A, -A), (-A, -GK/2), (-GK/2, -GK/2), (-GK/2, -A))]
-        return max(p[0] for p in top) - min(p[0] for p in top)
-    def rig(self, e):
-        """The camera at tilt e. The eye's path is near a straight line in the world; the scale is
-        solved per frame so the agent's width on screen changes evenly, or the pull reads as two moves.
+    on uniform keyTimes, so the easing lives in the samples and nothing on the page knows the curve.
 
-        The eye also starts `dolly` times further out and comes in, which the scale solve holds at
-        the same framing — so the only thing it changes is how strong the perspective is. At the
-        wide lens's own two block-widths a collaborator's near vertical corner foreshortens right
-        through horizontal partway down the arc, and a horizontal edge under a form reads as a
-        slice rather than a corner. Further out it stays a corner; by the end the eye is back at
-        DIST, so the last frame is the mark either way."""
-        c = Lens(PHI0 + (PHI1-PHI0)*e, DIST*(1 + self.dolly*(1-e)), UP1*e, target=TARGET)
-        for k in ("cx", "cy"):
-            setattr(c, k, getattr(self.cam0, k) + (getattr(self.cam1, k) - getattr(self.cam0, k))*e)
-        c.s = 1.0
-        c.s = (self.w0 + (self.w1 - self.w0)*e)/self.top_width(c)
-        return c
+    The camera does not move: it is the mark's own lens from the first frame. It used to pull up
+    from straight overhead while the collaborators slid in, and the tilt swung each panel's outer
+    vertical edge from near horizontal to 51° below it — the greens read as turning downward."""
+    def __init__(self, N=48, dur=2.4, delta=0.1, panels=(0.3, 1.0), fx=(0.0, 0.4),
+                 clarity=0.6, backs=0.45, rim=1.3, spill=0.5, bloom=0.3, agent=0.8,
+                 margin=3.0, end_pad=7.0):
+        self.__dict__.update({k: v for k, v in locals().items() if k != "self"})
+        self.cam = fit(Lens(PHI1, DIST, UP1, target=TARGET), prisms_at(0.0), pad=end_pad)
+        # the collaborators fade in at their far position, so that position must be wholly inside
+        # the frame with room for their glow: nothing arrives cropped
+        pts = [self.cam.project((x, y, z)) for poly, z0, z1, _ in prisms_at(delta)[1:] for x, y in poly for z in (z0, z1)]
+        assert all(margin <= v <= 64 - margin for p in pts for v in p), "the collaborators start outside the frame"
     def frame(self, t):
         """One instant: everything the drawing needs, as numbers."""
-        e, ep, ef = ramp(t, *self.camera), ramp(t, *self.panels), ramp(t, *self.fx)
-        c = self.rig(e); prisms = prisms_at(self.delta*(1-ep)); P = c.project
+        ep, ef = ramp(t, *self.panels), ramp(t, *self.fx)
+        c = self.cam; prisms = prisms_at(self.delta*(1-ep)); P = c.project
         f = dict(E=ef, P=ep, flat=1-ef, faces=[], grad={})
         for pi, (poly, z0, z1, col) in enumerate(prisms):
             for nrm, corners in prism_faces(poly, z0, z1):
@@ -179,7 +156,6 @@ class Intro:
         f["hl"] = P(highlight(c.eye))
         top = f["faces"][0][2]
         f["hlr"] = 0.9*max(max(p[0] for p in top) - min(p[0] for p in top), max(p[1] for p in top) - min(p[1] for p in top))
-        f["ks"] = c.s/self.cam1.s
         for i, (pi, nrm, pts, _) in enumerate(f["faces"]):
             if nrm[2] < 0.5: continue
             poly = ccw(prisms[pi][0]); Lx, Ly = LAMP[0] - TARGET[0], LAMP[1] - TARGET[1]
@@ -274,12 +250,12 @@ class Intro:
         body += Eg(Pg(f'<g clip-path="url(#{key}-c1)" opacity="0.2">{cube}</g><g clip-path="url(#{key}-c2)" opacity="0.2">{cube}</g>'))
         # the spill at the junction, split so the panels' share arrives with them
         defs.append(el("radialGradient", f' id="{key}-sp" gradientUnits="userSpaceOnUse"',
-                       [("cx", [f["J"][0] for f in fr]), ("cy", [f["J"][1] for f in fr]), ("r", [26*f["ks"] for f in fr])],
+                       [("cx", [f["J"][0] for f in fr]), ("cy", [f["J"][1] for f in fr]), ("r", [26]*len(fr))],
                        f'<stop offset="0" stop-color="#fff" stop-opacity="{self.spill}"/><stop offset="0.3" stop-color="#bfeaff" stop-opacity="{self.spill*0.4:.2f}"/>'
                        f'<stop offset="1" stop-color="#7fd0f5" stop-opacity="0"/>'))
         spl = lambda c_: f'<g clip-path="url(#{key}-{c_})"><rect width="64" height="64" fill="url(#{key}-sp)"/></g>'
         body += Eg(spl("c0") + Pg(spl("c1") + spl("c2")))
-        # the solid start, shaded per face so the form is there the moment a side shows; gone by the end
+        # the solid start, shaded per face so the form is there from the first frame; gone by the end
         flat = lambda pi: "".join(use(i, col(i) if nrm(i)[2] > 0.5 else dk(i, shade(col(i), nrm(i)))) for i in range(nf) if prism(i) == pi)
         body += el("g", "", gate("flat"), flat(0) + Pg(flat(1) + flat(2)))
         # the lamp: one highlight on the shared top plane, clipped into whichever tops it falls
@@ -414,12 +390,12 @@ if __name__ == "__main__":
     out["logo-light.svg"] = Intro(clarity=0.82, backs=0.55, bloom=0.1, agent=1.0).mark()
     out["lockup.svg"] = lockup(out["logo.svg"], INK, "yession")
     out["lockup-light.svg"] = lockup(out["logo-light.svg"], INK_LIGHT, "yession")
-    out["logo-16.svg"] = small(I.cam1)
+    out["logo-16.svg"] = small(I.cam)
     out["icon.svg"] = icon(out["logo.svg"])
     for name, s in out.items():
         open(os.path.join(HERE, name), "w").write(s)
         print(f"{name:18} {len(s.encode()):7} bytes")
-    print(f"intro: {I.N} keyframes over {I.dur}s, panels from {I.panels[0]:.0%} (fit the frame from {I.gate:.0%})")
+    print(f"intro: {I.N} keyframes over {I.dur}s, panels from {I.panels[0]:.0%}")
     if "--png" in sys.argv:
         for src, sizes in (("icon.svg", (1024, 512, 192, 180)), ("logo-16.svg", (32, 16))):
             for px in sizes:
