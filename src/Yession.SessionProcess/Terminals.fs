@@ -2079,6 +2079,36 @@ module SessionTerminals =
                                                                             Said = said } })
                                                       reDrain ()
                                                       mayOweWake ()
+                                              })
+                                            // A shell that EXITS under a running block takes
+                                            // the block's `D` mark with it, and nothing else
+                                            // settles a block: the terminal stays busy for
+                                            // the life of the process, so every command
+                                            // queued behind it reads `queued` and waits for
+                                            // ever. The log says nothing either — the last
+                                            // durable word is the block's own start — so a
+                                            // session showing six held commands has no
+                                            // record of what happened to the shell they are
+                                            // held behind.
+                                            //
+                                            // Said, not repaired: what a block whose shell
+                                            // died should REPORT is a decision, and this is
+                                            // the line that hands whoever takes it the case.
+                                            // The detector above cannot cover this one — it
+                                            // is armed on a start mark that never arrived,
+                                            // and a command that ends its own shell (`exit`
+                                            // reached inside a loop) started perfectly well.
+                                            Async.StartImmediate (
+                                              async {
+                                                  let! ended = pty.Exited
+                                                  if not settled then
+                                                      printfn
+                                                          "[terminal %s] the shell %s under block %s: nothing can complete that block, so this terminal stays busy and its queue is held"
+                                                          (TerminalId.value terminalId)
+                                                          (match ended with
+                                                           | SandboxExited code -> sprintf "exited with code %d" code
+                                                           | SandboxRunFailed reason -> sprintf "failed (%s)" reason)
+                                                          (BlockId.value blockId)
                                               }))
                                     return result
                                 }
