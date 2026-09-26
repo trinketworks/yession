@@ -347,6 +347,12 @@ module Dom =
         let panePanel = "data-pane-panel"
         /// A block's read-only view: its command line and everything it printed.
         let paneBlock = "data-pane-block"
+        /// The pane's action row: the acts about the thing on screen, in ONE place at the
+        /// bottom of the column whatever kind that thing is — take the keyboard, watch the
+        /// recording, download the file. Its value is the tab's key, so a test can say which
+        /// thing the verbs it finds are about. Absent when the selected tab affords nothing,
+        /// because a bordered strip with nothing in it says there are no controls.
+        let paneActions = "data-pane-actions"
         /// Where a player mounts (Plan 13, stage 3e; Plan 14, stage 4). ONE hook for all
         /// three kinds of recording — a whole terminal, a block's range, a stretch's — with
         /// the tab's key as its value, because they differ in what they play rather than in
@@ -373,6 +379,12 @@ module Dom =
         /// name a file — and with no script the link still works, which is what makes the
         /// interception an improvement rather than the only way in.
         let content = "data-content"
+        /// The picture itself, when the pane can draw the file. Its value is the content path.
+        let contentImage = "data-content-image"
+        /// The way to HAVE the file, wherever it is offered — the action row today. A real `<a>`
+        /// with `download`, so it works without script and names the file the way a person knows
+        /// it rather than by the version leaf it is addressed as.
+        let contentDownload = "data-content-download"
         /// The live screen of a terminal in live mode (Plan 14, stage 6). Its value is the
         /// terminal's id; the holder's copy is the one that takes keystrokes, and every other
         /// peer's is the same screen read-only.
@@ -626,6 +638,10 @@ module Dom =
         /// The way to HAVE a file the pane is showing — beside a picture, and instead of one
         /// for a kind this build cannot draw.
         let download = "Download"
+        /// Taking the keyboard of a terminal nobody holds. The STEAL — taking it from somebody
+        /// — is the lease bar's `Take over`, which names who it would be taken from; this one
+        /// takes nothing from anyone, and the two are not the same act.
+        let takeControl = "Take control"
         /// What a second activation of the tab you are on will do. A gesture has no control
         /// of its own to be labelled, so it says so from the tab it acts on.
         let pinHint = "Select again to pin this tab"
