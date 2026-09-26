@@ -68,7 +68,16 @@ module RichText =
     let private inlineContent (chip: ContentRef -> TemplateResult) (node: Node) : TemplateResult list =
         children node |> List.map (inlineNode chip)
 
-    /// One block node. Recurses for nested structure (lists, list items, blockquotes).
+    /// A cell's alignment as the utility that draws it — `""` for a plain column, so the class
+    /// list gains nothing and the cell falls back to `proseTable`'s own `text-left`.
+    let private cellAlignClass (node: Node) : string =
+        match (nodeAttrs node).align with
+        | Some "right" -> Style.proseTableAlignRight
+        | Some "center" -> Style.proseTableAlignCenter
+        | Some "left" -> Style.proseTableAlignLeft
+        | _ -> ""
+
+    /// One block node. Recurses for nested structure (lists, list items, blockquotes, tables).
     let rec private block (chip: ContentRef -> TemplateResult) (node: Node) : TemplateResult =
         let inlineContent node = inlineContent chip node
         let blocks node = blocks chip node
@@ -86,6 +95,18 @@ module RichText =
         | "ordered_list" -> html $"""<ol class="{Style.proseOl}" start="{listStart node}">{blocks node}</ol>"""
         | "list_item" -> html $"""<li class="{Style.proseLi}">{blocks node}</li>"""
         | "horizontal_rule" -> html $"""<hr class="{Style.proseHr}">"""
+        // A wrapper carries the horizontal scroll (WCAG 1.4.10 exempts two-dimensional
+        // content like a table from reflow) so the `<table>` itself stays a table, not a
+        // block — a real reader still gets header/data cell semantics, only wrapped by a div
+        // that never appears in the accessibility tree.
+        | "table" -> html $"""<div class="{Style.proseTableWrap}"><table class="{Style.proseTable}">{blocks node}</table></div>"""
+        | "table_row" -> html $"""<tr>{blocks node}</tr>"""
+        // `scope="col"` because a GFM table's only header row names its COLUMNS — there is no
+        // row-header syntax to read a different scope off.
+        | "table_header" ->
+            html $"""<th scope="col" class="{Style.cls [ Style.proseTableHeaderCell; cellAlignClass node ]}">{inlineContent node}</th>"""
+        | "table_cell" ->
+            html $"""<td class="{Style.cls [ Style.proseTableCell; cellAlignClass node ]}">{inlineContent node}</td>"""
         // Any node the default schema adds later still shows its text rather than vanishing.
         | _ -> html $"""<p class="{Style.proseP}">{inlineContent node}</p>"""
 
@@ -98,7 +119,11 @@ module RichText =
     /// `chip` draws a reference into this session's content root — the one thing in a body that
     /// is not text or a link out. The caller supplies it because the caller is the surface that
     /// knows what a reference looks like there and what opening one does.
+    ///
+    /// Parses with `tableMdParser`, not the composer's own `mdParser`: the timeline only reads
+    /// Markdown, so it is the one surface that can carry GFM tables without teaching the
+    /// composer how to edit one (`ProseMirror.tableMdParser`'s own comment has the reasoning).
     let render (chip: ContentRef -> TemplateResult) (markdown: string) : TemplateResult =
         let md = if isNull (box markdown) then "" else markdown
-        let doc = mdParser.parse md
+        let doc = tableMdParser.parse md
         if isNull (box doc) then html $"{md}" else html $"{blocks chip doc}"
