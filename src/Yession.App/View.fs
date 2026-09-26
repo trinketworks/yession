@@ -2656,6 +2656,31 @@ module View =
         // against is what the session HOLDS (`Chapters.written`), never the guess on screen,
         // so the first keystroke on a chapter nobody has named writes a name rather than
         // editing one nobody chose.
+        // A stretch with nothing running, drawn where it happened. Not an act note: nobody
+        // performed it, so it wears no author and no mark, and `entryOf` hands it up with
+        // `None` for the author the way a chapter rule does.
+        //
+        // The label is the only control, and the whole of it: a duration that does not look
+        // like a button still has to BE one, so it is a real `<button>` with an accessible
+        // name saying what pressing it does — the visible words are "7 hours later", which
+        // announces nothing. The tooltip carries the moment even while the label shows the
+        // duration, so hovering answers the question without changing anything.
+        let sessionBreak (resumed: SessionResumed) (at: System.DateTimeOffset) (item: ConversationItem) =
+            let showingMoment = Set.contains item.MessageId model.DatedBreaks
+            let elapsed = sprintf "%s later" (Elapsed.inWords (at - resumed.LastHeardAt))
+            let moment = Moment.stamp at
+            let said, reading, label =
+                if showingMoment then moment, Dom.Text.breakMoment, Dom.Text.sessionBreakShowElapsed
+                else elapsed, Dom.Text.breakElapsed, Dom.Text.sessionBreakShowMoment
+            html $"""
+                <div class="{Style.sessionBreak}" data-session-break="{reading}"
+                     data-message-id="{MessageId.value item.MessageId}">
+                  <span class="{Style.sessionBreakLine}" aria-hidden="true"></span>
+                  <button type="button" class="{Style.sessionBreakLabel}"
+                          aria-label="{label}" title="{moment}"
+                          @click={Ev(fun _ -> dispatch (ToggleBreakTimeMsg item.MessageId))}>{said}</button>
+                  <span class="{Style.sessionBreakLine}" aria-hidden="true"></span>
+                </div>"""
         let chapterRule (item: ConversationItem) =
             let held = Chapters.written model.Synced.Chapters item
             let named = ClientModel.chapterName model item
@@ -2696,6 +2721,10 @@ module View =
             match row with
                 | RowItem (TimelineMessage item) ->
                     match item.Content with
+                    // Before the general act rendering, because this act is not drawn as one:
+                    // the session being away is a gap in the page, not a line in it.
+                    | ItemContent.Act (Act.SessionResumed (resumed, at)) ->
+                        Some (None, sessionBreak resumed at item)
                     | ItemContent.Act act -> Some (Some item.Author, actNoteItem act item)
                     | ItemContent.Message _ -> Some (Some item.Author, messageItem item)
                     | ItemContent.Stopped stop -> Some (Some item.Author, stoppedItem stop item)

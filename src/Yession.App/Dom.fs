@@ -105,6 +105,9 @@ module Dom =
         /// control that opens a chapter there — valued by the same id, and carrying whether
         /// this item already opens one, so a test can read the state without reading a class.
         let chapterRule = "data-chapter-rule"
+        /// A break where the session was away. Carries WHICH reading its label is showing, so
+        /// a test can press it and see the answer change rather than inferring from the words.
+        let sessionBreak = "data-session-break"
         let chapterName = "data-chapter-name"
         /// The contents: the section listing every chapter, and one entry in it valued by the
         /// message its chapter opens at.
@@ -477,6 +480,14 @@ module Dom =
         /// What the field on a rule is, for a reader who cannot see the rule it sits on. The
         /// name itself is the value, so the label says what KIND of thing it is.
         let chapterNameLabel = "Chapter name"
+        /// The break's label says how long the session was away; its accessible name and its
+        /// tooltip say the whole of what pressing it does, because the visible words are a
+        /// duration and a duration does not announce that it is a control.
+        let sessionBreakShowMoment = "Show when the session came back"
+        let sessionBreakShowElapsed = "Show how long the session was away"
+        /// Which reading the label is showing, for the hook above.
+        let breakElapsed = "elapsed"
+        let breakMoment = "moment"
 
         /// What a copy control says once it has copied, IN THE BOX that held the value —
         /// the confirmation lands where the eye already is, rather than beside it. A moment

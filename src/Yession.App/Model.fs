@@ -674,6 +674,16 @@ type ClientModel =
       /// things being read, not two popovers fighting over an Escape. Empty is every line
       /// folded to its title, which is how a timeline is read.
       OpenFolds     : Set<FoldKey>
+      /// Which session breaks are showing the moment they happened instead of how long they
+      /// were. View state for `OpenFolds`' reason — which reading of a time one person wants
+      /// is nobody else's business — and a set for the same reason too: two breaks on screen
+      /// are two questions, and answering one must not re-answer the other.
+      ///
+      /// NOT a `FoldKey`. That type is documented as one control — an arrow, a title, and
+      /// something that unfolds beneath — and nothing unfolds here; the label changes what it
+      /// says. Borrowing the key would make a break the fourth kind of fold and the doc
+      /// comment on `FoldKey` a lie.
+      DatedBreaks   : Set<MessageId>
       /// What this client has just put on the clipboard, named by the hook of the box it
       /// came out of (`Dom.Hooks.githubUserCode` and whatever joins it). View state, local
       /// and transient for the same reason the menu above is: copying is one person's act
@@ -888,6 +898,11 @@ type ClientMsg =
     /// control, as with the menu — and one message for every fold on the timeline, because
     /// they are one control drawn in three places.
     | ToggleFoldMsg of FoldKey
+    /// Show this break's moment instead of its duration, or go back to the duration if it is
+    /// already showing one. A toggle rather than a one-way reveal, for the reason the menu and
+    /// the folds are: the control that sends it is the same control either way, and a label a
+    /// press cannot put back is a label people stop pressing.
+    | ToggleBreakTimeMsg of MessageId
     /// Shut whatever menu is open. Everything that dismisses one sends this: Escape, a
     /// press outside it, and choosing something from it.
     | CloseItemMenuMsg
@@ -964,6 +979,7 @@ module ClientModel =
           TerminalsOpen = false
           ItemMenu = None
           OpenFolds = Set.empty
+          DatedBreaks = Set.empty
           Copied = None
           Claude =
             { Status = None
@@ -2140,6 +2156,11 @@ module ClientModel =
                 if Set.contains key model.OpenFolds then Set.remove key model.OpenFolds
                 else Set.add key model.OpenFolds
             { model with OpenFolds = next }
+        | ToggleBreakTimeMsg messageId ->
+            let next =
+                if Set.contains messageId model.DatedBreaks then Set.remove messageId model.DatedBreaks
+                else Set.add messageId model.DatedBreaks
+            { model with DatedBreaks = next }
         | CopiedMsg copied -> { model with Copied = copied }
         | ToggleContentListMsg ->
             // Going to the list KEEPS the read it covers, so coming back resumes it — a

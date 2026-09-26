@@ -1873,6 +1873,39 @@ module Style =
     /// on the way past. Decorative — the name beside it is what says which chapter this is.
     let chapterDot = "w-1.5 h-1.5 rounded-full bg-ink-faint shrink-0"
 
+    /// A stretch in which nothing was running, drawn as a break in the page rather than as
+    /// something somebody said — because nobody did. Where a chapter hangs its name UNDER a
+    /// full-measure line (the line belongs to what follows), a break puts its words IN the
+    /// line: what it divides is not two sections but two times, and the reader needs to see
+    /// the seam, not a heading.
+    ///
+    /// `readingColumn`, the same measure a chapter rule and a message group wear, so the break
+    /// stops where the words stop; a line running the whole scroller reads as drawn on the page
+    /// rather than as a gap in the conversation. Symmetric margins, unlike `chapterRule`'s: a
+    /// break belongs to neither side, which is the one thing it is saying.
+    let sessionBreak =
+        cls [ "flex items-center gap-3 my-6 max-md:my-4"; readingColumn; "max-md:max-w-none" ]
+
+    /// The line either side. `bg-edge` and a one-pixel box, which is exactly what a causal
+    /// link's rail is (`causeRail`) — the marks that join things in this timeline are all one
+    /// weight, and a break is another of them. Opaque for the same reason: a translucent
+    /// hairline doubles wherever two of them meet.
+    let sessionBreakLine = "flex-1 h-px bg-edge"
+
+    /// Its words, and a real control: pressing them swaps how long ago for when. Borderless and
+    /// transparent — it rides in the line rather than sitting in a box of its own — brightening
+    /// under the pointer, and carrying the shared focus ring so a keyboard reaches it.
+    /// `tabular-nums` so the label does not jitter its neighbours as the numbers change width.
+    ///
+    /// The chapter name's voice, not `statusFaint`'s caps: this is a sibling of `chapterRule`,
+    /// the other thing that divides this column, and the two should read alike. Caps is for a
+    /// status word — seen on the page it made a quiet break shout, and spread the moment
+    /// ("2026-09-26 22:26 UTC") across 148px of letter-spacing to say one date.
+    let sessionBreakLabel =
+        cls [ "font-ui font-light text-small text-ink-faint shrink-0"
+              "bg-transparent border-0 px-1.5 py-0 cursor-pointer tabular-nums"
+              "hover:text-ink focus-visible:text-ink transition-colors"; focusRing ]
+
     /// The name, worn by a text input for the reason the session title is: it is editable
     /// text, and a control that only becomes editable once you have pressed it is a control
     /// nobody presses. The same arrangement as `titleInput` — transparent at rest, the
