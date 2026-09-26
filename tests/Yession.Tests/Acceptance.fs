@@ -1974,6 +1974,70 @@ let private contentListTests =
             Expect.isFalse ((listed representativeModel).Contains ">Terminals<") "terminals alone need no heading"
     ]
 
+// The pane's action row: the acts about the thing on screen, in ONE place whatever kind it is.
+// What is pinned here is the place — a reader who learns where `Download` lives under a picture
+// must find a terminal's verbs in the same place, which is the whole reason the row exists.
+let private paneActionsTests =
+    testList "The pane's action row" [
+        // The row and nothing outside it: its children are buttons and links, so the first
+        // `</div>` after the hook is its end.
+        let rowFor (key: string) (html: string) : string option =
+            match html.IndexOf (Dom.attr Dom.Hooks.paneActions key) with
+            | -1 -> None
+            | at -> Some (html.Substring (at, html.IndexOf ("</div>", at) + "</div>".Length - at))
+        let picture = Content.ContentRef.create "artifacts/chart.png/0000-e7f1a6" |> expect
+
+        testCase "a file's way to have it is in the row, not inside the picture" <| fun () ->
+            let html =
+                representativeModel
+                |> ClientModel.update (ShowInPaneMsg (Reading (ContentTab picture)))
+                |> Support.render
+            let row = rowFor "content:artifacts/chart.png/0000-e7f1a6" html
+            Expect.isTrue
+                (row |> Option.exists (fun r -> r.Contains Dom.Hooks.contentDownload))
+                "the download is in the action row"
+            Expect.isTrue
+                (html.IndexOf Dom.Hooks.contentImage < html.IndexOf Dom.Hooks.contentDownload)
+                "and under the picture rather than inside it"
+
+        testCase "a terminal nobody holds offers its keyboard there; a held one does not" <| fun () ->
+            let free = Support.render representativeModel
+            Expect.isTrue
+                (rowFor ("terminal:" + TerminalId.value terminalId) free
+                 |> Option.exists (fun r -> r.Contains Dom.Hooks.terminalTake))
+                "the keyboard of a free terminal is taken from the row"
+            // A HELD terminal's take is the steal, and it stays on the lease bar where the name
+            // of the person it would be taken from is. Two takes in two places, saying different
+            // things, is the thing this must not become.
+            let held = Support.render leasedTerminalModel
+            Expect.isFalse
+                (rowFor ("terminal:" + TerminalId.value terminalId) held
+                 |> Option.exists (fun r -> r.Contains Dom.Hooks.terminalTake))
+                "a held one offers nothing of the kind in the row"
+            Expect.isTrue
+                (held.Contains (Dom.attr Dom.Hooks.terminalLease (PeerId.value bob)))
+                "the steal is the lease bar's, and it is still there"
+
+        testCase "a tab that affords nothing draws no row at all" <| fun () ->
+            // A bordered strip with no controls in it is a control bar saying there are none.
+            // A stretch is always its recording and plays without being asked: there is no other
+            // read of it to offer and nothing to step out to.
+            let stretch =
+                { Offset = EventOffset.create 3L |> expect
+                  TerminalId = terminalId
+                  Title = "build"
+                  Holder = PeerRef bob
+                  End = LeaseStolen (PeerRef ada)
+                  Range = Some (2, 40)
+                  StartedAt = DateTimeOffset (2026, 8, 8, 0, 0, 0, TimeSpan.Zero)
+                  EndedAt = DateTimeOffset (2026, 8, 8, 0, 2, 0, TimeSpan.Zero) }
+            let html =
+                representativeModel
+                |> ClientModel.update (ShowInPaneMsg (Reading (StretchTab stretch)))
+                |> Support.render
+            Expect.isFalse (html.Contains Dom.Hooks.paneActions) "no row"
+    ]
+
 // The offer to bring a stopped session back (Plan 11). It replaces the connection status
 // word, so the thing to pin is WHEN it appears — a button with nowhere to go, or one shown
 // over a session that is merely reconnecting, are both worse than the plain status.
@@ -2874,6 +2938,7 @@ let tests =
         agentTurnTests
         terminalListTests
         contentListTests
+        paneActionsTests
         presenceTests
         syncStatusTests
         chromeTests
