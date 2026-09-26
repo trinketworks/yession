@@ -190,54 +190,63 @@ module Editor =
     /// while focused, on focus, and clears (`None`) on blur/destroy. Added only to editable
     /// editors. The Browser tags the report with this body's field and rAF-throttles it.
     let private presenceReportPlugin (report: (string * string) option -> unit) : Plugin =
-        makePlugin (createObj [
-            "props" ==> createObj [
-                "handleDOMEvents" ==> createObj [
-                    "focus" ==> System.Func<EditorView, obj, bool>(fun v _ -> report (relSelectionOf v.state); false)
-                    "blur" ==> System.Func<EditorView, obj, bool>(fun _ _ -> report None; false) ] ]
-            "view" ==> System.Func<EditorView, obj>(fun _ ->
+        makePlugin (jsOptions<PluginSpec<unit, unit>> (fun spec ->
+            spec.props <- jsOptions<PluginProps> (fun props ->
+                props.handleDOMEvents <- jsOptions<DomEventHandlers> (fun events ->
+                    events.focus <- System.Func<EditorView, Browser.Types.FocusEvent, bool>(fun v _ -> report (relSelectionOf v.state); false)
+                    events.blur <- System.Func<EditorView, Browser.Types.FocusEvent, bool>(fun _ _ -> report None; false)))
+            spec.view <- System.Func<EditorView, PluginView>(fun _ ->
                 let mutable last : (string * string) option = None
-                createObj [
-                    "update" ==> System.Func<EditorView, EditorState, unit>(fun v _prev ->
+                jsOptions<PluginView> (fun pluginView ->
+                    pluginView.update <- System.Func<EditorView, EditorState, unit>(fun v _prev ->
                         if viewHasFocus v then
                             let cur = relSelectionOf v.state
                             if cur <> last then
                                 last <- cur
                                 report cur)
-                    "destroy" ==> System.Func<unit, unit>(fun () -> report None) ]) ])
+                    pluginView.destroy <- System.Func<unit, unit>(fun () -> report None)))))
 
-    /// The decoration plugin's key — private so remote cursors can only be pushed through
-    /// `EditorHandle.PushPresences`, never by reaching into plugin state.
-    let private presenceDecoKey = pluginKey "yession-presence-cursors"
+    /// The decoration plugin's key: it keeps the decorations drawn, and a transaction carries
+    /// it the remote cursors to draw them from. Private so remote cursors can only be pushed
+    /// through `EditorHandle.PushPresences`, never by reaching into plugin state.
+    let private presenceDecoKey : PluginKey<DecorationSet, RemoteBodyCursor[]> =
+        pluginKey "yession-presence-cursors"
 
     /// Build the `DecorationSet` for a set of remote cursors: a translucent selection span
     /// `min..max` (when non-empty) and a caret widget + name label at `head`, per peer. A
     /// position that no longer resolves (its content was deleted) is skipped.
-    let private buildBodyDecorations (state: EditorState) (remotes: RemoteBodyCursor[]) : obj =
-        let decos = ResizeArray<obj> ()
+    let private buildBodyDecorations (state: EditorState) (remotes: RemoteBodyCursor[]) : DecorationSet =
+        let decos = ResizeArray<Decoration> ()
         for r in remotes do
             match absPosInBody state r.Anchor, absPosInBody state r.Head with
             | Some a, Some h ->
                 let lo, hi = (min a h), (max a h)
                 if lo <> hi then
-                    decos.Add (decoInline lo hi (createObj [ "style" ==> sprintf "background-color:%s" r.Selection ]))
-                decos.Add (decoWidget h (caretDom r.Colour r.Name) (createObj [ "side" ==> 10 ]))
+                    decos.Add (decoInline lo hi (jsOptions<DecorationAttrs> (fun attrs ->
+                        attrs.style <- sprintf "background-color:%s" r.Selection)))
+                decos.Add (decoWidget h (caretDom r.Colour r.Name) (jsOptions<WidgetSpec> (fun spec -> spec.side <- 10)))
             | _ -> ()
         decoSetCreate (stateDoc state) (decos.ToArray ())
 
     /// Holds a `DecorationSet` in plugin state: a `setMeta` push rebuilds it from the remote
     /// cursors; any other transaction remaps the existing set through the doc change.
     let private presenceDecorationsPlugin () : Plugin =
-        makePlugin (createObj [
-            "key" ==> presenceDecoKey
-            "state" ==> createObj [
-                "init" ==> System.Func<obj, EditorState, obj>(fun _ _ -> decoSetEmpty)
-                "apply" ==> System.Func<Transaction, obj, EditorState, EditorState, obj>(fun tr old _oldS newS ->
+        makePlugin (jsOptions<PluginSpec<DecorationSet, RemoteBodyCursor[]>> (fun spec ->
+            spec.key <- presenceDecoKey
+            spec.state <- jsOptions<StateField<DecorationSet>> (fun field ->
+                field.init <- System.Func<EditorStateConfig, EditorState, DecorationSet>(fun _ _ -> decoSetEmpty)
+                field.apply <- System.Func<Transaction, DecorationSet, EditorState, EditorState, DecorationSet>(fun tr old _oldS newS ->
                     match trGetMeta tr presenceDecoKey with
-                    | null -> if trDocChanged tr then decoSetMap old (trMapping tr) (trDoc tr) else old
-                    | remotes -> buildBodyDecorations newS (unbox<RemoteBodyCursor[]> remotes)) ]
-            "props" ==> createObj [
-                "decorations" ==> System.Func<EditorState, obj>(fun s -> pluginKeyGetState presenceDecoKey s) ] ])
+                    | Some remotes -> buildBodyDecorations newS remotes
+                    | None -> if trDocChanged tr then decoSetMap old (trMapping tr) (trDoc tr) else old))
+            spec.props <- jsOptions<PluginProps> (fun props ->
+                props.decorations <- System.Func<EditorState, DecorationSet>(fun s -> pluginKeyGetState presenceDecoKey s))))
+
+    /// The attribute the placeholder decoration puts on the empty paragraph, which `Style`
+    /// draws the prompt from.
+    type private PlaceholderAttrs =
+        inherit DecorationAttrs
+        abstract ``data-placeholder`` : string with get, set
 
     /// What an empty composer says it is for. A `contenteditable` has no `placeholder`
     /// attribute — the field's own `placeholder:` Tailwind variant has never once applied to a
@@ -250,13 +259,13 @@ module Editor =
     /// CONTENT — it cannot be selected, copied, sent, or synced to a peer as an empty message,
     /// which is exactly what putting the words in the document would risk.
     let private placeholderPlugin (text: string) : Plugin =
-        makePlugin (createObj [
-            "props" ==> createObj [
-                "decorations" ==> System.Func<EditorState, obj>(fun state ->
+        let attrs = jsOptions<PlaceholderAttrs> (fun attrs -> attrs.``data-placeholder`` <- text)
+        makePlugin (jsOptions<PluginSpec<unit, unit>> (fun spec ->
+            spec.props <- jsOptions<PluginProps> (fun props ->
+                props.decorations <- System.Func<EditorState, DecorationSet>(fun state ->
                     let doc = stateDoc state
-                    if docIsEmpty doc then
-                        decoSetCreate doc [| decoNode 0 (docContentSize doc) (createObj [ "data-placeholder" ==> text ]) |]
-                    else decoSetEmpty) ] ])
+                    if docIsEmpty doc then decoSetCreate doc [| decoNode 0 (docContentSize doc) attrs |]
+                    else decoSetEmpty))))
 
     let private plugins
         (fragment: Y.XmlFragment)
@@ -355,7 +364,7 @@ module Editor =
     /// has something to send. The returned handle pushes remote cursors in. Serialization for
     /// the drain lives in `Domain.Markdown`.
     let mountEditor
-        (host: obj)
+        (host: Browser.Types.Element)
         (fragment: Y.XmlFragment)
         (readOnly: bool)
         (reportFocus: (string * string) option -> unit)
@@ -377,4 +386,4 @@ module Editor =
         { Dispose = fun () -> view.destroy ()
           PushPresences =
             fun remotes ->
-                view.dispatch (trSetMeta view.state.tr presenceDecoKey (box (List.toArray remotes))) }
+                view.dispatch (trSetMeta view.state.tr presenceDecoKey (List.toArray remotes)) }

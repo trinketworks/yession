@@ -190,7 +190,7 @@ module ProseMirror =
 
     /// What `EditorState.create` is handed — the fields this repository sets. Built by
     /// `createState`, which is the only thing that needs its shape.
-    type [<AllowNullLiteral>] private EditorStateConfig =
+    type [<AllowNullLiteral>] EditorStateConfig =
         abstract schema : Schema with get, set
         abstract plugins : Plugin[] with get, set
 
@@ -207,8 +207,9 @@ module ProseMirror =
     [<Import("EditorView", "prosemirror-view")>]
     let private editorViewClass : obj = jsNative
     [<Emit("new ($0)($1, $2)")>]
-    let private viewNew (cls: obj) (host: obj) (props: EditorProps) : EditorView = jsNative
-    let createView (host: obj) (props: EditorProps) : EditorView = viewNew editorViewClass host props
+    let private viewNew (cls: obj) (host: Browser.Types.Element) (props: EditorProps) : EditorView = jsNative
+    /// An editor view rendered inside `host`.
+    let createView (host: Browser.Types.Element) (props: EditorProps) : EditorView = viewNew editorViewClass host props
 
     // --- prosemirror-keymap / -commands ----------------------------------------------------
 
@@ -429,59 +430,120 @@ module ProseMirror =
     let selAnchor (sel: obj) : int = jsNative
     [<Emit("$0.head")>]
     let selHead (sel: obj) : int = jsNative
-    [<Emit("$0.setMeta($1, $2)")>]
-    let trSetMeta (tr: Transaction) (key: obj) (value: obj) : Transaction = jsNative
-    [<Emit("$0.getMeta($1)")>]
-    let trGetMeta (tr: Transaction) (key: obj) : obj = jsNative
     [<Emit("$0.docChanged")>]
     let trDocChanged (tr: Transaction) : bool = jsNative
-    [<Emit("$0.selectionSet")>]
-    let trSelectionSet (tr: Transaction) : bool = jsNative
+    /// How positions moved across a transaction's steps, for carrying decorations through it.
+    type Mapping = interface end
+
     [<Emit("$0.mapping")>]
-    let trMapping (tr: Transaction) : obj = jsNative
+    let trMapping (tr: Transaction) : Mapping = jsNative
     [<Emit("$0.doc")>]
-    let trDoc (tr: Transaction) : obj = jsNative
-    [<Emit("$0")>]
-    let asTransaction (tr: obj) : Transaction = jsNative
+    let trDoc (tr: Transaction) : Node = jsNative
 
     // prosemirror-state: PluginKey + a Plugin carrying state + props.
+
+    /// A plugin's key: what names it in a state, what state it keeps, and what a transaction
+    /// may carry to it as metadata. ProseMirror's own `PluginKey<T>` types only the state; the
+    /// metadata is typed here too, so what `trSetMeta` puts on a transaction is what
+    /// `trGetMeta` reads off it, rather than an `obj` each side agrees about in prose.
+    type PluginKey<'State, 'Meta> = interface end
+
     [<Import("PluginKey", "prosemirror-state")>]
     let private pluginKeyClass : obj = jsNative
     [<Emit("new ($0)($1)")>]
-    let private pluginKeyNew (cls: obj) (name: string) : obj = jsNative
-    let pluginKey (name: string) : obj = pluginKeyNew pluginKeyClass name
+    let private pluginKeyNew<'State, 'Meta> (cls: obj) (name: string) : PluginKey<'State, 'Meta> = jsNative
+    let pluginKey<'State, 'Meta> (name: string) : PluginKey<'State, 'Meta> =
+        pluginKeyNew<'State, 'Meta> pluginKeyClass name
+    /// The state the keyed plugin keeps in `state`. Asked of a state the plugin runs in; one it
+    /// does not run in answers `undefined`, which is not a `'State`.
     [<Emit("$0.getState($1)")>]
-    let pluginKeyGetState (key: obj) (state: EditorState) : obj = jsNative
+    let pluginKeyGetState (key: PluginKey<'State, 'Meta>) (state: EditorState) : 'State = jsNative
+
+    /// `tr` carrying `value` to the plugin `key` names.
+    [<Emit("$0.setMeta($1, $2)")>]
+    let trSetMeta (tr: Transaction) (key: PluginKey<'State, 'Meta>) (value: 'Meta) : Transaction = jsNative
+    /// What `tr` carries to the plugin `key` names, and nothing when it carries nothing.
+    [<Emit("$0.getMeta($1)")>]
+    let trGetMeta (tr: Transaction) (key: PluginKey<'State, 'Meta>) : 'Meta option = jsNative
+
+    // prosemirror-view: Decoration widgets/inlines + a DecorationSet.
+
+    type Decoration = interface end
+    type DecorationSet = interface end
+
+    /// The attributes an inline or node decoration puts on the DOM it covers. ProseMirror
+    /// takes any attribute by name; the ones a caller needs beyond these are declared by that
+    /// caller, on an interface inheriting this one.
+    type [<AllowNullLiteral>] DecorationAttrs =
+        abstract style : string with get, set
+
+    /// How a widget sits against content at its position: a positive `side` keeps it after
+    /// what is typed there, rather than pushing text past it.
+    type [<AllowNullLiteral>] WidgetSpec =
+        abstract side : int with get, set
+
+    /// What a plugin's `view` answers: told of every update, and of its own teardown.
+    type [<AllowNullLiteral>] PluginView =
+        abstract update : System.Func<EditorView, EditorState, unit> with get, set
+        abstract destroy : System.Func<unit, unit> with get, set
+
+    /// DOM event handlers a plugin puts on the view; `true` when the event was handled.
+    type [<AllowNullLiteral>] DomEventHandlers =
+        abstract focus : System.Func<EditorView, Browser.Types.FocusEvent, bool> with get, set
+        abstract blur : System.Func<EditorView, Browser.Types.FocusEvent, bool> with get, set
+
+    type [<AllowNullLiteral>] PluginProps =
+        abstract handleDOMEvents : DomEventHandlers with get, set
+        abstract decorations : System.Func<EditorState, DecorationSet> with get, set
+
+    /// A plugin's state: made once from the config the editor state was created with, then
+    /// carried through every transaction.
+    type [<AllowNullLiteral>] StateField<'State> =
+        abstract init : System.Func<EditorStateConfig, EditorState, 'State> with get, set
+        abstract apply : System.Func<Transaction, 'State, EditorState, EditorState, 'State> with get, set
+
+    /// A plugin, as `new Plugin(spec)` takes it — the fields this repository sets. Build with
+    /// `jsOptions`, so a field nobody assigned is absent. A plugin keeping no state and
+    /// reading no metadata is a `PluginSpec<unit, unit>`.
+    type [<AllowNullLiteral>] PluginSpec<'State, 'Meta> =
+        abstract key : PluginKey<'State, 'Meta> with get, set
+        abstract state : StateField<'State> with get, set
+        abstract props : PluginProps with get, set
+        abstract view : System.Func<EditorView, PluginView> with get, set
+
     [<Import("Plugin", "prosemirror-state")>]
     let private pluginClass : obj = jsNative
     [<Emit("new ($0)($1)")>]
-    let private pluginNew (cls: obj) (spec: obj) : Plugin = jsNative
-    let makePlugin (spec: obj) : Plugin = pluginNew pluginClass spec
+    let private pluginNew (cls: obj) (spec: PluginSpec<'State, 'Meta>) : Plugin = jsNative
+    let makePlugin (spec: PluginSpec<'State, 'Meta>) : Plugin = pluginNew pluginClass spec
 
-    // prosemirror-view: Decoration widgets/inlines + a DecorationSet.
     [<Import("Decoration", "prosemirror-view")>]
     let private decorationClass : obj = jsNative
     [<Emit("$0.widget($1, $2, $3)")>]
-    let private decorationWidget (cls: obj) (pos: int) (dom: obj) (spec: obj) : obj = jsNative
-    let decoWidget (pos: int) (dom: obj) (spec: obj) : obj = decorationWidget decorationClass pos dom spec
+    let private decorationWidget (cls: obj) (pos: int) (dom: Browser.Types.HTMLElement) (spec: WidgetSpec) : Decoration = jsNative
+    /// `dom` drawn at `pos`, between characters rather than over any.
+    let decoWidget (pos: int) (dom: Browser.Types.HTMLElement) (spec: WidgetSpec) : Decoration =
+        decorationWidget decorationClass pos dom spec
     [<Emit("$0.inline($1, $2, $3)")>]
-    let private decorationInline (cls: obj) (from: int) (to': int) (attrs: obj) : obj = jsNative
-    let decoInline (from: int) (to': int) (attrs: obj) : obj = decorationInline decorationClass from to' attrs
+    let private decorationInline (cls: obj) (from: int) (to': int) (attrs: DecorationAttrs) : Decoration = jsNative
+    let decoInline (from: int) (to': int) (attrs: DecorationAttrs) : Decoration =
+        decorationInline decorationClass from to' attrs
     [<Emit("$0.node($1, $2, $3)")>]
-    let private decorationNode (cls: obj) (from: int) (to': int) (attrs: obj) : obj = jsNative
+    let private decorationNode (cls: obj) (from: int) (to': int) (attrs: DecorationAttrs) : Decoration = jsNative
     /// Attributes on the NODE spanning `from..to'` — as opposed to `decoInline`'s span inside
     /// one. What puts a marker on a whole empty paragraph without putting anything in it.
-    let decoNode (from: int) (to': int) (attrs: obj) : obj = decorationNode decorationClass from to' attrs
+    let decoNode (from: int) (to': int) (attrs: DecorationAttrs) : Decoration =
+        decorationNode decorationClass from to' attrs
     [<Import("DecorationSet", "prosemirror-view")>]
     let private decorationSetClass : obj = jsNative
     [<Emit("$0.create($1, $2)")>]
-    let private decorationSetCreate (cls: obj) (doc: obj) (decos: obj[]) : obj = jsNative
-    let decoSetCreate (doc: obj) (decos: obj[]) : obj = decorationSetCreate decorationSetClass doc decos
+    let private decorationSetCreate (cls: obj) (doc: Node) (decos: Decoration[]) : DecorationSet = jsNative
+    let decoSetCreate (doc: Node) (decos: Decoration[]) : DecorationSet = decorationSetCreate decorationSetClass doc decos
     [<Emit("$0.empty")>]
-    let private decorationSetEmpty (cls: obj) : obj = jsNative
-    let decoSetEmpty : obj = decorationSetEmpty decorationSetClass
+    let private decorationSetEmpty (cls: obj) : DecorationSet = jsNative
+    let decoSetEmpty : DecorationSet = decorationSetEmpty decorationSetClass
     [<Emit("$0.map($1, $2)")>]
-    let decoSetMap (set: obj) (mapping: obj) (doc: obj) : obj = jsNative
+    let decoSetMap (set: DecorationSet) (mapping: Mapping) (doc: Node) : DecorationSet = jsNative
 
     /// The two inline colours the caret carries, written through `Fable.BrowserExtras`'s
     /// CSSOM slice — the same one the shell writes its layout number with. `setProperty` is
@@ -496,7 +558,7 @@ module ProseMirror =
     /// The DOM for one caret + name label (a widget decoration). Built through the typed DOM
     /// binding rather than a JavaScript program in a string: an emit binds a platform API, and
     /// assembling elements is logic, which belongs where the compiler reads it.
-    let caretDom (color: string) (name: string) : obj =
+    let caretDom (color: string) (name: string) : Browser.Types.HTMLElement =
         let caret = Browser.Dom.document.createElement "span"
         caret.className <- "pm-caret"
         setBorderColour caret color
@@ -505,7 +567,7 @@ module ProseMirror =
         label.textContent <- name
         setBackground label color
         caret.appendChild label |> ignore
-        box caret
+        caret
 
     // --- Yjs relative positions (survive concurrent edits) + lib0 base64 for the wire --------
 
@@ -534,7 +596,7 @@ module ProseMirror =
     // --- y-prosemirror position bridging (ProseMirror positions <-> Yjs relative positions) --
 
     [<Import("ySyncPluginKey", "y-prosemirror")>]
-    let ySyncPluginKey : obj = jsNative
+    let ySyncPluginKey : PluginKey<obj, obj> = jsNative
     [<Import("getRelativeSelection", "y-prosemirror")>]
     let private getRelativeSelection (binding: obj) (state: EditorState) : obj = jsNative
     [<Import("relativePositionToAbsolutePosition", "y-prosemirror")>]
