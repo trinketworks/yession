@@ -421,6 +421,7 @@ let private frameSerializationTests =
                   ToolUseFinished { ToolUseId = toolUseId; Outcome = ToolCallFailed "no such tool"; Block = None; Result = None }
                   // Plan 17: the two the operator's declarations produce.
                   McpServerAvailable { MessageId = messageId; Name = McpServerName.create "serial" |> expect }
+                  SessionResumed { MessageId = messageId; LastHeardAt = DateTimeOffset (2026, 9, 25, 4, 0, 0, TimeSpan.Zero) }
                   McpServerUnavailable { MessageId = messageId; Name = McpServerName.create "printer" |> expect }
                   // Watched pull requests: a start (with its baseline snapshot), a stop,
                   // and a transition — including the optional-mergeable both ways.
@@ -1207,6 +1208,35 @@ let private chapterTests =
 
 /// The contract every watched change keeps, and the one thing that reads it today: whether
 /// a change was noticed long after it happened.
+let private sessionResumedTests =
+    let resumedAt = DateTimeOffset (2026, 9, 25, 13, 0, 0, TimeSpan.Zero)
+    let lastHeard = resumedAt.AddHours -9.0
+    let resumed = SessionResumed { MessageId = MessageId.create "r1" |> expect; LastHeardAt = lastHeard }
+    let at (offset: int64) (time: DateTimeOffset) (event: SessionEvent) : EventEnvelope<SessionEvent> =
+        { EventId = EventId.fresh ()
+          SessionId = SessionId.create "resume-session" |> expect
+          Offset = EventOffset.create offset |> expect
+          Actor = ActorRef.SessionProcess
+          Timestamp = time
+          Event = event }
+    testList "A session that was away" [
+        testCase "says so on the timeline, with how long it was stopped" <| fun () ->
+            let projection, _ = ConversationProjection.applyEvents None [ at 1L resumedAt resumed ] ConversationProjection.empty
+            Expect.stringContains
+                (projection.Items |> List.map ConversationItem.said |> String.concat "\n")
+                "stopped for 9h"
+                "the gap, in words the screen and the agent share"
+
+        testCase "its history is when it began and when it last came back" <| fun () ->
+            let began = lastHeard.AddDays -1.0
+            let history =
+                SessionHistory.ofEnvelopes
+                    [ at 0L began (McpServerAvailable { MessageId = MessageId.create "m" |> expect; Name = McpServerName.create "serial" |> expect })
+                      at 1L resumedAt resumed ]
+            Expect.equal history.StartedAt (Some began) "the first thing it wrote"
+            Expect.equal history.LastResumed (Some (resumedAt, lastHeard)) "and the last time it came back, with since when"
+    ]
+
 let private watchChangedTests =
     let repo = RepoRef.create "octo/hello" |> expect
     let pr = PrRef.create repo 12 |> expect
@@ -3529,6 +3559,31 @@ let private artifactTests =
                 Expect.equal (ConversationItem.headline item) "shared artifact file:///artifacts/chart.png/0000-7f2a91 (1.50 kB)" "the act, on the timeline"
                 Expect.equal item.Author ActorRef.Agent "attributed to whoever shared it"
             | items -> failwithf "expected one act, got %d" (List.length items)
+
+        // What the list panel reads. Derived from the acts rather than kept beside them, so
+        // this is the whole rule: one row per NAME at its newest version, newest share first.
+        testCase "the artifacts a session holds are one row per name, at the version last shared" <| fun () ->
+            let at (offset: int64) (event: SessionEvent) : EventEnvelope<SessionEvent> =
+                { EventId = EventId.fresh ()
+                  SessionId = SessionId.create "session-1" |> expect
+                  Offset = EventOffset.create offset |> expect
+                  Actor = ActorRef.Agent
+                  Timestamp = DateTimeOffset (2026, 9, 24, 0, 0, 0, TimeSpan.Zero)
+                  Event = event }
+            let named (name: string) (seq: int) =
+                shared (ArtifactRef.create name seq stamp |> expect)
+            let proj, _ =
+                ConversationProjection.applyEvents
+                    None
+                    [ at 1L (named "chart.png" 0)
+                      at 2L (named "notes.log" 0)
+                      at 3L (named "chart.png" 1) ]
+                    ConversationProjection.empty
+            Expect.equal
+                (ConversationProjection.artifacts proj |> List.map (fun a -> ArtifactRef.content a.Ref |> ContentRef.value))
+                [ "artifacts/chart.png/0001-7f2a91"; "artifacts/notes.log/0000-7f2a91" ]
+                "the updated one is one row at its new version, and it comes first for being the most recent share"
+            Expect.equal (ConversationProjection.artifacts ConversationProjection.empty) [] "a session that has shared nothing offers no rows"
     ]
 
 let tests =
@@ -3547,6 +3602,7 @@ let tests =
         repoTests
         chapterTests
         namingTests
+        sessionResumedTests
         watchChangedTests
         prWatchTests
         deliveryFilterTests

@@ -154,24 +154,37 @@ let private githubRequestTests =
 let private githubStatusTests =
     testList "what a status GitHub answered with means" [
 
-        testCase "a 401 is the credential, for a look and a listing alike" <| fun () ->
-            Expect.equal (GitHubPrs.failureAt 401 "") PrUnauthorized "the pull request endpoints"
-            Expect.equal (GitHubRepos.failureAt 401) GitHubRepos.Refused "and the repository ones"
+        testCase "a 401 is the credential" <| fun () ->
+            Expect.equal (GitHubPrs.failureAt 401 "" "" "") PrUnauthorized "the credential is dead"
 
         testCase "a 404 is something this credential cannot see" <| fun () ->
-            Expect.equal (GitHubPrs.failureAt 404 "") PrNotFound "GitHub says this for absent and for hidden alike"
-            Expect.equal (GitHubRepos.failureAt 404) GitHubRepos.NotFound "the same on a listing"
+            Expect.equal (GitHubPrs.failureAt 404 "" "" "") PrNotFound "GitHub says this for absent and for hidden alike"
 
-        // 403 is how GitHub says "too many"; a 403 for any other reason (scopes, a blocked
-        // App) is also not something a retry sooner would fix.
-        testCase "403 and 429 are both the allowance being spent" <| fun () ->
-            Expect.equal (GitHubPrs.failureAt 403 "") (PrRateLimited None) "a 403 waits"
-            Expect.equal (GitHubPrs.failureAt 429 "") (PrRateLimited None) "and so does a 429"
-            Expect.equal (GitHubRepos.failureAt 403) GitHubRepos.RateLimited "the same on a listing"
-            Expect.equal (GitHubRepos.failureAt 429) GitHubRepos.RateLimited "and the same again"
+        // A 403 used to be read as a rate limit whatever it said, so a credential missing a
+        // scope was told to wait for a window that would change nothing, and a watch on it
+        // held off fifteen minutes at a time.
+        testCase "a 403 with allowance left is a refusal, not a wait" <| fun () ->
+            Expect.equal
+                (GitHubPrs.failureAt 403 "" "4999" """{"message":"Resource not accessible by integration"}""")
+                PrForbidden
+                "the credential works and may not do this"
+
+        testCase "a 403 with the allowance spent is a rate limit" <| fun () ->
+            Expect.equal (GitHubPrs.failureAt 403 "" "0" "") (PrRateLimited None) "the primary budget is gone"
+
+        // A secondary limit leaves the primary budget untouched, so the remaining count says
+        // nothing; GitHub names it in the message instead.
+        testCase "a secondary rate limit's 403 is a rate limit" <| fun () ->
+            Expect.equal
+                (GitHubPrs.failureAt 403 "" "4000" """{"message":"You have exceeded a secondary rate limit."}""")
+                (PrRateLimited None)
+                "it says so in the message"
+
+        testCase "a 429 is a rate limit" <| fun () ->
+            Expect.equal (GitHubPrs.failureAt 429 "" "" "") (PrRateLimited None) "too many, whatever else"
 
         testCase "a rate limit carries the window it ends at, when GitHub named one" <| fun () ->
-            Expect.equal (GitHubPrs.failureAt 429 "1770000000") (PrRateLimited (Some 1770000000L)) "the reset epoch"
+            Expect.equal (GitHubPrs.failureAt 429 "1770000000" "" "") (PrRateLimited (Some 1770000000L)) "the reset epoch"
 
         // Read as an `Int32` this parsed as nothing, so the hold fell back to a fixed window
         // and the number GitHub actually named was discarded — on every reply, from January
@@ -179,17 +192,17 @@ let private githubStatusTests =
         // first second an `int` cannot hold.
         testCase "a reset window past 2038 is read, not dropped" <| fun () ->
             Expect.equal
-                (GitHubPrs.failureAt 429 "2147483648")
+                (GitHubPrs.failureAt 429 "2147483648" "" "")
                 (PrRateLimited (Some 2147483648L))
                 "the second after Int32.MaxValue"
-            Expect.equal
-                (GitHubPrs.failureAt 403 "4102444800")
-                (PrRateLimited (Some 4102444800L))
-                "and one well past it"
 
         testCase "any other status is reported as what GitHub answered" <| fun () ->
-            Expect.equal (GitHubPrs.failureAt 502 "") (PrUnreachable "github answered 502") "a gateway between us"
-            Expect.equal (GitHubRepos.failureAt 502) (GitHubRepos.Unreachable "github answered 502") "the same on a listing"
+            Expect.equal (GitHubPrs.failureAt 502 "" "" "") (PrUnreachable "github answered 502") "a gateway between us"
+
+        // One reading of a status, spoken in a picker's words: the listing is a projection of
+        // the look's, so the two cannot disagree about which 403 is which.
+        testCase "a listing reads a status the way a look does" <| fun () ->
+            Expect.equal (GitHubRepos.failureAt 403 "4999" "") GitHubRepos.Forbidden "the same refusal"
 
         // A reply that arrived and did not decode is not a host that could not be reached,
         // and the two sentences send a person to different places: one to their network,

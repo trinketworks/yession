@@ -3,6 +3,8 @@ namespace Yession.Domain.Chat
 open Yession.Domain.Watching
 open Yession.Domain
 open Yession.Domain.Agent
+open Yession.Domain.Artifacts
+open Yession.Domain.Content
 open Yession.Domain.Prs
 
 /// The conversation is a *projection* of the event log — never read from Yjs/draft state.
@@ -886,6 +888,10 @@ module ConversationProjection =
         // its own events, against the newly resolved set, so a boot, a reconnect and a
         // restart all emit nothing and only a genuine change by the operator is loud.
         | SessionEvent.McpServerAvailable m -> proj |> noted m.MessageId ActorRef.System (Act.McpServerAvailable m) envelope
+        // The process's own account of the gap it was absent for — the session speaking, not
+        // anybody in it.
+        | SessionEvent.SessionResumed r ->
+            proj |> noted r.MessageId ActorRef.SessionProcess (Act.SessionResumed (r, envelope.Timestamp)) envelope
         | SessionEvent.McpServerUnavailable m -> proj |> noted m.MessageId ActorRef.System (Act.McpServerUnavailable m) envelope
         // Watched pull requests fold in for the repo notes' reason: a watch is a
         // session-shaping act, and a transition is exactly what a joining human or the
@@ -981,6 +987,32 @@ module ConversationProjection =
                 else
                     proj, highWater)
             (projection, appliedThrough)
+
+    /// Every artifact this session holds, at its latest version, most recently shared first.
+    ///
+    /// DERIVED rather than kept: the share is already an act in `Items`, and a second copy in
+    /// the projection would be a list that could disagree with the timeline it was folded from.
+    /// A reader wants the newest version of each name — the older ones are still addressable,
+    /// and the way to ask for one is the act that put it there, which is on the timeline where
+    /// it happened.
+    ///
+    /// It lives here rather than in the view because it is the answer to "what has been shared",
+    /// which is a question about the log — and a cheap test can ask it without a browser.
+    let artifacts (proj: ConversationProjection) : ArtifactShared list =
+        proj.Items
+        |> List.choose (fun item ->
+            match item.Content with
+            | ItemContent.Act (Act.ArtifactShared a) -> Some (EventOffset.value item.Offset, a)
+            | _ -> None)
+        // Later in the log wins: shares of one name arrive in the order they were made, so the
+        // last mention is the newest version without comparing sequence numbers here.
+        |> List.fold (fun byName (at, a) -> Map.add (ArtifactRef.name a.Ref) (at, a) byName) Map.empty
+        |> Map.toList
+        |> List.map snd
+        // Newest first, because the list is read to find the thing just shared far more often
+        // than to find one from an hour ago.
+        |> List.sortByDescending fst
+        |> List.map snd
 
 /// What a person in this session still has to decide about.
 ///

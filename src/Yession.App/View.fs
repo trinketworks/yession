@@ -10,6 +10,7 @@ open Yession.Domain.Collab
 open Yession.Domain.Tools
 open Yession.Domain.Chat
 open Yession.Domain.Content
+open Yession.Domain.Artifacts
 open Yession.Domain.Files
 open Yession.Domain.Prs
 open Fable.BrowserExtras
@@ -3604,20 +3605,58 @@ module View =
                   </span>
                   <span class="{Style.terminalListVerbs}">{rewind}{reattach}{kill}</span>
                 </div>"""
-        match ClientModel.terminalRows model with
-        | [] ->
+        // An artifact's row, in the same grid as a terminal's. Reachability is the whole point
+        // of it: an artifact is otherwise findable only by its chip in a message, so one shared
+        // two hundred messages ago cannot be opened again at all.
+        //
+        // The mark is `ContentKind`'s, the same rule the chip and the pane body use, so what a
+        // row promises and what opening it draws cannot disagree. The row is a BUTTON that
+        // selects the pane tab (a person here is choosing what to look at, not navigating away)
+        // and the size sits beside the name because it is what decides between looking at it
+        // here and taking it away.
+        let artifactRow (a: ArtifactShared) =
+            let content = ArtifactRef.content a.Ref
+            let mark =
+                match ContentKind.ofMediaType a.MediaType with
+                | ContentKind.Image _ -> Icon.imageSm
+                | ContentKind.Download -> Icon.fileSm
+            html $"""
+                <div class="{Style.artifactListRow}" role="listitem">
+                  <span class="{Style.statusFaint}" aria-hidden="true">{mark}</span>
+                  <span class="min-w-0 flex items-center">
+                    <button type="button" class="{Style.terminalListName}"
+                            data-artifact-list-row="{ContentRef.value content}"
+                            @click={Ev(fun _ ->
+                                          dispatch (ShowInPaneMsg (Reading (ContentTab content)))
+                                          actions.FocusPane ())}>{ArtifactRef.name a.Ref}</button>
+                  </span>
+                  <span class="{Style.artifactListSize}">{ContentSize.render a.Bytes}</span>
+                </div>"""
+        let terminals = ClientModel.terminalRows model
+        let artifacts = ClientModel.artifactRows model
+        // Headings only when there are two kinds to tell apart: over a list of terminals alone,
+        // "Terminals" names the only thing on screen, which is a word that says nothing.
+        let heading (label: string) =
+            if List.isEmpty artifacts then Lit.nothing
+            else html $"""<div class="{Style.listSectionLabel}">{label}</div>"""
+        match terminals, artifacts with
+        | [], [] ->
             html $"""
                 <div class="{Style.terminalListEmpty}" data-terminal-list>
                   <span class="font-terminal text-[28px] leading-8 text-ink-faint select-none" aria-hidden="true">$</span>
                   <button type="button" class="{Style.btnPrimary}" data-terminal-new
                           @click={Ev(fun _ -> actions.OpenTerminal "terminal")}>New terminal</button>
                 </div>"""
-        | rows ->
+        | rows, shared ->
             let items = rows |> List.map row
+            let files = shared |> List.map artifactRow
             html $"""
                 <div class="{Style.terminalListBody}" data-terminal-list role="list"
-                     aria-label="Every terminal in this session">
+                     aria-label="Every terminal and artifact in this session">
+                  {if List.isEmpty rows then Lit.nothing else heading "Terminals"}
                   {items}
+                  {if List.isEmpty shared then Lit.nothing else heading "Artifacts"}
+                  {files}
                 </div>"""
 
     /// The side pane: a tab strip over three kinds of thing — a terminal, a block's

@@ -106,7 +106,7 @@ The derivations themselves (`nix/packages.nix`) have three consumers, and the di
 between them is which SOURCE they build: `flake.nix` and `devenv.nix` both build a store copy
 of the repo (git-filtered for the flake, whole-directory for devenv), while
 `nix/worktree.nix` evaluates in place, against the tree as it stands — `nix build --file
-nix/worktree.nix nix|npm|staged|nugetDeps`. That last route is what `check Nix NixBuild` drives and the
+nix/worktree.nix nix|npm|staged|nugetTools`. That last route is what `check Nix NixBuild` drives and the
 only one that can catch a `src` filter that has stopped matching what git tracks.
 
 **No new helper scripts.** New build/dev/repo functionality is a `tasks.fsx` verb, not a shell
@@ -735,7 +735,7 @@ Capabilities:
   symlink or 176MB of `obj/`/Fable output into the derivation is green everywhere in CI and
   broken on the laptop. `check Nix` asserts the source contract (`NixSource.fs`) against the
   tree this run built; `NixBuild` builds `nix/worktree.nix` and boot-smokes the result — which
-  is also what re-checks the NuGet FOD hash, the other thing a devenv-only `check` cannot see.
+  is also what re-checks the dotnet-tools FOD hash, the other thing a devenv-only `check` cannot see.
   Two capabilities because they are two costs: the contract is an evaluation that belongs
   beside the suites that built the tree it reads, the build is minutes of sandboxed compile
   that belongs on a runner of its own.

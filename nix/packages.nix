@@ -99,21 +99,79 @@ let
     export DOTNET_EnableWriteXorExecute=0
   '';
 
-  # NuGet global-packages cache — the only network step (a fixed-output derivation). Populated
-  # by restoring the solution + the Fable tool; consumed offline by `staged` via NUGET_PACKAGES.
+  # Every NuGet package the projects restore, fetched one by one and pinned by the lockfiles.
+  #
+  # Each packages.lock.json records a `contentHash` per package — but not of the file nuget.org
+  # serves. nuget.org counter-signs every package by appending a `.signature.p7s` entry, and
+  # NuGet hashes the package WITHOUT it: the bytes the author uploaded. `zip -d` of that one
+  # entry gives exactly those bytes back (checked against every package locked here when this
+  # was written), so each fetch strips it and is pinned by the lockfile's own hash — a package
+  # changes when its lockfile does, and there is no hash in this file to keep. The stripped
+  # package is still a valid one, and restore does not require a repository signature.
+  #
+  # Read at eval time from the lockfiles in `src`, which is a source copy and not a build, so
+  # this is not import-from-derivation.
+  nugetPackages =
+    let
+      lockfiles = lib.filter (f: baseNameOf f == "packages.lock.json")
+        (lib.filesystem.listFilesRecursive src.outPath);
+      # `Project` entries are the repository's own projects: nothing to fetch.
+      locked = lib.concatMap (file:
+        lib.concatMap (deps:
+          lib.mapAttrsToList (name: dep: {
+            id = lib.toLower name;
+            version = lib.toLower dep.resolved;
+            inherit (dep) contentHash;
+          }) (lib.filterAttrs (_: dep: dep ? contentHash) deps))
+        (lib.attrValues (lib.importJSON file).dependencies)) lockfiles;
+    in lib.unique locked;
+
+  fetchNupkg = { id, version, contentHash }: pkgs.fetchurl {
+    name = "${id}.${version}.nupkg";
+    url = "https://api.nuget.org/v3-flatcontainer/${id}/${version}/${id}.${version}.nupkg";
+    hash = "sha512-${contentHash}";
+    downloadToTemp = true;
+    nativeBuildInputs = [ pkgs.zip pkgs.unzip ];
+    # The file gets a name ending in .nupkg first: zip takes an archive named without an
+    # extension to mean `<name>.zip`, finds nothing there and exits 12, "nothing to do" — the
+    # same status it gives for a package with no signature to delete. So whether there is one
+    # is asked of the listing, never read off the exit code. And every failure stops the fetch
+    # here, because fetchurl's builder would not: it would carry on and hash the SIGNED file,
+    # and the mismatch would blame the lockfile.
+    postFetch = ''
+      pkg="$downloadedFile.nupkg"
+      mv "$downloadedFile" "$pkg" || exit 1
+      if unzip -Z1 "$pkg" | grep -qxF .signature.p7s; then
+        zip -q -d "$pkg" .signature.p7s || exit 1
+      fi
+      mv "$pkg" "$out" || exit 1
+    '';
+  };
+
+  # The packages as a local feed: a directory of .nupkg files, which is a NuGet source as it
+  # stands. `staged` restores from it offline.
+  nugetFeed = pkgs.linkFarm "yession-nuget-feed"
+    (map (p: { name = "${p.id}.${p.version}.nupkg"; path = fetchNupkg p; }) nugetPackages);
+
+  # The dotnet TOOLS (fable, fsharp-analyzers) — the one NuGet step that still needs a hash
+  # kept by hand. `.config/dotnet-tools.json` names a version per tool and no content hash, so
+  # nothing here can pin them the way the lockfiles pin packages; this is a fixed-output
+  # restore of that manifest alone. Its source is the manifest and nothing else, so the hash
+  # moves when a tool does, and only then. To re-derive it:
+  # `nix build --file nix/worktree.nix nugetTools` and take the `got:`.
   #
   # NO `version` in the name. A fixed-output derivation's store path comes from its NAME and
-  # its HASH, so carrying the version there moved the path every commit — and this is the one
-  # derivation that reaches the NETWORK, so every build re-downloaded the whole NuGet cache
-  # from nuget.org and inherited nuget.org's bad days (a 503 here fails the build with
-  # NU1301, having nothing to do with the change being built). The content is pinned by
-  # `outputHash`; what it is called is not part of that guarantee.
-  nugetDeps = pkgs.stdenv.mkDerivation {
-    name = "yession-nuget-deps";
-    inherit src;
+  # its HASH, so carrying the version there moved the path every commit — and this derivation
+  # reaches the NETWORK, so every build re-downloaded it from nuget.org and inherited
+  # nuget.org's bad days (a 503 here fails the build with NU1301, having nothing to do with the
+  # change being built). The content is pinned by `outputHash`; what it is called is not part
+  # of that guarantee.
+  nugetTools = pkgs.stdenv.mkDerivation {
+    name = "yession-nuget-tools";
+    src = lib.fileset.toSource { root = ./..; fileset = ../.config/dotnet-tools.json; };
     nativeBuildInputs = [ pkgs.dotnet-sdk_10 pkgs.cacert ];
-    # The one derivation here that reaches the network, so the one that has to be told how to
-    # leave the box. A sandboxed fixed-output build gets a cleared environment; without the
+    # dotnet reaches the network itself here, rather than through fetchurl, so it has to be
+    # told how to leave the box. A sandboxed fixed-output build gets a cleared environment; without the
     # proxy variables passed through, NuGet dials out directly and a box that only egresses
     # through a proxy answers with `NU1301 … 503`, which reads like nuget.org having a bad day
     # rather than a build that never reached it. .NET's HttpClient picks these up on its own.
@@ -133,7 +191,6 @@ let
         </packageSources>
       </configuration>
       EOF
-      dotnet restore Yession.slnx --configfile nuget.config
       dotnet tool restore --configfile nuget.config
       runHook postBuild
     '';
@@ -146,8 +203,26 @@ let
     dontFixup = true;
     outputHashMode = "recursive";
     outputHashAlgo = "sha256";
-    outputHash = "sha256-V/xjyl4/+w82hm91owuC79sg+jRzDE4jLce+cp5WpdY=";
+    outputHash = "sha256-5Hbz/sgEPZecuyCyJJAfR0X6NH/PpORRtLMtKLHbdUs=";
   };
+
+  # Offline NuGet for a build: the tools already in the global-packages folder, and the locked
+  # packages as the only source. NUGET_PACKAGES must be writable (restore writes lock and temp
+  # files into it), so the read-only tools are copied rather than pointed at.
+  nugetEnv = ''
+    export NUGET_PACKAGES="$TMPDIR/nuget-packages"
+    cp -r --no-preserve=mode,ownership ${nugetTools} "$NUGET_PACKAGES"
+    cat > nuget.config <<EOF
+    <?xml version="1.0" encoding="utf-8"?>
+    <configuration>
+      <packageSources>
+        <clear/>
+        <add key="locked" value="${nugetFeed}"/>
+      </packageSources>
+    </configuration>
+    EOF
+    dotnet tool restore
+  '';
 
   # The npm manifests, alone. What `node_modules` IS depends on these two files and the addon —
   # not on the F# sources and not on the version. Handing the full `src` to the derivations below
@@ -235,16 +310,7 @@ let
       cp -a ${nodeModules}/node_modules ./node_modules
       chmod -R u+w node_modules
       export PATH="$PWD/node_modules/.bin:$PATH"
-      # NUGET_PACKAGES must be writable (restore writes lock/temp files); copy the read-only FOD.
-      export NUGET_PACKAGES="$TMPDIR/nuget-packages"
-      cp -r --no-preserve=mode,ownership ${nugetDeps} "$NUGET_PACKAGES"
-      cat > nuget.config <<'EOF'
-      <?xml version="1.0" encoding="utf-8"?>
-      <configuration>
-        <packageSources><clear/></packageSources>
-      </configuration>
-      EOF
-      dotnet tool restore
+      ${nugetEnv}
       dotnet fsi tasks.fsx stage "${version}"
       runHook postBuild
     '';
@@ -448,15 +514,7 @@ let
       cp -a ${nodeModules}/node_modules ./node_modules
       chmod -R u+w node_modules
       export PATH="$PWD/node_modules/.bin:$PATH"
-      export NUGET_PACKAGES="$TMPDIR/nuget-packages"
-      cp -r --no-preserve=mode,ownership ${nugetDeps} "$NUGET_PACKAGES"
-      cat > nuget.config <<'EOF'
-      <?xml version="1.0" encoding="utf-8"?>
-      <configuration>
-        <packageSources><clear/></packageSources>
-      </configuration>
-      EOF
-      dotnet tool restore
+      ${nugetEnv}
       dotnet fsi tasks.fsx example serial
       runHook postBuild
     '';
@@ -493,8 +551,8 @@ let
   };
 in
 {
-  # nugetDeps is exposed for one reason: its `outputHash` can only be re-derived by building it
-  # (`nix build --file nix/worktree.nix nugetDeps`), and a hash you cannot rebuild on demand is
+  # nugetTools is exposed for one reason: its `outputHash` can only be re-derived by building it
+  # (`nix build --file nix/worktree.nix nugetTools`), and a hash you cannot rebuild on demand is
   # a hash nobody updates until a release job fails.
-  inherit libdatachannel node-datachannel node-pty claude-code nugetDeps nodeModules staged nix npm serial-provider;
+  inherit libdatachannel node-datachannel node-pty claude-code nugetTools nugetFeed nodeModules staged nix npm serial-provider;
 }

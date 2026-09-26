@@ -176,6 +176,7 @@ let private servicesOver (service: Repos.ReposService) : Commands.CommandService
         fun repo _declared ->
             { InSandbox = "/repos/" + RepoRef.relativePath repo
               OnHost = "/data/repos/" + RepoRef.relativePath repo }
+      DeclaredSandboxes = fun () -> []
       Terminals = fun () -> SessionTerminals.unavailable
       Files = fun () -> SessionFiles.unavailable
       Artifacts = fun () -> Artifacts.unavailable
@@ -241,6 +242,38 @@ let private registryReporting (outcome: WorkSandboxes.RunningSandbox -> WorkSand
                                   StartedAt = None
                                   Environment = SessionEnvironment.unavailable })
                 } }
+
+/// A session whose one checkout declares `octo/hello:dev` — a container, a setup, a
+/// credential — with the request the sandbox manager is finally asked for handed to `record`.
+///
+/// The declaration is what the FOLD read; the point of the tests below is that a start which
+/// names this sandbox comes up as this says, and the request is the only place that shows.
+let private declaringDev (record: SandboxRequest -> unit) : Commands.CommandServices =
+    let dev = SandboxRef.parse "octo/hello:dev" |> expect
+    let declared : SandboxDecl =
+        { SandboxDecl.empty with
+            Container = Some { ContainerSpec.defaults with Image = Some { Name = "ghcr.io/octo/dev"; Tag = Some "3" } }
+            Setup = Some "make deps"
+            Forward = [ "github" ] }
+    { servicesOver (reposAnswering (fun repo -> async { return Ok { Repo = repo; Branch = "main"; Dirty = false; Path = "/repos" } })) with
+        DeclaredSandboxes = fun () -> [ dev, declared ]
+        Sandboxes =
+            fun () ->
+                { WorkSandboxes.unavailable with
+                    Ensure =
+                        fun _ _ name request ->
+                            async {
+                                record request
+                                return
+                                    Ok (
+                                        WorkSandboxes.SandboxStarted
+                                            { Ref = name
+                                              Backend = "docker"
+                                              Request = request
+                                              StartedBy = None
+                                              StartedAt = None
+                                              Environment = SessionEnvironment.unavailable })
+                            } } }
 
 /// Services whose queued commands land in `seen` instead of a terminal.
 let private servicesQueueing (seen: ResizeArray<CommandRequest>) (sandboxes: WorkSandboxes.WorkSandboxes) =
@@ -546,6 +579,91 @@ let private tests' =
                 let! answer = startSandbox session
                 Expect.stringContains (answered answer) "is up" "the sandbox came back"
                 Expect.isEmpty seen "saying nothing is not asking to run nothing"
+            }
+
+        // A repo's sandbox is its FILE's to describe, and the tool that names one carries a
+        // declaration with nothing in it. Started from that verbatim, `octo/hello:dev` came up
+        // as a repo sandbox with no container — which is refused, in words that send whoever
+        // reads them to a `yession.yaml` that declares one. It is how a sandbox an agent
+        // stopped could not be started again.
+        testCaseAsync "naming a repo's sandbox starts it as that repo's file declares it" <|
+            async {
+                let mutable asked : SandboxRequest option = None
+                let session = openToolSession (declaringDev (fun request -> asked <- Some request))
+                let! answer = session.Call "start_work_sandbox" """{"name":"octo/hello:dev"}"""
+                Expect.stringContains (answered answer) "is up" "the start happened"
+                let spec : EnvironmentSpec = (Option.get asked).Spec
+                Expect.equal
+                    (SandboxRuntime.describe spec.Runtime)
+                    "ghcr.io/octo/dev:3"
+                    "the container the file declared, not the `no container` the tool carries"
+                Expect.equal spec.Setup (Some "make deps") "and everything else the file said"
+            }
+
+        // The one thing a file cannot know is which of THIS session's credentials to forward,
+        // so the caller still contributes that — by union, because a repo that asked for a
+        // credential does not stop needing it because somebody restarted the sandbox without
+        // naming it.
+        testCaseAsync "the credentials a start names join the ones the file asked for" <|
+            async {
+                let mutable asked : SandboxRequest option = None
+                let session = openToolSession (declaringDev (fun request -> asked <- Some request))
+                let! answer =
+                    session.Call "start_work_sandbox" """{"name":"octo/hello:dev","forward":["jira"]}"""
+                Expect.stringContains (answered answer) "is up" "the start happened"
+                let request : SandboxRequest = Option.get asked
+                Expect.equal
+                    (request.Forward |> List.map ConnectionName.value)
+                    [ "github"; "jira" ]
+                    "the file's credential kept, the caller's added"
+            }
+
+        // The refusal a name nobody declared deserves: what this repo DOES declare. Refusing
+        // it further down for having no container describes a file that declares two.
+        testCaseAsync "a repo sandbox no file declares is refused naming the ones that are" <|
+            async {
+                let session = openToolSession (declaringDev ignore)
+                let! answer = session.Call "start_work_sandbox" """{"name":"octo/hello:release"}"""
+                let text = answered answer
+                Expect.stringContains text "declares no sandbox named 'release'" "the name that is not there"
+                Expect.stringContains text "octo/hello:dev" "and the one that is"
+                Expect.isFalse (text.Contains "container") "not a complaint about a container the file declares"
+            }
+
+        // `dev` is what an agent writes after reading "started sandbox octo/hello:dev".
+        // Every verb that reaches a RUNNING sandbox already reads it that way; starting was
+        // the one door that did not, so a bare name whose repo sandbox had been stopped made
+        // a NEW session-owned sandbox with none of the file's container — silently, under a
+        // name that says it is the repo's.
+        testCaseAsync "a bare name the session does not hold is the one sandbox a repo declares by it" <|
+            async {
+                let mutable asked : SandboxRequest option = None
+                let session = openToolSession (declaringDev (fun request -> asked <- Some request))
+                let! answer = session.Call "start_work_sandbox" """{"name":"dev"}"""
+                Expect.stringContains (answered answer) "octo/hello:dev" "the repo's sandbox, said in full"
+                let spec : EnvironmentSpec = (Option.get asked).Spec
+                Expect.equal
+                    (SandboxRuntime.describe spec.Runtime)
+                    "ghcr.io/octo/dev:3"
+                    "started as the file declares it, not as an empty session sandbox"
+            }
+
+        // Two checkouts declaring `dev` is a name with two meanings, and picking either is
+        // picking for the caller. Refuse, naming both, so the next ask can say which.
+        testCaseAsync "a bare name two repos declare is refused naming both" <|
+            async {
+                let services = declaringDev ignore
+                let other = SandboxRef.parse "octo/world:dev" |> expect
+                let session =
+                    openToolSession
+                        { services with
+                            DeclaredSandboxes =
+                                fun () -> services.DeclaredSandboxes () @ [ other, SandboxDecl.empty ] }
+                let! answer = session.Call "start_work_sandbox" """{"name":"dev"}"""
+                let text = answered answer
+                Expect.stringContains text "ambiguous" "the name means two things"
+                Expect.stringContains text "octo/hello:dev" "one of them"
+                Expect.stringContains text "octo/world:dev" "and the other"
             }
 
     ]
@@ -879,6 +997,18 @@ let private artifactTests =
 
     let firstVersion (name: string) = ArtifactRef.first name stamp
 
+    let sandboxNamed name =
+        match SandboxName.create name with
+        | Ok n -> SandboxRef.create SessionOwned n
+        | Error e -> failwithf "sandbox name: %s" e
+
+    /// The refusal, which is the thing under test — a weighing that answered with a size when it
+    /// was asked about a path that is not there would be the fault, not a bad message.
+    let expectError (result: Result<int64, string>) =
+        match result with
+        | Error said -> said
+        | Ok bytes -> failwithf "expected a refusal, got %d bytes" bytes
+
     testList
         "artifacts"
         [ testCaseAsync "a share_artifact answers with the address the store minted" <|
@@ -918,6 +1048,44 @@ let private artifactTests =
                 let! answer = session.Call "share_artifact" """{"path":"big.iso"}"""
                 Expect.stringContains (answered answer) "at most 100 MB" "the cap, as the store said it"
             }
+
+          // What the sandbox's shell says about a path is written for whoever wrote the shell
+          // (`sh: 1: cannot open /x: No such file`). The agent reads this and decides what to do
+          // next, so every answer the question can have is one this side named.
+          testList
+              "weighing the file the caller named"
+              [ test "a byte count is the size" {
+                    Expect.equal
+                        (Artifacts.weighed SandboxRef.defaultRef "out/chart.png" (0, "2048\n", ""))
+                        (Ok 2048L)
+                        "what wc counted"
+                }
+
+                test "a path that is not there says so, and where it looked" {
+                    let said = expectError (Artifacts.weighed (sandboxNamed "dev") "out/chart.png" (3, "", ""))
+                    Expect.stringContains said "out/chart.png" "the path the caller named"
+                    Expect.stringContains said "'dev'" "the sandbox it was looked for in — the file may be in another"
+                    Expect.isFalse (said.Contains "sh:") "not the shell's own complaint"
+                }
+
+                test "a directory says what an artifact is instead" {
+                    let said = expectError (Artifacts.weighed SandboxRef.defaultRef "out" (4, "", ""))
+                    Expect.stringContains said "one file" "an artifact is a file, and the agent has to pick one"
+                }
+
+                test "a file it cannot read is not a file that is missing" {
+                    let said = expectError (Artifacts.weighed SandboxRef.defaultRef "/root/key" (5, "", ""))
+                    Expect.stringContains said "not readable" "which is a different thing to do about"
+                }
+
+                // An exit code nothing here anticipated is the one case where the shell knows more
+                // than this side does, so its words are kept — under a sentence that says what was
+                // being attempted.
+                test "an answer nobody anticipated keeps what the shell said" {
+                    let said = expectError (Artifacts.weighed SandboxRef.defaultRef "out/chart.png" (126, "", "Permission denied\n"))
+                    Expect.stringContains said "Permission denied" "the shell's words"
+                    Expect.stringContains said "how big out/chart.png is" "and what was being asked"
+                } ]
         ]
 
 let tests = testList "Tool calls" [ tests'; fileTests; artifactTests; launchTests ]

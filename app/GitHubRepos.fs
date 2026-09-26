@@ -35,13 +35,15 @@ type LookupFailure =
     /// `/user/repos` asked with no credential at all. GitHub has no anonymous answer to
     /// "my repos", so this is not a refusal — it is a sign-in that has not happened.
     | NoCredential
-    /// 401: the credential is dead. The sign-in panel's "sign in again".
+    /// 401: the credential is dead.
     | Refused
     /// 404: not a repo this credential can see, which GitHub says identically for one
     /// that does not exist.
     | NotFound
-    /// 403/429: the credential's hourly allowance is spent.
+    /// The credential's allowance is spent.
     | RateLimited
+    /// A 403 that is not a rate limit: the credential may not see this.
+    | Forbidden
     /// GitHub answered, and this session could not read what it said. Not `Unreachable`:
     /// the request went, the reply came back, and it was a 2xx — what failed is the
     /// decoding. Told apart because the remedy is not the same one: "could not be reached"
@@ -54,9 +56,12 @@ module LookupFailure =
     let describe (failure: LookupFailure) : string =
         match failure with
         | NoCredential -> "connect GitHub to list your repositories"
-        | Refused -> "github rejected this credential — sign in again"
+        // "Sign in", not "sign in again": a connected credential is spent ahead of an
+        // ambient GITHUB_TOKEN, so signing in is the fix whichever of the two was refused.
+        | Refused -> "github rejected this credential — sign in to github on the settings panel"
         | NotFound -> "github does not show that repository to this credential"
         | RateLimited -> "github is rate limiting this credential — try again shortly"
+        | Forbidden -> "github does not let this credential see that"
         | Unreadable said -> sprintf "github answered with something this session could not read: %s" said
         | Unreachable said -> sprintf "github could not be reached: %s" said
 
@@ -90,6 +95,7 @@ let branchesDecoder : Decoder<string list> = Decode.list (Decode.field "name" De
 type private Reply =
     { Reachable : bool
       Status : int
+      Remaining : string
       Body : string }
 
 /// How every request in this file presents itself to GitHub: the versioned accept header, a
@@ -110,20 +116,29 @@ let private getJson (url: string) (token: string) : Async<Reply> =
     async {
         let! attempt = Http.text url [ Http.headers (sentHeaders token) ]
         match attempt with
-        | Http.Answered (response, body) -> return { Reachable = true; Status = response.Status; Body = body }
-        | Http.Unreachable reason -> return { Reachable = false; Status = 0; Body = reason }
+        | Http.Answered (response, body) ->
+            return
+                { Reachable = true
+                  Status = response.Status
+                  Remaining = Http.headerOf "x-ratelimit-remaining" response
+                  Body = body }
+        | Http.Unreachable reason -> return { Reachable = false; Status = 0; Remaining = ""; Body = reason }
     }
 
-/// What a status GitHub answered with means for a look.
-let failureAt (status: int) : LookupFailure =
-    if status = 401 then Refused
-    elif status = 404 then NotFound
-    elif status = 403 || status = 429 then RateLimited
-    else Unreachable (sprintf "github answered %d" status)
+/// What a status GitHub answered with means for a look: `GitHubPrs.failureAt`'s reading, in
+/// the words a picker says. One reading, so "which 403 is a rate limit" is decided once.
+let failureAt (status: int) (remaining: string) (body: string) : LookupFailure =
+    match GitHubPrs.failureAt status "" remaining body with
+    | PrWatches.PrUnauthorized -> Refused
+    | PrWatches.PrNotFound -> NotFound
+    | PrWatches.PrForbidden -> Forbidden
+    | PrWatches.PrRateLimited _ -> RateLimited
+    | PrWatches.PrUnreadable said -> Unreadable said
+    | PrWatches.PrUnreachable said -> Unreachable said
 
 /// A reply that never arrived carries why in place of a body; everything else is a status.
 let private failureOf (reply: Reply) : LookupFailure =
-    if not reply.Reachable then Unreachable reply.Body else failureAt reply.Status
+    if not reply.Reachable then Unreachable reply.Body else failureAt reply.Status reply.Remaining reply.Body
 
 let private read (decoder: Decoder<'a>) (url: string) (token: string option) : Async<Result<'a, LookupFailure>> =
     async {
@@ -336,6 +351,7 @@ let private statusOf (failure: LookupFailure) : int =
     | Refused -> 401
     | NotFound -> 404
     | RateLimited -> 429
+    | Forbidden -> 403
     // Both 502: a gateway that cannot reach the upstream and one whose upstream said
     // something it cannot pass on are the same answer to the browser. The words differ.
     | Unreadable _

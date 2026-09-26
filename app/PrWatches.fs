@@ -52,6 +52,10 @@ type PrFetchFailure =
     /// as nothing and the hold fell back to a fixed window — a rate-limit reading that
     /// stops being read, silently, on a date already inside some certificates' lifetimes.
     | PrRateLimited of resetEpoch: int64 option
+    /// Seen and refused: the credential works, and is not allowed to do this — a scope it
+    /// lacks, an App not granted the repo. No wait changes it, which is why it is not
+    /// `PrRateLimited`, and no sign-in fixes it the way a dead one's does.
+    | PrForbidden
     /// The provider answered, and this session could not read what it said — a 2xx whose
     /// body did not decode, or an identifier in it this session cannot hold. Not
     /// `PrUnreachable`: the request went and the reply came back, so "could not be reached"
@@ -437,6 +441,7 @@ let create
                                 "%s cannot see this pull request — it may be gone, or the credential cannot reach it"
                                 provider
                         | PrRateLimited _ -> sprintf "rate limited by %s — waiting for the window to reset" provider
+                        | PrForbidden -> sprintf "%s does not let this credential read this pull request" provider
                         | PrUnreadable reason ->
                             sprintf "%s answered with something this session could not read: %s" provider reason
                         | PrUnreachable reason -> reason
@@ -450,7 +455,7 @@ let create
                     // Neither says to come back later, so neither sets a hold: the next
                     // poll is the ordinary cadence's. A reply this session cannot read is
                     // the provider working and us not understanding it, which no wait fixes.
-                    | PrNotFound | PrUnreadable _ | PrUnreachable _ -> ()
+                    | PrNotFound | PrForbidden | PrUnreadable _ | PrUnreachable _ -> ()
                     let moved = entry.Health <> Some health
                     entry.Health <- Some health
                     schedule None
@@ -593,8 +598,11 @@ let service
                 provider
                 what
                 provider
-        | PrUnauthorized -> sprintf "%s rejected the credential — sign in again from the Connections panel" provider
+        // "Sign in", not "sign in again": a credential somebody connects is spent ahead of
+        // an ambient GITHUB_TOKEN, so signing in is the fix whichever of the two was refused.
+        | PrUnauthorized -> sprintf "%s rejected the credential — sign in to %s on the settings panel" provider provider
         | PrRateLimited _ -> sprintf "rate limited by %s — try again shortly" provider
+        | PrForbidden -> sprintf "%s does not let this credential do that to %s" provider what
         | PrUnreadable reason ->
             sprintf "%s answered with something this session could not read: %s" provider reason
         | PrUnreachable reason -> reason

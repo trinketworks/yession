@@ -1519,6 +1519,20 @@ let editorTests =
                 // convergence happens un-stormed.
                 do! awaitU (page.EvaluateAsync "() => window.__caretStorm(true)")
 
+                // Anti-vacuity, first half: the storm is really running before a key is
+                // pressed, so the convergence below happens under one rather than beside it.
+                //
+                // WAITED for, not counted afterwards. The storm pushes one per animation
+                // frame, so "at least five by the end of the typing window" measures how many
+                // frames the MACHINE delivered inside a fixed wall-clock window — it went red
+                // twice here on a loaded box with nothing wrong with the code, and would go
+                // green on a fast one with the storm broken in a way this says nothing about.
+                // A wait makes the same claim about the code and none about the box: a page
+                // the browser never paints times out here saying which, and a storm that
+                // never dispatches never arrives.
+                do! waitFor "the caret storm to push frames at all" page "window.__caretPushes >= 5"
+                let! stormedBefore = await (page.EvaluateAsync<int> "() => window.__caretPushes")
+
                 // A types into its own composer. Real key events, so every keystroke is its own
                 // doc update and its own relay — the drip a collaborator actually produces,
                 // rather than one paste the mirror could absorb in a single frame.
@@ -1543,16 +1557,17 @@ let editorTests =
                 // content and not of an editor nobody decorated.
                 do! waitFor "the author's caret to be drawn in the mirror" page "!!document.querySelector('#peer-b .pm-caret')"
 
-                do! awaitU (page.EvaluateAsync "() => window.__caretStorm(false)")
+                // Anti-vacuity, second half, and the reason a green here means anything: a
+                // storm that stopped before the words arrived converges beautifully. Frames
+                // landing DURING the convergence are what raced it — waited for with the storm
+                // still on, so the first one settles it, rather than counted against a window
+                // that was only ever a guess at how fast this machine is.
+                do! waitFor
+                        "the caret storm to push a frame while the content was arriving"
+                        page
+                        (sprintf "window.__caretPushes > %d" stormedBefore)
 
-                // Anti-vacuity, and the reason a green here means anything: a storm that never
-                // ran converges beautifully. Frames are not free to assume — a page the browser
-                // decided not to paint would push none of them.
-                let! pushes = await (page.EvaluateAsync<int> "() => window.__caretPushes")
-                if pushes < 5 then
-                    failwithf
-                        "the caret storm pushed %d times — too few for convergence to have been raced at all, so this case proved nothing"
-                        pushes
+                do! awaitU (page.EvaluateAsync "() => window.__caretStorm(false)")
             }
 
         // The other half of the same story, and the one the whole `pushPresences` debate turned
@@ -1571,6 +1586,12 @@ let editorTests =
             async {
                 do! waitFor "both peers to mount" page "!!document.querySelector('#peer-a .ProseMirror') && !!document.querySelector('#peer-b .ProseMirror')"
                 do! awaitU (page.EvaluateAsync "() => window.__caretStorm(true)")
+                // The storm is dispatching before anything is typed, and keeps dispatching
+                // while the words arrive — both waited for rather than counted at the end, for
+                // the reason the case above gives: a push is one animation frame, so a count
+                // inside a fixed window is a measurement of the machine.
+                do! waitFor "the caret storm to push frames at all" page "window.__caretPushes >= 5"
+                let! stormedBefore = await (page.EvaluateAsync<int> "() => window.__caretPushes")
                 do! awaitU (page.ClickAsync "#peer-a .ProseMirror")
                 do! awaitU (page.Keyboard.TypeAsync "# Heading one")
                 // Over CONTENT: an empty document is the case y-prosemirror short-circuits
@@ -1579,11 +1600,13 @@ let editorTests =
                         "the co-editor to render the author's remote content"
                         page
                         (sprintf "%s === 'Heading one'" (ownText "#peer-b .ProseMirror h1"))
+                do! waitFor
+                        "the caret storm to push a frame while the content was arriving"
+                        page
+                        (sprintf "window.__caretPushes > %d" stormedBefore)
                 do! awaitU (page.EvaluateAsync "() => window.__caretStorm(false)")
 
                 let! pushes = await (page.EvaluateAsync<int> "() => window.__caretPushes")
-                if pushes < 5 then
-                    failwithf "the caret storm pushed %d times — too few to have exercised the write-back at all" pushes
                 // The doc really moved under the storm — otherwise a write-back count of zero
                 // says the observer was never wired, not that nothing was written.
                 let! updates = await (page.EvaluateAsync<int> "() => window.__docUpdates")
@@ -1929,6 +1952,49 @@ let editorTests =
         // The document-level check the case above makes cannot see this: the timeline's own
         // scrollbox absorbs the overflow, so `documentElement.scrollWidth` stays honest while
         // the conversation is unreadable. What is asserted is the column, and only the column.
+        // Typing into the composer with a phone keyboard up never scrolls the page past the
+        // shell. Photographed on iOS as a band of empty page between the composer and the
+        // keyboard, which stayed after the keyboard went: ProseMirror's scroll-to-caret
+        // scrolled the WINDOW, measured against the visual viewport's height without its
+        // offset, so a caret the platform had already brought into view was scrolled for
+        // again — on a send (the cleared draft) and on typing, neither of which the update
+        // loop sees.
+        //
+        // A keyboard is the visual viewport shrinking under a layout that does not, which a
+        // page scale is here. iOS also lets the page scroll into the keyboard's height; the
+        // room below the shell stands in for that, and is the room the double scroll spent.
+        editorCaseIn 390 844 "typing in the composer with the keyboard up never scrolls the page past the shell" <| fun page ->
+            async {
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-draft-editor] .ProseMirror")
+                do! awaitU (
+                        page.EvaluateAsync
+                            """() => {
+                                 const room = document.createElement('div')
+                                 room.style.height = '400px'
+                                 document.body.appendChild(room)
+                                 document.getElementById('shell').scrollIntoView({ block: 'end' })
+                               }""")
+                do! awaitU (page.ClickAsync "#shell [data-draft-editor] .ProseMirror")
+                let! cdp = await (page.Context.NewCDPSessionAsync page)
+                let scale = Collections.Generic.Dictionary<string, obj> ()
+                scale.["pageScaleFactor"] <- box 1.6
+                let! _ = await (cdp.SendAsync ("Emulation.setPageScaleFactor", scale))
+                let! _ = await (page.WaitForFunctionAsync "visualViewport.height < innerHeight")
+
+                // How far the visible area runs past the shell's foot, in CSS pixels: the gap.
+                let pastShell () =
+                    page.EvaluateAsync<float>
+                        """() => {
+                             const shell = document.getElementById('shell').getBoundingClientRect()
+                             return (visualViewport.offsetTop + visualViewport.height) - shell.bottom
+                           }"""
+                    |> await
+                do! awaitU (page.Keyboard.TypeAsync "one")
+                do! awaitU (page.Keyboard.PressAsync "Enter")
+                do! awaitU (page.Keyboard.TypeAsync "two")
+                let! typed = pastShell ()
+                Expect.isTrue (typed <= 1.0) (sprintf "typing left %.0fpx of page under the shell" typed)
+            }
         editorCaseIn 390 844 "a message no line break fits inside never scrolls the timeline sideways" <| fun page ->
             async {
                 let! width = await (page.EvaluateAsync<int> "() => window.innerWidth")
@@ -3190,14 +3256,43 @@ let editorTests =
                 // The blur IS the gesture under test: it is what a tap on a button does
                 // first, on every browser that does not focus one.
                 do! awaitU (page.EvaluateAsync "() => document.activeElement.blur()")
+                // …and then the composer is left to finish reacting to it. The hit-test aims
+                // at a point in VIEWPORT coordinates, so it is a question about stacking only
+                // once the box it aims at has stopped moving: read mid-collapse it answers
+                // about wherever Send was passing through, or — if the row is between renders
+                // and the box is empty — about the origin of the page, which in this stacked
+                // harness is another mount's field entirely. That is what the flake was: an
+                // `INPUT` from the terminal command line answering for a Send nobody had
+                // finished laying out. A settled box is a question about the code; an
+                // unsettled one is a question about how fast this machine re-rendered.
+                do! waitFor
+                        "Send's box to settle after the blur"
+                        page
+                        """(() => {
+                             const send = document.querySelector('#shell [data-send-draft]')
+                             if (!send) { window.__sendBox = null; return false }
+                             const b = send.getBoundingClientRect()
+                             if (b.width === 0 || b.height === 0) { window.__sendBox = null; return false }
+                             const now = [b.top, b.left, b.width, b.height].join(',')
+                             const settled = window.__sendBox === now
+                             window.__sendBox = now
+                             return settled
+                           })()"""
+                // On failure it says WHERE both were, because "an INPUT answered" alone cannot
+                // tell an overlay from a hit-test aimed at the wrong point.
                 let! answered =
                     await (page.EvaluateAsync<string>
                             """() => {
                                  const send = document.querySelector('#shell [data-send-draft]')
                                  const b = send.getBoundingClientRect()
                                  const at = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2)
-                                 if (at === null) return 'nothing'
-                                 return send.contains(at) ? 'send' : at.tagName + '.' + (at.getAttribute('class') ?? '')
+                                 if (at !== null && send.contains(at)) return 'send'
+                                 const box = r => `${Math.round(r.left)},${Math.round(r.top)} ${Math.round(r.width)}x${Math.round(r.height)}`
+                                 const who =
+                                   at === null
+                                     ? 'nothing'
+                                     : at.tagName + '.' + (at.getAttribute('class') ?? '') + ' at ' + box(at.getBoundingClientRect())
+                                 return who + ' (send at ' + box(b) + ')'
                                }""")
                 Expect.equal answered "send" "a press at Send's own centre reaches Send once the editor has let focus go"
                 return ()

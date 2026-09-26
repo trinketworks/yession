@@ -3,6 +3,7 @@ namespace Yession.App
 open Fable.Core.JsInterop
 open Yjs
 open Fable.ProseMirror.ProseMirror
+open Fable.BrowserExtras
 
 /// The Linear-style rich-text editor: type or paste Markdown, rendered live as formatted
 /// rich text. Pure F# over the `ProseMirror` bindings (no authored JS). The document lives
@@ -284,6 +285,61 @@ module Editor =
                         view.dispatch ((view.state.tr).replaceSelectionWith (doc, false))
                         true)
 
+    /// Bring the caret into view by scrolling the boxes a reader can scroll — the composer's
+    /// own, the conversation around a body edited in place — and never the document.
+    ///
+    /// ProseMirror's default walk scrolls EVERY ancestor up to `body`, and at `body` it scrolls
+    /// the window, measured against `visualViewport.height` without its `offsetTop`. With a
+    /// phone keyboard up the visual viewport is short and already panned to the composer by
+    /// the platform, so a caret sitting at the foot of the layout reads as below the fold and
+    /// the window is scrolled a second time. On iOS that scroll outlives the keyboard: the
+    /// shell is `h-dvh overflow-hidden`, nothing in it can scroll the document back, and a
+    /// gap the height of the double-count stays under the composer with the header gone off
+    /// the top. It fired on a send (y-prosemirror scrolls to the caret when the cleared
+    /// fragment lands) and on typing at the bottom line — neither of which passes through
+    /// the update loop, which is why nothing the model did ever explained it.
+    ///
+    /// The shell is sized to the visible viewport and nothing in it is placed by scrolling the
+    /// page, so there is no case where the page is the right thing to move. `overflow-hidden`
+    /// ancestors are skipped for the same reason: script can scroll them, a reader cannot,
+    /// and a clipped box moved by the caret stays moved.
+    let private scrollCaretIntoScrollers =
+        System.Func<EditorView, bool>(fun view ->
+            let margin = 5.0
+            let caret = view.coordsAtPos (selHead (selection view.state))
+            let document = Browser.Dom.document
+            let rec walk (element: Browser.Types.HTMLElement) (top: float) (bottom: float) =
+                let atDocument =
+                    isNull element
+                    || System.Object.ReferenceEquals (element, document.body)
+                    || System.Object.ReferenceEquals (element, document.documentElement)
+                if not atDocument then
+                    let overflowY = Css.computedProperty element "overflow-y"
+                    let position = Css.computedProperty element "position"
+                    let scrollable = overflowY = "auto" || overflowY = "scroll"
+                    let top, bottom =
+                        if not scrollable then top, bottom
+                        else
+                            let box = element.getBoundingClientRect ()
+                            let move =
+                                if top < box.top then top - box.top - margin
+                                elif bottom > box.bottom then
+                                    if bottom - top > box.bottom - box.top then top - box.top + margin
+                                    else bottom - box.bottom + margin
+                                else 0.0
+                            if move = 0.0 then top, bottom
+                            else
+                                let before = element.scrollTop
+                                element.scrollTop <- before + move
+                                let moved = element.scrollTop - before
+                                top - moved, bottom - moved
+                    // A fixed or sticky box does not move with anything above it, so nothing
+                    // above it can bring the caret any nearer — ProseMirror's own stop.
+                    if position <> "fixed" && position <> "sticky" then
+                        walk element.parentElement top bottom
+            walk view.dom caret.top caret.bottom
+            true)
+
     /// Mount a ProseMirror editor onto `host`, bound to the live `fragment`. The fragment is
     /// the synced, doc-backed body, so edits flow straight into the CRDT and to peers through
     /// the doc — no change callback. `readOnly` renders another peer's content without an edit
@@ -307,10 +363,11 @@ module Editor =
         let prompt = if readOnly then "" else placeholder
         let state = createState (createObj [ "schema" ==> schema; "plugins" ==> plugins fragment report submit prompt ])
         let view =
-            createView host (createObj [
-                "state" ==> state
-                "editable" ==> (System.Func<bool>(fun () -> not readOnly))
-                "handlePaste" ==> handlePaste ])
+            createView host (jsOptions<EditorProps> (fun props ->
+                props.state <- state
+                props.editable <- System.Func<EditorState, bool>(fun _ -> not readOnly)
+                props.handlePaste <- handlePaste
+                props.handleScrollToSelection <- scrollCaretIntoScrollers))
         { Dispose = fun () -> view.destroy ()
           PushPresences =
             fun remotes ->

@@ -790,3 +790,12 @@ corner the whole way; the eye is back at DIST by the last frame, so the mark is 
 About 135 KB, 18 KB gzipped; SMIL cannot read
 `prefers-reduced-motion`, so a page that respects it shows `mark.svg` instead. Click to replay.
 Built by `gen28.py`.
+
+The pull was then taken out. While the panels slide in, the tilt from overhead to 46° swings
+each one's outer vertical edge on screen from near horizontal to 51° below it, and the dolly
+that had cured the horizontal-edge slice could not cure that: the greens read as turning
+downward as they arrived. A camera that holds the mark's own lens from the first frame has
+nothing to swing: the agent becomes jelly where it stands and the panels slide straight in
+along their faces. It is also over a third smaller (60 KB, 8 KB gzipped): the agent's six faces
+no longer morph, and the per-frame scale solve, the start framing and the gate that checked
+the panels against a moving frame all went with it. `assets/logo/gen.py` is the live generator.

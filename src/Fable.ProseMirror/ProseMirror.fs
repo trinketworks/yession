@@ -40,10 +40,33 @@ module ProseMirror =
     type [<AllowNullLiteral>] EditorState =
         abstract tr : Transaction
 
+    /// A position's box in viewport coordinates, as `coordsAtPos` answers it.
+    type [<AllowNullLiteral>] Coords =
+        abstract left : float
+        abstract right : float
+        abstract top : float
+        abstract bottom : float
+
     type [<AllowNullLiteral>] EditorView =
         abstract state : EditorState
         abstract dispatch : Transaction -> unit
         abstract destroy : unit -> unit
+        /// The editable element ProseMirror renders into, inside the mount host.
+        abstract dom : Browser.Types.HTMLElement
+        abstract coordsAtPos : int -> Coords
+
+    /// The props an `EditorView` is constructed with — the ones this repository sets. Build
+    /// with `jsOptions<EditorProps>`, so a prop nobody assigned is absent and ProseMirror's
+    /// own default stands.
+    type [<AllowNullLiteral>] EditorProps =
+        abstract state : EditorState with get, set
+        /// Asked with the current state; `false` renders without an edit surface.
+        abstract editable : System.Func<EditorState, bool> with get, set
+        /// `true` when the paste was handled and ProseMirror's own handling must not run.
+        abstract handlePaste : System.Func<EditorView, obj, bool> with get, set
+        /// Called in place of ProseMirror's scroll-to-caret after a transaction that asked for
+        /// one; `true` when it was handled and the default walk must not run.
+        abstract handleScrollToSelection : System.Func<EditorView, bool> with get, set
 
     // --- prosemirror-markdown: the schema + parser/serializer (markdown round-trip) --------
 
@@ -174,8 +197,8 @@ module ProseMirror =
     [<Import("EditorView", "prosemirror-view")>]
     let private editorViewClass : obj = jsNative
     [<Emit("new ($0)($1, $2)")>]
-    let private viewNew (cls: obj) (host: obj) (props: obj) : EditorView = jsNative
-    let createView (host: obj) (props: obj) : EditorView = viewNew editorViewClass host props
+    let private viewNew (cls: obj) (host: obj) (props: EditorProps) : EditorView = jsNative
+    let createView (host: obj) (props: EditorProps) : EditorView = viewNew editorViewClass host props
 
     // --- prosemirror-keymap / -commands ----------------------------------------------------
 
