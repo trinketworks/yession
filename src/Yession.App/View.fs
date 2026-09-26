@@ -2860,7 +2860,7 @@ module View =
                 match ContentRef.create (el.getAttribute Dom.Hooks.content) with
                 | Error _ -> ()
                 | Ok ref ->
-                    match ContentKind.ofMediaType (ContentMedia.ofRef ref) with
+                    match ContentName.kind ref with
                     | ContentKind.Download -> ()
                     | ContentKind.Image _ ->
                         e.preventDefault ()
@@ -3464,16 +3464,16 @@ module View =
     let private contentDownloadLink (ref: ContentRef) : TemplateResult =
         let url = RelativeUrl.inDocument DocumentBase.shell (SessionRoute.relative (SessionRoute.Content ref))
         html $"""
-            <a class="{Style.btn}" href="{url}" download="{ContentRef.fileName ref}"
+            <a class="{Style.btn}" href="{url}" download="{ContentName.ofRef ref}"
                data-content-download="{ContentRef.value ref}">{Dom.Text.download}</a>"""
 
     let private paneContentView (ref: ContentRef) : TemplateResult =
         let url = RelativeUrl.inDocument DocumentBase.shell (SessionRoute.relative (SessionRoute.Content ref))
-        let name = ContentRef.fileName ref
+        let name = ContentName.ofRef ref
         // The download is NOT here: it is a verb about the thing on screen, and those are the
         // action row's, at the bottom of the column whatever kind is showing. A file that
         // carried its own copy would be the one kind whose verbs moved when you opened it.
-        match ContentKind.ofMediaType (ContentMedia.ofRef ref) with
+        match ContentName.kind ref with
         | ContentKind.Image _ ->
             html $"""
                 <section class="{Style.paneBody}" data-pane-content="{ContentRef.value ref}">
@@ -3661,10 +3661,7 @@ module View =
         // here and taking it away.
         let artifactRow (a: ArtifactShared) =
             let content = ArtifactRef.content a.Ref
-            let mark =
-                match ContentKind.ofMediaType a.MediaType with
-                | ContentKind.Image _ -> Icon.imageSm
-                | ContentKind.Download -> Icon.fileSm
+            let mark = Icon.ofContent (ContentKind.ofMediaType a.MediaType)
             html $"""
                 <div class="{Style.artifactListRow}" role="listitem">
                   <span class="{Style.statusFaint}" aria-hidden="true">{mark}</span>
@@ -3784,16 +3781,27 @@ module View =
             // The file's own name, which is what the reader asked for. Not the path: a tab
             // strip is narrow, and `artifacts/chart.png/0003-7f2a91` truncates to the part
             // that says least.
-            | ContentTab ref -> ContentRef.fileName ref
+            | ContentTab ref -> ContentName.ofRef ref
         let readonlyTabButton (activate: unit -> unit) (pinMark: TemplateResult) (pinnedAttr: string) (hint: string) (tab: PaneTab) =
             let on = isOn tab
             let label = tabLabel tab
+            // The strip holds both kinds at once, so a content tab says which it is — wearing
+            // the SAME `ContentKind` mark as its chip in the message and its row in the list,
+            // so the three cannot promise different things about one file. A terminal-shaped
+            // tab wears none: it is what the strip is mostly made of, and a mark on every tab
+            // is a column of marks that distinguishes nothing.
+            let kindMark =
+                match tab with
+                | ContentTab ref ->
+                    let glyph = Icon.ofContent (ContentName.kind ref)
+                    html $"""<span class="{Style.paneTabKindMark}" aria-hidden="true">{glyph}</span>"""
+                | TerminalTab _ | BlockTab _ | StretchTab _ -> Lit.nothing
             html $"""
                 <button type="button" role="tab" class="{if on then Style.terminalTabActive else Style.terminalTab}"
                         data-pane-tab="{PaneTab.key tab}" title="{hint}"
                         data-pane-tab-pinned="{pinnedAttr}"
                         aria-selected="{if on then "true" else "false"}" tabindex="{if on then "0" else "-1"}"
-                        @click={Ev(fun _ -> activate ())}>{label}{pinMark}<span class="{Style.terminalTabPeers}">{viewerDots [] tab}</span></button>"""
+                        @click={Ev(fun _ -> activate ())}>{kindMark}{label}{pinMark}<span class="{Style.terminalTabPeers}">{viewerDots [] tab}</span></button>"""
         /// Activating the tab you are ALREADY on is how a tab gets kept, or released.
         ///
         /// The pin used to be a second button beside every keepable tab. On a touch screen

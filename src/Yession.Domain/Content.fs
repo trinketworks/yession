@@ -107,7 +107,10 @@ module ContentMedia =
         | "avif" -> Some "image/avif"
         | _ -> None
 
-    let ofRef (ref: ContentRef) : string option = ofName (ContentRef.fileName ref)
+// Deliberately no `ofRef`: which segment of a path carries the name depends on what kind of
+// path it is, and this module is compiled before the type that knows (`ArtifactRef`). Ask
+// `ContentName` at the bottom of this file — the one that answered `fileName` here typed a
+// shared picture as a download.
 
 /// What the pane can MAKE of a piece of content. Two cases now and a third (text, a repo file)
 /// when it is needed: a kind the pane cannot draw is a download, which is the fallback that
@@ -316,3 +319,30 @@ module ArtifactRef =
     /// few: one order, so "latest" cannot mean two things on two surfaces.
     let latest (refs: ArtifactRef list) : ArtifactRef option =
         refs |> List.sortBy (fun r -> r.Seq, ArtifactStamp.value r.Stamp) |> List.tryLast
+
+/// What a piece of content is CALLED, and what the pane can make of it — one answer, for every
+/// surface that names a path.
+///
+/// Which segment carries the name depends on the kind of path: an artifact version's leaf is a
+/// VERSION (`0003-7f2a91`) and the name a person said — carrying the extension the media type is
+/// read from — is the directory above it, while any other content path is called by its leaf and
+/// always will be (`repos/octo/hello/README.md`). Asking the leaf in every case is what the
+/// chip, the tab and the pane body each did separately: a shared picture was called
+/// `0000-e7f1a6`, typed as a download, and refused to open in the pane its own mark had promised.
+///
+/// So the rule sits above both spellings, where it can be asked without knowing which kind of
+/// path is in hand.
+module ContentName =
+
+    /// The name a person reads, whatever kind of path this is.
+    let ofRef (ref: ContentRef) : string =
+        match ArtifactRef.ofContent ref with
+        | Ok artifact -> ArtifactRef.name artifact
+        | Error _ -> ContentRef.fileName ref
+
+    /// The media type that name implies.
+    let mediaType (ref: ContentRef) : string option = ContentMedia.ofName (ofRef ref)
+
+    /// What the pane will do with it: the one rule a chip's mark, a tab's mark and the body all
+    /// read, so none of the three can promise what another refuses.
+    let kind (ref: ContentRef) : ContentKind = ContentKind.ofMediaType (mediaType ref)

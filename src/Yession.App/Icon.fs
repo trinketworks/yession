@@ -1,6 +1,7 @@
 namespace Yession.App
 
 open Lit
+open Yession.Domain.Content
 
 /// The client's icons, as inline SVG.
 ///
@@ -194,6 +195,16 @@ module Icon =
     let prSm = stroked "w-3.5 h-3.5 block" prPath
     let imageSm = stroked "w-3.5 h-3.5 block" imagePath
     let fileSm = stroked "w-3.5 h-3.5 block" filePath
+
+    /// The mark a piece of content wears wherever it is NAMED — a chip in a message, a row in
+    /// the content list, a tab in the strip. One function rather than the same two-armed match
+    /// written at each surface: what the mark promises is what the pane will do with it
+    /// (a picture opens, anything else downloads), and three copies of that rule are three
+    /// chances for a chip to promise a view the pane refuses to give.
+    let ofContent (kind: ContentKind) =
+        match kind with
+        | ContentKind.Image _ -> imageSm
+        | ContentKind.Download -> fileSm
 
     /// GitHub's mark, as GitHub draws it: the one FILLED shape in this file, and the one
     /// exception to its vocabulary, because a brand's mark is not ours to redraw in strokes
