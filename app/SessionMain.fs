@@ -658,6 +658,7 @@ let private commandServices : Commands.CommandServices =
     { Repos = fun () -> reposService
       Sandboxes = fun () -> workSandboxes
       WorkCheckout = fun repo declared -> Sandboxes.checkoutViewsAt declared reposDir repo
+      DeclaredSandboxes = fun () -> repoSandboxes.Declared ()
       Terminals = fun () -> terminals
       Files = fun () -> files
       Artifacts = fun () -> artifacts
