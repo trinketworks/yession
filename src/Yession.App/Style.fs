@@ -2577,6 +2577,14 @@ module Style =
     /// stays". Nothing here destroys anything, so nothing here wears the danger tone.
     let paneTabPinMark = "ml-1.5 text-blue"
 
+    /// The mark saying which KIND a tab is, worn by the kinds that are not the strip's usual
+    /// occupant. It leads the label rather than trailing it, where the pin sits: one says what
+    /// this tab IS and belongs before its name, the other says what has been done to it.
+    ///
+    /// Inherits the tab's own colour rather than taking one, so it dims and brightens with the
+    /// tab's selected state instead of making a second claim about which tab is live.
+    let paneTabKindMark = "mr-1.5 inline-flex items-center align-middle"
+
     /// The pane's body — whatever the selected tab shows. It takes the column's remaining
     /// height so the thing inside it scrolls rather than the column.
     let paneBody = "flex-1 min-h-0 flex flex-col"

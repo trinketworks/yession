@@ -3476,6 +3476,25 @@ let private contentTests =
             Expect.equal (ContentKind.ofMediaType (Some "application/pdf")) ContentKind.Download "anything else downloads"
             Expect.equal (ContentKind.ofMediaType None) ContentKind.Download "and so does a type nobody knows"
 
+        // Which segment carries the name is not the same question for every kind of path, and
+        // every surface that named one asked the leaf. An artifact version's leaf is a version:
+        // a shared picture came out called `0000-e7f1a6` and typed as a download, so the chip
+        // promising a picture opened nothing and the pane it opened refused to draw one.
+        testCase "an artifact version is named by its artifact; anything else by its leaf" <| fun () ->
+            let pinned = ContentRef.create "artifacts/chart.png/0000-e7f1a6" |> expect
+            Expect.equal (ContentName.ofRef pinned) "chart.png" "the name a person said, not the version"
+            Expect.equal (ContentName.kind pinned) (ContentKind.Image "image/png") "so the pane draws it"
+            let resolving = ContentRef.create "artifacts/chart.png" |> expect
+            Expect.equal (ContentName.ofRef resolving) "chart.png" "the name is the name either way"
+            Expect.equal (ContentName.kind resolving) (ContentKind.Image "image/png") "and means the same kind"
+            let repoFile = ContentRef.create "repos/octo/hello/README.md" |> expect
+            Expect.equal (ContentName.ofRef repoFile) "README.md" "a path that is not an artifact is its leaf"
+            Expect.equal (ContentName.kind repoFile) ContentKind.Download "markdown is not a kind this pane draws"
+            // A leaf that is not a version leaves the path un-artifact-like, and then the leaf
+            // IS the name: nothing here quietly reinterprets a directory called `artifacts`.
+            let notAVersion = ContentRef.create "artifacts/chart.png/notes.txt" |> expect
+            Expect.equal (ContentName.ofRef notAVersion) "notes.txt" "no version, no reinterpretation"
+
         testCase "a size reads the way the cap is written: decimal" <| fun () ->
             Expect.equal (ContentSize.render 0L) "0 bytes" "nothing"
             Expect.equal (ContentSize.render 999L) "999 bytes" "under a kilobyte"

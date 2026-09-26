@@ -1997,9 +1997,35 @@ let private paneActionsTests =
             Expect.isTrue
                 (row |> Option.exists (fun r -> r.Contains Dom.Hooks.contentDownload))
                 "the download is in the action row"
+            // The picture is DRAWN, which is the whole reason a version is worth opening — and
+            // asserting only the order let this pass while the body was a download link and the
+            // image was nowhere (an absent hook indexes -1, which is less than anything).
+            Expect.isTrue (html.Contains Dom.Hooks.contentImage) "the picture itself is on screen"
             Expect.isTrue
                 (html.IndexOf Dom.Hooks.contentImage < html.IndexOf Dom.Hooks.contentDownload)
                 "and under the picture rather than inside it"
+
+        // The strip is intermingled on purpose — kind is a mark on the tab, not a mode you pick
+        // before you pick a thing. That only works if the mark is there, and is the same mark
+        // the file wears everywhere else it is named.
+        testCase "a content tab in the strip says which kind it is" <| fun () ->
+            let html =
+                representativeModel
+                |> ClientModel.update (ShowInPaneMsg (Reading (ContentTab picture)))
+                |> Support.render
+            let tab =
+                let at = html.IndexOf (Dom.attr Dom.Hooks.paneTab "content:artifacts/chart.png/0000-e7f1a6")
+                Expect.isTrue (at >= 0) "the artifact is a tab in the strip while it is open"
+                html.Substring (at, html.IndexOf ("</button>", at) + "</button>".Length - at)
+            let picturePath = Support.renderTemplate Icon.imageSm
+            let markAt = tab.IndexOf picturePath
+            Expect.isTrue (markAt >= 0) "wearing the picture mark, as its chip and its row do"
+            // Looked for AFTER the mark on purpose: the tab's own hook spells the version, so
+            // the file's name appears in an attribute before any mark could be drawn. What is
+            // claimed is that the mark leads the LABEL, not that nothing else mentions the file.
+            Expect.isTrue
+                (tab.IndexOf ("chart.png", markAt) >= 0)
+                "before the name: the mark says what this is, so it leads it"
 
         testCase "a terminal nobody holds offers its keyboard there; a held one does not" <| fun () ->
             let free = Support.render representativeModel

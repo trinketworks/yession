@@ -108,10 +108,7 @@ module Entity =
         // keeps the pinned address either way (`EntityRef.said`), because an agent quoting one
         // has to say which bytes it means. An artifact path knows its own name; any other
         // content is called by its file name, which is what `repos/…` will want.
-        | EntityRef.Content ref ->
-            match ArtifactRef.ofContent ref with
-            | Ok artifact -> ArtifactRef.name artifact
-            | Error _ -> ContentRef.fileName ref
+        | EntityRef.Content ref -> ContentName.ofRef ref
 
     /// Where a reference leads, and whether that is out of this session or into it — which is
     /// one question, because it decides both the URL and what a click does.
@@ -170,10 +167,7 @@ module Entity =
             // the name's media type (`ContentKind`), which is the same rule the pane will use —
             // one answer, so the chip cannot promise a view the pane will not give.
             | EntityRef.Content ref ->
-                let glyph =
-                    match ContentKind.ofMediaType (ContentMedia.ofRef ref) with
-                    | ContentKind.Image _ -> Icon.imageSm
-                    | ContentKind.Download -> Icon.fileSm
+                let glyph = Icon.ofContent (ContentName.kind ref)
                 html $"""<span class="{Style.entityMark}" aria-hidden="true">{glyph}</span>"""
         match destination entity with
         | Away url ->
