@@ -4456,6 +4456,17 @@ let private watchEngineTests =
           Watches.Kind.NoCursor = ()
           Watches.Kind.Describe = fun key -> sprintf "counter %d" key
           Watches.Kind.Record = fun _ key _ changes -> async { recorded.Add (key, changes) } }
+    /// A source that answers "nothing has changed" — the conditional reply every settled
+    /// watch gets — unless the case has set a refusal.
+    let quietKind (refusal: Watches.Refusal option ref) =
+        { counterKind (ref 0) refusal (ResizeArray ()) with
+            Watches.Kind.Look =
+                fun _ _ _ _ _ ->
+                    async {
+                        match refusal.Value with
+                        | Some r -> return Watches.Refused r
+                        | None -> return Watches.Unmoved
+                    } }
     let engine (kind: Watches.Kind<int, int, int, unit, int>) =
         Watches.create (fun () -> started) (fun _ -> async { return None }) (fun _ -> async { return () }) kind
     let watching (known: int) : Watches.Watch<int, int> list =
@@ -4505,6 +4516,27 @@ let private watchEngineTests =
                 let! _ = watchers.Poke (fun _ -> true)
                 Expect.isEmpty (List.ofSeq recorded) "nothing asked inside the window the source named"
                 Expect.equal (List.exactlyOne (watchers.Rows ())).Health (Some "rate limited") "and the reason is what the row says"
+            }
+
+        // The health set by a failure is cleared by the next look that WORKED, and a look
+        // answering "nothing has changed" is one of those. It used not to count, and one
+        // transient refusal was therefore permanent: every later look at a settled watch is
+        // conditional and answers not-modified, so nothing after the failure reached the
+        // branch that clears it, and the row said `unreachable` until the process restarted.
+        testCaseAsync "a watch that failed once is readable again when the source says nothing has changed" <|
+            async {
+                let refusal =
+                    ref (Some { Watches.Refusal.Health = "github answered 502"
+                                Watches.Refusal.HoldUntilEpoch = None
+                                Watches.Refusal.CredentialRejected = false })
+                let watchers = engine (quietKind refusal)
+                watchers.Apply (watching 3)
+                let! _ = watchers.Poll ()
+                Expect.equal (List.exactlyOne (watchers.Rows ())).Health (Some "github answered 502") "the failure is what the row says"
+                refusal.Value <- None
+                let! moved = watchers.Poke (fun _ -> true)
+                Expect.isTrue moved "the row has something new to show"
+                Expect.isNone (List.exactlyOne (watchers.Rows ())).Health "a source that answered is a source that was reached"
             }
     ]
 
