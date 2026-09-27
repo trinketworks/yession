@@ -204,16 +204,16 @@ let appended (events: SessionEvent list) : SessionEvent list =
         | SessionResumed _ -> false
         | _ -> true)
 
-/// This client's timeline without the session's own note that it came back — `appended`'s rule
-/// on the other side of the wire. (That it STARTED never reaches the projection at all, so
-/// there is nothing to drop for it here.) Only that one act is dropped, never acts in general: a
-/// repo added or a command refused is something that happened in the session, and a case listing
-/// the timeline wants to see it.
+/// This client's timeline without the session's own notes that it started or came back —
+/// `appended`'s rule on the other side of the wire. Only those two acts are dropped, never acts
+/// in general: a repo added or a command refused is something that happened in the session,
+/// and a case listing the timeline wants to see it.
 let timelineOf (model: ClientModel) : Chat.ConversationItem list =
     model.Conversation.Items
     |> List.filter (fun item ->
         match item.Content with
-        | ItemContent.Act (Act.SessionResumed _) -> false
+        | ItemContent.Act (Act.SessionResumed _)
+        | ItemContent.Act (Act.SessionStarted _) -> false
         | _ -> true)
 
 /// What was said on it, in order — the form most cases want.

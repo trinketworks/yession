@@ -115,6 +115,10 @@ and SessionResumed =
 
 // --- What each chat act SAYS (see RepoFacts.fs for why the prose lives beside the event) ---
 
+module SessionStarted =
+
+    let phrase : Phrase = Phrase.text "session started"
+
 module SessionResumed =
 
     /// Said with the gap, which only the envelope's time can give: this record holds one end.

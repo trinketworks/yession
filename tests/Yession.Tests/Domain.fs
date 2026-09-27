@@ -1230,12 +1230,12 @@ let private sessionLifecycleTests =
     let saidIn (projection: ConversationProjection) =
         projection.Items |> List.map ConversationItem.said |> String.concat "\n"
     testList "A session's own account of its life" [
-        // Deliberately NOT a line on the timeline: every session has one, it is always first,
-        // and a reader looking at the top of a timeline already knows the session started. What
-        // the event is for is the history a turn is told, below.
-        testCase "starting puts nothing on the timeline" <| fun () ->
+        // This case used to assert the opposite: starting was lifecycle and put nothing on
+        // the timeline. It is an item now because what the first boot brings up names it as
+        // its cause, and a cause is an item a reader can be pointed at.
+        testCase "starting is an item on the timeline" <| fun () ->
             let projection, _ = ConversationProjection.applyEvents None [ at 0L lastHeard started ] ConversationProjection.empty
-            Expect.isEmpty projection.Items "lifecycle, not something said"
+            Expect.stringContains (saidIn projection) "session started" "the item a boot's acts can point at"
 
         testCase "says so on the timeline, with how long it was stopped" <| fun () ->
             let projection, _ = ConversationProjection.applyEvents None [ at 1L resumedAt resumed ] ConversationProjection.empty

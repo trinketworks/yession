@@ -483,6 +483,7 @@ module Dom =
         /// The break's label says how long the session was away; its accessible name and its
         /// tooltip say the whole of what pressing it does, because the visible words are a
         /// duration and a duration does not announce that it is a control.
+        let sessionStarted = "session started"
         let sessionBreakShowMoment = "Show when the session came back"
         let sessionBreakShowElapsed = "Show how long the session was away"
         /// Which reading the label is showing, for the hook above.
