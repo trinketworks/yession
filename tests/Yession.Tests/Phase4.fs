@@ -2346,7 +2346,7 @@ let private hookRelayTests =
                 sprintf "sub-%d" minted)
         relay, pushed
     let signedWith (secret: string) (body: string) =
-        [ "x-hub-signature-256", "sha256=" + Interop.hmacSha256 secret body "hex" ]
+        [ "x-hub-signature-256", "sha256=" + Interop.hmacSha256 secret body BinaryToTextEncoding.Hex ]
     let aBody = """{"repository":{"full_name":"trinketworks/yession"},"number":7}"""
 
     testList "The hook relay" [
@@ -2376,9 +2376,9 @@ let private hookRelayTests =
             let specs : WebhookRelay.EndpointSpec list =
                 [ { Name = "github"; Rotation = 0; Signature = WebhookRelay.SignatureSpec.webSub }
                   { Name = "ci-2"; Rotation = 7
-                    Signature = { Header = "x-sig"; Encoding = "base64"; Prefix = "" } }
+                    Signature = { Header = "x-sig"; Encoding = WebhookRelay.SignatureEncoding.Base64; Prefix = "" } }
                   { Name = "shop_a"; Rotation = 1
-                    Signature = { Header = "x-shop-hmac"; Encoding = "hex"; Prefix = "v1=" } } ]
+                    Signature = { Header = "x-shop-hmac"; Encoding = WebhookRelay.SignatureEncoding.Hex; Prefix = "v1=" } } ]
             for spec in specs do
                 let text = WebhookRelay.EndpointSpec.encode spec
                 match WebhookRelay.EndpointSpec.decode text with
@@ -2601,7 +2601,7 @@ let private hookDeliveryStreamTests =
                 let deliver () =
                     postDelivery
                         (sprintf "%s/hooks/github" url)
-                        [ "x-hub-signature-256", "sha256=" + Interop.hmacSha256 secret body "hex" ]
+                        [ "x-hub-signature-256", "sha256=" + Interop.hmacSha256 secret body BinaryToTextEncoding.Hex ]
                         body
 
                 // The relay's answer is checked BEFORE the wait: a delivery that never

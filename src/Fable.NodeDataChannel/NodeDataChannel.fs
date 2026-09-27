@@ -3,12 +3,12 @@ module Fable.NodeDataChannel
 // Fable bindings to the `node-datachannel` npm package (libdatachannel's Node addon). The
 // binding layer only: the slice of its surface the session's WebRTC transport uses.
 //
-// SHAPES ONLY, and no `[<Import>]` anywhere, deliberately. The addon is native: a static
-// `import` loads its `.node` binary at module-eval, which would force the cheap test tier —
+// No static `import` of the package, deliberately. The addon is native: a static `import`
+// loads its `.node` binary at module-eval, which would force the cheap test tier —
 // pure/model/protocol tests that never open a WebRTC connection — to build and ship that
 // binary just to LOAD the bundle. So what `require('node-datachannel')` answers with is
-// declared here as `Exports`, and the Host loads the module lazily, on the first real
-// connection, and views it through that.
+// declared here as `Exports`, `load` is the `require` that answers it, and the Host calls
+// `load` lazily, on the first real connection.
 //
 // Fable-only: `dotnet build` type-checks it; Fable emits the JS that runs on Node.
 
@@ -63,3 +63,19 @@ type [<AllowNullLiteral>] Exports =
     abstract PeerConnection : PeerConnectionClass
     /// libdatachannel's global teardown.
     abstract cleanup : unit -> unit
+
+/// `createRequire(from)` — a CommonJS `require` resolving from the module at `from`. Typed as
+/// answering THIS package's exports, because `load` is the only thing that asks it anything.
+///
+/// A `Func` rather than an F# arrow: Fable uncurries an imported function that answers an
+/// arrow, which would rewrite `createRequire(from)(id)` into `createRequire(from, id)` — one
+/// call where two were meant.
+[<Import("createRequire", "node:module")>]
+let private createRequire (from: string) : System.Func<string, Exports> = jsNative
+
+/// `require('node-datachannel')`, resolved from the module at `from` (a `file:` URL) — the
+/// caller's own, which is where its `node_modules` are. This is where the addon's typing is
+/// asserted, and the only place: `require` answers whatever the file exports, and `Exports`
+/// is what this binding says that is. THROWS the way `require` does when there is nothing to
+/// load.
+let load (from: string) : Exports = (createRequire from).Invoke "node-datachannel"

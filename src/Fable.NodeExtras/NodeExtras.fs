@@ -17,8 +17,10 @@ namespace Fable.NodeExtras
 // is not a binding at all: `Fable.Node` types `ErrnoException` and stops, and what two callers
 // were each writing out beside it — a throw that handed over something that is not an object,
 // an errno spelled `''` — is a decision, so it is taken once. What Fable.Node already covers and nothing
-// here re-declares: `node:events`, `createHash`/`createHmac`/`randomBytes` from `node:crypto`,
-// and `Buffer`'s `from`/`toString`/`concat`/`alloc`.
+// here re-declares: `node:events`, `randomBytes` from `node:crypto`, and `Buffer`'s
+// `from`/`toString`/`concat`/`alloc`. `createHash`/`createHmac` it covers but for the one
+// thing asked of them: a digest in a named encoding comes back typed `obj`, so the text a
+// caller wanted is exactly what cannot be read through it — `Digests` below types that.
 //
 // `node:stream` and `node:http` are the two it covers only in part, and the part it misses is
 // the one a proxy is made of: `Fable.Node`'s `ClientRequest<'T>` has no `pipe`, no `destroy`
@@ -726,6 +728,57 @@ module WebCrypto =
     /// length, which it already leaked by sending it).
     [<Import("timingSafeEqual", "node:crypto")>]
     let timingSafeEqual (left: Buffer) (right: Buffer) : bool = jsNative
+
+// --- node:crypto: hashes and HMACs, digested as text ------------------------------------------
+
+/// How a digest is written out as text — Node's own name for the set. A `[<StringEnum>]`, so
+/// each case is erased to the literal Node takes (`hex`, `base64`, `base64url`); `binary` is
+/// the fourth, and nothing here wants it.
+///
+/// Qualified access because `Node.Buffer.BufferEncoding` has a `Hex` and a `Base64` of its own,
+/// and a file opening both would otherwise have its bare cases re-pointed at this one.
+[<StringEnum>]
+[<RequireQualifiedAccess>]
+type BinaryToTextEncoding =
+    | Hex
+    | Base64
+    | Base64url
+
+/// A hash or an HMAC being fed. `update` answers the same object, so a chain reads as one
+/// expression; `digest` ends it, and Node throws on a second.
+///
+/// `Fable.Node` types the same object, and answers a digest in a named encoding as `obj` —
+/// which is `string` whenever an encoding is named, and a `Buffer` only when none is. Typing
+/// that here is what keeps a cast out of every caller.
+[<AllowNullLiteral>]
+type Digester =
+    abstract update : data: string * inputEncoding: BufferEncoding -> Digester
+    abstract digest : encoding: BinaryToTextEncoding -> string
+
+[<RequireQualifiedAccess>]
+module Digests =
+
+    /// `createHash(algorithm)` — `"sha256"`, say.
+    [<Import("createHash", "node:crypto")>]
+    let hash (algorithm: string) : Digester = jsNative
+
+    /// `createHmac(algorithm, key)`, keyed by the key's UTF-8 bytes.
+    [<Import("createHmac", "node:crypto")>]
+    let hmac (algorithm: string) (key: string) : Digester = jsNative
+
+// --- The module a call is written in ----------------------------------------------------------
+
+/// `import.meta`, which no binding types because it is syntax rather than a value.
+[<RequireQualifiedAccess>]
+module ImportMeta =
+
+    /// `import.meta.url`: the address of the module this CALL is compiled into — not this
+    /// file's. An emit is pasted into its caller, which for every other binding here is the
+    /// hazard the header describes and for this one is the whole point: the answer is about the
+    /// caller, so it has to be spelled where the caller is. Once esbuild has flattened a bin into
+    /// one file, that is the bundle's own address.
+    [<Emit("import.meta.url")>]
+    let url () : string = jsNative
 
 // --- Buffers over bytes -----------------------------------------------------------------------
 
