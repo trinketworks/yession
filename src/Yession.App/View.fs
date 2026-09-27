@@ -2974,7 +2974,7 @@ module View =
         // and with the facts behind a disclosure there was nothing on the line to say so.
         let author =
             let who = Authority.author block.Authority
-            if who = ActorRef.PeerRef model.Peer.PeerId then Lit.nothing
+            if ClientModel.isMine who model then Lit.nothing
             else
                 html $"""
                     <span class="{Style.cls [ Style.avatarSm; Entity.actorMark model who ]}" title="{Entity.actorName model who}"
@@ -3072,7 +3072,7 @@ module View =
     /// changes it. Shown in place of the command lines — never in place of the queue, which
     /// keeps working while a peer is live and is precisely what the release will run.
     let private terminalLeaseBar (actions: ViewActions) (model: ClientModel) (terminal: TerminalId) (holder: ActorRef) : TemplateResult =
-        let mine = ActorRef.PeerRef model.Peer.PeerId
+        let mine = ClientModel.me model
         // The hook keeps the stable token (a test asserting WHO holds a lease should not have
         // to know what this client happens to have learned about their name); the words get
         // the name, like every other person on screen.
@@ -3113,7 +3113,7 @@ module View =
     /// read-only, which is the whole point of a shared terminal: watching is not a lesser
     /// mode, it is the ordinary one.
     let private terminalScreenView (actions: ViewActions) (model: ClientModel) (terminal: TerminalId) (holder: ActorRef option) : TemplateResult =
-        let mine = ActorRef.PeerRef model.Peer.PeerId
+        let mine = ClientModel.me model
         let id = TerminalId.value terminal
         let body =
             match ClientModel.terminalScreen terminal model with

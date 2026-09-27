@@ -1621,6 +1621,30 @@ module ClientModel =
         |> List.filter (fun (_, _, field) -> terminalOfFocus field model = Some terminal)
         |> List.map (fun (who, name, _) -> who, name)
 
+    /// Which actor THIS client is, by the same rule the Session Process used to stamp what
+    /// this client asked for: `Attribution.actorFor` — the durable user when this peer's join
+    /// was attributed, the peer connection itself when it was not.
+    ///
+    /// Asking the rule rather than building `ActorRef.PeerRef model.Peer.PeerId` and comparing.
+    /// The two agree only under `--auth localhost`, which verifies nobody; under a
+    /// Manager-verified deployment every command this connection sends is written `UserRef`,
+    /// so a client that assumed `PeerRef` matched NOTHING it had done. It cost a strip that
+    /// never held a terminal you opened (`+ new` opened one and showed you nothing, so people
+    /// pressed it again — 24 empty terminals in one session), a lease bar that named its holder
+    /// "somebody else" to the holder, a live screen that refused the holder's keystrokes, and a
+    /// pty that never heard the holder's viewport size. One wrong answer, four surfaces.
+    ///
+    /// This is for a DURABLE actor — one the log carries. Presence is not: an awareness frame
+    /// is keyed by the peer that sent it and never attributed, so the handful of comparisons
+    /// against `model.Presence` are right to build a `PeerRef`, and are deliberately left alone.
+    let me (model: ClientModel) : ActorRef =
+        Attribution.actorFor model.Attribution.PeerUsers model.Peer.PeerId
+
+    /// Whether a durable actor is this client. The question every ownership rule here asks —
+    /// is this terminal mine, is this lease mine — with `me` as its one answer.
+    let isMine (actor: ActorRef) (model: ClientModel) : bool =
+        actor = me model
+
     /// A peer's display name: your own connection's, else the roster's, else the peer's own
     /// live presence, else the raw id (an id is a last resort, not a label — `PEER-129755065`
     /// is not a person).
@@ -1880,14 +1904,14 @@ module ClientModel =
             // keep. Doing it here means the strip is simply the pins — one rule, one place,
             // and no filter at render free to disagree with it.
             //
-            // "I opened it" is `PeerRef` against this client's own peer, which is how every
-            // other surface here decides whose something is (the lease bar, the queue's
-            // authorship). A session whose actors are Manager-verified users attributes them
-            // as `UserRef`, and this does not pin those — stated rather than papered over,
-            // because inventing a second identity rule for one convenience is how two
-            // answers to "is this mine" start disagreeing.
+            // "I opened it" is `ClientModel.me`'s rule — `Attribution.actorFor`, the same one
+            // the Session Process stamped the open with — asked of the attribution this page
+            // has just been folded into rather than of `model.Attribution`, because the
+            // `PeerJoined` that says who I am can arrive in the SAME page as the terminal I
+            // opened. Reading the older copy here would leave the session's first page
+            // unpinnable and nothing else, which is the kind of gap that is found once.
             let pins =
-                let mine = ActorRef.PeerRef model.Peer.PeerId
+                let mine = Attribution.actorFor attribution.PeerUsers model.Peer.PeerId
                 let opened =
                     freshEvents
                     |> List.choose (fun e ->
