@@ -198,7 +198,7 @@ let headerOf (req: IncomingMessage) (name: string) : string option =
     req.headerEntries ()
     |> Array.tryPick (fun (header, value) ->
         match value with
-        | :? string as text when header = name -> Some text
+        | HeaderValue.Single text when header = name -> Some text
         | _ -> None)
 
 /// This box's own name — what a confined sandbox's git names to reach a listener here
