@@ -90,16 +90,54 @@ let private construct (ctor: obj) (payload: JwtPayload) : SignJwt = jsNative
 /// Start a signing builder over the given payload claims.
 let signJwt (payload: JwtPayload) : SignJwt = construct signJwtCtor payload
 
-type [<AllowNullLiteral>] JwtVerifyResult =
-    abstract payload : obj
-    abstract protectedHeader : obj
+/// A key as a key set publishes it: the key's parameters (`Jwk` above) plus what a verifier
+/// selects it by — `kid`, `alg` and `use` (RFC 7517 §4). The input half of `Jwk`: jose
+/// strips the selection parameters on export, and a key set is where they are written back.
+/// A parameter this key type does not have is left unset, which is what absent means.
+type PublishedJwk =
+    abstract kty : string with get, set
+    abstract crv : string with get, set
+    abstract x : string with get, set
+    abstract y : string with get, set
+    abstract n : string with get, set
+    abstract e : string with get, set
+    abstract kid : string with get, set
+    abstract alg : string with get, set
+    abstract ``use`` : string with get, set
 
-/// Verify a JWT's signature and standard claims. `keyOrSet` is a CryptoKey or a JWK-set
-/// resolver from `createLocalJWKSet`; `options` carries expected `issuer`/`audience`.
-/// Rejects (promise) on any failure.
-[<Import("jwtVerify", "jose")>]
-let jwtVerify (jwt: string) (keyOrSet: obj) (options: obj) : JS.Promise<JwtVerifyResult> = jsNative
+/// A JWKS document (RFC 7517 §5), as `createLocalJWKSet` takes one.
+type JsonWebKeySet =
+    abstract keys : PublishedJwk[] with get, set
 
-/// Build a key resolver over a `{ keys: [...] }` JWKS document.
+/// What `createLocalJWKSet` answers: a function jose calls with a token's protected header
+/// to pick the key that verifies it. Opaque: only jose makes one, and only jose calls it.
+type KeySetResolver =
+    interface end
+
+/// Build a key resolver over a JWKS document.
 [<Import("createLocalJWKSet", "jose")>]
-let createLocalJWKSet (jwks: obj) : obj = jsNative
+let createLocalJWKSet (jwks: JsonWebKeySet) : KeySetResolver = jsNative
+
+/// `jwtVerify`'s options: the slice used. Each claim named here is REQUIRED to match — a
+/// token whose `iss` or `aud` differs is rejected, as is one that lacks the claim.
+type JwtVerifyOptions =
+    /// The expected `iss`.
+    abstract issuer : string with get, set
+    /// The expected `aud` — one of the token's audiences, when it names several.
+    abstract audience : string with get, set
+
+/// A verified token's claims: the slice read back. Optional because jose verifies only what
+/// `JwtVerifyOptions` asked of it (and the registered time claims): a claim nobody asked
+/// about may be absent from a token that verified.
+type [<AllowNullLiteral>] JwtClaims =
+    abstract sub : string option
+    /// The discriminator Yession's provider writes (`JwtPayload` above).
+    abstract yession_attribution : string option
+
+type [<AllowNullLiteral>] JwtVerifyResult =
+    abstract payload : JwtClaims
+
+/// Verify a JWT's signature, against the key the set resolves for its header, and its
+/// standard claims against `options`. Rejects (promise) on any failure.
+[<Import("jwtVerify", "jose")>]
+let jwtVerify (jwt: string) (keySet: KeySetResolver) (options: JwtVerifyOptions) : JS.Promise<JwtVerifyResult> = jsNative
