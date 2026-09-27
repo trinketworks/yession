@@ -207,6 +207,16 @@ module Source =
         | SandboxExited _ -> "the stream ended"
         | SandboxRunFailed reason -> reason
 
+    /// The same thing said about a SHELL, which is the other way a source ends. Apart from
+    /// `endedReason` because a shell is not a stream: it always has an exit code, nothing
+    /// has to be withheld, and "the stream ended with code 0" reads as a device unplugging
+    /// itself rather than as the `exit` somebody's command reached — which is the whole
+    /// fact a person is looking for when their terminal closed under them.
+    let shellEndedReason (ending: SandboxRun) : string =
+        match ending with
+        | SandboxExited code -> sprintf "the shell exited with code %d" code
+        | SandboxRunFailed reason -> sprintf "the shell stopped: %s" reason
+
 /// Reach a byte stream somebody else is producing, and hand back a handle shaped exactly
 /// like a pty's.
 ///

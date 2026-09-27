@@ -3888,6 +3888,99 @@ let private lostOverALateShellWaking (mayOweWake: unit -> unit) (loans: SessionT
         return terminals, id, log, clock, mark, writtenAt, lost
     }
 
+/// A shell the CASE ends — which `Kill` cannot express, because the question is what
+/// happens when a shell goes without anybody closing the terminal: a command that reached
+/// `exit`, an out-of-memory kill, a container that stopped. It marks its prompt, so the
+/// terminal adopts it, and renders a block's line without ever marking it finished — what a
+/// shell that died under a command leaves behind.
+let private exitingShell () =
+    let environment, _, _ = profileEnvironment (fun () -> Set.empty)
+    let ending, ended = latch ()
+    let mutable code = 0
+    let shell : SessionEnvironment.SessionEnvironment =
+        { environment with
+            SpawnPty =
+                fun _ _ _ onOutput ->
+                    async {
+                        return
+                            Ok
+                                { Write =
+                                    fun line ->
+                                        if line.Contains "__y_c; " then onOutput ("$ " + line.Trim () + "\r\n")
+                                        else onOutput "\u001b]133;A;y=test-nonce\u0007"
+                                  Resize = fun _ _ -> ()
+                                  Kill = ending
+                                  Exited =
+                                    async {
+                                        do! ended
+                                        return SandboxExited code
+                                    } } } }
+    shell,
+    fun (exitCode: int) ->
+        code <- exitCode
+        ending ()
+
+/// One block, typed at such a shell and still running, and the switch that ends the shell
+/// under it.
+///
+/// Every wait here is BOUNDED and fails as itself. A latch would read more directly, and it
+/// is the wrong tool for exactly this case: the thing under test is a block nothing finishes,
+/// so a regression leaves the latch unfired, and an unfired latch schedules nothing — the
+/// event loop empties, Node exits 0, and the run reports no verdict at all rather than a red
+/// one. A poll keeps a timer on the loop and names what never happened.
+let private blockOverAnExitingShell () =
+    async {
+        let log = newLog ()
+        let shell, endShell = exitingShell ()
+        let openTranscript, _, _, _, readTranscript = recordingTranscripts ()
+        let terminals, _, _ = makeTerminals log shell openTranscript readTranscript []
+        let! opened = terminals.Open (PeerRef ada) (SandboxShell SandboxRef.defaultRef) (TerminalTitle.fromProse "build")
+        let id = opened |> expect
+        let mutable started = false
+        Async.StartImmediate (terminals.RunBlock id (entry "b1" id byAda 1.0) "echo hi" (fun () -> started <- true))
+        do! waitUntilWithin 2_000 "the block to be typed at the shell" (fun () -> started)
+        Expect.isTrue (terminals.Busy () |> Set.contains (TerminalId.value id)) "the block is running before the shell goes"
+        return terminals, id, log, endShell
+    }
+
+/// What a shell's exit does to the terminal it was the shell of. Two facts, because they
+/// fail apart: a block left running for ever is an agent waiting on news that never comes,
+/// and a terminal left open over a dead pty is a queue the drain keeps offering work to.
+let private shellExitTests =
+    testList "A shell that exits under its terminal" [
+        // The block's end is the shell's `D` mark, so a shell that exits takes the only thing
+        // that could have finished it. Nothing else settled a block, so the terminal never
+        // left `busy` and every command queued behind it waited for ever.
+        testCaseAsync "a shell that exits ends the block it was running" <|
+            async {
+                let! terminals, id, log, endShell = blockOverAnExitingShell ()
+                endShell 0
+                do!
+                    waitUntilWithin 2_000 "the block to end when its shell did" (fun () ->
+                        not (terminals.Busy () |> Set.contains (TerminalId.value id)))
+                let! events = eventsOf log
+                match events |> List.tryPick (function SessionEvent.TerminalBlockCompleted e -> Some e.Result | _ -> None) with
+                | Some (CommandExecutionFailed reason) ->
+                    Expect.isTrue (reason.Contains "the shell exited with code 0") "and says what happened to it"
+                | other -> failwithf "expected the block to end when its shell did, got %A" other
+            }
+
+        // A terminal whose pty is gone can run nothing — nothing to type into, nothing to
+        // mark a command finished — so it closes, the way an attached source's terminal does
+        // when its stream ends. That is also what refuses the queue: the drain leaves nothing
+        // queued on a closed terminal.
+        testCaseAsync "a shell that exits closes its terminal, saying how the shell went" <|
+            async {
+                let! terminals, id, log, endShell = blockOverAnExitingShell ()
+                endShell 3
+                do!
+                    waitUntilWithin 2_000 "the terminal to close when its shell exited" (fun () ->
+                        not (terminals.IsOpen id))
+                let! reasons = closureReasons log
+                Expect.equal reasons [ "the shell exited with code 3" ] "closed for the reason the shell gave"
+            }
+    ]
+
 let private lostOverALateShellLent (loans: SessionTerminals.BlockLoans) = lostOverALateShellWaking ignore loans
 
 let private lostOverALateShell () = lostOverALateShellLent SessionTerminals.BlockLoans.none
@@ -4664,6 +4757,7 @@ let tests =
         agentVerbTests
         shellStartTests
         shellProfileTests
+        shellExitTests
         lostEvidenceTests
         codecTests
         orderTests

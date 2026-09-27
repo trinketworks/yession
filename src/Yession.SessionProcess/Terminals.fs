@@ -1690,6 +1690,38 @@ module SessionTerminals =
                                 finally
                                     terminal.Starting <- None
                                     started ()
+                                // A shell that EXITS ends its terminal — the rule an attached
+                                // source already follows below, arrived at from the other end.
+                                // A terminal whose pty is gone can run nothing: there is
+                                // nothing to type a command into, and nothing that could mark
+                                // one finished. Left open it was worse than useless, because
+                                // the drain went on offering it work — so a `D` that died with
+                                // the shell left its block running for ever, the terminal never
+                                // left `busy`, and every command queued behind it read `queued`
+                                // until the process restarted. Eight hours of that, six commands
+                                // held, and nothing anywhere saying why.
+                                //
+                                // `closeTerminal` is the whole repair: it ends the block on the
+                                // record, clears `busy`, says the terminal closed and why, and
+                                // re-drains — which refuses what was queued here rather than
+                                // leaving it queued on nothing.
+                                //
+                                // Only the shell `openShell` ADOPTED is watched, which is what
+                                // reading `terminal.Shell` says: a pty that never marked a
+                                // prompt was killed there and the terminal kept its degraded
+                                // path, where each block is its own process and no shell's exit
+                                // is anybody's news.
+                                //
+                                // `isOpen` is the guard rather than a flag of its own: this
+                                // awaits once, and the one thing that resolves `Exited` twice —
+                                // `closeTerminal` killing the pty — has already taken the
+                                // terminal out of the live map by the time we look.
+                                match terminal.Shell with
+                                | Some pty ->
+                                    let! ending = pty.Exited
+                                    if isOpen id then
+                                        do! closeTerminal id (Source.shellEndedReason ending) |> Async.Ignore
+                                | None -> ()
                             })
                     | Attached _ ->
                         dialledHandle |> Option.iter (fun handle -> terminal.Shell <- Some handle)
@@ -2079,36 +2111,6 @@ module SessionTerminals =
                                                                             Said = said } })
                                                       reDrain ()
                                                       mayOweWake ()
-                                              })
-                                            // A shell that EXITS under a running block takes
-                                            // the block's `D` mark with it, and nothing else
-                                            // settles a block: the terminal stays busy for
-                                            // the life of the process, so every command
-                                            // queued behind it reads `queued` and waits for
-                                            // ever. The log says nothing either — the last
-                                            // durable word is the block's own start — so a
-                                            // session showing six held commands has no
-                                            // record of what happened to the shell they are
-                                            // held behind.
-                                            //
-                                            // Said, not repaired: what a block whose shell
-                                            // died should REPORT is a decision, and this is
-                                            // the line that hands whoever takes it the case.
-                                            // The detector above cannot cover this one — it
-                                            // is armed on a start mark that never arrived,
-                                            // and a command that ends its own shell (`exit`
-                                            // reached inside a loop) started perfectly well.
-                                            Async.StartImmediate (
-                                              async {
-                                                  let! ended = pty.Exited
-                                                  if not settled then
-                                                      printfn
-                                                          "[terminal %s] the shell %s under block %s: nothing can complete that block, so this terminal stays busy and its queue is held"
-                                                          (TerminalId.value terminalId)
-                                                          (match ended with
-                                                           | SandboxExited code -> sprintf "exited with code %d" code
-                                                           | SandboxRunFailed reason -> sprintf "failed (%s)" reason)
-                                                          (BlockId.value blockId)
                                               }))
                                     return result
                                 }
