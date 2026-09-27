@@ -337,7 +337,7 @@ let startProvider () : JS.Promise<Provider> =
         // WebSocket", and it is what a plain GET at a provider should read.
         let server =
             Interop.createServer (fun _ res ->
-                res.writeHead (426, JsInterop.createObj []) |> ignore
+                res.writeHead (426, [  ])
                 res.``end`` "")
 
         onUpgrade server (fun req socket ->

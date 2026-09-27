@@ -14,6 +14,7 @@ module Yession.Tests.Assets
 open FSharp
 open Fable.Core
 open Fable.Core.JsInterop
+open Fable.NodeExtras
 open Fable.Pyxpecto
 open Thoth.Json
 open Yession.App
@@ -52,7 +53,7 @@ let private headersOf (headers: obj) : Map<string, string> =
 /// The double itself: three members, each a real F# function, so what a call to it DOES is
 /// F# the compiler reads rather than statements inside a string. `Func` rather than a curried
 /// lambda because Node's members take their arguments at once, which is what `serve` emits.
-let private responseInto (reply: Reply) : Interop.ServerResponse =
+let private responseInto (reply: Reply) : ServerResponse =
     unbox (
         createObj
             [ "writeHead"

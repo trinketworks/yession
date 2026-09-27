@@ -143,13 +143,11 @@ let serve (assets: AssetSet) (build: string) (path: string) (res: ServerResponse
     | Some (file, bytes) ->
         res.writeHead (
             200,
-            createObj
-                [ "content-type", box (AssetFile.contentType file)
-                  "cache-control", box CachePolicy.asset ])
-        |> ignore
-        res.``end`` (unbox bytes)
+            [ ResponseHeader.ContentType (AssetFile.contentType file)
+              ResponseHeader.CacheControl CachePolicy.asset ])
+        res.``end`` bytes
     | None ->
-        res.writeHead (404, createObj [ "content-type", box "text/plain" ]) |> ignore
+        res.writeHead (404, [ ResponseHeader.ContentType "text/plain" ])
         // An EMPTY set is the developer case — nothing was built — and saying so beats a bare
         // 404 on an address that looks perfectly reasonable.
         res.``end`` (if Map.isEmpty assets.Files then "not built (run: build)" else "stale asset address (reload)")

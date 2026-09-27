@@ -19,6 +19,7 @@ module Yession.Tests.GitHubRepos
 // and the cursor run in the cheap tier, being this session's own JSON either way.
 
 open Fable.Core
+open Fable.NodeExtras
 open Fable.Pyxpecto
 open Yession.Domain
 open Yession.Domain.Repos
@@ -48,7 +49,7 @@ let private get (url: string) (cookie: string) : Async<TestHttp.Reply> =
 
     TestHttp.getNoStore headers url
 
-let private serving (handler: Interop.IncomingMessage -> Interop.ServerResponse -> unit) =
+let private serving (handler: Interop.IncomingMessage -> ServerResponse -> unit) =
     async {
         let server = Interop.createServer handler
         let! listening =
@@ -56,8 +57,8 @@ let private serving (handler: Interop.IncomingMessage -> Interop.ServerResponse 
         return sprintf "http://127.0.0.1:%d" (Interop.serverPort listening)
     }
 
-let private json (res: Interop.ServerResponse) (status: int) (body: string) =
-    res.writeHead (status, JsInterop.createObj [ "content-type", box "application/json" ]) |> ignore
+let private json (res: ServerResponse) (status: int) (body: string) =
+    res.writeHead (status, [ ResponseHeader.ContentType "application/json" ])
     res.``end`` body
 
 // --- the provider's JSON -------------------------------------------------------------------
@@ -174,7 +175,7 @@ type private StubApi =
 let private startStubApi () : Async<StubApi> =
     async {
         let requests = ResizeArray<string * string option> ()
-        let handler (req: Interop.IncomingMessage) (res: Interop.ServerResponse) =
+        let handler (req: Interop.IncomingMessage) (res: ServerResponse) =
             let url : string = req.url
             let bearer = Interop.headerOf req "authorization"
             requests.Add (url, bearer)
@@ -297,7 +298,7 @@ let private startRoutes (api: StubApi) (tokens: (CredentialFor * string) list) =
         return!
             serving (fun req res ->
                 if not (route req res) then
-                    res.writeHead (404, JsInterop.createObj [ "content-type", box "text/plain" ]) |> ignore
+                    res.writeHead (404, [ ResponseHeader.ContentType "text/plain" ])
                     res.``end`` "not found")
     }
 

@@ -6,6 +6,7 @@ module Yession.Host.Host
 
 open System
 open Yjs
+open Fable.NodeExtras
 open Yession.Domain
 open Yession.Domain.Sandboxes
 open Yession.Domain.Agent
@@ -154,7 +155,7 @@ let startFull
     // composition root's. `McpConnections.none` is a session that was given none.
     (mcpConnections: McpClient.McpConnections)
     // Extra HTTP routes on the session's server (Plan 08: the connection surface).
-    (extraHttpRoutes: (Interop.IncomingMessage -> Interop.ServerResponse -> bool) option)
+    (extraHttpRoutes: (Interop.IncomingMessage -> ServerResponse -> bool) option)
     (sessionId: SessionId)
     (auth: SessionAuth.Auth option)
     // The path this session is served under (`""` at an origin root).

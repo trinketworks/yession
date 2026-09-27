@@ -49,6 +49,7 @@ module Yession.Host.Control
 // and the secrets/connections handlers apply their own policy per call.
 
 open Fable.Core.JsInterop
+open Fable.NodeExtras
 open Yession.Domain
 open Yession.Domain.Tools
 open Yession.Domain.Access
@@ -101,11 +102,11 @@ type ConnectionsApi =
       Status : ControlCaller -> Async<ConnectionStatusList> }
 
 let private respondJson (res: ServerResponse) (json: string) =
-    res.writeHead (200, createObj [ "content-type", box "application/json"; "cache-control", box "no-store" ]) |> ignore
+    res.writeHead (200, [ ResponseHeader.ContentType "application/json"; ResponseHeader.CacheControl "no-store" ])
     res.``end`` json
 
 let private respond (res: ServerResponse) (status: int) (text: string) =
-    res.writeHead (status, createObj [ "content-type", box "text/plain"; "cache-control", box "no-store" ]) |> ignore
+    res.writeHead (status, [ ResponseHeader.ContentType "text/plain"; ResponseHeader.CacheControl "no-store" ])
     res.``end`` text
 
 /// Handle a control request. Returns false when the path is not a control route, so a

@@ -21,6 +21,7 @@ module Yession.Host.WebhookRelay
 
 open Fable.Core
 open Fable.Core.JsInterop
+open Fable.NodeExtras
 open Yession.Domain
 open Yession.Domain.Hooks
 
@@ -303,9 +304,8 @@ let private headersOf (req: Interop.IncomingMessage) : (string * string) list =
         | _ -> name, "")
     |> List.ofArray
 
-let private respond (res: Interop.ServerResponse) (status: int) (text: string) =
-    res.writeHead (status, JsInterop.createObj [ "content-type", box "text/plain"; "cache-control", box "no-store" ])
-    |> ignore
+let private respond (res: ServerResponse) (status: int) (text: string) =
+    res.writeHead (status, [ ResponseHeader.ContentType "text/plain"; ResponseHeader.CacheControl "no-store" ])
     res.``end`` text
 
 /// Handle a delivery. `false` when the path is not ours, so the composing server falls
@@ -315,7 +315,7 @@ let private respond (res: Interop.ServerResponse) (status: int) (text: string) =
 /// point: the caller is whatever service an operator pointed at this URL, and it
 /// authenticates by signing the body. There is no session to have a cookie, and an unsigned
 /// delivery is refused here rather than let through to be judged later.
-let tryHandle (relay: Relay) (req: Interop.IncomingMessage) (res: Interop.ServerResponse) : bool =
+let tryHandle (relay: Relay) (req: Interop.IncomingMessage) (res: ServerResponse) : bool =
     let path = Interop.pathnameOf req.url
     if not (path.StartsWith "/hooks/") then false
     elif req.``method`` <> "POST" then
@@ -328,7 +328,7 @@ let tryHandle (relay: Relay) (req: Interop.IncomingMessage) (res: Interop.Server
             // probe what this deployment is watching.
             match relay.Deliver (path.Substring "/hooks/".Length) (headersOf req) body with
             | 204 ->
-                res.writeHead (204, JsInterop.createObj [ "cache-control", box "no-store" ]) |> ignore
+                res.writeHead (204, [ ResponseHeader.CacheControl "no-store" ])
                 res.``end`` ""
             | 401 -> respond res 401 "bad signature"
             | 400 -> respond res 400 "body is not a json object"

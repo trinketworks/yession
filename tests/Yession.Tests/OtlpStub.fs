@@ -9,6 +9,7 @@ module Yession.Tests.OtlpStub
 
 open Fable.Core
 open Fable.Core.JsInterop
+open Fable.NodeExtras
 open Thoth.Json
 open Yession.Host
 
@@ -165,10 +166,10 @@ let startWith (onRecord: ReceivedLog -> unit) : Async<Stub> =
                         for r in decode body do
                             received.Add r
                             onRecord r
-                        res.writeHead (200, createObj [ "content-type", box "application/json" ]) |> ignore
+                        res.writeHead (200, [ ResponseHeader.ContentType "application/json" ])
                         res.``end`` "{}")
                 | _ ->
-                    res.writeHead (405, createObj [ "content-type", box "text/plain" ]) |> ignore
+                    res.writeHead (405, [ ResponseHeader.ContentType "text/plain" ])
                     res.``end`` "method not allowed")
         let! url =
             Async.FromContinuations (fun (cont, _, _) ->

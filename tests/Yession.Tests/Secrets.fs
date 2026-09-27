@@ -589,7 +589,7 @@ let private startControlServer (callers: (string * Control.ControlCaller) list) 
         let table = Map.ofList callers
         let dummyRegister (_: string) (_: SessionId) (_: string) : Yession.Oidc.RegisterClientResponse =
             { ClientId = "unused"; ClientSecret = "unused"; Issuer = "unused" }
-        let handler (req: Interop.IncomingMessage) (res: Interop.ServerResponse) =
+        let handler (req: Interop.IncomingMessage) (res: ServerResponse) =
             if not (Control.tryHandle
                         (fun secret -> Map.tryFind secret table)
                         (fun _ _ -> async { return Ok () })
@@ -605,7 +605,7 @@ let private startControlServer (callers: (string * Control.ControlCaller) list) 
                         (fun _ _ -> false)
                         onUnauthorized
                         req res) then
-                res.writeHead (404, Fable.Core.JsInterop.createObj [ "content-type", box "text/plain" ]) |> ignore
+                res.writeHead (404, [ ResponseHeader.ContentType "text/plain" ])
                 res.``end`` "not found"
         let server = Interop.createServer handler
         let! listening =

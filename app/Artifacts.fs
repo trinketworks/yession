@@ -209,16 +209,15 @@ let private headersFor (ref: ArtifactRef) (bytes: int64) =
         match ContentKind.ofMediaType (ArtifactRef.mediaType ref) with
         | ContentKind.Image media -> media, sprintf "inline; filename=\"%s\"" name
         | ContentKind.Download -> "application/octet-stream", sprintf "attachment; filename=\"%s\"" name
-    createObj
-        [ "content-type", box contentType
-          "content-length", box (string bytes)
-          "content-disposition", box disposition
-          "cache-control", box CachePolicy.contentVersion
-          "x-content-type-options", box "nosniff"
-          "content-security-policy", box "default-src 'none'; sandbox" ]
+    [ ResponseHeader.ContentType contentType
+      ResponseHeader.ContentLength bytes
+      ResponseHeader.ContentDisposition disposition
+      ResponseHeader.CacheControl CachePolicy.contentVersion
+      ResponseHeader.ContentTypeOptions "nosniff"
+      ResponseHeader.ContentSecurityPolicy "default-src 'none'; sandbox" ]
 
 let private notFound (res: ServerResponse) =
-    res.writeHead (404, createObj [ "content-type", box "text/plain"; "cache-control", box "no-store" ]) |> ignore
+    res.writeHead (404, [ ResponseHeader.ContentType "text/plain"; ResponseHeader.CacheControl "no-store" ])
     res.``end`` "not found"
 
 /// One version's bytes, piped rather than read: this is allowed to be 100 MB, and a slow
@@ -228,7 +227,7 @@ let private serveVersion (artifactsDir: string) (ref: ArtifactRef) (res: ServerR
     match (if containedIn artifactsDir path then sizeOf path else None) with
     | None -> notFound res
     | Some bytes ->
-        res.writeHead (200, headersFor ref bytes) |> ignore
+        res.writeHead (200, headersFor ref bytes)
         let file = openFileStream path
         // The head has gone out, so there is no status left to say this with: a read that
         // fails now can only end the response early, which is what a truncated body is. The
@@ -253,7 +252,7 @@ let routes (auth: SessionAuth.Auth) (artifactsDir: string) (mount: string) : Inc
         match SessionRoute.parseUnder mount req.``method`` (req.url.Split('?').[0]) with
         | Some (SessionRoute.Content ref) ->
             if (auth.IdentityOf req).IsNone then
-                res.writeHead (401, createObj [ "content-type", box "text/plain"; "cache-control", box "no-store" ]) |> ignore
+                res.writeHead (401, [ ResponseHeader.ContentType "text/plain"; ResponseHeader.CacheControl "no-store" ])
                 res.``end`` "unauthorized"
             else
                 match ContentRef.segments ref with
@@ -271,7 +270,10 @@ let routes (auth: SessionAuth.Auth) (artifactsDir: string) (mount: string) : Inc
                     match ArtifactRef.latest (versions artifactsDir name) with
                     | Some latest ->
                         let target = RelativeUrl.under mount (SessionRoute.relative (SessionRoute.Content (ArtifactRef.content latest)))
-                        res.writeHead (307, createObj [ "location", box target; "cache-control", box CachePolicy.contentLatest ]) |> ignore
+                        res.writeHead (
+                            307,
+                            [ ResponseHeader.Location target
+                              ResponseHeader.CacheControl CachePolicy.contentLatest ])
                         res.``end`` ""
                     | None -> notFound res
                 // The content root has one directory in it so far. A `repos/…` path is a real
