@@ -175,8 +175,22 @@ let create
                 let schedule (reading: 'Snapshot option) = entry.DueAtEpoch <- nowEpoch + kind.DueIn reading
                 match outcome with
                 | Unmoved ->
+                    // A look that answered "nothing has changed" is a look that WORKED: the
+                    // source was reached, and it said so. So it clears a health an earlier
+                    // failure set, exactly as a fresh reading does — which it used not to,
+                    // and that alone made one transient refusal permanent. Every later look
+                    // at a settled watch is conditional and answers not-modified, so nothing
+                    // after the failure ever reached the branch that clears it: a row went on
+                    // saying `unreachable`, and a summary went on reducing it to the same
+                    // word, until the process restarted. A watch nobody could read and a
+                    // watch nothing is happening to are not the same fact, and only one of
+                    // them wants a person.
+                    let moved = entry.Health.IsSome
+                    if moved then
+                        printfn "[watch] %s can be read again" (kind.Describe entry.Key)
+                    entry.Health <- None
                     schedule entry.Snapshot
-                    return false
+                    return moved
                 | Read (snapshot, cursor) ->
                     let changes = kind.Detect entry.Known snapshot
                     if not (List.isEmpty changes) then
