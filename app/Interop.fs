@@ -9,7 +9,6 @@ open Fable.NodeExtras
 open Node.Api
 open Node.Buffer
 open Yession.Domain.Link
-open Fable.Core.JsInterop
 
 // --- Awaiting a promise ------------------------------------------------------
 //
@@ -57,13 +56,13 @@ let awaitPromise (promise: JS.Promise<'a>) : Async<'a> =
 
 // --- node-datachannel --------------------------------------------------------
 //
-// The types are `Fable.NodeDataChannel`'s. The module is a native addon, and a static
-// top-level `import` loads its `.node` binary at module-eval — which would force the CHEAP
-// test tier (pure/model/protocol tests that never open a WebRTC connection) to build and
-// ship that binary just to LOAD the test bundle. So it is resolved lazily through `require`
-// below: the addon loads only on the first real connection (the verify tier and
-// production), and the cheap tier runs without it. This mirrors the dynamic-`import()`
-// pattern already used for the agent SDK and Docker backend.
+// The types, and the `require` that answers them, are `Fable.NodeDataChannel`'s. The module
+// is a native addon, and a static top-level `import` loads its `.node` binary at module-eval —
+// which would force the CHEAP test tier (pure/model/protocol tests that never open a WebRTC
+// connection) to build and ship that binary just to LOAD the test bundle. So it is loaded
+// lazily, from this bundle's location, below: the addon loads only on the first real
+// connection (the verify tier and production), and the cheap tier runs without it. This
+// mirrors the dynamic-`import()` pattern already used for the agent SDK and Docker backend.
 //
 // `createRequire`, not a bare `require`: Fable emits ESM and the bundle runs as ESM, where
 // `require` is simply not defined — a bare one throws ReferenceError, which a lookup's `try`
@@ -77,12 +76,10 @@ let awaitPromise (promise: JS.Promise<'a>) : Async<'a> =
 [<Import("createRequire", "node:module")>]
 let private createRequire (url: string) : Node.Base.NodeRequire = jsNative
 
-/// This module's own address. A macro by necessity, and the one thing a binding project could
-/// not declare for its callers: `import.meta.url` names the module it is written in, so a copy
-/// in `Fable.NodeExtras` would answer for NodeExtras. Everything below is relative to the
-/// bundle this module is part of — one file, once esbuild has flattened it.
-[<Emit("import.meta.url")>]
-let private moduleUrl : string = jsNative
+/// This module's own address. `ImportMeta.url` is an emit, so it is spelled HERE, in this
+/// module, and answers for it rather than for the binding that declares it. Everything below
+/// is relative to the bundle this module is part of — one file, once esbuild has flattened it.
+let private moduleUrl : string = ImportMeta.url ()
 
 /// A CommonJS `require` rooted here. Made once: `createRequire` is not free, and the answer
 /// cannot change within a process.
@@ -99,12 +96,12 @@ let resolveModule (id: string) : string = required.Force().resolve id
 /// A url resolved against this bundle's own — `./assets` beside the running file.
 let urlBesideModule (relative: string) : Node.Url.URL = Node.Api.URL.Create (relative, moduleUrl)
 
+/// The `node-datachannel` module, loaded on first use from this bundle's location and kept.
+/// A load that throws is not kept: the next connection asks again, as it always has.
 let mutable private nodeDataChannel : Fable.NodeDataChannel.Exports = null
-/// The lazily-required `node-datachannel` module (cached after first use), viewed through
-/// the shape `Fable.NodeDataChannel` declares for it — the one place that typing is asserted.
 let private ndc () : Fable.NodeDataChannel.Exports =
     if isNull nodeDataChannel then
-        nodeDataChannel <- unbox<Fable.NodeDataChannel.Exports> (require "node-datachannel")
+        nodeDataChannel <- Fable.NodeDataChannel.load moduleUrl
     nodeDataChannel
 
 // --- What this process has open --------------------------------------------------------
@@ -192,16 +189,15 @@ let random () : float = JS.Math.random ()
 let setInterval (ms: int) (callback: unit -> unit) : int = JS.setInterval callback ms
 
 /// SHA-256 of the UTF-8 input, base64url-encoded — the PKCE S256 operation the provider
-/// applies to a `code_verifier` (RFC 7636 §4.2). `Fable.Node` types a digest taken in an
-/// encoding as `obj` (a `Buffer` when none is named); Node answers text for a named one.
+/// applies to a `code_verifier` (RFC 7636 §4.2).
 let sha256Base64Url (input: string) : string =
-    unbox<string> (Node.Api.crypto.createHash("sha256").update(input, "utf8").digest "base64url")
+    (Digests.hash "sha256").update(input, BufferEncoding.Utf8).digest BinaryToTextEncoding.Base64url
 
-/// HMAC-SHA256 of the UTF-8 input under a secret, digested in `encoding` (`hex`,
-/// `base64`, `base64url`). Beside the hash above because it is the same kind of thing; the
-/// hook relay verifies signed deliveries with it, over the bytes exactly as they arrived.
-let hmacSha256 (secret: string) (input: string) (encoding: string) : string =
-    unbox<string> (Node.Api.crypto.createHmac("sha256", secret).update(input, "utf8").digest encoding)
+/// HMAC-SHA256 of the UTF-8 input under a secret, digested in `encoding`. Beside the hash
+/// above because it is the same kind of thing; the hook relay verifies signed deliveries with
+/// it, over the bytes exactly as they arrived.
+let hmacSha256 (secret: string) (input: string) (encoding: BinaryToTextEncoding) : string =
+    (Digests.hmac "sha256" secret).update(input, BufferEncoding.Utf8).digest encoding
 
 /// A short content address: enough of the SHA-256 that a different build is a different
 /// string, which is what lets bytes be served under an immutable cache policy — and short
