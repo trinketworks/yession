@@ -383,7 +383,7 @@ let private optionsFor
     (registry: ToolRegistry)
     (controller: Fetch.Types.AbortController)
     (claudePath: string)
-    (agentEnv: obj)
+    (agentEnv: Environment)
     (claudeSpawner: Spawner)
     : Options =
     jsOptions<Options> (fun o ->
@@ -425,7 +425,7 @@ let private runQuery
     (prompt: string)
     (model: string option)
     (registry: ToolRegistry)
-    (agentEnv: obj)
+    (agentEnv: Environment)
     (claudePath: string)
     (claudeSpawner: Spawner)
     (registerAbort: (unit -> unit) -> unit)
@@ -684,7 +684,7 @@ let runWith (dataDir: string) (backend: SandboxBackend) (credential: (string * s
                     // one, so a person changing it changes the next turn and nothing else.
                     (context.Model |> Option.map ModelId.value)
                     registry
-                    (cli.Env |> Map.toList |> List.map (fun (name, value) -> name ==> value) |> createObj)
+                    (Environment.ofMap cli.Env)
                     (claudePath ())
                     cli.Spawner
                     signal.OnAbort

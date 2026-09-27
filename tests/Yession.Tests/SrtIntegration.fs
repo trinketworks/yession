@@ -12,7 +12,6 @@ module Yession.Tests.SrtIntegration
 // it starts in milliseconds, and a regression there is a regression in the reason.
 
 open Fable.Core
-open Fable.Core.JsInterop
 open Fable.Pyxpecto
 open Fable.NodeExtras
 open Yession.Domain
@@ -110,7 +109,7 @@ let private driveSpawner
     (command: string)
     (args: string array)
     (cwd: string)
-    (env: (string * string) array)
+    (env: Map<string, string>)
     (stdin: string)
     : Async<string * int> =
     Async.FromContinuations (fun (cont, _, _) ->
@@ -120,8 +119,8 @@ let private driveSpawner
             { new Sdk.SpawnOptions with
                 member _.command = command
                 member _.args = args
-                member _.cwd = cwd
-                member _.env = createObj (env |> Array.map (fun (name, value) -> name ==> value) |> List.ofArray)
+                member _.cwd = Some cwd
+                member _.env = Sdk.Environment.ofMap env
                 member _.signal = None }
 
         let spawned = spawner.Invoke options
@@ -439,7 +438,7 @@ let tests =
                 let policy = policyIn workspace []
                 let spawner =
                     Sandboxes.AgentSandbox.srtClaudeSpawner (Sandboxes.SrtSandbox.wrapperFor (srtTools ()) policy)
-                let! out, code = driveSpawner spawner "/bin/cat" [||] workspace (Map.toArray policy.Env) "round-trip"
+                let! out, code = driveSpawner spawner "/bin/cat" [||] workspace policy.Env "round-trip"
                 Expect.equal code 0 "the confined process exited cleanly"
                 Expect.equal out "round-trip" "stdin reached it and its stdout came back"
             })

@@ -107,12 +107,33 @@ let createSdkMcpServer (name: string) (version: string) (tools: ToolDefinition a
 
 // --- the process seam ---------------------------------------------------------------------
 
+/// A spawned CLI's environment COMPLETE, as the SDK carries one: a plain object of names to
+/// values. The same object travels both ways across the seam — `Options.env` in, the spawn
+/// request's `env` out — and it REPLACES the child's environment rather than merging with
+/// `process.env`, so there is no such thing as a partial one.
+///
+/// Opaque, and made only by `Environment.ofMap`: the spawners hand it on to the child exactly
+/// as it arrived, and nothing here reads it back.
+type Environment =
+    interface end
+
+[<RequireQualifiedAccess>]
+module Environment =
+
+    let ofMap (variables: Map<string, string>) : Environment =
+        unbox (createObj [ for name, value in Map.toList variables -> name, box value ])
+
 /// What the SDK asks a spawner for.
 type [<AllowNullLiteral>] SpawnOptions =
     abstract command : string
     abstract args : string array
-    abstract cwd : string
-    abstract env : obj
+
+    /// Where to start the child. The SDK leaves the field out, or spells it `""`, when it has
+    /// no directory to name — so `Some ""` is a request that named none, and reading it is
+    /// the spawner's business (`AgentSandbox.startDirectory`), not this binding's.
+    abstract cwd : string option
+
+    abstract env : Environment
 
     /// The SDK's OWN forwarded abort signal, not the caller's: it fires only after stdin EOF
     /// and the SDK's grace window, so a kill hung on it never pre-empts the CLI's graceful
@@ -151,24 +172,20 @@ type [<AllowNullLiteral>] SpawnedProcess =
     /// caller names none is `SIGTERM`.
     abstract kill : signal: string -> bool
 
-    /// A listener is `obj` for the reason `Fable.NodeExtras.EventRelay` gives: it is somebody
-    /// else's function, forwarded, and adapting it would change which function `off` can
-    /// remove. It is also the only way to have one member per verb rather than one per event,
-    /// since the two events the SDK waits on carry different arities — `exit` a code and a
-    /// signal, `error` an error. A listener written HERE goes through `SpawnedProcess.onExit`
-    /// and `onError`, which say what each event carries.
-    abstract on : ``event``: string * listener: obj -> unit
-    abstract once : ``event``: string * listener: obj -> unit
-    abstract off : ``event``: string * listener: obj -> unit
+    // The SDK also LISTENS — `on`, `once` and `off`, for `exit` and `error` — and those are
+    // deliberately not members here. F# never calls them by name: a listener written in F#
+    // goes through `SpawnedProcess.onExit` and `onError`, which say what each event carries,
+    // and the stand-in answers them in `SpawnedProcess.NodeProcess`.
 
 /// What `spawnClaudeCodeProcess` is: one request in, one process out, synchronously.
 type Spawner = Func<SpawnOptions, SpawnedProcess>
 
 module SpawnedProcess =
 
-    /// `SpawnedProcess` as JavaScript reads it, which differs in ONE member: `exitCode` is
-    /// Node's `number | null`. An object expression over `SpawnedProcess` itself cannot answer
-    /// that. Fable spells an `int option` member's `None` as `undefined`, which the SDK's
+    /// `SpawnedProcess` as JavaScript reads it, which differs in two ways. It carries the
+    /// listening members the SDK calls and F# only ever implements. And `exitCode` is Node's
+    /// `number | null`, which an object expression over `SpawnedProcess` itself cannot
+    /// answer. Fable spells an `int option` member's `None` as `undefined`, which the SDK's
     /// `=== null` reads as "exited"; and it passes whatever the member answers through `| 0`
     /// on the way out, so even a `null` smuggled in arrives as `0` — a still-running stand-in
     /// reading as one that exited cleanly. Both were tried; the cheap tier pins the result.
@@ -179,6 +196,12 @@ module SpawnedProcess =
         abstract killed : bool
         abstract exitCode : obj
         abstract kill : signal: string -> bool
+
+        // A listener is `obj` for the reason `Fable.NodeExtras.EventRelay` gives: it is the
+        // SDK's function, forwarded, and adapting it would change which function `off` can
+        // remove. It is also the only way to have one member per verb rather than one per
+        // event, since the two events the SDK waits on carry different arities — `exit` a
+        // code and a signal, `error` an error.
         abstract on : ``event``: string * listener: obj -> unit
         abstract once : ``event``: string * listener: obj -> unit
         abstract off : ``event``: string * listener: obj -> unit
@@ -219,14 +242,24 @@ module SpawnedProcess =
         // why F# needs a second one to build it.
         unbox<SpawnedProcess> spelled
 
+    [<Emit("$0.on('exit', $1)")>]
+    let private listenExit (proc: SpawnedProcess) (listener: Func<int option, string option, unit>) : unit =
+        jsNative
+
+    [<Emit("$0.on('error', $1)")>]
+    let private listenError (proc: SpawnedProcess) (listener: Func<Fable.NodeExtras.StreamError, unit>) : unit =
+        jsNative
+
     /// Listen for the process ending: the code it ended with, or the signal that ended it.
+    /// A `Func` because the event hands over two arguments at once, and a curried F#
+    /// function would answer the first with a function rather than take both.
     let onExit (proc: SpawnedProcess) (handler: int option -> string option -> unit) : unit =
-        proc.on ("exit", box (Func<int option, string option, unit> handler))
+        listenExit proc (Func<int option, string option, unit> handler)
 
     /// Listen for the process failing — a spawn that never happened, or a stand-in whose
     /// wrap refused.
     let onError (proc: SpawnedProcess) (handler: Fable.NodeExtras.StreamError -> unit) : unit =
-        proc.on ("error", box (Func<Fable.NodeExtras.StreamError, unit> handler))
+        listenError proc (Func<Fable.NodeExtras.StreamError, unit> handler)
 
 // --- the turn's options -------------------------------------------------------------------
 
@@ -281,9 +314,10 @@ type [<AllowNullLiteral>] Options =
     abstract abortController : obj with get, set
     /// A system Claude Code install, instead of the SDK's own vendored executable.
     abstract pathToClaudeCodeExecutable : string with get, set
-    /// The spawned CLI's environment, as a plain JS object (`createObj`). It REPLACES the
-    /// subprocess environment rather than merging with `process.env`.
-    abstract env : obj with get, set
+    /// The spawned CLI's environment. It REPLACES the subprocess environment rather than
+    /// merging with `process.env`, and it is what a spawner is handed back as the request's
+    /// `env`.
+    abstract env : Environment with get, set
     abstract spawnClaudeCodeProcess : Spawner with get, set
 
 // --- what a query yields ------------------------------------------------------------------
