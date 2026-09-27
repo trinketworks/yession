@@ -23,11 +23,15 @@ type [<AllowNullLiteral>] KeyPair =
     abstract publicKey : CryptoKey
     abstract privateKey : CryptoKey
 
+/// `generateKeyPair`'s options: the slice used.
+type GenerateKeyPairOptions =
+    /// Whether the PRIVATE key may be exported. `false` is the invariant the provider
+    /// relies on; the public key stays exportable regardless (it must be, for JWKS).
+    abstract extractable : bool with get, set
+
 /// Generate a keypair for the given JWS algorithm (e.g. "EdDSA" → Ed25519).
-/// Pass `{ extractable = false }` to make the PRIVATE key non-exportable; the public key
-/// stays exportable regardless (it must be, for JWKS).
 [<Import("generateKeyPair", "jose")>]
-let generateKeyPair (alg: string) (options: obj) : JS.Promise<KeyPair> = jsNative
+let generateKeyPair (alg: string) (options: GenerateKeyPairOptions) : JS.Promise<KeyPair> = jsNative
 
 /// A key's JWK as jose exports one: its parameters and nothing else. jose strips `ext`,
 /// `key_ops`, `alg` and `use` on the way out, so what a key set says about a key's use is
@@ -48,9 +52,27 @@ type [<AllowNullLiteral>] Jwk =
 [<Import("exportJWK", "jose")>]
 let exportJWK (key: CryptoKey) : JS.Promise<Jwk> = jsNative
 
+/// The claims a token is started with, before the builder's setters add the registered
+/// ones (`iss`, `sub`, `aud`, `iat`, `exp`). The slice used: the OIDC profile claims
+/// Yession's provider adds when its strategy attributed a real user — each absent
+/// otherwise, which is what leaving it unset means — and `yession_attribution`, the
+/// discriminator the relying party reads back (`Fable.OpenIdClient.IdTokenClaims`).
+type JwtPayload =
+    abstract yession_attribution : string with get, set
+    abstract name : string with get, set
+    abstract email : string with get, set
+    abstract picture : string with get, set
+
+/// The JWS protected header a token is signed under: the slice used.
+type JwsHeaderParameters =
+    /// The JWS algorithm — the one the signing key was generated for.
+    abstract alg : string with get, set
+    /// Which key in the published set verifies this token.
+    abstract kid : string with get, set
+
 /// The `new SignJWT(payload)` builder: chain claim setters, then sign with a private key.
 type [<AllowNullLiteral>] SignJwt =
-    abstract setProtectedHeader : obj -> SignJwt
+    abstract setProtectedHeader : JwsHeaderParameters -> SignJwt
     abstract setIssuer : string -> SignJwt
     abstract setSubject : string -> SignJwt
     abstract setAudience : string -> SignJwt
@@ -63,10 +85,10 @@ type [<AllowNullLiteral>] SignJwt =
 let private signJwtCtor : obj = jsNative
 
 [<Emit("new ($0)($1)")>]
-let private construct (ctor: obj) (arg: obj) : 'a = jsNative
+let private construct (ctor: obj) (payload: JwtPayload) : SignJwt = jsNative
 
-/// Start a signing builder over the given payload claims (plain JS object).
-let signJwt (payload: obj) : SignJwt = construct signJwtCtor payload
+/// Start a signing builder over the given payload claims.
+let signJwt (payload: JwtPayload) : SignJwt = construct signJwtCtor payload
 
 type [<AllowNullLiteral>] JwtVerifyResult =
     abstract payload : obj
