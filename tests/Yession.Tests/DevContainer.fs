@@ -29,7 +29,6 @@ module Yession.Tests.DevContainer
 // case fails saying the checkout is missing, which is the machine's fault, not the code's.
 
 open System
-open Fable.Core
 open Fable.Core.JsInterop
 open Fable.NodeExtras
 open Fable.Pyxpecto
@@ -49,11 +48,21 @@ let private runLine (line: string) : unit =
 
 module DK = Fable.Dockerode
 
-[<Emit("$0.getVolume($1).remove()")>]
-let private removeVolume (client: obj) (name: string) : JS.Promise<unit> = jsNative
+/// A named volume carrying the label the cleanup sweep finds a session's objects by.
+let private createLabelledVolume (client: DK.Docker) (name: string) : Async<unit> =
+    client.createVolume (
+        jsOptions<DK.VolumeCreateOptions> (fun o ->
+            o.Name <- name
+            o.Labels <- DK.Labels.ofList [ "yession-session", name ])
+    )
+    |> Interop.awaitPromise
+    |> Async.Ignore
 
-[<Emit("((client, name) => client.createVolume({ Name: name, Labels: { 'yession-session': name } }))($0, $1)")>]
-let private createLabelledVolume (client: obj) (name: string) : JS.Promise<obj> = jsNative
+/// The volume's own `remove`, unforced.
+let private removeVolume (client: DK.Docker) (name: string) : Async<unit> =
+    client.getVolume(name).remove (jsOptions<DK.RemoveOptions> ignore)
+    |> Interop.awaitPromise
+    |> Async.Ignore
 
 let private repoRef = RepoRef.create "trinketworks/yession" |> expect
 
@@ -225,7 +234,7 @@ let tests =
                 // cannot find — labelled, a run that dies before its own removal still
                 // leaves something the sweep sees.
                 let volume = sprintf "yession-test-%s" (SessionId.value (SessionId.mint ())) |> fun s -> s.ToLowerInvariant ()
-                do! createLabelledVolume (DK.create ()) volume |> Interop.awaitPromise |> Async.Ignore
+                do! createLabelledVolume (DK.create ()) volume
                 let mutable failure = None
                 try
                     do!
@@ -241,7 +250,7 @@ let tests =
                             | other -> failwithf "expected two counts, got %A" other
                         })
                 with e -> failure <- Some e
-                do! removeVolume (DK.create ()) volume |> Interop.awaitPromise
+                do! removeVolume (DK.create ()) volume
                 match failure with
                 | Some e -> return raise e
                 | None -> return ()
