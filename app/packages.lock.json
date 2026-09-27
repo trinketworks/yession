@@ -148,7 +148,8 @@
       "fable.claudeagentsdk": {
         "type": "Project",
         "dependencies": {
-          "Fable.Core": "[5.2.0, )"
+          "Fable.Core": "[5.2.0, )",
+          "Fable.NodeExtras": "[1.0.0, )"
         }
       },
       "fable.dockerode": {

@@ -384,7 +384,7 @@ let private optionsFor
     (controller: Fetch.Types.AbortController)
     (claudePath: string)
     (agentEnv: obj)
-    (claudeSpawner: obj)
+    (claudeSpawner: Spawner)
     : Options =
     jsOptions<Options> (fun o ->
         o.systemPrompt <- systemPrompt
@@ -416,7 +416,7 @@ let private optionsFor
         o.abortController <- box controller
         if claudePath <> "" then o.pathToClaudeCodeExecutable <- claudePath
         o.env <- agentEnv
-        o.spawnClaudeCodeProcess <- !!claudeSpawner)
+        o.spawnClaudeCodeProcess <- claudeSpawner)
 
 /// Drive one query to its end: forward what the turn says as it says it, and answer with the
 /// body or the reason, and what it spent either way.
@@ -427,7 +427,7 @@ let private runQuery
     (registry: ToolRegistry)
     (agentEnv: obj)
     (claudePath: string)
-    (claudeSpawner: obj)
+    (claudeSpawner: Spawner)
     (registerAbort: (unit -> unit) -> unit)
     (forward: AgentResponseChunk -> unit)
     : Async<Result<string, string> * AgentUsage> =

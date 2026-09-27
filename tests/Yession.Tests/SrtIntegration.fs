@@ -106,7 +106,7 @@ module Sdk = Fable.ClaudeAgentSdk
 /// arrives — so the answer settles once, and a child that never ran says its message where
 /// its output would have been, with -1 where an exit code would have been.
 let private driveSpawner
-    (spawner: obj)
+    (spawner: Sdk.Spawner)
     (command: string)
     (args: string array)
     (cwd: string)
@@ -114,17 +114,17 @@ let private driveSpawner
     (stdin: string)
     : Async<string * int> =
     Async.FromContinuations (fun (cont, _, _) ->
-        // The seam's own option shape, as the SDK hands it over. `signal` is null rather than
-        // missing: a spawner reads it as "nothing will abort this" either way, and Fable will
-        // not cast a record that is short of a field the interface declares.
-        let options : Sdk.SpawnOptions =
-            !!{| command = command
-                 args = args
-                 cwd = cwd
-                 env = createObj (env |> Array.map (fun (name, value) -> name ==> value) |> List.ofArray)
-                 signal = (null: obj) |}
+        // The seam's own option shape, as the SDK hands it over — but with no signal: a
+        // spawner reads that as "nothing will abort this".
+        let options =
+            { new Sdk.SpawnOptions with
+                member _.command = command
+                member _.args = args
+                member _.cwd = cwd
+                member _.env = createObj (env |> Array.map (fun (name, value) -> name ==> value) |> List.ofArray)
+                member _.signal = None }
 
-        let spawned = (unbox<System.Func<Sdk.SpawnOptions, Sdk.SpawnedProcess>> spawner).Invoke options
+        let spawned = spawner.Invoke options
 
         let out = System.Text.StringBuilder ()
         let mutable settled = false
@@ -136,21 +136,14 @@ let private driveSpawner
 
         // `setEncoding` rather than converting each chunk: it puts a decoder in front of the
         // stream, so a multi-byte character split across two reads still arrives whole.
-        let stdout : Node.Stream.Readable<string> = !!spawned.stdout
-        stdout.setEncoding Node.Buffer.BufferEncoding.Utf8
-        stdout.on ("data", fun (chunk: string) -> out.Append chunk |> ignore) |> ignore
+        spawned.stdout.setEncoding Node.Buffer.BufferEncoding.Utf8
+        spawned.stdout.on ("data", fun (chunk: string) -> out.Append chunk |> ignore) |> ignore
 
-        spawned.on (
-            "exit",
-            box (
-                System.Func<obj, obj, unit> (fun code _ ->
-                    settle (out.ToString (), (if isNullOrUndefined code then -1 else unbox<int> code)))))
+        Sdk.SpawnedProcess.onExit spawned (fun code _ -> settle (out.ToString (), defaultArg code -1))
+        Sdk.SpawnedProcess.onError spawned (fun error -> settle (Fable.NodeExtras.StreamError.describe error, -1))
 
-        spawned.on ("error", box (System.Func<obj, unit> (fun error -> settle (Fable.NodeExtras.StreamError.describe !!error, -1))))
-
-        let stdin' : Node.Stream.Writable<string> = !!spawned.stdin
-        stdin'.write stdin |> ignore
-        stdin'.``end`` ())
+        spawned.stdin.write stdin |> ignore
+        spawned.stdin.``end`` ())
 
 // --- The suite ------------------------------------------------------------------------------
 

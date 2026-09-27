@@ -2490,8 +2490,8 @@ module AgentSandbox =
     /// against. JavaScript admits a `throw` of any value at all, and an `error` event
     /// carrying a string is how a handler reading `.message` gets `undefined` instead of a
     /// reason.
-    let private asError (thrown: exn) : obj =
-        if isError (box thrown) then box thrown else box (errorWith (describe (box thrown)))
+    let private asError (thrown: exn) : exn =
+        if isError (box thrown) then thrown else errorWith (describe (box thrown))
 
     // The SDK's `spawnClaudeCodeProcess` seam. The env arriving in `options.env` IS the
     // policy env (it flows from the query's `env` option), so the spawner passes it
@@ -2501,19 +2501,18 @@ module AgentSandbox =
     // the force-kill never pre-empts the CLI's graceful shutdown.
 
     /// The host-backend agent spawner, handed to the SDK as `spawnClaudeCodeProcess`.
-    let hostClaudeSpawner () : obj =
-        box (
-            Func<Sdk.SpawnOptions, Sdk.SpawnedProcess> (fun options ->
-                let child =
-                    spawnWithEnv options.command (List.ofArray options.args) options.env (startDirectory options) Pipe true
+    let hostClaudeSpawner () : Sdk.Spawner =
+        Sdk.Spawner (fun options ->
+            let child =
+                spawnWithEnv options.command (List.ofArray options.args) options.env (startDirectory options) Pipe true
 
-                let abort () = killTree child "SIGKILL"
-                let signal : AbortSignal = !!options.signal
+            let abort () = killTree child "SIGKILL"
 
-                if not (isNullOrUndefined signal) then
-                    if signal.aborted then abort () else signal.onAbort abort
+            match options.signal with
+            | Some signal -> if signal.aborted then abort () else signal.onAbort abort
+            | None -> ()
 
-                !!child))
+            Sdk.SpawnedProcess.ofChild child)
 
     // The srt spawner has one problem the host spawner does not: the SDK's seam is
     // SYNCHRONOUS (`options => process`) and srt's wrap is asynchronous (it resolves the
@@ -2535,17 +2534,17 @@ module AgentSandbox =
         let mutable kill : (string -> unit) option = None
         let mutable killed = false
         let mutable pending : string option = None
-        let mutable exited : obj = null
+        let mutable exited : int option = None
 
         /// Whether `Kill` has been CALLED. Node's own meaning of `child.killed`: true from
         /// the moment the SDK asks, not from the moment anything dies.
         member _.Killed = killed
 
-        /// The code the child ended with, `null` until it has — Node's spelling, which is
-        /// what the SDK reads.
+        /// The code the child ended with, `None` until it has — and for a child a signal
+        /// ended, which Node reports without a code.
         member _.ExitCode = exited
 
-        member _.Exited (code: obj) = exited <- code
+        member _.Exited (code: int option) = exited <- code
 
         /// The child has arrived. Joining and flushing are ONE verb because a caller that
         /// could do the first without the second is the caller that loses a kill.
@@ -2569,70 +2568,69 @@ module AgentSandbox =
 
     /// The srt-backend agent spawner: the same seam, with the CLI coming up inside the
     /// sandbox `wrap` describes.
-    let srtClaudeSpawner (wrap: string -> string list -> string option -> Async<string list>) : obj =
-        box (
-            Func<Sdk.SpawnOptions, Sdk.SpawnedProcess> (fun options ->
-                let relay = createRelay ()
-                let stdin = Node.Api.stream.PassThrough.Create<string> ()
-                let stdout = Node.Api.stream.PassThrough.Create<string> ()
-                let stderr = Node.Api.stream.PassThrough.Create<string> ()
-                let standin = Standin ()
+    let srtClaudeSpawner (wrap: string -> string list -> string option -> Async<string list>) : Sdk.Spawner =
+        Sdk.Spawner (fun options ->
+            let relay = createRelay ()
+            let stdin = Node.Api.stream.PassThrough.Create<string> ()
+            let stdout = Node.Api.stream.PassThrough.Create<string> ()
+            let stderr = Node.Api.stream.PassThrough.Create<string> ()
+            let standin = Standin ()
 
-                let join (executable: string) (arguments: string list) =
-                    let child =
-                        spawnWithEnv executable arguments options.env (startDirectory options) Pipe true
+            let join (executable: string) (arguments: string list) =
+                let child =
+                    spawnWithEnv executable arguments options.env (startDirectory options) Pipe true
 
-                    stdin.pipe child.stdin |> ignore
-                    child.stdout.pipe stdout |> ignore
-                    child.stderr.pipe stderr |> ignore
+                stdin.pipe child.stdin |> ignore
+                child.stdout.pipe stdout |> ignore
+                child.stderr.pipe stderr |> ignore
 
-                    child.on (
-                        "exit",
-                        (fun (code: obj) (signal: obj) ->
-                            standin.Exited code
-                            relay.emit ("exit", [| code; signal |])))
-                    |> ignore
+                // Relayed as the values Node handed over, not as F# rebuilt them: the SDK's
+                // own listener compares the code against `null`.
+                child.on (
+                    "exit",
+                    (fun (code: int option) (signal: string option) ->
+                        standin.Exited code
+                        relay.emit ("exit", [| box code; box signal |])))
+                |> ignore
 
-                    child.on ("error", (fun (error: obj) -> relay.emit ("error", [| error |]))) |> ignore
-                    standin.Joined (killTree child)
+                ChildProcessStreams.onError child (fun error -> relay.emit ("error", [| box error |]))
+                standin.Joined (killTree child)
 
-                async {
-                    try
-                        match! wrap options.command (List.ofArray options.args) (startDirectory options) with
-                        | executable :: arguments -> join executable arguments
-                        // Unreachable: `wrapperFor` refuses an empty argv before it returns
-                        // one. Said rather than assumed, because the alternative is a
-                        // stand-in nothing ever joins and a turn that hangs instead of
-                        // reporting.
-                        | [] -> failwith "srt returned an empty argv"
-                    with error ->
-                        relay.emit ("error", [| asError error |])
-                }
-                |> Async.StartImmediate
+            async {
+                try
+                    match! wrap options.command (List.ofArray options.args) (startDirectory options) with
+                    | executable :: arguments -> join executable arguments
+                    // Unreachable: `wrapperFor` refuses an empty argv before it returns
+                    // one. Said rather than assumed, because the alternative is a
+                    // stand-in nothing ever joins and a turn that hangs instead of
+                    // reporting.
+                    | [] -> failwith "srt returned an empty argv"
+                with error ->
+                    relay.emit ("error", [| box (asError error) |])
+            }
+            |> Async.StartImmediate
 
-                let proxy =
-                    { new Sdk.SpawnedProcess with
-                        member _.stdin = box stdin
-                        member _.stdout = box stdout
-                        member _.stderr = box stderr
-                        member _.killed = standin.Killed
-                        member _.exitCode = standin.ExitCode
-                        member _.kill signal = standin.Kill signal
-                        member _.on (``event``, listener) = relay.on (``event``, listener)
-                        member _.once (``event``, listener) = relay.once (``event``, listener)
-                        member _.off (``event``, listener) = relay.off (``event``, listener) }
+            let proxy =
+                Sdk.SpawnedProcess.standingIn
+                    stdin
+                    stdout
+                    stderr
+                    (fun () -> standin.Killed)
+                    (fun () -> standin.ExitCode)
+                    standin.Kill
+                    relay
 
-                let signal : AbortSignal = !!options.signal
+            match options.signal with
+            | Some signal ->
+                let abort () = proxy.kill "SIGKILL" |> ignore
+                if signal.aborted then abort () else signal.onAbort abort
+            | None -> ()
 
-                if not (isNullOrUndefined signal) then
-                    let abort () = proxy.kill "SIGKILL" |> ignore
-                    if signal.aborted then abort () else signal.onAbort abort
-
-                proxy))
+            proxy)
 
     /// The spawner for the configured agent backend. Docker is not one: `parseAgent`
     /// refused it at boot.
-    let claudeSpawnerFor (backend: SandboxBackend) (ambient: Map<string, string>) (home: string) (env: Map<string, string>) : obj =
+    let claudeSpawnerFor (backend: SandboxBackend) (ambient: Map<string, string>) (home: string) (env: Map<string, string>) : Sdk.Spawner =
         match backend with
         | SrtBackend ->
             // The tools parse fail-closed, and SessionMain has already had this value
@@ -2664,7 +2662,7 @@ module AgentSandbox =
         (backend: SandboxBackend)
         (dataDir: string)
         (credential: (string * string) option)
-        : {| Env : Map<string, string>; Spawner : obj |} =
+        : {| Env : Map<string, string>; Spawner : Sdk.Spawner |} =
         let home = SessionLayout.agentHome dataDir
         Fs.ensureDir home
         let ambient = ambientEnv ()

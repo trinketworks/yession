@@ -2355,12 +2355,27 @@ let private agentSpawnerTests =
             Expect.isTrue standin.Killed "the kill was asked for, whether or not anything died"
 
         testCase "a stand-in has no exit code until the child reports one" <| fun () ->
-            // `null`, not `undefined`: the SDK tests the field against `null`, so the answer
-            // for "still running" has to be the one Node gives.
             let standin = Sandboxes.AgentSandbox.Standin ()
-            Expect.isTrue (isNull standin.ExitCode) "nothing has exited"
-            standin.Exited (box 0)
-            Expect.equal (unbox<int> standin.ExitCode) 0 "the code the child ended with"
+            Expect.isNone standin.ExitCode "nothing has exited"
+            standin.Exited (Some 0)
+            Expect.equal standin.ExitCode (Some 0) "the code the child ended with"
+
+        testCase "a process standing in for a child answers a code it does not have as null" <| fun () ->
+            // `null`, not `undefined`: the SDK tests the field with `=== null`, so the answer
+            // for "still running" has to be the one Node gives — and `None` alone is
+            // `undefined`, which the SDK reads as a process that has exited and whose stdin it
+            // then refuses to write. `typeof` is what tells the two apart.
+            let proxy =
+                Fable.ClaudeAgentSdk.SpawnedProcess.standingIn
+                    (Node.Api.stream.PassThrough.Create<string> ())
+                    (Node.Api.stream.PassThrough.Create<string> ())
+                    (Node.Api.stream.PassThrough.Create<string> ())
+                    (fun () -> false)
+                    (fun () -> None)
+                    (fun _ -> true)
+                    (createRelay ())
+
+            Expect.equal (Fable.Core.JsInterop.jsTypeof (box proxy.exitCode)) "object" "Node's null, not undefined"
 
         testCase "a kill asked for before the child arrives reaches it when it does" <| fun () ->
             // srt's wrap is asynchronous and the SDK's seam is not, so there is a window in
@@ -2398,10 +2413,22 @@ let private nodePath () : string = Node.Api.``process``.execPath
 
 /// The FIRING end of an abort, which the product never holds: the signals it sees come from
 /// the agent SDK. Here because a spawner that listens to one needs something to listen to.
-/// Call a spawner the way the SDK does: one request in, one process out.
-let private askSpawner (spawner: obj) (fields: (string * obj) list) : Fable.ClaudeAgentSdk.SpawnedProcess =
-    (unbox<Func<Fable.ClaudeAgentSdk.SpawnOptions, Fable.ClaudeAgentSdk.SpawnedProcess>> spawner)
-        .Invoke (unbox<Fable.ClaudeAgentSdk.SpawnOptions> (Fable.Core.JsInterop.createObj fields))
+/// Call a spawner the way the SDK does: one request in, one process out. No directory, so
+/// the child starts where this process is.
+let private askSpawner
+    (spawner: Fable.ClaudeAgentSdk.Spawner)
+    (command: string)
+    (arguments: string array)
+    (env: (string * obj) list)
+    (signal: AbortSignal option)
+    : Fable.ClaudeAgentSdk.SpawnedProcess =
+    spawner.Invoke
+        { new Fable.ClaudeAgentSdk.SpawnOptions with
+            member _.command = command
+            member _.args = arguments
+            member _.cwd = null
+            member _.env = Fable.Core.JsInterop.createObj env
+            member _.signal = signal }
 
 /// A wrap that confines nothing: the argv it was handed, back. The srt spawner takes its wrap
 /// as a PARAMETER, so a case about the SEAM needs a wrap rather than a sandbox — which is why
@@ -2416,20 +2443,15 @@ let private passthroughWrap
 /// What a spawner answers for `killed` once the SDK's forwarded abort has fired — waited out
 /// to the child's exit, so the answer is read after the teardown it is about and no sleeper
 /// outlives the case.
-let private killedAfterAbort (spawner: obj) : Async<bool> =
+let private killedAfterAbort (spawner: Fable.ClaudeAgentSdk.Spawner) : Async<bool> =
     async {
         let controller = abortController ()
 
         let spawned =
-            askSpawner
-                spawner
-                [ "command", box (nodePath ())
-                  "args", box [| "-e"; "setTimeout(() => {}, 60000)" |]
-                  "env", Fable.Core.JsInterop.createObj []
-                  "signal", controller.signal ]
+            askSpawner spawner (nodePath ()) [| "-e"; "setTimeout(() => {}, 60000)" |] [] (Some controller.signal)
 
         let exited = ref false
-        spawned.on ("exit", box (Func<obj, obj, unit> (fun _ _ -> exited.Value <- true)))
+        Fable.ClaudeAgentSdk.SpawnedProcess.onExit spawned (fun _ _ -> exited.Value <- true)
 
         controller.abort ()
         do! Support.waitUntilWithin 5000 "the child exits" (fun () -> exited.Value)
@@ -2443,12 +2465,13 @@ let private agentSpawnerPortsTests =
             let spawned =
                 askSpawner
                     (Sandboxes.AgentSandbox.hostClaudeSpawner ())
-                    [ "command", box (nodePath ())
-                      "args", box [| "-e"; "process.exit(process.env.YESSION_MARK === 'set' ? 4 : 5)" |]
-                      "env", Fable.Core.JsInterop.createObj [ "YESSION_MARK", box "set" ] ]
+                    (nodePath ())
+                    [| "-e"; "process.exit(process.env.YESSION_MARK === 'set' ? 4 : 5)" |]
+                    [ "YESSION_MARK", box "set" ]
+                    None
 
-            do! Support.waitUntilWithin 5000 "the child exits" (fun () -> not (isNull spawned.exitCode))
-            Expect.equal (unbox<int> spawned.exitCode) 4 "the CLI ran with exactly the env the request carried"
+            do! Support.waitUntilWithin 5000 "the child exits" (fun () -> spawned.exitCode.IsSome)
+            Expect.equal spawned.exitCode (Some 4) "the CLI ran with exactly the env the request carried"
         }
 
         // The SDK's forwarded abort is how a turn is stopped, and what it has to stop is the
@@ -2460,10 +2483,10 @@ let private agentSpawnerPortsTests =
             let spawned =
                 askSpawner
                     (Sandboxes.AgentSandbox.hostClaudeSpawner ())
-                    [ "command", box (nodePath ())
-                      "args", box [| "-e"; "setTimeout(() => {}, 60000)" |]
-                      "env", Fable.Core.JsInterop.createObj []
-                      "signal", controller.signal ]
+                    (nodePath ())
+                    [| "-e"; "setTimeout(() => {}, 60000)" |]
+                    []
+                    (Some controller.signal)
 
             let child = unbox<Node.ChildProcess.ChildProcess> spawned
             controller.abort ()
@@ -2486,10 +2509,10 @@ let private agentSpawnerPortsTests =
             let spawned =
                 askSpawner
                     (Sandboxes.AgentSandbox.hostClaudeSpawner ())
-                    [ "command", box (nodePath ())
-                      "args", box [| "-e"; "setTimeout(() => {}, 60000)" |]
-                      "env", Fable.Core.JsInterop.createObj []
-                      "signal", controller.signal ]
+                    (nodePath ())
+                    [| "-e"; "setTimeout(() => {}, 60000)" |]
+                    []
+                    (Some controller.signal)
 
             let child = unbox<Node.ChildProcess.ChildProcess> spawned
 
