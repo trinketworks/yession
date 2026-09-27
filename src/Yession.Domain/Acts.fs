@@ -64,6 +64,9 @@ type Act =
     /// The session came back after a stretch with nothing running. With when it came back,
     /// which is half of the gap it states and lives on the envelope rather than the record.
     | SessionResumed of SessionResumed * at: System.DateTimeOffset
+    /// The session began: the first process over an empty log. With when, for the same
+    /// reason its pair carries it — the envelope holds the moment, the record does not.
+    | SessionStarted of SessionStarted * at: System.DateTimeOffset
 
 module Act =
 
@@ -95,6 +98,7 @@ module Act =
         | Act.PrUnwatched p -> PrUnwatched.phrase p
         | Act.PrTransitioned p -> PrTransitioned.phrase p
         | Act.SessionResumed (r, at) -> SessionResumed.phrase at r
+        | Act.SessionStarted _ -> SessionStarted.phrase
 
     /// Who the act was done for, when that is not its author: " for Ada" after the deed —
     /// the person behind the agent or a repo's file, or whose credential a push spent. Empty
@@ -129,7 +133,8 @@ module Act =
         | Act.PrWatched _
         | Act.PrUnwatched _
         | Act.PrTransitioned _
-        | Act.SessionResumed _ -> []
+        | Act.SessionResumed _
+        | Act.SessionStarted _ -> []
 
     /// The person `forWhom` names, when it names one — for a reader that has to know WHO,
     /// not how to say it.
@@ -182,7 +187,8 @@ module Act =
         | Act.McpServerUnavailable _
         | Act.PrUnwatched _
         | Act.PrTransitioned _
-        | Act.SessionResumed _ -> []
+        | Act.SessionResumed _
+        | Act.SessionStarted _ -> []
 
     /// The whole account as ONE sentence: headline, then the particulars after an em-dash,
     /// semicolon-joined. This is the composition every reader that is not a screen gets
@@ -234,6 +240,7 @@ module Act =
         | Act.PrUnwatched _ -> "unwatched", "pull request", "pull requests"
         | Act.PrTransitioned _ -> "noted", "pull request", "pull requests"
         | Act.SessionResumed _ -> "resumed", "session", "sessions"
+        | Act.SessionStarted _ -> "started", "session", "sessions"
 
     /// Whether this act opens a chapter BY NATURE — one nobody had to ask for.
     ///
@@ -270,4 +277,5 @@ module Act =
         | Act.McpServerAvailable _
         | Act.McpServerUnavailable _
         | Act.PrUnwatched _
-        | Act.SessionResumed _ -> false
+        | Act.SessionResumed _
+        | Act.SessionStarted _ -> false

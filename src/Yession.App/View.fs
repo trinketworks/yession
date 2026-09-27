@@ -2681,6 +2681,17 @@ module View =
                           @click={Ev(fun _ -> dispatch (ToggleBreakTimeMsg item.MessageId))}>{said}</button>
                   <span class="{Style.sessionBreakLine}" aria-hidden="true"></span>
                 </div>"""
+        // Where the session began: the same rule, saying so. Not a control — there is no
+        // second reading to swap to — so the words are plain text, with the moment in the
+        // tooltip the way the break keeps it.
+        let sessionStart (at: System.DateTimeOffset) (item: ConversationItem) =
+            html $"""
+                <div class="{Style.sessionBreak}" data-session-start
+                     data-message-id="{MessageId.value item.MessageId}">
+                  <span class="{Style.sessionBreakLine}" aria-hidden="true"></span>
+                  <span class="{Style.sessionStartLabel}" title="{Moment.stamp at}">{Dom.Text.sessionStarted}</span>
+                  <span class="{Style.sessionBreakLine}" aria-hidden="true"></span>
+                </div>"""
         let chapterRule (item: ConversationItem) =
             let held = Chapters.written model.Synced.Chapters item
             let named = ClientModel.chapterName model item
@@ -2725,6 +2736,7 @@ module View =
                     // the session being away is a gap in the page, not a line in it.
                     | ItemContent.Act (Act.SessionResumed (resumed, at)) ->
                         Some (None, sessionBreak resumed at item)
+                    | ItemContent.Act (Act.SessionStarted (_, at)) -> Some (None, sessionStart at item)
                     | ItemContent.Act act -> Some (Some item.Author, actNoteItem act item)
                     | ItemContent.Message _ -> Some (Some item.Author, messageItem item)
                     | ItemContent.Stopped stop -> Some (Some item.Author, stoppedItem stop item)

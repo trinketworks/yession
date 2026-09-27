@@ -887,11 +887,11 @@ module ConversationProjection =
         // its own events, against the newly resolved set, so a boot, a reconnect and a
         // restart all emit nothing and only a genuine change by the operator is loud.
         | SessionEvent.McpServerAvailable m -> proj |> noted m.MessageId ActorRef.System (Act.McpServerAvailable m) envelope
-        // That the session began is lifecycle and not a line: it is true of every session, it
-        // is always the first thing in the log, and "this session started" at the top of every
-        // timeline tells a reader what the top of a timeline already tells them. A turn is told
-        // (`SessionHistory`), which is where the fact is worth something.
-        | SessionEvent.SessionStarted _ -> proj
+        // That the session began is an item, for its pair's reason and one more: what the
+        // first boot brings up (a repo's sandboxes) names it as its cause, and a cause is an
+        // item a reader can be pointed at. It draws as a rule, not a line anybody said.
+        | SessionEvent.SessionStarted s ->
+            proj |> noted s.MessageId ActorRef.SessionProcess (Act.SessionStarted (s, envelope.Timestamp)) envelope
         // Coming BACK is a different matter: it says a stretch passed in which nothing ran,
         // which nothing else on the screen says.
         | SessionEvent.SessionResumed r ->

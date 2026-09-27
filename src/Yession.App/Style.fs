@@ -1906,6 +1906,10 @@ module Style =
               "bg-transparent border-0 px-1.5 py-0 cursor-pointer tabular-nums"
               "hover:text-ink focus-visible:text-ink transition-colors"; focusRing ]
 
+    /// The words on the rule where the session began: the break label's voice, without the
+    /// control's affordances, because there is nothing to press.
+    let sessionStartLabel = "font-ui font-light text-small text-ink-faint shrink-0 px-1.5"
+
     /// The name, worn by a text input for the reason the session title is: it is editable
     /// text, and a control that only becomes editable once you have pressed it is a control
     /// nobody presses. The same arrangement as `titleInput` — transparent at rest, the
