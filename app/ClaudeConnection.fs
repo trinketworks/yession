@@ -9,7 +9,6 @@ module Yession.Host.ClaudeConnection
 // /claude* routes the client panel drives.
 
 open Fable.Core
-open Fable.Core.JsInterop
 open Fable.NodeExtras
 open Yession.Domain
 open Yession.Domain.Sandboxes
@@ -171,11 +170,6 @@ let headersFor (credential: string * string) : (string * string) [] =
            // The beta Claude Code's own client sends: an OAuth grant is not an API key, and
            // the provider wants telling which it is holding.
            yield "anthropic-beta", "oauth-2025-04-20" |]
-
-/// Those headers as a request sends them. The summarizer posts a body, so it builds the
-/// object; the catalogue's GET goes through `Http.headers` and needs none.
-let private headerObject (headers: (string * string) []) : obj =
-    headers |> Array.map (fun (name, value) -> name, box value) |> createObj
 
 /// How long one page of the catalogue may take.
 ///

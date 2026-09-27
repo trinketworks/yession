@@ -392,7 +392,9 @@ let private keyTests =
     testList "Signing key non-extractability" [
         testCaseAsync "a jose keypair generated extractable=false refuses to export its private half" <|
             async {
-                let! keys = Fable.Jose.generateKeyPair "EdDSA" (createObj [ "extractable" ==> false ]) |> Interop.awaitPromise
+                let! keys =
+                    Fable.Jose.generateKeyPair "EdDSA" (jsOptions<Fable.Jose.GenerateKeyPairOptions> (fun o -> o.extractable <- false))
+                    |> Interop.awaitPromise
                 Expect.isFalse keys.privateKey.extractable "the private key is non-extractable"
                 let! publicRefused = refuses (fun () -> Fable.Jose.exportJWK keys.publicKey)
                 Expect.isFalse publicRefused "the public half exports (JWKS depends on it)"
