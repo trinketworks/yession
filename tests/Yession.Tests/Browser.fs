@@ -4304,6 +4304,74 @@ let mountedTests =
                 }))
     ]
 
+// --- Spawning a piece of a deployment ----------------------------------------------------
+
+/// A child process of the deployment, kept with what it has said so the failure report can
+/// say which of three processes went wrong, in its own words.
+type private Deployed =
+    { Label: string
+      Process: Process
+      /// The origin its readiness line carried, where it carried one. A piece told `--port 0`
+      /// states its address there and nowhere else, so this is the only thing that knows it.
+      Origin: string option
+      Said: Text.StringBuilder }
+    /// Where it came up, for a caller that has to address it. A piece whose readiness line
+    /// named no address cannot be addressed, and says so rather than answering with a guess.
+    member this.At (path: string) : string =
+        match this.Origin with
+        | Some origin -> origin + path
+        | None -> failwithf "%s never said where it came up" this.Label
+    /// The port it came up on, for the rare assertion that is about the port itself.
+    member this.Port : int = Uri(this.At "/").Port
+    member this.Stop () =
+        try if not this.Process.HasExited then this.Process.Kill true with _ -> ()
+
+/// Spawn one piece of the deployment and wait for the line that says it is up. A piece that
+/// dies on its arguments fails here, naming itself, rather than as a wait downstream that
+/// never settles.
+///
+/// The URL in that line, where there is one, is the address it really came up on — which is
+/// what lets a piece be told `--port 0` and asked afterwards rather than assigned a number.
+let private deploy
+    (label: string)
+    (command: string)
+    (args: string list)
+    (env: (string * string) list)
+    (ready: string -> bool)
+    : Deployed =
+    let psi = ProcessStartInfo command
+    args |> List.iter psi.ArgumentList.Add
+    env |> List.iter (fun (name, value) -> psi.EnvironmentVariables.[name] <- value)
+    psi.UseShellExecute <- false
+    psi.RedirectStandardOutput <- true
+    psi.RedirectStandardError <- true
+    let p = new Process (StartInfo = psi)
+    let said = Text.StringBuilder ()
+    let up = TaskCompletionSource<bool> ()
+    // A `ref` rather than a `let mutable`, because `heard` is a closure and F# will not let one
+    // capture a mutable local.
+    let origin = ref None
+    let heard (line: string) =
+        if line <> null then
+            lock said (fun () -> said.AppendLine line |> ignore)
+            if ready line then
+                origin.Value <- urlIn line |> Option.map (fun url -> url.TrimEnd '/')
+                up.TrySetResult true |> ignore
+    p.OutputDataReceived.Add (fun e -> heard e.Data)
+    p.ErrorDataReceived.Add (fun e -> heard e.Data)
+    p.EnableRaisingEvents <- true
+    p.Exited.Add (fun _ -> up.TrySetResult false |> ignore)
+    p.Start () |> ignore
+    p.BeginOutputReadLine ()
+    p.BeginErrorReadLine ()
+    if not (up.Task.Wait 60000) || not up.Task.Result then
+        try if not p.HasExited then p.Kill true with _ -> ()
+        failwithf "%s never came up; it said:\n%s" label (string said)
+    // Read AFTER the wait: the readiness line is where the address is stated, so there is
+    // nothing to read until it has arrived.
+    { Label = label; Process = p; Origin = origin.Value; Said = said }
+
+
 // --- Creating a session behind a front door (browser) -------------------------------------
 //
 // The deployment nothing else here has: ONE public origin, with the Manager at its root and
@@ -4445,30 +4513,21 @@ let mutable private frontedHost : Process = null
 /// where to forward that before the Manager has said anything at all. (It was tried the other
 /// way, and the session exited on a 502 from a door forwarding to port 0.)
 let private startFrontedHost (publicOrigin: string) (managerPort: int) : unit =
-    let psi = ProcessStartInfo "node"
-    psi.ArgumentList.Add "app/out/Main.js"
-    psi.ArgumentList.Add "--auth"
-    psi.ArgumentList.Add "localhost"
-    psi.ArgumentList.Add "--port"
-    psi.ArgumentList.Add (string managerPort)
-    psi.ArgumentList.Add "--default-session"
-    psi.ArgumentList.Add FRONT_SESSION
-    psi.ArgumentList.Add "--data-dir"
-    psi.ArgumentList.Add frontDataDir
-    psi.UseShellExecute <- false
-    psi.RedirectStandardOutput <- true
-    psi.EnvironmentVariables.["YESSION_MANAGER_URL"] <- publicOrigin
-    psi.EnvironmentVariables.["YESSION_SESSION_URL"] <- publicOrigin + "/s/{id}"
-    let p = new Process (StartInfo = psi)
-    let ready = TaskCompletionSource<bool> ()
     // The management UI's line, not the session's: this case drives the Manager, and that line
     // is the last thing a completed boot prints.
-    p.OutputDataReceived.Add (fun e ->
-        if e.Data <> null && e.Data.Contains "management UI at" then ready.TrySetResult true |> ignore)
-    p.Start () |> ignore
-    p.BeginOutputReadLine ()
-    frontedHost <- p
-    if not (ready.Task.Wait 60000) then failwith "fronted host never reported readiness"
+    let host =
+        deploy
+            "fronted host"
+            "node"
+            [ "app/out/Main.js"
+              "--auth"; "localhost"
+              "--port"; string managerPort
+              "--default-session"; FRONT_SESSION
+              "--data-dir"; frontDataDir ]
+            [ "YESSION_MANAGER_URL", publicOrigin
+              "YESSION_SESSION_URL", publicOrigin + "/s/{id}" ]
+            (fun line -> line.Contains "management UI at")
+    frontedHost <- host.Process
 
 let frontDoorTests =
     testList "Creating a session behind a front door (browser)" [
@@ -4569,70 +4628,6 @@ let private frontedMapDir = frontedDataDir + "/proxy"
 let private FRONTED_LOGIN = "alice@example.com"
 let private FRONTED_NAME = "Alice Example"
 
-/// A child process of the deployment, kept with what it has said so the failure report can
-/// say which of three processes went wrong, in its own words.
-type private Deployed =
-    { Label: string
-      Process: Process
-      /// The origin its readiness line carried, where it carried one. A piece told `--port 0`
-      /// states its address there and nowhere else, so this is the only thing that knows it.
-      Origin: string option
-      Said: Text.StringBuilder }
-    /// Where it came up, for a caller that has to address it. A piece whose readiness line
-    /// named no address cannot be addressed, and says so rather than answering with a guess.
-    member this.At (path: string) : string =
-        match this.Origin with
-        | Some origin -> origin + path
-        | None -> failwithf "%s never said where it came up" this.Label
-    /// The port it came up on, for the rare assertion that is about the port itself.
-    member this.Port : int = Uri(this.At "/").Port
-    member this.Stop () =
-        try if not this.Process.HasExited then this.Process.Kill true with _ -> ()
-
-/// Spawn one piece of the deployment and wait for the line that says it is up. A piece that
-/// dies on its arguments fails here, naming itself, rather than as a wait downstream that
-/// never settles.
-///
-/// The URL in that line, where there is one, is the address it really came up on — which is
-/// what lets a piece be told `--port 0` and asked afterwards rather than assigned a number.
-let private deploy
-    (label: string)
-    (command: string)
-    (args: string list)
-    (env: (string * string) list)
-    (ready: string -> bool)
-    : Deployed =
-    let psi = ProcessStartInfo command
-    args |> List.iter psi.ArgumentList.Add
-    env |> List.iter (fun (name, value) -> psi.EnvironmentVariables.[name] <- value)
-    psi.UseShellExecute <- false
-    psi.RedirectStandardOutput <- true
-    psi.RedirectStandardError <- true
-    let p = new Process (StartInfo = psi)
-    let said = Text.StringBuilder ()
-    let up = TaskCompletionSource<bool> ()
-    // A `ref` rather than a `let mutable`, because `heard` is a closure and F# will not let one
-    // capture a mutable local.
-    let origin = ref None
-    let heard (line: string) =
-        if line <> null then
-            lock said (fun () -> said.AppendLine line |> ignore)
-            if ready line then
-                origin.Value <- urlIn line |> Option.map (fun url -> url.TrimEnd '/')
-                up.TrySetResult true |> ignore
-    p.OutputDataReceived.Add (fun e -> heard e.Data)
-    p.ErrorDataReceived.Add (fun e -> heard e.Data)
-    p.EnableRaisingEvents <- true
-    p.Exited.Add (fun _ -> up.TrySetResult false |> ignore)
-    p.Start () |> ignore
-    p.BeginOutputReadLine ()
-    p.BeginErrorReadLine ()
-    if not (up.Task.Wait 60000) || not up.Task.Result then
-        try if not p.HasExited then p.Kill true with _ -> ()
-        failwithf "%s never came up; it said:\n%s" label (string said)
-    // Read AFTER the wait: the readiness line is where the address is stated, so there is
-    // nothing to read until it has arrived.
-    { Label = label; Process = p; Origin = origin.Value; Said = said }
 
 /// The deployment, and the one address a person on the tailnet ever sees of it.
 type private Fronted =

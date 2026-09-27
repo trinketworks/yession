@@ -62,7 +62,7 @@ let create (sessionId: SessionId) (mount: string) : Auth =
                             clientId
                             clientSecret
                             // Loopback HTTP issuer (RFC 8252 pattern) — see the binding.
-                            (createObj [ "execute" ==> [| allowInsecureRequests |] ])
+                            (jsOptions<DiscoveryOptions> (fun o -> o.execute <- [| allowInsecureRequests |]))
                         |> Interop.awaitPromise
                     configuration <- Some (resolved, redirectUri)
                     return Ok ()
@@ -84,13 +84,13 @@ let create (sessionId: SessionId) (mount: string) : Auth =
                     let url =
                         buildAuthorizationUrl
                             config
-                            (createObj
-                                [ "redirect_uri" ==> redirectUri
-                                  "scope" ==> "openid"
-                                  "state" ==> state
-                                  "code_challenge" ==> challenge
-                                  "code_challenge_method" ==> "S256" ])
-                    return Some (urlHref url)
+                            (jsOptions<AuthorizationParameters> (fun p ->
+                                p.redirect_uri <- redirectUri
+                                p.scope <- "openid"
+                                p.state <- state
+                                p.code_challenge <- challenge
+                                p.code_challenge_method <- "S256"))
+                    return Some url.href
             }
       HandleCallback =
         fun requestUrl ->
@@ -112,9 +112,9 @@ let create (sessionId: SessionId) (mount: string) : Auth =
                                 authorizationCodeGrant
                                     config
                                     (newUrlWithBase requestUrl redirectUri)
-                                    (createObj
-                                        [ "pkceCodeVerifier" ==> verifier
-                                          "expectedState" ==> state ])
+                                    (jsOptions<AuthorizationChecks> (fun c ->
+                                        c.pkceCodeVerifier <- verifier
+                                        c.expectedState <- state))
                                 |> Interop.awaitPromise
                             let claims = tokens.claims ()
                             // The attribution rides the validated ID token: only the
