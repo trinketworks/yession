@@ -187,15 +187,15 @@ type private UpgradedSocket =
 
 [<Emit("$0.on('upgrade', $1)")>]
 let private onUpgradeRaw
-    (server: Interop.HttpServer)
-    (handler: System.Func<Interop.IncomingMessage, UpgradedSocket, unit>)
+    (server: HttpServer)
+    (handler: System.Func<IncomingMessage, UpgradedSocket, unit>)
     : unit =
     jsNative
 
 /// `server.on('upgrade', …)`: the request that asked for it, and the socket under it. The
 /// handler is an uncurried delegate so Node receives the two-argument callback it calls — the
-/// way `Interop.createServer` takes its own.
-let private onUpgrade (server: Interop.HttpServer) (handler: Interop.IncomingMessage -> UpgradedSocket -> unit) : unit =
+/// way `createServer` takes its own.
+let private onUpgrade (server: HttpServer) (handler: IncomingMessage -> UpgradedSocket -> unit) : unit =
     onUpgradeRaw server (System.Func<_, _, _> handler)
 
 /// Send one frame.
@@ -336,7 +336,7 @@ let startProvider () : JS.Promise<Provider> =
         // Anything that is not an upgrade is told so. 426 is the status for "this endpoint is
         // WebSocket", and it is what a plain GET at a provider should read.
         let server =
-            Interop.createServer (fun _ res ->
+            createServer (fun _ res ->
                 res.writeHead (426, [  ])
                 res.``end`` "")
 
@@ -368,7 +368,7 @@ let startProvider () : JS.Promise<Provider> =
             fun () ->
                 listening
                     { new Provider with
-                        member _.port = Interop.serverPort server
+                        member _.port = serverPort server
 
                         member _.stop () =
                             // `close` waits for the connections that are still open, so a test

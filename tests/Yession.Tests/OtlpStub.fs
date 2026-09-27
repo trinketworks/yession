@@ -159,7 +159,7 @@ let startWith (onRecord: ReceivedLog -> unit) : Async<Stub> =
     async {
         let received = ResizeArray<ReceivedLog> ()
         let server =
-            Interop.createServer (fun req res ->
+            createServer (fun req res ->
                 match req.``method`` with
                 | "POST" ->
                     Interop.readBody req (fun body ->
@@ -174,7 +174,7 @@ let startWith (onRecord: ReceivedLog -> unit) : Async<Stub> =
         let! url =
             Async.FromContinuations (fun (cont, _, _) ->
                 server.listen (0, "127.0.0.1", fun () ->
-                    cont (sprintf "http://127.0.0.1:%d" (Interop.serverPort server)))
+                    cont (sprintf "http://127.0.0.1:%d" (serverPort server)))
                 |> ignore)
         return
             { Url = url

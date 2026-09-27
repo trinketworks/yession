@@ -293,7 +293,7 @@ let create
 
 /// Every header, as pairs, names lowercased by Node on the way in. A header that repeated
 /// is carried joined the way HTTP joins one.
-let private headersOf (req: Interop.IncomingMessage) : (string * string) list =
+let private headersOf (req: IncomingMessage) : (string * string) list =
     req.headerEntries ()
     |> Array.map (fun (name, value) ->
         match value with
@@ -312,7 +312,7 @@ let private respond (res: ServerResponse) (status: int) (text: string) =
 /// point: the caller is whatever service an operator pointed at this URL, and it
 /// authenticates by signing the body. There is no session to have a cookie, and an unsigned
 /// delivery is refused here rather than let through to be judged later.
-let tryHandle (relay: Relay) (req: Interop.IncomingMessage) (res: ServerResponse) : bool =
+let tryHandle (relay: Relay) (req: IncomingMessage) (res: ServerResponse) : bool =
     let path = Interop.pathnameOf req.url
     if not (path.StartsWith "/hooks/") then false
     elif req.``method`` <> "POST" then

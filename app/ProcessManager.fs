@@ -505,7 +505,7 @@ let connectionsApiFor
 /// every UI route is gated by the same trust rule as /authorize.
 let createWithUi
     (options: Options)
-    (ui: (ProcessManager -> (Interop.IncomingMessage -> Async<AuthenticationOutcome>) -> Interop.IncomingMessage -> ServerResponse -> bool) option)
+    (ui: (ProcessManager -> (IncomingMessage -> Async<AuthenticationOutcome>) -> IncomingMessage -> ServerResponse -> bool) option)
     : Async<ProcessManager> =
   async {
     let statePath = sprintf "%s/manager.json" options.DataDir
@@ -944,7 +944,7 @@ let createWithUi
 
     // The per-request authenticator the UI routes gate on: the same strategy value that
     // authenticates /authorize, applied to any Manager request.
-    let identify (req: Interop.IncomingMessage) : Async<AuthenticationOutcome> =
+    let identify (req: IncomingMessage) : Async<AuthenticationOutcome> =
         strategy.Authenticate
             { RemoteAddress = Interop.remoteAddressOf req
               Query = (fun name -> Interop.queryParamOf req.url name)
@@ -962,7 +962,7 @@ let createWithUi
 <style>body{font-family:system-ui,sans-serif;max-width:32rem;margin:4rem auto;padding:0 1rem}p{color:#444}</style>
 </head><body><h1>%s</h1><p>%s</p></body></html>"""
             title title detail
-    let handleConnectionsCallback (req: Interop.IncomingMessage) (res: ServerResponse) : bool =
+    let handleConnectionsCallback (req: IncomingMessage) (res: ServerResponse) : bool =
         let path = req.url.Split('?').[0]
         if not (req.``method`` = "GET" && path = "/connections/callback") then false
         else
@@ -995,7 +995,7 @@ let createWithUi
 
     let! controlServer =
         async {
-            let handler (req: Interop.IncomingMessage) (res: ServerResponse) =
+            let handler (req: IncomingMessage) (res: ServerResponse) =
                 let handled =
                     WebhookRelay.tryHandle hookRelay req res
                     || Control.tryHandle resolveCaller reportName reportActivity reportSummary notifications.Register mcp.Register provider.RegisterClient secretsApi connectionsApi connectionsHub.Register hookRelay.Subscribe hookRelay.Unsubscribe (fun path -> audit (SecretStore.Audit.controlUnauthorized path)) req res
@@ -1011,11 +1011,11 @@ let createWithUi
                 if not handled then
                     res.writeHead (404, [ ResponseHeader.ContentType "text/plain" ])
                     res.``end`` "not found"
-            let server = Interop.createServer handler
+            let server = createServer handler
             let! listening =
                 Async.FromContinuations (fun (cont, _, _) ->
                     server.listen (defaultArg options.ManagerPort 0, "127.0.0.1", fun () -> cont server) |> ignore)
-            endpointUrl <- Some (sprintf "http://127.0.0.1:%d" (Interop.serverPort listening))
+            endpointUrl <- Some (sprintf "http://127.0.0.1:%d" (serverPort listening))
             return Some listening
         }
     let controlUrl () = endpointUrl
@@ -1311,7 +1311,7 @@ let createWithUi
           McpSetFor = fun sessionId -> mcp.Current sessionId
           UsersOf = usersOf
           LocalOf = localOf
-          EndpointPort = controlServer |> Option.map Interop.serverPort
+          EndpointPort = controlServer |> Option.map serverPort
           Public = options.Public
           HookEndpoints = hookRelay.Endpoints
           StopAll =

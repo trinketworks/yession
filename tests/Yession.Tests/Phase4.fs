@@ -502,7 +502,7 @@ let private processTests =
 let private startControlServerOver
     (endpoints: WebhookRelay.HookEndpoint list)
     (secrets: (string * SessionId) list)
-    : Async<Interop.HttpServer * string * NotificationHub.NotificationHub<SessionNotification> * KeyedRetainedHub.KeyedRetainedHub<McpServerSet> * WebhookRelay.Relay> =
+    : Async<HttpServer * string * NotificationHub.NotificationHub<SessionNotification> * KeyedRetainedHub.KeyedRetainedHub<McpServerSet> * WebhookRelay.Relay> =
     async {
         let table =
             secrets
@@ -522,16 +522,16 @@ let private startControlServerOver
             WebhookRelay.create endpoints hub.NotifySecret (fun () ->
                 minted <- minted + 1
                 sprintf "sub-%d" minted)
-        let handler (req: Interop.IncomingMessage) (res: ServerResponse) =
+        let handler (req: IncomingMessage) (res: ServerResponse) =
             if not (
                 WebhookRelay.tryHandle relay req res
                 || Control.tryHandle (fun secret -> Map.tryFind secret table) (fun _ _ -> async { return Ok () }) (fun _ _ -> async { return Ok () }) (fun _ _ -> async { return Ok () }) hub.Register mcp.Register registerClient None None (fun _ _ -> Subscription.none) relay.Subscribe relay.Unsubscribe ignore req res) then
                 res.writeHead (404, [ ResponseHeader.ContentType "text/plain" ])
                 res.``end`` "not found"
-        let server = Interop.createServer handler
+        let server = createServer handler
         let! listening =
             Async.FromContinuations (fun (cont, _, _) -> server.listen (0, "127.0.0.1", fun () -> cont server) |> ignore)
-        return listening, sprintf "http://127.0.0.1:%d" (Interop.serverPort listening), hub, mcp, relay
+        return listening, sprintf "http://127.0.0.1:%d" (serverPort listening), hub, mcp, relay
     }
 
 /// The common case: no hook endpoints declared.
@@ -1097,20 +1097,20 @@ let private managerWithUi (name: string) =
 /// answers are different facts. A reconciler driven by `/sessions/stream` reaches a
 /// just-created session a few hundred milliseconds after the Manager has launched it, and
 /// everything that arrives in that window meets this.
-let private startFrontDoor () : Async<Interop.HttpServer * string * (unit -> unit)> =
+let private startFrontDoor () : Async<HttpServer * string * (unit -> unit)> =
     async {
         let mutable mapped = false
-        let handler (_: Interop.IncomingMessage) (res: ServerResponse) =
+        let handler (_: IncomingMessage) (res: ServerResponse) =
             if mapped then
                 res.writeHead (200, [ ResponseHeader.ContentType "text/html; charset=utf-8" ])
                 res.``end`` "<!doctype html><title>a session</title>"
             else
                 res.writeHead (404, [ ResponseHeader.ContentType "text/plain" ])
                 res.``end`` "not found"
-        let server = Interop.createServer handler
+        let server = createServer handler
         let! listening =
             Async.FromContinuations (fun (cont, _, _) -> server.listen (0, "127.0.0.1", fun () -> cont server) |> ignore)
-        return listening, sprintf "http://127.0.0.1:%d" (Interop.serverPort listening), (fun () -> mapped <- true)
+        return listening, sprintf "http://127.0.0.1:%d" (serverPort listening), (fun () -> mapped <- true)
     }
 
 /// A Manager publishing its sessions at a front door this test owns, with one session created
@@ -2050,7 +2050,7 @@ let private sseStreamTests =
                 // Split mid-payload AND before the blank line that ends the event, so NEITHER
                 // piece is an event on its own: a loop that dropped what it held back would
                 // deliver nothing at all, and one that dispatched the half would deliver it twice.
-                let handler (_req: Interop.IncomingMessage) (res: ServerResponse) =
+                let handler (_req: IncomingMessage) (res: ServerResponse) =
                     res.writeHead (200, [ ResponseHeader.ContentType "text/event-stream" ])
                     res.write "data: half a lo" |> ignore
                     // The gap is what makes this two reads rather than one: written back to back,
@@ -2061,11 +2061,11 @@ let private sseStreamTests =
                         res.write "af\n\n" |> ignore
                     })
 
-                let server = Interop.createServer handler
+                let server = createServer handler
                 let! listening =
                     Async.FromContinuations (fun (cont, _, _) ->
                         server.listen (0, "127.0.0.1", fun () -> cont server) |> ignore)
-                let url = sprintf "http://127.0.0.1:%d/stream" (Interop.serverPort listening)
+                let url = sprintf "http://127.0.0.1:%d/stream" (serverPort listening)
 
                 let payloads = ResizeArray<string> ()
                 let subscription = Sse.subscribe url [] payloads.Add
@@ -2098,16 +2098,16 @@ let private aThrowingSubscriber () =
     async {
         let connections = ResizeArray<int> ()
 
-        let handler (_req: Interop.IncomingMessage) (res: ServerResponse) =
+        let handler (_req: IncomingMessage) (res: ServerResponse) =
             connections.Add 1
             res.writeHead (200, [ ResponseHeader.ContentType "text/event-stream" ])
             res.write "data: one\n\ndata: two\n\n" |> ignore
 
-        let server = Interop.createServer handler
+        let server = createServer handler
         let! listening =
             Async.FromContinuations (fun (cont, _, _) ->
                 server.listen (0, "127.0.0.1", fun () -> cont server) |> ignore)
-        let url = sprintf "http://127.0.0.1:%d/stream" (Interop.serverPort listening)
+        let url = sprintf "http://127.0.0.1:%d/stream" (serverPort listening)
 
         let received = ResizeArray<string> ()
         let mutable thrown = false
@@ -2155,7 +2155,7 @@ let private sseThrowingSinkTests =
 /// side lets go of the connection. The honest observation of "the client is no longer
 /// holding this open", where a client-side handle would only say what the client thinks.
 [<Emit("$0.socket.on('close', $1)")>]
-let private onRequestSocketClosed (req: Interop.IncomingMessage) (closed: unit -> unit) : unit =
+let private onRequestSocketClosed (req: IncomingMessage) (closed: unit -> unit) : unit =
     Fable.Core.Util.jsNative
 
 /// A URL nothing is listening on: a port this box held for a moment and let go, so a connect
@@ -2163,11 +2163,11 @@ let private onRequestSocketClosed (req: Interop.IncomingMessage) (closed: unit -
 /// connect nobody answered, and not a deadline the case would have to wait out.
 let private aDeadUrl () : Async<string> =
     async {
-        let server = Interop.createServer (fun _ res -> res.``end`` "")
+        let server = createServer (fun _ res -> res.``end`` "")
         let! listening =
             Async.FromContinuations (fun (cont, _, _) ->
                 server.listen (0, "127.0.0.1", fun () -> cont server) |> ignore)
-        let port = Interop.serverPort listening
+        let port = serverPort listening
         do! Async.FromContinuations (fun (cont, _, _) -> listening.close (fun _ -> cont ()))
         return sprintf "http://127.0.0.1:%d/stream" port
     }
@@ -2215,15 +2215,15 @@ let private sseGiveUpTests =
             async {
                 // A stream that is open and stays open: the only way this connection can end is
                 // the teardown, so anything reaching `retry` came from the unsubscribe.
-                let handler (_req: Interop.IncomingMessage) (res: ServerResponse) =
+                let handler (_req: IncomingMessage) (res: ServerResponse) =
                     res.writeHead (200, [ ResponseHeader.ContentType "text/event-stream" ])
                     res.write ": subscribed\n\n" |> ignore
 
-                let server = Interop.createServer handler
+                let server = createServer handler
                 let! listening =
                     Async.FromContinuations (fun (cont, _, _) ->
                         server.listen (0, "127.0.0.1", fun () -> cont server) |> ignore)
-                let url = sprintf "http://127.0.0.1:%d/stream" (Interop.serverPort listening)
+                let url = sprintf "http://127.0.0.1:%d/stream" (serverPort listening)
 
                 let asked = ResizeArray<Sse.Refusal> ()
                 let recording : Sse.Retry = fun refusal -> asked.Add refusal; true
@@ -2246,18 +2246,18 @@ let private sseGiveUpTests =
                 // way, where nothing the subscription does can be seen from here.
                 let mutable socketClosed = false
 
-                let handler (req: Interop.IncomingMessage) (res: ServerResponse) =
+                let handler (req: IncomingMessage) (res: ServerResponse) =
                     onRequestSocketClosed req (fun () -> socketClosed <- true)
                     res.writeHead (404, [ ResponseHeader.ContentType "text/plain" ])
                     // Node holds a head until something is written, so this is what puts the
                     // status on the wire — and it deliberately does not end the response.
                     res.write "no stream here" |> ignore
 
-                let server = Interop.createServer handler
+                let server = createServer handler
                 let! listening =
                     Async.FromContinuations (fun (cont, _, _) ->
                         server.listen (0, "127.0.0.1", fun () -> cont server) |> ignore)
-                let url = sprintf "http://127.0.0.1:%d/stream" (Interop.serverPort listening)
+                let url = sprintf "http://127.0.0.1:%d/stream" (serverPort listening)
 
                 // What a caller that knows its peer says about a 404: this endpoint is not
                 // here, and asking again every second is a hot loop against a server that is

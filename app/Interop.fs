@@ -151,32 +151,6 @@ let createPeerConnection (name: string) : Fable.NodeDataChannel.PeerConnection =
 
 // --- node:http ---------------------------------------------------------------
 
-/// A request as it ARRIVED at this process's server. `HttpMessage` is where its headers and
-/// its body-as-a-stream come from, stated as inheritance rather than re-declared here,
-/// because a Node server's request and a Node client's response are the same received thing
-/// — and the gateway pipes one straight into the other.
-type [<AllowNullLiteral>] IncomingMessage =
-    inherit HttpMessage
-    abstract url : string
-    abstract ``method`` : string
-    abstract on : string * (obj -> unit) -> IncomingMessage
-
-type [<AllowNullLiteral>] HttpServer =
-    inherit Listening
-    abstract listen : int * string * (unit -> unit) -> HttpServer
-    abstract close : (obj -> unit) -> unit
-
-/// The actual bound port (differs from the requested one when listening on 0).
-let serverPort (server: HttpServer) : int = boundPort server
-
-[<Import("createServer", "node:http")>]
-let private createServerRaw : System.Func<IncomingMessage, ServerResponse, unit> -> HttpServer = jsNative
-
-/// Create an HTTP server. The handler is passed as an uncurried delegate so Node receives
-/// a plain `(req, res) => ...` two-argument callback.
-let createServer (handler: IncomingMessage -> ServerResponse -> unit) : HttpServer =
-    createServerRaw (System.Func<_, _, _>(handler))
-
 /// The whole body of a request, as text, then `cont`. Every route that takes a body is
 /// small and decodes it entire, so there is nothing here to stream.
 ///

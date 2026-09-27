@@ -391,11 +391,11 @@ let tests =
                 // github.com, played by a listener that answers anything with one line —
                 // seeing that line inside the container is the whole proof.
                 let upstream =
-                    Interop.createServer (fun _ res ->
+                    createServer (fun _ res ->
                         res.writeHead (200, [ ResponseHeader.ContentType "text/plain" ])
                         res.``end`` "answered by the upstream")
                 do! Async.FromContinuations (fun (cont, _, _) -> upstream.listen (0, "127.0.0.1", fun () -> cont ()) |> ignore)
-                let! gateway = GitGateway.start (sprintf "http://127.0.0.1:%d" (Interop.serverPort upstream)) ignore
+                let! gateway = GitGateway.start (sprintf "http://127.0.0.1:%d" (serverPort upstream)) ignore
                 try
                     let cap = gateway.Grant SandboxRef.defaultRef
                     let secret =

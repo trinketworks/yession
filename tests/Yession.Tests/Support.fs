@@ -13,6 +13,7 @@ module Yession.Tests.Support
 open System
 open Elmish
 open Fable.Core
+open Fable.NodeExtras
 open Fable.Pyxpecto
 open Yjs
 open Yession.Domain
@@ -53,11 +54,11 @@ let user msg = Ylmish.Program.Message.User msg
 /// and cannot be run twice at once at all.
 let freePort () : Async<int> =
     async {
-        let server = Interop.createServer (fun _ res -> res.``end`` "")
+        let server = createServer (fun _ res -> res.``end`` "")
         let! listening =
             Async.FromContinuations (fun (cont, _, _) ->
                 server.listen (0, "127.0.0.1", fun () -> cont server) |> ignore)
-        let port = Interop.serverPort listening
+        let port = serverPort listening
         do! Async.FromContinuations (fun (cont, _, _) -> listening.close (fun _ -> cont ()))
         return port
     }

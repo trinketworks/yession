@@ -589,7 +589,7 @@ let private startControlServer (callers: (string * Control.ControlCaller) list) 
         let table = Map.ofList callers
         let dummyRegister (_: string) (_: SessionId) (_: string) : Yession.Oidc.RegisterClientResponse =
             { ClientId = "unused"; ClientSecret = "unused"; Issuer = "unused" }
-        let handler (req: Interop.IncomingMessage) (res: ServerResponse) =
+        let handler (req: IncomingMessage) (res: ServerResponse) =
             if not (Control.tryHandle
                         (fun secret -> Map.tryFind secret table)
                         (fun _ _ -> async { return Ok () })
@@ -607,11 +607,11 @@ let private startControlServer (callers: (string * Control.ControlCaller) list) 
                         req res) then
                 res.writeHead (404, [ ResponseHeader.ContentType "text/plain" ])
                 res.``end`` "not found"
-        let server = Interop.createServer handler
+        let server = createServer handler
         let! listening =
             Async.FromContinuations (fun (cont, _, _) ->
                 server.listen (0, "127.0.0.1", fun () -> cont server) |> ignore)
-        return listening, sprintf "http://127.0.0.1:%d" (Interop.serverPort listening)
+        return listening, sprintf "http://127.0.0.1:%d" (serverPort listening)
     }
 
 let private caller sessionId users : Control.ControlCaller =

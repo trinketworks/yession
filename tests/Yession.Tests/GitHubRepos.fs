@@ -49,12 +49,12 @@ let private get (url: string) (cookie: string) : Async<TestHttp.Reply> =
 
     TestHttp.getNoStore headers url
 
-let private serving (handler: Interop.IncomingMessage -> ServerResponse -> unit) =
+let private serving (handler: IncomingMessage -> ServerResponse -> unit) =
     async {
-        let server = Interop.createServer handler
+        let server = createServer handler
         let! listening =
             Async.FromContinuations (fun (cont, _, _) -> server.listen (0, "127.0.0.1", fun () -> cont server) |> ignore)
-        return sprintf "http://127.0.0.1:%d" (Interop.serverPort listening)
+        return sprintf "http://127.0.0.1:%d" (serverPort listening)
     }
 
 let private json (res: ServerResponse) (status: int) (body: string) =
@@ -175,7 +175,7 @@ type private StubApi =
 let private startStubApi () : Async<StubApi> =
     async {
         let requests = ResizeArray<string * string option> ()
-        let handler (req: Interop.IncomingMessage) (res: ServerResponse) =
+        let handler (req: IncomingMessage) (res: ServerResponse) =
             let url : string = req.url
             let bearer = Interop.headerOf req "authorization"
             requests.Add (url, bearer)

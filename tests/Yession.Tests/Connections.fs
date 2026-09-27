@@ -556,7 +556,7 @@ let private startTokenEndpoint () : Async<TokenEndpoint> =
         let mutable failing = 0
         let requests = ResizeArray<string> ()
         let contentTypes = ResizeArray<string option> ()
-        let handler (req: Interop.IncomingMessage) (res: ServerResponse) =
+        let handler (req: IncomingMessage) (res: ServerResponse) =
             Interop.readBody req (fun acc ->
                 requests.Add acc
                 contentTypes.Add (Interop.headerOf req "content-type")
@@ -568,11 +568,11 @@ let private startTokenEndpoint () : Async<TokenEndpoint> =
                     let status = if response.StartsWith "{" then 200 else 400
                     res.writeHead (status, [ ResponseHeader.ContentType "application/json" ])
                     res.``end`` response) |> ignore
-        let server = Interop.createServer handler
+        let server = createServer handler
         let! listening =
             Async.FromContinuations (fun (cont, _, _) -> server.listen (0, "127.0.0.1", fun () -> cont server) |> ignore)
         return
-            { Url = sprintf "http://127.0.0.1:%d/token" (Interop.serverPort listening)
+            { Url = sprintf "http://127.0.0.1:%d/token" (serverPort listening)
               SetResponse = (fun r -> response <- r)
               FailNext = (fun n -> failing <- n)
               Requests = requests
@@ -588,14 +588,14 @@ type private StatusEndpoint =
 let private startStatusEndpoint () : Async<StatusEndpoint> =
     async {
         let mutable status = 200
-        let handler (_: Interop.IncomingMessage) (res: ServerResponse) =
+        let handler (_: IncomingMessage) (res: ServerResponse) =
             res.writeHead (status, [ ResponseHeader.ContentType "application/json" ])
             res.``end`` "{}"
-        let server = Interop.createServer handler
+        let server = createServer handler
         let! listening =
             Async.FromContinuations (fun (cont, _, _) -> server.listen (0, "127.0.0.1", fun () -> cont server) |> ignore)
         return
-            { Url = sprintf "http://127.0.0.1:%d/user" (Interop.serverPort listening)
+            { Url = sprintf "http://127.0.0.1:%d/user" (serverPort listening)
               SetStatus = fun s -> status <- s }
     }
 
@@ -611,15 +611,15 @@ let private startProfileEndpoint () : Async<ProfileEndpoint> =
     async {
         let mutable status = 200
         let authorizations = ResizeArray<string option> ()
-        let handler (req: Interop.IncomingMessage) (res: ServerResponse) =
+        let handler (req: IncomingMessage) (res: ServerResponse) =
             authorizations.Add (Interop.headerOf req "authorization")
             res.writeHead (status, [ ResponseHeader.ContentType "application/json" ])
             res.``end`` """{"login":"octocat","id":583231,"name":"The Octocat","email":null}"""
-        let server = Interop.createServer handler
+        let server = createServer handler
         let! listening =
             Async.FromContinuations (fun (cont, _, _) -> server.listen (0, "127.0.0.1", fun () -> cont server) |> ignore)
         return
-            { Url = sprintf "http://127.0.0.1:%d/user" (Interop.serverPort listening)
+            { Url = sprintf "http://127.0.0.1:%d/user" (serverPort listening)
               SetStatus = fun s -> status <- s
               Authorizations = authorizations }
     }
@@ -1212,7 +1212,7 @@ let private startConnectionsServer (callers: (string * Control.ControlCaller) li
         apiRef.Value <- Some api
         let dummyRegister (_: string) (_: SessionId) (_: string) : Yession.Oidc.RegisterClientResponse =
             { ClientId = "unused"; ClientSecret = "unused"; Issuer = "unused" }
-        let handler (req: Interop.IncomingMessage) (res: ServerResponse) =
+        let handler (req: IncomingMessage) (res: ServerResponse) =
             if not (Control.tryHandle
                         (fun secret -> Map.tryFind secret table)
                         (fun _ _ -> async { return Ok () })
@@ -1230,10 +1230,10 @@ let private startConnectionsServer (callers: (string * Control.ControlCaller) li
                         req res) then
                 res.writeHead (404, [ ResponseHeader.ContentType "text/plain" ])
                 res.``end`` "not found"
-        let server = Interop.createServer handler
+        let server = createServer handler
         let! listening =
             Async.FromContinuations (fun (cont, _, _) -> server.listen (0, "127.0.0.1", fun () -> cont server) |> ignore)
-        return sprintf "http://127.0.0.1:%d" (Interop.serverPort listening)
+        return sprintf "http://127.0.0.1:%d" (serverPort listening)
     }
 
 let private routeTests =
@@ -1744,7 +1744,7 @@ let private startStubGitHub () : Async<StubGitHub> =
     async {
         let mutable tokenReply = """{"error":"authorization_pending"}"""
         let tokenRequests = ResizeArray<string> ()
-        let handler (req: Interop.IncomingMessage) (res: ServerResponse) =
+        let handler (req: IncomingMessage) (res: ServerResponse) =
             Interop.readBody req (fun acc ->
                 let reply =
                     if (req.url.Split('?').[0]) = "/device/code" then
@@ -1755,10 +1755,10 @@ let private startStubGitHub () : Async<StubGitHub> =
                         tokenReply
                 res.writeHead (200, [ ResponseHeader.ContentType "application/json" ])
                 res.``end`` reply) |> ignore
-        let server = Interop.createServer handler
+        let server = createServer handler
         let! listening =
             Async.FromContinuations (fun (cont, _, _) -> server.listen (0, "127.0.0.1", fun () -> cont server) |> ignore)
-        let origin = sprintf "http://127.0.0.1:%d" (Interop.serverPort listening)
+        let origin = sprintf "http://127.0.0.1:%d" (serverPort listening)
         return
             { DeviceUrl = origin + "/device/code"
               TokenUrl = origin + "/token"
@@ -1833,14 +1833,14 @@ let private startGitHubRoutesOver
     =
     async {
         let route = GitHubConnection.routes sessionA (stubAuth ()) connections post ""
-        let handler (req: Interop.IncomingMessage) (res: ServerResponse) =
+        let handler (req: IncomingMessage) (res: ServerResponse) =
             if not (route req res) then
                 res.writeHead (404, [ ResponseHeader.ContentType "text/plain" ])
                 res.``end`` "not found"
-        let server = Interop.createServer handler
+        let server = createServer handler
         let! listening =
             Async.FromContinuations (fun (cont, _, _) -> server.listen (0, "127.0.0.1", fun () -> cont server) |> ignore)
-        return sprintf "http://127.0.0.1:%d" (Interop.serverPort listening)
+        return sprintf "http://127.0.0.1:%d" (serverPort listening)
     }
 
 let private startGitHubRoutes (connections: ControlClient.SessionConnections) =
@@ -2820,7 +2820,7 @@ let private startStubGitHubApi () : Async<StubGitHubApi> =
                 @ [ "x-ratelimit-remaining", string remaining
                     "x-ratelimit-reset", string resets
                     "x-ratelimit-resource", resource ]
-        let handler (req: Interop.IncomingMessage) (res: ServerResponse) =
+        let handler (req: IncomingMessage) (res: ServerResponse) =
             let path = req.url.Split('?').[0]
             requests.Add (path, Interop.headerOf req "authorization")
             let refuse () =
@@ -2856,11 +2856,11 @@ let private startStubGitHubApi () : Async<StubGitHubApi> =
             else
                 res.writeNamedHead (200, withAllowance [ "content-type", "application/json"; "etag", etag ])
                 res.``end`` body
-        let server = Interop.createServer handler
+        let server = createServer handler
         let! listening =
             Async.FromContinuations (fun (cont, _, _) -> server.listen (0, "127.0.0.1", fun () -> cont server) |> ignore)
         return
-            { Url = sprintf "http://127.0.0.1:%d" (Interop.serverPort listening)
+            { Url = sprintf "http://127.0.0.1:%d" (serverPort listening)
               SetPr = (fun body -> prBody <- body; prVersion <- prVersion + 1)
               SetCheckRuns = (fun body -> checksBody <- body; checksVersion <- checksVersion + 1)
               SetStatus = (fun s -> status <- s)

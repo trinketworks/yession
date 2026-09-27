@@ -412,13 +412,13 @@ let private opTests =
             async {
                 let mutable issuer = ""
                 let! provider = ManagerOidc.create (fun () -> issuer) Strategy.localhost (fun _ _ _ _ -> ())
-                let handler (req: Interop.IncomingMessage) (res: ServerResponse) =
+                let handler (req: IncomingMessage) (res: ServerResponse) =
                     if not (provider.TryHandle req res) then
                         res.writeHead (404, [ ResponseHeader.ContentType "text/plain" ])
                         res.``end`` "not found"
-                let server = Interop.createServer handler
+                let server = createServer handler
                 let! _ = Async.FromContinuations (fun (cont, _, _) -> server.listen (0, "127.0.0.1", fun () -> cont ()) |> ignore)
-                issuer <- sprintf "http://127.0.0.1:%d" (Interop.serverPort server)
+                issuer <- sprintf "http://127.0.0.1:%d" (serverPort server)
 
                 let client = provider.RegisterClient "ctl-secret" sessionId "http://127.0.0.1:9/callback"
                 let jar = OidcHttp.newJar ()

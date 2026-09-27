@@ -18,12 +18,12 @@ open Yession.App
 open Yession.Host
 
 /// Start a server on a free port and answer with `handler`, which sees the request.
-let private serving (handler: Interop.IncomingMessage -> ServerResponse -> unit) =
+let private serving (handler: IncomingMessage -> ServerResponse -> unit) =
     async {
-        let server = Interop.createServer handler
+        let server = createServer handler
         let! listening =
             Async.FromContinuations (fun (cont, _, _) -> server.listen (0, "127.0.0.1", fun () -> cont server) |> ignore)
-        return sprintf "http://127.0.0.1:%d" (Interop.serverPort listening), server
+        return sprintf "http://127.0.0.1:%d" (serverPort listening), server
     }
 
 let private json (res: ServerResponse) (status: int) (body: string) =
@@ -33,11 +33,11 @@ let private json (res: ServerResponse) (status: int) (body: string) =
 /// The request body, accumulated across `data` and handed over on `end` — a Node stream read
 /// the way `OtlpStub` reads the same one, with the accumulator in F# rather than in a string
 /// no compiler looks at.
-let private onBody (req: Interop.IncomingMessage) (f: string -> unit) : unit = Interop.readBody req f
+let private onBody (req: IncomingMessage) (f: string -> unit) : unit = Interop.readBody req f
 
 /// A provider that answers every ask with `said`, and records what it was asked.
 let private answering (said: string) (seen: ResizeArray<string>) =
-    fun (req: Interop.IncomingMessage) (res: ServerResponse) ->
+    fun (req: IncomingMessage) (res: ServerResponse) ->
         onBody req (fun body ->
             seen.Add body
             json res 200 (sprintf """{"content":[{"type":"text","text":"%s"}],"stop_reason":"end_turn"}""" said))
@@ -120,7 +120,7 @@ let portsTests =
                 // exactly like a credential that has gone stale.
                 let seen = ResizeArray<string> ()
                 let record =
-                    fun (req: Interop.IncomingMessage) (res: ServerResponse) ->
+                    fun (req: IncomingMessage) (res: ServerResponse) ->
                         match Interop.headerOf req "x-api-key", Interop.headerOf req "authorization" with
                         | Some key, _ -> seen.Add ("x-api-key:" + key)
                         | _, Some bearer -> seen.Add ("authorization:" + bearer)

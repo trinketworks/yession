@@ -10,6 +10,7 @@ module Yession.Tests.TranscriptHttp
 // pin, is that a transcript is a TERMINAL's and its lines do not carry their own index.
 
 open Fable.Core
+open Fable.NodeExtras
 open Fable.Pyxpecto
 open Yession.Domain
 open Yession.Domain.Terminals
@@ -46,7 +47,7 @@ let private serving (records: int) =
                 None
                 false
                 0
-        let port = Yession.Host.Interop.serverPort server
+        let port = serverPort server
         let at (route: SessionRoute) (t: string) =
             sprintf "%s?token=%s" (SessionRoute.at (sprintf "http://127.0.0.1:%d" port) route) t
         return at, (fun () -> async { server.close ignore })
@@ -126,7 +127,7 @@ let private endpointTests =
                     Signalling.start
                         (SessionId.create "transcript-http-grow" |> expect)
                         ignore None (Some endpoint) None None (fun _ -> token) "" None false 0
-                let port = Yession.Host.Interop.serverPort server
+                let port = serverPort server
                 let url =
                     sprintf
                         "%s?token=%s"
