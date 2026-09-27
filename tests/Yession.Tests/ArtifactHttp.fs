@@ -10,6 +10,7 @@ module Yession.Tests.ArtifactHttp
 // address is a FILE — so the cases that matter are the door, the containment, and what a
 // browser is told about bytes this build did not write.
 
+open Fable.NodeExtras
 open Fable.Pyxpecto
 open Yession.Domain
 open Yession.Domain.Content
@@ -66,7 +67,7 @@ let private serving (files: (ArtifactRef * string) list) =
                 None
                 false
                 0
-        let origin = sprintf "http://127.0.0.1:%d" (Interop.serverPort server)
+        let origin = sprintf "http://127.0.0.1:%d" (serverPort server)
         let at (ref: ContentRef) = SessionRoute.at origin (SessionRoute.Content ref)
         return dir, origin, at, (fun () -> async { server.close ignore })
     }

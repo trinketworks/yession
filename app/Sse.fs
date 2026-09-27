@@ -57,10 +57,9 @@ let stream (req: IncomingMessage) (res: ServerResponse) (encode: Encode<'a>) (su
     let subscription = subscribe sink
     // The keep-alive beat, so an idle subscription is not reaped by an HTTP idle timeout.
     let heartbeat = JS.setInterval (fun () -> res.write ": ping\n\n" |> ignore) 15000
-    req.on ("close", fun _ ->
+    req.onClose (fun () ->
         JS.clearInterval heartbeat
         subscription.Stop ())
-    |> ignore
     sink
 
 /// Why a connect attempt left no stream open.

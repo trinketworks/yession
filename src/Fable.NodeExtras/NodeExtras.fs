@@ -1277,6 +1277,55 @@ module NetServers =
         | Some bound -> bound.port
         | None -> failwith "the server is not listening, so it has no port"
 
+// --- node:http, serving ------------------------------------------------------------------------
+//
+// The other half of "node:http, answering" above: the server a response is written from, and
+// the request it answers. Declared here rather than beside `ServerResponse` because a server is
+// `Listening`, which is only sayable once the section above has said it.
+
+/// A request as it ARRIVED at this process's server. `HttpMessage` is where its headers and its
+/// body-as-a-stream come from, stated as inheritance rather than re-declared here, because a
+/// Node server's request and a Node client's response are the same received thing — and the
+/// gateway pipes one straight into the other.
+type IncomingMessage =
+    inherit HttpMessage
+    abstract url : string
+    abstract ``method`` : string
+
+    /// The request is over — answered, or its peer went away first. What a response that stays
+    /// open (a server-sent event stream) waits for to let go of whatever it was feeding it from.
+    /// A member rather than `on(name, handler)` for the reason `Readable`'s events are: the
+    /// event's name and its handler's type are one fact.
+    [<Emit("$0.on('close', $1)")>]
+    abstract onClose : handler: (unit -> unit) -> unit
+
+/// A `node:http` server, as this repository runs one: bound, asked its port, and closed.
+type HttpServer =
+    inherit Listening
+
+    /// Bind, and call back once the OS has chosen — port 0 asks it to choose. Node answers the
+    /// server itself, for chaining.
+    abstract listen : port: int * host: string * onListening: (unit -> unit) -> HttpServer
+
+    /// Stop accepting connections, and call back once every open one has ended. Node hands the
+    /// callback an `Error` when the server was not listening and nothing when it closed, which
+    /// is what the option says.
+    abstract close : onClosed: (exn option -> unit) -> unit
+
+[<AutoOpen>]
+module HttpServers =
+
+    [<Import("createServer", "node:http")>]
+    let private createServerRaw (handler: System.Func<IncomingMessage, ServerResponse, unit>) : HttpServer = jsNative
+
+    /// Create an HTTP server. The handler is passed as an uncurried delegate so Node receives a
+    /// plain `(req, res) => ...` two-argument callback.
+    let createServer (handler: IncomingMessage -> ServerResponse -> unit) : HttpServer =
+        createServerRaw (System.Func<_, _, _> handler)
+
+    /// The actual bound port (differs from the requested one when listening on 0).
+    let serverPort (server: HttpServer) : int = boundPort server
+
 // --- A terminal, by a descriptor something else opened -----------------------------------------
 
 [<AutoOpen>]

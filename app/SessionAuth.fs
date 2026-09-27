@@ -15,6 +15,7 @@ module Yession.Host.SessionAuth
 
 open Fable.Core
 open Fable.Core.JsInterop
+open Fable.NodeExtras
 open Yession.Domain
 open Yession.Domain.Access
 open Yession.SessionProcess
