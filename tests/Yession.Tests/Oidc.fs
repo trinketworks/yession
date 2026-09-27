@@ -371,12 +371,12 @@ let private wireTests =
 // deterministic is WHERE the thunk is invoked: inside the promise, so a synchronous throw is a
 // rejection and nothing but a settled promise ever reaches F#.
 //
-// `Promise.resolve().then($0)` rather than `Promise.try($0)`, which says the same thing in one
-// word but is ES2025: it is present on the Node 24 `devenv.nix` pins and absent on 22, and a test
-// rig is the last place to raise a runtime floor quietly. The thunk runs a microtask later here
-// and nothing in this case can tell.
-[<Emit("Promise.resolve().then($0)")>]
-let private attempted (attempt: unit -> JS.Promise<'a>) : JS.Promise<'a> = Fable.Core.Util.jsNative
+// `Promise.resolve().then(attempt)` rather than `Promise.try(attempt)`, which says the same
+// thing in one word but is ES2025: it is present on the Node 24 `devenv.nix` pins and absent on
+// 22, and a test rig is the last place to raise a runtime floor quietly. The thunk runs a
+// microtask later here and nothing in this case can tell.
+let private attempted (attempt: unit -> JS.Promise<'a>) : JS.Promise<'a> =
+    Promise.lift () |> Promise.bind attempt
 
 /// Whether the attempt refused — a rejection and a synchronous throw being one outcome by the
 /// time this reads it. `Interop.awaitPromise` settles the promise in the tick that created it,
@@ -405,8 +405,22 @@ let private keyTests =
 
 // --- OP over HTTP ([Ports]): the real endpoint driven as a raw OAuth client ---------
 
-[<Emit("new URL($0).searchParams.get($1)")>]
-let private queryOfUrl (url: string) (name: string) : string option = Fable.Core.Util.jsNative
+/// A published key as jose takes one back: the served document, read through the codec that
+/// pins its bytes, handed over parameter by parameter — so what jose verifies against is what
+/// the provider published, and nothing the document does not carry is set.
+let private joseKeySet (document: Jwks) : Fable.Jose.JsonWebKeySet =
+    let key (k: JwksKey) =
+        jsOptions<Fable.Jose.PublishedJwk> (fun j ->
+            j.kty <- k.Kty
+            k.Crv |> Option.iter (fun v -> j.crv <- v)
+            k.X |> Option.iter (fun v -> j.x <- v)
+            k.Y |> Option.iter (fun v -> j.y <- v)
+            k.N |> Option.iter (fun v -> j.n <- v)
+            k.E |> Option.iter (fun v -> j.e <- v)
+            j.kid <- k.Kid
+            j.alg <- k.Alg
+            j.``use`` <- k.Use)
+    jsOptions<Fable.Jose.JsonWebKeySet> (fun set -> set.keys <- document.Keys |> List.map key |> Array.ofList)
 
 let private opTests =
     testList "OP endpoint over HTTP" [
@@ -457,7 +471,7 @@ let private opTests =
                         let! reply = OidcHttp.getWithJar jar (authorizeUrl ())
                         Expect.equal reply.Status 302 "authorize redirects (trust-localhost strategy)"
                         return
-                            match queryOfUrl reply.Location "code" with
+                            match Interop.queryParamOf reply.Location "code" with
                             | Some code -> code
                             | None -> failwith "the authorize redirect carried no code"
                     }
@@ -474,14 +488,14 @@ let private opTests =
                 let tokenResponse = Wire.fromString Wire.tokenResponse tokens.Body |> expect
                 Expect.equal tokenResponse.TokenType "Bearer" "token_type per RFC 6749 §5.1"
                 let! jwksReply = OidcHttp.getWithJar jar decoded.JwksUri
-                let keySet = Fable.Jose.createLocalJWKSet (JS.JSON.parse jwksReply.Body)
-                let! verified =
-                    Fable.Jose.jwtVerify tokenResponse.IdToken keySet (createObj [ "issuer" ==> issuer; "audience" ==> client.ClientId ])
-                    |> Interop.awaitPromise
-                let subject : string = verified.payload?sub
-                Expect.equal subject "local" "the ID token's subject is the local user"
-                let attribution : string = verified.payload?yession_attribution
-                Expect.equal attribution "unattributed" "localhost access is unattributed"
+                let keySet = Wire.fromString Wire.jwks jwksReply.Body |> expect |> joseKeySet |> Fable.Jose.createLocalJWKSet
+                let expected =
+                    jsOptions<Fable.Jose.JwtVerifyOptions> (fun o ->
+                        o.issuer <- issuer
+                        o.audience <- client.ClientId)
+                let! verified = Fable.Jose.jwtVerify tokenResponse.IdToken keySet expected |> Interop.awaitPromise
+                Expect.equal verified.payload.sub (Some "local") "the ID token's subject is the local user"
+                Expect.equal verified.payload.yession_attribution (Some "unattributed") "localhost access is unattributed"
 
                 // Replay: the same code again -> invalid_grant.
                 let! replay = TestHttp.postForm (tokenForm code client.ClientSecret verifier) decoded.TokenEndpoint
