@@ -24,9 +24,6 @@ open Node.Buffer
 open Yession.App
 open Yession.Host.Interop
 
-[<Import("fileURLToPath", "node:url")>]
-let private fileUrlToPath (url: obj) : string = jsNative
-
 /// The packaged location: `assets/` beside the running bundle, which is the package root once
 /// esbuild has flattened everything into one file.
 let private packagedAssets : Node.Url.URL = urlBesideModule "./assets"
@@ -102,7 +99,7 @@ type AssetSet =
 /// permissions fault. The refusal names the file and what the OS said about it, which is the
 /// only place that diagnosis still exists.
 let load (fallbackDir: string) : AssetSet =
-    let packaged = fileUrlToPath packagedAssets
+    let packaged = FileUrls.toPath packagedAssets
     let files =
         AssetFile.all
         |> List.choose (fun file ->

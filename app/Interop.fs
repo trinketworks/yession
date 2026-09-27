@@ -85,10 +85,10 @@ let private moduleUrl : string = ImportMeta.url ()
 /// cannot change within a process.
 let private required = lazy (createRequire moduleUrl)
 
-/// `require(id)`, from this bundle's location — for the native addons that are CJS-only and
-/// loaded lazily, so their absence is an answer at the lookup rather than a failure of the
-/// whole module's load. THROWS the way `require` does when there is nothing to load.
-let require (id: string) : obj = required.Force().Invoke id
+/// The `node-pty` module, from this bundle's location. CJS-only and native, so it is loaded
+/// on first use rather than imported: its absence is an answer at the lookup, not a failure of
+/// the whole module's load. THROWS the way `require` does when there is nothing to load.
+let loadNodePty () : Fable.NodePty.Exports = Fable.NodePty.load moduleUrl
 
 /// Where `require(id)` would load from, without loading it. THROWS when it would not resolve.
 let resolveModule (id: string) : string = required.Force().resolve id

@@ -753,6 +753,7 @@ type BinaryToTextEncoding =
 [<AllowNullLiteral>]
 type Digester =
     abstract update : data: string * inputEncoding: BufferEncoding -> Digester
+    abstract update : data: Buffer -> Digester
     abstract digest : encoding: BinaryToTextEncoding -> string
 
 [<RequireQualifiedAccess>]
@@ -779,6 +780,14 @@ module ImportMeta =
     /// one file, that is the bundle's own address.
     [<Emit("import.meta.url")>]
     let url () : string = jsNative
+
+/// `node:url`'s conversions between a `file:` URL and a path.
+[<RequireQualifiedAccess>]
+module FileUrls =
+
+    /// `fileURLToPath(url)` — the platform path a `file:` URL names. THROWS on any other scheme.
+    [<Import("fileURLToPath", "node:url")>]
+    let toPath (url: Node.Url.URL) : string = jsNative
 
 // --- Buffers over bytes -----------------------------------------------------------------------
 

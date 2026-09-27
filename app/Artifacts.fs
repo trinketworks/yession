@@ -50,23 +50,23 @@ let private discard (path: string) : unit =
 /// to hold the file in memory.
 let private digestOf (path: string) : ContentDigest option =
     try
-        let hash = crypto.createHash "sha256"
+        let hash = Digests.hash "sha256"
         let fd = fs.openSync (U2.Case1 path, U2.Case1 "r")
         try
             let chunk = 1 <<< 20
-            let buffer = JS.Constructors.Uint8Array.Create chunk
+            let buffer = buffer.Buffer.alloc chunk
             // The read position is carried rather than left to the descriptor's own cursor:
             // the binding wants one, and an explicit offset is what makes this loop's
             // termination readable — it ends when a read at the end returns nothing.
             let mutable pos = 0.
             let mutable go = true
             while go do
-                let read = fs.readSync (fd, unbox buffer, 0., float chunk, pos)
+                let read = fs.readSync (fd, buffer, 0., float chunk, pos)
                 if read <= 0. then go <- false
                 else
                     pos <- pos + read
                     hash.update (buffer.slice (0, int read)) |> ignore
-            ContentDigest.create (unbox<string> (hash.digest "hex")) |> Result.toOption
+            ContentDigest.create (hash.digest BinaryToTextEncoding.Hex) |> Result.toOption
         finally
             fs.closeSync fd
     with _ -> None
