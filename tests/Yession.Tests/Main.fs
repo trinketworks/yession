@@ -185,4 +185,4 @@ let all =
     ]
 
 [<EntryPoint>]
-let main argv = !! Pyxpecto.runTests [||] (Tag.narrowed all)
+let main argv = !! Pyxpecto.runTests [||] (Tag.narrowed all |> RunEnd.guarded)

@@ -377,6 +377,31 @@ module Processes =
     [<Emit("process.exit($0)")>]
     let exitWith (code: int) : 'a = jsNative
 
+    /// The code this process WILL exit with when it ends — `process.exitCode`, which is not
+    /// an exit: it says how the ending should come out, and the ending still has to arrive.
+    /// That is the difference that makes it the only thing an `exit` listener can change,
+    /// because by then the exit is already happening.
+    ///
+    /// Unset reads as 0, which is what Node does with it: a process that sets nothing and
+    /// runs out of work exits 0. So this answers the same 0 rather than an `option` whose
+    /// `None` would mean the identical thing.
+    [<Emit("process.exitCode ?? 0")>]
+    let exitCode () : int = jsNative
+
+    /// Say how this process should end, without ending it.
+    [<Emit("process.exitCode = $0")>]
+    let setExitCode (code: int) : unit = jsNative
+
+    /// The two endings a Node process has, as something to be told about.
+    ///
+    /// `"beforeExit"` is the loop running out of work — nothing left to do, and nobody said
+    /// to stop. `"exit"` is the ending itself, however it was reached, including an explicit
+    /// `process.exit`, which skips `"beforeExit"` entirely. A listener on either runs
+    /// synchronously: scheduling work from one is scheduling work for a process that is
+    /// already leaving.
+    [<Emit("process.on($0, $1)")>]
+    let onEnding (event: string) (listener: unit -> unit) : unit = jsNative
+
 // --- Child processes ------------------------------------------------------------------------
 
 /// What ONE of a child's standard streams is wired to. Node also reads a single one of these

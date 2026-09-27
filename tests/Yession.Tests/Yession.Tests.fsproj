@@ -16,6 +16,10 @@
 
   <ItemGroup>
     <Compile Include="Tags.fs" />
+    <!-- How a run ENDS, as opposed to what it found. Beside `Tags.fs` because they answer
+         the two halves of one question — which cases this run executes, and whether it
+         executed them — and early, because `Main.fs` is the only caller of either. -->
+    <Compile Include="RunEnd.fs" />
     <!-- The one HTTP client the suites drive routes with. Early, because everything that
          serves something uses it. -->
     <Compile Include="TestHttp.fs" />

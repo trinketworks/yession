@@ -1976,6 +1976,51 @@ let private testWaitTests =
             }
     ]
 
+// The OTHER other half: a run that stops early. A case that stops being scheduled is not
+// work, so Node's loop empties and the process leaves with code 0 having printed no verdict —
+// the run reads as a pass. Pyxpecto exits on every verdict it reaches, so an ending it did not
+// choose is already the fault; `RunEnd` is what says so, and what names the case.
+let private runEndTests =
+    testList "The test harness's ending (a run that stopped early)" [
+        testCaseAsync "an ordinary ending is not complained about" <|
+            async { Expect.isNone (RunEnd.ending false []) "nothing in flight, nothing to say" }
+
+        testCaseAsync "a case still running when the process leaves fails the run, and is named" <|
+            async {
+                match RunEnd.ending false [ "Yession - Domain - waits for ever" ] with
+                | Some complaint ->
+                    Expect.isTrue (complaint.Contains "Yession - Domain - waits for ever")
+                        "the case nobody would otherwise know to look at"
+                | None -> failwith "expected a case that never settled to fail the run"
+            }
+
+        testCaseAsync "a loop that emptied with nothing in flight is still a run that did not happen" <|
+            async {
+                Expect.isSome (RunEnd.ending true [])
+                    "a finished run exits on its own verdict, so a drained loop reached none"
+            }
+
+        testCaseAsync "a case is named while it runs, and let go when it finishes" <|
+            async {
+                let mutable seen = []
+                let probe =
+                    Fable.Pyxpecto.Model.AsyncTest (
+                        "waits",
+                        async { seen <- RunEnd.stillRunning () },
+                        Fable.Pyxpecto.Model.FocusState.Normal)
+                let wrapped =
+                    RunEnd.guarded (
+                        Fable.Pyxpecto.Model.TestList ("probe", [ probe ], Fable.Pyxpecto.Model.FocusState.Normal))
+                match wrapped with
+                | Fable.Pyxpecto.Model.TestList (_, [ Fable.Pyxpecto.Model.AsyncTest (_, body, _) ], _) ->
+                    do! body
+                    Expect.isTrue (seen |> List.contains "probe - waits") "in flight while it ran"
+                    Expect.isFalse (RunEnd.stillRunning () |> List.contains "probe - waits")
+                        "and gone once it finished"
+                | other -> failwithf "expected the tree back in the same shape, got %A" other
+            }
+    ]
+
 let private commandFoldTests =
     testList "Command execution (local)" [
         testCaseAsync "a host-sandbox command never inherits the session's credentials (leak regression)" <|
@@ -2482,6 +2527,7 @@ let tests =
         environmentRecordingTests
         testEnvTests
         testWaitTests
+        runEndTests
         commandFoldTests
         acceptanceTests
         agentSpawnerTests
