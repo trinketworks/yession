@@ -1108,8 +1108,7 @@ module private Pty =
                           Fable.NodePty.ForkOptions.cols = cols
                           Fable.NodePty.ForkOptions.rows = rows
                           Fable.NodePty.ForkOptions.cwd = startIn cwd
-                          Fable.NodePty.ForkOptions.env =
-                            createObj [ for name, value in Map.toList env -> name ==> value ] }
+                          Fable.NodePty.ForkOptions.env = Fable.NodePty.Environment.ofMap env }
                     )
                 proc.onData onOutput
                 proc.onExit (fun exit -> exited.Settle (SandboxExited (exitCode exit)))
@@ -1190,17 +1189,24 @@ module DockerSandbox =
         | None -> "alpine:3"
 
     /// One `HostConfig.Mounts` entry from a typed mount.
-    let private mountObj (name: string) (m: ContainerMount) : obj =
+    let private mountFor (name: string) (m: ContainerMount) : DK.Mount =
         let source, kind =
             match m.Source with
-            | HostPath p -> p, "bind"
-            | NamedVolume v -> v, "volume"
-            | SessionWorkspace -> name, "volume"
-        createObj
-            [ "Type", box kind
-              "Source", box source
-              "Target", box m.Target
-              "ReadOnly", box (m.Mode = ReadOnly) ]
+            | HostPath p -> p, DK.MountType.Bind
+            | NamedVolume v -> v, DK.MountType.Volume
+            | SessionWorkspace -> name, DK.MountType.Volume
+        jsOptions<DK.Mount> (fun mount ->
+            mount.Type <- kind
+            mount.Source <- source
+            mount.Target <- m.Target
+            mount.ReadOnly <- (m.Mode = ReadOnly))
+
+    /// What every docker object this module makes is labelled with: the session it belongs
+    /// to, which is what the cleanup sweep and `countByLabel` find it by.
+    let private sessionLabels (name: string) : DK.Labels = DK.Labels.ofList [ "yession-session", name ]
+
+    /// Removed even while it runs.
+    let private forced () : DK.RemoveOptions = jsOptions<DK.RemoveOptions> (fun o -> o.force <- true)
 
     /// Drain a build/pull progress stream; resolves when Docker signals completion.
     let private drainProgress (client: DK.Docker) (stream: DK.Stream) : Async<Result<unit, string>> =
@@ -1216,7 +1222,11 @@ module DockerSandbox =
         async {
             let client = DK.create ()
             let! arr =
-                client.listContainers (createObj [ "all", box true; "filters", box (createObj [ "label", box [| label |] ]) ])
+                client.listContainers (
+                    jsOptions<DK.ListContainersOptions> (fun o ->
+                        o.all <- true
+                        o.filters <- jsOptions<DK.ContainerFilters> (fun f -> f.label <- [| label |]))
+                )
                 |> Interop.awaitPromise
             return arr.Length
         }
@@ -1298,7 +1308,14 @@ module DockerSandbox =
     let private awaitStarted (client: DK.Docker) (container: DK.Container) : Async<Result<unit, string>> =
         async {
             try
-                let! stream = container.logs (createObj [ "follow", box true; "stdout", box true; "stderr", box true ]) |> Interop.awaitPromise
+                let! stream =
+                    container.logs (
+                        jsOptions<DK.LogsOptions> (fun o ->
+                            o.follow <- true
+                            o.stdout <- true
+                            o.stderr <- true)
+                    )
+                    |> Interop.awaitPromise
                 let stdout = DK.createPassThrough ()
                 let stderr = DK.createPassThrough ()
                 client.modem.demuxStream (stream, stdout, stderr)
@@ -1424,13 +1441,15 @@ module DockerSandbox =
                             | Some build ->
                                 let tag = "yession-build-" + name.ToLower ()
                                 let src = Node.Api.fs.readdirSync (U2.Case1 build.ContextPath) |> Array.ofSeq
+                                let context =
+                                    jsOptions<DK.BuildContext> (fun c ->
+                                        c.context <- build.ContextPath
+                                        c.src <- src)
                                 let opts =
-                                    [ "t", box tag ]
-                                    @ (match build.DockerfilePath with Some d -> [ "dockerfile", box d ] | None -> [])
-                                    |> createObj
-                                let! stream =
-                                    client.buildImage (createObj [ "context", box build.ContextPath; "src", box src ], opts)
-                                    |> Interop.awaitPromise
+                                    jsOptions<DK.BuildOptions> (fun o ->
+                                        o.t <- tag
+                                        build.DockerfilePath |> Option.iter (fun d -> o.dockerfile <- d))
+                                let! stream = client.buildImage (context, opts) |> Interop.awaitPromise
                                 let! drained = drainProgress client stream
                                 return drained |> Result.map (fun () -> tag)
                             | None ->
@@ -1461,74 +1480,81 @@ module DockerSandbox =
                         // and by accident: docker is the backend that passes no workspace.
                         let workspaceTarget =
                             policy.WorkingDirectory |> Option.defaultValue "/workspace"
-                        let mounts = mountPlan workspaceTarget container.Mounts policy |> List.map (mountObj name)
+                        let mounts = mountPlan workspaceTarget container.Mounts policy |> List.map (mountFor name)
                         let env =
                             policy.Env |> Map.toList |> List.map (fun (k, v) -> sprintf "%s=%s" k v) |> List.toArray
                         // The named volume persists across container restarts by design;
                         // the label lets cleanup find it (see the workflow teardown).
-                        do! client.createVolume (createObj [ "Name", box name; "Labels", box (createObj [ "yession-session", box name ]) ]) |> Interop.awaitPromise |> Async.Ignore
+                        do!
+                            client.createVolume (
+                                jsOptions<DK.VolumeCreateOptions> (fun o ->
+                                    o.Name <- name
+                                    o.Labels <- sessionLabels name)
+                            )
+                            |> Interop.awaitPromise
+                            |> Async.Ignore
                         // Clear a same-named crash leftover so `createContainer` can reuse the name.
-                        try do! client.getContainer(name).remove (createObj [ "force", box true ]) |> Interop.awaitPromise |> Async.Ignore
+                        try do! client.getContainer(name).remove (forced ()) |> Interop.awaitPromise |> Async.Ignore
                         with _ -> ()
                         let! container =
                             client.createContainer (
-                                createObj
-                                    [ "name", box name
-                                      "Image", box image
-                                      "Labels", box (createObj [ "yession-session", box name ])
-                                      "Env", box env
-                                      "WorkingDir", box workspaceTarget
-                                      // The sandbox's own process when it declared one, and
-                                      // otherwise the idle command that has always kept the
-                                      // container up for `exec` to reach — either way behind
-                                      // the daemon workaround (`startCommand`).
-                                      "Cmd", box (startCommand entrypoint container.Command)
-                                      "HostConfig",
-                                      box (
-                                          createObj
-                                              [ "Mounts", box (List.toArray mounts)
-                                                // The host, by the name `hostAddressFrom`
-                                                // promises. Colima and Docker Desktop
-                                                // resolve it unasked; a native Linux daemon
-                                                // does not, and `host-gateway` is the
-                                                // daemon's own answer on all three.
-                                                "ExtraHosts", box [| "host.docker.internal:host-gateway" |]
-                                                // Everything dropped, then the file-ownership
-                                                // capabilities added back. "Nothing it runs
-                                                // legitimately needs a capability" was measured
-                                                // false: a nix source build's tar unpack
-                                                // preserves the archive's uid/gid (CHOWN), later
-                                                // chmods the result (FOWNER), and root then
-                                                // reads files it just gave away (DAC_OVERRIDE).
-                                                // All three verified against a raw container;
-                                                // still far below docker's own default set — no
-                                                // NET_RAW, no SETUID/SETGID, no MKNOD — and
-                                                // no-new-privileges stays.
-                                                "CapDrop", box [| "ALL" |]
-                                                "CapAdd", box [| "CHOWN"; "FOWNER"; "DAC_OVERRIDE" |]
-                                                "SecurityOpt", box [| "no-new-privileges" |]
-                                                // /dev/shm, above docker's 64MB default.
-                                                // Chromium composites through shared memory
-                                                // and starves the moment more than one page
-                                                // paints at once: measured under this exact
-                                                // HostConfig, six concurrent headless pages
-                                                // leave two standing at 64MB and all six at
-                                                // 1GB, that being the only thing changed. A
-                                                // repo cannot reach this from its yession.yaml
-                                                // — the container block is image/build/volumes/
-                                                // cmd/entrypoint and nothing else — so a browser
-                                                // suite run in here (Playwright, Cypress) could
-                                                // not fix a too-small /dev/shm from the outside.
-                                                // tmpfs is a ceiling, not a reservation: a
-                                                // container that never opens a browser writes
-                                                // nothing here and pays nothing for the headroom.
-                                                "ShmSize", box 1073741824 ]) ])
+                                jsOptions<DK.ContainerCreateOptions> (fun o ->
+                                    o.name <- name
+                                    o.Image <- image
+                                    o.Labels <- sessionLabels name
+                                    o.Env <- env
+                                    o.WorkingDir <- workspaceTarget
+                                    // The sandbox's own process when it declared one, and
+                                    // otherwise the idle command that has always kept the
+                                    // container up for `exec` to reach — either way behind
+                                    // the daemon workaround (`startCommand`).
+                                    o.Cmd <- startCommand entrypoint container.Command
+                                    o.HostConfig <-
+                                        jsOptions<DK.HostConfig> (fun host ->
+                                            host.Mounts <- List.toArray mounts
+                                            // The host, by the name `hostAddressFrom`
+                                            // promises. Colima and Docker Desktop
+                                            // resolve it unasked; a native Linux daemon
+                                            // does not, and `host-gateway` is the
+                                            // daemon's own answer on all three.
+                                            host.ExtraHosts <- [| "host.docker.internal:host-gateway" |]
+                                            // Everything dropped, then the file-ownership
+                                            // capabilities added back. "Nothing it runs
+                                            // legitimately needs a capability" was measured
+                                            // false: a nix source build's tar unpack
+                                            // preserves the archive's uid/gid (CHOWN), later
+                                            // chmods the result (FOWNER), and root then
+                                            // reads files it just gave away (DAC_OVERRIDE).
+                                            // All three verified against a raw container;
+                                            // still far below docker's own default set — no
+                                            // NET_RAW, no SETUID/SETGID, no MKNOD — and
+                                            // no-new-privileges stays.
+                                            host.CapDrop <- [| "ALL" |]
+                                            host.CapAdd <- [| "CHOWN"; "FOWNER"; "DAC_OVERRIDE" |]
+                                            host.SecurityOpt <- [| "no-new-privileges" |]
+                                            // /dev/shm, above docker's 64MB default.
+                                            // Chromium composites through shared memory
+                                            // and starves the moment more than one page
+                                            // paints at once: measured under this exact
+                                            // HostConfig, six concurrent headless pages
+                                            // leave two standing at 64MB and all six at
+                                            // 1GB, that being the only thing changed. A
+                                            // repo cannot reach this from its yession.yaml
+                                            // — the container block is image/build/volumes/
+                                            // cmd/entrypoint and nothing else — so a browser
+                                            // suite run in here (Playwright, Cypress) could
+                                            // not fix a too-small /dev/shm from the outside.
+                                            // tmpfs is a ceiling, not a reservation: a
+                                            // container that never opens a browser writes
+                                            // nothing here and pays nothing for the headroom.
+                                            host.ShmSize <- 1073741824))
+                            )
                             |> Interop.awaitPromise
                         do! container.start () |> Interop.awaitPromise |> Async.Ignore
                         match! awaitStarted client container with
                         | Error reason ->
                             try
-                                do! client.getContainer(container.id).remove (createObj [ "force", box true ]) |> Interop.awaitPromise |> Async.Ignore
+                                do! client.getContainer(container.id).remove (forced ()) |> Interop.awaitPromise |> Async.Ignore
                             with _ -> ()
                             return Error reason
                         | Ok () ->
@@ -1553,25 +1579,29 @@ module DockerSandbox =
                             async {
                                 try
                                     let execOpts =
-                                        [ "Cmd", box (List.toArray (argvFor entrypoint exec))
-                                          "AttachStdin", box true
-                                          "AttachStdout", box true
-                                          "AttachStderr", box true
-                                          "Env", box (execEnv exec) ]
-                                        // Resolved against the container's own working
-                                        // directory, which is what it was CREATED with — so
-                                        // an exec naming nothing lands exactly where it
-                                        // always did, and one naming a relative directory
-                                        // means the same thing here as it does everywhere
-                                        // else in the session.
-                                        @ (match execWorkingDir exec with
-                                           | Some w -> [ "WorkingDir", box w ]
-                                           | None -> [])
-                                        |> createObj
+                                        jsOptions<DK.ExecOptions> (fun o ->
+                                            o.Cmd <- List.toArray (argvFor entrypoint exec)
+                                            o.AttachStdin <- true
+                                            o.AttachStdout <- true
+                                            o.AttachStderr <- true
+                                            o.Env <- execEnv exec
+                                            // Resolved against the container's own working
+                                            // directory, which is what it was CREATED with — so
+                                            // an exec naming nothing lands exactly where it
+                                            // always did, and one naming a relative directory
+                                            // means the same thing here as it does everywhere
+                                            // else in the session.
+                                            execWorkingDir exec |> Option.iter (fun w -> o.WorkingDir <- w))
                                     let! started = container.exec execOpts |> Interop.awaitPromise
                                     // Hijack the connection so stdin rides the same socket the
                                     // output is demuxed from.
-                                    let! stream = started.start (createObj [ "hijack", box true; "stdin", box true ]) |> Interop.awaitPromise
+                                    let! stream =
+                                        started.start (
+                                            jsOptions<DK.ExecStartOptions> (fun o ->
+                                                o.hijack <- true
+                                                o.stdin <- true)
+                                        )
+                                        |> Interop.awaitPromise
                                     let stdout = DK.createPassThrough ()
                                     let stderr = DK.createPassThrough ()
                                     client.modem.demuxStream (stream, stdout, stderr)
@@ -1590,7 +1620,7 @@ module DockerSandbox =
                                     stream.onError (fun error -> ended.Settle (SandboxRunFailed (StreamError.describe error)))
                                     return
                                         Ok
-                                            { WriteStdin = fun text -> stream.write (box text) |> ignore
+                                            { WriteStdin = fun text -> stream.write text |> ignore
                                               CloseStdin = fun () -> stream.``end`` ()
                                               // The Engine API cannot signal an exec's process;
                                               // closing our side of the stream is the most a
@@ -1615,16 +1645,14 @@ module DockerSandbox =
                             async {
                                 try
                                     let execOpts =
-                                        [ "Cmd", box (List.toArray (argvFor entrypoint exec))
-                                          "AttachStdin", box true
-                                          "AttachStdout", box true
-                                          "AttachStderr", box true
-                                          "Tty", box true
-                                          "Env", box (execEnv exec) ]
-                                        @ (match execWorkingDir exec with
-                                           | Some w -> [ "WorkingDir", box w ]
-                                           | None -> [])
-                                        |> createObj
+                                        jsOptions<DK.ExecOptions> (fun o ->
+                                            o.Cmd <- List.toArray (argvFor entrypoint exec)
+                                            o.AttachStdin <- true
+                                            o.AttachStdout <- true
+                                            o.AttachStderr <- true
+                                            o.Tty <- true
+                                            o.Env <- execEnv exec
+                                            execWorkingDir exec |> Option.iter (fun w -> o.WorkingDir <- w))
                                     let! started = container.exec execOpts |> Interop.awaitPromise
                                     // `Tty` on the START as well as on the create: the Engine
                                     // API's exec-start takes its own, and without it the daemon
@@ -1633,7 +1661,14 @@ module DockerSandbox =
                                     // middle of a shell's output. Unseen for as long as no
                                     // docker terminal ran a shell through the Host; the first
                                     // one printed `\x01\x00…\x14sed (GNU sed) 4.10`.
-                                    let! stream = started.start (createObj [ "hijack", box true; "stdin", box true; "Tty", box true ]) |> Interop.awaitPromise
+                                    let! stream =
+                                        started.start (
+                                            jsOptions<DK.ExecStartOptions> (fun o ->
+                                                o.hijack <- true
+                                                o.stdin <- true
+                                                o.Tty <- true)
+                                        )
+                                        |> Interop.awaitPromise
                                     Readables.text stream onOutput
                                     // Size it before anything runs: a program that reads its
                                     // dimensions at startup must not read 80x24 and then be
@@ -1661,7 +1696,7 @@ module DockerSandbox =
                                             // is a very long command line — but a caller that
                                             // starts streaming bytes through this should
                                             // chunk rather than assume the write survives.
-                                            { Write = fun text -> stream.write (box text) |> ignore
+                                            { Write = fun text -> stream.write text |> ignore
                                               Resize = fun c r -> execResize started r c
                                               // As with the piped exec: the Engine API cannot
                                               // signal an exec's process, so closing our side
@@ -1673,7 +1708,7 @@ module DockerSandbox =
                         let dispose () =
                             async {
                                 try
-                                    do! client.getContainer(container.id).remove (createObj [ "force", box true ]) |> Interop.awaitPromise |> Async.Ignore
+                                    do! client.getContainer(container.id).remove (forced ()) |> Interop.awaitPromise |> Async.Ignore
                                 with ex ->
                                     eprintfn "[sandbox %s] docker remove failed: %s" name ex.Message
                             }
@@ -2035,42 +2070,35 @@ module SrtSandbox =
 
     /// The config object srt itself reads.
     ///
-    /// Built here rather than in a macro, because which FIELDS it has is a decision: every
-    /// optional one is omitted when this policy has nothing to say about it, and omitted is
-    /// what srt reads as "you decide" — `bwrapPath ?? 'bwrap'`, a ripgrep default parameter,
-    /// `if (!enableWeakerNestedSandbox)`. A blank tool path is an absent one, as the
-    /// ternaries this replaced read it: `toolsFrom` already refuses to make one, and a
-    /// config that slipped one through would fail srt's own schema instead of falling back.
-    let private toJs (config: SrtConfig) : obj =
-        let strings (values: string list) : obj = box (List.toArray values)
-        let entry (key: string) (encode: string -> obj) (value: string option) : (string * obj) list =
-            value
-            |> Option.filter (fun named -> named <> "")
-            |> Option.map (fun named -> key, encode named)
-            |> Option.toList
-        let flag (key: string) (asked: bool) : (string * obj) list = if asked then [ key, box true ] else []
-        createObj
-            [ yield
-                ("network",
-                 createObj
-                     [ yield ("allowedDomains", strings config.AllowedDomains)
-                       yield ("deniedDomains", strings [])
-                       yield ("strictAllowlist", box true)
-                       yield ("allowUnixSockets", strings config.AllowUnixSockets)
-                       yield! flag "allowAllUnixSockets" config.AllowAllUnixSockets ])
-              yield
-                ("filesystem",
-                 createObj
-                     [ "denyRead", strings config.DenyRead
-                       "allowRead", strings config.AllowRead
-                       "allowWrite", strings config.AllowWrite
-                       "denyWrite", strings []
-                       "allowGitConfig", box config.AllowGitConfig
-                       "disabled", box config.FilesystemDisabled ])
-              yield! entry "bwrapPath" box config.Bwrap
-              yield! entry "socatPath" box config.Socat
-              yield! entry "ripgrep" (fun command -> createObj [ "command", box command ]) config.Ripgrep
-              yield! flag "enableWeakerNestedSandbox" config.WeakNesting ]
+    /// Which FIELDS it has is a decision: every optional one is left unassigned when this
+    /// policy has nothing to say about it, and unassigned is absent, which is what srt reads
+    /// as "you decide" (see `Fable.SandboxRuntime`). A flag this policy does not raise is
+    /// absent rather than `false`, for the same reason. A blank tool path is an absent one,
+    /// as the ternaries this replaced read it: `toolsFrom` already refuses to make one, and
+    /// a config that slipped one through would fail srt's own schema instead of falling back.
+    let private toJs (config: SrtConfig) : RuntimeConfig =
+        let named (value: string option) : string option = value |> Option.filter (fun named -> named <> "")
+        jsOptions<RuntimeConfig> (fun srt ->
+            srt.network <-
+                jsOptions<NetworkConfig> (fun network ->
+                    network.allowedDomains <- List.toArray config.AllowedDomains
+                    network.deniedDomains <- [||]
+                    network.strictAllowlist <- true
+                    network.allowUnixSockets <- List.toArray config.AllowUnixSockets
+                    if config.AllowAllUnixSockets then network.allowAllUnixSockets <- true)
+            srt.filesystem <-
+                jsOptions<FilesystemConfig> (fun filesystem ->
+                    filesystem.denyRead <- List.toArray config.DenyRead
+                    filesystem.allowRead <- List.toArray config.AllowRead
+                    filesystem.allowWrite <- List.toArray config.AllowWrite
+                    filesystem.denyWrite <- [||]
+                    filesystem.allowGitConfig <- config.AllowGitConfig
+                    filesystem.disabled <- config.FilesystemDisabled)
+            named config.Bwrap |> Option.iter (fun path -> srt.bwrapPath <- path)
+            named config.Socat |> Option.iter (fun path -> srt.socatPath <- path)
+            named config.Ripgrep
+            |> Option.iter (fun command -> srt.ripgrep <- jsOptions<RipgrepConfig> (fun ripgrep -> ripgrep.command <- command))
+            if config.WeakNesting then srt.enableWeakerNestedSandbox <- true)
 
     /// How srt is told "no directory": its wrapper takes the child's start directory and
     /// reads a missing one as "wherever this process is". This seam is handed the empty
@@ -2085,27 +2113,17 @@ module SrtSandbox =
     let private wrapCwd (directory: string option) : string option = directory
 
     /// The confined command line for `command` under this policy's `customConfig`.
-    let private wrapArgv (srt: SandboxManager) (command: string) (custom: obj) (cwd: string option) : JS.Promise<Wrapped> =
+    let private wrapArgv (srt: SandboxManager) (command: string) (custom: RuntimeConfig) (cwd: string option) : JS.Promise<Wrapped> =
         srt.wrapWithSandboxArgv (command, None, custom, None, cwd)
 
-    /// A copy of the manager's config carrying the two network fields this session widens.
-    /// The rest of the config — the filesystem rules, the credential scrubbing, srt's own
-    /// proxy state — is copied through rather than restated, because `updateConfig` REPLACES
-    /// what it is given; `Object.assign` copies every field, a record would copy the ones it
-    /// declares. Read once: `getConfig` hands back the manager's own object, so the config
-    /// and the network it carries are two views of one read rather than two reads that could
-    /// have disagreed.
+    /// Put the two network fields this session widens on the manager's config, and nothing
+    /// else of it changed (`RuntimeConfig.widened` says how). Read once: `getConfig` hands
+    /// back the manager's own object, so the config and the network it carries are two views
+    /// of one read rather than two reads that could have disagreed.
     let private widenAllowlist (srt: SandboxManager) (allowedDomains: string array) (allowUnixSockets: string array) : unit =
         match srt.getConfig () with
         | None -> failwith "srt's manager has no config to widen: it has not been initialized"
-        | Some config ->
-            let network =
-                JS.Constructors.Object.assign (
-                    obj (),
-                    box config.network,
-                    box {| allowedDomains = allowedDomains; allowUnixSockets = allowUnixSockets |}
-                )
-            srt.updateConfig (unbox<RuntimeConfig> (JS.Constructors.Object.assign (obj (), box config, box {| network = network |})))
+        | Some config -> srt.updateConfig (RuntimeConfig.widened config allowedDomains allowUnixSockets)
 
     // srt's manager is a PROCESS-WIDE singleton: one filtering proxy pair, one egress
     // allowlist, initialized once. Filesystem policy is per-spawn (it rides `customConfig`

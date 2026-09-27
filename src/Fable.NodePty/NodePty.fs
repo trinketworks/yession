@@ -33,16 +33,27 @@ type [<AllowNullLiteral>] Pty =
     /// `kill(signal?)`: SIGHUP when none is named, as a terminal closing sends.
     abstract kill : ?signal: string -> unit
 
+/// A child's environment COMPLETE, as node-pty reads it: a plain object of names to values.
+/// Opaque, and made only by `Environment.ofMap` — node-pty replaces rather than merges, so
+/// there is no such thing as a partial one.
+type Environment =
+    interface end
+
+[<RequireQualifiedAccess>]
+module Environment =
+
+    let ofMap (variables: Map<string, string>) : Environment =
+        unbox (JsInterop.createObj [ for name, value in Map.toList variables -> name, box value ])
+
 /// `spawn`'s options — the five this repository sets. `cwd` `None` starts the process where
-/// this one is; `env` is the child's environment COMPLETE, as a plain object of names to
-/// values (`createObj` makes one), because node-pty replaces rather than merges.
+/// this one is.
 [<RequireQualifiedAccess>]
 type ForkOptions =
     { name : string
       cols : int
       rows : int
       cwd : string option
-      env : obj }
+      env : Environment }
 
 /// What `require('node-pty')` answers with.
 type [<AllowNullLiteral>] Exports =

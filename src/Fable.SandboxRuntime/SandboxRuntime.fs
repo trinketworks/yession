@@ -13,21 +13,70 @@ module Fable.SandboxRuntime
 open Fable.Core
 open Fable.Core.JsInterop
 
-/// The network half of srt's config — the two fields this repository widens after the
-/// manager is up. srt reads both from the config the manager was INITIALIZED with, never
-/// from a spawn's own, which is why they are rewritten on the manager rather than sent
-/// with the command.
-type [<AllowNullLiteral>] NetworkConfig =
-    abstract allowedDomains : string array
-    abstract allowUnixSockets : string array
+// --- The config srt reads ---------------------------------------------------------------------
+//
+// Built with `jsOptions`, because which fields it has is a decision srt reads: an optional one
+// nobody assigned is ABSENT, and absent is what srt reads as "you decide" — `bwrapPath ??
+// 'bwrap'`, a ripgrep default parameter, `if (!enableWeakerNestedSandbox)`.
 
-/// srt's config object, opaque beyond `network`. The Host BUILDS one from a policy — as a
-/// plain object, because which fields it has is a decision srt reads (an absent one is "you
-/// decide") — and reads it back only to widen the network. `updateConfig` REPLACES what it
-/// is given, so a widened copy is taken with `Object.assign` over the whole object rather
-/// than through a record, which would drop every field nothing here declares.
+/// The network half. `allowedDomains` and `allowUnixSockets` are the two fields this
+/// repository widens after the manager is up: srt reads both from the config the manager was
+/// INITIALIZED with, never from a spawn's own, which is why they are rewritten on the manager
+/// rather than sent with the command.
+type [<AllowNullLiteral>] NetworkConfig =
+    abstract allowedDomains : string array with get, set
+    abstract deniedDomains : string array with get, set
+    /// Egress to nothing the allowlist does not name — no "ask" for an unlisted host.
+    abstract strictAllowlist : bool with get, set
+    abstract allowUnixSockets : string array with get, set
+    /// Every unix socket, for a host that cannot scope one by path.
+    abstract allowAllUnixSockets : bool with get, set
+
+/// The filesystem half: regions denied, and holes opened back in them.
+type [<AllowNullLiteral>] FilesystemConfig =
+    abstract denyRead : string array with get, set
+    abstract allowRead : string array with get, set
+    abstract allowWrite : string array with get, set
+    abstract denyWrite : string array with get, set
+    /// Writes to `.git/config`, which srt denies unless told otherwise.
+    abstract allowGitConfig : bool with get, set
+    /// No read or write rules at all, the mandatory denies included.
+    abstract disabled : bool with get, set
+
+/// The ripgrep srt scans for files to deny with.
+type [<AllowNullLiteral>] RipgrepConfig =
+    abstract command : string with get, set
+
+/// srt's config object: what `initialize` is handed for the session, and what a spawn's
+/// `customConfig` overrides it with.
 type [<AllowNullLiteral>] RuntimeConfig =
-    abstract network : NetworkConfig
+    abstract network : NetworkConfig with get, set
+    abstract filesystem : FilesystemConfig with get, set
+    abstract bwrapPath : string with get, set
+    abstract socatPath : string with get, set
+    abstract ripgrep : RipgrepConfig with get, set
+    /// The host's `/proc` kept and capabilities not dropped — what an unprivileged container,
+    /// which cannot nest a user namespace, is left with.
+    abstract enableWeakerNestedSandbox : bool with get, set
+
+[<RequireQualifiedAccess>]
+module RuntimeConfig =
+
+    /// A copy of `config` carrying these two network fields. The rest of it — the filesystem
+    /// rules, the credential scrubbing, srt's own proxy state — is copied through rather than
+    /// restated, because `updateConfig` REPLACES what it is given, and the manager's config
+    /// holds fields srt put there that nothing here declares: `Object.assign` copies every
+    /// field, a rebuild would copy the ones it knows.
+    let widened (config: RuntimeConfig) (allowedDomains: string array) (allowUnixSockets: string array) : RuntimeConfig =
+        let network =
+            JS.Constructors.Object.assign (
+                createEmpty<NetworkConfig>,
+                config.network,
+                jsOptions<NetworkConfig> (fun n ->
+                    n.allowedDomains <- allowedDomains
+                    n.allowUnixSockets <- allowUnixSockets)
+            )
+        unbox<RuntimeConfig> (JS.Constructors.Object.assign (createEmpty<RuntimeConfig>, config, {| network = network |}))
 
 /// What `wrapWithSandboxArgv` answers with: the confined command line to spawn instead.
 type [<AllowNullLiteral>] Wrapped =
@@ -39,14 +88,14 @@ type [<AllowNullLiteral>] SandboxManager =
     abstract isSupportedPlatform : unit -> bool
     /// `initialize(runtimeConfig, sandboxAskCallback?, enableLogMonitor?)` — the config as
     /// the Host built it. Returns early once a manager exists.
-    abstract initialize : config: obj -> JS.Promise<unit>
+    abstract initialize : config: RuntimeConfig -> JS.Promise<unit>
     abstract reset : unit -> JS.Promise<unit>
     /// `wrapWithSandboxArgv(command, binShell?, customConfig?, abortSignal?, cwd?)`. The
     /// per-spawn `customConfig` wins outright over the session's for what it names — the
     /// filesystem profile rides here. `cwd` `None` is "wherever this process is", which is
     /// how srt reads a missing one.
     abstract wrapWithSandboxArgv :
-        command: string * binShell: string option * customConfig: obj * abortSignal: obj option * cwd: string option ->
+        command: string * binShell: string option * customConfig: RuntimeConfig * abortSignal: obj option * cwd: string option ->
             JS.Promise<Wrapped>
     /// Where srt's Linux egress bridge listens: the unix sockets the in-sandbox socat
     /// connects to. Both are absent off Linux, where Seatbelt needs no such bridge.
