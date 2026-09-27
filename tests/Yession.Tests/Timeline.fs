@@ -2103,6 +2103,23 @@ let private sandboxCauseTests =
             let events = [ at 1L 0.0 (repoAdded "a" "octo/hello"); at 2L 1.0 (repoAdded "b" "octo/other"); at 3L 2.0 asks ]
             Expect.equal (causeOf "c" events) (Some (Cause.Item (message "a"))) "the ref points at the add"
 
+        testCase "a start the boot brought up names the boot" <| fun () ->
+            let html =
+                Support.render (
+                    clientOf
+                        [ at 1L 0.0 (SessionEvent.SessionStarted { MessageId = message "boot" })
+                          at 2L 1.0 (repoAdded "a" "octo/hello")
+                          at 3L 2.0 (startingBecause "s" (Cause.Item (message "boot"))) ])
+            Expect.isTrue ((causeLineOf "s" html).Contains Dom.Text.causeBooted) "the session's own sentence"
+
+        testCase "a start after a resume opens its own chain" <| fun () ->
+            let events =
+                [ at 1L 0.0 (SessionEvent.SessionStarted { MessageId = message "boot" })
+                  at 2L 1.0 (startingBecause "s" (Cause.Item (message "boot")))
+                  at 3L 2.0 (SessionEvent.SessionResumed { MessageId = message "again"; LastHeardAt = epoch.AddSeconds 1.5 })
+                  at 4L 3.0 (startingBecause "t" (Cause.Item (message "again"))) ]
+            Expect.equal (linkOf "t" events) (Some (CauseLink.Drawn (Cause.Item (message "again")))) "its own boot, not the first one's chain"
+
         testCase "a cause that is not an item offers no jump" <| fun () ->
             let html = Support.render (clientOf [ at 1L 0.0 (startingBecause "s" Cause.Booted) ])
             Expect.isFalse ((causeLineOf "s" html).Contains "data-cause-jump") "nothing to jump to"

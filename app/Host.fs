@@ -36,6 +36,9 @@ type SessionHost =
       /// browser whose cookie names a Manager-verified user.
       MintPeerTokenAs : PeerAttribution -> string
       Port : int
+      /// The item this process's boot recorded (`SessionStarted` / `SessionResumed`): what
+      /// the boot's own work names as its cause.
+      Boot : MessageId
       Log : EventLog<SessionEvent>
       /// The session's Yjs document. The Session Process owns it; peers hold replicas
       /// synced over `State` frames.
@@ -927,12 +930,13 @@ let startFull
         // off, so the timeline reads in the order it happened. Exactly one of the two, decided
         // by the one thing that tells them apart: a log with something in it was left by a
         // previous process, and an empty one is a session beginning.
+        let boot = mintMessageId ()
         let! _ =
             log.Append
                 ActorRef.SessionProcess
                 (match lastHeardAt with
-                 | Some at -> SessionResumed { MessageId = mintMessageId (); LastHeardAt = at }
-                 | None -> SessionStarted { MessageId = mintMessageId () })
+                 | Some at -> SessionResumed { MessageId = boot; LastHeardAt = at }
+                 | None -> SessionStarted { MessageId = boot })
         do! terminals.ReconcileAtBoot ()
         // And the turn that process was running, then what people queued, then what the log
         // still owes — in that order, which is the scheduler's to keep (`Scheduler.Boot`).
@@ -1135,6 +1139,7 @@ let startFull
               MintPeerToken = fun () -> peerTokens.Mint UnattributedAccess
               MintPeerTokenAs = peerTokens.Mint
               Port = port
+              Boot = boot
               Log = log
               Doc = doc
               Environment = environment

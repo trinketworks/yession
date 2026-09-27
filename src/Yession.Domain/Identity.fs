@@ -544,7 +544,8 @@ type Cause =
     /// Something earlier in the conversation: the message a turn answers, the repo added
     /// that a sandbox came up for.
     | Item of MessageId
-    /// The session started, and re-read what its repos declare.
+    /// The session started, and re-read what its repos declare. What a log written before
+    /// a boot was an item says; a boot now is one (`Item`), named by `FoldCause.Booted`.
     | Booted
     /// A person's credential became readable here — they verified into this launch, or
     /// connected something — and the repos' declarations were re-read for them.
@@ -554,8 +555,9 @@ type Cause =
 /// starts came up. Decided here, per repo, so the fold only asks.
 [<RequireQualifiedAccess>]
 type FoldCause =
-    /// The session started.
-    | Booted
+    /// The session started or resumed, recorded as this item (`SessionStarted` /
+    /// `SessionResumed`), so what the boot brings up points at the boot it came up in.
+    | Booted of MessageId
     /// A credential became readable here: a person's, or one nobody is named behind.
     | Connected of CredentialFor
     /// Something was done to one repo, recorded as this item — or as nothing, when it
@@ -569,7 +571,7 @@ module FoldCause =
     /// in the same fold was not caused by it, and saying so would be a false link.
     let causeFor (repo: RepoRef) (fold: FoldCause) : Cause option =
         match fold with
-        | FoldCause.Booted -> Some Cause.Booted
+        | FoldCause.Booted boot -> Some (Cause.Item boot)
         | FoldCause.Connected (CredentialFor.Person principal) -> Some (Cause.Connected principal)
         // Nobody is named behind it, so there is nobody to point to.
         | FoldCause.Connected CredentialFor.Deployment -> None

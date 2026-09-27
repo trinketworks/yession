@@ -150,6 +150,19 @@ let tests =
                 do! host.Stop ()
             }
 
+        // What the boot's own work names as its cause is the item the boot recorded — the
+        // link from a sandbox the boot brought up back to the rule that says it began.
+        testCaseAsync "a Host's boot is the item its boot recorded" <|
+            async {
+                let log = InMemoryEventLog.create (sid ()) (fun () -> System.DateTimeOffset.UtcNow)
+                let! host = Host.startWithEnvironment None None (Some log) (sid ()) 0
+                let! after = log.Read None System.Int32.MaxValue
+                match after.Events |> List.map (fun e -> e.Event) with
+                | SessionStarted started :: _ -> Expect.equal host.Boot started.MessageId "the start it recorded"
+                | other -> failwithf "expected the start first, got %A" other
+                do! host.Stop ()
+            }
+
         // The other half of the decision above. A session beginning has nothing to have been
         // away from, so a resumption here would be a gap measured from nothing.
         testCaseAsync "a Host booted over an empty log starts the session, and resumes nothing" <|
