@@ -49,11 +49,9 @@ let dataOf (event: string) : string option =
 let stream (req: IncomingMessage) (res: ServerResponse) (encode: Encode<'a>) (subscribe: Subscribe<'a>) : Sink<'a> =
     res.writeHead (
         200,
-        createObj
-            [ "content-type", box "text/event-stream"
-              "cache-control", box "no-store"
-              "connection", box "keep-alive" ])
-    |> ignore
+        [ ResponseHeader.ContentType "text/event-stream"
+          ResponseHeader.CacheControl "no-store"
+          ResponseHeader.Connection "keep-alive" ])
     res.write ": subscribed\n\n" |> ignore
     let sink : Sink<'a> = fun payload -> res.write (frame (encode payload)) |> ignore
     let subscription = subscribe sink

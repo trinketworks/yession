@@ -161,17 +161,6 @@ type [<AllowNullLiteral>] IncomingMessage =
     abstract ``method`` : string
     abstract on : string * (obj -> unit) -> IncomingMessage
 
-/// The response this process's server is writing. `Writable` for the same reason: it is
-/// where an upstream body is piped, and what gets destroyed when that body cannot finish.
-type [<AllowNullLiteral>] ServerResponse =
-    inherit Writable
-    abstract writeHead : int * obj -> ServerResponse
-    abstract write : string -> bool
-    abstract ``end`` : string -> unit
-    /// Whether a head has gone out — what decides if an error can still be said on this
-    /// response or has to close it.
-    abstract headersSent : bool
-
 type [<AllowNullLiteral>] HttpServer =
     inherit Listening
     abstract listen : int * string * (unit -> unit) -> HttpServer

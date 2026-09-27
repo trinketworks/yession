@@ -1014,6 +1014,110 @@ module HttpClient =
         let options = createObj [ "method" ==> ``method``; "headers" ==> createObj headers ]
         if url.StartsWith "https:" then overHttps url options onResponse else overHttp url options onResponse
 
+// --- node:http, answering ---------------------------------------------------------------------
+
+/// One header on a response this host writes. Closed, so each name is spelled once — here —
+/// rather than as a string at every call site, where `"cache-contol"` is a header nobody reads
+/// and nothing says so.
+[<RequireQualifiedAccess>]
+type ResponseHeader =
+    | CacheControl of string
+    | Connection of string
+    | ContentDisposition of string
+    | ContentLength of int64
+    | ContentSecurityPolicy of string
+    | ContentType of string
+    /// `x-content-type-options`.
+    | ContentTypeOptions of string
+    | ETag of string
+    | Location of string
+    | SetCookie of string
+
+[<RequireQualifiedAccess>]
+module ResponseHeader =
+
+    /// The name on the wire. Lowercase, which is what Node answers a request's with too.
+    let name (header: ResponseHeader) : string =
+        match header with
+        | ResponseHeader.CacheControl _ -> "cache-control"
+        | ResponseHeader.Connection _ -> "connection"
+        | ResponseHeader.ContentDisposition _ -> "content-disposition"
+        | ResponseHeader.ContentLength _ -> "content-length"
+        | ResponseHeader.ContentSecurityPolicy _ -> "content-security-policy"
+        | ResponseHeader.ContentType _ -> "content-type"
+        | ResponseHeader.ContentTypeOptions _ -> "x-content-type-options"
+        | ResponseHeader.ETag _ -> "etag"
+        | ResponseHeader.Location _ -> "location"
+        | ResponseHeader.SetCookie _ -> "set-cookie"
+
+    let value (header: ResponseHeader) : string =
+        match header with
+        | ResponseHeader.CacheControl v
+        | ResponseHeader.Connection v
+        | ResponseHeader.ContentDisposition v
+        | ResponseHeader.ContentSecurityPolicy v
+        | ResponseHeader.ContentType v
+        | ResponseHeader.ContentTypeOptions v
+        | ResponseHeader.ETag v
+        | ResponseHeader.Location v
+        | ResponseHeader.SetCookie v -> v
+        | ResponseHeader.ContentLength bytes -> string bytes
+
+/// The headers object Node's `writeHead` takes. Opaque, and made only below: from typed
+/// headers, or from an upstream's exactly as they arrived.
+type OutgoingHeaders =
+    interface end
+
+/// The response this process's server is writing. `Writable` because it is where an upstream
+/// body is piped, and what gets destroyed when that body cannot finish.
+///
+/// `Fable.Node` types `writeHead`'s headers as `obj` and `end` as text or a Buffer; the head is
+/// declared here so the headers are `ResponseHeader`s (see `writeHead` below), and both `end`s
+/// so a body that is bytes goes out as bytes instead of being cast to a string on the way.
+[<AllowNullLiteral>]
+type ServerResponse =
+    inherit Writable
+
+    [<Emit("$0.writeHead($1, $2)")>]
+    abstract writeHeadWith : statusCode: int * headers: OutgoingHeaders -> unit
+
+    abstract write : text: string -> bool
+
+    abstract ``end`` : text: string -> unit
+
+    abstract ``end`` : bytes: Buffer -> unit
+
+    /// Whether a head has gone out — what decides if an error can still be said on this
+    /// response or has to close it.
+    abstract headersSent : bool
+
+[<AutoOpen>]
+module ResponseHeads =
+
+    let private outgoing (pairs: (string * obj) seq) : OutgoingHeaders = unbox (createObj pairs)
+
+    type ServerResponse with
+
+        /// Send the status line and these headers.
+        member this.writeHead (statusCode: int, headers: ResponseHeader list) : unit =
+            this.writeHeadWith (
+                statusCode,
+                outgoing [ for header in headers -> ResponseHeader.name header, box (ResponseHeader.value header) ]
+            )
+
+        /// Send the status line with an upstream's headers as they came (`headerEntries`,
+        /// filtered): a proxy relays names it has no case for, and a value that is an array —
+        /// a repeated `set-cookie` — stays one.
+        member this.relayHead (statusCode: int, headers: (string * obj)[]) : unit =
+            this.writeHeadWith (statusCode, outgoing headers)
+
+        /// Send the status line with headers this process speaks but `ResponseHeader` has no
+        /// case for — which is only ever a stand-in for somebody else's server (a test playing
+        /// github.com's rate limit, or an MCP provider's session id). Product responses are
+        /// ours to name, and go through `writeHead`.
+        member this.writeNamedHead (statusCode: int, headers: (string * string) list) : unit =
+            this.writeHeadWith (statusCode, outgoing [ for name, value in headers -> name, box value ])
+
 // --- The environment's outbound proxy ----------------------------------------------------------
 
 [<AutoOpen>]

@@ -11,13 +11,14 @@ module Yession.Tests.Summaries
 // Ports, for that reason.
 
 open Fable.Core
+open Fable.NodeExtras
 open Fable.Pyxpecto
 open Yession.Domain.Agent
 open Yession.App
 open Yession.Host
 
 /// Start a server on a free port and answer with `handler`, which sees the request.
-let private serving (handler: Interop.IncomingMessage -> Interop.ServerResponse -> unit) =
+let private serving (handler: Interop.IncomingMessage -> ServerResponse -> unit) =
     async {
         let server = Interop.createServer handler
         let! listening =
@@ -25,8 +26,8 @@ let private serving (handler: Interop.IncomingMessage -> Interop.ServerResponse 
         return sprintf "http://127.0.0.1:%d" (Interop.serverPort listening), server
     }
 
-let private json (res: Interop.ServerResponse) (status: int) (body: string) =
-    res.writeHead (status, JsInterop.createObj [ "content-type", box "application/json" ]) |> ignore
+let private json (res: ServerResponse) (status: int) (body: string) =
+    res.writeHead (status, [ ResponseHeader.ContentType "application/json" ])
     res.``end`` body
 
 /// The request body, accumulated across `data` and handed over on `end` — a Node stream read
@@ -36,7 +37,7 @@ let private onBody (req: Interop.IncomingMessage) (f: string -> unit) : unit = I
 
 /// A provider that answers every ask with `said`, and records what it was asked.
 let private answering (said: string) (seen: ResizeArray<string>) =
-    fun (req: Interop.IncomingMessage) (res: Interop.ServerResponse) ->
+    fun (req: Interop.IncomingMessage) (res: ServerResponse) ->
         onBody req (fun body ->
             seen.Add body
             json res 200 (sprintf """{"content":[{"type":"text","text":"%s"}],"stop_reason":"end_turn"}""" said))
@@ -119,7 +120,7 @@ let portsTests =
                 // exactly like a credential that has gone stale.
                 let seen = ResizeArray<string> ()
                 let record =
-                    fun (req: Interop.IncomingMessage) (res: Interop.ServerResponse) ->
+                    fun (req: Interop.IncomingMessage) (res: ServerResponse) ->
                         match Interop.headerOf req "x-api-key", Interop.headerOf req "authorization" with
                         | Some key, _ -> seen.Add ("x-api-key:" + key)
                         | _, Some bearer -> seen.Add ("authorization:" + bearer)

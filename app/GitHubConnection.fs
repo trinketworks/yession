@@ -21,6 +21,7 @@ module Yession.Host.GitHubConnection
 open System
 open Fable.Core
 open Fable.Core.JsInterop
+open Fable.NodeExtras
 open Yession.Domain
 open Yession.Domain.Sandboxes
 open Yession.Domain.Access
@@ -208,11 +209,11 @@ let grantRequest (target: SecretId) (granted: PollGrant) : ControlWire.Connectio
 // `Poll` from the panel drives one session→github.com poll of the pending flow.
 
 let private respondJson (res: ServerResponse) (status: int) (json: string) =
-    res.writeHead (status, createObj [ "content-type", box "application/json"; "cache-control", box "no-store" ]) |> ignore
+    res.writeHead (status, [ ResponseHeader.ContentType "application/json"; ResponseHeader.CacheControl "no-store" ])
     res.``end`` json
 
 let private respondText (res: ServerResponse) (status: int) (text: string) =
-    res.writeHead (status, createObj [ "content-type", box "text/plain"; "cache-control", box "no-store" ]) |> ignore
+    res.writeHead (status, [ ResponseHeader.ContentType "text/plain"; ResponseHeader.CacheControl "no-store" ])
     res.``end`` text
 
 let private jsonString (raw: string) : string = Encode.toString 0 (Encode.string raw)

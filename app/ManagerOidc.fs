@@ -18,6 +18,7 @@ module Yession.Host.ManagerOidc
 
 open Fable.Core
 open Fable.Core.JsInterop
+open Fable.NodeExtras
 open Yession.Domain
 open Yession.Domain.Access
 open Yession.Oidc
@@ -47,11 +48,11 @@ let private jwksJson (publicJwk: Fable.Jose.Jwk) (kid: string) : string =
                 JwksKey.Use = "sig" } ] }
 
 let private respond (res: ServerResponse) (status: int) (contentType: string) (body: string) =
-    res.writeHead (status, createObj [ "content-type", box contentType; "cache-control", box "no-store" ]) |> ignore
+    res.writeHead (status, [ ResponseHeader.ContentType contentType; ResponseHeader.CacheControl "no-store" ])
     res.``end`` body
 
 let private redirect (res: ServerResponse) (location: string) =
-    res.writeHead (302, createObj [ "location", box location; "cache-control", box "no-store" ]) |> ignore
+    res.writeHead (302, [ ResponseHeader.Location location; ResponseHeader.CacheControl "no-store" ])
     res.``end`` ""
 
 type Provider =

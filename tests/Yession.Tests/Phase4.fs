@@ -8,6 +8,7 @@ module Yession.Tests.Phase4
 
 open System
 open Fable.Core
+open Fable.NodeExtras
 open Fable.Pyxpecto
 open Yession.Domain
 open Yession.Domain.Sandboxes
@@ -521,11 +522,11 @@ let private startControlServerOver
             WebhookRelay.create endpoints hub.NotifySecret (fun () ->
                 minted <- minted + 1
                 sprintf "sub-%d" minted)
-        let handler (req: Interop.IncomingMessage) (res: Interop.ServerResponse) =
+        let handler (req: Interop.IncomingMessage) (res: ServerResponse) =
             if not (
                 WebhookRelay.tryHandle relay req res
                 || Control.tryHandle (fun secret -> Map.tryFind secret table) (fun _ _ -> async { return Ok () }) (fun _ _ -> async { return Ok () }) (fun _ _ -> async { return Ok () }) hub.Register mcp.Register registerClient None None (fun _ _ -> Subscription.none) relay.Subscribe relay.Unsubscribe ignore req res) then
-                res.writeHead (404, Fable.Core.JsInterop.createObj [ "content-type", box "text/plain" ]) |> ignore
+                res.writeHead (404, [ ResponseHeader.ContentType "text/plain" ])
                 res.``end`` "not found"
         let server = Interop.createServer handler
         let! listening =
@@ -1099,12 +1100,12 @@ let private managerWithUi (name: string) =
 let private startFrontDoor () : Async<Interop.HttpServer * string * (unit -> unit)> =
     async {
         let mutable mapped = false
-        let handler (_: Interop.IncomingMessage) (res: Interop.ServerResponse) =
+        let handler (_: Interop.IncomingMessage) (res: ServerResponse) =
             if mapped then
-                res.writeHead (200, Fable.Core.JsInterop.createObj [ "content-type", box "text/html; charset=utf-8" ]) |> ignore
+                res.writeHead (200, [ ResponseHeader.ContentType "text/html; charset=utf-8" ])
                 res.``end`` "<!doctype html><title>a session</title>"
             else
-                res.writeHead (404, Fable.Core.JsInterop.createObj [ "content-type", box "text/plain" ]) |> ignore
+                res.writeHead (404, [ ResponseHeader.ContentType "text/plain" ])
                 res.``end`` "not found"
         let server = Interop.createServer handler
         let! listening =
@@ -2049,9 +2050,8 @@ let private sseStreamTests =
                 // Split mid-payload AND before the blank line that ends the event, so NEITHER
                 // piece is an event on its own: a loop that dropped what it held back would
                 // deliver nothing at all, and one that dispatched the half would deliver it twice.
-                let handler (_req: Interop.IncomingMessage) (res: Interop.ServerResponse) =
-                    res.writeHead (200, Fable.Core.JsInterop.createObj [ "content-type", box "text/event-stream" ])
-                    |> ignore
+                let handler (_req: Interop.IncomingMessage) (res: ServerResponse) =
+                    res.writeHead (200, [ ResponseHeader.ContentType "text/event-stream" ])
                     res.write "data: half a lo" |> ignore
                     // The gap is what makes this two reads rather than one: written back to back,
                     // the two pieces would reach the client in a single chunk and the case would
@@ -2098,10 +2098,9 @@ let private aThrowingSubscriber () =
     async {
         let connections = ResizeArray<int> ()
 
-        let handler (_req: Interop.IncomingMessage) (res: Interop.ServerResponse) =
+        let handler (_req: Interop.IncomingMessage) (res: ServerResponse) =
             connections.Add 1
-            res.writeHead (200, Fable.Core.JsInterop.createObj [ "content-type", box "text/event-stream" ])
-            |> ignore
+            res.writeHead (200, [ ResponseHeader.ContentType "text/event-stream" ])
             res.write "data: one\n\ndata: two\n\n" |> ignore
 
         let server = Interop.createServer handler
@@ -2216,9 +2215,8 @@ let private sseGiveUpTests =
             async {
                 // A stream that is open and stays open: the only way this connection can end is
                 // the teardown, so anything reaching `retry` came from the unsubscribe.
-                let handler (_req: Interop.IncomingMessage) (res: Interop.ServerResponse) =
-                    res.writeHead (200, Fable.Core.JsInterop.createObj [ "content-type", box "text/event-stream" ])
-                    |> ignore
+                let handler (_req: Interop.IncomingMessage) (res: ServerResponse) =
+                    res.writeHead (200, [ ResponseHeader.ContentType "text/event-stream" ])
                     res.write ": subscribed\n\n" |> ignore
 
                 let server = Interop.createServer handler
@@ -2248,10 +2246,9 @@ let private sseGiveUpTests =
                 // way, where nothing the subscription does can be seen from here.
                 let mutable socketClosed = false
 
-                let handler (req: Interop.IncomingMessage) (res: Interop.ServerResponse) =
+                let handler (req: Interop.IncomingMessage) (res: ServerResponse) =
                     onRequestSocketClosed req (fun () -> socketClosed <- true)
-                    res.writeHead (404, Fable.Core.JsInterop.createObj [ "content-type", box "text/plain" ])
-                    |> ignore
+                    res.writeHead (404, [ ResponseHeader.ContentType "text/plain" ])
                     // Node holds a head until something is written, so this is what puts the
                     // status on the wire — and it deliberately does not end the response.
                     res.write "no stream here" |> ignore

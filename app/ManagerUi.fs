@@ -11,6 +11,7 @@ module Yession.Host.ManagerUi
 // client; it shares the Manager's 127.0.0.1 endpoint with the control RPC.
 
 open Fable.Core.JsInterop
+open Fable.NodeExtras
 open Node.Api
 open Node.Buffer
 open Yession.Domain
@@ -741,13 +742,8 @@ let private assets = Assets.configured ()
 
 let private cssUrl = ManagerRoute.path (ManagerRoute.asset assets.Build AssetFile.``app``)
 
-/// The icon's constant is base64 (it lives in source); the wire wants the PNG. Same decode
-/// the session server does, for the same reason — `res.end` takes what Node's `end` takes.
-let private decodeBase64 (encoded: string) : string =
-    unbox (buffer.Buffer.from (encoded, BufferEncoding.Base64))
-
 let private respondWith (res: ServerResponse) (status: int) (contentType: string) (cacheControl: string) (body: string) =
-    res.writeHead (status, createObj [ "content-type", box contentType; "cache-control", box cacheControl ]) |> ignore
+    res.writeHead (status, [ ResponseHeader.ContentType contentType; ResponseHeader.CacheControl cacheControl ])
     res.``end`` body
 
 /// Every management response but one is a live view of mutable process state, so `no-store` is
@@ -761,7 +757,7 @@ let private html (res: ServerResponse) (body: string) = respond res 200 "text/ht
 /// GET: what the caller lands on is a resource, not a resubmission of the form waiting to be
 /// re-fired by a reload.
 let private seeOther (res: ServerResponse) (location: string) =
-    res.writeHead (303, createObj [ "location", box location; "cache-control", box "no-store" ]) |> ignore
+    res.writeHead (303, [ ResponseHeader.Location location; ResponseHeader.CacheControl "no-store" ])
     res.``end`` ""
 
 /// A string as a JS literal, for the one inline script below — so a URL containing a quote
@@ -1033,22 +1029,19 @@ let tryHandle
             // the build does.
             res.writeHead (
                 200,
-                createObj [ "content-type", box "application/manifest+json"; "cache-control", box CachePolicy.shell ])
-            |> ignore
+                [ ResponseHeader.ContentType "application/manifest+json"
+                  ResponseHeader.CacheControl CachePolicy.shell ])
             res.``end`` (WebApp.managerManifest (ManagerRoute.path ManagerRoute.Icon))
         | ManagerRoute.Icon ->
             // The same mark the session shells wear, from the same constant, at the address
             // the page emits for it.
-            res.writeHead (
-                200,
-                createObj [ "content-type", box "image/png"; "cache-control", box CachePolicy.shell ])
-            |> ignore
-            res.``end`` (decodeBase64 Brand.iconPngBase64)
+            res.writeHead (200, [ ResponseHeader.ContentType "image/png"; ResponseHeader.CacheControl CachePolicy.shell ])
+            res.``end`` (buffer.Buffer.from (Brand.iconPngBase64, BufferEncoding.Base64))
         | ManagerRoute.Favicon ->
             res.writeHead (
                 200,
-                createObj [ "content-type", box "image/svg+xml; charset=utf-8"; "cache-control", box CachePolicy.shell ])
-            |> ignore
+                [ ResponseHeader.ContentType "image/svg+xml; charset=utf-8"
+                  ResponseHeader.CacheControl CachePolicy.shell ])
             res.``end`` Brand.faviconSvg
         // Creating a session is asking to WORK in one. It used to answer with a refreshed
         // table, which left the primary path at three acts — create, find the row, Launch —

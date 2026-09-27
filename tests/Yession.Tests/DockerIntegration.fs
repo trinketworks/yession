@@ -12,6 +12,7 @@ module Yession.Tests.DockerIntegration
 open System
 open Fable.Core
 open Fable.Core.JsInterop
+open Fable.NodeExtras
 open Fable.Pyxpecto
 open Yession.Domain
 open Yession.Domain.Sandboxes
@@ -391,7 +392,7 @@ let tests =
                 // seeing that line inside the container is the whole proof.
                 let upstream =
                     Interop.createServer (fun _ res ->
-                        res.writeHead (200, createObj [ "content-type", box "text/plain" ]) |> ignore
+                        res.writeHead (200, [ ResponseHeader.ContentType "text/plain" ])
                         res.``end`` "answered by the upstream")
                 do! Async.FromContinuations (fun (cont, _, _) -> upstream.listen (0, "127.0.0.1", fun () -> cont ()) |> ignore)
                 let! gateway = GitGateway.start (sprintf "http://127.0.0.1:%d" (Interop.serverPort upstream)) ignore

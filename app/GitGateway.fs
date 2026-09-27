@@ -263,7 +263,7 @@ let private forward
         let up =
             httpRequest url req.``method`` (upstreamHeaders (req.headerEntries ()) authorization) (fun answer ->
                 if relayed answer.statusCode then
-                    res.writeHead (answer.statusCode, createObj (downstreamHeaders (answer.headerEntries ()))) |> ignore
+                    res.relayHead (answer.statusCode, downstreamHeaders (answer.headerEntries ()))
                     answer.pipe res
                     answer.onEnd (fun () -> finish Forwarded.Answered)
                     answer.onError (fun _ ->
@@ -343,7 +343,7 @@ let start (upstream: string) (report: string -> unit) : Async<Gateway> =
         live <- live |> Map.filter (fun _ loan -> loan.Terminal <> terminal)
 
     let answer (res: ServerResponse) (status: int) (contentType: string) (body: string) =
-        res.writeHead (status, createObj [ "content-type", box contentType; "cache-control", box "no-store" ]) |> ignore
+        res.writeHead (status, [ ResponseHeader.ContentType contentType; ResponseHeader.CacheControl "no-store" ])
         res.``end`` body
 
     let notFound (res: ServerResponse) = answer res 404 "text/plain" "not found"

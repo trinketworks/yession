@@ -318,10 +318,10 @@ let private startUpstream () : Async<Upstream> =
             authorizations.Add (headerOf req "authorization")
             paths.Add req.url
             if answer.Value = 200 then
-                res.writeHead (200, createObj [ "content-type", box "application/x-git-upload-pack-advertisement" ]) |> ignore
+                res.writeHead (200, [ ResponseHeader.ContentType "application/x-git-upload-pack-advertisement" ])
                 res.``end`` (advertisement "1111111111111111111111111111111111111111")
             else
-                res.writeHead (answer.Value, createObj [ "content-type", box "text/plain"; "www-authenticate", box "Basic realm=\"GitHub\"" ]) |> ignore
+                res.writeNamedHead (answer.Value, [ "content-type", "text/plain"; "www-authenticate", "Basic realm=\"GitHub\"" ])
                 res.``end`` "no")
     async {
         do! Async.FromContinuations (fun (cont, _, _) -> server.listen (0, "127.0.0.1", fun () -> cont ()) |> ignore)
@@ -800,8 +800,7 @@ let private gitHttpBackend (root: string) (seen: ResizeArray<string option>) : H
                 match splitCgiHead written with
                 | None -> ()
                 | Some (status, headers, rest) ->
-                    res.writeHead (status, createObj (headers |> List.map (fun (name, value) -> name ==> value)))
-                    |> ignore
+                    res.writeNamedHead (status, headers)
 
                     headed <- true
                     written <- ""
@@ -810,7 +809,7 @@ let private gitHttpBackend (root: string) (seen: ResizeArray<string option>) : H
         answer.onEnd (fun () ->
             // A backend that said nothing at all is this fixture failing, not an answer git
             // should be asked to read.
-            if not headed then res.writeHead (500, createObj []) |> ignore
+            if not headed then res.writeHead (500, [  ])
             res.``end`` ""))
 
 // --- [Ports]: the push, end to end ---------------------------------------------------------

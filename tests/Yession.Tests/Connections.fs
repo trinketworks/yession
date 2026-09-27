@@ -7,6 +7,7 @@ module Yession.Tests.Connections
 
 open System
 open Fable.Core
+open Fable.NodeExtras
 open Fable.Pyxpecto
 open Yession.Domain
 open Yession.Domain.Sandboxes
@@ -555,17 +556,17 @@ let private startTokenEndpoint () : Async<TokenEndpoint> =
         let mutable failing = 0
         let requests = ResizeArray<string> ()
         let contentTypes = ResizeArray<string option> ()
-        let handler (req: Interop.IncomingMessage) (res: Interop.ServerResponse) =
+        let handler (req: Interop.IncomingMessage) (res: ServerResponse) =
             Interop.readBody req (fun acc ->
                 requests.Add acc
                 contentTypes.Add (Interop.headerOf req "content-type")
                 if failing > 0 then
                     failing <- failing - 1
-                    res.writeHead (503, Fable.Core.JsInterop.createObj [ "content-type", box "text/plain" ]) |> ignore
+                    res.writeHead (503, [ ResponseHeader.ContentType "text/plain" ])
                     res.``end`` "the provider is having a moment"
                 else
                     let status = if response.StartsWith "{" then 200 else 400
-                    res.writeHead (status, Fable.Core.JsInterop.createObj [ "content-type", box "application/json" ]) |> ignore
+                    res.writeHead (status, [ ResponseHeader.ContentType "application/json" ])
                     res.``end`` response) |> ignore
         let server = Interop.createServer handler
         let! listening =
@@ -587,8 +588,8 @@ type private StatusEndpoint =
 let private startStatusEndpoint () : Async<StatusEndpoint> =
     async {
         let mutable status = 200
-        let handler (_: Interop.IncomingMessage) (res: Interop.ServerResponse) =
-            res.writeHead (status, Fable.Core.JsInterop.createObj [ "content-type", box "application/json" ]) |> ignore
+        let handler (_: Interop.IncomingMessage) (res: ServerResponse) =
+            res.writeHead (status, [ ResponseHeader.ContentType "application/json" ])
             res.``end`` "{}"
         let server = Interop.createServer handler
         let! listening =
@@ -610,9 +611,9 @@ let private startProfileEndpoint () : Async<ProfileEndpoint> =
     async {
         let mutable status = 200
         let authorizations = ResizeArray<string option> ()
-        let handler (req: Interop.IncomingMessage) (res: Interop.ServerResponse) =
+        let handler (req: Interop.IncomingMessage) (res: ServerResponse) =
             authorizations.Add (Interop.headerOf req "authorization")
-            res.writeHead (status, Fable.Core.JsInterop.createObj [ "content-type", box "application/json" ]) |> ignore
+            res.writeHead (status, [ ResponseHeader.ContentType "application/json" ])
             res.``end`` """{"login":"octocat","id":583231,"name":"The Octocat","email":null}"""
         let server = Interop.createServer handler
         let! listening =
@@ -1211,7 +1212,7 @@ let private startConnectionsServer (callers: (string * Control.ControlCaller) li
         apiRef.Value <- Some api
         let dummyRegister (_: string) (_: SessionId) (_: string) : Yession.Oidc.RegisterClientResponse =
             { ClientId = "unused"; ClientSecret = "unused"; Issuer = "unused" }
-        let handler (req: Interop.IncomingMessage) (res: Interop.ServerResponse) =
+        let handler (req: Interop.IncomingMessage) (res: ServerResponse) =
             if not (Control.tryHandle
                         (fun secret -> Map.tryFind secret table)
                         (fun _ _ -> async { return Ok () })
@@ -1227,7 +1228,7 @@ let private startConnectionsServer (callers: (string * Control.ControlCaller) li
                         (fun _ _ -> false)
                         ignore
                         req res) then
-                res.writeHead (404, Fable.Core.JsInterop.createObj [ "content-type", box "text/plain" ]) |> ignore
+                res.writeHead (404, [ ResponseHeader.ContentType "text/plain" ])
                 res.``end`` "not found"
         let server = Interop.createServer handler
         let! listening =
@@ -1743,7 +1744,7 @@ let private startStubGitHub () : Async<StubGitHub> =
     async {
         let mutable tokenReply = """{"error":"authorization_pending"}"""
         let tokenRequests = ResizeArray<string> ()
-        let handler (req: Interop.IncomingMessage) (res: Interop.ServerResponse) =
+        let handler (req: Interop.IncomingMessage) (res: ServerResponse) =
             Interop.readBody req (fun acc ->
                 let reply =
                     if (req.url.Split('?').[0]) = "/device/code" then
@@ -1752,7 +1753,7 @@ let private startStubGitHub () : Async<StubGitHub> =
                     else
                         tokenRequests.Add acc
                         tokenReply
-                res.writeHead (200, Fable.Core.JsInterop.createObj [ "content-type", box "application/json" ]) |> ignore
+                res.writeHead (200, [ ResponseHeader.ContentType "application/json" ])
                 res.``end`` reply) |> ignore
         let server = Interop.createServer handler
         let! listening =
@@ -1832,9 +1833,9 @@ let private startGitHubRoutesOver
     =
     async {
         let route = GitHubConnection.routes sessionA (stubAuth ()) connections post ""
-        let handler (req: Interop.IncomingMessage) (res: Interop.ServerResponse) =
+        let handler (req: Interop.IncomingMessage) (res: ServerResponse) =
             if not (route req res) then
-                res.writeHead (404, Fable.Core.JsInterop.createObj [ "content-type", box "text/plain" ]) |> ignore
+                res.writeHead (404, [ ResponseHeader.ContentType "text/plain" ])
                 res.``end`` "not found"
         let server = Interop.createServer handler
         let! listening =
@@ -2811,23 +2812,22 @@ let private startStubGitHubApi () : Async<StubGitHubApi> =
         let mutable allowance : (int * int64 * string) option = None
         let requests = ResizeArray<string * string option> ()
         let posted = ResizeArray<string * string> ()
-        let withAllowance (pairs: (string * obj) list) =
+        let withAllowance (pairs: (string * string) list) =
             match allowance with
             | None -> pairs
             | Some (remaining, resets, resource) ->
                 pairs
-                @ [ "x-ratelimit-remaining", box (string remaining)
-                    "x-ratelimit-reset", box (string resets)
-                    "x-ratelimit-resource", box resource ]
-        let handler (req: Interop.IncomingMessage) (res: Interop.ServerResponse) =
+                @ [ "x-ratelimit-remaining", string remaining
+                    "x-ratelimit-reset", string resets
+                    "x-ratelimit-resource", resource ]
+        let handler (req: Interop.IncomingMessage) (res: ServerResponse) =
             let path = req.url.Split('?').[0]
             requests.Add (path, Interop.headerOf req "authorization")
             let refuse () =
-                res.writeHead (status, Fable.Core.JsInterop.createObj (withAllowance [ "content-type", box "application/json" ])) |> ignore
+                res.writeNamedHead (status, withAllowance [ "content-type", "application/json" ])
                 res.``end`` """{"message":"nope"}"""
             let answer (code: int) (json: string) =
-                res.writeHead (code, Fable.Core.JsInterop.createObj (withAllowance [ "content-type", box "application/json" ]))
-                |> ignore
+                res.writeNamedHead (code, withAllowance [ "content-type", "application/json" ])
                 res.``end`` json
             let body, version = if path.Contains "/check-runs" then checksBody, checksVersion else prBody, prVersion
             let etag = sprintf "\"v%d\"" version
@@ -2851,13 +2851,10 @@ let private startStubGitHubApi () : Async<StubGitHubApi> =
             elif status <> 200 then
                 refuse ()
             elif Interop.headerOf req "if-none-match" = Some etag then
-                res.writeHead (304, Fable.Core.JsInterop.createObj (withAllowance [ "etag", box etag ])) |> ignore
+                res.writeNamedHead (304, withAllowance [ "etag", etag ])
                 res.``end`` ""
             else
-                res.writeHead (
-                    200,
-                    Fable.Core.JsInterop.createObj (withAllowance [ "content-type", box "application/json"; "etag", box etag ]))
-                |> ignore
+                res.writeNamedHead (200, withAllowance [ "content-type", "application/json"; "etag", etag ])
                 res.``end`` body
         let server = Interop.createServer handler
         let! listening =

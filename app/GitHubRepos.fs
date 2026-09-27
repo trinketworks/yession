@@ -328,11 +328,11 @@ let pullHeadOver (apiBase: string) (token: string option) (repo: RepoRef) (numbe
 open Yession.App
 
 let private respondJson (res: ServerResponse) (status: int) (json: string) =
-    res.writeHead (status, createObj [ "content-type", box "application/json"; "cache-control", box "no-store" ]) |> ignore
+    res.writeHead (status, [ ResponseHeader.ContentType "application/json"; ResponseHeader.CacheControl "no-store" ])
     res.``end`` json
 
 let private respondText (res: ServerResponse) (status: int) (text: string) =
-    res.writeHead (status, createObj [ "content-type", box "text/plain"; "cache-control", box "no-store" ]) |> ignore
+    res.writeHead (status, [ ResponseHeader.ContentType "text/plain"; ResponseHeader.CacheControl "no-store" ])
     res.``end`` text
 
 /// The JSON the browser reads a listing as: the codec the picker decodes with, so the

@@ -21,6 +21,7 @@ module Yession.Tests.Oidc
 open System
 open Fable.Core
 open Fable.Core.JsInterop
+open Fable.NodeExtras
 open Fable.Pyxpecto
 open Yession.Domain
 open Yession.Domain.Access
@@ -411,9 +412,9 @@ let private opTests =
             async {
                 let mutable issuer = ""
                 let! provider = ManagerOidc.create (fun () -> issuer) Strategy.localhost (fun _ _ _ _ -> ())
-                let handler (req: Interop.IncomingMessage) (res: Interop.ServerResponse) =
+                let handler (req: Interop.IncomingMessage) (res: ServerResponse) =
                     if not (provider.TryHandle req res) then
-                        res.writeHead (404, createObj [ "content-type", box "text/plain" ]) |> ignore
+                        res.writeHead (404, [ ResponseHeader.ContentType "text/plain" ])
                         res.``end`` "not found"
                 let server = Interop.createServer handler
                 let! _ = Async.FromContinuations (fun (cont, _, _) -> server.listen (0, "127.0.0.1", fun () -> cont ()) |> ignore)

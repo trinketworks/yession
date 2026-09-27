@@ -11,6 +11,7 @@ module Yession.Host.Signalling
 // Session Process's answer; the established data channel becomes a session `FrameChannel`.
 
 open Fable.Core.JsInterop
+open Fable.NodeExtras
 open Node.Api
 open Node.Buffer
 open Yession.Domain
@@ -37,12 +38,6 @@ let private bootstrapHtml (sessionId: SessionId) (mount: string) (managerOrigin:
     // Seed the serving session id so the secondary identifier renders on first paint (the
     // browser re-learns it from `PeerAccepted` once connected).
     Ssr.page sessionId mount managerOrigin ephemeralStorage assets { ClientModel.init placeholderPeer with Session = Some sessionId }
-
-/// The app icon's bytes. The constant is base64 (`Brand.iconPngBase64`) because it lives in
-/// source; the wire wants the PNG, and `res.end` is typed to the string case it is used with
-/// everywhere else — so the Buffer goes through `unbox`, which is what Node's `end` accepts.
-let private decodeBase64 (encoded: string) : string =
-    unbox (buffer.Buffer.from (encoded, BufferEncoding.Base64))
 
 let private encodeUriComponent (value: string) : string = Fable.Core.JS.encodeURIComponent value
 
@@ -156,18 +151,18 @@ let start
          | None -> false)
         || (queryParamOf url "token" |> Option.map validateToken |> Option.defaultValue false)
     let unauthorized (res: ServerResponse) =
-        res.writeHead (401, createObj [ "content-type", box "text/plain"; "cache-control", box "no-store" ]) |> ignore
+        res.writeHead (401, [ ResponseHeader.ContentType "text/plain"; ResponseHeader.CacheControl "no-store" ])
         res.``end`` "unauthorized"
 
     let notFound (res: ServerResponse) =
-        res.writeHead (404, createObj [ "content-type", box "text/plain"; "cache-control", box "no-store" ]) |> ignore
+        res.writeHead (404, [ ResponseHeader.ContentType "text/plain"; ResponseHeader.CacheControl "no-store" ])
         res.``end`` "not found"
 
     /// A request this route cannot act on, said in the answer rather than by failing inside
     /// the handler. The signalling POST is the one route whose body is a peer's, so it is
     /// the one that has to refuse.
     let badRequest (why: string) (res: ServerResponse) =
-        res.writeHead (400, createObj [ "content-type", box "text/plain"; "cache-control", box "no-store" ]) |> ignore
+        res.writeHead (400, [ ResponseHeader.ContentType "text/plain"; ResponseHeader.CacheControl "no-store" ])
         res.``end`` why
 
     /// Write a JSONL range. Shared by the event log and the transcripts, because the argument
@@ -176,10 +171,8 @@ let start
     let writeLines (lines: string list) (res: ServerResponse) =
         res.writeHead (
             200,
-            createObj
-                [ "content-type", box "application/x-ndjson; charset=utf-8"
-                  "cache-control", box "no-store" ])
-        |> ignore
+            [ ResponseHeader.ContentType "application/x-ndjson; charset=utf-8"
+              ResponseHeader.CacheControl "no-store" ])
         res.``end`` (lines |> List.map (fun l -> l + "\n") |> String.concat "")
 
     /// Redirect a cursor to the range that answers it. An absolute-path Location, built from
@@ -196,14 +189,14 @@ let start
             match queryParamOf url "token" with
             | Some token -> sprintf "%s?token=%s" path (encodeUriComponent token)
             | None -> path
-        res.writeHead (307, createObj [ "location", box target; "cache-control", box "no-store" ]) |> ignore
+        res.writeHead (307, [ ResponseHeader.Location target; ResponseHeader.CacheControl "no-store" ])
         res.``end`` ""
 
     /// A cursor whose caller is already current. `204` rather than an empty range, because
     /// an empty range is a resource a client would keep, and "nothing yet" is exactly the
     /// thing that stops being true.
     let noContent (res: ServerResponse) =
-        res.writeHead (204, createObj [ "cache-control", box "no-store" ]) |> ignore
+        res.writeHead (204, [ ResponseHeader.CacheControl "no-store" ])
         res.``end`` ""
 
     /// The cursor. Never carries events and never caches: it answers where the events
@@ -293,10 +286,8 @@ let start
                     | Some json ->
                         res.writeHead (
                             200,
-                            createObj
-                                [ "content-type", box "application/json; charset=utf-8"
-                                  "cache-control", box CachePolicy.keyframe ])
-                        |> ignore
+                            [ ResponseHeader.ContentType "application/json; charset=utf-8"
+                              ResponseHeader.CacheControl CachePolicy.keyframe ])
                         res.``end`` json
                     | None -> notFound res
                 })
@@ -317,7 +308,7 @@ let start
                 | Some tryRoutes -> tryRoutes req res
                 | None -> false
             if not handledByExtra then
-                res.writeHead (404, createObj [ "content-type", box "text/plain" ]) |> ignore
+                res.writeHead (404, [ ResponseHeader.ContentType "text/plain" ])
                 res.``end`` "not found"
         match routeOf req with
         | Some Signal ->
@@ -331,7 +322,7 @@ let start
                     Async.StartImmediate(
                         async {
                             let! answer = answerOffer pc offer.Sdp
-                            res.writeHead (200, createObj [ "content-type", box "application/json" ]) |> ignore
+                            res.writeHead (200, [ ResponseHeader.ContentType "application/json" ])
                             res.``end`` answer
                         }))
         | Some Shell ->
@@ -339,16 +330,14 @@ let start
             // must never be served stale — a cached shell pins the whole UI to the build it
             // was rendered against. Revalidated every time; the ETag makes that a 304.
             if headerOf req "if-none-match" = Some shellEtag then
-                res.writeHead (304, createObj [ "cache-control", box CachePolicy.shell; "etag", box shellEtag ]) |> ignore
+                res.writeHead (304, [ ResponseHeader.CacheControl CachePolicy.shell; ResponseHeader.ETag shellEtag ])
                 res.``end`` ""
             else
                 res.writeHead (
                     200,
-                    createObj
-                        [ "content-type", box "text/html; charset=utf-8"
-                          "cache-control", box CachePolicy.shell
-                          "etag", box shellEtag ])
-                |> ignore
+                    [ ResponseHeader.ContentType "text/html; charset=utf-8"
+                      ResponseHeader.CacheControl CachePolicy.shell
+                      ResponseHeader.ETag shellEtag ])
                 res.``end`` bootstrapHtml
         | Some (Asset (build, path)) ->
             // Whatever this build left in its asset directory — the bundle, the stylesheet, a
@@ -367,30 +356,23 @@ let start
             // client to a build that is gone. `no-cache` means revalidate, not "do not keep".
             res.writeHead (
                 200,
-                createObj
-                    [ "content-type", box "text/javascript; charset=utf-8"
-                      "cache-control", box CachePolicy.shell ])
-            |> ignore
+                [ ResponseHeader.ContentType "text/javascript; charset=utf-8"
+                  ResponseHeader.CacheControl CachePolicy.shell ])
             res.``end`` serviceWorkerScript
         | Some Manifest ->
             res.writeHead (
                 200,
-                createObj
-                    [ "content-type", box "application/manifest+json; charset=utf-8"
-                      "cache-control", box CachePolicy.shell ])
-            |> ignore
+                [ ResponseHeader.ContentType "application/manifest+json; charset=utf-8"
+                  ResponseHeader.CacheControl CachePolicy.shell ])
             res.``end`` WebApp.manifest
         | Some Icon ->
-            res.writeHead (
-                200,
-                createObj [ "content-type", box "image/png"; "cache-control", box CachePolicy.shell ])
-            |> ignore
-            res.``end`` (decodeBase64 Brand.iconPngBase64)
+            res.writeHead (200, [ ResponseHeader.ContentType "image/png"; ResponseHeader.CacheControl CachePolicy.shell ])
+            res.``end`` (buffer.Buffer.from (Brand.iconPngBase64, BufferEncoding.Base64))
         | Some Favicon ->
             res.writeHead (
                 200,
-                createObj [ "content-type", box "image/svg+xml; charset=utf-8"; "cache-control", box CachePolicy.shell ])
-            |> ignore
+                [ ResponseHeader.ContentType "image/svg+xml; charset=utf-8"
+                  ResponseHeader.CacheControl CachePolicy.shell ])
             res.``end`` Brand.faviconSvg
         | Some (EventsAfter after) ->
             match events with
@@ -421,30 +403,33 @@ let start
             // preserving offline reopen.
             match auth with
             | None ->
-                res.writeHead (404, createObj [ "content-type", box "text/plain"; "cache-control", box "no-store" ]) |> ignore
+                res.writeHead (404, [ ResponseHeader.ContentType "text/plain"; ResponseHeader.CacheControl "no-store" ])
                 res.``end`` "this session has no authorization provider"
             // Already signed in: straight to the shell. A sign-in this browser holds is not
             // restarted — the bounce would only mint the cookie it already carries, three
             // redirects later. `./` relative to `<mount>/login` is the shell, as `/callback`
             // spells it below.
             | Some a when (a.IdentityOf req).IsSome ->
-                res.writeHead (302, createObj [ "location", box "./"; "cache-control", box "no-store" ]) |> ignore
+                res.writeHead (302, [ ResponseHeader.Location "./"; ResponseHeader.CacheControl "no-store" ])
                 res.``end`` ""
             | Some a ->
                 Async.StartImmediate (
                     async {
                         match! a.BeginLogin () with
                         | Some url ->
-                            res.writeHead (302, createObj [ "location", box url; "cache-control", box "no-store" ]) |> ignore
+                            res.writeHead (302, [ ResponseHeader.Location url; ResponseHeader.CacheControl "no-store" ])
                             res.``end`` ""
                         | None ->
-                            res.writeHead (503, createObj [ "content-type", box "text/plain"; "cache-control", box "no-store" ]) |> ignore
+                            res.writeHead (
+                                503,
+                                [ ResponseHeader.ContentType "text/plain"
+                                  ResponseHeader.CacheControl "no-store" ])
                             res.``end`` "session is still registering with its manager"
                     })
         | Some Callback ->
             match auth with
             | None ->
-                res.writeHead (404, createObj [ "content-type", box "text/plain"; "cache-control", box "no-store" ]) |> ignore
+                res.writeHead (404, [ ResponseHeader.ContentType "text/plain"; ResponseHeader.CacheControl "no-store" ])
                 res.``end`` "this session has no authorization provider"
             | Some a ->
                 Async.StartImmediate (
@@ -455,11 +440,15 @@ let start
                             // wherever this session is mounted, with no prefix to know.
                             res.writeHead (
                                 302,
-                                createObj [ "location", box "./"; "set-cookie", box setCookie; "cache-control", box "no-store" ])
-                            |> ignore
+                                [ ResponseHeader.Location "./"
+                                  ResponseHeader.SetCookie setCookie
+                                  ResponseHeader.CacheControl "no-store" ])
                             res.``end`` ""
                         | Error (status, message) ->
-                            res.writeHead (status, createObj [ "content-type", box "text/plain"; "cache-control", box "no-store" ]) |> ignore
+                            res.writeHead (
+                                status,
+                                [ ResponseHeader.ContentType "text/plain"
+                                  ResponseHeader.CacheControl "no-store" ])
                             res.``end`` message
                     })
         | Some Me ->
@@ -485,7 +474,7 @@ let start
                       Sub = subject
                       Attributed = attributed
                       DisplayName = displayName }
-                res.writeHead (200, createObj [ "content-type", box "application/json"; "cache-control", box "no-store" ]) |> ignore
+                res.writeHead (200, [ ResponseHeader.ContentType "application/json"; ResponseHeader.CacheControl "no-store" ])
                 res.``end`` (MeProbe.toJson payload)
             match auth with
             | None -> respondMe "local" None UnattributedAccess
@@ -493,7 +482,7 @@ let start
                 match a.IdentityOf req with
                 | Some identity -> respondMe identity.Subject identity.DisplayName identity.Attribution
                 | None ->
-                    res.writeHead (401, createObj [ "content-type", box "text/plain"; "cache-control", box "no-store" ]) |> ignore
+                    res.writeHead (401, [ ResponseHeader.ContentType "text/plain"; ResponseHeader.CacheControl "no-store" ])
                     res.``end`` "unauthorized"
         | Some (Claude _)
         | Some (GitHub _)

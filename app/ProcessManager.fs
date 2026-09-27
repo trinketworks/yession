@@ -12,6 +12,7 @@ module Yession.Host.ProcessManager
 // directory are unsupported (documented; a lock arrives with SQLite).
 
 open System
+open Fable.NodeExtras
 open Yession.Domain
 open Yession.Domain.Link
 open Yession.Domain.Tools
@@ -504,7 +505,7 @@ let connectionsApiFor
 /// every UI route is gated by the same trust rule as /authorize.
 let createWithUi
     (options: Options)
-    (ui: (ProcessManager -> (Interop.IncomingMessage -> Async<AuthenticationOutcome>) -> Interop.IncomingMessage -> Interop.ServerResponse -> bool) option)
+    (ui: (ProcessManager -> (Interop.IncomingMessage -> Async<AuthenticationOutcome>) -> Interop.IncomingMessage -> ServerResponse -> bool) option)
     : Async<ProcessManager> =
   async {
     let statePath = sprintf "%s/manager.json" options.DataDir
@@ -961,12 +962,15 @@ let createWithUi
 <style>body{font-family:system-ui,sans-serif;max-width:32rem;margin:4rem auto;padding:0 1rem}p{color:#444}</style>
 </head><body><h1>%s</h1><p>%s</p></body></html>"""
             title title detail
-    let handleConnectionsCallback (req: Interop.IncomingMessage) (res: Interop.ServerResponse) : bool =
+    let handleConnectionsCallback (req: Interop.IncomingMessage) (res: ServerResponse) : bool =
         let path = req.url.Split('?').[0]
         if not (req.``method`` = "GET" && path = "/connections/callback") then false
         else
             let respondHtml (status: int) (html: string) =
-                res.writeHead (status, Fable.Core.JsInterop.createObj [ "content-type", box "text/html; charset=utf-8"; "cache-control", box "no-store" ]) |> ignore
+                res.writeHead (
+                    status,
+                    [ ResponseHeader.ContentType "text/html; charset=utf-8"
+                      ResponseHeader.CacheControl "no-store" ])
                 res.``end`` html
             match broker with
             | None -> respondHtml 404 (connectionsCallbackPage "Not available" "This Manager has no secrets store, so connections are disabled.")
@@ -991,7 +995,7 @@ let createWithUi
 
     let! controlServer =
         async {
-            let handler (req: Interop.IncomingMessage) (res: Interop.ServerResponse) =
+            let handler (req: Interop.IncomingMessage) (res: ServerResponse) =
                 let handled =
                     WebhookRelay.tryHandle hookRelay req res
                     || Control.tryHandle resolveCaller reportName reportActivity reportSummary notifications.Register mcp.Register provider.RegisterClient secretsApi connectionsApi connectionsHub.Register hookRelay.Subscribe hookRelay.Unsubscribe (fun path -> audit (SecretStore.Audit.controlUnauthorized path)) req res
@@ -1000,12 +1004,12 @@ let createWithUi
                     || (match ui, self with
                         | Some handle, Some pm -> handle pm identify req res
                         | Some _, None ->
-                            res.writeHead (503, Fable.Core.JsInterop.createObj [ "content-type", box "text/plain" ]) |> ignore
+                            res.writeHead (503, [ ResponseHeader.ContentType "text/plain" ])
                             res.``end`` "starting"
                             true
                         | None, _ -> false)
                 if not handled then
-                    res.writeHead (404, Fable.Core.JsInterop.createObj [ "content-type", box "text/plain" ]) |> ignore
+                    res.writeHead (404, [ ResponseHeader.ContentType "text/plain" ])
                     res.``end`` "not found"
             let server = Interop.createServer handler
             let! listening =
