@@ -4,11 +4,12 @@ module Fable.NodePty
 // opens when someone runs `vim`. The binding layer only: the slice of its surface the
 // sandboxes use.
 //
-// SHAPES ONLY, and no `[<Import>]` anywhere, deliberately — the same reasoning as
+// No static `import` of the package, deliberately — the same reasoning as
 // `Fable.NodeDataChannel`. The addon is native and built from source into the Nix
 // `nodeModules` derivation; off Nix it may not be there at all, and a backend that cannot
-// open a pty reports so rather than failing to load. So the Host `require`s it lazily,
-// through a try, and views what it gets through `Exports`.
+// open a pty reports so rather than failing to load. So what `require('node-pty')` answers
+// with is declared here as `Exports`, `load` is the `require` that answers it, and the Host
+// calls `load` lazily, through a try.
 //
 // Fable-only: `dotnet build` type-checks it; Fable emits the JS that runs on Node.
 
@@ -58,3 +59,17 @@ type ForkOptions =
 /// What `require('node-pty')` answers with.
 type [<AllowNullLiteral>] Exports =
     abstract spawn : file: string * args: string array * options: ForkOptions -> Pty
+
+/// `createRequire(from)` — a CommonJS `require` resolving from the module at `from`. Typed as
+/// answering THIS package's exports, because `load` is the only thing that asks it anything.
+///
+/// A `Func` rather than an F# arrow: Fable uncurries an imported function that answers an
+/// arrow, which would rewrite `createRequire(from)(id)` into `createRequire(from, id)` — one
+/// call where two were meant.
+[<Import("createRequire", "node:module")>]
+let private createRequire (from: string) : System.Func<string, Exports> = jsNative
+
+/// `require('node-pty')`, resolved from the module at `from` (a `file:` URL) — the caller's
+/// own, which is where its `node_modules` are. This is where the addon's typing is asserted,
+/// and the only place. THROWS the way `require` does when there is nothing to load.
+let load (from: string) : Exports = (createRequire from).Invoke "node-pty"

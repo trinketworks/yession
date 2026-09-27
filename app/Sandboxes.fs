@@ -1074,10 +1074,10 @@ module private Pty =
 
     /// Absent is an ANSWER here, not a failure: `null` is what `available` reads, and a
     /// throw — no addon, or a require that is not defined at all — is the same answer.
-    /// `Interop.require` rather than a static `import`: node-pty is CJS-only, and a missing
-    /// package would fail the whole module's load rather than this one lookup.
+    /// `Interop.loadNodePty` rather than a static `import`: node-pty is CJS-only, and a
+    /// missing package would fail the whole module's load rather than this one lookup.
     let private tryRequire () : Fable.NodePty.Exports =
-        try unbox<Fable.NodePty.Exports> (Interop.require "node-pty") with _ -> null
+        try Interop.loadNodePty () with _ -> null
 
     /// Resolved once. `require` is not free and the answer cannot change within a process.
     let private modul = lazy (tryRequire ())
