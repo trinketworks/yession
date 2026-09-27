@@ -1482,6 +1482,6 @@ Async.StartImmediate (
         // disagree about who is here.
         Async.StartImmediate (
             foldFor
-                (fun _ -> FoldCause.Booted)
+                (fun _ -> FoldCause.Booted host.Boot)
                 (List.distinct (CredentialFor.Deployment :: ConnectionStatusList.arrivals Map.empty connectionStatus)))
     })

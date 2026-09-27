@@ -1863,6 +1863,10 @@ let private foldCauseTests =
 
         testCase "a connection nobody is named behind is no cause" <| fun () ->
             Expect.isNone (FoldCause.causeFor one (FoldCause.Connected CredentialFor.Deployment)) "nobody to point to"
+
+        testCase "a boot caused every repo's sandboxes, and names which boot" <| fun () ->
+            let boot = MessageId.create "m-boot" |> expect
+            Expect.equal (FoldCause.causeFor two (FoldCause.Booted boot)) (Some (Cause.Item boot)) "the boot's own item"
     ]
 
 let private authorityTests =

@@ -2256,6 +2256,10 @@ module View =
                     | Some cause ->
                         let said =
                             match cause.Content with
+                            // A boot is nobody's act: the session's own sentence, not the
+                            // process's name in front of a phrase.
+                            | ItemContent.Act (Act.SessionStarted _) -> [ html $"""{Dom.Text.causeBooted}""" ]
+                            | ItemContent.Act (Act.SessionResumed _) -> [ html $"""{Dom.Text.causeResumed}""" ]
                             | ItemContent.Act act ->
                                 Entity.phrase model cause.Author (Segment.Ref (EntityRef.Actor cause.Author) :: Segment.Text " " :: Act.phrase act)
                             | _ -> [ html $"""{ConversationItem.said cause}""" ]
