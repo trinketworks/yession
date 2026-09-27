@@ -1009,6 +1009,24 @@ let private artifactTests =
         | Error said -> said
         | Ok bytes -> failwithf "expected a refusal, got %d bytes" bytes
 
+    /// The session's store, on THIS filesystem: the one string both halves of a share — the
+    /// mount the sandbox is given, and the path it is told to write to — are judged against.
+    let store = "/data/s/workspace/artifacts"
+
+    /// A repo's own work sandbox, which is a container whatever the session runs under.
+    let repoSandbox =
+        SandboxRef.inScope (RepoRef.create "octo/hello" |> expect) (SandboxName.create "dev" |> expect)
+
+    /// Where a spec puts the session's store, read back OFF the spec rather than assumed: this
+    /// is the half the sandbox actually gets, so a test that restated it would be comparing two
+    /// copies of one guess.
+    let mountedStore (spec: EnvironmentSpec) : string option =
+        match spec.Runtime with
+        | Container container ->
+            container.Mounts
+            |> List.tryPick (fun mount -> if mount.Source = HostPath store then Some mount.Target else None)
+        | Confinement -> None
+
     testList
         "artifacts"
         [ testCaseAsync "a share_artifact answers with the address the store minted" <|
@@ -1085,6 +1103,37 @@ let private artifactTests =
                     let said = expectError (Artifacts.weighed SandboxRef.defaultRef "out/chart.png" (126, "", "Permission denied\n"))
                     Expect.stringContains said "Permission denied" "the shell's words"
                     Expect.stringContains said "how big out/chart.png is" "and what was being asked"
+                } ]
+
+          // Where the drop box IS, from inside the sandbox that does the copying. A share hands
+          // the bytes to the sandbox rather than carrying them through this process, so this one
+          // path decides whether they land in the store or in a filesystem only that sandbox can
+          // see — and it has to name the same place the mount did, or the copy succeeds and the
+          // store stays empty.
+          testList
+              "where the store is, from inside a sandbox"
+              [ test "a session's own sandbox is given the directory the store already is" {
+                    Expect.equal
+                        (Sandboxes.artifactsVisibleTo SrtBackend store SandboxRef.defaultRef)
+                        store
+                        "confinement shares the host's own paths, so there is nothing to translate"
+                }
+
+                // The fault this pins, and why it is asserted against the MOUNT rather than
+                // against a literal: the session here runs srt and the repo's sandbox is a
+                // container anyway, so answering with the SESSION's backend sent the copy to a
+                // host-shaped path — one that exists inside the container, which is why `cp`
+                // reported success while nothing ever reached the store.
+                test "a repo's sandbox is given the mount, whatever the session runs under" {
+                    let asked = { EnvironmentSpec.defaults with Runtime = Container ContainerSpec.defaults }
+                    Expect.equal
+                        (Some (Sandboxes.artifactsVisibleTo SrtBackend store repoSandbox))
+                        (mountedStore (Sandboxes.withSessionShares "/data/s/workspace/repos" store DockerBackend asked))
+                        "a share writes where the session mounted the store, or the bytes land nowhere"
+                    Expect.notEqual
+                        (Sandboxes.artifactsVisibleTo SrtBackend store repoSandbox)
+                        store
+                        "and never this filesystem's own path, which a container can write and nothing reads"
                 } ]
         ]
 

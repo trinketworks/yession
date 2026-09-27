@@ -402,12 +402,17 @@ let create
     /// mounted there, and this process could not do because under docker the source is inside a
     /// container it cannot read. Landed under a `.part` leaf, so what appears at the version's
     /// own address appears whole (the rename is this side's, below).
-    let copyIn (sandbox: SandboxRef) (source: string) (ref: ArtifactRef) : Async<Result<unit, string>> =
+    ///
+    /// It answers with the path it told the sandbox to write to, so the caller that then looks
+    /// for the bytes can say where they were sent when they are not there. Nobody else builds
+    /// that string: a refusal naming a second spelling of it would be a refusal about a path
+    /// nothing wrote.
+    let copyIn (sandbox: SandboxRef) (source: string) (ref: ArtifactRef) : Async<Result<string, string>> =
         async {
             let target = sprintf "%s/%s/%s.part" (artifactsPathIn sandbox) (ArtifactRef.name ref) (ArtifactRef.leaf ref)
             match! run sandbox "an artifact was shared" "mkdir -p -- \"$(dirname -- \"$2\")\" && cp -- \"$1\" \"$2\"" [ source; target ] with
             | Error reason -> return Error reason
-            | Ok (0, _, _) -> return Ok ()
+            | Ok (0, _, _) -> return Ok target
             | Ok (_, _, err) ->
                 let said = err.Trim ()
                 return Error (if said = "" then sprintf "copying %s into the artifacts store failed" source else said)
@@ -432,7 +437,7 @@ let create
                 | Ok _ ->
                     match! copyIn sandbox source ref with
                     | Error reason -> return Error reason
-                    | Ok () ->
+                    | Ok target ->
                         let landed = pathOf artifactsDir ref
                         let part = landed + ".part"
                         // What ARRIVED, measured on this side. The check above refused a file that
@@ -441,7 +446,21 @@ let create
                         // something else — and it is the one that guards the bytes a browser will
                         // be served.
                         match sizeOf part with
-                        | None -> return Error (sprintf "nothing arrived for %s" name)
+                        // Both paths, said out loud. This is the one refusal whose cause is
+                        // entirely outside what either side can see on its own — the copy
+                        // succeeded and the bytes are not here — so the reader's only question
+                        // is which store the sandbox was writing into, and the two strings
+                        // answer it: a host-shaped path in a message about a container is the
+                        // whole diagnosis, and it cost a day's archaeology the once it shipped.
+                        | None ->
+                            return
+                                Error (
+                                    sprintf
+                                        "nothing arrived for %s: sandbox '%s' reported copying it to %s, and there is nothing at %s on this side"
+                                        name
+                                        (SandboxRef.render sandbox)
+                                        target
+                                        part)
                         | Some landedBytes when landedBytes > cap ->
                             discard part
                             return

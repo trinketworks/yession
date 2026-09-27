@@ -1292,8 +1292,12 @@ Async.StartImmediate (
                 host.Sandboxes.EnvironmentFor
                 // The store as each sandbox sees it: the bind mount's target under docker, the
                 // directory itself otherwise — the same answer `withSessionShares` mounts by,
-                // so what the copy writes to is where this side then looks.
-                (fun _ -> Sandboxes.artifactsVisibleAt workBackend artifactsDir)
+                // so what the copy writes to is where this side then looks. By the SANDBOX,
+                // whose own backend decides it (`artifactsVisibleTo`), and not by this
+                // module's configured one: a repo-owned sandbox is a container whatever
+                // `default` runs under, and answering with the host path for one told it to
+                // copy the bytes somewhere only the container could see.
+                (Sandboxes.artifactsVisibleTo workBackend artifactsDir)
                 (fun sandbox -> ShellProfileProjection.workingDirectory sandbox (terminals.Profiles ()))
                 TerminalShell.posix
         terminalCommands <- host.TerminalCommands
