@@ -2468,7 +2468,10 @@ module AgentSandbox =
     /// difference is not cosmetic: `spawn` handed `cwd: ''` fails with ENOENT rather than
     /// inheriting this process's directory.
     let startDirectory (options: Sdk.SpawnOptions) : string option =
-        if isNullOrUndefined options.cwd || options.cwd = "" then None else Some options.cwd
+        match options.cwd with
+        | None
+        | Some "" -> None
+        | Some directory -> Some directory
 
     /// Take the child's whole process GROUP down, and tell Node the child was asked to die.
     ///
@@ -2504,7 +2507,7 @@ module AgentSandbox =
     let hostClaudeSpawner () : Sdk.Spawner =
         Sdk.Spawner (fun options ->
             let child =
-                spawnWithEnv options.command (List.ofArray options.args) options.env (startDirectory options) Pipe true
+                spawnWithEnv options.command (List.ofArray options.args) (box options.env) (startDirectory options) Pipe true
 
             let abort () = killTree child "SIGKILL"
 
@@ -2578,7 +2581,7 @@ module AgentSandbox =
 
             let join (executable: string) (arguments: string list) =
                 let child =
-                    spawnWithEnv executable arguments options.env (startDirectory options) Pipe true
+                    spawnWithEnv executable arguments (box options.env) (startDirectory options) Pipe true
 
                 stdin.pipe child.stdin |> ignore
                 child.stdout.pipe stdout |> ignore
