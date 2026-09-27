@@ -103,6 +103,12 @@
           "Fable.Node": "[1.6.0, )"
         }
       },
+      "fable.nodeforge": {
+        "type": "Project",
+        "dependencies": {
+          "Fable.Core": "[5.2.0, )"
+        }
+      },
       "fable.nodepty": {
         "type": "Project",
         "dependencies": {
@@ -193,6 +199,7 @@
           "Fable.Node": "[1.6.0, )",
           "Fable.NodeDataChannel": "[1.0.0, )",
           "Fable.NodeExtras": "[1.0.0, )",
+          "Fable.NodeForge": "[1.0.0, )",
           "Fable.NodePty": "[1.0.0, )",
           "Fable.OpenIdClient": "[1.0.0, )",
           "Fable.OpenTelemetry": "[1.0.0, )",

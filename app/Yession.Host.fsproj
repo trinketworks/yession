@@ -43,6 +43,11 @@
     <Compile Include="Artifacts.fs" />
     <Compile Include="Repos.fs" />
     <Compile Include="GitGateway.fs" />
+    <!-- The credential proxy: the git gateway's idea for any HTTPS client — a stand-in in the
+         sandbox, the credential swapped in here. Provider-neutral; GitHubAccess.fs is the
+         first provider to declare a route on it. -->
+    <Compile Include="CredentialProxy.fs" />
+    <Compile Include="GitHubAccess.fs" />
     <!-- Reading `yession.yaml` off a checkout (Plan 27). After Repos.fs, which owns where a
          checkout is, and Fs.fs. The only part of the file's story that cannot run in the
          cheap tier: the decoder itself is pure and lives in the domain. -->
@@ -145,6 +150,7 @@
     <ProjectReference Include="..\src\Fable.Zod\Fable.Zod.fsproj" />
     <ProjectReference Include="..\src\Fable.Dockerode\Fable.Dockerode.fsproj" />
     <ProjectReference Include="..\src\Fable.Jose\Fable.Jose.fsproj" />
+    <ProjectReference Include="..\src\Fable.NodeForge\Fable.NodeForge.fsproj" />
     <ProjectReference Include="..\src\Fable.Yaml\Fable.Yaml.fsproj" />
     <ProjectReference Include="..\src\Fable.NodeDataChannel\Fable.NodeDataChannel.fsproj" />
     <ProjectReference Include="..\src\Fable.NodePty\Fable.NodePty.fsproj" />

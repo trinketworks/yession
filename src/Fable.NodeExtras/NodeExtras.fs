@@ -1277,6 +1277,132 @@ module NetServers =
         | Some bound -> bound.port
         | None -> failwith "the server is not listening, so it has no port"
 
+// --- A proxy's sockets: CONNECT, and TLS terminated here -------------------------------------
+
+/// A connection as bytes both ways: the client's socket after a `CONNECT`, a socket this
+/// process dialled, or the TLS stream laid over either. Declared as its own shape rather than
+/// as `Readable` and `Writable` together, which would give it two `destroy`s and two
+/// `onError`s and a call to either an ambiguity.
+[<AllowNullLiteral>]
+type Duplex =
+    inherit Readable
+
+    /// The same socket, as somewhere a `pipe` can end.
+    [<Emit("$0")>]
+    abstract sink : Writable
+
+    /// Write text, encoded as UTF-8 — what a status line is.
+    [<Emit("$0.write($1)")>]
+    abstract writeText : text: string -> unit
+
+    /// Put bytes already read back at the front of the stream, for whatever reads it next.
+    /// What a `CONNECT`'s `head` is for: bytes the client sent after the request line, which
+    /// belong to the tunnel and not to the proxy.
+    abstract unshift : chunk: Buffer -> unit
+
+    /// The first chunk and no other — for a reader that hands the stream on after it, as a
+    /// client does once a proxy has answered its `CONNECT`.
+    [<Emit("$0.once('data', $1)")>]
+    abstract onceData : handler: (Buffer -> unit) -> unit
+
+    /// Finish writing and close, once what was written has gone.
+    [<Emit("$0.end()")>]
+    abstract finish : unit -> unit
+
+/// A `CONNECT` as a server sees one: its target, in authority form (`host:port`).
+[<AllowNullLiteral>]
+type ConnectRequest =
+    abstract url : string
+
+/// What a `node:http` server offers a proxy beyond requests: the `CONNECT`s it would otherwise
+/// refuse, and a connection handed to it from elsewhere — a TLS stream this process
+/// terminated — to parse HTTP out of as though it had accepted it itself.
+[<AllowNullLiteral>]
+type Connectable =
+    /// A `CONNECT` arrived. `head` is whatever the client sent past the request line, which
+    /// is usually nothing: a client waits to be told the tunnel is open before it speaks.
+    [<Emit("$0.on('connect', $1)")>]
+    abstract onConnect : handler: System.Func<ConnectRequest, Duplex, Buffer, unit> -> unit
+
+    /// Serve HTTP on a connection this server did not accept.
+    [<Emit("$0.emit('connection', $1)")>]
+    abstract serve : connection: Duplex -> unit
+
+[<AutoOpen>]
+module NetClients =
+
+    /// Dial a UNIX socket. Writing may start at once: what is written before the connection
+    /// opens is held until it does.
+    [<Import("connect", "node:net")>]
+    let connectPath (path: string) : Duplex = jsNative
+
+/// Where `node:tls` keeps the certificates it trusts: the Mozilla set Node was built with,
+/// or what the operating system trusts — which is where a site's own root lives.
+[<StringEnum; RequireQualifiedAccess>]
+type CaStore =
+    | Default
+    | System
+
+/// A key and the certificate that goes with it, ready to answer a handshake.
+[<AllowNullLiteral>]
+type SecureContext = interface end
+
+[<AllowNullLiteral>]
+type SecureContextOptions =
+    /// PEM.
+    abstract cert : string with get, set
+    /// PEM.
+    abstract key : string with get, set
+
+[<AllowNullLiteral>]
+type TlsServerSocketOptions =
+    abstract isServer : bool with get, set
+    abstract secureContext : SecureContext with get, set
+    abstract ALPNProtocols : string array with get, set
+
+[<AllowNullLiteral>]
+type TlsClientOptions =
+    /// The connection to speak TLS over, already open.
+    abstract socket : Duplex with get, set
+    /// The name the server's certificate has to carry.
+    abstract servername : string with get, set
+    /// PEMs to trust INSTEAD of Node's own set.
+    abstract ca : string array with get, set
+
+[<AllowNullLiteral>]
+type TlsSocketClass =
+    [<EmitConstructor>]
+    abstract Create : socket: Duplex * options: TlsServerSocketOptions -> Duplex
+
+[<RequireQualifiedAccess>]
+module Tls =
+
+    [<Import("createSecureContext", "node:tls")>]
+    let secureContext (options: SecureContextOptions) : SecureContext = jsNative
+
+    [<Import("TLSSocket", "node:tls")>]
+    let private tlsSocket : TlsSocketClass = jsNative
+
+    /// Answer TLS on `socket` as the server, with `context`'s certificate, and hand back the
+    /// plaintext stream the handshake opens. HTTP/1.1 is the one protocol offered, because
+    /// the plaintext is handed to a `node:http` server, which speaks nothing else.
+    let terminate (socket: Duplex) (context: SecureContext) : Duplex =
+        tlsSocket.Create (
+            socket,
+            jsOptions<TlsServerSocketOptions> (fun o ->
+                o.isServer <- true
+                o.secureContext <- context
+                o.ALPNProtocols <- [| "http/1.1" |])
+        )
+
+    /// Speak TLS as the client over an open connection.
+    [<Import("connect", "node:tls")>]
+    let connect (options: TlsClientOptions) : Duplex = jsNative
+
+    /// Every certificate one store trusts, as PEM.
+    [<Import("getCACertificates", "node:tls")>]
+    let caCertificates (store: CaStore) : string array = jsNative
+
 // --- node:http, serving ------------------------------------------------------------------------
 //
 // The other half of "node:http, answering" above: the server a response is written from, and
@@ -1302,10 +1428,14 @@ type IncomingMessage =
 /// A `node:http` server, as this repository runs one: bound, asked its port, and closed.
 type HttpServer =
     inherit Listening
+    inherit Connectable
 
     /// Bind, and call back once the OS has chosen — port 0 asks it to choose. Node answers the
     /// server itself, for chaining.
     abstract listen : port: int * host: string * onListening: (unit -> unit) -> HttpServer
+
+    /// Bind a UNIX socket at `path`, and call back once it is bound.
+    abstract listen : path: string * onListening: (unit -> unit) -> HttpServer
 
     /// Stop accepting connections, and call back once every open one has ended. Node hands the
     /// callback an `Error` when the server was not listening and nothing when it closed, which
