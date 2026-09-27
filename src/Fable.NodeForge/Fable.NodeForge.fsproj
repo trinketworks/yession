@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Fable bindings to the `node-forge` npm package — the slice of its X.509 surface that mints
+    a certificate authority and the leaf certificates it signs. Node's own `crypto` can parse
+    a certificate and cannot build one, which is the whole of why this exists. Fable-only, like
+    the other binding projects: `dotnet build` type-checks it; Fable emits the JS that runs.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="NodeForge.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Fable.Core" />
+  </ItemGroup>
+
+</Project>

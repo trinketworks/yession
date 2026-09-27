@@ -192,6 +192,12 @@
           "Fable.Node": "[1.6.0, )"
         }
       },
+      "fable.nodeforge": {
+        "type": "Project",
+        "dependencies": {
+          "Fable.Core": "[5.2.0, )"
+        }
+      },
       "fable.nodepty": {
         "type": "Project",
         "dependencies": {

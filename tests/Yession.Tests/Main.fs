@@ -126,6 +126,9 @@ let all =
         // The route a sandbox's git takes to github.com without holding a credential. Its
         // git-driven half asks for `Ports` inside.
         Tag.needs "The git gateway" [] (fun () -> GitGateway.tests)
+        // The same idea for any HTTPS client: a stand-in in the sandbox, the credential swapped
+        // in on the way to the provider. Its client-driven half asks for `Ports` inside.
+        Tag.needs "The credential proxy" [] (fun () -> CredentialProxy.tests)
         Tag.needs "Pty integration" [ Tag.Pty ] (fun () -> PtyIntegration.tests)
         Tag.needs "Phase3" [] (fun () -> Phase3.tests)
         Tag.needs "EventsHttp" [] (fun () -> EventsHttp.tests)
