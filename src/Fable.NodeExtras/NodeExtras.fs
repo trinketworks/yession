@@ -936,6 +936,12 @@ type Socket =
     /// The peer's address, and nothing once the socket has been torn down.
     abstract remoteAddress : string option
 
+    /// The connection is gone, whichever end let go of it. What a server watches to learn that
+    /// the far side has dropped a request it was holding open — the honest observation of that,
+    /// where anything on the client's side would only say what the client thinks.
+    [<Emit("$0.on('close', $1)")>]
+    abstract onClose : handler: (unit -> unit) -> unit
+
 /// One header's value, as HTTP carries it: said once, or said again. A proxy that narrowed
 /// it to `string` would silently drop the second `set-cookie`, and one that kept it `obj`
 /// would hand every reader a `:?` to write — and the reader that wrote `unbox<string>`
@@ -1326,6 +1332,60 @@ module HttpServers =
     /// The actual bound port (differs from the requested one when listening on 0).
     let serverPort (server: HttpServer) : int = boundPort server
 
+// --- node:http, upgrading ----------------------------------------------------------------------
+//
+// What a server is handed when a request asks to stop being HTTP: the `upgrade` event, and the
+// raw socket under it. Its own section rather than more of "serving" above, because a server
+// that never upgrades never sees any of it, and the socket it hands over speaks no HTTP at all.
+
+/// The connection under an accepted upgrade. From the 101 onwards nothing on it is HTTP, and
+/// every byte is the caller's to frame.
+///
+/// Bytes go both ways as `byte []` rather than `Buffer`: Node's `write` takes a `Uint8Array`
+/// and its `data` event hands over a `Buffer`, which is a `Uint8Array` subclass — and a
+/// `Uint8Array` is what Fable compiles a `byte []` to. So a framer written in F# reads and
+/// writes arrays, and nothing is converted in either direction.
+[<AllowNullLiteral>]
+type UpgradedSocket =
+    inherit Socket
+
+    /// Bytes onto the wire.
+    abstract write : bytes: byte [] -> bool
+
+    /// The polite end: what has already been written still goes out.
+    abstract ``end`` : unit -> unit
+
+    /// The rude one: the connection disappears with nothing said.
+    abstract destroy : unit -> unit
+
+    /// Every read, as it arrives.
+    [<Emit("$0.on('data', $1)")>]
+    abstract onData : handler: (byte [] -> unit) -> unit
+
+    /// A peer that disappeared mid-write raises here, and an unhandled `error` on a socket
+    /// takes the PROCESS down rather than the connection — so a caller that drops connections
+    /// as a matter of course listens before it writes anything.
+    [<Emit("$0.on('error', $1)")>]
+    abstract onError : handler: (StreamError -> unit) -> unit
+
+[<AutoOpen>]
+module HttpUpgrades =
+
+    [<Emit("$0.on('upgrade', $1)")>]
+    let private onUpgradeRaw
+        (server: HttpServer)
+        (handler: System.Func<IncomingMessage, UpgradedSocket, unit>)
+        : unit =
+        jsNative
+
+    /// `server.on('upgrade', …)`: the request that asked for it, and the socket under it. Node
+    /// also hands over whatever bytes arrived past the head, which a peer never has from a
+    /// client that speaks only after the 101 — as every WebSocket client does. The handler is
+    /// an uncurried delegate so Node receives the callback it calls, the way `createServer`
+    /// takes its own.
+    let onUpgrade (server: HttpServer) (handler: IncomingMessage -> UpgradedSocket -> unit) : unit =
+        onUpgradeRaw server (System.Func<_, _, _> handler)
+
 // --- A terminal, by a descriptor something else opened -----------------------------------------
 
 [<AutoOpen>]
@@ -1471,3 +1531,45 @@ module ChildProcessSeams =
                  detached = detached |}
 
         Node.Api.childProcess.spawn (command, ResizeArray arguments, js)
+
+// --- The console, overheard ------------------------------------------------------------------
+
+/// Hearing what was warned, for a caller whose only way to ask what some code said is to be the
+/// thing it said it to. `console` is ONE mutable object for the whole process, so hearing means
+/// putting something else in `warn`'s place — and reading the real one first is the only way to
+/// put it back.
+[<RequireQualifiedAccess>]
+module ConsoleWarnings =
+
+    /// A `console.warn` — the platform's, or the stand-in below — held only to be put back.
+    type private Warner = interface end
+
+    [<Emit("console.warn")>]
+    let private current () : Warner = jsNative
+
+    [<Emit("console.warn = $0")>]
+    let private install (warner: Warner) : unit = jsNative
+
+    /// A function called the way `console` calls one: with however many arguments the caller
+    /// passed, where an F# function takes exactly one. The parts arrive as an array, so what
+    /// to make of them is F#'s decision rather than this line's.
+    [<Emit("(function (hear) { return (...parts) => hear(parts); })($0)")>]
+    let private variadic (hear: obj [] -> unit) : Warner = jsNative
+
+    /// Run `body` with `heard` in `console.warn`'s place, and put the real one back however the
+    /// body ends. Each warning arrives as one line, spelled the way `console` would have printed
+    /// it — its arguments described and joined by spaces.
+    ///
+    /// The body runs INSIDE rather than there being a take and a matching give-back, for
+    /// `Support.withEnv`'s reason: a capture that is not given back swallows every later
+    /// caller's warnings, and the half a caller forgets is the give-back.
+    let overhearing (heard: string -> unit) (body: Async<'a>) : Async<'a> =
+        async {
+            let original = current ()
+            install (variadic (fun parts -> heard (parts |> Array.map Thrown.describe |> String.concat " ")))
+
+            try
+                return! body
+            finally
+                install original
+        }

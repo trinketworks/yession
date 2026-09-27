@@ -25,9 +25,9 @@ open Yession.Host
 open Yession.Tests.Support
 open Yession.Peer
 
-/// What a browser makes of a link on a page: the href resolved against the page's own URL.
-[<Emit("new URL($1, $0).href")>]
-let private resolveUrl (pageUrl: string) (href: string) : string = Fable.Core.Util.jsNative
+/// What a browser makes of a link on a page: the href resolved against the page's own URL —
+/// the WHATWG `URL` constructor, which Node ships as the browser does.
+let private resolveUrl (pageUrl: string) (href: string) : string = Fable.BrowserExtras.Urls.resolve href pageUrl
 
 let private statePath (name: string) =
     sprintf "tests/Yession.Tests/out/.data/%s-%d.manager.json" name (int (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds ()) % 1000000)
@@ -1727,9 +1727,6 @@ let private reapingTests =
 // everything. This is what gates a release.
 // -----------------------------------------------------------------------------
 
-[<Fable.Core.Import("spawn", "node:child_process")>]
-let private spawnRaw : obj = Fable.Core.Util.jsNative
-
 // Run the packaged manager bundle on this Node, pointing it at the packaged session
 // bundle (what the `yession` bin shim does in an install). `--auth localhost` mirrors a
 // single-machine operator's choice — the shipped default (`none`) denies everything.
@@ -1737,20 +1734,16 @@ let private spawnRaw : obj = Fable.Core.Util.jsNative
 // `args` and `env` are both here because the shipped bin reads both: what this Manager
 // decides is argv, what its children inherit is the environment. `YESSION_SPAWN_MAIN` is
 // on the env side for the same reason it is in the real shim — packaging tells the Manager
-// where the packaged session bundle is; an operator does not.
-[<Emit("$0(process.execPath, [$1, '--auth', 'localhost', ...$2], { env: { ...process.env, YESSION_SPAWN_MAIN: $4, ...Object.fromEntries($3) }, stdio: ['pipe', 'pipe', 'inherit'] })")>]
-let private spawnBundle (spawn: obj) (managerJs: string) (args: string array) (env: (string * string) array) (sessionJs: string) : obj = Fable.Core.Util.jsNative
-
-/// The spawned bundle's stdout, as the `Readable` it is — so the stream is told to decode,
-/// rather than each chunk being asked whether it already has been.
-[<Emit("$0.stdout")>]
-let private stdoutOf (child: obj) : Fable.NodeExtras.Readable = Fable.Core.Util.jsNative
-
-[<Emit("$0.kill('SIGKILL')")>]
-let private killBinary (child: obj) : unit = Fable.Core.Util.jsNative
-
-[<Emit("$0.on('exit', $1)")>]
-let private onBinaryExit (child: obj) (handler: obj -> unit) : unit = Fable.Core.Util.jsNative
+// where the packaged session bundle is; an operator does not. It goes first, so an `env`
+// that names it too is the one that wins.
+let private spawnBundle (managerJs: string) (args: string list) (env: (string * string) list) (sessionJs: string) : Node.ChildProcess.ChildProcess =
+    ChildProcesses.spawn
+        Node.Api.``process``.execPath
+        (managerJs :: "--auth" :: "localhost" :: args)
+        { Cwd = None
+          Env = ChildEnv.Adding (Map.ofList (("YESSION_SPAWN_MAIN", sessionJs) :: env))
+          Streams = { Stdin = Stdio.Pipe; Stdout = Stdio.Pipe; Stderr = Stdio.Inherit }
+          Detached = false }
 
 /// A running packaged manager: its two announced URLs and a kill that resolves once
 /// the process is gone.
@@ -1761,25 +1754,24 @@ type private PackagedManager =
 
 let private startPackagedManager (args: string list) (env: (string * string) list) : Async<PackagedManager> =
     Async.FromContinuations (fun (cont, econt, _) ->
-        let child =
-            spawnBundle spawnRaw "dist/npm/manager.js" (Array.ofList args) (Array.ofList env) "dist/npm/session.js"
+        let child = spawnBundle "dist/npm/manager.js" args env "dist/npm/session.js"
         let mutable sessionUrl = None
         let mutable uiUrl = None
         let mutable settled = false
         let urlIn (line: string) =
             let m = System.Text.RegularExpressions.Regex.Match (line, "http://[0-9.:]+/")
             if m.Success then Some m.Value else None
-        onBinaryExit child (fun _ ->
+        ChildProcessStreams.onExit child (fun _ ->
             if not settled then
                 settled <- true
                 econt (Exception "packaged manager exited before announcing its endpoints"))
         // A missing/unrunnable binary is a loud test failure, not a crashed runner.
-        Fable.Core.JsInterop.emitJsExpr (child, (fun (e: obj) ->
+        ChildProcessStreams.onError child (fun e ->
             if not settled then
                 settled <- true
-                econt (Exception (sprintf "packaged manager failed to start: %A" e)))) "$0.on('error', $1)"
+                econt (Exception (sprintf "packaged manager failed to start: %s" (StreamError.describe e))))
         let mutable buffer = ""
-        Fable.NodeExtras.Readables.text (stdoutOf child) (fun chunk ->
+        Readables.text (ChildProcessStreams.stdout child) (fun chunk ->
             buffer <- buffer + chunk
             let parts = buffer.Split '\n'
             buffer <- parts.[parts.Length - 1]
@@ -1795,8 +1787,8 @@ let private startPackagedManager (args: string list) (env: (string * string) lis
                           Shutdown =
                             fun () ->
                                 Async.FromContinuations (fun (kcont, _, _) ->
-                                    onBinaryExit child (fun _ -> kcont ())
-                                    killBinary child) }
+                                    ChildProcessStreams.onExit child (fun _ -> kcont ())
+                                    child.kill "SIGKILL" |> ignore) }
                 | _ -> ()))
 
 /// Which port the launched child answers on, read off the row's OPEN LINK.
@@ -2154,9 +2146,10 @@ let private sseThrowingSinkTests =
 /// Watch the socket a request arrived on, from the server's end: this fires when the far
 /// side lets go of the connection. The honest observation of "the client is no longer
 /// holding this open", where a client-side handle would only say what the client thinks.
-[<Emit("$0.socket.on('close', $1)")>]
 let private onRequestSocketClosed (req: IncomingMessage) (closed: unit -> unit) : unit =
-    Fable.Core.Util.jsNative
+    match req.socket with
+    | Some socket -> socket.onClose closed
+    | None -> failwith "the request arrived with no socket to watch"
 
 /// A URL nothing is listening on: a port this box held for a moment and let go, so a connect
 /// to it is REFUSED rather than merely slow — which is what makes the outcome under test a
