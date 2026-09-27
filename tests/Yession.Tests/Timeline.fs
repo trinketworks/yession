@@ -2112,6 +2112,15 @@ let private sandboxCauseTests =
                           at 3L 2.0 (startingBecause "s" (Cause.Item (message "boot"))) ])
             Expect.isTrue ((causeLineOf "s" html).Contains Dom.Text.causeBooted) "the session's own sentence"
 
+        testCase "a start the first boot brought up offers no jump, with nothing drawn to jump to" <| fun () ->
+            let html =
+                Support.render (
+                    clientOf
+                        [ at 1L 0.0 (SessionEvent.SessionStarted { MessageId = message "boot" })
+                          at 2L 1.0 (repoAdded "a" "octo/hello")
+                          at 3L 2.0 (startingBecause "s" (Cause.Item (message "boot"))) ])
+            Expect.isFalse ((causeLineOf "s" html).Contains "data-cause-jump") "the session starting is not on screen"
+
         testCase "a start after a resume opens its own chain" <| fun () ->
             let events =
                 [ at 1L 0.0 (SessionEvent.SessionStarted { MessageId = message "boot" })

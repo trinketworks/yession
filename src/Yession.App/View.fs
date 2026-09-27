@@ -2265,7 +2265,12 @@ module View =
                             | _ -> [ html $"""{ConversationItem.said cause}""" ]
                         let jump =
                             html $"""<button type="button" class="{Style.causeJump}" data-cause-jump aria-label="{Dom.Text.causeJumpLabel}" @click={Ev(fun _ -> actions.RevealMessage target)}>{Icon.caused}</button>"""
-                        line jump said (MessageId.value target)
+                        // The session starting is not drawn, so there is nothing to jump to.
+                        let mark =
+                            match cause.Content with
+                            | ItemContent.Act (Act.SessionStarted _) -> still
+                            | _ -> jump
+                        line mark said (MessageId.value target)
                     | None -> line still [ html $"""{Dom.Text.causeMissing}""" ] (MessageId.value target)
                 | Cause.Booted -> line still [ html $"""{Dom.Text.causeBooted}""" ] "booted"
                 | Cause.Connected principal ->
@@ -2685,17 +2690,6 @@ module View =
                           @click={Ev(fun _ -> dispatch (ToggleBreakTimeMsg item.MessageId))}>{said}</button>
                   <span class="{Style.sessionBreakLine}" aria-hidden="true"></span>
                 </div>"""
-        // Where the session began: the same rule, saying so. Not a control — there is no
-        // second reading to swap to — so the words are plain text, with the moment in the
-        // tooltip the way the break keeps it.
-        let sessionStart (at: System.DateTimeOffset) (item: ConversationItem) =
-            html $"""
-                <div class="{Style.sessionBreak}" data-session-start
-                     data-message-id="{MessageId.value item.MessageId}">
-                  <span class="{Style.sessionBreakLine}" aria-hidden="true"></span>
-                  <span class="{Style.sessionStartLabel}" title="{Moment.stamp at}">{Dom.Text.sessionStarted}</span>
-                  <span class="{Style.sessionBreakLine}" aria-hidden="true"></span>
-                </div>"""
         let chapterRule (item: ConversationItem) =
             let held = Chapters.written model.Synced.Chapters item
             let named = ClientModel.chapterName model item
@@ -2740,7 +2734,10 @@ module View =
                     // the session being away is a gap in the page, not a line in it.
                     | ItemContent.Act (Act.SessionResumed (resumed, at)) ->
                         Some (None, sessionBreak resumed at item)
-                    | ItemContent.Act (Act.SessionStarted (_, at)) -> Some (None, sessionStart at item)
+                    // Not drawn: the top of a timeline already says the session began. It
+                    // stays an item because a first boot's work names it as its cause, and
+                    // that cause line is where it is said.
+                    | ItemContent.Act (Act.SessionStarted _) -> None
                     | ItemContent.Act act -> Some (Some item.Author, actNoteItem act item)
                     | ItemContent.Message _ -> Some (Some item.Author, messageItem item)
                     | ItemContent.Stopped stop -> Some (Some item.Author, stoppedItem stop item)
