@@ -183,7 +183,7 @@ let create (dispatch: ClientMsg -> unit) (report: TerminalId -> int -> int -> un
     /// it, and every peer is watching the same screen, so a viewer with a narrower pane
     /// scrolls rather than reshaping everyone else's terminal.
     let measureSizes (model: ClientModel) =
-        let mine = ActorRef.PeerRef model.Peer.PeerId
+        let mine = ClientModel.me model
         for terminal in Projection.openTerminals model.Terminals do
             let key = TerminalId.value terminal.TerminalId
             match measure key with
@@ -251,7 +251,7 @@ let create (dispatch: ClientMsg -> unit) (report: TerminalId -> int -> int -> un
             // Here rather than on the `take` press because the flip has no press to hang it
             // on: it is the Session Process saying the mode changed, which reaches this client
             // as a model change like any other. One edge, both routes.
-            let mine = ActorRef.PeerRef model.Peer.PeerId
+            let mine = ClientModel.me model
             let showing = ClientModel.selectedTerminal model
             for terminal in Projection.openTerminals model.Terminals do
                 let key = TerminalId.value terminal.TerminalId

@@ -61,6 +61,17 @@ let private openedBy (by: ActorRef) (id: TerminalId) (title: string) =
 
 let private opened (id: TerminalId) (title: string) = openedBy (PeerRef ada) id title
 
+/// The users a Manager-verified deployment attributes these peers to, and the join that
+/// records it. Under `--auth localhost` no join carries one and every actor stays a peer;
+/// these are the other deployment, which is the one the pane's ownership rules were never
+/// tested against.
+let private nick = UserId.create "nick@example.com" |> expect
+let private bobsUser = UserId.create "bob@example.com" |> expect
+
+let private attributed (peer: PeerId) =
+    let user = if peer = ada then nick else bobsUser
+    SessionEvent.PeerJoined { PeerId = peer; DisplayName = "swift-heron"; User = Some user }
+
 let private sent (n: string) (body: string) =
     MessageSent { MessageId = message n; QueueId = None; Author = Principal.Peer ada; Body = body }
 
@@ -1508,6 +1519,41 @@ let private pinTests =
                       Sandbox = Some SandboxRef.defaultRef; Renewable = false }
             let model = clientOf [ at 1L 0.0 mine; at 2L 1.0 theirs ]
             Expect.equal (model.Pins |> List.map PaneTab.key) [ "terminal:term-a" ] "mine, and only mine"
+
+        // Rule one again, under the OTHER deployment — and the case whose absence let the
+        // strip go wrong for a year. `Principal.toActor (principalFor peer)` is what stamps a
+        // peer's command, so the actor in the log is the peer only while nobody verified it;
+        // once the Manager attributes a user, everything this same connection asks for is
+        // written `UserRef`. A client that answers "is this mine" by building `PeerRef` out of
+        // its own peer id therefore matches nothing it did, and pressing `+ new` opened a real
+        // terminal that reached neither the strip nor the pane — 24 of them in one session,
+        // pressed again each time because nothing appeared.
+        testCase "a terminal I opened is mine when the Manager verified who I am" <| fun () ->
+            let model = clientOf [ at 1L 0.0 (attributed ada); at 2L 1.0 (openedBy (UserRef nick) terminalA "mine") ]
+            Expect.equal (model.Pins |> List.map PaneTab.key) [ "terminal:term-a" ] "the terminal I asked for"
+
+        testCase "a verified somebody else's terminal is still not mine" <| fun () ->
+            // The other half, and the one that makes the case above safe to widen to: the rule
+            // is "the user THIS peer joined as", not "any user".
+            let model = clientOf [ at 1L 0.0 (attributed ada); at 2L 1.0 (openedBy (UserRef bobsUser) terminalB "theirs") ]
+            Expect.equal (model.Pins |> List.map PaneTab.key) [] "somebody else's, however verified"
+
+        testCase "a lease stamped with my verified user is mine" <| fun () ->
+            // Same rule, the other thing that asks it. A lease is what decides whether the live
+            // screen takes your keystrokes, says "you" over it, and reports your viewport to the
+            // pty — so under a verified deployment the holder's own terminal read as somebody
+            // else's, read-only, at the wrong size.
+            let model = clientOf [ at 1L 0.0 (attributed ada) ]
+            Expect.isTrue (ClientModel.isMine (UserRef nick) model) "the user I joined as is me"
+            Expect.isFalse (ClientModel.isMine (UserRef bobsUser) model) "another user is not"
+            Expect.isFalse (ClientModel.isMine ActorRef.Agent model) "the agent is not"
+
+        testCase "unattributed, I am still my peer" <| fun () ->
+            // `--auth localhost` verifies nobody, so the log says `PeerRef` and the answer has
+            // to follow it. One rule reading the log, rather than a deployment-shaped branch.
+            let model = clientOf [ at 1L 0.0 (opened terminalA "mine") ]
+            Expect.isTrue (ClientModel.isMine (PeerRef ada) model) "my peer is me"
+            Expect.isFalse (ClientModel.isMine (UserRef nick) model) "a user nothing attributed to me is not"
 
         testCase "typing in a terminal pins it for the person typing" <| fun () ->
             // Rule three. Watching the agent work and joining it are one keystroke apart.
