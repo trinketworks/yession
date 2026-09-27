@@ -400,6 +400,23 @@ let artifactsVisibleAt (backend: SandboxBackend) (hostArtifactsDir: string) : st
     | SrtBackend -> hostArtifactsDir
     | DockerBackend -> "/artifacts"
 
+/// The same answer for a SANDBOX, which is the form every caller outside this module wants.
+///
+/// A share is copied in by the sandbox, so the path it is told to write to has to be the store
+/// as THAT sandbox sees it — and which backend a sandbox runs on is not the one the session was
+/// configured with: a repo-owned sandbox is work, and work runs in a container whatever
+/// `default` runs under (`SandboxRuntime.scopedBackend`). Taking the sandbox rather than a
+/// backend is what makes that unforgettable, because the composition root has no backend left
+/// to get wrong.
+///
+/// It is the fault this exists to prevent, and it shipped: the root answered with the SESSION's
+/// backend for every sandbox, so a share out of a repo container was told to write to a
+/// host-shaped path. Inside a container that path is writable, so `mkdir -p` and `cp` both
+/// succeeded and the bytes landed in the container's own filesystem — a copy that reported
+/// success, with nothing in the mount the store reads.
+let artifactsVisibleTo (configured: SandboxBackend) (hostArtifactsDir: string) (sandbox: SandboxRef) : string =
+    artifactsVisibleAt (SandboxRuntime.scopedBackend configured (SandboxRef.scope sandbox)) hostArtifactsDir
+
 /// What the SESSION adds to whatever was asked for. The checkouts are the session's,
 /// shared by every sandbox in it, so they are not part of anybody's ask: a repo that
 /// declared its own `dev` did not decline to see the repos directory.
