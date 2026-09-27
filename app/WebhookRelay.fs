@@ -292,16 +292,13 @@ let create
 // --- the route ---------------------------------------------------------------------------
 
 /// Every header, as pairs, names lowercased by Node on the way in. A header that repeated
-/// arrives as an array, and is carried joined the way HTTP joins one. Those are the two
-/// shapes Node's typings admit for a value; the third, `undefined`, they admit and never
-/// send, and reads as empty.
+/// is carried joined the way HTTP joins one.
 let private headersOf (req: Interop.IncomingMessage) : (string * string) list =
     req.headerEntries ()
     |> Array.map (fun (name, value) ->
         match value with
-        | :? string as text -> name, text
-        | :? (string[]) as repeated -> name, String.concat ", " repeated
-        | _ -> name, "")
+        | HeaderValue.Single text -> name, text
+        | HeaderValue.Repeated repeated -> name, String.concat ", " repeated)
     |> List.ofArray
 
 let private respond (res: ServerResponse) (status: int) (text: string) =

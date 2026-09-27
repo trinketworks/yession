@@ -118,13 +118,17 @@ let private routeTests =
 // the parts a wire test can only observe indirectly, so they are pinned here, where a red says
 // which one moved.
 
-let private headers (pairs: (string * string) list) : (string * obj)[] =
-    pairs |> List.map (fun (name, value) -> name, box value) |> List.toArray
+let private headers (pairs: (string * string) list) : (string * HeaderValue)[] =
+    pairs |> List.map (fun (name, value) -> name, HeaderValue.Single value) |> List.toArray
 
-let private names (pairs: (string * obj)[]) = pairs |> Array.map fst |> List.ofArray
+let private names (pairs: (string * HeaderValue)[]) = pairs |> Array.map fst |> List.ofArray
 
-let private valueOf (name: string) (pairs: (string * obj)[]) =
-    pairs |> Array.tryPick (fun (key, value) -> if key = name then Some (unbox<string> value) else None)
+let private valueOf (name: string) (pairs: (string * HeaderValue)[]) =
+    pairs
+    |> Array.tryPick (fun (key, value) ->
+        match value with
+        | HeaderValue.Single text when key = name -> Some text
+        | _ -> None)
 
 let private carryTests =
     testList "what the gateway carries" [

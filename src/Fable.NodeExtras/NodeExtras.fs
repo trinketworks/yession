@@ -936,6 +936,26 @@ type Socket =
     /// The peer's address, and nothing once the socket has been torn down.
     abstract remoteAddress : string option
 
+/// One header's value, as HTTP carries it: said once, or said again. A proxy that narrowed
+/// it to `string` would silently drop the second `set-cookie`, and one that kept it `obj`
+/// would hand every reader a `:?` to write — and the reader that wrote `unbox<string>`
+/// instead got an array that claimed to be text.
+[<RequireQualifiedAccess>]
+type HeaderValue =
+    | Single of string
+    /// A header that repeated: every value, in the order it arrived.
+    | Repeated of string[]
+
+[<RequireQualifiedAccess>]
+module HeaderValue =
+
+    /// Node's own shape for one: a string, or an array of them. What a request's options and
+    /// `writeHead` take, which is why the two are the only callers.
+    let internal wire (value: HeaderValue) : obj =
+        match value with
+        | HeaderValue.Single text -> box text
+        | HeaderValue.Repeated values -> box values
+
 /// A message that ARRIVED over HTTP — its headers, and its body as the stream it is. Both
 /// halves of an exchange are one of these on the receiving side, which is why the shape is
 /// shared rather than written twice.
@@ -947,15 +967,33 @@ type HttpMessage =
     /// after its peer disconnected can be.
     abstract socket : Socket option
 
-    /// Every header that arrived, as `name, value` pairs — Node LOWERCASES the names on the
-    /// way in, so a caller comparing them compares lowercase.
-    ///
-    /// A value is `obj` because it is a string OR an array of them (a header that repeated),
-    /// and a proxy that narrowed it to `string` would silently drop the second `set-cookie`.
-    /// Pairs rather than the object itself so that deciding WHICH headers to carry is F# a
-    /// test can run, instead of an `Object.entries` loop inside an emit.
+[<AutoOpen>]
+module HttpMessageHeaders =
+
     [<Emit("Object.entries($0.headers)")>]
-    abstract headerEntries : unit -> (string * obj)[]
+    let private entries (message: HttpMessage) : (string * obj)[] = jsNative
+
+    /// Node's typings admit three shapes for a value — a string, an array of them, and
+    /// `undefined` — and only the first two are a header that arrived. The third answers
+    /// `None`, and the pair is dropped: a header with no value is not one to carry.
+    let private decode (value: obj) : HeaderValue option =
+        match value with
+        | :? string as text -> Some (HeaderValue.Single text)
+        | :? (string[]) as values -> Some (HeaderValue.Repeated values)
+        | _ -> None
+
+    type HttpMessage with
+
+        /// Every header that arrived, as `name, value` pairs — Node LOWERCASES the names on
+        /// the way in, so a caller comparing them compares lowercase.
+        ///
+        /// Pairs rather than the object itself so that deciding WHICH headers to carry is F#
+        /// a test can run, instead of an `Object.entries` loop inside an emit; and each value
+        /// decoded HERE, once, so a caller pattern-matches a `HeaderValue` instead of asking
+        /// JavaScript what it was handed.
+        member this.headerEntries () : (string * HeaderValue)[] =
+            entries this
+            |> Array.choose (fun (name, value) -> decode value |> Option.map (fun decoded -> name, decoded))
 
 /// The upstream's answer to a request this process made.
 [<AllowNullLiteral>]
@@ -1033,10 +1071,11 @@ module HttpClient =
     let httpRequest
         (url: string)
         (``method``: string)
-        (headers: (string * obj)[])
+        (headers: (string * HeaderValue)[])
         (onResponse: HttpResponse -> unit)
         : HttpRequest =
-        let options = createObj [ "method" ==> ``method``; "headers" ==> createObj headers ]
+        let headers = createObj [ for name, value in headers -> name, HeaderValue.wire value ]
+        let options = createObj [ "method" ==> ``method``; "headers" ==> headers ]
         if url.StartsWith "https:" then overHttps url options onResponse else overHttp url options onResponse
 
 // --- node:http, answering ---------------------------------------------------------------------
@@ -1131,10 +1170,10 @@ module ResponseHeads =
             )
 
         /// Send the status line with an upstream's headers as they came (`headerEntries`,
-        /// filtered): a proxy relays names it has no case for, and a value that is an array —
-        /// a repeated `set-cookie` — stays one.
-        member this.relayHead (statusCode: int, headers: (string * obj)[]) : unit =
-            this.writeHeadWith (statusCode, outgoing headers)
+        /// filtered): a proxy relays names it has no case for, and a value that repeated —
+        /// a second `set-cookie` — goes out repeated.
+        member this.relayHead (statusCode: int, headers: (string * HeaderValue)[]) : unit =
+            this.writeHeadWith (statusCode, outgoing [ for name, value in headers -> name, HeaderValue.wire value ])
 
         /// Send the status line with headers this process speaks but `ResponseHeader` has no
         /// case for — which is only ever a stand-in for somebody else's server (a test playing
