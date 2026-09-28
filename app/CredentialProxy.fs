@@ -37,6 +37,8 @@ open Fable.NodeExtras
 open Fable.NodeForge
 open Node.Buffer
 open Yession.Domain
+open Yession.Domain.Sandboxes
+open Yession.Domain.Terminals
 open Yession.Host.Interop
 
 #if FABLE_COMPILER
@@ -231,8 +233,10 @@ let direct (host: string) : string = "https://" + host
 type Proxy =
     { /// The UNIX socket it listens on — what srt's `network.mitmProxy` names.
       Socket : string
-      /// PEM: what a sandbox's `SSL_CERT_FILE` names.
+      /// PEM: the authority, and every root this process trusts besides.
       TrustBundle : string
+      /// Where `TrustBundle` is written — what a sandbox's `SSL_CERT_FILE` names.
+      TrustFile : string
       /// Lend a block's requests a route's credential: the stand-in its line exports, live
       /// until the terminal's next loan for that route or `Retire`.
       Lend : CredentialRoute -> TerminalId -> Lender -> string
@@ -247,16 +251,22 @@ type private Loan =
       Terminal : TerminalId
       Lender : Lender }
 
-/// Start the proxy on a UNIX socket at `socket`. `upstream` is where a declared host is
-/// reached (`direct`, outside a suite); `report` is where a fault goes that no client can be
-/// told about any more — once an answer's head is out there is nothing left to say it on.
+/// Start the proxy on a UNIX socket at `socket`, with its trust bundle written to
+/// `trustFile`. `upstream` is where a declared host is reached (`direct`, outside a suite);
+/// `report` is where a fault goes that no client can be told about any more — once an
+/// answer's head is out there is nothing left to say it on.
 let start
     (routes: CredentialRoute list)
     (upstream: string -> string)
     (socket: string)
+    (trustFile: string)
     (report: string -> unit)
     : Async<Proxy> =
     let signer = mintAuthority ()
+    let bundle = trustBundle signer
+    // Written before anything can be told where it is, and replaced whole: a sandbox that
+    // read half a bundle would trust half the internet.
+    Fs.writeTextAtomic trustFile bundle
     let mutable contexts : Map<string, SecureContext> = Map.empty
     let contextFor (host: string) =
         match Map.tryFind host contexts with
@@ -408,7 +418,8 @@ let start
         do! Async.FromContinuations (fun (cont, _, _) -> server.listen (socket, fun () -> cont ()) |> ignore)
         return
             { Socket = socket
-              TrustBundle = trustBundle signer
+              TrustBundle = bundle
+              TrustFile = trustFile
               Lend =
                 fun route terminal lender ->
                     retireWhere (fun loan -> loan.Terminal = terminal && loan.Route = route)
@@ -418,3 +429,40 @@ let start
               Retire = fun terminal -> retireWhere (fun loan -> loan.Terminal = terminal)
               Close = fun () -> Async.FromContinuations (fun (cont, _, _) -> server.close (fun _ -> cont ())) }
     }
+
+// --- what a sandbox and a block are given ------------------------------------------------------
+
+/// Whether a sandbox on `backend` can reach this proxy. srt can: its egress already runs
+/// through a proxy of its own, which hands a declared host's `CONNECT` to this one's socket
+/// (`Interception`). Docker and the unconfined host reach the internet directly, and are told
+/// nothing until a listener they can reach — guarded, since it would then be reachable by more
+/// than this session — exists for them.
+let reachable (backend: SandboxBackend) : bool =
+    match backend with
+    | SrtBackend -> true
+    | HostBackend
+    | DockerBackend -> false
+
+/// The variables that point a TLS client at a trust bundle, one per family of client that
+/// reads its own: Go and OpenSSL, curl, Node, Python's requests. Each REPLACES the client's
+/// store (Node's adds to it), which is why the bundle carries every root and not just this
+/// proxy's authority.
+let trustVariables : string list = [ "SSL_CERT_FILE"; "CURL_CA_BUNDLE"; "NODE_EXTRA_CA_CERTS"; "REQUESTS_CA_BUNDLE" ]
+
+/// What a sandbox needs for `route`'s hosts to reach this proxy: those hosts' HTTPS routed
+/// here, leave to reach them, the bundle it is told to trust, and leave to read it. Nothing
+/// of anybody's credential — that is per block (`lend`).
+let provision (proxy: Proxy) (route: CredentialRoute) : WorkSandboxes.Provision =
+    { WorkSandboxes.Provision.empty with
+        Env = trustVariables |> List.map (fun name -> name, proxy.TrustFile) |> Map.ofList
+        Domains = route.Hosts
+        Reads = [ proxy.TrustFile ]
+        Intercept = Some { Interception.Socket = proxy.Socket; Interception.Hosts = route.Hosts } }
+
+/// What one block is lent on `route`: a fresh stand-in, in every variable the route's tools
+/// read one from — the same stand-in in each, so the block's requests are one loan whichever
+/// variable a tool happened to read.
+let lend (proxy: Proxy) (route: CredentialRoute) (terminal: TerminalId) (lender: Lender) : BlockEnv =
+    let standIn = proxy.Lend route terminal lender
+    { BlockEnv.GitConfig = None
+      BlockEnv.Vars = route.Variables |> List.map (fun name -> name, Some standIn) }

@@ -158,7 +158,7 @@ let private githubSource (route: string) : WorkSandboxes.CredentialSource * Resi
             async {
                 return
                     WorkSandboxes.CredentialForwarding.Forwarded
-                        { Env = Map.ofList [ "GITHUB_ROUTE", route ]; GitConfig = []; Domains = [] }
+                        { WorkSandboxes.Provision.empty with Env = Map.ofList [ "GITHUB_ROUTE", route ] }
             }
       Revoke = fun ref -> revoked.Add (SandboxRef.render ref)
       // Lends by NAME: what a block gets says whose credential it was asked for, which

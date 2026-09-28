@@ -31,6 +31,14 @@ type [<AllowNullLiteral>] NetworkConfig =
     abstract allowUnixSockets : string array with get, set
     /// Every unix socket, for a host that cannot scope one by path.
     abstract allowAllUnixSockets : bool with get, set
+    /// Hosts whose `CONNECT`s srt's proxy hands to another proxy's UNIX socket rather than
+    /// dialling. Read from the manager's config, like the allowlist.
+    abstract mitmProxy : MitmProxyConfig with get, set
+
+/// Where srt sends the `CONNECT`s for some hosts instead of dialling them.
+and [<AllowNullLiteral>] MitmProxyConfig =
+    abstract socketPath : string with get, set
+    abstract domains : string array with get, set
 
 /// The filesystem half: regions denied, and holes opened back in them.
 type [<AllowNullLiteral>] FilesystemConfig =
@@ -62,12 +70,18 @@ type [<AllowNullLiteral>] RuntimeConfig =
 [<RequireQualifiedAccess>]
 module RuntimeConfig =
 
-    /// A copy of `config` carrying these two network fields. The rest of it — the filesystem
+    /// A copy of `config` carrying these network fields — the interception only when there
+    /// is one to say, since `None` means "unchanged" and not "none". The rest of it — the filesystem
     /// rules, the credential scrubbing, srt's own proxy state — is copied through rather than
     /// restated, because `updateConfig` REPLACES what it is given, and the manager's config
     /// holds fields srt put there that nothing here declares: `Object.assign` copies every
     /// field, a rebuild would copy the ones it knows.
-    let widened (config: RuntimeConfig) (allowedDomains: string array) (allowUnixSockets: string array) : RuntimeConfig =
+    let widened
+        (config: RuntimeConfig)
+        (allowedDomains: string array)
+        (allowUnixSockets: string array)
+        (mitmProxy: MitmProxyConfig option)
+        : RuntimeConfig =
         // `Object.assign` copies into its target and hands the same target back, so each copy
         // is the value made here — typed from the start, and nothing needs to be read back out
         // of the call's `obj`.
@@ -75,6 +89,7 @@ module RuntimeConfig =
         JS.Constructors.Object.assign (network, config.network) |> ignore
         network.allowedDomains <- allowedDomains
         network.allowUnixSockets <- allowUnixSockets
+        mitmProxy |> Option.iter (fun mitm -> network.mitmProxy <- mitm)
         let copy = createEmpty<RuntimeConfig>
         JS.Constructors.Object.assign (copy, config) |> ignore
         copy.network <- network

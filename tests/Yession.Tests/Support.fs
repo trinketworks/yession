@@ -83,7 +83,8 @@ let emptyPolicy : SandboxPolicy =
       Realisation = []
       Env = Map.empty
       WorkingDirectory = None
-      Filesystem = Confined }
+      Filesystem = Confined
+      Intercept = None }
 
 let preparedEmptyPolicy : unit -> Async<Result<SandboxPolicy, string>> =
     fun () -> async { return Ok emptyPolicy }

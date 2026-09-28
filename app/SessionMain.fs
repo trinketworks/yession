@@ -301,7 +301,9 @@ let private makeSandboxes
                                                 // nothing and has nothing to widen.
                                                 AllowedDomains =
                                                     policy.AllowedDomains
-                                                    |> Option.map (fun domains -> List.distinct (domains @ provision.Domains)) }
+                                                    |> Option.map (fun domains -> List.distinct (domains @ provision.Domains))
+                                                ReadPaths = List.distinct (policy.ReadPaths @ provision.Reads)
+                                                Intercept = provision.Intercept }
                             })
                         (Sandboxes.summaryFor backend workSpec)
                         (sprintf "env-%s" (SandboxRef.objectName sessionId sandbox)))
@@ -1172,6 +1174,15 @@ Async.StartImmediate (
         // each time, so a refresh reaches a sandbox already running and a sandbox's env
         // never holds a value worth printing.
         let! gitGateway = GitGateway.start "https://github.com" (fun fault -> eprintfn "[session %s] git gateway: %s" (SessionId.value sessionId) fault)
+        // The same idea for the API: a block's `gh` holds a stand-in, and the proxy swaps in
+        // the credential of that block's act on the way to api.github.com.
+        let! credentialProxy =
+            CredentialProxy.start
+                [ GitHubAccess.route ]
+                CredentialProxy.direct
+                (Sandboxes.SessionLayout.credentialProxySocket ())
+                (Sandboxes.SessionLayout.prepareTrustBundle dataDir)
+                (fun fault -> eprintfn "[session %s] credential proxy: %s" (SessionId.value sessionId) fault)
         // Who commits in a BLOCK are by: the account behind the credential the block's act
         // spends, asked of GitHub and kept (`Repos.identityMemo`: hits for the session,
         // misses for a window). Nobody's profile takes the four variables away, so a block
@@ -1201,9 +1212,10 @@ Async.StartImmediate (
             }
         // The route's host, as THIS sandbox's git reaches it — or none, for a backend with
         // no way to the gateway, which is the one thing a start refuses over.
-        let gatewayHostFor (sandbox: SandboxRef) : string option =
+        let sandboxBackend (sandbox: SandboxRef) : SandboxBackend =
             SandboxRuntime.scopedBackend workBackend (SandboxRef.scope sandbox)
-            |> Sandboxes.hostAddressHere (Interop.hostname ())
+        let gatewayHostFor (sandbox: SandboxRef) : string option =
+            sandboxBackend sandbox |> Sandboxes.hostAddressHere (Interop.hostname ())
         let forwardableCredentials : WorkSandboxes.CredentialSource list =
             [ { Name = GitHubConnection.connectionName
                 // The route, and only the route: nobody's credential is named at a start.
@@ -1223,13 +1235,18 @@ Async.StartImmediate (
                                             (SandboxBackend.describe backend))
                             | Some host ->
                                 let cap = gitGateway.Grant sandbox
-                                return
-                                    WorkSandboxes.CredentialForwarding.Forwarded
-                                        { Env = Map.empty
-                                          GitConfig = GitGateway.gitConfig host gitGateway.Port cap
-                                          // The route's host, for a backend whose egress
-                                          // would otherwise refuse it (srt).
-                                          Domains = [ host ] }
+                                let git =
+                                    { WorkSandboxes.Provision.empty with
+                                        GitConfig = GitGateway.gitConfig host gitGateway.Port cap
+                                        // The route's host, for a backend whose egress
+                                        // would otherwise refuse it (srt).
+                                        Domains = [ host ] }
+                                // And the API, where the proxy can be reached from.
+                                let api =
+                                    if CredentialProxy.reachable (sandboxBackend sandbox) then
+                                        CredentialProxy.provision credentialProxy GitHubAccess.route
+                                    else WorkSandboxes.Provision.empty
+                                return WorkSandboxes.CredentialForwarding.Forwarded (WorkSandboxes.Provision.merge git api)
                         }
                 Revoke = gitGateway.Revoke
                 // What a block is lent: the loan its git carries on every request to the
@@ -1270,9 +1287,26 @@ Async.StartImmediate (
                                                                   Actor = Authority.author authority })
                                                     return ()
                                                 } }
-                                return { identity with GitConfig = Some (GitGateway.loanConfig host gitGateway.Port secret) }
+                                let lent = { identity with GitConfig = Some (GitGateway.loanConfig host gitGateway.Port secret) }
+                                // The API's stand-in, lent to the same act as the push: a
+                                // block's `gh` and its `git push` spend one person's credential.
+                                if CredentialProxy.reachable (sandboxBackend sandbox) then
+                                    let api =
+                                        CredentialProxy.lend
+                                            credentialProxy
+                                            GitHubAccess.route
+                                            terminal
+                                            { CredentialProxy.Lender.Owner = owner
+                                              CredentialProxy.Lender.Resolve = fun () -> resolveGitHubToken owner
+                                              CredentialProxy.Lender.Refused =
+                                                fun () -> reportGitHubNetworkFailure owner "the credential proxy was answered 401" }
+                                    return BlockEnv.merge lent api
+                                else return lent
                         }
-                Retire = gitGateway.Retire } ]
+                Retire =
+                    fun terminal ->
+                        gitGateway.Retire terminal
+                        credentialProxy.Retire terminal } ]
         let! host = Host.startFull clock runAgent summarize (Some (makeSandboxes forwardableCredentials)) (secretsCapabilitiesFor sessionId) (Some log) (Some docStore) (Some transcriptStore) reportName reportActivity telemetry.Emit subscribeNotifications mcpServers connectionRoutes sessionId auth sessionMount managerOrigin ephemeralStorage (resourceProfile |> Option.bind (fun file -> file.Guidance)) port
         // The Host built the sandbox registry (it owns the log), so the cell the turn
         // capabilities and the `work_sandboxes` query read is filled here — before the

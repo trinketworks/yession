@@ -13,6 +13,8 @@ open Fable.NodeExtras
 open Fable.Pyxpecto
 open Node.Buffer
 open Yession.Domain
+open Yession.Domain.Sandboxes
+open Yession.Domain.Terminals
 open Yession.Host
 open Yession.Host.CredentialProxy
 open Yession.Host.Interop
@@ -22,7 +24,9 @@ let private ada = Principal.User (UserId.create "ada" |> expect)
 let private terminal = TerminalId.create "term-a" |> expect
 
 let private route : CredentialRoute =
-    { Provider = "example"; Hosts = [ "api.example.test"; "uploads.example.test" ]; Variables = [ "EXAMPLE_TOKEN" ] }
+    { Provider = "example"
+      Hosts = [ "api.example.test"; "uploads.example.test" ]
+      Variables = [ "EXAMPLE_TOKEN"; "EXAMPLE_API_TOKEN" ] }
 
 /// A second provider, for the one invariant that needs two.
 let private other : CredentialRoute =
@@ -96,6 +100,32 @@ let private carryTests =
         testCase "GitHub's stand-in reaches gh, and gh's requests reach the swap" <| fun () ->
             Expect.isTrue (List.contains "GH_TOKEN" GitHubAccess.route.Variables) "the variable gh reads a token from"
             Expect.equal (routeFor [ GitHubAccess.route ] "api.github.com") (Some GitHubAccess.route) "the host gh calls"
+    ]
+
+// --- cheap: what srt is told ------------------------------------------------------------------
+
+let private interception (socket: string) (hosts: string list) : Interception =
+    { Interception.Socket = socket; Interception.Hosts = hosts }
+
+let private srtTests =
+    testList "what srt is told" [
+
+        // srt's proxy only hands a host to ours if its config says so, and that config is
+        // built from the policy alone.
+        testCase "a policy's interception is the mitm proxy srt is configured with" <| fun () ->
+            let intercept = interception "/tmp/y.sock" [ "api.example.test" ]
+            let tools : Sandboxes.SrtTools =
+                { Bwrap = None; Socat = None; Ripgrep = None; Nesting = Sandboxes.StrictNesting; Runtime = [] }
+            let config = Sandboxes.SrtSandbox.configFor tools { Support.emptyPolicy with Intercept = Some intercept }
+            Expect.equal config.MitmProxy (Some intercept) "the socket and the hosts, as the policy said"
+
+        // srt reads `mitmProxy` from the manager a session shares, so a sandbox that asks
+        // for fewer hosts than one before it must not take them away.
+        testCase "the manager's interception only ever widens" <| fun () ->
+            let held = interception "/tmp/y.sock" [ "api.example.test" ]
+            let wider = Sandboxes.SrtSandbox.widerInterception (Some held) (Some (interception "/tmp/y.sock" [ "api.other.test" ]))
+            Expect.equal wider (Some (interception "/tmp/y.sock" [ "api.example.test"; "api.other.test" ])) "the union"
+            Expect.equal (Sandboxes.SrtSandbox.widerInterception (Some held) None) (Some held) "and nothing asked is nothing taken"
     ]
 
 // --- [Ports]: a real client, through a real proxy -------------------------------------------
@@ -178,8 +208,12 @@ let private lenderOf (lend: Lend) : Lender =
 /// A proxy for both routes in front of `upstream`, on a socket of its own, for `body`.
 let private withProxy (upstream: Upstream) (body: Proxy -> Async<unit>) : Async<unit> =
     async {
-        let dir = TestFiles.tempDir "yession-credproxy-"
-        let! proxy = CredentialProxy.start [ route; other ] (fun _ -> upstream.Origin) (dir + "/proxy.sock") ignore
+        // Canonical, because srt matches a read grant against the path as written (the note in
+        // GitIntegration.fs), and the srt case hands a sandbox the trust file in here.
+        let dir =
+            let made = TestFiles.tempDir "yession-credproxy-"
+            Fs.canonical made |> Option.defaultValue made
+        let! proxy = CredentialProxy.start [ route; other ] (fun _ -> upstream.Origin) (dir + "/proxy.sock") (dir + "/trust.pem") ignore
         try
             do! body proxy
         finally
@@ -288,10 +322,100 @@ let private portsTests =
                         Expect.equal lend.Refusals 1 "and reported"
                     })
         }
+
+        // Whichever variable a tool reads its token from, it holds the same loan — and that
+        // loan is what spends.
+        testCaseAsync "every variable a block is lent holds one stand-in, and it spends as the lender" <| async {
+            let! upstream = startUpstream ()
+            do!
+                withProxy upstream (fun proxy ->
+                    async {
+                        let lent = CredentialProxy.lend proxy route terminal (lenderOf { Token = Some "ghu_real"; Refusals = 0 })
+                        match lent.Vars |> List.choose snd |> List.distinct with
+                        | [ standIn ] ->
+                            let! _ = request proxy "api.example.test" (Some ("token " + standIn))
+                            Expect.equal (List.ofSeq upstream.Authorizations) [ Some "token ghu_real" ] "the lender's credential"
+                        | other -> failwithf "expected one stand-in in %A, got %A" route.Variables other
+                    })
+        }
+
+        // A sandbox is told to trust a file; what makes that trust the proxy's is that the
+        // file is the bundle the proxy wrote, and that the sandbox may read it.
+        testCaseAsync "a sandbox provisioned for a route trusts, and may read, the bundle the proxy wrote" <| async {
+            let! upstream = startUpstream ()
+            do!
+                withProxy upstream (fun proxy ->
+                    async {
+                        let provision = CredentialProxy.provision proxy route
+                        Expect.equal (Map.tryFind "SSL_CERT_FILE" provision.Env) (Some proxy.TrustFile) "told where"
+                        Expect.equal provision.Reads [ proxy.TrustFile ] "and let read it"
+                        Expect.equal (Fs.readText proxy.TrustFile) proxy.TrustBundle "and it is the proxy's bundle"
+                    })
+        }
+    ]
+
+// --- [Srt]: a confined client, through srt's proxy into this one ----------------------------------
+//
+// The seam the Ports suite cannot reach: a sandboxed command's only way out is srt's filtering
+// proxy, and what hands a declared host's CONNECT to this proxy is srt's `mitmProxy`, set from
+// the policy. Only a real confined curl proves the stand-in survives that route, TLS verifies
+// against the bundle it was told to trust, and the provider sees the lender's credential.
+
+let private srtTools () =
+    match Sandboxes.SrtSandbox.toolsFrom (Sandboxes.ambientEnv ()) with
+    | Ok tools -> tools
+    | Error reason -> failwithf "srt tools: %s" reason
+
+let private confinedTests =
+    testList "from an srt sandbox" [
+
+        testCaseAsync "a confined curl spends a lent stand-in, through srt's proxy, as the lender" <| async {
+            let! upstream = startUpstream ()
+            do!
+                withProxy upstream (fun proxy ->
+                    async {
+                        let workspace =
+                            let made = TestFiles.tempDir "yession-credproxy-srt-"
+                            Fs.canonical made |> Option.defaultValue made
+                        let provision = CredentialProxy.provision proxy route
+                        let lent = CredentialProxy.lend proxy route terminal (lenderOf { Token = Some "ghu_real"; Refusals = 0 })
+                        let policy : SandboxPolicy =
+                            { ReadPaths = workspace :: provision.Reads
+                              WritePaths = [ workspace ]
+                              AllowedDomains = Some provision.Domains
+                              Sockets = []
+                              Binds = []
+                              Volumes = []
+                              Realisation = []
+                              Env =
+                                Sandboxes.mergeEnv (Sandboxes.hostBaseline (Sandboxes.ambientEnv ())) provision.Env
+                                |> Map.add "HOME" workspace
+                              WorkingDirectory = Some workspace
+                              Filesystem = Confined
+                              Intercept = provision.Intercept }
+                        match! Sandboxes.SrtSandbox.create (srtTools ()) policy with
+                        | Error reason -> failwithf "srt sandbox failed: %s" reason
+                        | Ok confined ->
+                            let blockEnv = lent.Vars |> List.choose (fun (name, value) -> value |> Option.map (fun v -> name, v)) |> Map.ofList
+                            let! run, _, err =
+                                runInSandbox
+                                    confined
+                                    "/bin/sh"
+                                    [ "-c"; "curl -sS --fail -H \"Authorization: token $EXAMPLE_TOKEN\" https://api.example.test/user" ]
+                                    blockEnv
+                                    None
+                            Expect.equal run (SandboxExited 0) (sprintf "curl was answered from inside: %s" err)
+                            Expect.equal (List.ofSeq upstream.Authorizations) [ Some "token ghu_real" ] "the provider saw the lender's credential"
+                            do! confined.Dispose ()
+                        TestFiles.removeTree workspace
+                    })
+        }
     ]
 
 let tests =
     testList "The credential proxy" [
         carryTests
+        srtTests
         Tag.needs "The credential proxy, driven by a client" [ Tag.Ports ] (fun () -> portsTests)
+        Tag.needs "The credential proxy, from srt" [ Tag.Srt ] (fun () -> confinedTests)
     ]

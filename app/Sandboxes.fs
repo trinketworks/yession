@@ -316,6 +316,21 @@ module SessionLayout =
     /// policy directly). It is what srt would use in that case, so they still agree.
     let tmpDir () : string = Interop.envOr "CLAUDE_CODE_TMPDIR" "/tmp/claude"
 
+    /// Where the credential proxy listens. In the system temp and SHORT, for the reason srt's
+    /// own bridge sockets are: a unix socket's path is capped (`sun_path`, 104 bytes on
+    /// macOS), and a session directory alone can be deeper than that. Named for the process,
+    /// which is the session — so two sessions on one box never share one.
+    let credentialProxySocket () : string =
+        sprintf "%s/yession-%s.sock" (Node.Api.os.tmpdir ()) (string Node.Api.``process``.pid)
+
+    /// Where the credential proxy's trust bundle is written, the directory made — canonical,
+    /// because srt matches the read grant a sandbox is given against the path as written, and
+    /// on macOS the session directory can sit behind a symlink.
+    let prepareTrustBundle (dataDir: string) : string =
+        let directory = sprintf "%s/credential-proxy" dataDir
+        Fs.ensureDir directory
+        sprintf "%s/trust.pem" (Fs.canonical directory |> Option.defaultValue directory)
+
     /// Where a session that predates the layout above left its checkouts: beside the
     /// workspace instead of inside it.
     let legacyReposDir (dataDir: string) : string = sprintf "%s/repos" dataDir
@@ -892,7 +907,9 @@ let policyFor
           // The write root stays the workspace either way (`WritePaths` above): a
           // sandbox that starts in its checkout still writes where it always did.
           WorkingDirectory = SandboxPath.resolvedFrom workspace spec.WorkingDirectory
-          Filesystem = Confined }
+          Filesystem = Confined
+          // What a forwarded credential provisions, joined where the provision is.
+          Intercept = None }
 
 /// A one-line description of the backend + spec for the start-requested event.
 let summaryFor (backend: SandboxBackend) (spec: EnvironmentSpec) : string =
@@ -1809,6 +1826,10 @@ type SrtConfig =
       /// above is not read at all, so this is the only way a granted socket works there, and
       /// it is set only when the policy already SAID it would be.
       AllowAllUnixSockets : bool
+      /// srt's `network.mitmProxy`: the hosts whose `CONNECT`s its proxy hands to another
+      /// proxy's socket instead of dialling — the credential proxy. Process-wide in srt, like
+      /// the allowlist, and widened on the manager for the same reason (`managerFor`).
+      MitmProxy : Interception option
       Bwrap : string option
       Socat : string option
       Ripgrep : string option
@@ -2021,6 +2042,7 @@ module SrtSandbox =
                 match leaf, outcome with
                 | Socket _, LeafRealisation.Coarsened _ -> true
                 | _ -> false)
+          MitmProxy = policy.Intercept
           Bwrap = tools.Bwrap
           Socat = tools.Socat
           Ripgrep = tools.Ripgrep
@@ -2093,6 +2115,12 @@ module SrtSandbox =
     /// absent rather than `false`, for the same reason. A blank tool path is an absent one,
     /// as the ternaries this replaced read it: `toolsFrom` already refuses to make one, and
     /// a config that slipped one through would fail srt's own schema instead of falling back.
+    /// An interception as srt spells it.
+    let private mitmConfig (interception: Interception) : MitmProxyConfig =
+        jsOptions<MitmProxyConfig> (fun mitm ->
+            mitm.socketPath <- interception.Socket
+            mitm.domains <- List.toArray interception.Hosts)
+
     let private toJs (config: SrtConfig) : RuntimeConfig =
         let named (value: string option) : string option = value |> Option.filter (fun named -> named <> "")
         jsOptions<RuntimeConfig> (fun srt ->
@@ -2102,7 +2130,8 @@ module SrtSandbox =
                     network.deniedDomains <- [||]
                     network.strictAllowlist <- true
                     network.allowUnixSockets <- List.toArray config.AllowUnixSockets
-                    if config.AllowAllUnixSockets then network.allowAllUnixSockets <- true)
+                    if config.AllowAllUnixSockets then network.allowAllUnixSockets <- true
+                    config.MitmProxy |> Option.iter (fun interception -> network.mitmProxy <- mitmConfig interception))
             srt.filesystem <-
                 jsOptions<FilesystemConfig> (fun filesystem ->
                     filesystem.denyRead <- List.toArray config.DenyRead
@@ -2137,10 +2166,16 @@ module SrtSandbox =
     /// else of it changed (`RuntimeConfig.widened` says how). Read once: `getConfig` hands
     /// back the manager's own object, so the config and the network it carries are two views
     /// of one read rather than two reads that could have disagreed.
-    let private widenAllowlist (srt: SandboxManager) (allowedDomains: string array) (allowUnixSockets: string array) : unit =
+    let private widenAllowlist
+        (srt: SandboxManager)
+        (allowedDomains: string array)
+        (allowUnixSockets: string array)
+        (interception: Interception option)
+        : unit =
         match srt.getConfig () with
         | None -> failwith "srt's manager has no config to widen: it has not been initialized"
-        | Some config -> srt.updateConfig (RuntimeConfig.widened config allowedDomains allowUnixSockets)
+        | Some config ->
+            srt.updateConfig (RuntimeConfig.widened config allowedDomains allowUnixSockets (interception |> Option.map mitmConfig))
 
     // srt's manager is a PROCESS-WIDE singleton: one filtering proxy pair, one egress
     // allowlist, initialized once. Filesystem policy is per-spawn (it rides `customConfig`
@@ -2151,6 +2186,20 @@ module SrtSandbox =
     /// The sockets every sandbox of this session may connect to. Session-scoped for the
     /// same reason `allowed` is: srt reads it from the manager's config, not the spawn's.
     let mutable private sockets : Set<string> = Set.empty
+    /// The hosts srt hands to the credential proxy, and where. Session-scoped for the same
+    /// reason again: srt reads `mitmProxy` off the manager's config and nowhere else.
+    let mutable private intercepted : Interception option = None
+
+    /// What the manager intercepts once a sandbox asking for `asked` has come up: the union
+    /// of the hosts, sent to the socket most recently named. A session runs one credential
+    /// proxy, so the socket only moves when a proxy is replaced — a suite starting a fresh
+    /// one per case — and then the newest is the one listening.
+    let widerInterception (held: Interception option) (asked: Interception option) : Interception option =
+        match held, asked with
+        | _, None -> held
+        | None, Some asked -> Some asked
+        | Some held, Some asked ->
+            Some { Interception.Socket = asked.Socket; Interception.Hosts = List.distinct (held.Hosts @ asked.Hosts) }
 
     /// The tools this config names srt must run. macOS names none — Seatbelt ships with
     /// the OS — so the list is empty there, and so is what a failed start there settles.
@@ -2215,6 +2264,7 @@ module SrtSandbox =
                 starting <- None
                 allowed <- Set.empty
                 sockets <- Set.empty
+                intercepted <- None
                 try
                     let! srt = Interop.awaitPromise promise
                     do! Interop.awaitPromise (srt.reset ())
@@ -2239,15 +2289,18 @@ module SrtSandbox =
                 // the network config per spawn.
                 let widerDomains = Set.union allowed (Set.ofList config.AllowedDomains)
                 let widerSockets = Set.union sockets (Set.ofList config.AllowUnixSockets)
-                if widerDomains <> allowed || widerSockets <> sockets then
+                let wider = widerInterception intercepted config.MitmProxy
+                if widerDomains <> allowed || widerSockets <> sockets || wider <> intercepted then
                     allowed <- widerDomains
                     sockets <- widerSockets
-                    widenAllowlist srt (Set.toArray widerDomains) (Set.toArray widerSockets)
+                    intercepted <- wider
+                    widenAllowlist srt (Set.toArray widerDomains) (Set.toArray widerSockets) wider
                 return srt
             }
         | None ->
             allowed <- Set.ofList config.AllowedDomains
             sockets <- Set.ofList config.AllowUnixSockets
+            intercepted <- config.MitmProxy
             // Started once, here, and memoized as its promise — including a start that
             // failed BECAUSE THIS HOST CANNOT CONFINE, so every later sandbox reports the
             // reason instead of rediscovering it. A start that settled nothing is not
@@ -2474,7 +2527,8 @@ module AgentSandbox =
           Realisation = []
           Env = env
           WorkingDirectory = None
-          Filesystem = Confined }
+          Filesystem = Confined
+          Intercept = None }
 
     /// Where a spawn request says to start the child: `None` for a request that named no
     /// directory. Both spawners read the request here and hand this on as it is — each
