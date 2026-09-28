@@ -1649,7 +1649,7 @@ let private reapingTests =
                     sprintf "tests/Yession.Tests/out/.data/reap-%d" (int (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds ()) % 1000000)
                 // Every lifecycle event the Manager emits, so the reap's REASON is read from
                 // the telemetry that operators read, not inferred from the session being gone.
-                let events = ResizeArray<string * (string * obj) list> ()
+                let events = ResizeArray<string * (string * Telemetry.AttributeValue) list> ()
                 // A free port rather than a fixed one, like the fronted registry test below:
                 // the Manager must actually ANSWER on the origin it declares, because a
                 // launched session fetches OIDC discovery against it (Plan 10).
@@ -1697,7 +1697,10 @@ let private reapingTests =
                         |> Seq.filter (fun (name, _) -> name = "session exited")
                         |> Seq.tryLast
                         |> Option.bind (fun (_, attrs) ->
-                            attrs |> List.tryPick (fun (k, v) -> if k = "yession.session.stop_reason" then Some (string v) else None)))
+                            attrs
+                            |> List.tryPick (function
+                                | "yession.session.stop_reason", Telemetry.AttributeValue.String reason -> Some reason
+                                | _ -> None)))
                 Expect.equal reason (Some "idle") "a session that reports must be reaped as idle, never as never-reported"
 
                 // And the way back returns it to the SAME address. This is the property that

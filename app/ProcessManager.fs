@@ -155,7 +155,7 @@ type Options =
       /// their own telemetry directly — the Manager does not collect from them; it only passes
       /// the standard `OTEL_*` env through to each child (Spawn merges over `process.env`) and
       /// adapts the child's identity (service.name/instance.id).
-      OnEvent : string -> (string * obj) list -> unit
+      OnEvent : string -> (string * Telemetry.AttributeValue) list -> unit
       /// How the humans at this Manager's endpoint are authenticated: /authorize for
       /// the OIDC bounce, and every management-UI request. None = the
       /// deny-everything strategy — nothing authenticates until the operator chooses
@@ -1161,7 +1161,8 @@ let createWithUi
                     publishSessions ()
                     // The Manager emits its own lifecycle telemetry directly (session launched).
                     options.OnEvent "session launched"
-                        [ "yession.session.id", box key; "yession.session.port", box port ]
+                        [ "yession.session.id", Telemetry.AttributeValue.String key
+                          "yession.session.port", Telemetry.AttributeValue.Int port ]
                     child.OnExit (fun code ->
                         children <- Map.remove key children
                         activity <- Map.remove key activity
@@ -1184,11 +1185,13 @@ let createWithUi
                         let reapReason = Map.tryFind key reaping
                         reaping <- Map.remove key reaping
                         options.OnEvent "session exited"
-                            ([ "yession.session.id", box key
-                               "yession.session.exit_code", box (defaultArg code -1)
-                               "yession.session.stopped", box stopped ]
+                            ([ "yession.session.id", Telemetry.AttributeValue.String key
+                               "yession.session.exit_code", Telemetry.AttributeValue.Int (defaultArg code -1)
+                               "yession.session.stopped", Telemetry.AttributeValue.Bool stopped ]
                              @ (match reapReason with
-                                | Some reason -> [ "yession.session.stop_reason", box (ReapReason.describe reason) ]
+                                | Some reason ->
+                                    [ "yession.session.stop_reason",
+                                      Telemetry.AttributeValue.String (ReapReason.describe reason) ]
                                 | None -> [])))
                     settle (Ok port)
                     return Ok port

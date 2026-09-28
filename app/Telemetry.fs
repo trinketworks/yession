@@ -33,6 +33,10 @@ open Yession.Domain.Agent
 /// The binding layer (module `Fable.OpenTelemetry`), qualified for clarity in app code.
 module OpenTelemetry = Fable.OpenTelemetry
 
+/// One attribute value on a log record — the binding's closed set, named here so a caller
+/// that only reports lifecycle signals does not reach past this module into the binding.
+type AttributeValue = OpenTelemetry.AttributeValue
+
 let private resolved () : JS.Promise<unit> = JS.Constructors.Promise.resolve ()
 
 /// The telemetry sink plus a graceful flush. `Emit turnId usage` records one agent-turn log
@@ -41,7 +45,7 @@ let private resolved () : JS.Promise<unit> = JS.Constructors.Promise.resolve ()
 /// records ship).
 type Emitter =
     { Emit : AgentTurnId -> AgentUsage -> unit
-      Log : string -> (string * obj) list -> unit
+      Log : string -> (string * AttributeValue) list -> unit
       Shutdown : unit -> JS.Promise<unit> }
 
 /// Telemetry off: every emit is a no-op, shutdown resolves immediately.
@@ -60,49 +64,53 @@ let disabled : Emitter = { Emit = (fun _ _ -> ()); Log = (fun _ _ -> ()); Shutdo
 /// provider that said nothing, and it is what the previous shape could not express — it kept
 /// whichever model an EARLIER ending had named, so a turn's last word about itself could be
 /// overruled by its first.
-let private modelAttributes (models: ModelSpend list) : (string * obj) list =
+let private modelAttributes (models: ModelSpend list) : (string * OpenTelemetry.AttributeValue) list =
+    let counts (spent: ModelSpend -> int) =
+        OpenTelemetry.AttributeValue.Ints (models |> List.map spent |> Array.ofList)
     match models with
     | [] -> []
-    | [ only ] -> [ "gen_ai.response.model", box only.Model ]
+    | [ only ] -> [ "gen_ai.response.model", OpenTelemetry.AttributeValue.String only.Model ]
     | several ->
-        [ "yession.agent.turn.models", box (several |> List.map (fun m -> m.Model) |> Array.ofList)
-          "yession.agent.turn.models.input_tokens",
-          box (several |> List.map (fun m -> m.InputTokens) |> Array.ofList)
-          "yession.agent.turn.models.output_tokens",
-          box (several |> List.map (fun m -> m.OutputTokens) |> Array.ofList)
-          "yession.agent.turn.models.cache_read_input_tokens",
-          box (several |> List.map (fun m -> m.CacheReadTokens) |> Array.ofList)
-          "yession.agent.turn.models.cache_creation_input_tokens",
-          box (several |> List.map (fun m -> m.CacheCreationTokens) |> Array.ofList) ]
+        [ "yession.agent.turn.models",
+          OpenTelemetry.AttributeValue.Strings (several |> List.map (fun m -> m.Model) |> Array.ofList)
+          "yession.agent.turn.models.input_tokens", counts (fun m -> m.InputTokens)
+          "yession.agent.turn.models.output_tokens", counts (fun m -> m.OutputTokens)
+          "yession.agent.turn.models.cache_read_input_tokens", counts (fun m -> m.CacheReadTokens)
+          "yession.agent.turn.models.cache_creation_input_tokens", counts (fun m -> m.CacheCreationTokens) ]
+
+/// Build and emit one log record on `logger` for a completed turn. Attribute names follow
+/// the OTel GenAI conventions; the `cache_*` pair is an Anthropic extension. Identifiers
+/// only — no message body, prompt, or completion ever appears here.
+/// Emit one general log record (no session/turn context) — used by the Manager for its own
+/// lifecycle signals (startup, session launch/exit).
+let emitLogTo
+    (logger: OpenTelemetry.Logger)
+    (body: string)
+    (attributes: (string * OpenTelemetry.AttributeValue) list)
+    : unit =
+    logger.emit (
+        jsOptions<OpenTelemetry.LogRecord> (fun r ->
+            r.severityNumber <- OpenTelemetry.severityInfo
+            r.body <- body
+            r.attributes <- OpenTelemetry.Attributes.ofList attributes))
 
 /// Build and emit one log record on `logger` for a completed turn. Attribute names follow
 /// the OTel GenAI conventions; the `cache_*` pair is an Anthropic extension. Identifiers
 /// only — no message body, prompt, or completion ever appears here.
 let emitTo (logger: OpenTelemetry.Logger) (sessionId: SessionId) (turnId: AgentTurnId) (usage: AgentUsage) : unit =
-    let attributes =
-        [ "gen_ai.system", box "anthropic"
-          "gen_ai.operation.name", box "agent_turn"
-          "gen_ai.usage.input_tokens", box usage.InputTokens
-          "gen_ai.usage.output_tokens", box usage.OutputTokens
-          "anthropic.usage.cache_read_input_tokens", box usage.CacheReadTokens
-          "anthropic.usage.cache_creation_input_tokens", box usage.CacheCreationTokens
-          "yession.session.id", box (SessionId.value sessionId)
-          "yession.agent.turn.id", box (AgentTurnId.value turnId) ]
-        @ modelAttributes usage.Models
-    logger.emit (
-        createObj
-            [ "severityNumber", box OpenTelemetry.severityInfo
-              "body", box "agent turn usage"
-              "attributes", box (createObj attributes) ])
-
-/// Emit one general log record (no session/turn context) — used by the Manager for its own
-/// lifecycle signals (startup, session launch/exit).
-let emitLogTo (logger: OpenTelemetry.Logger) (body: string) (attributes: (string * obj) list) : unit =
-    logger.emit (
-        createObj
-            [ "severityNumber", box OpenTelemetry.severityInfo
-              "body", box body
-              "attributes", box (createObj attributes) ])
+    emitLogTo
+        logger
+        "agent turn usage"
+        ([ "gen_ai.system", OpenTelemetry.AttributeValue.String "anthropic"
+           "gen_ai.operation.name", OpenTelemetry.AttributeValue.String "agent_turn"
+           "gen_ai.usage.input_tokens", OpenTelemetry.AttributeValue.Int usage.InputTokens
+           "gen_ai.usage.output_tokens", OpenTelemetry.AttributeValue.Int usage.OutputTokens
+           "anthropic.usage.cache_read_input_tokens", OpenTelemetry.AttributeValue.Int usage.CacheReadTokens
+           "anthropic.usage.cache_creation_input_tokens",
+           OpenTelemetry.AttributeValue.Int usage.CacheCreationTokens
+           "yession.session.id", OpenTelemetry.AttributeValue.String (SessionId.value sessionId)
+           "yession.agent.turn.id", OpenTelemetry.AttributeValue.String (AgentTurnId.value turnId) ]
+         @ modelAttributes usage.Models)
 
 // --- Resource identity (code default, overridable by the standard env vars) --------------
 
@@ -146,7 +154,8 @@ let private resourceOf (defaultServiceName: string) (instanceId: string option) 
         match Interop.envOr "OTEL_SERVICE_NAME" "" with
         | "" -> merged
         | name -> Map.add "service.name" name merged
-    OpenTelemetry.resource (createObj [ for KeyValue (k, v) in merged -> k, box v ])
+    OpenTelemetry.resource (
+        OpenTelemetry.Attributes.ofList [ for KeyValue (k, v) in merged -> k, OpenTelemetry.AttributeValue.String v ])
 
 // --- Exporter selection from OTEL_LOGS_EXPORTER ------------------------------------------
 
@@ -202,4 +211,4 @@ let managerFromEnv () : Emitter =
 /// stand-in for a real collector). Bypasses env exporter selection.
 let createOtlp (sessionId: SessionId) (url: string) : Emitter =
     build "yession-session" (Some (SessionId.value sessionId)) (Some sessionId)
-        [ OpenTelemetry.batchProcessor (OpenTelemetry.otlpLogExporter url (createObj [])) ]
+        [ OpenTelemetry.batchProcessor (OpenTelemetry.otlpLogExporter url Map.empty) ]
