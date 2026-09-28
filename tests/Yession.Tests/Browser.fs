@@ -3466,11 +3466,11 @@ let editorTests =
             }
 
         // Pins (Plan 20, stage 1). The pin's STATE is a rendered attribute the cheap tier can
-        // read; what needs a browser is the keyboard release — Delete on a focused tab
-        // removes that tab from the document, and focus has to land on what took its place
-        // rather than on `body`. Same floor the DVR's control swap answers, in the surface a
+        // read; what needs a browser is the keyboard close — Delete on a focused tab removes
+        // that tab from the document, and focus has to land on what took its place rather
+        // than on `body`. Same floor the DVR's control swap answers, in the surface a
         // keyboard user actually walks.
-        editorCase "a tab is kept by its pin and released from the keyboard, without stranding focus" <| fun page ->
+        editorCase "a tab is kept by its pin and closed from the keyboard, without stranding focus" <| fun page ->
             async {
                 // A chip's tab arrives previewed — kept by nothing — and selected, since
                 // tapping the chip is what put it there.
@@ -3497,8 +3497,9 @@ let editorTests =
                 do! awaitU (page.ClickAsync "#shell [data-terminal-tab='term-harness']")
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-pane-tab^='block:']")
 
-                // Delete on the focused tab releases it. The tab leaves the strip, and focus
-                // lands on whatever took its position — never nowhere.
+                // Delete on the focused tab closes it — a kept tab included, which the close
+                // control itself will not do. The tab leaves the strip, and focus lands on
+                // whatever took its position — never nowhere.
                 do! awaitU (page.FocusAsync "#shell [data-pane-tab^='block:']")
                 do! awaitU (page.Keyboard.PressAsync "Delete")
                 let! _ =

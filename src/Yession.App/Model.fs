@@ -332,6 +332,19 @@ module PaneTab =
         | StretchTab stretch -> Some stretch.TerminalId
         | ContentTab _ -> None
 
+    /// Whether the thing in this tab has ENDED — a terminal that has closed, or one this
+    /// session does not have at all.
+    ///
+    /// A block, a stretch and a file are readings of something that already finished, so
+    /// there is nothing about them left to end: they answer `false` and stay in the strip
+    /// until somebody closes them. This used to be `isLive`, asked as "what may the strip
+    /// keep", which is a question about the strip's policy — and it answered `true` about a
+    /// content tab, which is not a live terminal by any reading.
+    let ended (terminals: Projection) =
+        function
+        | TerminalTab id -> Projection.tryFind id terminals |> Option.forall (fun t -> not t.IsOpen)
+        | BlockTab _ | StretchTab _ | ContentTab _ -> false
+
     /// What having this tab up says to everyone else (`ViewRef`) — the one place a tab becomes
     /// a thing to be present AT. Every terminal-shaped tab reports the terminal, because a
     /// reader who wants to know who else is here is asking about the terminal and not about
@@ -343,18 +356,6 @@ module PaneTab =
         | StretchTab stretch -> ViewingTerminal stretch.TerminalId
         | ContentTab ref -> ViewingFile ref
 
-    /// Whether this tab is a LIVE terminal's, given the terminals as they stand (Plan 20,
-    /// stage 1) — what the strip may keep.
-    ///
-    /// The strip holds the working set, and a recording is not one: a closed terminal leaves
-    /// the strip and stays in the list, which is where every terminal the session has ever
-    /// had now lives. A pin on a recording is a person keeping something to READ, which is
-    /// what a block or stretch tab is, and those stay however their terminal ends.
-    let isLive (terminals: Projection) =
-        function
-        | TerminalTab id ->
-            Projection.tryFind id terminals |> Option.map (fun t -> t.IsOpen) |> Option.defaultValue false
-        | BlockTab _ | StretchTab _ | ContentTab _ -> true
 
 /// Which read of a tab the pane is showing (Plan 25, stage 2): the reader's POSITION — which
 /// tab, and for a terminal where in its history — and their FIDELITY — the text of it, or the
@@ -637,17 +638,32 @@ type ClientModel =
       /// measurement of nothing: the width this reader last had is the truer answer, and the
       /// only one they could have meant.
       TerminalViewports : Map<TerminalId, Size>
-      /// What this client PINNED to the strip, in pin order (Plan 20, stage 1).
+      /// The tabs this client has OPEN, in the order they opened (Plan 20, stage 1).
       ///
       /// The strip used to be a census — every terminal the session ever had, for ever,
       /// because it was the only door to a recording. The list is that door now, so the
-      /// strip can be what a person is actually working with: their pins, and whatever they
-      /// are looking at.
+      /// strip can be what a person is actually working with.
       ///
-      /// A LIST rather than a set, because pin order is what a reader's tabs sit in and a
-      /// set would re-order them on any change. LOCAL to this client, never synced: pinning
-      /// is reading, not collaborating.
-      Pins          : PaneTab list
+      /// A LIST rather than a set, because the order tabs sit in is the order they arrived
+      /// and a set would re-order them on any change. LOCAL to this client, never synced:
+      /// what one person has open is not what another is working on.
+      ///
+      /// What opens one: a terminal you asked for, and a tab you kept. What closes one: your
+      /// own press, or the terminal in it ending — unless you kept it, which is the whole of
+      /// what keeping means here.
+      Tabs          : PaneTab list
+      /// Which of them this client KEPT, by tab key.
+      ///
+      /// A mark on an open tab rather than a list of its own, because "in my strip" and
+      /// "kept" were two memberships free to disagree: the fold wrote pins for terminals a
+      /// person never kept and dropped pins for terminals they had, so neither question
+      /// could be answered off either list. One list of tabs, one mark saying which of them
+      /// somebody decided to hold on to.
+      ///
+      /// Written by ONE message (`TogglePinMsg`) and by nothing else. No event writes it: a
+      /// pin is an act, and a person who typed one command into somebody else's terminal had
+      /// it kept for the rest of the session with nothing on screen saying who decided so.
+      Pinned        : Set<string>
       /// What the pane is SHOWING: which tab, which read of it, or the census (Plan 25,
       /// stage 2). `None` = nothing chosen yet, resolved to a default by `selectedPane`.
       ///
@@ -655,7 +671,7 @@ type ClientModel =
       /// nothing made them: see `PaneMode`. Its tab is also the PREVIEW slot (Plan 20, stage
       /// 1) — a tab that is shown and not pinned is transient, and showing anything else
       /// replaces it. There is no second field for that: a pinned tab and a previewed one
-      /// differ by whether `Pins` names it, which is the only fact there is.
+      /// differ by whether `Tabs` names it, which is the only fact there is.
       Pane          : PaneMode option
       /// Whether the terminals panel is open. View state, never synced: two people in one
       /// session may reasonably want different columns on screen.
@@ -880,6 +896,10 @@ type ClientMsg =
     /// unpinning a terminal leaves it running and leaves its row in the list, and the one
     /// verb that ends a terminal lives on that row.
     | TogglePinMsg of PaneTab
+    /// Take this tab out of the strip. Not the same verb as ending what is in it: closing a
+    /// terminal's tab leaves the terminal running, and its row in the list — where the one
+    /// verb that ends a terminal lives — is untouched.
+    | CloseTabMsg of PaneTab
     /// Rewind a LIVE terminal (Plan 14, stage 7): watch what it has recorded so far, from a
     /// transcript length pinned NOW while the terminal keeps running.
     ///
@@ -974,7 +994,8 @@ module ClientModel =
           TerminalKeyframes = Map.empty
           TerminalScreens = Map.empty
           TerminalViewports = Map.empty
-          Pins = []
+          Tabs = []
+          Pinned = Set.empty
           Pane = None
           TerminalsOpen = false
           ItemMenu = None
@@ -1091,19 +1112,22 @@ module ClientModel =
 
     /// Whether this client is keeping a tab.
     let isPinned (tab: PaneTab) (model: ClientModel) : bool =
-        model.Pins |> List.exists (fun pinned -> PaneTab.key pinned = PaneTab.key tab)
+        Set.contains (PaneTab.key tab) model.Pinned
 
-    /// The tab strip, in the order it renders (Plan 20, stage 1): the pins that are still
-    /// live, in pin order, then whatever is being previewed.
+    /// The tab strip, in the order it renders (Plan 20, stage 1): the pins, in pin order,
+    /// then whatever is being previewed.
     ///
     /// The preview is at the END and never in the middle, so a person reading one recording
     /// after another watches one tab change rather than their pins shuffling under them.
-    /// A closed terminal is not here at all — its row in the list is where its recording is
-    /// read now, which is what lets the strip stop being a census.
+    ///
+    /// A terminal that CLOSES keeps its tab when it was pinned, and shows its recording
+    /// there. That is the pin doing what it says: the strip stopped being a census because
+    /// the list became the door to every recording, not because a closed terminal is
+    /// unkeepable — and a tab that vanishes at the moment the thing in it finishes is a tab
+    /// taken away from whoever was watching it finish.
     let rec paneTabs (model: ClientModel) : PaneTab list =
-        // No filter here: a pin on a terminal that has closed is dropped where the close is
-        // FOLDED, so the strip is simply the pins. Filtering again at render would be a
-        // second mechanism for one fact, free to disagree with the first.
+        // No filter here, and now nothing to filter: only a person's own act adds a pin, and
+        // only their own act removes one.
         //
         // The preview is the RESOLVED selection rather than the stored choice, because a
         // client that has pinned nothing still shows a terminal — whatever `selectedPane`
@@ -1111,12 +1135,13 @@ module ClientModel =
         // panel it is sitting above.
         let previewed =
             match selectedPane model with
-            | Some chosen when not (isPinned chosen model) -> [ chosen ]
+            | Some chosen when not (model.Tabs |> List.exists (fun open' -> PaneTab.key open' = PaneTab.key chosen)) ->
+                [ chosen ]
             | _ -> []
-        model.Pins @ previewed
+        model.Tabs @ previewed
 
     /// Which tab the pane shows: the stored choice while what it names still exists, else the
-    /// first pinned live terminal, else the first open one. Resolved rather than stored, for
+    /// first pinned OPEN terminal, else the first open one. Resolved rather than stored, for
     /// the same reason `composerTarget` is: a choice that outlives what it pointed at is a
     /// blank pane nobody asked for. The default lands somewhere you can type.
     ///
@@ -1134,8 +1159,15 @@ module ClientModel =
         match model.Pane |> Option.bind PaneMode.subject |> Option.map TabMode.tab with
         | Some chosen when exists chosen -> Some chosen
         | _ ->
-            let pinnedTerminal = model.Pins |> List.tryPick (function TerminalTab _ as tab -> Some tab | _ -> None)
-            match pinnedTerminal with
+            // Open, because this default exists to land somewhere a person can TYPE. A
+            // recording is a fine tab and a poor place to arrive with nothing selected.
+            let openTerminalTab =
+                model.Tabs
+                |> List.tryPick (function
+                    | TerminalTab id as tab when
+                        Projection.tryFind id model.Terminals |> Option.exists (fun t -> t.IsOpen) -> Some tab
+                    | _ -> None)
+            match openTerminalTab with
             | Some tab -> Some tab
             | None ->
                 Projection.openTerminals model.Terminals
@@ -1898,19 +1930,20 @@ module ClientModel =
                     model.EventConsumer.LastProcessedOffset
                     page.Events
                     model.Timeline
-            // The pins move with the terminals (Plan 20, stage 1), in the step that folds
-            // the events rather than at render: a terminal I opened is one I asked for and
-            // is therefore in my hands, and a terminal that has closed has nothing left to
-            // keep. Doing it here means the strip is simply the pins — one rule, one place,
-            // and no filter at render free to disagree with it.
+            // The tabs follow the terminals, which is what a tab is FOR: a terminal I asked
+            // for opens one, and a terminal that ends takes its own away again — unless
+            // somebody kept it, which is the whole of what keeping means. No pin is computed
+            // here and none ever will be: this fold used to write them, so a pin meant both
+            // "recently mine" and "I decided to hold on to this" and neither could be read
+            // off it.
             //
-            // "I opened it" is `ClientModel.me`'s rule — `Attribution.actorFor`, the same one
-            // the Session Process stamped the open with — asked of the attribution this page
-            // has just been folded into rather than of `model.Attribution`, because the
+            // "I asked for it" is `ClientModel.me`'s rule — `Attribution.actorFor`, the same
+            // one the Session Process stamped the open with — asked of the attribution this
+            // page has just been folded into rather than of `model.Attribution`, because the
             // `PeerJoined` that says who I am can arrive in the SAME page as the terminal I
             // opened. Reading the older copy here would leave the session's first page
-            // unpinnable and nothing else, which is the kind of gap that is found once.
-            let pins =
+            // tabless and nothing else, which is the kind of gap that is found once.
+            let tabs =
                 let mine = Attribution.actorFor attribution.PeerUsers model.Peer.PeerId
                 let opened =
                     freshEvents
@@ -1918,9 +1951,10 @@ module ClientModel =
                         match e.Event with
                         | SessionEvent.TerminalOpened t when t.OpenedBy = mine -> Some (TerminalTab t.TerminalId)
                         | _ -> None)
-                (model.Pins @ opened)
-                |> List.filter (fun tab -> PaneTab.isLive terminals tab)
+                (model.Tabs @ opened)
                 |> List.distinctBy PaneTab.key
+                |> List.filter (fun tab ->
+                    Set.contains (PaneTab.key tab) model.Pinned || not (PaneTab.ended terminals tab))
             let latestKnown = EventOffset.maxOption model.EventConsumer.LatestKnownOffset highWater
             { model with
                 Conversation = conversation
@@ -1931,7 +1965,7 @@ module ClientModel =
                 Agent = agent
                 Environment = environment
                 Terminals = terminals
-                Pins = pins
+                Tabs = tabs
                 Peers = peers
                 Attribution = attribution
                 EventConsumer =
@@ -2161,12 +2195,42 @@ module ClientModel =
             { model with Pane = Some (OnTab (WatchingBehind (terminal, length))); TerminalsOpen = true }
         | TogglePinMsg tab ->
             let key = PaneTab.key tab
-            // Unpinning leaves what is SHOWN alone: it stays on screen, now as the preview.
-            // Pressing unpin should say "stop keeping this", never "take it away from me
-            // while I am looking at it".
             if isPinned tab model then
-                { model with Pins = model.Pins |> List.filter (fun pinned -> PaneTab.key pinned <> key) }
-            else { model with Pins = model.Pins @ [ tab ] }
+                // Unpinning leaves the tab OPEN and where it was: it stays on screen, now
+                // closable. Pressing unpin should say "stop keeping this", never "take it
+                // away from me while I am looking at it".
+                { model with Pinned = Set.remove key model.Pinned }
+            else
+                // Keeping something that was only previewed OPENS it, because a mark on a tab
+                // that is not in the strip is a mark on nothing. Appended rather than moved
+                // to the front: a strip that re-orders under a reader is the thing pin order
+                // was a list for in the first place.
+                let tabs =
+                    if model.Tabs |> List.exists (fun open' -> PaneTab.key open' = key) then model.Tabs
+                    else model.Tabs @ [ tab ]
+                { model with Tabs = tabs; Pinned = Set.add key model.Pinned }
+        | CloseTabMsg tab ->
+            // Closing is total — the tab goes, and a tab that was kept is no longer kept,
+            // because somebody asking for it gone has said so more recently than they said to
+            // keep it. WHICH tabs offer a close is the view's question, and its answer is
+            // "the ones nobody kept": a stray tap in a strip that scrolls sideways must not
+            // take away something a person is holding on to, while Delete on a focused tab is
+            // deliberate enough to.
+            //
+            // The pane lets go of it too, and only when it was the tab that was showing.
+            // Otherwise `selectedPane` would resolve the closed tab right back as the preview
+            // — closing the thing you are looking at would leave it exactly where it was.
+            let key = PaneTab.key tab
+            let letGo (mode: TabMode) = PaneTab.key (TabMode.tab mode) = key
+            let pane =
+                match model.Pane with
+                | Some (OnTab mode) when letGo mode -> None
+                | Some (OnList (Some mode)) when letGo mode -> Some (OnList None)
+                | other -> other
+            { model with
+                Tabs = model.Tabs |> List.filter (fun open' -> PaneTab.key open' <> key)
+                Pinned = Set.remove key model.Pinned
+                Pane = pane }
         | ToggleContentMsg ->
             { model with TerminalsOpen = not model.TerminalsOpen }
         | ToggleItemMenuMsg messageId ->
@@ -2198,15 +2262,14 @@ module ClientModel =
                 | None -> Some (OnList None)
             { model with Pane = next; TerminalsOpen = true }
         | EnsureTerminalDraftMsg (terminal, author, queueId) ->
-            // Typing in a terminal pins it, for the person typing (Plan 20, stage 1). The
-            // rule that makes the agent's terminals safe to leave unpinned: watching one and
-            // joining one are a keystroke apart, and the moment you take a seat at it, it is
-            // in your strip. Applied before the idempotence check below, because a slot that
-            // already exists is somebody coming BACK to a terminal — which is the same claim.
-            let model =
-                if author = model.Peer.PeerId && not (isPinned (TerminalTab terminal) model) then
-                    { model with Pins = model.Pins @ [ TerminalTab terminal ] }
-                else model
+            // Typing does NOT pin. It used to — "watching one and joining one are a keystroke
+            // apart" — and the reasoning was sound about terminals while the strip was also
+            // the working set. It is not sound about a pin: a person who typed one command
+            // into somebody else's terminal had it kept for the rest of the session, and
+            // nothing they did said so. Keeping is one gesture, on the tab, and this is not
+            // it. A terminal being typed in is on screen already, which is the whole of what
+            // it needs.
+            //
             // Idempotent, and the queue key of an existing slot is never re-minted: every
             // co-editor's send depends on it staying the one the slot was published with.
             if Map.containsKey (terminal, author) model.Synced.TerminalDrafts then model

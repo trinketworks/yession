@@ -419,6 +419,13 @@ let private oneBlock =
 
 let private stripKeys (model: ClientModel) = ClientModel.paneTabs model |> List.map PaneTab.key
 
+/// More events, onto a client that has already folded some — the same page message a browser
+/// takes, so "what happened next" is folded by the path that folds everything else.
+let private thenFolded (events: EventEnvelope<SessionEvent> list) (model: ClientModel) : ClientModel =
+    ClientModel.update
+        (EventsPageMsg { Events = events; LastOffset = events |> List.tryLast |> Option.map (fun e -> e.Offset); IsEnd = true })
+        model
+
 let private paneTests =
     testList "The pane's tabs (Plan 14, stage 2)" [
         testCase "opening a tab shows it, and opens the column it is in" <| fun () ->
@@ -1490,25 +1497,17 @@ let private listTests =
             Expect.isTrue listed.TerminalsOpen "and the column came with it"
     ]
 
-// --- Pins, and the preview slot (Plan 20, stage 1) ------------------------------------------
+// --- Tabs, pins, and the preview slot (Plan 20, stage 1) ------------------------------------
 
 let private pinTests =
-    testList "Pins and the preview (Plan 20, stage 1)" [
+    testList "Tabs, pins and the preview (Plan 20, stage 1)" [
 
-        testCase "the strip holds the pins, and closed terminals are not among them" <| fun () ->
-            // The whole reason the strip can stop being a census: a terminal that has closed
-            // is read from its row in the list, so keeping it here would be the census again
-            // under another name.
-            let model =
-                clientOf
-                    [ at 1L 0.0 (opened terminalA "build")
-                      at 2L 1.0 (opened terminalB "logs")
-                      at 3L 2.0 (closedNow terminalA) ]
-            Expect.equal (stripKeys model) [ "terminal:term-b" ] "only what is still running"
-
-        testCase "a terminal I opened is pinned; one somebody else opened is not" <| fun () ->
-            // Rule one, and the rule that makes an agent's terminals safe to leave out of the
-            // strip: you asked for it, so it is in your hands.
+        testCase "nothing a session DOES puts a tab in my strip" <| fun () ->
+            // The rule the strip is built on now: a pin is a person's own act. Terminals
+            // opened — by me, by the agent — are things that happened, and the strip is not
+            // a record of what happened. It used to pin the ones I opened, which made "kept"
+            // and "recently mine" the same word and left a person unable to read either off
+            // their own tabs.
             let mine =
                 SessionEvent.TerminalOpened
                     { TerminalId = terminalA; OpenedBy = PeerRef ada; Title = (TerminalTitle.fromProse "mine")
@@ -1518,31 +1517,103 @@ let private pinTests =
                     { TerminalId = terminalB; OpenedBy = ActorRef.Agent; Title = (TerminalTitle.fromProse "running the tests")
                       Sandbox = Some SandboxRef.defaultRef; Renewable = false }
             let model = clientOf [ at 1L 0.0 mine; at 2L 1.0 theirs ]
-            Expect.equal (model.Pins |> List.map PaneTab.key) [ "terminal:term-a" ] "mine, and only mine"
+            Expect.equal (Set.toList model.Pinned) [] "kept nothing, because I kept nothing"
+            Expect.equal
+                (model.Tabs |> List.map PaneTab.key)
+                [ "terminal:term-a" ]
+                "a tab for the one I asked for, and none for the agent's"
 
-        // Rule one again, under the OTHER deployment — and the case whose absence let the
-        // strip go wrong for a year. `Principal.toActor (principalFor peer)` is what stamps a
-        // peer's command, so the actor in the log is the peer only while nobody verified it;
-        // once the Manager attributes a user, everything this same connection asks for is
-        // written `UserRef`. A client that answers "is this mine" by building `PeerRef` out of
-        // its own peer id therefore matches nothing it did, and pressing `+ new` opened a real
-        // terminal that reached neither the strip nor the pane — 24 of them in one session,
-        // pressed again each time because nothing appeared.
-        testCase "a terminal I opened is mine when the Manager verified who I am" <| fun () ->
-            let model = clientOf [ at 1L 0.0 (attributed ada); at 2L 1.0 (openedBy (UserRef nick) terminalA "mine") ]
-            Expect.equal (model.Pins |> List.map PaneTab.key) [ "terminal:term-a" ] "the terminal I asked for"
+        testCase "a terminal I kept stays when it closes, and shows its recording" <| fun () ->
+            // What the pin now promises, and what it could not promise before: the fold used
+            // to drop a pin the moment its terminal closed, so a tab was taken away from
+            // whoever was watching the thing in it finish. The list is still every terminal's
+            // home; this is about the one somebody said they wanted in front of them.
+            let model =
+                clientOf
+                    [ at 1L 0.0 (opened terminalA "build")
+                      at 2L 1.0 (opened terminalB "logs") ]
+                |> ClientModel.update (TogglePinMsg (TerminalTab terminalA))
+                |> ClientModel.update (TogglePinMsg (TerminalTab terminalB))
+                |> thenFolded [ at 3L 2.0 (closedNow terminalA) ]
+            Expect.equal
+                (model.Tabs |> List.map PaneTab.key)
+                [ "terminal:term-a"; "terminal:term-b" ]
+                "both still open, and closing one is not a person changing their mind"
+            Expect.isTrue (List.contains "terminal:term-a" (stripKeys model)) "the closed one is still a tab"
 
-        testCase "a verified somebody else's terminal is still not mine" <| fun () ->
-            // The other half, and the one that makes the case above safe to widen to: the rule
-            // is "the user THIS peer joined as", not "any user".
-            let model = clientOf [ at 1L 0.0 (attributed ada); at 2L 1.0 (openedBy (UserRef bobsUser) terminalB "theirs") ]
-            Expect.equal (model.Pins |> List.map PaneTab.key) [] "somebody else's, however verified"
+        testCase "a terminal that ends takes its tab with it, when nobody kept it" <| fun () ->
+            // The other half of the tab rule, and why the strip does not need tidying: what
+            // is in a tab having finished is the ordinary reason a tab is done with. The list
+            // is where every terminal the session ever had is read from.
+            let model =
+                clientOf
+                    [ at 1L 0.0 (opened terminalA "build")
+                      at 2L 1.0 (opened terminalB "logs") ]
+                |> thenFolded [ at 3L 2.0 (closedNow terminalA) ]
+            Expect.equal
+                (model.Tabs |> List.map PaneTab.key)
+                [ "terminal:term-b" ]
+                "only what is still running"
+            Expect.equal
+                (ClientModel.terminalRows model |> List.map (fun t -> TerminalId.value t.TerminalId) |> List.sort)
+                [ "term-a"; "term-b" ]
+                "and both are still in the list, which is nobody's working set"
 
+        testCase "keeping something previewed opens it as a tab" <| fun () ->
+            // A mark on a tab that is not in the strip would be a mark on nothing, so the
+            // gesture that keeps a glance is also the one that opens it.
+            let kept = BlockTab (terminalA, block "1")
+            let model =
+                clientOf oneBlock
+                |> ClientModel.update (ShowInPaneMsg (Reading kept))
+                |> ClientModel.update (TogglePinMsg kept)
+            Expect.isTrue (ClientModel.isPinned kept model) "kept"
+            Expect.isTrue (model.Tabs |> List.exists (fun tab -> PaneTab.key tab = PaneTab.key kept)) "and open"
+
+        testCase "closing a tab takes it off the strip and leaves its terminal running" <| fun () ->
+            // Closing a tab and ending a terminal are two verbs, and only one of them is in
+            // the strip. The one that ends a terminal lives on its row in the list.
+            let model =
+                clientOf [ at 1L 0.0 (opened terminalA "build") ]
+                |> ClientModel.update (CloseTabMsg (TerminalTab terminalA))
+            Expect.equal (model.Tabs |> List.map PaneTab.key) [] "out of the strip"
+            Expect.isTrue
+                (Projection.tryFind terminalA model.Terminals |> Option.map (fun t -> t.IsOpen) |> Option.defaultValue false)
+                "and still running for everyone"
+
+        testCase "closing the tab you are looking at really closes it" <| fun () ->
+            // The pane has to let go, and only of the tab that went: a selection naming a
+            // closed-over tab resolves straight back as the preview, so a strip that removed
+            // the tab and kept the selection would put it back and read as nothing happening.
+            let kept = BlockTab (terminalA, block "1")
+            let model =
+                clientOf oneBlock
+                |> ClientModel.update (ShowInPaneMsg (Reading kept))
+                |> ClientModel.update (TogglePinMsg kept)
+                |> ClientModel.update (CloseTabMsg kept)
+            Expect.isFalse
+                (stripKeys model |> List.contains (PaneTab.key kept))
+                "gone from the strip, not back in it as a preview"
+
+        testCase "a tab is in the strip once, whether or not it is the one showing" <| fun () ->
+            // The preview is what is shown and NOT open. It used to be what is shown and not
+            // PINNED, which was the same question while every open tab was a pin and became
+            // a double entry the moment they were two lists.
+            let model =
+                clientOf [ at 1L 0.0 (opened terminalA "build") ]
+                |> ClientModel.update (ShowInPaneMsg (Reading (TerminalTab terminalA)))
+            Expect.equal (stripKeys model) [ "terminal:term-a" ] "one tab"
+
+        // The case whose absence let the strip go wrong for a year, asked of the rule that
+        // still answers it. `Principal.toActor (principalFor peer)` is what stamps a peer's
+        // command, so the actor in the log is the peer only while nobody verified it; once
+        // the Manager attributes a user, everything this same connection asks for is written
+        // `UserRef`. A client that answers "is this mine" by building `PeerRef` out of its own
+        // peer id therefore matches nothing it did — and a lease is what decides whether the
+        // live screen takes your keystrokes, says "you" over it, and reports your viewport to
+        // the pty, so the holder's own terminal read as somebody else's, read-only, at the
+        // wrong size.
         testCase "a lease stamped with my verified user is mine" <| fun () ->
-            // Same rule, the other thing that asks it. A lease is what decides whether the live
-            // screen takes your keystrokes, says "you" over it, and reports your viewport to the
-            // pty — so under a verified deployment the holder's own terminal read as somebody
-            // else's, read-only, at the wrong size.
             let model = clientOf [ at 1L 0.0 (attributed ada) ]
             Expect.isTrue (ClientModel.isMine (UserRef nick) model) "the user I joined as is me"
             Expect.isFalse (ClientModel.isMine (UserRef bobsUser) model) "another user is not"
@@ -1555,20 +1626,20 @@ let private pinTests =
             Expect.isTrue (ClientModel.isMine (PeerRef ada) model) "my peer is me"
             Expect.isFalse (ClientModel.isMine (UserRef nick) model) "a user nothing attributed to me is not"
 
-        testCase "typing in a terminal pins it for the person typing" <| fun () ->
-            // Rule three. Watching the agent work and joining it are one keystroke apart.
+        testCase "typing in a terminal does not keep it" <| fun () ->
+            // It used to: watching the agent work and joining it are one keystroke apart, so
+            // taking a seat pinned the terminal. The argument was about the WORKING SET, and
+            // the pin is not that — one command typed into somebody else's terminal kept it
+            // for the rest of the session, with nothing on screen saying who had decided so.
+            // A terminal being typed in is the one on screen already.
             let queueId = QueueId.create "q-draft" |> expect
-            let model = clientOf [ at 1L 0.0 (openedBy ActorRef.Agent terminalB "running the tests") ]
-            Expect.isFalse (ClientModel.isPinned (TerminalTab terminalB) model) "not pinned by watching"
-            let typing = ClientModel.update (EnsureTerminalDraftMsg (terminalB, ada, queueId)) model
-            Expect.isTrue (ClientModel.isPinned (TerminalTab terminalB) typing) "pinned by taking a seat at it"
-
-        testCase "somebody else's typing does not pin their terminal to my strip" <| fun () ->
-            let queueId = QueueId.create "q-draft-bob" |> expect
             let model =
                 clientOf [ at 1L 0.0 (openedBy ActorRef.Agent terminalB "running the tests") ]
-                |> ClientModel.update (EnsureTerminalDraftMsg (terminalB, bob, queueId))
-            Expect.isFalse (ClientModel.isPinned (TerminalTab terminalB) model) "pins are one reader's"
+                |> ClientModel.update (EnsureTerminalDraftMsg (terminalB, ada, queueId))
+            Expect.isFalse (ClientModel.isPinned (TerminalTab terminalB) model) "keeping is a gesture, not a side effect"
+            Expect.isTrue
+                (Map.containsKey (terminalB, ada) model.Synced.TerminalDrafts)
+                "and the seat itself is still taken"
 
         testCase "reading one recording after another leaves ONE tab, not a row of them" <| fun () ->
             // The preview slot: the choice, while nothing pins it. Twenty chips tapped in a
@@ -1614,6 +1685,7 @@ let private pinTests =
             // row in the list, and this is not it.
             let model =
                 clientOf [ at 1L 0.0 (opened terminalA "build") ]
+                |> ClientModel.update (TogglePinMsg (TerminalTab terminalA))
                 |> ClientModel.update (TogglePinMsg (TerminalTab terminalA))
             Expect.isFalse (ClientModel.isPinned (TerminalTab terminalA) model) "out of my strip"
             Expect.isTrue
