@@ -3,7 +3,7 @@
   <!--
     The browser programs: Fable-compiled to app/out/browser, then each entry bundled by
     esbuild into the asset set (app/out/public/assets) — the session client (client.js),
-    and the Manager page's and opening screen's programs.
+    and the Manager page's program.
   -->
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
@@ -34,11 +34,11 @@
     <!-- Host-free harness for the rich-editor browser E2E; bundled only by the test build,
          never imported by the app entry (Browser.fs), so it does not ship. -->
     <Compile Include="EditorHarness.fs" />
-    <!-- The Manager's two pages' programs: entries of their own, bundled on their own
-         (`AssetFile.manager-page`, `AssetFile.opening-page`), so a Manager page loads
-         neither the session client nor the other page. Nothing here imports them. -->
+    <!-- The Manager page's program: an entry of its own, bundled on its own
+         (`AssetFile.manager-page`), so the page does not load the session client. Nothing
+         here imports it. (The opening screen's program is inline: `ManagerUi.openingProgram`
+         says why.) -->
     <Compile Include="ManagerPage.fs" />
-    <Compile Include="OpeningPage.fs" />
   </ItemGroup>
 
   <ItemGroup>

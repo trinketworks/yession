@@ -1297,8 +1297,8 @@ let private readinessTests =
         // A page's program is a file of the Manager's asset set, and a module script at an
         // address that 404s — or answers at a type that is not JavaScript — is refused without
         // a word: the page paints and nothing on it moves. RESOLVED from the page's own address
-        // and fetched, for the reason the stylesheet case above gives: the opening page lives
-        // under `/sessions/{id}/`, where a link that is right at `/` is a 404.
+        // and fetched, for the reason the stylesheet case above gives: a Manager page under
+        // `/sessions/{id}/` would 404 on a link that is right at `/`.
         testCaseAsync "the Manager page's program is served from where the page is" <|
             async {
                 let! pm = managerWithUi "manager-program"
@@ -1308,13 +1308,20 @@ let private readinessTests =
                 do! pm.StopAll ()
             }
 
-        testCaseAsync "the opening page's program is served from where the page is" <|
+        // The opening screen's dwell is timed from when its program runs, so the program runs
+        // as the page is PARSED — inline, at the end of the body — and never as a script the
+        // browser must fetch or defer first, which starts the dwell late and holds the screen
+        // past the intro it waits for (`ManagerUi.openingProgram`). Every `<script>` is counted.
+        testCaseAsync "the opening page's program runs as the page is parsed, not after it" <|
             async {
                 let! pm = managerWithUi "opening-program"
                 pm.CreateSession "opening-program" "" |> expect |> ignore
-                let pageUrl = sprintf "http://127.0.0.1:%d/sessions/opening-program/open" pm.EndpointPort.Value
-                let! page = TestHttp.get pageUrl
-                do! expectServedProgram pageUrl page.Body
+                let! page = TestHttp.get (sprintf "http://127.0.0.1:%d/sessions/opening-program/open" pm.EndpointPort.Value)
+                let scripts =
+                    System.Text.RegularExpressions.Regex.Matches (page.Body, "<script[^>]*>")
+                    |> Seq.map (fun m -> m.Value)
+                    |> List.ofSeq
+                Expect.equal scripts [ "<script>" ] "one script, a classic inline one: no src, no module, no defer"
                 do! pm.StopAll ()
             }
 

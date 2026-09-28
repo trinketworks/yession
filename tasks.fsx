@@ -408,10 +408,9 @@ let private buildAssets (outDir: string) (minify: bool) =
     let produce (file: AssetFile) =
         match file with
         | AssetFile.``client`` -> program "Browser" file
-        // The Manager's two pages. Entries of their own in the browser project, so neither
-        // page loads the session client and the client carries neither of them.
+        // The Manager page. An entry of its own in the browser project, so the page does not
+        // load the session client and the client does not carry it.
         | AssetFile.``manager-page`` -> program "ManagerPage" file
-        | AssetFile.``opening-page`` -> program "OpeningPage" file
         // The shell's stylesheet scans the F# sources for composed class names; the player's is
         // its own file because the shell defers it (see `app/player.css`).
         | AssetFile.``app`` -> run tailwind ([ "-i"; "app/tailwind.css"; "-o"; at file ] @ extra) |> ignore

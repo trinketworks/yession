@@ -601,10 +601,9 @@ let private assets = Assets.configured ()
 
 let private cssUrl = ManagerRoute.path (ManagerRoute.asset assets.Build AssetFile.``app``)
 
-/// The two pages' programs, from the same set and addressed the same way as the stylesheet.
+/// The Manager page's program, from the same set and addressed the same way as the stylesheet.
+/// (The opening screen's is not served: see `openingProgram`.)
 let private managerProgramUrl = ManagerRoute.path (ManagerRoute.asset assets.Build AssetFile.``manager-page``)
-
-let private openingProgramUrl = ManagerRoute.path (ManagerRoute.asset assets.Build AssetFile.``opening-page``)
 
 let private respondWith (res: ServerResponse) (status: int) (contentType: string) (cacheControl: string) (body: string) =
     res.writeHead (status, [ ResponseHeader.ContentType contentType; ResponseHeader.CacheControl cacheControl ])
@@ -750,6 +749,57 @@ let private screenPage (title: string) (body: string) : string =
         Style.standalone
         body
 
+/// The opening screen's program, inline at the end of its `<body>` and NOT a served module.
+///
+/// The dwell below is timed from `performance.now()` when this script runs. An inline script
+/// at the end of `<body>` runs during parse, as the intro starts painting; a module script is
+/// deferred, running only after the document has parsed AND its file has been fetched — so
+/// served, the dwell started late and the screen held past the intro it exists to wait for.
+/// That is why this one page keeps a program in a string, against the rule that says not to.
+///
+/// It is a constant: every value it needs is an attribute on the screen (`openingPage`, below),
+/// named here by the `Dom.Manager` hooks' values — `openingReady`, `openingTarget`,
+/// `openingWord`, `openingFailed`. Written out rather than spliced so the program is literal
+/// text; rename one of the first three without it and the screen never hands over, which the
+/// opening page's browser cases see.
+let private openingProgram =
+    """
+  // The intro is 2.4s and a beat after it lands is the least anyone is shown; under reduced
+  // motion there is no intro, and nothing to wait for.
+  const DWELL = matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 2800
+  const shownAt = performance.now()
+  const ready = document.querySelector('[data-opening-ready]').getAttribute('data-opening-ready')
+  const target = document.querySelector('[data-opening-target]').getAttribute('href')
+  const status = document.getElementById('status')
+  let attempts = 0
+  async function poll () {
+    attempts++
+    try {
+      // `ok`, not "the request settled". A front door that has not mapped this session yet
+      // answers — with a 404, or a gateway error — and a fetch that only caught THROWN
+      // requests reads that as the session answering, redirects into it, and leaves whoever
+      // pressed Create looking at the front door's 404. The readiness route reports the
+      // difference.
+      const answer = await fetch(ready, { cache: 'no-store' })
+      if (answer.ok) {
+        status.querySelector('[data-word]').textContent = 'ready'
+        setTimeout(() => location.replace(target), Math.max(0, DWELL - (performance.now() - shownAt)))
+        return
+      }
+    } catch (e) { /* the Manager itself is unreachable: the same wait, bounded the same way */ }
+    // 40 at 500ms is the 20 seconds these words promise.
+    if (attempts >= 40) {
+      status.className = status.getAttribute('data-opening-failed')
+      status.textContent =
+        'The session started, but its address is not answering after 20 seconds. ' +
+        'If this deployment maps session ports through a proxy, that mapping has not appeared.'
+      return
+    }
+    setTimeout(poll, 500)
+  }
+  poll()
+"""
+
 /// What the screen looks like: the mark's intro at 224px (`Brand.intro`, one SVG, SMIL),
 /// the wordmark rising under it as the last frame lands, and under that the status line —
 /// `starting` with the session's id, then `ready`. The way out is on the screen from the
@@ -757,15 +807,17 @@ let private screenPage (title: string) (body: string) : string =
 /// the manager. A reader who declined motion gets the still mark (`Brand.mark`) and the same
 /// words; the switch is CSS, since SMIL cannot read the preference.
 ///
-/// The poll keeps its shape and its bound (`app/browser/OpeningPage.fs`, the screen's program).
-/// What is added is a DWELL: the page does not go before the intro has finished plus a beat
-/// (2.4s + 0.4s), however fast the session comes up, because a start that flashes past is not a
-/// start anyone saw — and it does not hold a slow one, which keeps polling, and breathing,
-/// until the bound says why it gave up.
+/// The poll keeps its shape and its bound (`openingProgram`, below). What is added is a DWELL:
+/// the page does not go before the intro has finished plus a beat (2.4s + 0.4s), however fast
+/// the session comes up, because a start that flashes past is not a start anyone saw — and it
+/// does not hold a slow one, which keeps polling, and breathing, until the bound says why it
+/// gave up.
 ///
-/// The program is served, not inlined, and the two addresses it needs are attributes on the
-/// screen: the readiness route on `<main>`, and the session's address on the link that already
-/// goes there. Nothing is spliced into a program, so there is nothing to escape but attributes.
+/// Everything the program needs is an attribute on the screen: the readiness route on `<main>`
+/// (`Dom.Manager.openingReady`), the session's address on the link that already goes there
+/// (`openingTarget`), the status word it changes (`openingWord`), and the classes the status
+/// line wears when the screen gives up (`openingFailed`). Nothing is spliced into the program,
+/// so there is nothing to escape but attributes.
 let private openingPage (sessionId: SessionId) (target: string) (readyUrl: string) : string =
     screenPage
         "Opening session…"
@@ -774,10 +826,10 @@ let private openingPage (sessionId: SessionId) (target: string) (readyUrl: strin
 <div class="%s" data-mark-intro aria-hidden="true">%s</div>
 <div class="%s" data-mark-static aria-hidden="true">%s</div>
 <p class="%s">yession</p>
-<p id="status" role="status" class="%s %s"><span class="%s"></span><span %s>starting</span><span class="%s">%s</span></p>
+<p id="status" role="status" class="%s %s" %s="%s"><span class="%s"></span><span %s>starting</span><span class="%s">%s</span></p>
 <p class="%s"><a id="target" class="%s" href="%s" %s>Open it directly</a> · <a class="%s" href="%s">Back to the session manager</a></p>
 </main>
-<script type="module" src="%s"></script>"""
+<script>%s</script>"""
             Style.startScreen
             Dom.Manager.openingReady
             (Ssr.escapeAttr readyUrl)
@@ -788,6 +840,8 @@ let private openingPage (sessionId: SessionId) (target: string) (readyUrl: strin
             Style.startWord
             Style.statusRun
             Style.startStatus
+            Dom.Manager.openingFailed
+            (Ssr.escapeAttr (Style.statusErr + " " + Style.startStatus))
             Style.statusDotPulse
             Dom.Manager.openingWord
             Style.startStatusId
@@ -798,7 +852,7 @@ let private openingPage (sessionId: SessionId) (target: string) (readyUrl: strin
             Dom.Manager.openingTarget
             Style.proseLink
             (ManagerRoute.path ManagerRoute.Home)
-            (Ssr.escapeAttr openingProgramUrl))
+            openingProgram)
 
 /// Handle a management-UI request against the Manager. Returns false for paths that
 /// are not the UI's (the composing server falls through — e.g. to the control routes).
