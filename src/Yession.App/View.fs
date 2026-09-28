@@ -2248,7 +2248,11 @@ module View =
                       <span class="{Style.causeMark}">{mark}</span>
                       <span class="{Style.cls [ Style.foldContent; Style.causeSaid ]}"><span class="{Style.srOnly}">{Dom.Text.causedBy}</span><span class="{Style.replyRefQuote}">{said}</span></span>
                     </div>"""
-            let still = html $"""<span aria-hidden="true">{Icon.caused}</span>"""
+            // The corner, drawn as the chain is: one-pixel boxes for the turn and the stem, so
+            // they sit on the gutter's centre line exactly, and the same head at the foot.
+            let corner =
+                html $"""<span class="{Style.causeCornerTurn}"></span><span class="{Style.causeCornerStem}"></span><span class="{Style.causeChainHead}">{Icon.chained}</span>"""
+            let still = html $"""<span class="{Style.causeCorner}" aria-hidden="true">{corner}</span>"""
             let drawn cause =
                 match cause with
                 | Cause.Item target ->
@@ -2264,7 +2268,7 @@ module View =
                                 Entity.phrase model cause.Author (Segment.Ref (EntityRef.Actor cause.Author) :: Segment.Text " " :: Act.phrase act)
                             | _ -> [ html $"""{ConversationItem.said cause}""" ]
                         let jump =
-                            html $"""<button type="button" class="{Style.causeJump}" data-cause-jump aria-label="{Dom.Text.causeJumpLabel}" @click={Ev(fun _ -> actions.RevealMessage target)}>{Icon.caused}</button>"""
+                            html $"""<button type="button" class="{Style.cls [ Style.causeCorner; Style.causeJump ]}" data-cause-jump aria-label="{Dom.Text.causeJumpLabel}" @click={Ev(fun _ -> actions.RevealMessage target)}>{corner}</button>"""
                         // The session starting is not drawn, so there is nothing to jump to.
                         let mark =
                             match cause.Content with

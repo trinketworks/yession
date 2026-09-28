@@ -1475,7 +1475,14 @@ module Style =
     let causeRow = "contents"
     /// The marks linking acts wear `edge`, the controls' rim: a line, not text, and OPAQUE —
     /// a chain's pieces meet across two rows, and a translucent line doubles where they touch.
-    let causeMark = "col-start-1 h-[1lh] flex items-center justify-center text-edge"
+    let causeMark = "col-start-1 flex justify-center text-edge"
+    /// The corner that opens a chain: a line and a gap tall, so the cause's sentence sits clear
+    /// of the headline under it and the head stops as far above the chevron as a chain's does.
+    let causeCorner = "relative block w-3.5 h-[calc(1lh+0.75rem)]"
+    /// Its turn: from the sentence's middle, in to the centre line.
+    let causeCornerTurn = "absolute top-2.5 left-[6.5px] right-0 h-px bg-current"
+    /// Its stem: down the centre line from the turn to the head.
+    let causeCornerStem = "absolute top-2.5 bottom-1.5 left-[6.5px] w-px bg-current"
     let causeSaid = "flex items-baseline text-small leading-[inherit] text-ink-faint"
     /// The link of a chain, above the act's chevron: shorter than a line, and reaching up
     /// through the act's top padding to meet the rail the act above draws (`causeRail`). Its
@@ -1489,7 +1496,7 @@ module Style =
     /// Starts the same ~12px under the chevron that the head stops above the next one.
     let causeRail = "col-start-1 row-span-2 justify-self-center w-px mt-1.5 -mb-2.5 bg-edge"
     let causeJump =
-        cls [ "flex bg-transparent border-0 p-0 cursor-pointer hover:text-ink focus-visible:text-ink"; focusRing ]
+        cls [ "bg-transparent border-0 p-0 cursor-pointer hover:text-ink focus-visible:text-ink"; focusRing ]
     /// The same quiet line as `replyRef`, but a real control — it jumps to the message it
     /// quotes. Borderless and transparent (it rides above the body, not a box of its own),
     /// brightening under the pointer and wearing the shared focus ring so a keyboard reaches
