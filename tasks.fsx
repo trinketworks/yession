@@ -2425,18 +2425,23 @@ let frames (args: string list) =
 //
 //   regex — what Fable's `Printer.ParsedXmlDoc.Parse` does, with no Fable in it: construct a
 //           `RegexOptions.Compiled` regex over the same pattern, match one doc comment, drop it,
-//           on every core at once. Each construction is a Reflection.Emit dynamic method
-//           generated, run and made collectible — the churn the crash report points at. Seconds
-//           to start; the loop to run first.
+//           from thread-pool work items as Fable's printer does. Each construction is a
+//           Reflection.Emit dynamic method generated, run and made collectible. Alone, that
+//           churn has not crashed (about 20M regexes on both architectures, crash-repro run 1),
+//           so `heapMb` stands in for the rest of a compiler: a live object graph of that size,
+//           rewritten by mutator threads, so collections run against a heap shaped like one.
 //   fable — the real compiler over the real browser client, `--noCache` so every run prints
-//           (and so parses) every doc comment again. What actually crashed; minutes per run.
+//           (and so parses) every doc comment again. This one crashes: two x86_64 children in
+//           about 130 compiles (crash-repro run 2), with run 946's stack.
 //
 // Each round spawns `workers` children side by side; a child is a fresh process, because the
 // runtime state that goes wrong dies with the process that corrupted it. Children run under the
 // same crash-report instrumentation as every other child here, so a hit comes back with stacks.
+// Any `NAME=value` argument is set in every child's environment, which is how a runtime knob
+// (`DOTNET_TieredCompilation=0`, `DOTNET_gcServer=1`) is tried against the crash rate.
 //
-//   crash-repro regex [rounds] [workers] [seconds]    defaults 20, cores, 60
-//   crash-repro fable [rounds] [workers]              defaults 10, 2
+//   crash-repro regex [rounds] [workers] [seconds] [heapMb] [NAME=value …]   defaults 20, cores, 60, 0
+//   crash-repro fable [rounds] [workers] [NAME=value …]                      defaults 10, 2
 //
 // Exit 0: no child died in the budget. Exit 1: one did, and its report is printed. The nix
 // sandbox, where every crash so far has happened, is reached through `nix build --file
@@ -2449,34 +2454,61 @@ let private summaryPattern = @"<summary>([\s\S]*?)</summary>"
 let private docComment (i: int) =
     sprintf "<summary>\n Declaration %d, %s\n</summary>\n<param name=\"x\">%s</param>" i (String ('w', i % 400)) (string i)
 
-/// One child's work: until the deadline, every worker thread compiles, matches and discards.
-/// Prints how many regexes it got through, which is the rate a fix has to be judged at.
-let private regexChurn (seconds: float) =
-    let deadline = DateTime.UtcNow.AddSeconds seconds
-    let workers = Environment.ProcessorCount * 2
-    let built = ref 0L
-    let threads =
-        [ for w in 0 .. workers - 1 ->
+/// A live graph of roughly `heapMb` megabytes that stays reachable until `until`, with mutator
+/// threads replacing random nodes so the old generation keeps acquiring pointers into the new
+/// one — the write-barrier and card-marking traffic a compiler's heap produces and a regex loop
+/// alone does not. Returns the threads so the caller can wait on them.
+let private liveHeap (heapMb: int) (until: DateTime) : Threading.Thread list =
+    if heapMb <= 0 then []
+    else
+        // A node is 64 references and a payload: about half a kilobyte.
+        let nodes : obj array array = Array.init (heapMb * 2000) (fun i -> Array.zeroCreate 64)
+        for i in 1 .. nodes.Length - 1 do
+            nodes.[i].[0] <- box nodes.[i - 1]
+        [ for m in 0 .. max 1 (Environment.ProcessorCount / 2) - 1 ->
             let t =
-                Threading.Thread (
-                    (fun () ->
-                        let mutable i = w
-                        while DateTime.UtcNow < deadline do
-                            let regex = Regex (summaryPattern, RegexOptions.Compiled)
-                            let m = regex.Match (docComment i)
-                            if not m.Success then failwithf "crash-repro: no summary in comment %d" i
-                            Threading.Interlocked.Increment &built.contents |> ignore
-                            i <- i + workers),
-                    16 * 1024 * 1024
-                )
+                Threading.Thread (fun () ->
+                    let random = Random (m)
+                    while DateTime.UtcNow < until do
+                        let fresh : obj array = Array.zeroCreate 64
+                        fresh.[1] <- box (String ('h', random.Next 256))
+                        fresh.[2] <- box nodes.[random.Next nodes.Length]
+                        nodes.[random.Next nodes.Length] <- fresh)
+            t.IsBackground <- true
             t.Start ()
             t ]
-    threads |> List.iter (fun t -> t.Join ())
-    printfn "crash-repro: %d compiled regexes in %.0fs on %d threads" built.Value seconds workers
+
+/// One child's work: until the deadline, thread-pool work items compile, match and discard,
+/// over a live heap when one is asked for. Prints how many regexes it got through, which is the
+/// rate a fix has to be judged at.
+let private regexChurn (seconds: float) (heapMb: int) =
+    let deadline = DateTime.UtcNow.AddSeconds seconds
+    let mutators = liveHeap heapMb deadline
+    let workers = Environment.ProcessorCount * 2
+    let built = ref 0L
+    let work (w: int) =
+        Threading.Tasks.Task.Run (fun () ->
+            let mutable i = w
+            while DateTime.UtcNow < deadline do
+                let regex = Regex (summaryPattern, RegexOptions.Compiled)
+                let m = regex.Match (docComment i)
+                if not m.Success then failwithf "crash-repro: no summary in comment %d" i
+                Threading.Interlocked.Increment &built.contents |> ignore
+                i <- i + workers)
+    Threading.Tasks.Task.WaitAll (Array.init workers work)
+    mutators |> List.iter (fun t -> t.Join ())
+    printfn "crash-repro: %d compiled regexes in %.0fs on %d work items, %d MB live" built.Value seconds workers heapMb
 
 /// Rounds of children, side by side; the first death ends the run with its evidence.
-let private rounds (layer: string) (count: int) (workers: int) (child: int -> string * string list) =
+let private rounds
+    (layer: string)
+    (count: int)
+    (workers: int)
+    (env: (string * string) list)
+    (child: int -> string * string list)
+    =
     let clock = Stopwatch.StartNew ()
+    env |> List.iter (fun (name, value) -> printfn "crash-repro %s: children run with %s=%s" layer name value)
     for round in 1 .. count do
         let children =
             [ for w in 1 .. workers ->
@@ -2486,6 +2518,7 @@ let private rounds (layer: string) (count: int) (workers: int) (child: int -> st
                 psi.WorkingDirectory <- repoRoot
                 psi.RedirectStandardOutput <- true
                 psi.RedirectStandardError <- true
+                env |> List.iter (fun (name, value) -> psi.Environment.[name] <- value)
                 let p = Process.Start (accountsForItself psi)
                 let out = p.StandardOutput.ReadToEndAsync ()
                 let err = p.StandardError.ReadToEndAsync ()
@@ -2506,20 +2539,29 @@ let private rounds (layer: string) (count: int) (workers: int) (child: int -> st
     printfn "crash-repro %s: no crash in %d rounds of %d children" layer count workers
 
 let crashRepro (args: string list) =
+    let isSetting (a: string) = a.Contains "="
+    let env =
+        args
+        |> List.filter isSetting
+        |> List.map (fun a -> let i = a.IndexOf '=' in a.[.. i - 1], a.[i + 1 ..])
+    let positional = args |> List.filter (isSetting >> not)
     let number (i: int) (fallback: int) =
-        args |> List.tryItem i |> Option.map int |> Option.defaultValue fallback
-    match args with
+        positional |> List.tryItem i |> Option.map int |> Option.defaultValue fallback
+    match positional with
     | "regex" :: _ ->
         let seconds = number 3 60
-        rounds "regex" (number 1 20) (number 2 Environment.ProcessorCount) (fun _ ->
-            "dotnet", [ "fsi"; Path.Combine (repoRoot, "tasks.fsx"); "crash-repro-child"; string seconds ])
+        let heapMb = number 4 0
+        rounds "regex" (number 1 20) (number 2 Environment.ProcessorCount) env (fun _ ->
+            "dotnet", [ "fsi"; Path.Combine (repoRoot, "tasks.fsx"); "crash-repro-child"; string seconds; string heapMb ])
     | "fable" :: _ ->
         make [ Target.Tools; Target.Packages ]
         let project = Path.Combine (repoRoot, "app", "browser", "Yession.Browser.fsproj")
-        rounds "fable" (number 1 10) (number 2 2) (fun w ->
+        rounds "fable" (number 1 10) (number 2 2) env (fun w ->
             let out = Path.Combine (Path.GetTempPath (), sprintf "yession-crash-repro-%d" w)
             "dotnet", [ "fable"; project; "-o"; out; "--noRestore"; "--noCache" ])
-    | _ -> failwith "crash-repro regex [rounds] [workers] [seconds] | crash-repro fable [rounds] [workers]"
+    | _ ->
+        failwith
+            "crash-repro regex [rounds] [workers] [seconds] [heapMb] [NAME=value …] | crash-repro fable [rounds] [workers] [NAME=value …]"
 
 // --- dispatch --------------------------------------------------------------------------------
 
@@ -2543,7 +2585,8 @@ match arg 1 with
 | Some "probe" -> probe (rest 2)
 | Some "frames" -> frames (rest 2)
 | Some "crash-repro" -> crashRepro (rest 2)
-| Some "crash-repro-child" -> regexChurn (arg 2 |> Option.map float |> Option.defaultValue 60.0)
+| Some "crash-repro-child" ->
+    regexChurn (arg 2 |> Option.map float |> Option.defaultValue 60.0) (arg 3 |> Option.map int |> Option.defaultValue 0)
 | Some "bench" -> bench (rest 2)
 | Some "bench-guard" -> benchGuard ()
 | Some "bench-publish" -> benchPublish (arg 2 |> Option.defaultWith defaultVersion)
