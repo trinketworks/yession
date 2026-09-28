@@ -334,13 +334,16 @@ module private Split =
 /// The handle is a `separator` with a value, so the arrow keys have to move it — a splitter
 /// that only answers a drag is a control a keyboard cannot reach at all.
 let installPaneResize () : unit =
-    // Which handle an event happened on, asked as "does a handle contain this" rather than by
-    // testing the target's type: `contains` answers false for anything that is not a node, so
-    // there is nothing to narrow and no way to be wrong about what a target is.
+    // Which handle an event happened on, asked as "does a handle contain this": a press on
+    // the grip's own children is a press on the handle. A target that is not a node at all is
+    // under no handle.
     let handleUnder (target: EventTarget) : HTMLElement option =
-        let found = document.querySelectorAll "[data-term-resize]"
-        [ for i in 0 .. found.length - 1 -> found.[i] :?> HTMLElement ]
-        |> List.tryFind (fun handle -> handle.contains (unbox target))
+        match EventTargets.asNode target with
+        | None -> None
+        | Some node ->
+            let found = document.querySelectorAll "[data-term-resize]"
+            [ for i in 0 .. found.length - 1 -> found.[i] :?> HTMLElement ]
+            |> List.tryFind (fun handle -> handle.contains node)
 
     Split.apply (Split.seed ())
     window.addEventListener ("resize", fun _ -> Split.apply (Split.current ()))

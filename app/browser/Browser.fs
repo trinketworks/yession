@@ -1124,11 +1124,10 @@ let private start () =
         // Neither path is reconstructed locally: the title is a named root and a chapter's
         // name rides its chapter's entry, and where each lives is the codec's answer
         // (`SyncedStateSync`), not a second one kept in step by hand.
-        let textOfField (field: FocusField) : obj option =
+        let textOfField (field: FocusField) : Y.Text option =
             match field with
-            | Title -> Some (box (doc.getText "title"))
-            | ChapterName messageId ->
-                SyncedStateSync.chapterNameText doc (MessageId.value messageId) |> Option.map box
+            | Title -> Some (doc.getText "title")
+            | ChapterName messageId -> SyncedStateSync.chapterNameText doc (MessageId.value messageId)
             | DraftBody _ | QueueBody _ | TerminalDraftBody _ | TerminalQueuedBody _ -> None
 
         // The connection panels are TOLD, on the read stream below — nothing here fetches a

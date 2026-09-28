@@ -50,27 +50,22 @@ open Yession.App
 //
 // It is `globalThis.__yessionRenders`, and the two readers outside this project — the
 // render-budget case in `Browser.fs`, and the frames tool's recorder — read it by that
-// name in the page. The harness reads it through `renders` below.
-type private RenderCounter =
-    /// Absent until the first render of this document.
-    abstract __yessionRenders : int option with get, set
-
-let private counter () : RenderCounter = unbox Browser.Dom.window
+// name in the page. The harness reads it through `renders` below. Absent until the first
+// render of this document.
+let private rendersPublished : PageGlobal<int> = PageGlobal.named "__yessionRenders"
 
 let private countRender () : unit =
-    let page = counter ()
-    page.__yessionRenders <-
-        Some (
-            match page.__yessionRenders with
-            | Some n -> n + 1
-            | None -> 1
-        )
+    PageGlobal.set
+        rendersPublished
+        (match PageGlobal.tryGet rendersPublished with
+         | Some n -> n + 1
+         | None -> 1)
 
 /// How many times the whole view has been rendered since this document loaded — the count
 /// published above, read back so a scenario counts the renders the APP made rather than a
 /// count of its own. Zero before the first.
 let renders () : int =
-    match (counter ()).__yessionRenders with
+    match PageGlobal.tryGet rendersPublished with
     | Some n -> n
     | None -> 0
 
@@ -191,14 +186,14 @@ let private keepSurfacesPinned (selector: string) : unit =
             // A capture listener on the document hears the DOCUMENT's own scroll as well as
             // the surfaces inside it, and a document has no `matches` to be asked — so what
             // the event reached says whether it is an element before it is asked anything.
-            let node = unbox<Browser.Types.Node> event.target
-            if node.nodeType = node.ELEMENT_NODE then
-                let el = unbox<Browser.Types.HTMLElement> event.target
+            match EventTargets.asHTMLElement event.target with
+            | Some el ->
                 if el.matches selector then pinned.set (el, atEnd el) |> ignore
                 // The chat is one of the two surfaces this selector matches, and the float
                 // is its own: a reader scrolling a terminal's scrollback has no "jump to
                 // latest" to show or hide.
-                if el.matches "[data-conversation]" then syncJumpToLatest ()),
+                if el.matches "[data-conversation]" then syncJumpToLatest ()
+            | None -> ()),
         true)
     Browser.Dom.window.addEventListener (
         "resize",
@@ -543,7 +538,7 @@ type Deps =
       Texts : TextRegistry
       PeerId : PeerId
       /// Where the view goes. Lit diffs into it; whatever is there on the first render stays.
-      Root : obj
+      Root : Browser.Types.Element
       Actions : ViewActions
       Dispatch : ClientMsg -> unit
       Links : Links }
@@ -929,7 +924,7 @@ let create (deps: Deps) : Renderer =
         countRender ()
         latest <- Some model
         let scroll = surfaceScroll PinnedSurfaces
-        Lit.render (unbox deps.Root) (View.view deps.Actions model dispatch)
+        Lit.render deps.Root (View.view deps.Actions model dispatch)
         restoreSurfaceScroll PinnedSurfaces scroll
         // A message can arrive below a reader who is not pinned to the tail (that is the
         // whole reason `restoreSurfaceScroll` above leaves them where they were), which is
