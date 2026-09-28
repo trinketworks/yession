@@ -2828,6 +2828,17 @@ let private semanticsTests =
                 (Entity.actorMark model (UserRef carol))
                 "the peer bob joined as, and the user bob is, are one person and one mark"
 
+        // The same person, the same colour, where they are TYPING as well as where they are
+        // named: the caret over a shared field is read from the checker's own tone and
+        // seed, so it agrees with the mark beside their name and across both references.
+        testCase "a person's caret is drawn in their mark's colour whichever reference names them" <| fun () ->
+            let model =
+                { representativeModel with
+                    Attribution = { Attribution.empty with PeerUsers = Map.ofList [ bob, carol ]; UserPeers = Map.ofList [ carol, bob ] } }
+            let caret = Entity.presenceColour model (PeerRef bob)
+            Expect.stringContains (Entity.actorMark model (UserRef carol)) caret
+                "the caret bob types with is a colour of the mark carol wears"
+
         // The other half of the same rule: the mark a surface draws is the one `Entity`
         // answers, on every surface. The roster seeded its own by a different string from
         // the chat's (`ActorRef.token` against `UserId.value`), so the two disagreed for

@@ -216,7 +216,7 @@ type ComposerChoice =
 /// Where a remote peer IS: the peer's name (for the cursor label), the `Focus` its caret is in
 /// when it is in one, and what it has open in the pane. Ephemeral presence, delivered over
 /// `Presence` frames — never synced through Yjs, never durable. The peer's colour is derived
-/// from its id (`EditorColour`), not carried.
+/// from who it is (`Entity.presenceColour`), not carried.
 ///
 /// Both halves are optional and an entry exists while EITHER holds, because they are genuinely
 /// independent: someone reading an artifact is typing nowhere, and someone typing in the

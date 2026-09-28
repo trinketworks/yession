@@ -58,18 +58,40 @@ module Entity =
     /// seeded by whichever was recorded gave that human two checkers on one screen. The
     /// durable identity wins when attribution has it: a user keeps one mark across every
     /// device and rejoin, and a peer nobody has attributed is seeded by the only id it has.
-    let actorMark (model: ClientModel) (actor: ActorRef) : string =
+    let private seed (model: ClientModel) (actor: ActorRef) : string option =
         match actor with
-        | UserRef u -> Style.humanAvatar (UserId.value u)
+        | UserRef u -> Some (UserId.value u)
         | PeerRef p ->
             match Map.tryFind p model.Attribution.PeerUsers with
-            | Some user -> Style.humanAvatar (UserId.value user)
-            | None -> Style.humanAvatar (PeerId.value p)
-        | ActorRef.Agent -> Style.agentAvatar
-        | ActorRef.SessionProcess | ActorRef.System -> Style.humanAvatar "session"
+            | Some user -> Some (UserId.value user)
+            | None -> Some (PeerId.value p)
+        | ActorRef.Agent -> None
+        | ActorRef.SessionProcess | ActorRef.System -> Some "session"
         // A repo's file is not a person and not the agent. Its own avatar, seeded by the
         // repo, so two repos configuring one session are told apart on sight.
-        | ActorRef.Configured repo -> Style.humanAvatar (RepoRef.value repo)
+        | ActorRef.Configured repo -> Some (RepoRef.value repo)
+
+    let actorMark (model: ClientModel) (actor: ActorRef) : string =
+        match seed model actor with
+        | Some id -> Style.humanAvatar id
+        | None -> Style.agentAvatar
+
+    /// The colour an actor's presence is drawn in — a caret and its name flag, a dot saying
+    /// who is in a field, the edge of a draft — as a CSS colour for an inline style.
+    ///
+    /// The light tone of the same checker `actorMark` draws, from the same seed, so a person
+    /// is one colour everywhere they appear. It was a hue hashed over the whole wheel from the
+    /// reference instead: unrelated to the checker beside it, a second colour for one person
+    /// whenever attribution named them both ways, and free to land on the agent's blue —
+    /// which `Style.humanTones` exists to keep off every person. The agent wears that blue.
+    let presenceColour (model: ClientModel) (actor: ActorRef) : string =
+        match seed model actor with
+        | Some id -> fst (Style.humanTone id)
+        | None -> "var(--color-blue)"
+
+    /// The same colour at a quarter, for a selection laid under text that must stay legible.
+    let presenceSelection (model: ClientModel) (actor: ActorRef) : string =
+        sprintf "color-mix(in srgb, %s 25%%, transparent)" (presenceColour model actor)
 
     /// Which kind of thing a reference is, for the hook a test reads it by.
     let kind (entity: EntityRef) : string =

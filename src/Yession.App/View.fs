@@ -1262,12 +1262,12 @@ module View =
     /// One collaborator's title caret+selection marker: a selection highlight span and a caret
     /// bar with a name label. The browser positions all three by measurement after render (from
     /// the peer's relative positions, decoded against the title `Y.Text`); colour is fixed here.
-    let private remoteCursor (who: ActorRef) (presence: RemotePresence) : TemplateResult =
-        let colour = EditorColour.ofEditor who
+    let private remoteCursor (model: ClientModel) (who: ActorRef) (presence: RemotePresence) : TemplateResult =
+        let colour = Entity.presenceColour model who
         // Container = the translucent selection highlight (positioned `lo..hi` by the browser);
         // the caret bar is offset to `head` inside it; the label rides above the caret.
         html $"""
-            <span class="{Style.remoteCursor}" data-cursor-peer="{ActorRef.token who}" style="background:{EditorColour.translucent who}">
+            <span class="{Style.remoteCursor}" data-cursor-peer="{ActorRef.token who}" style="background:{Entity.presenceSelection model who}">
               <span class="{Style.remoteCursorCaret}" style="background:{colour}">
                 <span class="{Style.remoteCursorLabel}" style="background:{colour}">{presence.DisplayName}</span>
               </span>
@@ -1327,7 +1327,7 @@ module View =
             model.Presence
             |> Map.toList
             |> List.filter (fun (_, p) -> p.Focus |> Option.exists (fun f -> f.Field = Title))
-            |> List.map (fun (who, p) -> remoteCursor who p)
+            |> List.map (fun (who, p) -> remoteCursor model who p)
         html $"""
             <header class="{Style.header}">
               <button type="button" class="{Style.cls [ Style.navChevronForward; Style.navReopen ]}" aria-label="Show sidebar" data-nav-toggle="show" @click={Ev(fun _ -> actions.ToggleNav ())}>{Icon.right}</button>
@@ -1423,14 +1423,14 @@ module View =
             ClientModel.editorsOf peerId model
             |> List.map (fun (editor, name) ->
                 html $"""
-                    <span class="{Style.draftEditorDot}" style="background:{EditorColour.ofEditor editor}"
+                    <span class="{Style.draftEditorDot}" style="background:{Entity.presenceColour model editor}"
                           title="{name}" data-draft-editor-peer="{ActorRef.token editor}"></span>""")
         // A collapsed draft: whose it is, one clamped line of it (the same read-only editor the
         // browser mounts everywhere, so the CRDT keeps it current), and who is in it. Opening it
         // collapses whatever was open — including your own composer.
         let summary (peerId: PeerId) =
             html $"""
-                <button type="button" class="{Style.draftSummary}" style="border-left-color:{EditorColour.ofEditor (ActorRef.PeerRef peerId)}"
+                <button type="button" class="{Style.draftSummary}" style="border-left-color:{Entity.presenceColour model (ActorRef.PeerRef peerId)}"
                         data-draft-summary="{PeerId.value peerId}"
                         data-draft-expand="{PeerId.value peerId}" @click={Ev(fun _ -> dispatch (ExpandDraftMsg peerId))}>
                   <span class="{Style.cls [ Style.avatarSm; Entity.actorMark model (PeerRef peerId) ]}"></span>
@@ -2700,7 +2700,7 @@ module View =
                 model.Presence
                 |> Map.toList
                 |> List.filter (fun (_, p) -> p.Focus |> Option.exists (fun f -> f.Field = ChapterName item.MessageId))
-                |> List.map (fun (who, p) -> remoteCursor who p)
+                |> List.map (fun (who, p) -> remoteCursor model who p)
             html $"""
                 <div class="{Style.chapterRule}" data-chapter-rule="{MessageId.value item.MessageId}">
                   <span class="{Style.chapterDot}" aria-hidden="true"></span>
@@ -3159,14 +3159,14 @@ module View =
             ClientModel.terminalEditorsOf terminal author model
             |> List.map (fun (editor, name) ->
                 html $"""
-                    <span class="{Style.draftEditorDot}" style="background:{EditorColour.ofEditor editor}"
+                    <span class="{Style.draftEditorDot}" style="background:{Entity.presenceColour model editor}"
                           title="{name}" data-terminal-draft-editor="{ActorRef.token editor}"></span>""")
         // Someone else mid-command: their live text, read-only here. Watching a collaborator
         // type a command is the same affordance as watching them type a message, which is
         // the whole reason the terminal composer is built out of the message composer's parts.
         let peerDraft (author: PeerId) =
             html $"""
-                <div class="{Style.terminalPeerDraft}" style="border-left-color:{EditorColour.ofEditor (ActorRef.PeerRef author)}"
+                <div class="{Style.terminalPeerDraft}" style="border-left-color:{Entity.presenceColour model (ActorRef.PeerRef author)}"
                      data-terminal-draft-author="{PeerId.value author}">
                   <span class="{Style.terminalPrompt}">$</span>
                   <input type="text" class="{Style.fieldMonoBare}" readonly aria-label="{ClientModel.nameOf author model}'s command"
@@ -3642,7 +3642,7 @@ module View =
                     // Whoever is typing, in their own colour — the same dot the roster and the
                     // tabs wear, so one person is one mark on every surface at once.
                     | Some (PeerRef peer) ->
-                        html $"""<span class="{Style.syncDot}" style="background:{EditorColour.ofEditor (ActorRef.PeerRef peer)}"
+                        html $"""<span class="{Style.syncDot}" style="background:{Entity.presenceColour model (ActorRef.PeerRef peer)}"
                                        title="{Entity.actorName model (PeerRef peer)}"></span>"""
                     | Some holder ->
                         html $"""<span class="{Style.statusRun}" title="{Entity.actorName model holder}"><span class="{Style.statusDot}"></span></span>"""
@@ -3651,7 +3651,7 @@ module View =
                 ClientModel.editorsInTerminal view.TerminalId model
                 |> List.map (fun (who, name) ->
                     html $"""
-                        <span class="{Style.draftEditorDot}" style="background:{EditorColour.ofEditor who}"
+                        <span class="{Style.draftEditorDot}" style="background:{Entity.presenceColour model who}"
                               title="{name}" data-terminal-tab-peer="{ActorRef.token who}"></span>""")
             let rewind =
                 if not affords.CanRewind then Lit.nothing
@@ -3771,7 +3771,7 @@ module View =
             |> List.filter (fun (who, _) -> not (List.contains who excluding))
             |> List.map (fun (who, name) ->
                 html $"""
-                    <span class="{Style.paneViewerDot}" style="border-color:{EditorColour.ofEditor who}"
+                    <span class="{Style.paneViewerDot}" style="border-color:{Entity.presenceColour model who}"
                           title="{name} is watching" data-pane-viewer="{ActorRef.token who}"></span>""")
         let terminalTabButton (activate: unit -> unit) (pinMark: TemplateResult) (pinnedAttr: string) (hint: string) (view: TerminalView) =
             let on = isOn (TerminalTab view.TerminalId)
@@ -3788,7 +3788,7 @@ module View =
                 (editors
                  |> List.map (fun (who, name) ->
                      html $"""
-                         <span class="{Style.draftEditorDot}" style="background:{EditorColour.ofEditor who}"
+                         <span class="{Style.draftEditorDot}" style="background:{Entity.presenceColour model who}"
                                title="{name}" data-terminal-tab-peer="{ActorRef.token who}"></span>"""))
                 @ viewerDots (editors |> List.map fst) (TerminalTab view.TerminalId)
             // Two literal spellings of one button, because lit-html cannot inject an
