@@ -23,17 +23,17 @@ open Yession.Tests.Support
 let private nodePath : string = Node.Api.``process``.execPath
 
 /// `main.mjs` under this Node, started the way a deployment starts it: the environment of
-/// this run, verbatim, and both output streams read as text — the example writes its own
+/// this run, unchanged, and both output streams read as text — the example writes its own
 /// lines to one and whatever Node has to say goes to the other, and a failure can be either.
 let private spawnMap (args: string []) : Node.ChildProcess.ChildProcess =
     let child =
-        spawnWithEnv
+        spawn
             nodePath
             ("examples/proxy/main.mjs" :: List.ofArray args)
-            Node.Api.``process``.env
-            None
-            Stdio.Pipe
-            false
+            { Cwd = None
+              Env = ChildEnv.Adding Map.empty
+              Streams = { Stdin = Stdio.Pipe; Stdout = Stdio.Pipe; Stderr = Stdio.Pipe }
+              Detached = false }
 
     // `setEncoding` rather than converting each chunk: it puts a decoder in front of the
     // stream, so a multi-byte character split across two reads still arrives whole.
@@ -64,7 +64,7 @@ let private startMap
                         over <- true
                         stopped ()
 
-                child.on ("exit", fun (_: obj) -> finish ()) |> ignore
+                ChildProcessStreams.onExit child (fun _ -> finish ())
                 try child.kill "SIGTERM" with _ -> finish ())
 
         let handle = {| Said = (fun () -> said.ToString ()); Stop = stop |}

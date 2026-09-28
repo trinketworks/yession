@@ -201,32 +201,13 @@ let private carryTests =
 
 
 /// What one git run said. The sandbox-side git under test is judged by its stdout and by
-/// the sentence on its stderr, which is the whole point of the `ERR` channel.
+/// the sentence on its stderr, which is the whole point of the `ERR` channel. Qualified
+/// because `ExecResult` carries the same three names.
+[<RequireQualifiedAccess>]
 type private GitRun =
     { Status : int
       Stdout : string
       Stderr : string }
-
-/// What `execFile` reports of a child that did not exit 0. `code` is the exit STATUS where
-/// the child ran and chose it, a string (`ENOENT`) where it could never be started, and
-/// neither where a signal ended it — which is how a run killed at its deadline arrives.
-type [<AllowNullLiteral>] private ExecFileError =
-    abstract code : obj
-
-[<Import("execFile", "node:child_process")>]
-let private execFile
-    (file: string)
-    (arguments: string array)
-    (options: obj)
-    (completed: Action<ExecFileError, string, string>)
-    : obj =
-    jsNative
-
-/// The status a run ended on: the child's own, or `-1` for one that never got to choose.
-let private statusOf (error: ExecFileError) : int =
-    if isNull error then 0
-    elif jsTypeof error.code = "number" then unbox<int> error.code
-    else -1
 
 /// What keeps this box out of a fixture git: no configuration of the operator's, no identity
 /// of theirs, and no prompt for a credential nobody is there to type. Data rather than an
@@ -256,34 +237,37 @@ let private gitEnvironment (told: Map<string, string>) : Map<string, string> =
 /// names no case; bounded, git is killed and the case that was waiting fails as itself, on
 /// the assertion it was actually making.
 let private git (args: string list) (cwd: string) (told: Map<string, string>) : Async<GitRun> =
-    let options : obj =
-        !!{| cwd = cwd
-             env = gitEnvironment told |> Map.toList |> List.map (fun (name, value) -> name ==> value) |> createObj
-             // Text back rather than buffers, which is what `GitRun` says it holds.
-             encoding = "utf8"
-             // Far past `execFile`'s 1MB default: what a fetch answers with is a packfile,
-             // and a run that outgrew the default would be killed and read as a gateway that
-             // stopped answering.
-             maxBuffer = 64 * 1024 * 1024
-             timeout = 20000
-             // The deadline has to END the run rather than ask it to stop: what is bounded
-             // here is a git waiting on an answer, and one that took the signal as a chance
-             // to tidy up would spend the budget anyway.
-             killSignal = "SIGKILL" |}
+    async {
+        let! run =
+            execFile
+                "git"
+                args
+                { Cwd = Some cwd
+                  // `Replacing`: the environment is built whole above, this box's own included.
+                  Env = ChildEnv.Replacing (gitEnvironment told)
+                  // Far past `execFile`'s 1MB default: what a fetch answers with is a packfile,
+                  // and a run that outgrew the default would be killed and read as a gateway
+                  // that stopped answering.
+                  MaxBuffer = Some (64 * 1024 * 1024)
+                  Timeout = Some 20000
+                  // The deadline has to END the run rather than ask it to stop: what is
+                  // bounded here is a git waiting on an answer, and one that took the signal
+                  // as a chance to tidy up would spend the budget anyway.
+                  KillSignal = Some "SIGKILL" }
 
-    Async.FromContinuations (fun (cont, _, _) ->
-        execFile
-            "git"
-            (List.toArray args)
-            options
-            (Action<ExecFileError, string, string> (fun error out err ->
-                cont
-                    { Status = statusOf error
-                      // Strings under an `encoding`, and nothing at all where the child never
-                      // ran — which a case reads as a sentence git printed.
-                      Stdout = if isNull out then "" else out
-                      Stderr = if isNull err then "" else err }))
-        |> ignore)
+        // Under an `encoding` Node hands both streams over as text even for a child that never
+        // started — so an absent one is not a run that said nothing, and is refused rather
+        // than read as a sentence git printed.
+        let said (stream: string) (text: string option) : string =
+            match text with
+            | Some text -> text
+            | None -> failwithf "git's %s never arrived (status %A)" stream run.Status
+
+        return
+            { GitRun.Status = defaultArg run.Status -1
+              GitRun.Stdout = said "stdout" run.Stdout
+              GitRun.Stderr = said "stderr" run.Stderr }
+    }
 
 /// Fixture git: must succeed, or the case is not testing what it says.
 let private gitOk (args: string list) (cwd: string) : Async<string> =
@@ -782,14 +766,14 @@ let private gitHttpBackend (root: string) (seen: ResizeArray<string option>) : H
                   Streams = { Stdin = Pipe; Stdout = Pipe; Stderr = Pipe }
                   Detached = false }
 
-        let answer : Readable = !!backend.stdout
-        req.pipe (!!backend.stdin)
+        let answer = ChildProcessStreams.stdout backend
+        req.pipe (ChildProcessStreams.stdin backend)
 
         // The backend's own account of itself arrives on a pipe rather than this process's
         // stderr — and an unread pipe is one a child eventually blocks on. Said out loud
         // instead, because what `http-backend` complains about is the only account a refused
         // request ever gives.
-        (!!backend.stderr : Readable)
+        (ChildProcessStreams.stderr backend)
             .onData (fun chunk -> eprintfn "git http-backend: %s" ((chunk.toString utf8).TrimEnd ()))
 
         let mutable written = ""

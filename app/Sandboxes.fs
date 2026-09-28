@@ -2506,13 +2506,6 @@ module AgentSandbox =
         try Node.Api.``process``.kill (-child.pid, !^signal) with _ -> ()
         try child.kill signal with _ -> ()
 
-    /// Whatever was thrown, as the `Error` a listener registered on `error` is written
-    /// against. JavaScript admits a `throw` of any value at all, and an `error` event
-    /// carrying a string is how a handler reading `.message` gets `undefined` instead of a
-    /// reason.
-    let private asError (thrown: exn) : exn =
-        if isError (box thrown) then thrown else errorWith (describe (box thrown))
-
     // The SDK's `spawnClaudeCodeProcess` seam. The env arriving in `options.env` IS the
     // policy env (it flows from the query's `env` option), so the spawner passes it
     // verbatim — which is what `spawnWithEnv` is for. `detached: true` makes the CLI a
@@ -2524,7 +2517,7 @@ module AgentSandbox =
     let hostClaudeSpawner () : Sdk.Spawner =
         Sdk.Spawner (fun options ->
             let child =
-                spawnWithEnv options.command (List.ofArray options.args) (box options.env) (startDirectory options) Pipe true
+                spawnWithEnv options.command (List.ofArray options.args) options.env (startDirectory options) Pipe true
 
             let abort () = killTree child "SIGKILL"
 
@@ -2598,7 +2591,7 @@ module AgentSandbox =
 
             let join (executable: string) (arguments: string list) =
                 let child =
-                    spawnWithEnv executable arguments (box options.env) (startDirectory options) Pipe true
+                    spawnWithEnv executable arguments options.env (startDirectory options) Pipe true
 
                 stdin.pipe child.stdin |> ignore
                 child.stdout.pipe stdout |> ignore
@@ -2610,10 +2603,10 @@ module AgentSandbox =
                     "exit",
                     (fun (code: int option) (signal: string option) ->
                         standin.Exited code
-                        relay.emit ("exit", [| box code; box signal |])))
+                        relay.exited (code, signal)))
                 |> ignore
 
-                ChildProcessStreams.onError child (fun error -> relay.emit ("error", [| box error |]))
+                ChildProcessStreams.onError child (fun error -> relay.failed error)
                 standin.Joined (killTree child)
 
             async {
@@ -2626,7 +2619,7 @@ module AgentSandbox =
                     // reporting.
                     | [] -> failwith "srt returned an empty argv"
                 with error ->
-                    relay.emit ("error", [| box (asError error) |])
+                    relay.failed (StreamError.ofThrown error)
             }
             |> Async.StartImmediate
 

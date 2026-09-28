@@ -170,15 +170,15 @@ module McpServers =
 /// `process.env`, so there is no such thing as a partial one.
 ///
 /// Opaque, and made only by `Environment.ofMap`: the spawners hand it on to the child exactly
-/// as it arrived, and nothing here reads it back.
-type Environment =
-    interface end
+/// as it arrived, and nothing here reads it back. It is `Fable.NodeExtras`' `VerbatimEnv`
+/// under the SDK's name, because that is what it IS — an environment complete, as the object
+/// Node reads one from — and a spawner hands it to `spawnWithEnv` with no conversion between.
+type Environment = Fable.NodeExtras.VerbatimEnv
 
 [<RequireQualifiedAccess>]
 module Environment =
 
-    let ofMap (variables: Map<string, string>) : Environment =
-        unbox (createObj [ for name, value in Map.toList variables -> name, box value ])
+    let ofMap (variables: Map<string, string>) : Environment = Fable.NodeExtras.VerbatimEnv.ofMap variables
 
 /// What the SDK asks a spawner for.
 type [<AllowNullLiteral>] SpawnOptions =
@@ -198,14 +198,38 @@ type [<AllowNullLiteral>] SpawnOptions =
     /// suite driving the seam by hand — and means "nothing will abort this".
     abstract signal : Fable.NodeExtras.AbortSignal option
 
+/// Node's `number | null` for a process's exit code, spelled as Node spells it.
+///
+/// Its own type because F# cannot write that down any other way. Fable spells an `int option`
+/// member's `None` as `undefined`, which the SDK's `exitCode === null` reads as "exited"; and
+/// it passes whatever an `int` member answers through `| 0` on the way out, so even a `null`
+/// smuggled in arrives as `0` — a still-running stand-in reading as one that exited cleanly.
+/// Both were tried; the cheap tier pins the result.
+[<AllowNullLiteral>]
+type ExitCode =
+    interface end
+
+[<RequireQualifiedAccess>]
+module ExitCode =
+
+    /// `None` as `null`, which is Node's answer for "still running" (and for a process a
+    /// signal ended); a code as itself.
+    [<Emit("$0 ?? null")>]
+    let ofOption (code: int option) : ExitCode = jsNative
+
+    /// What an F# reader makes of one: `None` while running. Fable's test for `None` is
+    /// `== null`, which is both of JavaScript's absences, so Node's `null` reads as `None`
+    /// with no conversion — the cast is to what the value already is.
+    let toOption (code: ExitCode) : int option = unbox code
+
 /// The process a spawner hands back: Node's `ChildProcess` as far as the SDK reads one.
 ///
 /// Declared rather than opaque because F# IMPLEMENTS it — the srt spawner's stand-in answers
 /// for a child that srt has not finished wrapping — and what the SDK reads off a process is
 /// the only statement of what a stand-in has to answer for. Implemented through
-/// `SpawnedProcess.standingIn` rather than an object expression at the call site, because one
-/// of its members has a spelling F# cannot write down (see `exitCode`). The host spawner hands
-/// back a real `ChildProcess` through `SpawnedProcess.ofChild`.
+/// `SpawnedProcess.standingIn` rather than an object expression at the call site, because what
+/// it answers is read afresh on every access and a relay's listeners are handed on verbatim;
+/// the host spawner hands back a real `ChildProcess` through `SpawnedProcess.ofChild`.
 type [<AllowNullLiteral>] SpawnedProcess =
     /// The SDK writes a turn into `stdin` and reads the CLI's answer off `stdout`. The chunk
     /// type is `Fable.Node`'s, which is what a `ChildProcess`'s streams carry there: text is
@@ -218,50 +242,29 @@ type [<AllowNullLiteral>] SpawnedProcess =
     /// is called rather than from the moment anything dies.
     abstract killed : bool
 
-    /// The code the process ended with; `None` while it is still running, and for one a
-    /// signal ended. Read as an option, but WRITTEN as Node writes it: the SDK asks
-    /// `exitCode === null`, and F#'s `None` is `undefined` — so a stand-in that answered
-    /// `None` as-is would be a process the SDK believes has exited, and whose stdin it then
-    /// refuses to write. `SpawnedProcess.standingIn` is what spells it `null`.
-    abstract exitCode : int option
+    /// The code the process ended with; `null` while it is still running, and for one a
+    /// signal ended — WRITTEN as Node writes it, because the SDK asks `exitCode === null` and
+    /// F#'s `None` is `undefined`: a stand-in that answered `None` as-is would be a process
+    /// the SDK believes has exited, and whose stdin it then refuses to write. `ExitCode` says
+    /// why it is its own type, and `ExitCode.toOption` is how F# reads one.
+    abstract exitCode : ExitCode
 
     /// Signal the process; `true` for "the signal was sent". Node's own default when the
     /// caller names none is `SIGTERM`.
     abstract kill : signal: string -> bool
 
-    // The SDK also LISTENS — `on`, `once` and `off`, for `exit` and `error` — and those are
-    // deliberately not members here. F# never calls them by name: a listener written in F#
-    // goes through `SpawnedProcess.onExit` and `onError`, which say what each event carries,
-    // and the stand-in answers them in `SpawnedProcess.NodeProcess`.
+    /// The SDK LISTENS — for `exit` and `error` — and a listener is its own function, handed
+    /// on verbatim (`Fable.NodeExtras.RelayListener` says why adapting one would break `off`).
+    /// A listener written in F# goes through `SpawnedProcess.onExit` and `onError` instead,
+    /// which say what each event carries.
+    abstract on : ``event``: string * listener: Fable.NodeExtras.RelayListener -> unit
+    abstract once : ``event``: string * listener: Fable.NodeExtras.RelayListener -> unit
+    abstract off : ``event``: string * listener: Fable.NodeExtras.RelayListener -> unit
 
 /// What `spawnClaudeCodeProcess` is: one request in, one process out, synchronously.
 type Spawner = Func<SpawnOptions, SpawnedProcess>
 
 module SpawnedProcess =
-
-    /// `SpawnedProcess` as JavaScript reads it, which differs in two ways. It carries the
-    /// listening members the SDK calls and F# only ever implements. And `exitCode` is Node's
-    /// `number | null`, which an object expression over `SpawnedProcess` itself cannot
-    /// answer. Fable spells an `int option` member's `None` as `undefined`, which the SDK's
-    /// `=== null` reads as "exited"; and it passes whatever the member answers through `| 0`
-    /// on the way out, so even a `null` smuggled in arrives as `0` — a still-running stand-in
-    /// reading as one that exited cleanly. Both were tried; the cheap tier pins the result.
-    type private NodeProcess =
-        abstract stdin : Node.Stream.Writable<string>
-        abstract stdout : Node.Stream.Readable<string>
-        abstract stderr : Node.Stream.Readable<string>
-        abstract killed : bool
-        abstract exitCode : obj
-        abstract kill : signal: string -> bool
-
-        // A listener is `obj` for the reason `Fable.NodeExtras.EventRelay` gives: it is the
-        // SDK's function, forwarded, and adapting it would change which function `off` can
-        // remove. It is also the only way to have one member per verb rather than one per
-        // event, since the two events the SDK waits on carry different arities — `exit` a
-        // code and a signal, `error` an error.
-        abstract on : ``event``: string * listener: obj -> unit
-        abstract once : ``event``: string * listener: obj -> unit
-        abstract off : ``event``: string * listener: obj -> unit
 
     /// A real Node child, as the process the SDK was promised. The SDK's own declaration of
     /// `SpawnedProcess` is the slice of `ChildProcess` it reads, so a child IS one; F# has no
@@ -280,24 +283,16 @@ module SpawnedProcess =
         (kill: string -> bool)
         (events: Fable.NodeExtras.EventRelay)
         : SpawnedProcess =
-        let spelled =
-            { new NodeProcess with
-                member _.stdin = stdin
-                member _.stdout = stdout
-                member _.stderr = stderr
-                member _.killed = killed ()
-                member _.exitCode =
-                    match exitCode () with
-                    | Some code -> box code
-                    | None -> null
-                member _.kill signal = kill signal
-                member _.on (``event``, listener) = events.on (``event``, listener)
-                member _.once (``event``, listener) = events.once (``event``, listener)
-                member _.off (``event``, listener) = events.off (``event``, listener) }
-
-        // The two interfaces are the same object to JavaScript; `NodeProcess` above says
-        // why F# needs a second one to build it.
-        unbox<SpawnedProcess> spelled
+        { new SpawnedProcess with
+            member _.stdin = stdin
+            member _.stdout = stdout
+            member _.stderr = stderr
+            member _.killed = killed ()
+            member _.exitCode = ExitCode.ofOption (exitCode ())
+            member _.kill signal = kill signal
+            member _.on (``event``, listener) = events.on (``event``, listener)
+            member _.once (``event``, listener) = events.once (``event``, listener)
+            member _.off (``event``, listener) = events.off (``event``, listener) }
 
     [<Emit("$0.on('exit', $1)")>]
     let private listenExit (proc: SpawnedProcess) (listener: Func<int option, string option, unit>) : unit =
