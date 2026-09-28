@@ -40,7 +40,8 @@ let private runOnPty (executable: string) (arguments: string list) : Async<Resul
               Realisation = []
               Env = Sandboxes.hostBaseline (Sandboxes.ambientEnv ())
               WorkingDirectory = None
-              Filesystem = Confined }
+              Filesystem = Confined
+              Intercept = None }
         match! Sandboxes.HostSandbox.create () policy with
         | Error e -> return Error e
         | Ok sandbox ->
@@ -101,7 +102,8 @@ let private withShellTerminal
               Realisation = []
               Env = Sandboxes.hostBaseline (Sandboxes.ambientEnv ())
               WorkingDirectory = None
-              Filesystem = Confined }
+              Filesystem = Confined
+              Intercept = None }
         match! Sandboxes.HostSandbox.create () policy with
         | Error e -> failwith e
         | Ok sandbox ->
@@ -1195,7 +1197,8 @@ let tests =
                       Realisation = []
                       Env = Map.empty
                       WorkingDirectory = None
-                      Filesystem = Confined }
+                      Filesystem = Confined
+                      Intercept = None }
                 match! Sandboxes.HostSandbox.create () policy with
                 | Error e -> failwith e
                 | Ok sandbox ->
@@ -1248,7 +1251,8 @@ let tests =
                       Realisation = []
                       Env = Sandboxes.hostBaseline (Sandboxes.ambientEnv ())
                       WorkingDirectory = None
-                      Filesystem = Confined }
+                      Filesystem = Confined
+                      Intercept = None }
                 match! Sandboxes.HostSandbox.create () policy with
                 | Error e -> failwith e
                 | Ok sandbox ->
@@ -1282,7 +1286,8 @@ let tests =
                       Realisation = []
                       Env = Sandboxes.hostBaseline (Sandboxes.ambientEnv ())
                       WorkingDirectory = None
-                      Filesystem = Confined }
+                      Filesystem = Confined
+                      Intercept = None }
                 match! Sandboxes.HostSandbox.create () policy with
                 | Error e -> failwith e
                 | Ok sandbox ->
@@ -1327,7 +1332,8 @@ let tests =
                       Realisation = []
                       Env = Sandboxes.hostBaseline (Sandboxes.ambientEnv ())
                       WorkingDirectory = None
-                      Filesystem = Confined }
+                      Filesystem = Confined
+                      Intercept = None }
                 match! Sandboxes.HostSandbox.create () policy with
                 | Error e -> failwith e
                 | Ok sandbox ->
@@ -1503,7 +1509,8 @@ let tests =
                       Realisation = []
                       Env = Sandboxes.hostBaseline (Sandboxes.ambientEnv ())
                       WorkingDirectory = None
-                      Filesystem = Confined }
+                      Filesystem = Confined
+                      Intercept = None }
                 match! Sandboxes.HostSandbox.create () policy with
                 | Error e -> failwith e
                 | Ok sandbox ->

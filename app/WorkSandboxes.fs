@@ -29,25 +29,40 @@ open Yession.Domain.Tools
 open Yession.Domain.Terminals
 open Yession.SessionProcess
 
-/// What a forwarded credential puts in a sandbox. Three channels: git's config is one
-/// variable everything shares (`GIT_CONFIG_COUNT`) and has to be APPENDED to, where a plain
-/// variable is simply set — `Sandboxes.withGitConfig` is the difference — and a route is
-/// only a route if the sandbox's egress admits the host it names.
+/// What a forwarded credential puts in a sandbox. Git's config is one variable everything
+/// shares (`GIT_CONFIG_COUNT`) and has to be APPENDED to, where a plain variable is simply set
+/// — `Sandboxes.withGitConfig` is the difference — and a route is only a route if the
+/// sandbox's egress admits the host it names, its proxy is told to send that host's HTTPS
+/// where the credential is, and the sandbox can read what it has to trust to get there.
 type Provision =
     { Env : Map<string, string>
       GitConfig : (string * string) list
       /// Hosts the sandbox must be allowed to reach for the provision to work. Read by a
       /// backend that filters egress (srt); the rest have nothing to widen.
-      Domains : string list }
+      Domains : string list
+      /// Files the sandbox must be able to read — a trust bundle. Read by a backend that
+      /// confines reads (srt); the rest read everything already.
+      Reads : string list
+      /// Hosts whose HTTPS the credential proxy answers (`Interception`).
+      Intercept : Interception option }
 
 module Provision =
 
-    let empty : Provision = { Env = Map.empty; GitConfig = []; Domains = [] }
+    let empty : Provision = { Env = Map.empty; GitConfig = []; Domains = []; Reads = []; Intercept = None }
 
     let merge (a: Provision) (b: Provision) : Provision =
         { Env = Sandboxes.mergeEnv a.Env b.Env
           GitConfig = a.GitConfig @ b.GitConfig
-          Domains = List.distinct (a.Domains @ b.Domains) }
+          Domains = List.distinct (a.Domains @ b.Domains)
+          Reads = List.distinct (a.Reads @ b.Reads)
+          // One credential proxy per session: two provisions naming it are the same socket,
+          // and the hosts are the union of what each routes there.
+          Intercept =
+            match a.Intercept, b.Intercept with
+            | Some x, Some y ->
+                Some { Interception.Socket = y.Socket; Interception.Hosts = List.distinct (x.Hosts @ y.Hosts) }
+            | x, None -> x
+            | None, y -> y }
 
 /// What forwarding one credential into one sandbox came to.
 [<RequireQualifiedAccess>]

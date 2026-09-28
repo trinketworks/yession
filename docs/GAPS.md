@@ -282,7 +282,13 @@ first's.
   are both srt confines their FILES exactly (the profile rides each spawn) but can only
   UNION their allowlists — the work sandbox can reach the agent's API hosts, without any
   credential for them. Splitting it needs either a manager instance per sandbox (srt does
-  not offer one) or a Session Process per sandbox.
+  not offer one) or a Session Process per sandbox. Its interception (`network.mitmProxy`)
+  is per process for the same reason: once any sandbox of a session forwards `github`,
+  EVERY srt spawn in it — the agent CLI's included — has its HTTPS to `api.github.com`
+  answered by the credential proxy, and only a sandbox provisioned for it has been told to
+  trust that proxy's authority. One that was not fails TLS to that host rather than
+  reaching it unauthenticated. `default` forwards `github` whenever the session can, so
+  in practice this is a sandbox started with `forward: []`.
 - **The strict confinement profile needs a nested user namespace, which an unprivileged
   container refuses.** srt's seccomp helper creates one inside bubblewrap's to drop
   capabilities and mount a fresh `/proc`; Docker's default (and this repo's dev container)
@@ -762,6 +768,15 @@ first's.
     lends nothing and a push typed there is refused in words. Only `github` is
     forwardable so far, and the gateway admits only git's three smart-HTTP requests to a
     repository path, so a cap is not a token for the rest of github.com.
+  - **The GitHub API is forwarded into srt sandboxes only.** Under srt, a forwarded `github`
+    also routes `api.github.com` and `uploads.github.com` through the credential proxy
+    (`CredentialProxy.fs`, srt's `mitmProxy`), and each block is lent a stand-in in
+    `GH_TOKEN` and `GITHUB_TOKEN` beside its git loan, spent as the same act. A docker or
+    host sandbox is given neither: its egress does not run through a proxy this session can
+    tell, and the proxy listens only on a socket srt reaches. The stand-in is in the block's
+    environment exactly as the git loan is, with the same transcript caveat above, and the
+    proxy — unlike the gateway — admits every request to a declared host: a stand-in is the
+    lender's whole API token for as long as it is live.
   - **An external MCP server's read-only tools are not queries yet.** `readOnlyHint` is
     declared, not inferred, precisely so a third-party server's queries could be listed into
     the registry without a yession-specific convention — but only the in-process
