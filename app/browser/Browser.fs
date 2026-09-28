@@ -1128,14 +1128,8 @@ let private start () =
 
         // The connection panels are TOLD, on the read stream below — nothing here fetches a
         // status. What is left is the one thing a push cannot report: a stream that never
-        // delivers. `armDeadline` is that net, and it is a single tick rather than a poll,
-        // because what it is waiting for is the clock and not an answer.
-        let armDeadline () =
-            Async.StartImmediate (
-                async {
-                    do! Async.Sleep (int Pending.deadlineMillis)
-                    dispatchRef (PendingWaitedMsg (nowMillis ()))
-                })
+        // delivers. The net for that is the deadline the model declares for every wait
+        // (`ClientModel.timers`), which is the clock's to keep and not an answer's.
 
         /// One shape for every panel action: sending → the command answers → either it is
         /// refused, or it opened an authorize tab (nothing for the status to show yet), or
@@ -1160,7 +1154,6 @@ let private start () =
                         match expect with
                         | Some expect ->
                             dispatchRef (ClaudePendingMsg (Pending.Awaiting (expect, nowMillis ())))
-                            armDeadline ()
                         | None -> dispatchRef (ClaudePendingMsg Pending.Ready)
                 })
         let postClaudeAction
@@ -1266,7 +1259,6 @@ let private start () =
                         match expect with
                         | Some expect ->
                             dispatchRef (GitHubPendingMsg (Pending.Awaiting (expect, nowMillis ())))
-                            armDeadline ()
                         | None -> dispatchRef (GitHubPendingMsg Pending.Ready)
                 })
 

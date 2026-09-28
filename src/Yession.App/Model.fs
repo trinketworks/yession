@@ -843,7 +843,9 @@ type ClientMsg =
     /// A GitHub connection command moved, exactly as Claude's does.
     | GitHubPendingMsg of Pending<ConnectionExpectation>
     /// The clock, for every panel waiting on a query at once: one tick, because a deadline
-    /// is about elapsed time and not about which panel is watching it.
+    /// is about elapsed time and not about which panel is watching it. Fired by the deadline
+    /// the model declares for each wait (`ClientModel.timers`), carrying the moment it fell
+    /// due.
     | PendingWaitedMsg of now: int64
     /// The launch surface moved (typed, listed, chose, sent, answered, failed, dismissed).
     | LaunchMsg of LaunchMsg
@@ -1903,6 +1905,12 @@ module ClientModel =
     /// the same box again, is a new key and a fresh wait, so no earlier deadline can take a
     /// later confirmation off the screen.
     ///
+    /// A panel's wait on the query is a deadline, keyed by the wait itself (the panel, and
+    /// when its command was accepted): a wait that ends — the query showed it, or a new
+    /// command replaced it — takes its deadline with it. What it fires is the moment the
+    /// deadline falls due, `since` plus `Pending.deadlineMillis`, which is exactly when a
+    /// timer started with the wait and running that long fires.
+    ///
     /// The agent's quiet is a debounce: one timer per message it is writing, keyed by the
     /// stamp, so each delta replaces the wait with a fresh one and only a body that stops
     /// growing for `writingQuietMs` ever fires. None once it has fired for this stamp — the
@@ -1925,7 +1933,17 @@ module ClientModel =
             | Some copy ->
                 [ { Key = [ "copied"; copy.Box; string copy.Nth ]; After = copiedShownMs; Fire = CopiedMsg None } ]
             | None -> []
-        catchUp @ copied @ quiet
+        let pending =
+            [ "claude", model.Claude.Pending; "github", model.GitHub.Pending ]
+            |> List.choose (fun (panel, pending) ->
+                match pending with
+                | Pending.Awaiting (_, since) ->
+                    Some
+                        { Key = [ "pending"; panel; string since ]
+                          After = int Pending.deadlineMillis
+                          Fire = PendingWaitedMsg (since + Pending.deadlineMillis) }
+                | Pending.Ready | Pending.Sending | Pending.Refused _ -> None)
+        catchUp @ copied @ pending @ quiet
 
     /// Fold a message into the model.
     /// Piped through `reconcileLaunch` (see its doc) so the launch surface anchors here,

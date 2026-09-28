@@ -194,6 +194,20 @@ let tests =
             clock.Advance most
             Expect.isSome (model ()).Copied "the second copy is shown for as long as the first was"
 
+        testCase "a panel's wait on the query is refused once its deadline passes" <| fun () ->
+            let clock, send, model = program ()
+            send (ClaudePendingMsg (Pending.Awaiting ({ Scope = "mine"; Connected = true }, 1_000L)))
+            clock.Advance (int Pending.deadlineMillis)
+            Expect.equal (model ()).Claude.Pending (Pending.Refused Pending.unseen) "a status that never came is said, not waited on for ever"
+
+        testCase "a wait the query answers in time is never refused" <| fun () ->
+            let clock, send, model = program ()
+            send (ClaudePendingMsg (Pending.Awaiting ({ Scope = "mine"; Connected = true }, 1_000L)))
+            clock.Advance (int Pending.deadlineMillis / 2)
+            send (ClaudePendingMsg Pending.Ready)
+            clock.Advance (int Pending.deadlineMillis)
+            Expect.equal (model ()).Claude.Pending Pending.Ready "an answered wait keeps its answer"
+
         testCase "a finished message asks for no wait" <| fun () ->
             Expect.isEmpty
                 (ClientModel.timers (fold [ opened; delta 3L "Looking"; completed 4L "Looking" ]))
