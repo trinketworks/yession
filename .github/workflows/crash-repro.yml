@@ -29,7 +29,7 @@ on:
         default: "60"
       heap_mb:
         description: "Live heap each regex child holds and rewrites, in MB (ignored by fable)"
-        default: "0"
+        default: "2000"
       env:
         description: "Space-separated NAME=value settings for every child, e.g. DOTNET_gcServer=1"
         default: ""

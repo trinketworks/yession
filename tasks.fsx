@@ -2427,9 +2427,11 @@ let frames (args: string list) =
 //           `RegexOptions.Compiled` regex over the same pattern, match one doc comment, drop it,
 //           from thread-pool work items as Fable's printer does. Each construction is a
 //           Reflection.Emit dynamic method generated, run and made collectible. Alone, that
-//           churn has not crashed (about 20M regexes on both architectures, crash-repro run 1),
-//           so `heapMb` stands in for the rest of a compiler: a live object graph of that size,
-//           rewritten by mutator threads, so collections run against a heap shaped like one.
+//           churn did not crash (about 20M regexes on both architectures, crash-repro run 1) —
+//           under fsi's Server GC. Under the workstation collector Fable uses, and with `heapMb`
+//           standing in for the rest of a compiler (a live object graph of that size, rewritten
+//           by mutator threads), it does: 6 of 8 x86_64 jobs in crash-repro run 9, three by
+//           SIGSEGV with run 946's stack and three by a compiled regex answering wrongly.
 //   fable — the real compiler over the real browser client, `--noCache` so every run prints
 //           (and so parses) every doc comment again. This one crashes: two x86_64 children in
 //           about 130 compiles (crash-repro run 2), with run 946's stack.
@@ -2440,7 +2442,7 @@ let frames (args: string list) =
 // Any `NAME=value` argument is set in every child's environment, which is how a runtime knob
 // (`DOTNET_TieredCompilation=0`, `DOTNET_gcServer=1`) is tried against the crash rate.
 //
-//   crash-repro regex [rounds] [workers] [seconds] [heapMb] [NAME=value …]   defaults 20, cores, 60, 0
+//   crash-repro regex [rounds] [workers] [seconds] [heapMb] [NAME=value …]   defaults 20, cores, 60, 2000
 //   crash-repro fable [rounds] [workers] [NAME=value …]                      defaults 10, 2
 //
 // Exit 0: no child died in the budget. Exit 1: one did, and its report is printed. The nix
@@ -2492,7 +2494,11 @@ let private regexChurn (seconds: float) (heapMb: int) =
             while DateTime.UtcNow < deadline do
                 let regex = Regex (summaryPattern, RegexOptions.Compiled)
                 let m = regex.Match (docComment i)
-                if not m.Success then failwithf "crash-repro: no summary in comment %d" i
+                // A miss here is not a bug in the pattern — it matches every comment this makes —
+                // but the same fault answering wrongly instead of crashing: the JIT compiled this
+                // regex from some other method's IL (crash-repro run 9 got three of these).
+                if not m.Success then
+                    failwithf "crash-repro: WRONG RESULT: a freshly compiled regex did not match comment %d" i
                 Threading.Interlocked.Increment &built.contents |> ignore
                 i <- i + workers)
     Threading.Tasks.Task.WaitAll (Array.init workers work)
@@ -2550,12 +2556,21 @@ let crashRepro (args: string list) =
     match positional with
     | "regex" :: _ ->
         let seconds = number 3 60
-        let heapMb = number 4 0
+        let heapMb = number 4 2000
+        // `dotnet fsi` runs with Server GC (its runtimeconfig says so), and under Server GC the
+        // fault has never shown — not in fsi and not in Fable. Fable runs with the workstation
+        // collector, so that is what a child gets unless the arguments say otherwise.
+        let env = if env |> List.exists (fst >> (=) "DOTNET_gcServer") then env else ("DOTNET_gcServer", "0") :: env
         rounds "regex" (number 1 20) (number 2 Environment.ProcessorCount) env (fun _ ->
             "dotnet", [ "fsi"; Path.Combine (repoRoot, "tasks.fsx"); "crash-repro-child"; string seconds; string heapMb ])
     | "fable" :: _ ->
         make [ Target.Tools; Target.Packages ]
         let project = Path.Combine (repoRoot, "app", "browser", "Yession.Browser.fsproj")
+        // One compile before the rounds, uncounted: Fable's project cracker writes each
+        // project's `obj/` on first sight, and two children cracking side by side race on it
+        // (MSB3491, a SIGABRT in round 1 that is not the fault this is chasing).
+        let warm = Path.Combine (Path.GetTempPath (), "yession-crash-repro-warm")
+        run "dotnet" [ "fable"; project; "-o"; warm; "--noRestore" ] |> ignore
         rounds "fable" (number 1 10) (number 2 2) env (fun w ->
             let out = Path.Combine (Path.GetTempPath (), sprintf "yession-crash-repro-%d" w)
             "dotnet", [ "fable"; project; "-o"; out; "--noRestore"; "--noCache" ])
