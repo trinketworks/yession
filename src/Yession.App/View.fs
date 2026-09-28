@@ -2421,8 +2421,10 @@ module View =
                 match item.Status with
                 | Streaming ->
                     // The one visible statement that a turn is in flight, and the hook that
-                    // says so is what a test counts: there must never be a second.
-                    Style.messageBodyStreaming, html $"""<span class="{Style.caretWorking}" data-agent-writing></span>"""
+                    // says so is what a test counts: there must never be a second. Turning
+                    // while nothing has been said, still once the words are arriving.
+                    let mark = if System.String.IsNullOrWhiteSpace body then Style.agentCaretThinking else Style.agentCaret
+                    Style.messageBodyStreaming, html $"""<span class="{mark}" data-agent-writing></span>"""
                 | _ -> Style.messageBody, Lit.nothing
             let bodyClass = Style.cls [ bodyClass; Style.messageVoice isAgent ]
             // The author line is the GROUP's to say (see `group` below); a message's own meta
@@ -2476,7 +2478,7 @@ module View =
                   {itemActions item}
                   {meta}
                   {replyRef}
-                  <div class="{bodyClass}" data-message-body>{RichText.render (contentChip item.Author) body}{caret}</div>
+                  <div class="{bodyClass}" data-message-body>{RichText.renderTrailed (contentChip item.Author) caret body}</div>
                 </article>"""
         // One line: who ran what, and how it went. No output — a tail inline would make the
         // chat noisiest exactly when it is busiest, and would put everything a command

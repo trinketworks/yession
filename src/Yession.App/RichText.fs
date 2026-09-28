@@ -69,9 +69,14 @@ module RichText =
         children node |> List.map (inlineNode chip)
 
     /// One block node. Recurses for nested structure (lists, list items, blockquotes).
-    let rec private block (chip: ContentRef -> TemplateResult) (node: Node) : TemplateResult =
-        let inlineContent node = inlineContent chip node
-        let blocks node = blocks chip node
+    ///
+    /// `tail` is drawn after the block's last inline content — in the same line box as its
+    /// last word, not after the box — and is `Lit.nothing` for every block but the body's last.
+    /// A block that holds blocks hands it on to its own last child; one that holds no inline
+    /// content (a rule) stands it after itself, the one place left.
+    let rec private block (chip: ContentRef -> TemplateResult) (tail: TemplateResult) (node: Node) : TemplateResult =
+        let inlineContent node = inlineContent chip node @ [ tail ]
+        let blocks node = blocks chip tail node
         match nodeTypeName node with
         | "paragraph" -> html $"""<p class="{Style.proseP}">{inlineContent node}</p>"""
         | "heading" ->
@@ -81,16 +86,17 @@ module RichText =
             | 3 -> html $"""<h3 class="{Style.proseH3}">{inlineContent node}</h3>"""
             | _ -> html $"""<h4 class="{Style.proseH4}">{inlineContent node}</h4>"""
         | "blockquote" -> html $"""<blockquote class="{Style.proseQuote}">{blocks node}</blockquote>"""
-        | "code_block" -> html $"""<pre class="{Style.prosePre}"><code>{nodeTextContent node}</code></pre>"""
+        | "code_block" -> html $"""<pre class="{Style.prosePre}"><code>{nodeTextContent node}</code>{tail}</pre>"""
         | "bullet_list" -> html $"""<ul class="{Style.proseUl}">{blocks node}</ul>"""
         | "ordered_list" -> html $"""<ol class="{Style.proseOl}" start="{listStart node}">{blocks node}</ol>"""
         | "list_item" -> html $"""<li class="{Style.proseLi}">{blocks node}</li>"""
-        | "horizontal_rule" -> html $"""<hr class="{Style.proseHr}">"""
+        | "horizontal_rule" -> html $"""<hr class="{Style.proseHr}">{tail}"""
         // Any node the default schema adds later still shows its text rather than vanishing.
         | _ -> html $"""<p class="{Style.proseP}">{inlineContent node}</p>"""
 
-    and private blocks (chip: ContentRef -> TemplateResult) (node: Node) : TemplateResult list =
-        children node |> List.map (block chip)
+    and private blocks (chip: ContentRef -> TemplateResult) (tail: TemplateResult) (node: Node) : TemplateResult list =
+        let last = nodeChildCount node - 1
+        children node |> List.mapi (fun i child -> block chip (if i = last then tail else Lit.nothing) child)
 
     /// Render a Markdown body as read-only formatted rich text. A parse failure (or an absent
     /// body) degrades to the raw text so a message can never silently vanish from the timeline.
@@ -101,4 +107,15 @@ module RichText =
     let render (chip: ContentRef -> TemplateResult) (markdown: string) : TemplateResult =
         let md = if isNull (box markdown) then "" else markdown
         let doc = mdParser.parse md
-        if isNull (box doc) then html $"{md}" else html $"{blocks chip doc}"
+        if isNull (box doc) then html $"{md}" else html $"{blocks chip Lit.nothing doc}"
+
+    /// The same, with `tail` standing at the end of the body's last line — where a caret goes,
+    /// because a caret says where the next word lands. Appended after the rendered body it
+    /// sat after the last paragraph's BOX, which is a line of its own under the text. A body
+    /// with nothing in it yet is the tail alone.
+    let renderTrailed (chip: ContentRef -> TemplateResult) (tail: TemplateResult) (markdown: string) : TemplateResult =
+        let md = if isNull (box markdown) then "" else markdown
+        let doc = mdParser.parse md
+        if isNull (box doc) then html $"{md}{tail}"
+        elif nodeChildCount doc = 0 then tail
+        else html $"{blocks chip tail doc}"

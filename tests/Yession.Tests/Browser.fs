@@ -3190,6 +3190,57 @@ let editorTests =
                 Expect.isTrue (shown < 25.0) (sprintf "the spoken sentence is not painted for anyone (%f px²)" shown)
                 return ()
             }
+        // Where the caret stands is the whole of what it says: the next word lands THERE. It
+        // was appended after the rendered body, which is after the last paragraph's box, so
+        // it stood on a line of its own under the text — and a mark aligned "by eye" to a
+        // baseline sits wherever its centre puts it, which on a phone is a pixel off. Both
+        // are geometry a cheap tier cannot see: the markup is the same either way.
+        //
+        // The baseline is measured, not assumed: an empty inline-block rests its bottom
+        // edge on the baseline of the line it is in, so a zero-sized one dropped after the
+        // last word marks exactly where that word's letters stand.
+        editorCaseIn 390 844 "the agent's caret stands on its last line's baseline, just after the last word" <| fun page ->
+            async {
+                // Held still, so the mark is measured at rest rather than mid-turn.
+                do! awaitU (page.EmulateMediaAsync (PageEmulateMediaOptions (ReducedMotion = ReducedMotion.Reduce)))
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-draft-editor]")
+                do! awaitU (page.EvaluateAsync "() => window.__agentTurn()")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-agent-writing]")
+                let! misplaced =
+                    await (page.EvaluateAsync<string>
+                            """() => {
+                                 const caret = document.querySelector('#shell [data-agent-writing]')
+                                 const body = caret.closest('[data-message-body]')
+                                 const walk = document.createTreeWalker(body, NodeFilter.SHOW_TEXT)
+                                 let last = null
+                                 while (walk.nextNode()) if (walk.currentNode.textContent.trim()) last = walk.currentNode
+                                 if (!last) return 'the body has no words to stand after'
+                                 const end = last.textContent.trimEnd().length
+                                 const range = document.createRange()
+                                 range.setStart(last, end - 1)
+                                 range.setEnd(last, end)
+                                 const glyph = range.getBoundingClientRect()
+                                 const probe = document.createElement('span')
+                                 probe.style.cssText = 'display:inline-block;width:0;height:0'
+                                 last.after(probe)
+                                 const baseline = probe.getBoundingClientRect().bottom
+                                 probe.remove()
+                                 const at = caret.getBoundingClientRect()
+                                 const em = parseFloat(getComputedStyle(caret).fontSize)
+                                 const wrong = []
+                                 if (at.top < glyph.top || at.bottom > glyph.bottom)
+                                   wrong.push('it is not on the last line (' + at.top + '-' + at.bottom + ' against ' + glyph.top + '-' + glyph.bottom + ')')
+                                 // Within an overshoot: a point is carried a hair past its
+                                 // line, as the round letters beside it are.
+                                 if (Math.abs(at.bottom - baseline) > 0.05 * em)
+                                   wrong.push('its lower point is ' + (at.bottom - baseline) + 'px off the baseline')
+                                 if (at.left < glyph.right) wrong.push('it starts before the last word ends')
+                                 if (at.left - glyph.right > em) wrong.push('it stands ' + (at.left - glyph.right) + 'px after the last word')
+                                 return wrong.join('; ')
+                               }""")
+                Expect.equal misplaced "" "the caret stands where the next word lands"
+                return ()
+            }
         // What the band it replaced could not take away, and what a control arriving in a band
         // can: the composer. A turn starting must not push what a person types with off the
         // screen, or the one thing to do while the agent writes — queue the next message — is
