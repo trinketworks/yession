@@ -540,14 +540,10 @@ let
     inherit version src;
     nativeBuildInputs = [
       ({ source = pkgs.dotnet-sdk_10; bin = pkgs.dotnetCorePackages.sdk_10_0-bin; }.${sdk})
-      pkgs.nodejs_24
     ];
     buildPhase = ''
       runHook preBuild
       ${dotnetEnv}
-      cp -a ${nodeModules}/node_modules ./node_modules
-      chmod -R u+w node_modules
-      export PATH="$PWD/node_modules/.bin:$PATH"
       ${nugetEnv}
       readlink -f "$(command -v dotnet)"
       dotnet fsi tasks.fsx crash-repro ${layer} ${rounds} ${workers} ${seconds} ${heapMb} ${env} | tee crash-repro.log
