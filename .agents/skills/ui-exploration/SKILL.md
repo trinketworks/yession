@@ -154,6 +154,9 @@ the same tool (a clamped "before" against an emulated "after" is not a compariso
   container (see AGENTS.md Testing).
 - The page must remain local: its program is F# (`app/browser/ManagerPage.fs`), served
   from the Manager's own asset set beside its stylesheet — no inline script, no CDN.
+- The `/open` screen is the one exception, and deliberately: its program is an inline
+  `<script>` at the end of `<body>` (`ManagerUi.openingProgram`), because its dwell is timed
+  from when the script runs and a served module runs late. Do not move it out.
 
 ## Cleanup
 

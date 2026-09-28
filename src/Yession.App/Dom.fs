@@ -810,14 +810,21 @@ module Dom =
         let mcpError = "data-mcp-error"
         let mcpWithdraw = "data-mcp-withdraw"
         let mcpAudience = "data-mcp-audience"
-        /// The opening screen's readiness address (`/sessions/{id}/ready`), on the screen it
-        /// polls for — spelled by the server, like every other address its pages carry.
+        /// The opening screen's hooks. Its program is inline and literal
+        /// (`ManagerUi.openingProgram`), so it names these four by VALUE: rename one here and
+        /// rename it there.
+        ///
+        /// The readiness address (`/sessions/{id}/ready`), on the screen it polls for —
+        /// spelled by the server, like every other address its pages carry.
         let openingReady = "data-opening-ready"
         /// The opening screen's way in: the session's own address, and where the screen hands
         /// the browser once the readiness address answers.
         let openingTarget = "data-opening-target"
         /// The opening screen's status word: `starting`, then `ready`.
         let openingWord = "data-word"
+        /// The classes the opening screen's status line takes when it gives up waiting, carried
+        /// on that line so its program is handed them rather than spelling them.
+        let openingFailed = "data-opening-failed"
         // Process status words shown in a row.
         let statusStopped = "stopped"
         let statusRunning = "running"
