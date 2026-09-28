@@ -343,16 +343,10 @@ let private placeInputCursor (field: string) (peer: string) (anchor: int) (head:
 let internal raf (f: unit -> unit) : unit =
     Browser.Dom.window.requestAnimationFrame (fun _ -> f ()) |> ignore
 
-// An armed deadline: something is true NOW and only worth saying if it is still true then
-// (see `syncCatchUpTimer`). Nothing debounces on it any more — what needs pacing is paced by
-// the frame (`raf`).
+// The render hold's clock: how long since the last render (see `setState`). What waits on the
+// model's own state is the model's to declare (`ClientModel.timers`); what needs pacing is
+// paced by the frame (`raf`).
 let private now () : float = Browser.Performance.performance.now ()
-
-/// How long catch-up must run before it is worth SAYING (see `EventConsumerState.CatchUpIsSlow`).
-/// Long enough that a send — which puts this client one event behind itself for a round trip —
-/// never lights it; short enough that a real wait is reported rather than sat through in
-/// silence.
-let private catchUpQuietMs = 500
 
 // --- Rich-text editor mount ------------------------------------------------------------
 // The view renders empty `[data-rich-body="<key>"]` hosts; the editor is mounted imperatively
@@ -760,30 +754,6 @@ let create (deps: Deps) : Renderer =
                 | _ -> None)
         | _ -> []
 
-    // Catch-up is the normal state for a moment after anything happens — your own send
-    // puts you behind your own event until the page comes back — so the status is armed
-    // rather than mirrored: a timer starts when catch-up begins and only if it is STILL
-    // running when the timer fires does the UI say so. Without this the header flickered
-    // "up to date" → "catching up" → "up to date" on every message sent, which reads as a
-    // fault. Disarmed the moment catch-up ends, and the reducer refuses a late `true`
-    // anyway (`CatchUpSlowMsg`), so a fire that races a landing page changes nothing.
-    let mutable catchUpTimer = 0
-    let syncCatchUpTimer (model: ClientModel) =
-        let consumer = model.EventConsumer
-        if consumer.IsCatchingUp && not consumer.CatchUpIsSlow then
-            // Idempotent: an armed timer is left to run, or a stream of pages would keep
-            // pushing the deadline out and it would never fire.
-            if catchUpTimer = 0 then
-                catchUpTimer <-
-                    JS.setTimeout
-                        (fun () ->
-                            catchUpTimer <- 0
-                            dispatch (CatchUpSlowMsg true))
-                        catchUpQuietMs
-        elif catchUpTimer <> 0 then
-            JS.clearTimeout catchUpTimer
-            catchUpTimer <- 0
-
     // Overlay each body's remote cursors, PACED BY THE FRAME: a render marks the push wanted
     // and the next animation frame performs it, at most once per frame however many renders
     // asked. Only editors whose cursor set changed are dispatched (idle empty→empty is
@@ -858,7 +828,7 @@ let create (deps: Deps) : Renderer =
     // the reader never asked for, scrolling past under their eye — 116 of them on a session
     // of 97 items, forty-nine thousand pixels of words moving. None of them is the tail,
     // and the tail is what an open is for. So a render that would show a client still
-    // behind is HELD, and one render is made at most every `catchUpQuietMs` while that
+    // behind is HELD, and one render is made at most every `ClientModel.catchUpQuietMs` while that
     // lasts — a long catch-up still shows its progress and its indicator — and the render
     // that shows the client caught up is immediate, whatever the hold. A send puts a client
     // one event behind itself for a round trip, and the page that answers it lands caught
@@ -905,7 +875,7 @@ let create (deps: Deps) : Renderer =
     let mutable held = 0
     let rec setState (model: ClientModel) =
         let since = now () - renderedAt
-        if model.EventConsumer.IsCatchingUp && since < float catchUpQuietMs then
+        if model.EventConsumer.IsCatchingUp && since < float ClientModel.catchUpQuietMs then
             latest <- Some model
             if held = 0 then
                 held <-
@@ -913,7 +883,7 @@ let create (deps: Deps) : Renderer =
                         (fun () ->
                             held <- 0
                             latest |> Option.iter render)
-                        (catchUpQuietMs - int since)
+                        (ClientModel.catchUpQuietMs - int since)
         else
             if held <> 0 then
                 JS.clearTimeout held
@@ -950,7 +920,6 @@ let create (deps: Deps) : Renderer =
         // Keep a slot rule running for every open terminal: a person may be mid-command
         // in more than one, and each slot follows its own command line.
         syncTerminalSlots model
-        syncCatchUpTimer model
         // After the render, because the foot it watches is a node this render just drew.
         syncListingFoot ()
         pushPresences ()
