@@ -177,8 +177,8 @@ let private announcedPair () : Async<ChildProcess * string * string> =
                 | _ -> ())
         |> ignore
 
-        child.on ("error", fun (thrown: obj) -> refused (sprintf "socat could not be started: %s" (Thrown.describe thrown)))
-        |> ignore
+        ChildProcessStreams.onError child (fun error ->
+            refused (sprintf "socat could not be started: %s" (StreamError.describe error)))
 
         child.on (
             "exit",

@@ -181,7 +181,7 @@ let private watchUnhandledRejections () : (unit -> int) * (unit -> unit) =
     let mutable reported = 0
     // One closure, registered and removed by reference: `removeListener` only removes the
     // very function `on` was given.
-    let listener = fun (_: obj) -> reported <- reported + 1
+    let listener = fun () -> reported <- reported + 1
     Node.Api.``process``.on ("unhandledRejection", listener) |> ignore
     (fun () -> reported), (fun () -> Node.Api.``process``.removeListener ("unhandledRejection", listener) |> ignore)
 
@@ -2485,8 +2485,9 @@ let private agentSpawnerPortsTests =
                     (Map.ofList [ "YESSION_MARK", "set" ])
                     None
 
-            do! Support.waitUntilWithin 5000 "the child exits" (fun () -> spawned.exitCode.IsSome)
-            Expect.equal spawned.exitCode (Some 4) "the CLI ran with exactly the env the request carried"
+            let exitCode () = Fable.ClaudeAgentSdk.ExitCode.toOption spawned.exitCode
+            do! Support.waitUntilWithin 5000 "the child exits" (fun () -> (exitCode ()).IsSome)
+            Expect.equal (exitCode ()) (Some 4) "the CLI ran with exactly the env the request carried"
         }
 
         // The SDK's forwarded abort is how a turn is stopped, and what it has to stop is the

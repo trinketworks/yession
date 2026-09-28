@@ -874,8 +874,8 @@ let private runAgent () : RunAgent option =
 /// reaches either end, so the handlers are only ever called because of it.
 let private onStdinClosed (handler: unit -> unit) : unit =
     let stdin = Node.Api.``process``.stdin
-    stdin.on ("close", fun (_: obj) -> handler ()) |> ignore
-    stdin.on ("end", fun (_: obj) -> handler ()) |> ignore
+    stdin.on ("close", fun () -> handler ()) |> ignore
+    stdin.on ("end", fun () -> handler ()) |> ignore
     stdin.resume () |> ignore
 
 Async.StartImmediate (

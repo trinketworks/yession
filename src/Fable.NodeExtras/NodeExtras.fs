@@ -106,6 +106,23 @@ type DirectoryEntry =
     abstract isDirectory : unit -> bool
     abstract isSymbolicLink : unit -> bool
 
+/// The options `readdirSync` is handed here: the one that makes it answer entries rather than
+/// names. Built with `jsOptions`, so the name Node reads is spelled by the compiler.
+[<AllowNullLiteral>]
+type internal ReaddirOptions =
+    abstract withFileTypes : bool with get, set
+
+/// The options `mkdirSync` is handed here.
+[<AllowNullLiteral>]
+type internal MkdirOptions =
+    abstract recursive : bool with get, set
+
+/// The options `rmSync` is handed here.
+[<AllowNullLiteral>]
+type internal RmOptions =
+    abstract recursive : bool with get, set
+    abstract force : bool with get, set
+
 [<AutoOpen>]
 module Files =
 
@@ -113,15 +130,16 @@ module Files =
     let private openSyncWithFlag (path: string) (flag: string) : int = jsNative
 
     [<Import("mkdirSync", "node:fs")>]
-    let private mkdirSyncWithOptions (path: string) (options: obj) : unit = jsNative
+    let private mkdirSyncWithOptions (path: string) (options: MkdirOptions) : unit = jsNative
 
     [<Import("readdirSync", "node:fs")>]
-    let private readdirSyncWithOptions (path: string) (options: obj) : DirectoryEntry array = jsNative
+    let private readdirSyncWithOptions (path: string) (options: ReaddirOptions) : DirectoryEntry array = jsNative
 
     /// What `dir` holds, each entry saying what it is. `Fable.Node`'s `readdirSync` answers
     /// names alone, so a caller that needs the kinds either asks the filesystem again per
     /// name — which for a symlink answers about its target — or reads them here.
-    let entries (dir: string) : DirectoryEntry array = readdirSyncWithOptions dir !!{| withFileTypes = true |}
+    let entries (dir: string) : DirectoryEntry array =
+        readdirSyncWithOptions dir (jsOptions<ReaddirOptions> (fun o -> o.withFileTypes <- true))
 
     /// A descriptor on `path` for appending, creating the file when it is not there (`'a'`).
     /// `Fable.Node`'s `openSync` takes the path alone, which is `'r'` — a reader.
@@ -143,16 +161,21 @@ module Files =
 
     /// Create a directory and any missing parents; a no-op when it is already there.
     /// `Fable.Node`'s `mkdirSync` takes no options, so it cannot say `recursive`.
-    let mkdirp (path: string) : unit = mkdirSyncWithOptions path (createObj [ "recursive", box true ])
+    let mkdirp (path: string) : unit =
+        mkdirSyncWithOptions path (jsOptions<MkdirOptions> (fun o -> o.recursive <- true))
 
     [<Import("rmSync", "node:fs")>]
-    let private rmSyncWithOptions (path: string) (options: obj) : unit = jsNative
+    let private rmSyncWithOptions (path: string) (options: RmOptions) : unit = jsNative
 
     /// Remove a path and everything under it, and say nothing about one that was not there
     /// (`recursive` + `force`). `Fable.Node` types `rmdirSync` and `unlinkSync`, neither of
     /// which is this: one refuses a non-empty directory and the other refuses a directory.
     let removeTree (path: string) : unit =
-        rmSyncWithOptions path (createObj [ "recursive", box true; "force", box true ])
+        rmSyncWithOptions
+            path
+            (jsOptions<RmOptions> (fun o ->
+                o.recursive <- true
+                o.force <- true))
 
     /// Copy a file, overwriting the destination. `Fable.Node` does not type `copyFileSync`.
     [<Import("copyFileSync", "node:fs")>]
@@ -406,9 +429,9 @@ module Processes =
 
 // --- Child processes ------------------------------------------------------------------------
 
-/// What ONE of a child's standard streams is wired to. Node also reads a single one of these
-/// as a shorthand for all three at once, which is the form `spawnWithEnv` at the end of this
-/// file passes; `StreamWiring` below is the form for a caller whose three streams differ.
+/// What ONE of a child's standard streams is wired to. `spawnWithEnv` at the end of this file
+/// takes a single one for all three, as Node's own shorthand does; `StreamWiring` below is the
+/// form for a caller whose three streams differ.
 [<StringEnum>]
 type Stdio =
     /// A pipe, read through `stdout`/`stderr` or written through `stdin`. Node's own default,
@@ -458,24 +481,76 @@ type ChildEnv =
     /// may see, or a child launched by absolute path that needs none.
     | Replacing of Map<string, string>
 
-module ChildEnv =
+/// A child's environment COMPLETE, as the JavaScript object Node reads one from: names to
+/// values, and nothing else in the child's view. Opaque on purpose — what it holds was decided
+/// by whoever built it, and the only thing done with one here is hand it to a child VERBATIM.
+///
+/// Where `ChildEnv` is what a caller MEANS, this is what Node is handed: `ChildEnv` resolves to
+/// one, and a seam that receives an environment already built (the agent SDK's spawn request)
+/// carries one through untouched rather than re-encoding it (see `spawnWithEnv`).
+type VerbatimEnv =
+    interface end
 
-    /// The names as the object Node reads them from.
-    let private named (names: Map<string, string>) : obj =
-        createObj [ for name, value in Map.toList names -> name ==> value ]
+[<RequireQualifiedAccess>]
+module VerbatimEnv =
+
+    /// These names and nothing else. The one cast is here: the object is built name by name,
+    /// so the names are dynamic and no declared shape can spell them.
+    let ofMap (names: Map<string, string>) : VerbatimEnv =
+        unbox (createObj [ for name, value in Map.toList names -> name ==> value ])
+
+    /// This process's environment with `names` written over it, as a FRESH object: a child's
+    /// environment is a copy, and this process's is not something a spawn may edit on the way
+    /// past.
+    let internal overProcess (names: Map<string, string>) : VerbatimEnv =
+        unbox (JS.Constructors.Object.assign (createObj [], Node.Api.``process``.env, ofMap names))
+
+module ChildEnv =
 
     /// The `env` to hand Node, or NOTHING — which is how "unchanged" is said, since Node's own
     /// default for an absent `env` is this process's environment entire. `Adding` nothing is
     /// exactly that, so it is said that way rather than by copying an environment to no end.
-    ///
-    /// The merge builds a FRESH object and assigns into it: a child's environment is a copy,
-    /// and this process's is not something a spawn may edit on the way past.
-    let internal toJs (env: ChildEnv) : obj option =
+    let internal toJs (env: ChildEnv) : VerbatimEnv option =
         match env with
-        | ChildEnv.Replacing names -> Some (named names)
+        | ChildEnv.Replacing names -> Some (VerbatimEnv.ofMap names)
         | ChildEnv.Adding names when Map.isEmpty names -> None
-        | ChildEnv.Adding names ->
-            Some (JS.Constructors.Object.assign (createObj [], Node.Api.``process``.env, named names))
+        | ChildEnv.Adding names -> Some (VerbatimEnv.overProcess names)
+
+/// The object `child_process.spawn` reads its options from. `Fable.Node` types it as `obj`, so
+/// it is declared here and filled through `jsOptions`: a field nobody set is ABSENT, which is
+/// how Node is told to use its own default.
+[<AllowNullLiteral>]
+type internal NodeSpawnOptions =
+    abstract cwd : string with get, set
+    abstract env : VerbatimEnv with get, set
+    /// Positional: stdin, stdout, stderr.
+    abstract stdio : Stdio array with get, set
+    abstract detached : bool with get, set
+
+module internal NodeSpawnOptions =
+
+    [<Import("spawn", "node:child_process")>]
+    let private spawnWith (command: string) (arguments: string array) (options: NodeSpawnOptions) : ChildProcess =
+        jsNative
+
+    /// Spawn with the options built from these four answers. The one place both the F# values
+    /// and the object Node reads are in view.
+    let spawn
+        (command: string)
+        (arguments: string list)
+        (cwd: string option)
+        (env: VerbatimEnv option)
+        (stdio: Stdio array)
+        (detached: bool)
+        : ChildProcess =
+        let options =
+            jsOptions<NodeSpawnOptions> (fun o ->
+                cwd |> Option.iter (fun cwd -> o.cwd <- cwd)
+                env |> Option.iter (fun env -> o.env <- env)
+                o.stdio <- stdio
+                o.detached <- detached)
+
+        spawnWith command (Array.ofList arguments) options
 
 /// The options `child_process.spawn` takes, which `Fable.Node` types as `obj` — so `cwd`,
 /// `env`, `stdio` and `detached` get no checking at all, and a misspelled one is silently a
@@ -523,13 +598,13 @@ module ChildProcesses =
     /// unless `setEncoding` was called — real stdio yields `Buffer`, and a caller that wants
     /// text converts it.
     let spawn (command: string) (arguments: string list) (options: SpawnOptions) : ChildProcess =
-        let js =
-            !!{| cwd = options.Cwd
-                 env = ChildEnv.toJs options.Env
-                 stdio = StreamWiring.toJs options.Streams
-                 detached = options.Detached |}
-
-        Node.Api.childProcess.spawn (command, ResizeArray arguments, js)
+        NodeSpawnOptions.spawn
+            command
+            arguments
+            options.Cwd
+            (ChildEnv.toJs options.Env)
+            (StreamWiring.toJs options.Streams)
+            options.Detached
 
 // --- Synchronous children -------------------------------------------------------------------
 
@@ -579,28 +654,43 @@ module SyncOptions =
     let none : SyncOptions =
         { Input = None; MaxBuffer = None; Cwd = None; Env = ChildEnv.Adding Map.empty; Streams = None }
 
+/// The object the synchronous `child_process` calls read their options from, as this binding
+/// fills it. `encoding` is always `utf8` — see `SyncOptions`.
+[<AllowNullLiteral>]
+type internal NodeSyncOptions =
+    abstract encoding : BufferEncoding with get, set
+    abstract input : string with get, set
+    abstract maxBuffer : int with get, set
+    abstract cwd : string with get, set
+    abstract env : VerbatimEnv with get, set
+    abstract stdio : Stdio array with get, set
+
 [<AutoOpen>]
 module SyncChildProcesses =
 
     [<Import("spawnSync", "node:child_process")>]
-    let private spawnSyncWith (command: string) (arguments: string array) (options: obj) : SyncResult = jsNative
+    let private spawnSyncWith (command: string) (arguments: string array) (options: NodeSyncOptions) : SyncResult =
+        jsNative
 
     [<Import("execFileSync", "node:child_process")>]
-    let private execFileSyncWith (command: string) (arguments: string array) (options: obj) : string = jsNative
+    let private execFileSyncWith (command: string) (arguments: string array) (options: NodeSyncOptions) : string =
+        jsNative
 
     [<Import("execSync", "node:child_process")>]
-    let private execSyncWith (line: string) (options: obj) : string = jsNative
+    let private execSyncWith (line: string) (options: NodeSyncOptions) : string = jsNative
 
     /// The shape Node reads, built once. What the environment MEANS is `ChildEnv`'s to say and
     /// the caller's to choose, so all that is left here is naming the fields Node reads them
-    /// under — which is the one thing `Fable.Node`'s `obj` cannot check.
-    let private toJs (options: SyncOptions) : obj =
-        !!{| encoding = "utf8"
-             input = options.Input
-             maxBuffer = options.MaxBuffer
-             cwd = options.Cwd
-             env = ChildEnv.toJs options.Env
-             stdio = options.Streams |> Option.map StreamWiring.toJs |}
+    /// under — which is the one thing `Fable.Node`'s `obj` cannot check. A field left `None`
+    /// is left ABSENT, which is how Node is told to use its own default.
+    let private toJs (options: SyncOptions) : NodeSyncOptions =
+        jsOptions<NodeSyncOptions> (fun o ->
+            o.encoding <- BufferEncoding.Utf8
+            options.Input |> Option.iter (fun input -> o.input <- input)
+            options.MaxBuffer |> Option.iter (fun bytes -> o.maxBuffer <- bytes)
+            options.Cwd |> Option.iter (fun cwd -> o.cwd <- cwd)
+            ChildEnv.toJs options.Env |> Option.iter (fun env -> o.env <- env)
+            options.Streams |> Option.iter (fun streams -> o.stdio <- StreamWiring.toJs streams))
 
     /// Run `command` to completion and answer everything it said. A child that FAILED is not
     /// an exception here: `status` carries what it exited with, and a caller reads it.
@@ -621,6 +711,100 @@ module SyncChildProcesses =
     /// `execFileSync` above is for one that knows its arguments.
     let execSync (line: string) (options: SyncOptions) : string =
         execSyncWith line (toJs options)
+
+// --- Asynchronous children, answered whole ---------------------------------------------------
+
+/// The options an `execFile` child is given here. Text back, always, for `SyncOptions`'
+/// reason: `ExecResult` says it holds strings.
+type ExecOptions =
+    { /// Where the child starts. `None` inherits this process's directory.
+      Cwd : string option
+      /// The child's environment, in whichever of `ChildEnv`'s two meanings the caller holds.
+      Env : ChildEnv
+      /// How much output to keep, in bytes — past Node's own 1 MiB default a child is KILLED
+      /// with its output truncated, so a caller expecting a large answer says how large.
+      MaxBuffer : int option
+      /// How long, in milliseconds, before the child is sent `KillSignal`. `None` is no limit.
+      Timeout : int option
+      /// What a timeout sends. `None` is Node's own default, `SIGTERM`.
+      KillSignal : string option }
+
+/// What an `execFile` child answered, whole. Qualified, because the three names are the
+/// obvious ones for any record of a run, and a caller's own would otherwise capture this one's
+/// constructions or be captured by them.
+[<RequireQualifiedAccess>]
+type ExecResult =
+    { /// The code the child exited with — `0` for one that succeeded — and NOTHING for one
+      /// that never started (`ENOENT`) or that a signal ended, a timeout's included: neither
+      /// chose a status, and reading theirs as a number would be inventing one.
+      Status : int option
+      /// What the child wrote to stdout, decoded. `None` where Node handed over nothing.
+      Stdout : string option
+      /// What the child wrote to stderr, on the same terms.
+      Stderr : string option }
+
+/// The object `execFile` reads its options from, as this binding fills it.
+[<AllowNullLiteral>]
+type internal NodeExecOptions =
+    abstract encoding : BufferEncoding with get, set
+    abstract cwd : string with get, set
+    abstract env : VerbatimEnv with get, set
+    abstract maxBuffer : int with get, set
+    abstract timeout : int with get, set
+    abstract killSignal : string with get, set
+
+/// What `execFile` hands its callback for a child that did not exit 0. `code` is the exit
+/// STATUS where the child ran and chose it, an errno string (`ENOENT`) where it could never be
+/// started, and absent where a signal ended it.
+[<AllowNullLiteral>]
+type internal ExecFailure =
+    abstract code : U2<int, string> option
+
+[<AutoOpen>]
+module AsyncChildProcesses =
+
+    [<Import("execFile", "node:child_process")>]
+    let private execFileWith
+        (command: string)
+        (arguments: string array)
+        (options: NodeExecOptions)
+        (completed: System.Action<ExecFailure, string, string>)
+        : ChildProcess =
+        jsNative
+
+    let private toJs (options: ExecOptions) : NodeExecOptions =
+        jsOptions<NodeExecOptions> (fun o ->
+            o.encoding <- BufferEncoding.Utf8
+            options.Cwd |> Option.iter (fun cwd -> o.cwd <- cwd)
+            ChildEnv.toJs options.Env |> Option.iter (fun env -> o.env <- env)
+            options.MaxBuffer |> Option.iter (fun bytes -> o.maxBuffer <- bytes)
+            options.Timeout |> Option.iter (fun ms -> o.timeout <- ms)
+            options.KillSignal |> Option.iter (fun signal -> o.killSignal <- signal))
+
+    let private statusOf (failure: ExecFailure) : int option =
+        if isNull failure then Some 0
+        else
+            match failure.code with
+            | Some (U2.Case1 status) -> Some status
+            | _ -> None
+
+    /// Run `command` with `arguments` to completion WITHOUT holding the event loop, and answer
+    /// everything it said. The asynchronous twin of `spawnSync`, for a child whose answer
+    /// depends on something this same process is serving — a synchronous run would hold the
+    /// loop while the child waited for an answer that could then never come. A child that
+    /// FAILED is not an exception: `Status` says how it ended.
+    let execFile (command: string) (arguments: string list) (options: ExecOptions) : Async<ExecResult> =
+        Async.FromContinuations (fun (cont, _, _) ->
+            execFileWith
+                command
+                (Array.ofList arguments)
+                (toJs options)
+                (System.Action<ExecFailure, string, string> (fun failure out err ->
+                    cont
+                        { ExecResult.Status = statusOf failure
+                          ExecResult.Stdout = Option.ofObj out
+                          ExecResult.Stderr = Option.ofObj err }))
+            |> ignore)
 
 // --- Crypto ---------------------------------------------------------------------------------
 
@@ -887,6 +1071,17 @@ module StreamError =
     let describe (error: StreamError) : string =
         if isNull (box error) || System.String.IsNullOrEmpty error.message then Thrown.describe (box error) else error.message
 
+    [<Emit("new Error($0)")>]
+    let private withMessage (message: string) : StreamError = jsNative
+
+    /// Whatever was thrown, as the `Error` a listener registered on `error` is written
+    /// against. JavaScript admits a `throw` of any value at all, and an `error` event
+    /// carrying a string is how a handler reading `.message` gets `undefined` instead of a
+    /// reason. An `Error` goes on as itself — the cast is to the one property it was just
+    /// asked to have; anything else becomes one that describes it.
+    let ofThrown (thrown: exn) : StreamError =
+        if Thrown.isError (box thrown) then unbox thrown else withMessage (Thrown.describe (box thrown))
+
 /// A byte stream something can be written INTO — an outgoing request, a server response, a
 /// child's stdin. Only what a proxy needs of one: somewhere for `pipe` to end up, a way to
 /// tear it down, and the failure it reports.
@@ -1018,11 +1213,24 @@ type HeaderValue =
 module HeaderValue =
 
     /// Node's own shape for one: a string, or an array of them. What a request's options and
-    /// `writeHead` take, which is why the two are the only callers.
+    /// `writeHead` take, which is why `OutgoingHeaders.ofPairs` is the only caller.
     let internal wire (value: HeaderValue) : obj =
         match value with
         | HeaderValue.Single text -> box text
         | HeaderValue.Repeated values -> box values
+
+/// The headers object Node takes on a message this process SENDS: `writeHead`'s, and a
+/// request's options. Opaque, and made only by `OutgoingHeaders.ofPairs`: from typed headers,
+/// or from an upstream's exactly as they arrived.
+type OutgoingHeaders =
+    interface end
+
+module internal OutgoingHeaders =
+
+    /// The object, name by name. The names are data — a proxy relays ones it has no case for —
+    /// so no declared shape can spell them, and the one cast is here.
+    let ofPairs (pairs: (string * HeaderValue) seq) : OutgoingHeaders =
+        unbox (createObj [ for name, value in pairs -> name, HeaderValue.wire value ])
 
 /// A message that ARRIVED over HTTP — its headers, and its body as the stream it is. Both
 /// halves of an exchange are one of these on the receiving side, which is why the shape is
@@ -1088,6 +1296,11 @@ module ChildProcessStreams =
     [<Emit("$0.stderr")>]
     let stderr (child: ChildProcess) : Readable = jsNative
 
+    /// The child's input as the stream bytes are piped INTO. `Fable.Node` types it as a
+    /// `Writable<string>`, which is not the `Writable` a `pipe` here ends at.
+    [<Emit("$0.stdin")>]
+    let stdin (child: ChildProcess) : Writable = jsNative
+
     /// A spawn that failed before exec, or a child that could not be signalled: the
     /// platform's own `Error`, for `StreamError.describe` to read.
     [<Emit("$0.on('error', $1)")>]
@@ -1113,6 +1326,13 @@ module ChildProcessStreams =
 type HttpRequest =
     inherit Writable
 
+/// What `http(s).request` is handed here beside the URL: the method, as the caller spelled it,
+/// and the headers.
+[<AllowNullLiteral>]
+type internal ClientRequestOptions =
+    abstract ``method`` : string with get, set
+    abstract headers : OutgoingHeaders with get, set
+
 [<AutoOpen>]
 module HttpClient =
 
@@ -1120,10 +1340,12 @@ module HttpClient =
     // arguments — so the pair is imported once here and `httpRequest` below is the only
     // place that has to know there are two.
     [<Import("request", "node:http")>]
-    let private overHttp (url: string) (options: obj) (onResponse: HttpResponse -> unit) : HttpRequest = jsNative
+    let private overHttp (url: string) (options: ClientRequestOptions) (onResponse: HttpResponse -> unit) : HttpRequest =
+        jsNative
 
     [<Import("request", "node:https")>]
-    let private overHttps (url: string) (options: obj) (onResponse: HttpResponse -> unit) : HttpRequest = jsNative
+    let private overHttps (url: string) (options: ClientRequestOptions) (onResponse: HttpResponse -> unit) : HttpRequest =
+        jsNative
 
     /// Open an HTTP request to `url` and call back with the response's head as soon as it
     /// lands — before the body, which is what makes a streaming proxy possible at all.
@@ -1142,8 +1364,11 @@ module HttpClient =
         (headers: (string * HeaderValue)[])
         (onResponse: HttpResponse -> unit)
         : HttpRequest =
-        let headers = createObj [ for name, value in headers -> name, HeaderValue.wire value ]
-        let options = createObj [ "method" ==> ``method``; "headers" ==> headers ]
+        let options =
+            jsOptions<ClientRequestOptions> (fun o ->
+                o.``method`` <- ``method``
+                o.headers <- OutgoingHeaders.ofPairs headers)
+
         if url.StartsWith "https:" then overHttps url options onResponse else overHttp url options onResponse
 
 // --- node:http, answering ---------------------------------------------------------------------
@@ -1195,11 +1420,6 @@ module ResponseHeader =
         | ResponseHeader.SetCookie v -> v
         | ResponseHeader.ContentLength bytes -> string bytes
 
-/// The headers object Node's `writeHead` takes. Opaque, and made only below: from typed
-/// headers, or from an upstream's exactly as they arrived.
-type OutgoingHeaders =
-    interface end
-
 /// The response this process's server is writing. `Writable` because it is where an upstream
 /// body is piped, and what gets destroyed when that body cannot finish.
 ///
@@ -1226,29 +1446,28 @@ type ServerResponse =
 [<AutoOpen>]
 module ResponseHeads =
 
-    let private outgoing (pairs: (string * obj) seq) : OutgoingHeaders = unbox (createObj pairs)
-
     type ServerResponse with
 
         /// Send the status line and these headers.
         member this.writeHead (statusCode: int, headers: ResponseHeader list) : unit =
             this.writeHeadWith (
                 statusCode,
-                outgoing [ for header in headers -> ResponseHeader.name header, box (ResponseHeader.value header) ]
+                OutgoingHeaders.ofPairs
+                    [ for header in headers -> ResponseHeader.name header, HeaderValue.Single (ResponseHeader.value header) ]
             )
 
         /// Send the status line with an upstream's headers as they came (`headerEntries`,
         /// filtered): a proxy relays names it has no case for, and a value that repeated —
         /// a second `set-cookie` — goes out repeated.
         member this.relayHead (statusCode: int, headers: (string * HeaderValue)[]) : unit =
-            this.writeHeadWith (statusCode, outgoing [ for name, value in headers -> name, HeaderValue.wire value ])
+            this.writeHeadWith (statusCode, OutgoingHeaders.ofPairs headers)
 
         /// Send the status line with headers this process speaks but `ResponseHeader` has no
         /// case for — which is only ever a stand-in for somebody else's server (a test playing
         /// github.com's rate limit, or an MCP provider's session id). Product responses are
         /// ours to name, and go through `writeHead`.
         member this.writeNamedHead (statusCode: int, headers: (string * string) list) : unit =
-            this.writeHeadWith (statusCode, outgoing [ for name, value in headers -> name, box value ])
+            this.writeHeadWith (statusCode, OutgoingHeaders.ofPairs [ for name, value in headers -> name, HeaderValue.Single value ])
 
 // --- The environment's outbound proxy ----------------------------------------------------------
 
@@ -1654,41 +1873,73 @@ module Aborting =
 
 // --- Relaying somebody else's listeners --------------------------------------------------------
 
-/// A Node `EventEmitter` used as a RELAY: what one thing said, re-emitted to listeners
-/// somebody ELSE wrote — registered through here and never called from here.
+/// A listener somebody ELSE wrote, held only to be handed on.
 ///
-/// `Fable.Node`'s `EventEmitter` cannot say that. It types a listener as an F# function of a
-/// definite arity, which is right for a listener written here and wrong for one passed
-/// through: Fable adapts a function whose arity it can see, and an adapted listener is a
-/// DIFFERENT function object — so `off` would no longer match what `on` registered, and a
-/// two-argument listener hung on `exit` would be handed one. Nor is there an arity to see,
-/// since it varies by event.
+/// `Fable.Node`'s `EventEmitter` types a listener as an F# function of a definite arity, which
+/// is right for a listener written here and wrong for one passed through: Fable adapts a
+/// function whose arity it can see, and an adapted listener is a DIFFERENT function object —
+/// so `off` would no longer match what `on` registered, and a two-argument listener hung on
+/// `exit` would be handed one. Nor is there an arity to see, since it varies by event.
 ///
-/// So a listener is `obj` here: it arrives as a JavaScript function and is handed on as that
-/// same function, which is the only thing a relay may do with one.
+/// So a listener is opaque: it arrives as a JavaScript function and is handed on as that same
+/// function, which is the only thing a relay may do with one. One written in F# is made by
+/// `RelayListener.onExit` or `onError`, which say what each event carries.
+type RelayListener =
+    interface end
+
+[<RequireQualifiedAccess>]
+module RelayListener =
+
+    /// A listener for `exit`: the code a process ended with, or the signal that ended it.
+    /// A `Func` because the event hands both over at once, and a curried F# function would
+    /// answer the first with a function rather than take both. The cast is to what it was
+    /// just built as: a JavaScript function.
+    let onExit (handler: int option -> string option -> unit) : RelayListener =
+        unbox (System.Func<int option, string option, unit> handler)
+
+    /// A listener for `error`.
+    let onError (handler: StreamError -> unit) : RelayListener =
+        unbox (System.Func<StreamError, unit> handler)
+
+/// A Node `EventEmitter` used as a RELAY for a PROCESS's two ending events: what one thing
+/// said, re-emitted to listeners somebody ELSE wrote — registered through here and never
+/// called from here.
+///
+/// The listening half takes any event name, because the name arrives from whoever listens and
+/// a relay has no business refusing one. The emitting half is one member per event, because
+/// the event's name and what it carries are one fact, and a member per event is how the type
+/// gets to say so.
 [<AllowNullLiteral>]
 type EventRelay =
 
     [<Emit("$0.on($1, $2)")>]
-    abstract on : ``event``: string * listener: obj -> unit
+    abstract on : ``event``: string * listener: RelayListener -> unit
 
     [<Emit("$0.once($1, $2)")>]
-    abstract once : ``event``: string * listener: obj -> unit
+    abstract once : ``event``: string * listener: RelayListener -> unit
 
     [<Emit("$0.off($1, $2)")>]
-    abstract off : ``event``: string * listener: obj -> unit
+    abstract off : ``event``: string * listener: RelayListener -> unit
 
-    /// Emit one event, with the arguments its listeners take. THROWS when the event is
-    /// `error` and nothing is listening — Node's own rule, and the reason a relay is a real
-    /// `EventEmitter` rather than a list of functions kept here.
-    [<Emit("$0.emit($1, ...$2)")>]
-    abstract emit : ``event``: string * arguments: obj array -> unit
+    /// The process ended: the code it ended with, or the signal that ended it — each exactly
+    /// as it was handed over, since a listener written in JavaScript compares the code
+    /// against `null`.
+    [<Emit("$0.emit('exit', $1, $2)")>]
+    abstract exited : code: int option * signal: string option -> unit
+
+    /// The process failed. THROWS when nothing is listening — Node's own rule for `error`,
+    /// and the reason a relay is a real `EventEmitter` rather than a list of functions kept
+    /// here.
+    [<Emit("$0.emit('error', $1)")>]
+    abstract failed : error: StreamError -> unit
 
 [<AutoOpen>]
 module EventRelays =
 
-    /// `new EventEmitter()`, with its listeners left opaque.
-    let createRelay () : EventRelay = !!Node.Api.events.EventEmitter.Create ()
+    /// `new EventEmitter()`, seen as a relay: `Fable.Node`'s own view of it cannot hold a
+    /// listener verbatim (see `RelayListener`), and this is the one place that says the two
+    /// are the same object.
+    let createRelay () : EventRelay = unbox (Node.Api.events.EventEmitter.Create ())
 
 // --- Child processes: an environment this process did not build ----------------------------------
 
@@ -1705,24 +1956,19 @@ module ChildProcessSeams =
     /// that is not a string, a key this process's own reader does not admit — is precisely
     /// what "verbatim" is there to protect.
     ///
-    /// Everything else is `SpawnOptions`' story — except the streams, which are Node's uniform
-    /// shorthand here rather than a `StreamWiring`, because no caller of this seam wants its
-    /// three to differ.
+    /// Everything else is `SpawnOptions`' story — except the streams, which are one `Stdio`
+    /// for all three here rather than a `StreamWiring`, because no caller of this seam wants
+    /// its three to differ.
     let spawnWithEnv
         (command: string)
         (arguments: string list)
-        (env: obj)
+        (env: VerbatimEnv)
         (cwd: string option)
         (stdio: Stdio)
         (detached: bool)
         : ChildProcess =
-        let js =
-            !!{| cwd = cwd
-                 env = env
-                 stdio = stdio
-                 detached = detached |}
-
-        Node.Api.childProcess.spawn (command, ResizeArray arguments, js)
+        // Node reads one `Stdio` as shorthand for all three; spelled out, it is the same child.
+        NodeSpawnOptions.spawn command arguments cwd (Some env) [| stdio; stdio; stdio |] detached
 
 // --- The console, overheard ------------------------------------------------------------------
 
