@@ -256,6 +256,11 @@
 
   --animate-pulse2: pulse2 1.1s ease-in-out infinite;
   --animate-blink: blink 1s steps(1) infinite;
+  /* The agent thinking (`Style.agentCaretThinking`): its diamond turned a quarter and set
+     down, the way the cube in the mark would be turned over in the hand. Ease-in-out so it
+     starts and stops like a thing with weight, a dip in scale mid-turn so the turn reads at
+     8px, and a rest so it is still more often than it is moving. */
+  --animate-think: think 1.4s cubic-bezier(0.65, 0, 0.35, 1) infinite;
   /* "Show in terminal" (Plan 25, stage 3): the block the reader was sent to, said once and
      then gone. A scroll alone lands them in a wall of identical mono and leaves them hunting
      for which line they were brought here for; a permanent mark would still be claiming it
@@ -278,6 +283,11 @@
   @keyframes pulse2 {
     0%, 100% { opacity: 0.25; }
     50% { opacity: 1; }
+  }
+  @keyframes think {
+    0% { rotate: 0deg; scale: 1; }
+    45% { rotate: 90deg; scale: 0.72; }
+    55%, 100% { rotate: 90deg; scale: 1; }
   }
   @keyframes blink {
     50% { opacity: 0; }

@@ -1525,6 +1525,39 @@ module Style =
     /// anybody noticed the picture was of a screen saying nothing.
     let caretWorking = caretBar + " animate-pulse2 motion-reduce:animate-none"
 
+    /// The agent's caret: its own mark, the solid blue diamond its avatar carries (the cube
+    /// seen from above that the intro opens on), standing where its next word lands. The
+    /// bar above is a person's shape — a turn that is yours to type into — and a message the
+    /// agent is writing is not that.
+    ///
+    /// Placed by the font, not by eye. The box is `1ex` square, so the diamond's height is
+    /// the face's x-height, and an empty inline-block rests its bottom edge on the baseline:
+    /// the lower point stands on the line the letters stand on and the upper one at the top
+    /// of an `x`, in whatever face and size the body is set in. It is a clip of that box
+    /// rather than a square turned 45°, because a turn is painted and not laid out — the
+    /// turned corners land wherever the square's centre puts them, which is how a mark ends
+    /// up a pixel off the baseline it was aligned to.
+    ///
+    /// Then overshot, as type is: a point antialiases to a thinner tip than a flat meets, so
+    /// a diamond ending exactly on the baseline and at the x-height reads short of both —
+    /// it did, side by side with `xoxvx` at 1x and 3x. Every point is carried 0.03em past
+    /// its line (the box is 0.06em larger and lowered by half of that), which is about
+    /// twice what Noto's `o` overshoots by and the usual ratio for a point against a curve.
+    let private agentMark =
+        "inline-block w-[calc(1ex_+_0.06em)] h-[calc(1ex_+_0.06em)] align-[-0.03em] bg-blue "
+        + "[clip-path:polygon(50%_0,100%_50%,50%_100%,0_50%)]"
+
+    /// Writing: held still, a small space after the last word. The words arriving are the
+    /// movement; a pulse on top of them said nothing they were not already saying.
+    let agentCaret = agentMark + " ml-[0.35em]"
+
+    /// Thinking — a turn accepted and nothing said yet: a quarter-turn, then a rest. A diamond
+    /// turned a quarter is the same diamond, so at rest it is exactly the writing mark, never
+    /// faint and never gone (the fault `caretWorking` above was brought in for). No margin:
+    /// alone in its body it stands on the content column, where the first word will.
+    /// Without motion it is dimmed instead, so thinking and writing still differ.
+    let agentCaretThinking = agentMark + " animate-think motion-reduce:animate-none motion-reduce:opacity-60"
+
     /// The empty timeline's own mark: the blinking caret, standing where the first message will
     /// land. Dimmed on top of that, because it is an invitation rather than an event — a
     /// full-strength caret in an empty room reads as something already happening.
