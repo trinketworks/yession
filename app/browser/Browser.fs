@@ -1553,6 +1553,7 @@ let private start () =
                 actions.LaunchSearch model.Launch.Query
 
         Client.makeProgram doc initial
+        |> Client.withTimers Timer.system
         |> Program.withSetState setState
         |> Program.run
 

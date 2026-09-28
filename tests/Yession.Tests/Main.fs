@@ -93,6 +93,7 @@ let all =
         Tag.needs "Keystrokes" [] (fun () -> Keystrokes.tests)
         Tag.needs "TabStrips" [] (fun () -> TabStrips.tests)
         Tag.needs "Timeline" [] (fun () -> Timeline.tests)
+        Tag.needs "Timers" [] (fun () -> Timers.tests)
         // What the client makes of a frame needs no socket; carrying one does.
         Tag.needs "Foreign terminal attach, reading the wire" [] (fun () -> Attach.tests)
         // The upgrade IS the thing being tested, and there is no in-memory stand-in for it.

@@ -78,7 +78,19 @@ type EventConsumerState =
       /// cold open with an out-of-order store, moments before the first page fixed it.
       MissingBefore       : EventOffset option }
 
-type AgentViewState = { ActiveTurn : AgentTurnId option }
+/// How far one message the agent is writing has got: the message, and how much of its body
+/// has arrived. Every delta is text, so a body only ever grows while it streams, and two
+/// stamps of one message are equal exactly when nothing arrived between them.
+[<RequireQualifiedAccess>]
+type WritingStamp = { Message : MessageId; Length : int }
+
+type AgentViewState =
+    { ActiveTurn : AgentTurnId option
+      /// The stamp at which the agent's writing was last seen to have sat still for
+      /// `ClientModel.writingQuietMs` (`AgentQuietMsg`). A fact about one exact body: it
+      /// holds while the message's stamp is still this one and means nothing once a word
+      /// lands, so nothing ever has to clear it.
+      Quiet : WritingStamp option }
 
 /// Where the Claude sign-in flow is (Plan 08). `ClaudeAwaitingCode` = the authorize
 /// tab is open; completion may land at the Manager's callback (the panel polls status)
@@ -761,6 +773,9 @@ type ClientMsg =
     /// it is the ONLY thing that lights the "catching up" status — see
     /// `EventConsumerState.CatchUpIsSlow` for why the truth alone is too noisy to show.
     | CatchUpSlowMsg of bool
+    /// The agent's writing sat still at this stamp for `ClientModel.writingQuietMs` — fired
+    /// by the timer `ClientModel.timers` declares for it, never by anything else.
+    | AgentQuietMsg of WritingStamp
     | DisconnectedMsg
     /// Edit the session title (collaborative text, merges like a draft body). A pure CRDT
     /// write; the Session Process reports the settled title to the Manager for the list.
@@ -963,7 +978,7 @@ module ClientModel =
               Feed = FeedLive
               // Nothing has been looked at yet; the replay decides.
               MissingBefore = None }
-          Agent = { ActiveTurn = None }
+          Agent = { ActiveTurn = None; Quiet = None }
           Presence = Map.empty
           Peers = Map.empty
           Attribution = Attribution.empty
@@ -1802,6 +1817,46 @@ module ClientModel =
         | Some subject -> sprintf "%s%s — yession" signal subject
         | None -> signal + "yession"
 
+    /// How long the agent's writing has to sit still before it reads as thinking again. Long
+    /// enough to ride over the gap between two deltas of one sentence, short enough that a
+    /// pause to reason — or to reach for a tool — shows as one within a breath.
+    let writingQuietMs = 700
+
+    /// A message's stamp, while it is one the agent is still writing and has said something in.
+    /// Nothing is a stamp before the first word: an empty body already reads as thinking, and
+    /// has no quiet to wait for.
+    let writingStamp (item: ConversationItem) : WritingStamp option =
+        match item.Status with
+        | Streaming when not (System.String.IsNullOrWhiteSpace (ConversationItem.said item)) ->
+            Some { WritingStamp.Message = item.MessageId; WritingStamp.Length = (ConversationItem.said item).Length }
+        | Streaming | Complete | ConversationItemStatus.Running | ConversationItemStatus.Failed -> None
+
+    /// Whether a message the agent is writing reads as THINKING rather than writing: nothing
+    /// said yet, or what has been said has sat still since the quiet timer last fired at
+    /// exactly this stamp. A word arriving moves the stamp, so it reads as writing again with
+    /// nothing dispatched, and a timer armed before that word fires a stamp that no longer
+    /// matches, so it cannot make the new words read as a pause.
+    let agentThinking (model: ClientModel) (item: ConversationItem) : bool =
+        match writingStamp item with
+        | None -> true
+        | Some stamp -> model.Agent.Quiet = Some stamp
+
+    /// Every wait this model wants running (`Timer`). The program keeps exactly these alive,
+    /// keyed, so a wait is started by appearing here and stopped by leaving.
+    ///
+    /// The agent's quiet is a debounce: one timer per message it is writing, keyed by the
+    /// stamp, so each delta replaces the wait with a fresh one and only a body that stops
+    /// growing for `writingQuietMs` ever fires. None once it has fired for this stamp — the
+    /// fact is recorded, and a wait for it again would be asking a settled question.
+    let timers (model: ClientModel) : Timer<ClientMsg> list =
+        model.Conversation.Items
+        |> List.choose writingStamp
+        |> List.filter (fun stamp -> model.Agent.Quiet <> Some stamp)
+        |> List.map (fun stamp ->
+            { Key = [ "agent-quiet"; MessageId.value stamp.Message; string stamp.Length ]
+              After = writingQuietMs
+              Fire = AgentQuietMsg stamp })
+
     /// Fold a message into the model.
     /// Piped through `reconcileLaunch` (see its doc) so the launch surface anchors here,
     /// after every message, rather than being read live from whatever the connection
@@ -1971,6 +2026,7 @@ module ClientModel =
                 EventConsumer =
                     { model.EventConsumer with
                         CatchUpIsSlow = slow && model.EventConsumer.IsCatchingUp } }
+        | AgentQuietMsg stamp -> { model with Agent = { model.Agent with Quiet = Some stamp } }
         | DisconnectedMsg ->
             { model with Connection = Reconnecting }
         | EditTitleMsg title ->
@@ -2299,3 +2355,4 @@ module ClientModel =
                     { model.Synced with Chapters = Chapters.rename item said model.Synced.Chapters }
             | None -> model
 )
+
