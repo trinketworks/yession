@@ -534,6 +534,33 @@ let
     meta.mainProgram = "serial-provider";
   };
 
+  # crashRepro — `tasks.fsx crash-repro` inside the build sandbox, which is the only place the
+  # fable SIGSEGV it chases has ever happened. Not an output anything ships or depends on: an
+  # instrument, built on demand (`nix build --file nix/worktree.nix crashRepro`, then
+  # `--rebuild` for another go, since a clean run is cached like any other build). The layer and
+  # its budget are the verb's own arguments, so the verb's header is the manual; `.override`
+  # sets them: `nix build --impure --expr '(import ./nix/worktree.nix).crashRepro.override
+  # { layer = "fable"; rounds = "5"; }'`.
+  crashRepro = lib.makeOverridable ({ layer ? "regex", rounds ? "20", workers ? "4", seconds ? "60" }: pkgs.stdenv.mkDerivation {
+    pname = "yession-crash-repro";
+    inherit version src;
+    nativeBuildInputs = [ pkgs.dotnet-sdk_10 pkgs.nodejs_24 ];
+    buildPhase = ''
+      runHook preBuild
+      ${dotnetEnv}
+      cp -a ${nodeModules}/node_modules ./node_modules
+      chmod -R u+w node_modules
+      export PATH="$PWD/node_modules/.bin:$PATH"
+      ${nugetEnv}
+      dotnet fsi tasks.fsx crash-repro ${layer} ${rounds} ${workers} ${seconds} | tee crash-repro.log
+      runHook postBuild
+    '';
+    installPhase = ''
+      mkdir -p "$out"
+      cp crash-repro.log "$out/"
+    '';
+  }) { };
+
   # npm — the npm tarball, `npm pack`ed off the same staged package dir.
   npm = pkgs.stdenv.mkDerivation {
     pname = "yession-tarball";
@@ -554,5 +581,5 @@ in
   # nugetTools is exposed for one reason: its `outputHash` can only be re-derived by building it
   # (`nix build --file nix/worktree.nix nugetTools`), and a hash you cannot rebuild on demand is
   # a hash nobody updates until a release job fails.
-  inherit libdatachannel node-datachannel node-pty claude-code nugetTools nugetFeed nodeModules staged nix npm serial-provider;
+  inherit libdatachannel node-datachannel node-pty claude-code nugetTools nugetFeed nodeModules staged nix npm serial-provider crashRepro;
 }

@@ -1,0 +1,76 @@
+# The fable SIGSEGV, chased on real runners (see the crash-repro section of tasks.fsx).
+#
+# On demand only, and never a gate: it exists to turn a once-in-a-hundred release failure into
+# a rate, so that a fix can be shown to move it. Every job runs `tasks.fsx crash-repro` inside
+# the nix build sandbox — where all three crashes happened — on both architectures the release
+# builds, `shards` times each, side by side. A red job carries the crash report in its log.
+#
+#   gh workflow run crash-repro.yml -f layer=regex
+#   gh workflow run crash-repro.yml -f layer=fable -f rounds=5 -f shards='[1,2,3,4]'
+name: crash-repro
+
+on:
+  workflow_dispatch:
+    inputs:
+      layer:
+        description: "regex (the emit churn alone, seconds to start) or fable (the real compile)"
+        type: choice
+        options: [regex, fable]
+        default: regex
+      rounds:
+        description: "Rounds of children per job"
+        default: "20"
+      workers:
+        description: "Children side by side per round"
+        default: "4"
+      seconds:
+        description: "Seconds each regex child churns for (ignored by fable)"
+        default: "60"
+      shards:
+        description: "JSON list, one job per entry per architecture"
+        default: "[1,2,3,4,5,6,7,8]"
+
+permissions:
+  contents: read
+
+jobs:
+  repro:
+    name: "crash-repro ${{ inputs.layer }} (${{ matrix.arch }} #${{ matrix.shard }})"
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(inputs.shards) }}
+        arch: [x86_64-linux, aarch64-linux]
+        include:
+          - arch: x86_64-linux
+            runner: ubuntu-latest
+          - arch: aarch64-linux
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v30
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      # Pull only: the dependencies come from the cache, and a repro result is nothing to keep.
+      - uses: cachix/cachix-action@v17
+        continue-on-error: true
+        with:
+          name: yession
+          skipPush: true
+      # The shard is passed through so that no two jobs could ever share a store path, which
+      # also makes a re-run of one job a fresh build rather than a cache hit.
+      - name: Run the repro in the build sandbox
+        env:
+          LAYER: ${{ inputs.layer }}
+          ROUNDS: ${{ inputs.rounds }}
+          WORKERS: ${{ inputs.workers }}
+          SECONDS_: ${{ inputs.seconds }}
+          SHARD: ${{ matrix.shard }}-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          nix build --impure --print-build-logs --no-link --expr "
+            ((import ./nix/worktree.nix).crashRepro.override {
+              layer = \"$LAYER\"; rounds = \"$ROUNDS\"; workers = \"$WORKERS\"; seconds = \"$SECONDS_\";
+            }).overrideAttrs { YESSION_CRASH_REPRO_SHARD = \"$SHARD\"; }"
