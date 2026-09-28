@@ -879,7 +879,7 @@ module View =
     let private githubSection
         (actions: ViewActions)
         (dispatch: ClientMsg -> unit)
-        (copied: string option)
+        (copied: Copy option)
         (github: GitHubViewState)
         : TemplateResult =
         let connectedRow (label: string) (scopeChoice: string) (credential: CredentialRow option) =
@@ -904,7 +904,7 @@ module View =
                 // one: an `aria-label` becomes the accessible name, so it would be announced
                 // in place of the very change it is here to report. The code is the box's
                 // contents and the caps label above says what it is.
-                let justCopied = copied = Some Dom.Hooks.githubUserCode
+                let justCopied = copied |> Option.exists (fun copy -> copy.Box = Dom.Hooks.githubUserCode)
                 html $"""
                     <span class="{Style.label}">code for github.com</span>
                     <div class="{Style.fieldActionWrap}">

@@ -491,7 +491,7 @@ module Dom =
 
         /// What a copy control says once it has copied, IN THE BOX that held the value —
         /// the confirmation lands where the eye already is, rather than beside it. A moment
-        /// and not a state: whoever set it takes it back (`ClientMsg.CopiedMsg`).
+        /// and not a state: the wait the model declares for it takes it back (`ClientModel.timers`).
         let copied = "copied"
 
         /// The word on every notice's disclosure. ONE word across all of them: the move is

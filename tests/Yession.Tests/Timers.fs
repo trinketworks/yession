@@ -177,6 +177,23 @@ let tests =
             clock.Advance (ClientModel.catchUpQuietMs / 2)
             Expect.isTrue (model ()).EventConsumer.CatchUpIsSlow "still behind at the interval, however many pages came"
 
+        testCase "a copy's confirmation is taken back after its moment" <| fun () ->
+            let clock, send, model = program ()
+            send (CopiedMsg (Some "data-box"))
+            clock.Advance ClientModel.copiedShownMs
+            Expect.isNone (model ()).Copied "\"just now\" stops being true"
+
+        // Each copy is a moment of its own: without that, the first copy's deadline would take
+        // the second copy's confirmation off the screen part-way through it.
+        testCase "copying the same box again restarts its moment" <| fun () ->
+            let clock, send, model = program ()
+            let most = ClientModel.copiedShownMs * 2 / 3
+            send (CopiedMsg (Some "data-box"))
+            clock.Advance most
+            send (CopiedMsg (Some "data-box"))
+            clock.Advance most
+            Expect.isSome (model ()).Copied "the second copy is shown for as long as the first was"
+
         testCase "a finished message asks for no wait" <| fun () ->
             Expect.isEmpty
                 (ClientModel.timers (fold [ opened; delta 3L "Looking"; completed 4L "Looking" ]))
