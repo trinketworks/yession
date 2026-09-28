@@ -131,12 +131,14 @@ class Intro:
     """Every keyframe is the same scene at one instant; the file carries them as baked SMIL values
     on uniform keyTimes, so the easing lives in the samples and nothing on the page knows the curve."""
     def __init__(self, N=48, dur=2.4, delta=0.1, panels=(0.3, 1.0), fx=(0.0, 0.4), camera=(0.08, 1.0),
-                 clarity=0.6, backs=0.45, rim=1.3, spill=0.5, bloom=0.3, agent=0.8, dolly=2.0,
+                 clarity=0.6, backs=0.45, rim=1.3, spill=0.5, bloom=0.3, agent=0.8, dolly=2.0, settle=0.6,
                  margin=3.0, start_pad=15.5, end_pad=7.0):
         self.__dict__.update({k: v for k, v in locals().items() if k != "self"})
         self.cam1 = fit(Lens(PHI1, DIST, UP1, target=TARGET), prisms_at(0.0), pad=end_pad)
         self.cam0 = fit(Lens(PHI0, DIST, 0.0, target=TARGET), prisms_at(0.0)[:1], pad=start_pad)
         self.w0, self.w1 = self.top_width(self.cam0), self.top_width(self.cam1)
+        self.c0, self.c1 = None, None
+        self.c0, self.c1 = self.centre(self.rig(0.0)), self.centre(self.rig(1.0))
         # the collaborators may only fade in while, at their far position, they are wholly inside
         # the frame with room for their glow: nothing arrives cropped
         def inside(t):
@@ -165,7 +167,14 @@ class Intro:
             setattr(c, k, getattr(self.cam0, k) + (getattr(self.cam1, k) - getattr(self.cam0, k))*e)
         c.s = 1.0
         c.s = (self.w0 + (self.w1 - self.w0)*e)/self.top_width(c)
+        if self.c0 is not None:
+            now, want = self.centre(c), tuple(self.c0[i] + (self.c1[i] - self.c0[i])*bez(e/self.settle) for i in range(2))
+            c.cx += want[0] - now[0]; c.cy += want[1] - now[1]
         return c
+    @staticmethod
+    def centre(c):
+        pts = [c.project((x, y, z)) for poly, z0, z1, _ in prisms_at(0.0) for x, y in poly for z in (z0, z1)]
+        return ((min(p[0] for p in pts) + max(p[0] for p in pts))/2, (min(p[1] for p in pts) + max(p[1] for p in pts))/2)
     def frame(self, t):
         """One instant: everything the drawing needs, as numbers."""
         e, ep, ef = ramp(t, *self.camera), ramp(t, *self.panels), ramp(t, *self.fx)
