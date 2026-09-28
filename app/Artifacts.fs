@@ -108,7 +108,7 @@ let nextVersion (artifactsDir: string) (name: string) (actor: ActorRef) : Result
     | Some latest -> ArtifactRef.next stamp latest
 
 /// The name a share takes when the caller did not say one: the file's own, as the last segment
-/// of the path it came from. So `share_artifact` of `$TMPDIR/chart.png` is `chart.png`, and the
+/// of the path it came from. So `share_artifact` of `out/chart.png` is `chart.png`, and the
 /// extension — which is what the media type is read from — survives by default rather than by
 /// the agent remembering to repeat it.
 let nameOfPath (path: string) : string =
