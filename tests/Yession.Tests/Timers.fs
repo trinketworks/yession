@@ -82,12 +82,18 @@ let private thinking (model: ClientModel) : bool =
     | None -> failwith "the message being written is not in the conversation"
 
 /// The real client program, with the model's timers running on a hand-turned clock.
-let private running () =
+let private program () =
     let clock = ManualClock ()
     let runner = Harness.run (Client.makeProgram (Y.Doc.Create ()) (ClientModel.init (peer "ada" "Ada")) |> Client.withTimers clock.Clock)
-    let send msg = runner.Dispatch (user msg)
+    clock, (fun msg -> runner.Dispatch (user msg)), runner.Model
+
+/// The program with a message open and nothing said in it yet.
+let private running () =
+    let clock, send, model = program ()
     send opened
-    clock, send, fun () -> thinking (runner.Model ())
+    clock, send, fun () -> thinking (model ())
+
+let private available (offset: int64) : ClientMsg = EventsAvailableMsg (EventOffset.create offset |> expect)
 
 let tests =
     testList "Timers" [
@@ -145,6 +151,31 @@ let tests =
                 let model = fold [ opened; delta 3L "Looking" ]
                 ClientModel.timers model |> List.fold (fun model timer -> ClientModel.update timer.Fire model) model
             Expect.isEmpty (ClientModel.timers quiet) "a settled question is not asked again"
+
+        testCase "catch-up that runs past its quiet interval is reported as slow" <| fun () ->
+            let clock, send, model = program ()
+            send (available 2L)
+            clock.Advance ClientModel.catchUpQuietMs
+            Expect.isTrue (model ()).EventConsumer.CatchUpIsSlow "a wait that lasted is a wait worth saying"
+
+        testCase "catch-up that ends inside its quiet interval is never reported" <| fun () ->
+            let clock, send, model = program ()
+            send (available 2L)
+            clock.Advance (ClientModel.catchUpQuietMs / 2)
+            send opened
+            clock.Advance ClientModel.catchUpQuietMs
+            Expect.isFalse (model ()).EventConsumer.CatchUpIsSlow "a send's round trip is not news"
+
+        // One wait for the whole episode: a page that lands while more is still to come is
+        // progress, and restarting the wait on each would keep a long catch-up from ever
+        // being reported.
+        testCase "pages landing during catch-up do not push its report out" <| fun () ->
+            let clock, send, model = program ()
+            send (available 4L)
+            clock.Advance (ClientModel.catchUpQuietMs / 2)
+            send opened
+            clock.Advance (ClientModel.catchUpQuietMs / 2)
+            Expect.isTrue (model ()).EventConsumer.CatchUpIsSlow "still behind at the interval, however many pages came"
 
         testCase "a finished message asks for no wait" <| fun () ->
             Expect.isEmpty

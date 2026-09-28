@@ -56,10 +56,10 @@ type EventConsumerState =
       /// to "catching up" and back on every send is a flicker, not information. The truth
       /// stays in `IsCatchingUp` (the read loop reads it); this is what the UI reports.
       ///
-      /// Set by a timer the client arms when catch-up begins and disarms when it ends, so
-      /// the threshold is one number in one place (`Browser.catchUpQuietMs`). It can only
-      /// ever be true WHILE catching up — the reducer enforces that, so a timer that fires
-      /// just after the page landed is harmless rather than a stuck indicator.
+      /// Set by the timer the model declares while catch-up runs (`ClientModel.timers`),
+      /// which stops when it ends, so the threshold is one number in one place
+      /// (`ClientModel.catchUpQuietMs`). It can only ever be true WHILE catching up — the
+      /// reducer holds that as an invariant of the state, whoever dispatches.
       CatchUpIsSlow       : bool
       /// Whether reads are getting through at all. `IsCatchingUp` says there is more to
       /// read; this says whether reading is possible — the distinction the old design had
@@ -1854,6 +1854,12 @@ module ClientModel =
     /// pause to reason — or to reach for a tool — shows as one within a breath.
     let writingQuietMs = 700
 
+    /// How long catch-up must run before it is worth SAYING (`EventConsumerState.CatchUpIsSlow`).
+    /// Long enough that a send — which puts this client one event behind itself for a round
+    /// trip — never lights it; short enough that a real wait is reported rather than sat
+    /// through in silence.
+    let catchUpQuietMs = 500
+
     /// A message's stamp, while it is one the agent is still writing and has said something in.
     /// Nothing is a stamp before the first word: an empty body already reads as thinking, and
     /// has no quiet to wait for.
@@ -1876,18 +1882,31 @@ module ClientModel =
     /// Every wait this model wants running (`Timer`). The program keeps exactly these alive,
     /// keyed, so a wait is started by appearing here and stopped by leaving.
     ///
+    /// Catch-up is the normal state for a moment after anything happens — a send puts this
+    /// client behind its own event until the page comes back — so it is reported only once
+    /// it has lasted `catchUpQuietMs`. Without the wait the header flickered "up to date" →
+    /// "catching up" → "up to date" on every message sent. One key for the whole episode:
+    /// the pages that arrive while it runs leave the wait alone rather than pushing it out,
+    /// which would mean a long catch-up was never reported; the episode ending takes it away.
+    ///
     /// The agent's quiet is a debounce: one timer per message it is writing, keyed by the
     /// stamp, so each delta replaces the wait with a fresh one and only a body that stops
     /// growing for `writingQuietMs` ever fires. None once it has fired for this stamp — the
     /// fact is recorded, and a wait for it again would be asking a settled question.
     let timers (model: ClientModel) : Timer<ClientMsg> list =
-        model.Conversation.Items
-        |> List.choose writingStamp
-        |> List.filter (fun stamp -> model.Agent.Quiet <> Some stamp)
-        |> List.map (fun stamp ->
-            { Key = [ "agent-quiet"; MessageId.value stamp.Message; string stamp.Length ]
-              After = writingQuietMs
-              Fire = AgentQuietMsg stamp })
+        let catchUp =
+            if model.EventConsumer.IsCatchingUp && not model.EventConsumer.CatchUpIsSlow then
+                [ { Key = [ "catch-up-slow" ]; After = catchUpQuietMs; Fire = CatchUpSlowMsg true } ]
+            else []
+        let quiet =
+            model.Conversation.Items
+            |> List.choose writingStamp
+            |> List.filter (fun stamp -> model.Agent.Quiet <> Some stamp)
+            |> List.map (fun stamp ->
+                { Key = [ "agent-quiet"; MessageId.value stamp.Message; string stamp.Length ]
+                  After = writingQuietMs
+                  Fire = AgentQuietMsg stamp })
+        catchUp @ quiet
 
     /// Fold a message into the model.
     /// Piped through `reconcileLaunch` (see its doc) so the launch surface anchors here,
@@ -2054,8 +2073,8 @@ module ClientModel =
         | EventFeedMsg health ->
             { model with EventConsumer = { model.EventConsumer with Feed = health } }
         | CatchUpSlowMsg slow ->
-            // Gated on still being behind, so a timer that fires just after the page landed
-            // cannot light an indicator with nothing left to report.
+            // Gated on still being behind: slow is a property of a catch-up that is running,
+            // and the state holds that whoever dispatches.
             { model with
                 EventConsumer =
                     { model.EventConsumer with
