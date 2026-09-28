@@ -2408,6 +2408,113 @@ let frames (args: string list) =
     fable (Path.Combine (repoRoot, "tools", "Yession.Frames", "Yession.Frames.fsproj")) out
     runInherit repoRoot "node" ([ Path.Combine (out, "Frames.js") ] @ args) |> ignore
 
+// --- crash-repro: the fable SIGSEGV, run until it happens --------------------------------------
+
+// `dotnet fable` dies with SIGSEGV about once in a hundred release builds (runs 753, 849, 946 —
+// the header of this file has the evidence). Once in a hundred cannot be bisected, and cannot be
+// said to be fixed, so this verb turns it into something that can: it does, over and over and
+// in parallel, what the faulting thread was doing, and stops at the first child that dies.
+//
+// Two layers, tightest first:
+//
+//   regex — what Fable's `Printer.ParsedXmlDoc.Parse` does, with no Fable in it: construct a
+//           `RegexOptions.Compiled` regex over the same pattern, match one doc comment, drop it,
+//           on every core at once. Each construction is a Reflection.Emit dynamic method
+//           generated, run and made collectible — the churn the crash report points at. Seconds
+//           to start; the loop to run first.
+//   fable — the real compiler over the real browser client, `--noCache` so every run prints
+//           (and so parses) every doc comment again. What actually crashed; minutes per run.
+//
+// Each round spawns `workers` children side by side; a child is a fresh process, because the
+// runtime state that goes wrong dies with the process that corrupted it. Children run under the
+// same crash-report instrumentation as every other child here, so a hit comes back with stacks.
+//
+//   crash-repro regex [rounds] [workers] [seconds]    defaults 20, cores, 60
+//   crash-repro fable [rounds] [workers]              defaults 10, 2
+//
+// Exit 0: no child died in the budget. Exit 1: one did, and its report is printed. The nix
+// sandbox, where every crash so far has happened, is reached through `nix build --file
+// nix/worktree.nix crashRepro` (and `--rebuild` to run it again); `crash-repro.yml` fans either
+// out across both architectures.
+
+/// The pattern and the input shape Fable matches for every declaration with a doc comment.
+let private summaryPattern = @"<summary>([\s\S]*?)</summary>"
+
+let private docComment (i: int) =
+    sprintf "<summary>\n Declaration %d, %s\n</summary>\n<param name=\"x\">%s</param>" i (String ('w', i % 400)) (string i)
+
+/// One child's work: until the deadline, every worker thread compiles, matches and discards.
+/// Prints how many regexes it got through, which is the rate a fix has to be judged at.
+let private regexChurn (seconds: float) =
+    let deadline = DateTime.UtcNow.AddSeconds seconds
+    let workers = Environment.ProcessorCount * 2
+    let built = ref 0L
+    let threads =
+        [ for w in 0 .. workers - 1 ->
+            let t =
+                Threading.Thread (
+                    (fun () ->
+                        let mutable i = w
+                        while DateTime.UtcNow < deadline do
+                            let regex = Regex (summaryPattern, RegexOptions.Compiled)
+                            let m = regex.Match (docComment i)
+                            if not m.Success then failwithf "crash-repro: no summary in comment %d" i
+                            Threading.Interlocked.Increment &built.contents |> ignore
+                            i <- i + workers),
+                    16 * 1024 * 1024
+                )
+            t.Start ()
+            t ]
+    threads |> List.iter (fun t -> t.Join ())
+    printfn "crash-repro: %d compiled regexes in %.0fs on %d threads" built.Value seconds workers
+
+/// Rounds of children, side by side; the first death ends the run with its evidence.
+let private rounds (layer: string) (count: int) (workers: int) (child: int -> string * string list) =
+    let clock = Stopwatch.StartNew ()
+    for round in 1 .. count do
+        let children =
+            [ for w in 1 .. workers ->
+                let command, args = child w
+                let psi = ProcessStartInfo (command)
+                args |> List.iter psi.ArgumentList.Add
+                psi.WorkingDirectory <- repoRoot
+                psi.RedirectStandardOutput <- true
+                psi.RedirectStandardError <- true
+                let p = Process.Start (accountsForItself psi)
+                let out = p.StandardOutput.ReadToEndAsync ()
+                let err = p.StandardError.ReadToEndAsync ()
+                p, out, err ]
+        let died =
+            [ for p, out, err in children do
+                p.WaitForExit ()
+                let output = out.Result.Trim ()
+                if layer = "regex" && output <> "" then printfn "%s" output
+                if p.ExitCode <> 0 then yield p.ExitCode, output + "\n" + err.Result.Trim ()
+                p.Dispose () ]
+        match died with
+        | (code, output) :: _ ->
+            failwithf
+                "crash-repro %s: a child died (%s) in round %d of %d, after %.0fs:\n%s%s"
+                layer (diedOf code) round count clock.Elapsed.TotalSeconds output (crashEvidence ())
+        | [] -> printfn "crash-repro %s: round %d of %d clean (%d children, %.0fs)" layer round count workers clock.Elapsed.TotalSeconds
+    printfn "crash-repro %s: no crash in %d rounds of %d children" layer count workers
+
+let crashRepro (args: string list) =
+    let number (i: int) (fallback: int) =
+        args |> List.tryItem i |> Option.map int |> Option.defaultValue fallback
+    match args with
+    | "regex" :: _ ->
+        let seconds = number 3 60
+        rounds "regex" (number 1 20) (number 2 Environment.ProcessorCount) (fun _ ->
+            "dotnet", [ "fsi"; Path.Combine (repoRoot, "tasks.fsx"); "crash-repro-child"; string seconds ])
+    | "fable" :: _ ->
+        make [ Target.Tools; Target.Packages ]
+        let project = Path.Combine (repoRoot, "app", "browser", "Yession.Browser.fsproj")
+        rounds "fable" (number 1 10) (number 2 2) (fun w ->
+            let out = Path.Combine (Path.GetTempPath (), sprintf "yession-crash-repro-%d" w)
+            "dotnet", [ "fable"; project; "-o"; out; "--noRestore"; "--noCache" ])
+    | _ -> failwith "crash-repro regex [rounds] [workers] [seconds] | crash-repro fable [rounds] [workers]"
+
 // --- dispatch --------------------------------------------------------------------------------
 
 let argv = fsi.CommandLineArgs
@@ -2429,6 +2536,8 @@ match arg 1 with
 | Some "lint" -> lint ()
 | Some "probe" -> probe (rest 2)
 | Some "frames" -> frames (rest 2)
+| Some "crash-repro" -> crashRepro (rest 2)
+| Some "crash-repro-child" -> regexChurn (arg 2 |> Option.map float |> Option.defaultValue 60.0)
 | Some "bench" -> bench (rest 2)
 | Some "bench-guard" -> benchGuard ()
 | Some "bench-publish" -> benchPublish (arg 2 |> Option.defaultWith defaultVersion)
