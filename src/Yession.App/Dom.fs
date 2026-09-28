@@ -801,6 +801,23 @@ module Dom =
         /// than the query it links to, so a swap can put focus back on the control that was
         /// pressed even though its href just changed.
         let filter = "data-filter"
+        /// The MCP section — the swap unit for every MCP answer — and its two acts: the form
+        /// that declares a server, and the Withdraw on a row, which carries the server's name
+        /// and its audience (empty for any session). A declaration the Manager refuses is
+        /// reported in the section's error line.
+        let mcp = "data-mcp"
+        let declareMcp = "data-declare-mcp"
+        let mcpError = "data-mcp-error"
+        let mcpWithdraw = "data-mcp-withdraw"
+        let mcpAudience = "data-mcp-audience"
+        /// The opening screen's readiness address (`/sessions/{id}/ready`), on the screen it
+        /// polls for — spelled by the server, like every other address its pages carry.
+        let openingReady = "data-opening-ready"
+        /// The opening screen's way in: the session's own address, and where the screen hands
+        /// the browser once the readiness address answers.
+        let openingTarget = "data-opening-target"
+        /// The opening screen's status word: `starting`, then `ready`.
+        let openingWord = "data-word"
         // Process status words shown in a row.
         let statusStopped = "stopped"
         let statusRunning = "running"

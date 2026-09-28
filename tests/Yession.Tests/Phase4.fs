@@ -709,6 +709,7 @@ let private uiRenderTests =
             let html =
                 ManagerUi.page
                     "app.css"
+                    "manager-page.js"
                     PublicAccess.Loopback
                     SessionQuery.defaults
                     [ { Record = uiRecord; Status = ProcessManager.NotRunning; Summary = None } ]
@@ -729,6 +730,7 @@ let private uiRenderTests =
             let html =
                 ManagerUi.page
                     "app.css"
+                    "manager-page.js"
                     (PublicAccess.create "https://yession.example.com" "https://{id}.example.com" |> expect)
                     SessionQuery.defaults
                     [ { Record = uiRecord; Status = ProcessManager.NotRunning; Summary = None } ]
@@ -743,6 +745,7 @@ let private uiRenderTests =
             let html =
                 ManagerUi.page
                     "app.css"
+                    "manager-page.js"
                     PublicAccess.Loopback
                     SessionQuery.defaults
                     [ { Record = uiRecord; Status = ProcessManager.NotRunning; Summary = None } ]
@@ -750,18 +753,25 @@ let private uiRenderTests =
                     []
             Expect.isFalse (html.Contains "data-hooks") "an empty table would imply there is something to fill in"
 
-        testCase "the page is self-contained: an inline script drives it, no external sources" <| fun () ->
+        // The page's program is the one it was handed an address for, and nothing else: not a
+        // program in a string (which nothing type-checks), and not one fetched from off this
+        // Manager (local-first). Every `<script>` on the page is counted, so an inline body
+        // coming back fails here as surely as a CDN link would.
+        testCase "the page runs the program it was given the address of, and no other" <| fun () ->
             let html =
                 ManagerUi.page
                     "app.css"
+                    "manager-page.js"
                     PublicAccess.Loopback
                     SessionQuery.defaults
                     [ { Record = uiRecord; Status = ProcessManager.NotRunning; Summary = None } ]
                     []
                     []
-            Expect.isTrue (html.Contains "<script>") "an inline script drives the UI (no bundle)"
-            Expect.isFalse (html.Contains "src=\"http") "no external/CDN scripts (local-first)"
-            Expect.isTrue (html.Contains Dom.Manager.createSession) "the create form renders"
+            let scripts =
+                System.Text.RegularExpressions.Regex.Matches (html, "<script[^>]*>")
+                |> Seq.map (fun m -> m.Value)
+                |> List.ofSeq
+            Expect.equal scripts [ "<script type=\"module\" src=\"manager-page.js\">" ] "one script, a module, at the address the page was given"
 
         // The page and the server are one declaration (`ManagerRoute`): every address the
         // page carries — on a control, a form, the section the rows stream fills — is a
@@ -781,6 +791,7 @@ let private uiRenderTests =
             let html =
                 ManagerUi.page
                     "app.css"
+                    "manager-page.js"
                     PublicAccess.Loopback
                     { SessionQuery.defaults with Show = Both }
                     views
@@ -1141,6 +1152,17 @@ let private managerBehindFrontDoor (name: string) =
         return pm, origin, mapIt, door
     }
 
+/// The one module script a Manager page names, resolved from the page's own address, answers
+/// as JavaScript.
+let private expectServedProgram (pageUrl: string) (page: string) : Async<unit> =
+    async {
+        let named = System.Text.RegularExpressions.Regex.Match (page, "<script type=\"module\" src=\"([^\"]+)\">")
+        Expect.isTrue named.Success "the page names its program"
+        let! program = TestHttp.get (resolveUrl pageUrl named.Groups.[1].Value)
+        Expect.equal program.Status 200 "the Manager serves it at that address"
+        Expect.stringContains (TestHttp.requiredHeader "content-type" program) "text/javascript" "as a program a browser will run"
+    }
+
 /// `/sessions/{id}/ready`: whether this deployment's front door reaches the session yet.
 ///
 /// The question `/open`'s landing page asks before it hands the browser over, and the one it
@@ -1258,6 +1280,30 @@ let private readinessTests =
                 Expect.stringContains page.Body "data-mark-intro" "the intro is on the screen"
                 Expect.stringContains page.Body "data-mark-static" "and the still mark, for a reader who declined motion"
                 Expect.stringContains page.Body (sprintf "href=\"%s\"" (ManagerRoute.path ManagerRoute.Home)) "the way back is a link to the manager"
+                do! pm.StopAll ()
+            }
+
+        // A page's program is a file of the Manager's asset set, and a module script at an
+        // address that 404s — or answers at a type that is not JavaScript — is refused without
+        // a word: the page paints and nothing on it moves. RESOLVED from the page's own address
+        // and fetched, for the reason the stylesheet case above gives: the opening page lives
+        // under `/sessions/{id}/`, where a link that is right at `/` is a 404.
+        testCaseAsync "the Manager page's program is served from where the page is" <|
+            async {
+                let! pm = managerWithUi "manager-program"
+                let pageUrl = sprintf "http://127.0.0.1:%d/" pm.EndpointPort.Value
+                let! page = TestHttp.get pageUrl
+                do! expectServedProgram pageUrl page.Body
+                do! pm.StopAll ()
+            }
+
+        testCaseAsync "the opening page's program is served from where the page is" <|
+            async {
+                let! pm = managerWithUi "opening-program"
+                pm.CreateSession "opening-program" "" |> expect |> ignore
+                let pageUrl = sprintf "http://127.0.0.1:%d/sessions/opening-program/open" pm.EndpointPort.Value
+                let! page = TestHttp.get pageUrl
+                do! expectServedProgram pageUrl page.Body
                 do! pm.StopAll ()
             }
 

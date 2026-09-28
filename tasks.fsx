@@ -399,12 +399,19 @@ let private buildAssets (outDir: string) (minify: bool) =
         at file |> ignore
         File.Copy (Path.Combine (repoRoot, "app", AssetFile.path file), Path.Combine (root, AssetFile.path file), true)
 
+    /// A browser program: one entry of the browser project's Fable output, bundled on its own.
+    let program (entry: string) (file: AssetFile) =
+        run esbuild
+            ([ sprintf "app/out/browser/%s.js" entry; "--bundle"; "--format=esm"; "--outfile=" + at file ] @ extra)
+        |> ignore
+
     let produce (file: AssetFile) =
         match file with
-        | AssetFile.``client`` ->
-            run esbuild
-                ([ "app/out/browser/Browser.js"; "--bundle"; "--format=esm"; "--outfile=" + at file ] @ extra)
-            |> ignore
+        | AssetFile.``client`` -> program "Browser" file
+        // The Manager's two pages. Entries of their own in the browser project, so neither
+        // page loads the session client and the client carries neither of them.
+        | AssetFile.``manager-page`` -> program "ManagerPage" file
+        | AssetFile.``opening-page`` -> program "OpeningPage" file
         // The shell's stylesheet scans the F# sources for composed class names; the player's is
         // its own file because the shell defers it (see `app/player.css`).
         | AssetFile.``app`` -> run tailwind ([ "-i"; "app/tailwind.css"; "-o"; at file ] @ extra) |> ignore
@@ -593,10 +600,11 @@ type Target =
     /// The server's JavaScript: `app/out/Main.js`, the Manager's entry, and `app/SessionMain.js`,
     /// a session's — with every module both import.
     | Server
-    /// The browser client's JavaScript, `app/out/browser`.
+    /// The browser project's JavaScript, `app/out/browser`: the session client, and the
+    /// Manager's page programs.
     | Client
-    /// The asset set a build ships, `app/out/public/assets`: the client bundled, the stylesheets,
-    /// the vendored faces.
+    /// The asset set a build ships, `app/out/public/assets`: the browser programs bundled, the
+    /// stylesheets, the vendored faces.
     | Assets
     /// The npm package, `dist/npm`, stamped with the version it states.
     | Package of version: string

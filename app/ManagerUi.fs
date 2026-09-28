@@ -3,9 +3,10 @@ module Yession.Host.ManagerUi
 // The management UI (Phase 4, Step 25): a deliberately server-side-rendered admin surface
 // — list sessions with live status, create, open (which launches), stop, archive. Pure F# render
 // functions produce full pages and FRAGMENTS from Fable.Lit templates (rendered to strings
-// by our own `Ssr` wrapper — no client bundle, no Elmish, no Yjs); a tiny inline vanilla
-// script swaps the fragments on stop/archive and takes live status from an SSE stream
-// of rendered tables (`GET /sessions/rows`) — the server pushes, the page never polls. It
+// by our own `Ssr` wrapper — no session client, no Elmish, no Yjs); a small F# program of
+// its own (`app/browser/ManagerPage.fs`, served from this Manager's asset set) swaps the
+// fragments on stop/archive and takes live status from an SSE stream of rendered tables
+// (`GET /sessions/rows`) — the server pushes, the page never polls. It
 // shares the session client's `Style` (the same locally served /app.css), and — being
 // online-only — is the natural home for server-side Lit SSR. This is not the collaborative
 // client; it shares the Manager's 127.0.0.1 endpoint with the control RPC.
@@ -345,153 +346,6 @@ let sessionRow (view: ProcessManager.SessionView) : string =
 let sessionsTable (query: SessionQuery) (views: ProcessManager.SessionView list) : string =
     Ssr.render (tableTemplate query views)
 
-// The interactivity, without htmx: a tiny vanilla script that swaps fragments on
-// stop/archive and takes live status from the rows stream. Inline (no external src) so
-// the page is self-contained — local first, no CDN.
-let private script =
-    """
-    const swap = (el, htmlText) => {
-      const t = document.createElement('template'); t.innerHTML = htmlText.trim()
-      const n = t.content.firstElementChild
-      if (!n || !el || n.outerHTML === el.outerHTML) return
-      // Keyboard continuity (WCAG 2.0): replacing the focused element strands focus on
-      // <body>. Land it back on the SAME session — the swap unit is often the whole table
-      // (the rows stream, a create), and the replacement's first action belongs to the
-      // first row, which is another session's control under the same finger.
-      const active = el.contains(document.activeElement) ? document.activeElement : null
-      const row = active && active.closest('[data-session]')
-      // A filter or sort control keeps a STABLE name across a swap even though its href just
-      // flipped, so the hand that pressed `archived` is left on `archived` rather than being
-      // dropped onto the first row of the list it just asked for.
-      const filter = active && active.closest('[data-filter]')
-      // Create rides the section's header line, so a frame arriving under a hand resting on
-      // it would otherwise drop that hand onto the first chip.
-      const wasCreate = !!active && !!active.closest('[data-create-session]')
-      const wasAction = !!active && active.hasAttribute('data-stop')
-      // A Create that is HELD (the browser is on its way to the new session, and the rows
-      // stream announces that session before the redirect lands) keeps its own element
-      // through the swap: the state, the tilt it was pushed at, and the focus all live on it.
-      const held = el.querySelector('[data-create-session] [aria-busy="true"]')
-      if (held) { const fresh = n.querySelector('[data-create-session] button'); if (fresh) fresh.replaceWith(held) }
-      el.replaceWith(n)
-      if (!active) return
-      const find = (sel) => sel && (n.matches(sel) ? n : n.querySelector(sel))
-      if (filter) {
-        const back = find('[data-filter="' + CSS.escape(filter.getAttribute('data-filter')) + '"]')
-        if (back) { back.focus(); return }
-      }
-      if (wasCreate) {
-        const back = find('[data-create-session] button')
-        if (back) { back.focus(); return }
-      }
-      const sel = row && '[data-session="' + CSS.escape(row.getAttribute('data-session')) + '"]'
-      const scope = find(sel) || n
-      // A Stop that landed has taken its own control away, and the row's first focusable is
-      // now the name — the stable open route, which is the way back in.
-      const f = (wasAction && scope.querySelector('[data-stop]')) || scope.querySelector('a[href], button, input')
-      if (f) f.focus()
-    }
-    const sessionsEl = () => document.querySelector('[data-sessions]')
-    document.addEventListener('click', async (e) => {
-      const b = e.target.closest('[data-stop]'); if (!b) return
-      const row = b.closest('tr')
-      const r = await fetch(b.getAttribute('data-post'), { method: 'POST' })
-      if (r.ok) swap(row, await r.text())
-    })
-    // Archiving answers with the WHOLE table, not a row: it can move a session out of the
-    // filter you are looking at, so the row is no longer the unit that changed. The query
-    // rides along because the answer has to be rendered for the list this page is showing.
-    document.addEventListener('click', async (e) => {
-      const b = e.target.closest('[data-archive],[data-unarchive]'); if (!b) return
-      const r = await fetch(b.getAttribute('data-post') + location.search, { method: 'POST' })
-      if (r.ok) swap(sessionsEl(), await r.text())
-    })
-    // A filter or sort click is a navigation this page performs itself: adopt the href the
-    // SERVER computed as the new location, then reopen the stream at it. The first frame is
-    // the whole snapshot for the new query, so one click is one swap and no page reloads —
-    // which is also why focus is never stranded.
-    //
-    // PUSHED, not replaced: the filter is the page's location, and the chips' whole claim to
-    // being links is that a bookmark restores one and the back button undoes one. A replace
-    // kept the first half and quietly broke the second — Back left the page — while the
-    // `popstate` handler below waited for an event that a chip click could never produce.
-    document.addEventListener('click', (e) => {
-      const a = e.target.closest('[data-filter]'); if (!a) return
-      if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return
-      e.preventDefault()
-      history.pushState(null, '', a.getAttribute('href'))
-      openRows(true)
-    })
-    // Creating is deliberately NOT intercepted here (the reasoning is on the form itself) —
-    // but it is MARKED. Between the push and the new page there is nothing on this one to
-    // show for it, so the button stays down (`aria-busy`: held, filled, and saying what it
-    // is doing) until the browser leaves. A second push in that window is refused: two
-    // Creates are two sessions.
-    document.addEventListener('submit', (e) => {
-      const f = e.target.closest('[data-create-session]'); if (!f) return
-      const b = f.querySelector('button')
-      if (b.getAttribute('aria-busy') === 'true') { e.preventDefault(); return }
-      b.setAttribute('aria-busy', 'true')
-    })
-    // Back here from the session — the page restored as it was left — the hold is over: the
-    // act it was held for happened.
-    window.addEventListener('pageshow', (e) => {
-      if (e.persisted) document.querySelectorAll('[aria-busy="true"]').forEach((b) => b.removeAttribute('aria-busy'))
-    })
-    // A button goes in where it is touched (`[data-press]`, tailwind.css). The stylesheet does
-    // the pressing off `:active`; what it cannot know is WHERE, so this hands it the touch
-    // point as two numbers in [-1, 1] from the button's centre. A key has no where and gets
-    // the centre — straight in — rather than the corner the mouse last left behind.
-    document.addEventListener('pointerdown', (e) => {
-      const b = e.target.closest('[data-press]'); if (!b) return
-      const r = b.getBoundingClientRect()
-      b.style.setProperty('--press-x', ((e.clientX - r.left) / r.width * 2 - 1).toFixed(2))
-      b.style.setProperty('--press-y', ((e.clientY - r.top) / r.height * 2 - 1).toFixed(2))
-    })
-    document.addEventListener('keydown', (e) => {
-      const b = e.target.closest('[data-press]'); if (!b) return
-      b.style.setProperty('--press-x', '0'); b.style.setProperty('--press-y', '0')
-    })
-    // Declaring an MCP server (Plan 17): the only place a url is written, and the only
-    // management action that can be REFUSED for a reason a human needs to read — a name
-    // clash. So this one reports, where stop/archive only swap.
-    const mcpSwap = (htmlText) => swap(document.querySelector('[data-mcp]'), htmlText)
-    document.addEventListener('submit', async (e) => {
-      const f = e.target.closest('[data-declare-mcp]'); if (!f) return
-      e.preventDefault()
-      const r = await fetch(f.getAttribute('action'), { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams(new FormData(f)) })
-      const text = await r.text()
-      if (r.ok) { mcpSwap(text) } else { const p = f.querySelector('[data-mcp-error]'); if (p) p.textContent = text }
-    })
-    document.addEventListener('click', async (e) => {
-      const b = e.target.closest('[data-mcp-withdraw]'); if (!b) return
-      const body = new URLSearchParams({ name: b.getAttribute('data-mcp-withdraw'), session: b.getAttribute('data-mcp-audience') || '' })
-      const r = await fetch(b.getAttribute('data-post'), { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body })
-      if (r.ok) mcpSwap(await r.text())
-    })
-    // The stream is opened AT the current query and reopened when it changes; the server
-    // filters per connection, so live status keeps arriving under whatever is being shown.
-    // Its address is on the section it fills, like every other address on this page: the
-    // server spells them all (`ManagerRoute`), and this script spells none.
-    //
-    // A stream reopened for a NEW query owes the page its first frame: until it lands, the
-    // address says one filter and the rows say another. If it fails before then — offline, a
-    // Manager mid-restart — the page reloads at the address it already has, which the server
-    // renders correctly by construction. Only then: the same error on a stream that had
-    // already delivered is an ordinary drop, and `EventSource` reconnects on its own.
-    let rows = null
-    const openRows = (moved) => {
-      if (rows) rows.close()
-      let settled = !moved
-      rows = new EventSource(sessionsEl().getAttribute('data-stream') + location.search)
-      rows.onmessage = (e) => { settled = true; if (e.data) swap(sessionsEl(), e.data) }
-      rows.onerror = () => { if (!settled) { settled = true; location.reload() } }
-    }
-    openRows(false)
-    // The back button moves the filter, so the stream has to move with it.
-    window.addEventListener('popstate', () => openRows(true))
-    """
-
 /// One declared MCP server (Plan 17). The AUDIENCE is a column rather than a separate
 /// table, because host-wide and session-scoped declarations are the same kind of fact and
 /// splitting them would make "which of these does session A get?" a question you answer by
@@ -702,10 +556,15 @@ let private bodyTemplate
           </div>
         </main>"""
 
-/// `styleSheetUrl` is passed in rather than read from the module below: F# scopes top-down, and
-/// the stylesheet's address is derived from bytes read further down the file.
+/// `styleSheetUrl` and `programUrl` are passed in rather than read from the module below: F#
+/// scopes top-down, and every asset's address is derived from bytes read further down the file.
+///
+/// The page's interactivity — fragment swaps on stop/archive and the MCP acts, the rows stream,
+/// focus kept through both — is a program of its own (`app/browser/ManagerPage.fs`), served
+/// from this Manager's asset set like the stylesheet: local, and never a program in a string.
 let page
     (styleSheetUrl: string)
+    (programUrl: string)
     (access: PublicAccess)
     (query: SessionQuery)
     (views: ProcessManager.SessionView list)
@@ -720,7 +579,7 @@ let page
         WebApp.managerHeadTags (ManagerRoute.path ManagerRoute.Manifest) (ManagerRoute.path ManagerRoute.Icon) (ManagerRoute.path ManagerRoute.Favicon)
         sprintf "</head><body class=\"%s\">" Style.app
         Ssr.render (bodyTemplate access query views declarations hooks)
-        sprintf "<script>%s</script>" script
+        sprintf "<script type=\"module\" src=\"%s\"></script>" (Ssr.escapeAttr programUrl)
         "</body></html>"
     ]
 
@@ -742,6 +601,11 @@ let private assets = Assets.configured ()
 
 let private cssUrl = ManagerRoute.path (ManagerRoute.asset assets.Build AssetFile.``app``)
 
+/// The two pages' programs, from the same set and addressed the same way as the stylesheet.
+let private managerProgramUrl = ManagerRoute.path (ManagerRoute.asset assets.Build AssetFile.``manager-page``)
+
+let private openingProgramUrl = ManagerRoute.path (ManagerRoute.asset assets.Build AssetFile.``opening-page``)
+
 let private respondWith (res: ServerResponse) (status: int) (contentType: string) (cacheControl: string) (body: string) =
     res.writeHead (status, [ ResponseHeader.ContentType contentType; ResponseHeader.CacheControl cacheControl ])
     res.``end`` body
@@ -759,10 +623,6 @@ let private html (res: ServerResponse) (body: string) = respond res 200 "text/ht
 let private seeOther (res: ServerResponse) (location: string) =
     res.writeHead (303, [ ResponseHeader.Location location; ResponseHeader.CacheControl "no-store" ])
     res.``end`` ""
-
-/// A string as a JS literal, for the one inline script below — so a URL containing a quote
-/// is data rather than syntax.
-let private jsonLiteral (s: string) : string = Fable.Core.JS.JSON.stringify s
 
 /// GET a URL and report the status its answer carried; `0` when nothing answered at all.
 /// Redirects are followed, because a session that bounces its shell through sign-in has
@@ -897,56 +757,30 @@ let private screenPage (title: string) (body: string) : string =
 /// the manager. A reader who declined motion gets the still mark (`Brand.mark`) and the same
 /// words; the switch is CSS, since SMIL cannot read the preference.
 ///
-/// The poll keeps its shape and its bound (below). What is added is a DWELL: the page does not
-/// go before the intro has finished plus a beat (2.4s + 0.4s), however fast the session comes
-/// up, because a start that flashes past is not a start anyone saw — and it does not hold a
-/// slow one, which keeps polling, and breathing, until the bound says why it gave up.
+/// The poll keeps its shape and its bound (`app/browser/OpeningPage.fs`, the screen's program).
+/// What is added is a DWELL: the page does not go before the intro has finished plus a beat
+/// (2.4s + 0.4s), however fast the session comes up, because a start that flashes past is not a
+/// start anyone saw — and it does not hold a slow one, which keeps polling, and breathing,
+/// until the bound says why it gave up.
+///
+/// The program is served, not inlined, and the two addresses it needs are attributes on the
+/// screen: the readiness route on `<main>`, and the session's address on the link that already
+/// goes there. Nothing is spliced into a program, so there is nothing to escape but attributes.
 let private openingPage (sessionId: SessionId) (target: string) (readyUrl: string) : string =
     screenPage
         "Opening session…"
         (sprintf
-            """<main class="%s">
+            """<main class="%s" %s="%s">
 <div class="%s" data-mark-intro aria-hidden="true">%s</div>
 <div class="%s" data-mark-static aria-hidden="true">%s</div>
 <p class="%s">yession</p>
-<p id="status" role="status" class="%s %s"><span class="%s"></span><span data-word>starting</span><span class="%s">%s</span></p>
-<p class="%s"><a id="target" class="%s" href="%s">Open it directly</a> · <a class="%s" href="%s">Back to the session manager</a></p>
+<p id="status" role="status" class="%s %s"><span class="%s"></span><span %s>starting</span><span class="%s">%s</span></p>
+<p class="%s"><a id="target" class="%s" href="%s" %s>Open it directly</a> · <a class="%s" href="%s">Back to the session manager</a></p>
 </main>
-<script>
-  const target = %s
-  const ready = %s
-  // The intro is 2.4s and a beat after it lands is the least anyone is shown; under reduced
-  // motion there is no intro, and nothing to wait for.
-  const DWELL = matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 2800
-  const shownAt = performance.now()
-  const status = document.getElementById('status')
-  let attempts = 0
-  async function poll () {
-    attempts++
-    try {
-      // `ok`, not "the request settled". A front door that has not mapped this session yet
-      // answers — with a 404, or a gateway error — and a fetch that only caught THROWN
-      // requests reads that as the session answering, redirects into it, and leaves whoever
-      // pressed Create looking at the front door's 404. This route reports the difference.
-      const answer = await fetch(ready, { cache: 'no-store' })
-      if (answer.ok) {
-        status.querySelector('[data-word]').textContent = 'ready'
-        setTimeout(() => location.replace(target), Math.max(0, DWELL - (performance.now() - shownAt)))
-        return
-      }
-    } catch (e) { /* the Manager itself is unreachable: the same wait, bounded the same way */ }
-    if (attempts >= 40) {
-      status.className = %s
-      status.textContent =
-        'The session started, but its address is not answering after 20 seconds. ' +
-        'If this deployment maps session ports through a proxy, that mapping has not appeared.'
-      return
-    }
-    setTimeout(poll, 500)
-  }
-  poll()
-</script>"""
+<script type="module" src="%s"></script>"""
             Style.startScreen
+            Dom.Manager.openingReady
+            (Ssr.escapeAttr readyUrl)
             Style.startMarkIntro
             (Ssr.render Brand.intro)
             Style.startMarkStill
@@ -955,16 +789,16 @@ let private openingPage (sessionId: SessionId) (target: string) (readyUrl: strin
             Style.statusRun
             Style.startStatus
             Style.statusDotPulse
+            Dom.Manager.openingWord
             Style.startStatusId
             (Ssr.escapeText (SessionId.value sessionId))
             Style.startLinks
             Style.proseLink
             (Ssr.escapeAttr target)
+            Dom.Manager.openingTarget
             Style.proseLink
             (ManagerRoute.path ManagerRoute.Home)
-            (jsonLiteral target)
-            (jsonLiteral readyUrl)
-            (jsonLiteral (Style.statusErr + " " + Style.startStatus)))
+            (Ssr.escapeAttr openingProgramUrl))
 
 /// Handle a management-UI request against the Manager. Returns false for paths that
 /// are not the UI's (the composing server falls through — e.g. to the control routes).
@@ -1014,7 +848,7 @@ let tryHandle
     let handle (route: ManagerRoute) : unit =
         match route with
         | ManagerRoute.Home ->
-            html res (page cssUrl pm.Public query (pm.Sessions ()) (pm.McpServers ()) pm.HookEndpoints)
+            html res (page cssUrl managerProgramUrl pm.Public query (pm.Sessions ()) (pm.McpServers ()) pm.HookEndpoints)
         | ManagerRoute.Asset (build, file) ->
             // Everything static this build ships, served by path and by nothing else — the
             // same service the Session Process runs, over this process's own set. The Manager
