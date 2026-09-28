@@ -33,6 +33,11 @@ on:
       env:
         description: "Space-separated NAME=value settings for every child, e.g. DOTNET_gcServer=1"
         default: ""
+      sdk:
+        description: "source (the nixpkgs source build every derivation uses) or bin (Microsoft's build)"
+        type: choice
+        options: [source, bin]
+        default: source
       shards:
         description: "JSON list, one job per entry per architecture"
         default: "[1,2,3,4,5,6,7,8]"
@@ -45,7 +50,7 @@ permissions:
 
 jobs:
   repro:
-    name: "crash-repro ${{ inputs.layer }} ${{ inputs.env }} (${{ matrix.arch }} #${{ matrix.shard }})"
+    name: "crash-repro ${{ inputs.layer }} ${{ inputs.sdk }} ${{ inputs.env }} (${{ matrix.arch }} #${{ matrix.shard }})"
     # A runner per architecture by expression, not a matrix `include`: an include naming an
     # architecture that `arches` left out would add that job back.
     runs-on: ${{ matrix.arch == 'aarch64-linux' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
@@ -77,10 +82,11 @@ jobs:
           SECONDS_: ${{ inputs.seconds }}
           HEAP_MB: ${{ inputs.heap_mb }}
           CHILD_ENV: ${{ inputs.env }}
+          SDK: ${{ inputs.sdk }}
           SHARD: ${{ matrix.shard }}-${{ github.run_id }}-${{ github.run_attempt }}
         run: |
           nix build --impure --print-build-logs --no-link --expr "
             ((import ./nix/worktree.nix).crashRepro.override {
               layer = \"$LAYER\"; rounds = \"$ROUNDS\"; workers = \"$WORKERS\"; seconds = \"$SECONDS_\";
-              heapMb = \"$HEAP_MB\"; env = \"$CHILD_ENV\";
+              heapMb = \"$HEAP_MB\"; env = \"$CHILD_ENV\"; sdk = \"$SDK\";
             }).overrideAttrs { YESSION_CRASH_REPRO_SHARD = \"$SHARD\"; }"
