@@ -22,6 +22,9 @@
     <!-- The process seam speaks Node: the abort signal the SDK forwards, the streams a
          spawned CLI is driven through, and the relay a stand-in answers its events from. -->
     <ProjectReference Include="..\Fable.NodeExtras\Fable.NodeExtras.fsproj" />
+    <!-- A tool's arguments are declared as a zod raw shape, which is `Fable.Zod`'s to build;
+         the SDK itself depends on zod for the same reason. -->
+    <ProjectReference Include="..\Fable.Zod\Fable.Zod.fsproj" />
   </ItemGroup>
 
 </Project>

@@ -65,8 +65,8 @@ let private zodProperty () : Decoder<Zod.ZodType * string option> =
         (zodType ())
         (Decode.oneOf [ Decode.optional "description" Decode.string; Decode.succeed None ])
 
-/// JSON Schema in, zod raw shape out — a plain object whose values are zod types, one per
-/// argument, which is what the SDK's tool builder takes.
+/// JSON Schema in, zod properties out — one zod type per argument, in the order the schema
+/// lists them, which `Zod.rawShape` turns into what the SDK's tool builder takes.
 ///
 /// The conversion belongs here, at the one edge that needs it, rather than making the schema
 /// itself SDK-shaped: every OTHER boundary a descriptor crosses (MCP's `tools/list`, an
@@ -80,7 +80,7 @@ let private zodProperty () : Decoder<Zod.ZodType * string option> =
 /// `toolArguments` below refuses them. Nothing is lost by refusing one call the model made
 /// and can make again, where refusing a schema withdraws a tool nobody in the turn can ask
 /// about.
-let zodShape (schema: string) : obj =
+let zodShape (schema: string) : (string * Zod.ZodType) list =
     let shape =
         Decode.object (fun get ->
             let required =
@@ -94,13 +94,14 @@ let zodShape (schema: string) : obj =
                     match description with
                     | Some description -> node.describe description
                     | None -> node
-                key ==> (if required.Contains key then described else described.optional ())))
+                key, (if required.Contains key then described else described.optional ())))
     match Decode.fromString shape schema with
-    | Ok properties -> createObj properties
-    | Error _ -> createObj []
+    | Ok properties -> properties
+    | Error _ -> []
 
 /// The arguments a tool was called with, as the JSON text `ToolCall` carries — or why they
-/// could not be read.
+/// could not be read. Handed `ToolInput.json` of what the SDK passed: `None` is a call that
+/// carried nothing JSON can say.
 ///
 /// An OBJECT is the whole of the contract, on both sides of this line. The SDK types a
 /// handler's argument as the shape the tool declared and enforces it before the handler
@@ -115,9 +116,12 @@ let zodShape (schema: string) : obj =
 /// about, which is exactly what `isError` is for. `{}` was the wrong answer to give it —
 /// a valid call to every tool whose arguments are all optional, and a tool that needed one
 /// would have run on nothing.
-let toolArguments (args: obj) : Result<string, string> =
-    Decode.fromValue "$" (Decode.keyValuePairs Decode.value) (unbox args)
-    |> Result.map (Encode.object >> Encode.toString 0)
+let toolArguments (args: string option) : Result<string, string> =
+    match args with
+    | None -> Error "no arguments object at all"
+    | Some text ->
+        Decode.fromString (Decode.keyValuePairs Decode.value) text
+        |> Result.map (Encode.object >> Encode.toString 0)
 
 /// One tool, as the SDK declares one, over the registry's single dispatch.
 ///
@@ -139,11 +143,11 @@ let private toolOf (registry: ToolRegistry) (descriptor: ToolDescriptor) : ToolD
     tool
         descriptor.Name
         descriptor.Description
-        (zodShape descriptor.InputSchema)
+        (Zod.rawShape (zodShape descriptor.InputSchema))
         annotations
         (fun args ->
             async {
-                match toolArguments args with
+                match toolArguments (ToolInput.json args) with
                 | Error reason -> return ToolResult.ofText true (sprintf "unreadable arguments: %s" reason)
                 | Ok arguments ->
                     let call : ToolCall =
@@ -165,7 +169,7 @@ let private toolOf (registry: ToolRegistry) (descriptor: ToolDescriptor) : ToolD
 /// proxy the claim belongs to the SESSION, so the terminal's write lease can arbitrate
 /// between the agent and a human; reached directly it belongs to the agent's own MCP session,
 /// and nobody can take the device off it.
-let private serversOf (registry: ToolRegistry) : obj =
+let private serversOf (registry: ToolRegistry) : McpServers =
     ToolRegistry.namespaces registry
     |> List.map (fun ns ->
         let tools =
@@ -173,8 +177,8 @@ let private serversOf (registry: ToolRegistry) : obj =
             |> List.filter (fun descriptor -> descriptor.Namespace = ns)
             |> List.map (toolOf registry)
             |> Array.ofList
-        ns ==> createSdkMcpServer ns "1.0.0" tools)
-    |> createObj
+        ns, createSdkMcpServer ns "1.0.0" tools)
+    |> McpServers.ofList
 
 // --- what one turn accumulates ------------------------------------------------------------
 
@@ -381,7 +385,7 @@ let private optionsFor
     (systemPrompt: string)
     (model: string option)
     (registry: ToolRegistry)
-    (controller: Fetch.Types.AbortController)
+    (controller: Fable.NodeExtras.AbortController)
     (claudePath: string)
     (agentEnv: Environment)
     (claudeSpawner: Spawner)
@@ -413,7 +417,7 @@ let private optionsFor
         // the same descriptors the servers were built from, so the two cannot drift.
         o.tools <- [||]
         o.allowedTools <- ToolRegistry.allowedTools registry |> Array.ofList
-        o.abortController <- box controller
+        o.abortController <- controller
         if claudePath <> "" then o.pathToClaudeCodeExecutable <- claudePath
         o.env <- agentEnv
         o.spawnClaudeCodeProcess <- claudeSpawner)
@@ -437,7 +441,7 @@ let private runQuery
         // before that has to survive the throw. See the `with` below.
         let mutable state = Turn.empty
         try
-            let controller = Fetch.newAbortController ()
+            let controller = Fable.NodeExtras.Aborting.abortController ()
             registerAbort (fun () -> controller.abort ())
             let options = optionsFor systemPrompt model registry controller claudePath agentEnv claudeSpawner
             let running = query prompt options

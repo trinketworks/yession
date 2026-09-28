@@ -52,6 +52,12 @@
           "Fable.Node": "[1.6.0, )"
         }
       },
+      "fable.zod": {
+        "type": "Project",
+        "dependencies": {
+          "Fable.Core": "[5.2.0, )"
+        }
+      },
       "Fable.Fetch": {
         "type": "CentralTransitive",
         "requested": "[2.7.0, )",
