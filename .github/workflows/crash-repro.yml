@@ -7,6 +7,7 @@
 #
 #   gh workflow run crash-repro.yml -f layer=regex
 #   gh workflow run crash-repro.yml -f layer=fable -f rounds=5 -f shards='[1,2,3,4]'
+#   gh workflow run crash-repro.yml -f layer=fable -f env=DOTNET_TieredCompilation=0 -f arches='["x86_64-linux"]'
 name: crash-repro
 
 on:
@@ -26,28 +27,39 @@ on:
       seconds:
         description: "Seconds each regex child churns for (ignored by fable)"
         default: "60"
+      heap_mb:
+        description: "Live heap each regex child holds and rewrites, in MB (ignored by fable)"
+        default: "2000"
+      env:
+        description: "Space-separated NAME=value settings for every child, e.g. DOTNET_gcServer=1"
+        default: ""
+      sdk:
+        description: "source (the nixpkgs source build every derivation uses) or bin (Microsoft's build)"
+        type: choice
+        options: [source, bin]
+        default: source
       shards:
         description: "JSON list, one job per entry per architecture"
         default: "[1,2,3,4,5,6,7,8]"
+      arches:
+        description: "JSON list of architectures to run on"
+        default: '["x86_64-linux","aarch64-linux"]'
 
 permissions:
   contents: read
 
 jobs:
   repro:
-    name: "crash-repro ${{ inputs.layer }} (${{ matrix.arch }} #${{ matrix.shard }})"
-    runs-on: ${{ matrix.runner }}
+    name: "crash-repro ${{ inputs.layer }} ${{ inputs.sdk }} ${{ inputs.env }} (${{ matrix.arch }} #${{ matrix.shard }})"
+    # A runner per architecture by expression, not a matrix `include`: an include naming an
+    # architecture that `arches` left out would add that job back.
+    runs-on: ${{ matrix.arch == 'aarch64-linux' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
     timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
         shard: ${{ fromJSON(inputs.shards) }}
-        arch: [x86_64-linux, aarch64-linux]
-        include:
-          - arch: x86_64-linux
-            runner: ubuntu-latest
-          - arch: aarch64-linux
-            runner: ubuntu-24.04-arm
+        arch: ${{ fromJSON(inputs.arches) }}
     steps:
       - uses: actions/checkout@v4
       - uses: cachix/install-nix-action@v30
@@ -68,9 +80,13 @@ jobs:
           ROUNDS: ${{ inputs.rounds }}
           WORKERS: ${{ inputs.workers }}
           SECONDS_: ${{ inputs.seconds }}
+          HEAP_MB: ${{ inputs.heap_mb }}
+          CHILD_ENV: ${{ inputs.env }}
+          SDK: ${{ inputs.sdk }}
           SHARD: ${{ matrix.shard }}-${{ github.run_id }}-${{ github.run_attempt }}
         run: |
           nix build --impure --print-build-logs --no-link --expr "
             ((import ./nix/worktree.nix).crashRepro.override {
               layer = \"$LAYER\"; rounds = \"$ROUNDS\"; workers = \"$WORKERS\"; seconds = \"$SECONDS_\";
+              heapMb = \"$HEAP_MB\"; env = \"$CHILD_ENV\"; sdk = \"$SDK\";
             }).overrideAttrs { YESSION_CRASH_REPRO_SHARD = \"$SHARD\"; }"
