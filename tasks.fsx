@@ -47,6 +47,17 @@ let tailwind = Path.Combine (binDir, "tailwindcss")
 // pool. W^X only changes how those pages are mapped, which is why toggling it moved nothing and
 // why the flag that once did so is gone.
 //
+// The cause was the runtime's, and is fixed in it. Symbolized, every report is the JIT's first
+// compile of one of those methods failing in `LCGMethodResolver::GetCodeInfo`, which copies the
+// method's IL out of a managed array the GC did not know was live across a return: a collection
+// on another thread moved or reclaimed it first (dotnet/runtime#131267, a .NET 10 regression,
+// fixed by the backport in 10.0.12). The same fault also compiles whatever bytes it finds, so it
+// does not always crash — `crash-repro` caught freshly compiled regexes answering wrongly and
+// throwing InvalidProgramException, on Microsoft's build of 10.0.10 as much as the nixpkgs one.
+// Both nixpkgs pins moved to a 10.0.12 runtime for that; the report below stays, because an
+// upstream fix that is "not the whole answer" (MeshWeaver still saw one after it) should be
+// caught saying so.
+//
 // The runtime can be told to account for itself: a crash report names the faulting thread's
 // frames, native and managed. Children are started here, so here is where they are told to
 // write one and where it is read back out. A run that does not crash pays nothing — no dump is
