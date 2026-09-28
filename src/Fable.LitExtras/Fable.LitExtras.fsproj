@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The part of Lit's runtime shape `Fable.Lit` does not bind: what a `TemplateResult` IS once
+    `html` has run — its static parts, the values in its holes, and the brand that tells a
+    template from any other object. The package types a template as an empty interface, which
+    is right for everything that hands one to Lit and wrong for the one reader here that takes
+    one apart: the Host's server-side renderer (app/Ssr.fs).
+
+    Fable-only, like app/Yession.Host.fsproj: `dotnet build` only type-checks it; the runnable
+    JS comes from Fable. There is nothing to install: the shape is Lit's own, already in the
+    bundle wherever a template is.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="LitExtras.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Fable.Core" />
+    <PackageReference Include="Fable.Lit" />
+  </ItemGroup>
+
+</Project>

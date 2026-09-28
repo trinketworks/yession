@@ -13,7 +13,6 @@ module Fable.YIndexeddb
 // Fable-only: `dotnet build` type-checks it; Fable emits the JS that runs in the browser.
 
 open Fable.Core
-open Fable.Core.JsInterop
 open Yjs
 
 /// A provider, holding one document against one IndexedDB store.
@@ -30,15 +29,14 @@ type IndexeddbPersistence =
     [<Emit("new Promise((resolve) => $0.once('synced', resolve))")>]
     abstract whenSynced : unit -> JS.Promise<unit>
 
+/// The provider's class, as the one thing done with it: construct a provider.
+type private PersistenceClass =
+    [<EmitConstructor>]
+    abstract Create : name: string * doc: Y.Doc -> IndexeddbPersistence
+
 [<Import("IndexeddbPersistence", "y-indexeddb")>]
-let private persistenceClass : obj = jsNative
+let private persistenceClass : PersistenceClass = jsNative
 
 /// Keep `doc` in the IndexedDB store called `name`, loading whatever that store already holds
 /// into it.
-///
-/// The receiver is parenthesised because Fable pastes the caller's TEXT for `$0`: `new $0(…)`
-/// over anything but a bare identifier binds `new` to the wrong part of it (YES003).
-[<Emit("new ($0)($1, $2)")>]
-let private construct (ctor: obj) (name: string) (doc: Y.Doc) : IndexeddbPersistence = jsNative
-
-let create (name: string) (doc: Y.Doc) : IndexeddbPersistence = construct persistenceClass name doc
+let create (name: string) (doc: Y.Doc) : IndexeddbPersistence = persistenceClass.Create (name, doc)

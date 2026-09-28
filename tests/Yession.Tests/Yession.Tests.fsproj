@@ -166,9 +166,13 @@
          app/ calls them yet — the call sites migrate one at a time — and a binding
          project nothing calls is a project nothing proves. -->
     <ProjectReference Include="..\..\src\Fable.NodeExtras\Fable.NodeExtras.fsproj" />
-    <!-- The web-platform bindings: `Phase4` resolves a page's links the way a browser does,
-         through the WHATWG `URL` that Node ships too. -->
+    <!-- The web-platform bindings: `Phase4` resolves a page's links, and the OIDC cookie jar a
+         redirect's `Location`, the way a browser does — through the WHATWG `URL` that Node
+         ships too. -->
     <ProjectReference Include="..\..\src\Fable.BrowserExtras\Fable.BrowserExtras.fsproj" />
+    <!-- The fetch surface `Fable.Fetch` does not bind: the OIDC cookie jar reads every
+         `set-cookie` apart through it. -->
+    <ProjectReference Include="..\..\src\Fable.FetchExtras\Fable.FetchExtras.fsproj" />
     <!-- The zod bindings. The product calls them now (app/Agent.fs turns a tool
          descriptor's JSON Schema into a zod shape), so this reference is only so the
          suite can name them directly. -->

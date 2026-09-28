@@ -275,7 +275,9 @@ module Urls =
 [<AllowNullLiteral>]
 type MessagePort =
     abstract onmessage : (MessageEvent -> unit) with get, set
-    abstract postMessage : message: obj -> unit
+    /// Post a message to the other end. Typed as the one message this repository posts: a
+    /// tick, whose arrival is the point and whose value nobody reads.
+    abstract postMessage : tick: int -> unit
 
 /// A `MessageChannel`: two ports, and a message posted on one arrives on the other as a
 /// TASK — a turn of the event loop the page may paint in, which is the one thing a
@@ -356,13 +358,15 @@ module CacheStorage =
         interface
         end
 
+    /// `headers` as name/value pairs, which Fable compiles to two-element arrays — one of the
+    /// shapes `HeadersInit` takes.
     [<Emit("new Response($0, { headers: $1 })")>]
-    let private responseCarrying (body: string) (headers: obj) : KeptResponse = jsNative
+    let private responseCarrying (body: string) (headers: (string * string) array) : KeptResponse = jsNative
 
     /// `body`, as a response to keep, carrying `headers` — which the Cache API round-trips
     /// for nothing, and is where a caller puts what the bytes alone cannot say.
     let keptResponse (body: string) (headers: (string * string) list) : KeptResponse =
-        responseCarrying body (createObj [ for name, value in headers -> name ==> value ])
+        responseCarrying body (Array.ofList headers)
 
     /// One named store.
     ///

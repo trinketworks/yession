@@ -27,7 +27,7 @@ open Fable.Yaml
 let private complaints (doc: Document) : string array =
     Array.append doc.errors doc.warnings |> Array.map (fun problem -> problem.message)
 
-let private toJson (doc: Document) : string = JS.JSON.stringify (doc.toJS ())
+let private toJson (doc: Document) : string = Plain.json (doc.toJS ())
 
 /// The same parser construction `RepoConfig` uses, and every field is load-bearing there for
 /// the same reasons: `core` resolves only what JSON could express, `uniqueKeys` makes a

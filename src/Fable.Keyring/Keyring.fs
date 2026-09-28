@@ -20,12 +20,14 @@ type Entry =
 [<AutoOpen>]
 module Entry =
 
-    [<Import("Entry", "@napi-rs/keyring")>]
-    let private entryCtor : obj = jsNative
+    /// The `Entry` class, as the one thing done with it: construct a handle.
+    type private EntryClass =
+        [<EmitConstructor>]
+        abstract Create : service: string * name: string -> Entry
 
-    [<Emit("new ($0)($1, $2)")>]
-    let private construct (ctor: obj) (service: string) (name: string) : Entry = jsNative
+    [<Import("Entry", "@napi-rs/keyring")>]
+    let private entryClass : EntryClass = jsNative
 
     /// Construct an entry handle. Constructing grants nothing and may itself throw on
     /// hosts with no usable credential store — callers guard it.
-    let entry (service: string) (name: string) : Entry = construct entryCtor service name
+    let entry (service: string) (name: string) : Entry = entryClass.Create (service, name)

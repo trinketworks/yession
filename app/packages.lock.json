@@ -178,6 +178,13 @@
           "Fable.Core": "[5.2.0, )"
         }
       },
+      "fable.litextras": {
+        "type": "Project",
+        "dependencies": {
+          "Fable.Core": "[5.2.0, )",
+          "Fable.Lit": "[1.4.2, )"
+        }
+      },
       "fable.nodedatachannel": {
         "type": "Project",
         "dependencies": {

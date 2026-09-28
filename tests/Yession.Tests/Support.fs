@@ -243,17 +243,13 @@ module OidcHttp =
     let cookieHeader (jar: Jar) : string =
         jar.Cookies |> Map.toList |> List.map (fun (k, v) -> sprintf "%s=%s" k v) |> String.concat "; "
 
-    /// Resolve a (possibly relative) URL against a base, exactly as a browser resolves a
-    /// `Location` header against the request URI.
-    [<Fable.Core.Emit("new URL($0, $1).href")>]
-    let private resolveUrl (location: string) (baseUrl: string) : string = Fable.Core.Util.jsNative
-
-    /// `Headers.getSetCookie()` — every `Set-Cookie` the reply carried, one string each.
-    /// `Headers.get` cannot answer this and `Fable.Fetch` does not bind it: `get` joins
-    /// repeated headers with a comma, and a cookie's `Expires` date contains one, so the
-    /// joined form cannot be taken apart again.
-    [<Fable.Core.Emit("$0.getSetCookie()")>]
-    let private setCookiesOf (headers: Fetch.Types.Headers) : string [] = Fable.Core.Util.jsNative
+    /// Every `Set-Cookie` the reply carried, one string each — `Headers.get` joins repeated
+    /// headers with a comma, and a cookie's `Expires` date contains one, so the joined form
+    /// cannot be taken apart again. A runtime with no `getSetCookie` cannot run these cases at
+    /// all, which is a failure to report rather than a reply that set nothing.
+    let private setCookiesOf (headers: Fetch.Types.Headers) : string [] =
+        Fable.FetchExtras.setCookies headers
+        |> Option.defaultWith (fun () -> failwith "this runtime's Headers has no getSetCookie")
 
     /// One GET that does not follow redirects, as the parts of the reply the OIDC cases read.
     ///
@@ -323,7 +319,7 @@ module OidcHttp =
             async {
                 let! reply = getWithJarAs headers jar url
                 if reply.Status >= 300 && reply.Status < 400 && hops < 10 then
-                    return! go (resolveUrl reply.Location url) (hops + 1)
+                    return! go (Fable.BrowserExtras.Urls.resolve reply.Location url) (hops + 1)
                 else
                     return reply
             }
