@@ -1755,6 +1755,48 @@ let editorTests =
                 Expect.isTrue (drift < 0.5) (sprintf "the name's baseline is the line's, it was %.2fpx off" drift)
             }
 
+        // The same question of an act still RUNNING, whose gutter holds the agent's mark
+        // rather than an arrow. A mark beside a title is read against that title's letters,
+        // so it spans them: lower point on the title's baseline, upper at its x-height —
+        // measured by an inline-block `1ex` tall dropped into the title's first line, whose
+        // bottom rests on that baseline and whose top is where an `x` ends — and it stays
+        // inside the gutter it marks. The first cut of this case checked the baseline alone
+        // and passed a gutter set a size larger than its title, whose mark was 2.8px too
+        // tall and centred onto the baseline by coincidence.
+        editorCase "a running act's mark spans its title's letters, in the gutter" <| fun page ->
+            async {
+                do! awaitU (page.EmulateMediaAsync (PageEmulateMediaOptions (ReducedMotion = ReducedMotion.Reduce)))
+                do! awaitU (page.EvaluateAsync "() => window.__acts()")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-act-status=\"running\"] [data-act-running]")
+                let! misplaced =
+                    await (page.EvaluateAsync<string> """() => {
+                        const note = document.querySelector('#shell [data-act-status="running"]')
+                        const mark = note.querySelector('[data-act-running]')
+                        const gutter = mark.parentElement.getBoundingClientRect()
+                        const title = note.querySelector('.col-start-2')
+                        const walk = document.createTreeWalker(title, NodeFilter.SHOW_TEXT)
+                        let first = null
+                        while (!first && walk.nextNode()) if (walk.currentNode.textContent.trim()) first = walk.currentNode
+                        if (!first) return 'the title has no words'
+                        const probe = document.createElement('span')
+                        probe.style.cssText = 'display:inline-block;width:0;height:1ex'
+                        first.parentNode.insertBefore(probe, first)
+                        const letters = probe.getBoundingClientRect()
+                        probe.remove()
+                        const at = mark.getBoundingClientRect()
+                        const em = parseFloat(getComputedStyle(first.parentElement).fontSize)
+                        const wrong = []
+                        if (Math.abs(at.bottom - letters.bottom) > 0.05 * em)
+                          wrong.push('its lower point is ' + (at.bottom - letters.bottom) + 'px off the title\'s baseline')
+                        if (Math.abs(at.top - letters.top) > 0.05 * em)
+                          wrong.push('its upper point is ' + (at.top - letters.top) + 'px off the title\'s x-height')
+                        if (at.left < gutter.left || at.right > gutter.right)
+                          wrong.push('it is outside its gutter (' + at.left + '-' + at.right + ' against ' + gutter.left + '-' + gutter.right + ')')
+                        return wrong.join('; ')
+                    }""")
+                Expect.equal misplaced "" "the running act's mark stands on its title's line"
+            }
+
         // EVERY fold's arrow sits on the centre of its own title's line, and every arrow on
         // one rail — an act's title is prose at one step, a tool call's is mono at another,
         // and the two steps carry different line-heights (13/16 and 11/16 against a row that
@@ -3196,10 +3238,12 @@ let editorTests =
         // baseline sits wherever its centre puts it, which on a phone is a pixel off. Both
         // are geometry a cheap tier cannot see: the markup is the same either way.
         //
-        // The baseline is measured, not assumed: an empty inline-block rests its bottom
-        // edge on the baseline of the line it is in, so a zero-sized one dropped after the
-        // last word marks exactly where that word's letters stand.
-        editorCaseIn 390 844 "the agent's caret stands on its last line's baseline, just after the last word" <| fun page ->
+        // The letters are measured, not assumed: an empty inline-block rests its bottom
+        // edge on the baseline of the line it is in, so one `1ex` tall dropped after the
+        // last word spans exactly where that word's lowercase stands — baseline to the top
+        // of an `x` — and the diamond is held to both, within the overshoot a point is
+        // carried past its line.
+        editorCaseIn 390 844 "the agent's caret spans its last line's letters, just after the last word" <| fun page ->
             async {
                 // Held still, so the mark is measured at rest rather than mid-turn.
                 do! awaitU (page.EmulateMediaAsync (PageEmulateMediaOptions (ReducedMotion = ReducedMotion.Reduce)))
@@ -3221,12 +3265,13 @@ let editorTests =
                                  range.setEnd(last, end)
                                  const glyph = range.getBoundingClientRect()
                                  const probe = document.createElement('span')
-                                 probe.style.cssText = 'display:inline-block;width:0;height:0'
+                                 probe.style.cssText = 'display:inline-block;width:0;height:1ex'
                                  last.after(probe)
-                                 const baseline = probe.getBoundingClientRect().bottom
+                                 const letters = probe.getBoundingClientRect()
+                                 const baseline = letters.bottom
                                  probe.remove()
                                  const at = caret.getBoundingClientRect()
-                                 const em = parseFloat(getComputedStyle(caret).fontSize)
+                                 const em = parseFloat(getComputedStyle(last.parentElement).fontSize)
                                  const wrong = []
                                  if (at.top < glyph.top || at.bottom > glyph.bottom)
                                    wrong.push('it is not on the last line (' + at.top + '-' + at.bottom + ' against ' + glyph.top + '-' + glyph.bottom + ')')
@@ -3234,6 +3279,8 @@ let editorTests =
                                  // line, as the round letters beside it are.
                                  if (Math.abs(at.bottom - baseline) > 0.05 * em)
                                    wrong.push('its lower point is ' + (at.bottom - baseline) + 'px off the baseline')
+                                 if (Math.abs(at.top - letters.top) > 0.05 * em)
+                                   wrong.push('its upper point is ' + (at.top - letters.top) + 'px off the x-height')
                                  if (at.left < glyph.right) wrong.push('it starts before the last word ends')
                                  if (at.left - glyph.right > em) wrong.push('it stands ' + (at.left - glyph.right) + 'px after the last word')
                                  return wrong.join('; ')
