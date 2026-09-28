@@ -89,6 +89,13 @@
           "Fable.Core": "[5.2.0, )"
         }
       },
+      "fable.litextras": {
+        "type": "Project",
+        "dependencies": {
+          "Fable.Core": "[5.2.0, )",
+          "Fable.Lit": "[1.4.2, )"
+        }
+      },
       "fable.nodedatachannel": {
         "type": "Project",
         "dependencies": {
@@ -196,6 +203,7 @@
           "Fable.Jose": "[1.0.0, )",
           "Fable.Keyring": "[1.0.0, )",
           "Fable.Lit": "[1.4.2, )",
+          "Fable.LitExtras": "[1.0.0, )",
           "Fable.Node": "[1.6.0, )",
           "Fable.NodeDataChannel": "[1.0.0, )",
           "Fable.NodeExtras": "[1.0.0, )",

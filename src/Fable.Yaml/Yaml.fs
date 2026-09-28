@@ -9,6 +9,19 @@ module Fable.Yaml
 
 open Fable.Core
 
+/// A parsed tree as plain JavaScript values — the objects, arrays, strings, numbers, booleans
+/// and nulls YAML's core schema resolves to, which is to say JSON's. Opaque: what anything here
+/// wants from it is a DECODE, and the decoders this repository keeps read JSON text on both
+/// runtimes, so `Plain.json` is the way out of it.
+type Plain =
+    interface end
+
+[<RequireQualifiedAccess>]
+module Plain =
+
+    /// The tree as JSON text, for a decoder to read.
+    let json (value: Plain) : string = JS.JSON.stringify value
+
 /// One thing the parser objected to, as yaml reports it (a `YAMLError`).
 [<AllowNullLiteral>]
 type Problem =
@@ -22,7 +35,7 @@ type Document =
     abstract errors : Problem array
     abstract warnings : Problem array
     /// The document as plain JavaScript values — what anything wanting JSON out of it takes.
-    abstract toJS : unit -> obj
+    abstract toJS : unit -> Plain
 
 /// How a parser is constructed. yaml reads these off a plain options object, which is what a
 /// Fable record is once compiled; the names are yaml's own.
@@ -42,4 +55,4 @@ let parseDocument (text: string) (options: ParseOptions) : Document = jsNative
 /// `parse`: the resolved value and nothing about what was objected to. For a question about
 /// what a committed file SAYS, where a refusal is not the point.
 [<Import("parse", "yaml")>]
-let parse (text: string) : obj = jsNative
+let parse (text: string) : Plain = jsNative

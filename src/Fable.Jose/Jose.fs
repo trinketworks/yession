@@ -81,14 +81,16 @@ type [<AllowNullLiteral>] SignJwt =
     abstract setExpirationTime : string -> SignJwt
     abstract sign : CryptoKey -> JS.Promise<string>
 
-[<Import("SignJWT", "jose")>]
-let private signJwtCtor : obj = jsNative
+/// The `SignJWT` class, as the one thing done with it: construct a builder.
+type private SignJwtClass =
+    [<EmitConstructor>]
+    abstract Create : payload: JwtPayload -> SignJwt
 
-[<Emit("new ($0)($1)")>]
-let private construct (ctor: obj) (payload: JwtPayload) : SignJwt = jsNative
+[<Import("SignJWT", "jose")>]
+let private signJwtClass : SignJwtClass = jsNative
 
 /// Start a signing builder over the given payload claims.
-let signJwt (payload: JwtPayload) : SignJwt = construct signJwtCtor payload
+let signJwt (payload: JwtPayload) : SignJwt = signJwtClass.Create payload
 
 /// A key as a key set publishes it: the key's parameters (`Jwk` above) plus what a verifier
 /// selects it by — `kid`, `alg` and `use` (RFC 7517 §4). The input half of `Jwk`: jose

@@ -65,8 +65,8 @@ let private pendingMap (doc: Y.Doc) : Y.Map<obj> = doc.getMap "pending"
 /// A queue entry field, set to whatever a peer we do not control might have written.
 let private setQueuedFieldInDoc (doc: Y.Doc) (id: QueueId) (field: string) (value: string) : unit =
     (pendingMap doc).get (QueueId.value id)
-    |> Option.filter (isNull >> not)
-    |> Option.iter (fun entry -> (unbox<Y.Map<obj>> entry).set (field, box value) |> ignore)
+    |> Option.bind Y.Map.tryOf
+    |> Option.iter (fun entry -> entry.set (field, box value) |> ignore)
 
 /// A raw pending entry, written the way a build we no longer ship would have written one.
 /// No production writer has this shape any more — that is the point — so the only way to

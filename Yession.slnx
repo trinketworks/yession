@@ -21,6 +21,7 @@
     <Project Path="src/Fable.OpenTelemetry/Fable.OpenTelemetry.fsproj" />
     <Project Path="src/Fable.BrowserExtras/Fable.BrowserExtras.fsproj" />
     <Project Path="src/Fable.FetchExtras/Fable.FetchExtras.fsproj" />
+    <Project Path="src/Fable.LitExtras/Fable.LitExtras.fsproj" />
     <Project Path="src/Fable.ProseMirror/Fable.ProseMirror.fsproj" />
     <Project Path="src/Fable.YIndexeddb/Fable.YIndexeddb.fsproj" />
     <Project Path="src/Fable.Xterm/Fable.Xterm.fsproj" />

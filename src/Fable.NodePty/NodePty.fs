@@ -43,8 +43,12 @@ type Environment =
 [<RequireQualifiedAccess>]
 module Environment =
 
-    let ofMap (variables: Map<string, string>) : Environment =
-        unbox (JsInterop.createObj [ for name, value in Map.toList variables -> name, box value ])
+    /// `Object.fromEntries` over the pairs, which Fable compiles to two-element arrays — the
+    /// shape it takes.
+    [<Emit("Object.fromEntries($0)")>]
+    let private ofEntries (entries: (string * string) array) : Environment = jsNative
+
+    let ofMap (variables: Map<string, string>) : Environment = ofEntries (Map.toArray variables)
 
 /// `spawn`'s options — the five this repository sets. `cwd` `None` starts the process where
 /// this one is.

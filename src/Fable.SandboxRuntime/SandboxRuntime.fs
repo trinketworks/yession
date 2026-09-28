@@ -68,15 +68,23 @@ module RuntimeConfig =
     /// holds fields srt put there that nothing here declares: `Object.assign` copies every
     /// field, a rebuild would copy the ones it knows.
     let widened (config: RuntimeConfig) (allowedDomains: string array) (allowUnixSockets: string array) : RuntimeConfig =
-        let network =
-            JS.Constructors.Object.assign (
-                createEmpty<NetworkConfig>,
-                config.network,
-                jsOptions<NetworkConfig> (fun n ->
-                    n.allowedDomains <- allowedDomains
-                    n.allowUnixSockets <- allowUnixSockets)
-            )
-        unbox<RuntimeConfig> (JS.Constructors.Object.assign (createEmpty<RuntimeConfig>, config, {| network = network |}))
+        // `Object.assign` copies into its target and hands the same target back, so each copy
+        // is the value made here — typed from the start, and nothing needs to be read back out
+        // of the call's `obj`.
+        let network = createEmpty<NetworkConfig>
+        JS.Constructors.Object.assign (network, config.network) |> ignore
+        network.allowedDomains <- allowedDomains
+        network.allowUnixSockets <- allowUnixSockets
+        let copy = createEmpty<RuntimeConfig>
+        JS.Constructors.Object.assign (copy, config) |> ignore
+        copy.network <- network
+        copy
+
+/// The platform's `AbortSignal`, as `wrapWithSandboxArgv` takes one to cancel a wrap in
+/// flight. Opaque: nothing here cancels a wrap, so nothing here makes one — `None` is the only
+/// value ever passed, and the slot is declared because the arguments after it are positional.
+type AbortSignal =
+    interface end
 
 /// What `wrapWithSandboxArgv` answers with: the confined command line to spawn instead.
 type [<AllowNullLiteral>] Wrapped =
@@ -95,7 +103,7 @@ type [<AllowNullLiteral>] SandboxManager =
     /// filesystem profile rides here. `cwd` `None` is "wherever this process is", which is
     /// how srt reads a missing one.
     abstract wrapWithSandboxArgv :
-        command: string * binShell: string option * customConfig: RuntimeConfig * abortSignal: obj option * cwd: string option ->
+        command: string * binShell: string option * customConfig: RuntimeConfig * abortSignal: AbortSignal option * cwd: string option ->
             JS.Promise<Wrapped>
     /// Where srt's Linux egress bridge listens: the unix sockets the in-sandbox socat
     /// connects to. Both are absent off Linux, where Seatbelt needs no such bridge.

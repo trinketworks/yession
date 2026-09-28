@@ -56,8 +56,12 @@ type Labels =
 [<RequireQualifiedAccess>]
 module Labels =
 
-    let ofList (labels: (string * string) list) : Labels =
-        unbox (createObj [ for name, value in labels -> name ==> value ])
+    /// `Object.fromEntries` over the pairs, which Fable compiles to two-element arrays — the
+    /// shape it takes.
+    [<Emit("Object.fromEntries($0)")>]
+    let private ofEntries (entries: (string * string) array) : Labels = jsNative
+
+    let ofList (labels: (string * string) list) : Labels = ofEntries (Array.ofList labels)
 
 /// What a `HostConfig.Mounts` entry's source is: a host path bound in, or a named volume.
 [<StringEnum; RequireQualifiedAccess>]
@@ -181,26 +185,33 @@ type [<AllowNullLiteral>] Exec =
     /// on the other side. Rejects when the exec is already gone.
     abstract resize: size: ExecSize -> JS.Promise<unit>
 
+/// What the Engine API answered to a request whose answer nothing here reads — a start, a
+/// removal, a ping, an inspect asked only for whether it succeeds. Opaque: the promise
+/// SETTLING is the whole of what a caller learns, and a type with members would suggest
+/// otherwise.
+type Unread =
+    interface end
+
 /// A container handle (created, or looked up by name/id).
 type [<AllowNullLiteral>] Container =
     /// The full container id assigned by the daemon.
     abstract id: string
-    abstract start: unit -> JS.Promise<obj>
-    abstract remove: options: RemoveOptions -> JS.Promise<obj>
+    abstract start: unit -> JS.Promise<Unread>
+    abstract remove: options: RemoveOptions -> JS.Promise<Unread>
     abstract exec: options: ExecOptions -> JS.Promise<Exec>
-    abstract inspect: unit -> JS.Promise<obj>
+    abstract inspect: unit -> JS.Promise<Unread>
     /// The container's own output. With `follow: true` a stream that stays open as the
     /// process prints; multiplexed like an exec's, so `demuxStream` reads it.
     abstract logs: options: LogsOptions -> JS.Promise<Stream>
 
 /// A named-volume handle.
 type [<AllowNullLiteral>] Volume =
-    abstract remove: options: RemoveOptions -> JS.Promise<obj>
+    abstract remove: options: RemoveOptions -> JS.Promise<Unread>
 
 /// An image handle — used to test local presence before pulling.
 type [<AllowNullLiteral>] Image =
     /// Resolves if the image exists locally; rejects otherwise.
-    abstract inspect: unit -> JS.Promise<obj>
+    abstract inspect: unit -> JS.Promise<Unread>
 
 /// docker-modem: the low-level plumbing dockerode exposes for stream handling.
 type [<AllowNullLiteral>] Modem =
@@ -208,15 +219,15 @@ type [<AllowNullLiteral>] Modem =
     abstract demuxStream: source: Stream * stdout: PassThrough * stderr: PassThrough -> unit
     /// Drain a build/pull progress stream, calling back once when it finishes: `(err, output)`,
     /// where `err` is `null` — `None` — when it finished well.
-    abstract followProgress: source: Stream * onFinished: (Fable.NodeExtras.StreamError option -> obj -> unit) -> unit
+    abstract followProgress: source: Stream * onFinished: (Fable.NodeExtras.StreamError option -> Unread -> unit) -> unit
 
 /// The dockerode client, bound to the local daemon socket.
 type [<AllowNullLiteral>] Docker =
     /// Resolves when the daemon answers; rejects when it is unreachable.
-    abstract ping: unit -> JS.Promise<obj>
+    abstract ping: unit -> JS.Promise<Unread>
     abstract createContainer: options: ContainerCreateOptions -> JS.Promise<Container>
     abstract getContainer: id: string -> Container
-    abstract createVolume: options: VolumeCreateOptions -> JS.Promise<obj>
+    abstract createVolume: options: VolumeCreateOptions -> JS.Promise<Unread>
     abstract getVolume: name: string -> Volume
     abstract getImage: name: string -> Image
     /// Pull an image; resolves to the progress stream to drain before use.
@@ -226,14 +237,29 @@ type [<AllowNullLiteral>] Docker =
     abstract listContainers: options: ListContainersOptions -> JS.Promise<ContainerSummary array>
     abstract modem: Modem
 
-[<Emit("new ($0)($1)")>]
-let private newWith (ctor: obj) (opts: obj) : 'a = jsNative
+/// The options either constructor below is handed: none set, which is how each is told "your
+/// default" — the local daemon socket for dockerode, a plain byte stream for `PassThrough`.
+type ConstructorOptions =
+    interface end
 
-let private dockerCtor: obj = importDefault "dockerode"
-let private passThroughCtor: obj = import "PassThrough" "node:stream"
+/// The dockerode class, as the one thing done with it: construct a client.
+type private DockerClass =
+    [<EmitConstructor>]
+    abstract Create : options: ConstructorOptions -> Docker
+
+/// `node:stream`'s `PassThrough` class, likewise.
+type private PassThroughClass =
+    [<EmitConstructor>]
+    abstract Create : options: ConstructorOptions -> PassThrough
+
+[<ImportDefault("dockerode")>]
+let private dockerClass: DockerClass = jsNative
+
+[<Import("PassThrough", "node:stream")>]
+let private passThroughClass: PassThroughClass = jsNative
 
 /// A client on the default local socket (`/var/run/docker.sock`, or the platform default).
-let create () : Docker = newWith dockerCtor (createObj [])
+let create () : Docker = dockerClass.Create (jsOptions<ConstructorOptions> ignore)
 
 /// A fresh PassThrough sink for demuxing exec output.
-let createPassThrough () : PassThrough = newWith passThroughCtor (createObj [])
+let createPassThrough () : PassThrough = passThroughClass.Create (jsOptions<ConstructorOptions> ignore)

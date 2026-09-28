@@ -270,8 +270,17 @@ open Fable.NodeExtras
 open Node.Api
 open Yession.Host
 
-[<Fable.Core.Emit("crypto.subtle.exportKey('raw', $0)")>]
-let private exportRawKey (key: obj) : Fable.Core.JS.Promise<obj> = Fable.Core.Util.jsNative
+/// The one `crypto.subtle` member the product never calls and this suite must: exporting a
+/// key, which is how non-extractability is pinned — by watching it refuse. Declared here, not
+/// in `Fable.NodeExtras.SubtleCrypto`, because nothing in the product may ask it.
+type private KeyExport =
+    abstract exportKey : format: KeyFormat * key: CryptoKey -> Fable.Core.JS.Promise<Fable.Core.JS.ArrayBuffer>
+
+[<Fable.Core.Import("subtle", "node:crypto")>]
+let private subtle : KeyExport = Fable.Core.Util.jsNative
+
+let private exportRawKey (key: CryptoKey) : Fable.Core.JS.Promise<Fable.Core.JS.ArrayBuffer> =
+    subtle.exportKey (KeyFormat.Raw, key)
 
 let private freshPath (label: string) =
     sprintf "tests/Yession.Tests/out/.data/%s-%d.secrets.json" label (int (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds ()) % 1000000)
