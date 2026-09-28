@@ -531,10 +531,17 @@ let
   # its budget are the verb's own arguments, so the verb's header is the manual; `.override`
   # sets them: `nix build --impure --expr '(import ./nix/worktree.nix).crashRepro.override
   # { layer = "fable"; rounds = "5"; }'`.
-  crashRepro = lib.makeOverridable ({ layer ? "regex", rounds ? "20", workers ? "4", seconds ? "60", heapMb ? "2000", env ? "" }: pkgs.stdenv.mkDerivation {
+  #
+  # `sdk` picks the runtime under test: "source" is the nixpkgs source build every other
+  # derivation here uses, "bin" is Microsoft's own build of the same release — the A/B that says
+  # whether the fault belongs to the runtime or to how nixpkgs compiled it.
+  crashRepro = lib.makeOverridable ({ layer ? "regex", rounds ? "20", workers ? "4", seconds ? "60", heapMb ? "2000", env ? "", sdk ? "source" }: pkgs.stdenv.mkDerivation {
     pname = "yession-crash-repro";
     inherit version src;
-    nativeBuildInputs = [ pkgs.dotnet-sdk_10 pkgs.nodejs_24 ];
+    nativeBuildInputs = [
+      ({ source = pkgs.dotnet-sdk_10; bin = pkgs.dotnetCorePackages.sdk_10_0-bin; }.${sdk})
+      pkgs.nodejs_24
+    ];
     buildPhase = ''
       runHook preBuild
       ${dotnetEnv}
@@ -542,6 +549,7 @@ let
       chmod -R u+w node_modules
       export PATH="$PWD/node_modules/.bin:$PATH"
       ${nugetEnv}
+      readlink -f "$(command -v dotnet)"
       dotnet fsi tasks.fsx crash-repro ${layer} ${rounds} ${workers} ${seconds} ${heapMb} ${env} | tee crash-repro.log
       runHook postBuild
     '';
