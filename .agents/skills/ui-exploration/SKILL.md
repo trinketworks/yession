@@ -152,7 +152,8 @@ the same tool (a clamped "before" against an emulated "after" is not a compariso
   whatever carries that attribute is what gets replaced wholesale).
 - Run the suite before calling it done: `devenv shell -- check Ports Native` on this
   container (see AGENTS.md Testing).
-- The page must remain self-contained: inline script, locally served `/app.css`, no CDN.
+- The page must remain local: its program is F# (`app/browser/ManagerPage.fs`), served
+  from the Manager's own asset set beside its stylesheet — no inline script, no CDN.
 
 ## Cleanup
 
