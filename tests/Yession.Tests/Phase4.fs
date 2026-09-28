@@ -1543,6 +1543,55 @@ let private launchOnceTests =
             }
     ]
 
+/// A Manager with its management endpoint up over stub sessions, and a session in it already
+/// running. The stub reports port 1, so the address `/open` names is known in advance.
+let private runningBehindUi (name: string) =
+    let dataDir =
+        sprintf "tests/Yession.Tests/out/.data/%s-%d" name (int (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds ()) % 1000000)
+    Fs.ensureDir dataDir
+    let ledger = dataDir + "/spawned"
+    async {
+        let! pm =
+            ProcessManager.createWithUi
+                { ProcessManager.Options.defaults dataDir nodePath (stubSession ledger (readyThenWait 0)) with
+                    Strategy = Some Strategy.localhost }
+                (Some ManagerUi.tryHandle)
+        let record = pm.CreateSession name "" |> expect
+        let! launched = pm.Launch record.SessionId
+        Expect.isTrue (Result.isOk launched) (sprintf "the stub launched: %A" launched)
+        let openUrl =
+            sprintf "http://127.0.0.1:%d%s" pm.EndpointPort.Value (ManagerRoute.path (ManagerRoute.OpenSession record.SessionId))
+        return pm, ledger, openUrl
+    }
+
+// `/open` on a session that is already up. The opening screen covers a launch and a front
+// door's mapping appearing; a running session has both, so the screen would only be a
+// delay — the answer is where the screen would have sent the browser, at once.
+let private openRunningTests =
+    testList "Opening a session that is already running" [
+        testCaseAsync "/open on a running session answers 303 straight to its sign-in address" <|
+            async {
+                let! pm, ledger, openUrl = runningBehindUi "open-running"
+                let! answer = TestHttp.getUnredirected [] openUrl
+                do! pm.StopAll ()
+                spawnedChildren ledger |> ignore
+                Expect.equal
+                    (answer.Status, TestHttp.header "location" answer)
+                    (303, Some "http://127.0.0.1:1/login")
+                    "a redirect to the session's sign-in entry, with no screen in front of it"
+            }
+
+        // What makes the URL safe to keep clicking: asking for a session that is up is not
+        // asking for it to be started again.
+        testCaseAsync "/open on a running session does not relaunch it" <|
+            async {
+                let! pm, ledger, openUrl = runningBehindUi "open-again"
+                let! _ = TestHttp.getUnredirected [] openUrl
+                do! pm.StopAll ()
+                Expect.equal (List.length (spawnedChildren ledger)) 1 "one child, spawned by the launch before /open"
+            }
+    ]
+
 let private uiFlowTests =
     testList "Management UI flow (Step 25)" [
         testCaseAsync "create -> launch -> open -> stop -> resume -> crash, all over the management endpoint, with live status pushed on the rows stream" <|
@@ -1671,14 +1720,8 @@ let private uiFlowTests =
                     (opened.Contains (sprintf "http://127.0.0.1:%d/login" launchedPort))
                     "the landing page names the session's sign-in entry"
 
-                // Already running: /open is not a relaunch — it hands back the same address,
-                // which is what makes the URL safe to keep clicking.
-                let! again = Interop.getText (baseUrl + "/sessions/open-1/open") |> Interop.awaitPromise
-                match (pm.TryFind sessionId).Value.Status with
-                | ProcessManager.Running (port, _, _) ->
-                    Expect.equal port launchedPort "the running session was not restarted"
-                    Expect.isTrue (again.Contains (sprintf "http://127.0.0.1:%d/login" port)) "same address"
-                | other -> failwithf "expected it to still be running, got %A" other
+                // What /open does with a session that is ALREADY running is its own pair of
+                // cases (`openRunningTests`): a redirect, and not a relaunch.
 
                 // An unknown session is a 404, not a launch attempt.
                 let! missing = TestHttp.get (baseUrl + "/sessions/nope-nope/open")
@@ -1864,15 +1907,15 @@ let private startPackagedManager (args: string list) (env: (string * string) lis
 /// (the summary has that column now). The link is the better source and always was: it is
 /// the row's actual promise — press it and you reach this session — so a row whose href
 /// named the wrong port would be broken for a person, not just for this test.
-/// Which port a session answers on, read off its `/open` page — the one place the Manager
-/// spells a session's address to a browser. A row never does: its name links to `/open`
-/// itself, so that a relaunch cannot break the link.
+/// Which port a RUNNING session answers on, read off where `/open` redirects — the one place
+/// the Manager spells a session's address to a browser. A row never does: its name links to
+/// `/open` itself, so that a relaunch cannot break the link.
 let private portOfOpen (openUrl: string) : Async<int> =
     async {
-        let! reply = TestHttp.get openUrl
-        let page = reply.Body
-        let m = System.Text.RegularExpressions.Regex.Match (page, "href=\"http://127\\.0\\.0\\.1:(\\d+)/")
-        if m.Success then return int m.Groups.[1].Value else return failwithf "no session address on the open page: %s" page
+        let! reply = TestHttp.getUnredirected [] openUrl
+        let location = TestHttp.requiredHeader "location" reply
+        let m = System.Text.RegularExpressions.Regex.Match (location, "^http://127\\.0\\.0\\.1:(\\d+)/")
+        if m.Success then return int m.Groups.[1].Value else return failwithf "/open named no session address: %d %s" reply.Status location
     }
 
 let private compositionTests =
@@ -1891,8 +1934,8 @@ let private compositionTests =
 
                 // Create and launch a session over the Manager's HTTP API. The redirect is
                 // not followed: creating now launches and opens, and this case wants the
-                // launch to be its own act; the port is then read off `/open`, the one page
-                // that spells it.
+                // launch to be its own act; the port is then read off where `/open` sends a
+                // browser, the one answer that spells it.
                 let! created = postFormHere (manager.UiUrl + "sessions") "id=composed&name=Composed"
                 Expect.equal created.Status 303 "created via the UI"
                 let! launched = TestHttp.postForm "" (manager.UiUrl + "sessions/composed/launch")
@@ -3153,9 +3196,9 @@ let private registryStreamTests =
                             Expect.isTrue
                                 (rendered.Contains "href=\"/sessions/reg-1/open\"")
                                 "the row links to the open route on the Manager's own origin"
-                            let! opening = TestHttp.get (baseUrl + "/sessions/reg-1/open")
+                            let! opening = TestHttp.getUnredirected [] (baseUrl + "/sessions/reg-1/open")
                             Expect.isTrue
-                                (opening.Body.Contains (sprintf "href=\"http://home.example.ts.net:%d/" port))
+                                ((TestHttp.requiredHeader "location" opening).StartsWith (sprintf "http://home.example.ts.net:%d/" port))
                                 "and /open hands the browser to the public origin"
                             let! login = OidcHttp.getWithJar (OidcHttp.newJar ()) (sprintf "http://127.0.0.1:%d/login" port)
                             Expect.equal login.Status 302 "/login redirects into the authorize chain"
@@ -3265,6 +3308,7 @@ let tests =
         // here launches a child — the invariant is about the moment BEFORE the first launch.
         Tag.needs "Registry writes announce themselves (UX review P0)" [ Tag.Ports ] (fun () -> registryPublishTests)
         Tag.needs "One session, one child (the launch in flight)" [ Tag.Ports ] (fun () -> launchOnceTests)
+        Tag.needs "Opening a session that is already running" [ Tag.Ports ] (fun () -> openRunningTests)
         Tag.needs "Idle reaping over the process boundary (Plan 11)" [ Tag.Ports; Tag.Native ] (fun () -> reapingTests)
         // `Srt` for the same reason: the packaged child picks the sandbox DEFAULT, and this
         // suite waits on an environment that reached Running and a command that exited 0 —

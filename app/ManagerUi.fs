@@ -1043,31 +1043,39 @@ let tryHandle
         // rare — so THIS is the URL to bookmark and the one the session client's
         // reconnect offer points at. Launch it if it is stopped, then hand the browser
         // to wherever this deployment says the session lives.
+        //
+        // The opening screen is only for the launch. It exists to cover two things
+        // arriving — the session process coming up and the front door's mapping to it
+        // appearing — and a session that is already running has both, so a screen in
+        // front of it would only be a delay (an intro, a dwell, a poll that answers
+        // at once). A running session is answered with a redirect straight to the
+        // address the screen would have sent the browser to.
         | ManagerRoute.OpenSession sessionId ->
+            let signIn port =
+                let address = PublicAccess.sessionAddress sessionId port pm.Public
+                RelativeUrl.under address.Url (SessionRoute.relative Login)
             Async.StartImmediate (
                 async {
                     match pm.TryFind sessionId with
                     | None ->
                         problem res 404 "No such session" (sprintf "This Manager has no session %s." (SessionId.value sessionId))
                     | Some view ->
+                        match view.Status with
                         // Already running is the common case once a client has
                         // reconnected on its own; asking for the port it already
-                        // has is not a relaunch.
-                        let! port =
-                            match view.Status with
-                            | ProcessManager.Running (port, _, _) -> async { return Ok port }
-                            | ProcessManager.NotRunning
-                            | ProcessManager.Exited _ -> pm.Launch sessionId
-                        match port with
-                        | Error reason -> problem res (refusalStatus sessionId) "Cannot open this session" reason
-                        | Ok port ->
-                            let address = PublicAccess.sessionAddress sessionId port pm.Public
-                            html
-                                res
-                                (openingPage
-                                    sessionId
-                                    (RelativeUrl.under address.Url (SessionRoute.relative Login))
-                                    (ManagerRoute.path (ManagerRoute.SessionReady sessionId)))
+                        // has is not a relaunch, and there is nothing to wait for.
+                        | ProcessManager.Running (port, _, _) -> seeOther res (signIn port)
+                        | ProcessManager.NotRunning
+                        | ProcessManager.Exited _ ->
+                            match! pm.Launch sessionId with
+                            | Error reason -> problem res (refusalStatus sessionId) "Cannot open this session" reason
+                            | Ok port ->
+                                html
+                                    res
+                                    (openingPage
+                                        sessionId
+                                        (signIn port)
+                                        (ManagerRoute.path (ManagerRoute.SessionReady sessionId)))
                 })
         // Does this deployment's front door reach the session yet? The question the
         // opening page above is really asking, answered HERE because here is the only
