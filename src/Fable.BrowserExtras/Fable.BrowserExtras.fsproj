@@ -21,6 +21,8 @@
 
   <ItemGroup>
     <Compile Include="BrowserExtras.fs" />
+    <Compile Include="PageGlobals.fs" />
+    <Compile Include="EventTargets.fs" />
   </ItemGroup>
 
   <ItemGroup>

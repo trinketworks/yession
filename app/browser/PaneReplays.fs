@@ -12,7 +12,7 @@ module Yession.Browser.PaneReplays
 // shell harness the `Browser`-tier E2E runs. A second copy would be a second thing to keep
 // correct, and the one that rotted would be the one nothing runs.
 
-open Fable.Core
+open Fable.BrowserExtras
 open Yession.Domain
 open Yession.App
 
@@ -23,13 +23,6 @@ let private mounts () : Browser.Types.Element list =
 let private mountKey (el: Browser.Types.Element) : string = el.getAttribute "data-pane-replay"
 
 let private isMounted (el: Browser.Types.Element) : bool = el.children.length > 0
-
-/// Everything a mount is holding, taken out of it — so what is put back is the whole of what
-/// the player mounts over, never a second player beside the first.
-let private clearChildren (el: obj) : unit =
-    let host = unbox<Browser.Types.Element> el
-    while not (isNull (box host.firstChild)) do
-        host.removeChild host.firstChild |> ignore
 
 /// Drive this from the render loop, after every render.
 type Syncer = { Sync : ClientModel -> unit }
@@ -42,7 +35,7 @@ let create (dispatch: ClientMsg -> unit) : Syncer =
     /// recording that arrived in pieces can be told apart from one that has not changed.
     let players = System.Collections.Generic.Dictionary<string, Replay.Mounted * string> ()
 
-    let mount (model: ClientModel) (el: obj) (key: string) =
+    let mount (model: ClientModel) (el: Browser.Types.Element) (key: string) =
         match ClientModel.paneTabs model |> List.tryFind (fun t -> PaneTab.key t = key) with
         | None -> ()
         | Some tab ->
@@ -56,7 +49,7 @@ let create (dispatch: ClientMsg -> unit) : Syncer =
                     |> Option.map (fun terminal () ->
                         dispatch (ShowInPaneMsg (Reading (TerminalTab terminal)))
                         PaneShell.toWatchToggle ())
-                players.[key] <- (Replay.mount (unbox el) replay caughtUp, replay.Cast)
+                players.[key] <- (Replay.mount el replay caughtUp, replay.Cast)
 
     { Sync =
         fun model ->
@@ -90,7 +83,10 @@ let create (dispatch: ClientMsg -> unit) : Syncer =
                         | Some el ->
                             (fst players.[key]).Dispose ()
                             players.Remove key |> ignore
-                            clearChildren el
+                            // Everything the mount is holding, taken out of it — so what
+                            // is put back is the whole of what the player mounts over,
+                            // never a second player beside the first.
+                            Elements.clearChildren el
                             mount model el key
                         | None -> ()
                     | _ -> ()
