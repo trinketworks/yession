@@ -79,6 +79,8 @@
     <Compile Include="Attach.fs" />
     <Compile Include="NodeExtras.fs" />
     <Compile Include="Timeline.fs" />
+    <!-- The waits the client model declares, on a hand-turned clock. -->
+    <Compile Include="Timers.fs" />
     <!-- The launch surface, through the model a browser folds and the renderer it serves. -->
     <Compile Include="LaunchSurface.fs" />
     <Compile Include="Editor.fs" />

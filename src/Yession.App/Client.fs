@@ -45,6 +45,20 @@ module Client =
               Decode = decodeModel
               OnError = Ylmish.Program.OnError.log }
 
+    /// Run the waits the model declares (`ClientModel.timers`) on `clock`, beside whatever the
+    /// program already subscribes to — Ylmish's own binding to the doc among them, which is
+    /// why this MAPS the subscription rather than setting one (`withSubscription` replaces).
+    ///
+    /// Applied by a composition root, never inside `makeProgram`: the root is what owns a
+    /// clock. The browser hands in `Timer.system`; a test hands in one it advances itself and
+    /// runs the product's timers without waiting on anything.
+    let withTimers (clock: Timer.Clock) (program: Program<'arg, ClientModel, Ylmish.Program.Message<ClientMsg>, 'view>) =
+        program
+        |> Program.mapSubscription (fun existing model ->
+            Sub.batch
+                [ existing model
+                  ClientModel.timers model |> Timer.subscribe clock |> Sub.map "timers" Ylmish.Program.Message.User ])
+
     /// A wired client connection: the frame pump to run, plus the actions that speak
     /// over it.
     type Connection =
