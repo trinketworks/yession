@@ -531,7 +531,7 @@ let
   # its budget are the verb's own arguments, so the verb's header is the manual; `.override`
   # sets them: `nix build --impure --expr '(import ./nix/worktree.nix).crashRepro.override
   # { layer = "fable"; rounds = "5"; }'`.
-  crashRepro = lib.makeOverridable ({ layer ? "regex", rounds ? "20", workers ? "4", seconds ? "60" }: pkgs.stdenv.mkDerivation {
+  crashRepro = lib.makeOverridable ({ layer ? "regex", rounds ? "20", workers ? "4", seconds ? "60", heapMb ? "0", env ? "" }: pkgs.stdenv.mkDerivation {
     pname = "yession-crash-repro";
     inherit version src;
     nativeBuildInputs = [ pkgs.dotnet-sdk_10 pkgs.nodejs_24 ];
@@ -542,7 +542,7 @@ let
       chmod -R u+w node_modules
       export PATH="$PWD/node_modules/.bin:$PATH"
       ${nugetEnv}
-      dotnet fsi tasks.fsx crash-repro ${layer} ${rounds} ${workers} ${seconds} | tee crash-repro.log
+      dotnet fsi tasks.fsx crash-repro ${layer} ${rounds} ${workers} ${seconds} ${heapMb} ${env} | tee crash-repro.log
       runHook postBuild
     '';
     installPhase = ''
