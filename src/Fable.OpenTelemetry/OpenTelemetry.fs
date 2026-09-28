@@ -15,11 +15,42 @@ module Fable.OpenTelemetry
 open Fable.Core
 open Fable.Core.JsInterop
 
-/// A logger: emits one already-built log record. The record is a plain object
-/// (`{ severityNumber; body; attributes; ... }`) — the emitter builds it; the binding
-/// stays shape-agnostic about the record body.
+/// One attribute value, as the OTel data model allows it: a primitive, or a homogeneous array
+/// of one. Closed to the cases this repository emits — widen it here when something needs a
+/// case, rather than handing the SDK an untyped value.
+[<RequireQualifiedAccess>]
+type AttributeValue =
+    | String of string
+    | Int of int
+    | Bool of bool
+    | Strings of string array
+    | Ints of int array
+
+/// A flat attribute set, as the SDK takes and stores one: a plain object keyed by the
+/// convention's dotted names. Opaque — built from typed pairs (`Attributes.ofList`), and read
+/// back only as JSON (`Attributes.toJson`) for a decoder to judge.
+type Attributes = interface end
+
+/// A finished record's body. OTel allows any value there, so what comes back is opaque until
+/// a reader decodes it (`LogBody.toJson`).
+type LogBody = interface end
+
+/// An OTel severity number (`SeverityNumber` in the data model). Only the SDK's own enum
+/// hands these out (`severityInfo`), so no product code writes a magic number.
+[<Erase>]
+type SeverityNumber = private SeverityNumber of int
+
+/// The record `Logger.emit` takes. The emitter builds one with `jsOptions`; this repository
+/// only ever emits text as the body.
+[<AllowNullLiteral>]
+type LogRecord =
+    abstract severityNumber : SeverityNumber with get, set
+    abstract body : string with get, set
+    abstract attributes : Attributes with get, set
+
+/// A logger: emits one already-built log record.
 type [<AllowNullLiteral>] Logger =
-    abstract emit: record: obj -> unit
+    abstract emit: record: LogRecord -> unit
 
 /// Opaque handles: we construct these and pass them back into the SDK, never inspect them.
 type [<AllowNullLiteral>] Resource = interface end
@@ -39,11 +70,10 @@ type [<AllowNullLiteral>] LoggerProvider =
 /// These two members are what this repository reads back; the rest stays undeclared.
 type [<AllowNullLiteral>] ReadableLogRecord =
     /// Whatever the emitter set as the body. OTel allows any value; this repository only ever
-    /// emits text, and the reader is what says so.
-    abstract body: obj
-    /// The record's attributes, flat, as the SDK stores them — a plain object whose keys are
-    /// the convention's dotted names.
-    abstract attributes: obj
+    /// emits text, and the reader is what says so (`LogBody.toJson`, then a decoder).
+    abstract body: LogBody
+    /// The record's attributes, flat, as the SDK stores them.
+    abstract attributes: Attributes
 
 /// In-memory exporter (tests): finished records accumulate in memory for assertions. It is
 /// a `LogRecordExporter`, so it drops straight into a processor.
@@ -57,35 +87,123 @@ type [<AllowNullLiteral>] InMemoryLogRecordExporter =
 type [<AllowNullLiteral>] ConsoleLogRecordExporter =
     inherit LogRecordExporter
 
-[<Emit("new ($0)($1)")>]
-let private newWith (ctor: obj) (opts: obj) : 'a = jsNative
+// --- Construction -------------------------------------------------------------------------
+// Every constructor is an import typed by the options it takes, so an options object is
+// built with `jsOptions` against a declared shape rather than as a bag of names.
 
-[<Emit("new ($0)()")>]
-let private newEmpty (ctor: obj) : 'a = jsNative
+[<AllowNullLiteral>]
+type private LoggerProviderConfig =
+    abstract resource : Resource with get, set
+    abstract processors : LogRecordProcessor array with get, set
 
-let private loggerProviderCtor : obj = import "LoggerProvider" "@opentelemetry/sdk-logs"
-let private batchProcessorCtor : obj = import "BatchLogRecordProcessor" "@opentelemetry/sdk-logs"
-let private simpleProcessorCtor : obj = import "SimpleLogRecordProcessor" "@opentelemetry/sdk-logs"
-let private inMemoryExporterCtor : obj = import "InMemoryLogRecordExporter" "@opentelemetry/sdk-logs"
-let private consoleExporterCtor : obj = import "ConsoleLogRecordExporter" "@opentelemetry/sdk-logs"
-let private otlpExporterCtor : obj = import "OTLPLogExporter" "@opentelemetry/exporter-logs-otlp-http"
-let private resourceFromAttributes : obj -> Resource = import "resourceFromAttributes" "@opentelemetry/resources"
+[<AllowNullLiteral>]
+type private ProcessorConfig =
+    abstract exporter : LogRecordExporter with get, set
+
+/// A header-name → value dictionary, which is what the OTLP exporter reads; built from a
+/// typed map in `otlpLogExporter`.
+type private OtlpHeaders = interface end
+
+[<AllowNullLiteral>]
+type private OtlpExporterConfig =
+    abstract url : string with get, set
+    abstract headers : OtlpHeaders with get, set
+
+type private LoggerProviderClass =
+    [<EmitConstructor>]
+    abstract Create : config: LoggerProviderConfig -> LoggerProvider
+
+type private ProcessorClass =
+    [<EmitConstructor>]
+    abstract Create : config: ProcessorConfig -> LogRecordProcessor
+
+type private OtlpExporterClass =
+    [<EmitConstructor>]
+    abstract Create : config: OtlpExporterConfig -> LogRecordExporter
+    [<EmitConstructor>]
+    abstract Create : unit -> LogRecordExporter
+
+type private ConsoleExporterClass =
+    [<EmitConstructor>]
+    abstract Create : unit -> ConsoleLogRecordExporter
+
+type private InMemoryExporterClass =
+    [<EmitConstructor>]
+    abstract Create : unit -> InMemoryLogRecordExporter
+
+/// The `SeverityNumber` enum object; only the members this repository uses are declared.
+type private SeverityNumbers =
+    abstract INFO : SeverityNumber
+
+[<Import("LoggerProvider", "@opentelemetry/sdk-logs")>]
+let private loggerProviderClass : LoggerProviderClass = jsNative
+[<Import("BatchLogRecordProcessor", "@opentelemetry/sdk-logs")>]
+let private batchProcessorClass : ProcessorClass = jsNative
+[<Import("SimpleLogRecordProcessor", "@opentelemetry/sdk-logs")>]
+let private simpleProcessorClass : ProcessorClass = jsNative
+[<Import("InMemoryLogRecordExporter", "@opentelemetry/sdk-logs")>]
+let private inMemoryExporterClass : InMemoryExporterClass = jsNative
+[<Import("ConsoleLogRecordExporter", "@opentelemetry/sdk-logs")>]
+let private consoleExporterClass : ConsoleExporterClass = jsNative
+[<Import("OTLPLogExporter", "@opentelemetry/exporter-logs-otlp-http")>]
+let private otlpExporterClass : OtlpExporterClass = jsNative
+[<Import("resourceFromAttributes", "@opentelemetry/resources")>]
+let private resourceFromAttributes (attributes: Attributes) : Resource = jsNative
+[<Import("SeverityNumber", "@opentelemetry/api-logs")>]
+let private severityNumbers : SeverityNumbers = jsNative
+
+/// A flat JS object from typed pairs — the one place a name-keyed bag is built, behind the
+/// opaque types that leave this module. A later pair for the same key wins, as it would in
+/// the object literal.
+let private flat (pairs: (string * obj) seq) : 'T = createObj pairs |> unbox<'T>
+
+/// JSON text of a value the SDK handed back. `JSON.stringify` answers `undefined` rather than
+/// text for an absent value, and JSON's own word for absent is `null`, so that is what a
+/// reader is given — a decoder then refuses it by name instead of receiving a non-string.
+let private json (value: obj) : string =
+    let text = JS.JSON.stringify value
+    if isNull (box text) then "null" else text
+
+[<RequireQualifiedAccess>]
+module Attributes =
+    let private raw (value: AttributeValue) : obj =
+        match value with
+        | AttributeValue.String s -> box s
+        | AttributeValue.Int n -> box n
+        | AttributeValue.Bool b -> box b
+        | AttributeValue.Strings xs -> box xs
+        | AttributeValue.Ints xs -> box xs
+
+    /// An attribute set from typed pairs.
+    let ofList (pairs: (string * AttributeValue) list) : Attributes =
+        flat [ for key, value in pairs -> key, raw value ]
+
+    /// The set as JSON text, for a reader to decode.
+    let toJson (attributes: Attributes) : string = json attributes
+
+[<RequireQualifiedAccess>]
+module LogBody =
+    /// The body as JSON text, for a reader to decode.
+    let toJson (body: LogBody) : string = json body
 
 /// The OTel logs severity number for INFO (9 in the data model), read from the SDK enum so
 /// it tracks the package rather than a magic literal.
-let severityInfo : int = unbox (import "SeverityNumber" "@opentelemetry/api-logs")?INFO
+let severityInfo : SeverityNumber = severityNumbers.INFO
 
-/// A Resource from a flat attribute bag, e.g. `{ "service.name": "yession-session" }`.
-let resource (attributes: obj) : Resource = resourceFromAttributes attributes
-
-/// A LoggerProvider wired to one processor over the given resource (SDK 2.x config form).
-let loggerProvider (resource: Resource) (processor: LogRecordProcessor) : LoggerProvider =
-    newWith loggerProviderCtor (createObj [ "resource", box resource; "processors", box [| processor |] ])
+/// A Resource from a flat attribute set, e.g. `service.name` = `yession-session`.
+let resource (attributes: Attributes) : Resource = resourceFromAttributes attributes
 
 /// A LoggerProvider fanning one emit out to several processors — the SDK-native tee
 /// (each exporter gets a copy). E.g. console + OTLP: "log to stdout AND forward."
 let loggerProviderMulti (resource: Resource) (processors: LogRecordProcessor list) : LoggerProvider =
-    newWith loggerProviderCtor (createObj [ "resource", box resource; "processors", box (Array.ofList processors) ])
+    loggerProviderClass.Create (
+        jsOptions<LoggerProviderConfig> (fun c ->
+            c.resource <- resource
+            c.processors <- Array.ofList processors))
+
+/// A LoggerProvider wired to one processor over the given resource (SDK 2.x config form).
+let loggerProvider (resource: Resource) (processor: LogRecordProcessor) : LoggerProvider =
+    loggerProviderMulti resource [ processor ]
 
 // Both processors take an options object `{ exporter; ... }` (SDK 2.x) — NOT the bare
 // exporter. Passing the exporter directly silently no-ops: the export throws on
@@ -93,23 +211,26 @@ let loggerProviderMulti (resource: Resource) (processors: LogRecordProcessor lis
 
 /// Batch processor: exports asynchronously off the caller's path (production).
 let batchProcessor (exporter: LogRecordExporter) : LogRecordProcessor =
-    newWith batchProcessorCtor (createObj [ "exporter", box exporter ])
+    batchProcessorClass.Create (jsOptions<ProcessorConfig> (fun c -> c.exporter <- exporter))
 
 /// Simple processor: exports per record (tests).
 let simpleProcessor (exporter: LogRecordExporter) : LogRecordProcessor =
-    newWith simpleProcessorCtor (createObj [ "exporter", box exporter ])
+    simpleProcessorClass.Create (jsOptions<ProcessorConfig> (fun c -> c.exporter <- exporter))
 
-/// OTLP/HTTP logs exporter (JSON) posting to `url`, with the given headers object.
-let otlpLogExporter (url: string) (headers: obj) : LogRecordExporter =
-    newWith otlpExporterCtor (createObj [ "url", box url; "headers", box headers ])
+/// OTLP/HTTP logs exporter (JSON) posting to `url`, with the given headers (name → value).
+let otlpLogExporter (url: string) (headers: Map<string, string>) : LogRecordExporter =
+    otlpExporterClass.Create (
+        jsOptions<OtlpExporterConfig> (fun c ->
+            c.url <- url
+            c.headers <- flat [ for KeyValue (name, value) in headers -> name, box value ]))
 
 /// OTLP/HTTP logs exporter (JSON) self-configured from the environment — no explicit url:
 /// the SDK reads `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT`/`OTEL_EXPORTER_OTLP_ENDPOINT` (+ `_HEADERS`).
 /// This is the standard "point me at the collector via env" form.
-let otlpLogExporterFromEnv () : LogRecordExporter = newEmpty otlpExporterCtor
+let otlpLogExporterFromEnv () : LogRecordExporter = otlpExporterClass.Create ()
 
 /// Console exporter (stdout) — the standard "log to stdout" leg of a tee.
-let consoleLogExporter () : LogRecordExporter = newEmpty consoleExporterCtor
+let consoleLogExporter () : LogRecordExporter = consoleExporterClass.Create ()
 
 /// In-memory exporter for tests.
-let inMemoryExporter () : InMemoryLogRecordExporter = newEmpty inMemoryExporterCtor
+let inMemoryExporter () : InMemoryLogRecordExporter = inMemoryExporterClass.Create ()

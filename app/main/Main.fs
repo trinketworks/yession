@@ -161,7 +161,7 @@ Async.StartImmediate(
         // OTEL_* env — stdout, a collector, or both; see app/Telemetry.fs). It emits its own
         // session-lifecycle signals and passes its OTEL_* environment through to each child.
         let telemetry = Telemetry.managerFromEnv ()
-        telemetry.Log "manager started" [ "yession.manager.data_dir", box dataDir ]
+        telemetry.Log "manager started" [ "yession.manager.data_dir", Telemetry.AttributeValue.String dataDir ]
         // Secrets (Plan 06): the OS credential manager keys the durable store; a host
         // without one runs in-memory only (loud at boot) — never a plaintext key file.
         // `--secrets` overrides both directions: `ephemeral` refuses persistence this host
