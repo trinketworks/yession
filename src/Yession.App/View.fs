@@ -3385,14 +3385,18 @@ module View =
         | Some next ->
             tabs.[next].focus ()
             // Only for a key the walk CLAIMED. Preventing unconditionally would swallow the
-            // strip's other keys — including the Delete/Backspace unpin below, whose own
+            // strip's other keys — including the Delete/Backspace close below, whose own
             // prevention belongs with it.
             e.preventDefault ()
 
-    /// Delete/Backspace on a focused tab — the keyboard's unpin (Plan 20, stage 1). Returns
+    /// Delete/Backspace on a focused tab — the keyboard's close (Plan 20, stage 1). Returns
     /// the tab's key, or `""` when this keypress is not that: the strip's other keys are the
-    /// arrow walk above, and typing must not unpin anything.
-    let private unpinKeyOn (e: Browser.Types.KeyboardEvent) : string =
+    /// arrow walk above, and typing must not close anything.
+    ///
+    /// It closes a KEPT tab too, where the close control will not: a stray tap in a strip
+    /// that scrolls sideways is exactly what a pin protects against, and Delete on a tab a
+    /// person has deliberately focused is not a stray anything.
+    let private closeKeyOn (e: Browser.Types.KeyboardEvent) : string =
         if e.key <> "Delete" && e.key <> "Backspace" then ""
         else
             match focusedWithin "[data-pane-tab]" with
@@ -3858,18 +3862,19 @@ module View =
         /// target of its own: a tab already takes a tap, a click and an Enter, and the second
         /// one on the same tab is unambiguous because the first has nothing left to do.
         ///
-        /// Offered where a pin would MEAN something: a live terminal, or a recording somebody
-        /// opened from the chat. A closed terminal appears here only as the preview — its home
-        /// is the list — so pinning one would be kept by nothing, and an act whose effect the
-        /// next event undoes is worse than no act.
+        /// Offered on every tab in the strip. It used to be offered only on a LIVE terminal's
+        /// or a recording opened from the chat, because a pin on a closed terminal was dropped
+        /// by the next fold and "an act whose effect the next event undoes is worse than no
+        /// act". That was true of the pin as it was; the fold no longer takes pins away, so
+        /// the only thing left to say about a closed terminal is that somebody wanted to keep
+        /// watching it, which is exactly what they are asking for.
         let tabButton (tab: PaneTab) =
-            let pinnable = PaneTab.isLive model.Terminals tab
-            let pinned = pinnable && ClientModel.isPinned tab model
+            let pinned = ClientModel.isPinned tab model
             // One message whichever kind of tab it is: showing a tab is showing a tab, and
             // the two spellings only ever differed in which fields they remembered to clear.
             let select () = dispatch (ShowInPaneMsg (Reading tab))
             let activate () =
-                if isOn tab && pinnable then dispatch (TogglePinMsg tab) else select ()
+                if isOn tab then dispatch (TogglePinMsg tab) else select ()
             // The mark says the tab is kept, and only when it is. `role="img"` with a name,
             // because a colour and a glyph are not a fact anything that cannot see them can
             // read — and the state is not on the button itself: a `tab` cannot also be a
@@ -3880,10 +3885,10 @@ module View =
             // Said where a pointer can find it, since a gesture with no target has nowhere
             // else to announce itself. Only on the tab it would act on — the selected one.
             let hint =
-                if not (isOn tab && pinnable) then ""
+                if not (isOn tab) then ""
                 elif pinned then Dom.Text.unpinHint
                 else Dom.Text.pinHint
-            let pinnedAttr = if not pinnable then "" elif pinned then "true" else "false"
+            let pinnedAttr = if pinned then "true" else "false"
             match tab with
             | TerminalTab id ->
                 match Projection.tryFind id model.Terminals with
@@ -4058,19 +4063,25 @@ module View =
                        @keydown={Ev(fun (e: Browser.Types.Event) ->
                                         let pressed = e :?> Browser.Types.KeyboardEvent
                                         moveTabFocus pressed
-                                        // Delete/Backspace unpins what is focused. The index
+                                        // Delete/Backspace closes what is focused. The index
                                         // is taken BEFORE the dispatch and the focus handed
-                                        // back after it, because the tab being released may
-                                        // be the one leaving the document.
-                                        match unpinKeyOn pressed with
+                                        // back after it, because the tab being closed is the
+                                        // one leaving the document.
+                                        //
+                                        // Only a tab that is OPEN: the preview is whatever is
+                                        // being looked at, and "close" said of it would mean
+                                        // closing the pane, which is not a thing this strip
+                                        // does.
+                                        match closeKeyOn pressed with
                                         | "" -> ()
                                         | key ->
                                             tabs
                                             |> List.tryFind (fun tab -> PaneTab.key tab = key)
-                                            |> Option.filter (fun tab -> ClientModel.isPinned tab model)
+                                            |> Option.filter (fun tab ->
+                                                model.Tabs |> List.exists (fun open' -> PaneTab.key open' = PaneTab.key tab))
                                             |> Option.iter (fun tab ->
                                                 focusNeighbourTab pressed
-                                                dispatch (TogglePinMsg tab)))}>
+                                                dispatch (CloseTabMsg tab)))}>
                     {tabs |> List.map tabButton}
                   </div>
                   <button type="button" class="{Style.terminalTabNew}" data-terminal-new
