@@ -217,6 +217,12 @@ type QueriesViewState =
       /// The latest value per query name. Absent = not answered yet.
       Values : Map<string, QueryValue> }
 
+/// One copy to the clipboard, as its confirmation shows it: the box it came out of, and which
+/// copy this is. The count is what makes a second copy of the same box a new moment, so its
+/// wait starts again rather than the first copy's deadline taking the second's confirmation
+/// off the screen.
+[<RequireQualifiedAccess>]
+type Copy = { Box : string; Nth : int }
 /// Which draft the composer has open. `Unchosen` is the state a fresh client is in, and the only
 /// one where the DEFAULT applies (join the draft already in flight rather than start a rival) —
 /// once someone picks, the pick stands, so "new message" is not undone by a peer starting to type.
@@ -718,9 +724,9 @@ type ClientModel =
       /// on one machine, and nobody else is looking at their clipboard.
       ///
       /// ONE slot, so the confirmation cannot be showing on two boxes at once — and `None`
-      /// again a moment later, put back by whoever set it (the browser's `Copy`), because
-      /// what it says is "just now" and nothing else in the model expires on its own.
-      Copied        : string option
+      /// again a moment later, taken back by the wait the model declares for it
+      /// (`ClientModel.timers`), because what it says is "just now".
+      Copied        : Copy option
       /// The Claude connection panel's state (Plan 08), driven by the /claude routes.
       Claude        : ClaudeViewState
       /// The GitHub connection panel's state (Plan 14), driven by the /github routes.
@@ -1860,6 +1866,10 @@ module ClientModel =
     /// through in silence.
     let catchUpQuietMs = 500
 
+    /// How long a copy says so for. Long enough to be read as an answer to the press, short
+    /// enough that the code it stands in front of comes back before anybody needs it again.
+    let copiedShownMs = 1500
+
     /// A message's stamp, while it is one the agent is still writing and has said something in.
     /// Nothing is a stamp before the first word: an empty body already reads as thinking, and
     /// has no quiet to wait for.
@@ -1889,6 +1899,10 @@ module ClientModel =
     /// the pages that arrive while it runs leave the wait alone rather than pushing it out,
     /// which would mean a long catch-up was never reported; the episode ending takes it away.
     ///
+    /// A copy's confirmation is an expiry, keyed by the copy itself: a copy of another box, or
+    /// the same box again, is a new key and a fresh wait, so no earlier deadline can take a
+    /// later confirmation off the screen.
+    ///
     /// The agent's quiet is a debounce: one timer per message it is writing, keyed by the
     /// stamp, so each delta replaces the wait with a fresh one and only a body that stops
     /// growing for `writingQuietMs` ever fires. None once it has fired for this stamp — the
@@ -1906,7 +1920,12 @@ module ClientModel =
                 { Key = [ "agent-quiet"; MessageId.value stamp.Message; string stamp.Length ]
                   After = writingQuietMs
                   Fire = AgentQuietMsg stamp })
-        catchUp @ quiet
+        let copied =
+            match model.Copied with
+            | Some copy ->
+                [ { Key = [ "copied"; copy.Box; string copy.Nth ]; After = copiedShownMs; Fire = CopiedMsg None } ]
+            | None -> []
+        catchUp @ copied @ quiet
 
     /// Fold a message into the model.
     /// Piped through `reconcileLaunch` (see its doc) so the launch surface anchors here,
@@ -2324,7 +2343,13 @@ module ClientModel =
                 if Set.contains messageId model.DatedBreaks then Set.remove messageId model.DatedBreaks
                 else Set.add messageId model.DatedBreaks
             { model with DatedBreaks = next }
-        | CopiedMsg copied -> { model with Copied = copied }
+        | CopiedMsg (Some box) ->
+            let nth =
+                match model.Copied with
+                | Some copy -> copy.Nth + 1
+                | None -> 1
+            { model with Copied = Some { Copy.Box = box; Copy.Nth = nth } }
+        | CopiedMsg None -> { model with Copied = None }
         | ToggleContentListMsg ->
             // Going to the list KEEPS the read it covers, so coming back resumes it — a
             // rewind included, which is the one thing the boolean did right. The column comes

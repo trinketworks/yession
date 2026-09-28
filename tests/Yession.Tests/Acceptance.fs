@@ -704,7 +704,7 @@ let private uiChecklistTests =
             Expect.isTrue (tag.Contains "aria-label=") (sprintf "and it has an accessible name: %s" tag)
 
         testCase "a copy is answered in the box the value came from" <| fun () ->
-            let html = Support.render { awaitingApproval with Copied = Some Dom.Hooks.githubUserCode }
+            let html = Support.render { awaitingApproval with Copied = Some { Copy.Box = Dom.Hooks.githubUserCode; Copy.Nth = 1 } }
             Expect.equal
                 (textOf Dom.Hooks.githubUserCode html)
                 Dom.Text.copied
@@ -714,7 +714,7 @@ let private uiChecklistTests =
             // ONE slot holds what was copied, so the mark is keyed by the box it belongs to.
             // Without that key every copyable thing on the page would confirm at once, and
             // three of them would be lying.
-            let html = Support.render { awaitingApproval with Copied = Some "data-some-other-box" }
+            let html = Support.render { awaitingApproval with Copied = Some { Copy.Box = "data-some-other-box"; Copy.Nth = 1 } }
             Expect.equal (textOf Dom.Hooks.githubUserCode html) "049A-EBB0" "its box still holds the code"
             Expect.isFalse (html.Contains (">" + Dom.Text.copied + "<")) "and nothing here claims to have been copied"
 

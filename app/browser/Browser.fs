@@ -295,10 +295,6 @@ let private writeClipboard (text: string) (settled: bool -> unit) : unit =
                     settled false
             })
 
-/// How long a copy says so for. Long enough to be read as an answer to the press, short
-/// enough that the code it stands in front of comes back before anybody needs it again.
-let private copiedShownMs = 1500
-
 /// A frame later — which is when the render that had to happen, has, and when a class just
 /// written has reached the style flush that acts on it.
 let private nextFrame (act: unit -> unit) : unit =
@@ -1274,11 +1270,6 @@ let private start () =
                         | None -> dispatchRef (GitHubPendingMsg Pending.Ready)
                 })
 
-        // The copied mark is a moment, so it is one deadline: re-armed by each copy, and the
-        // one it replaces is cleared. Two live timers over one slot would let the first
-        // copy's deadline take the second copy's confirmation off the screen.
-        let mutable copiedTimer = 0
-
         // The side effects a template can't derive from the model. Send routes to the one
         // implementation in `Client.connect` (capture markdown, enqueue, seed the queue fragment).
         let actions : ViewActions =
@@ -1391,15 +1382,8 @@ let private start () =
                         // the box showing the value, which is what a person falls back to
                         // reading — a "copied" over an empty clipboard would send them to the
                         // other tab with nothing to paste.
-                        if written then
-                            if copiedTimer <> 0 then JS.clearTimeout copiedTimer
-                            dispatchRef (CopiedMsg (Some key))
-                            copiedTimer <-
-                                JS.setTimeout
-                                    (fun () ->
-                                        copiedTimer <- 0
-                                        dispatchRef (CopiedMsg None))
-                                    copiedShownMs)
+                        // How long it says so is the model's (`ClientModel.timers`).
+                        if written then dispatchRef (CopiedMsg (Some key)))
               GitHubDisconnect =
                 fun scope ->
                     githubAction
