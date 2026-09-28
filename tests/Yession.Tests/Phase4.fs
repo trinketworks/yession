@@ -1065,6 +1065,17 @@ let private peopleMarkTests =
                 for tone in [ light; dark ] do
                     Expect.isFalse (inBlueBand tone) (sprintf "%s reads as the agent's blue (hue %A); a person's checker may not wear it" tone (hue tone))
 
+        // A caret is the other place a person's colour is drawn, and it was drawn from a hue
+        // of its own, hashed over the whole wheel — so a person with an amber checker could
+        // type in the agent's blue. Many seeds, because which one lands where is the hash's
+        // business; that none of them can is the rule.
+        testCase "no person's caret is drawn in the agent's blue" <| fun () ->
+            let model = ClientModel.init { PeerId = PeerId.create "peer-caret" |> expect; DisplayName = "Grace" }
+            for i in 0 .. 199 do
+                let who = PeerRef (PeerId.create (sprintf "peer-%d" i) |> expect)
+                let colour = Entity.presenceColour model who
+                Expect.isFalse (inBlueBand colour) (sprintf "peer-%d's caret is %s, the agent's blue (hue %A)" i colour (hue colour))
+
         testCase "every person's checker is declared to Tailwind" <| fun () ->
             // The checkers are assembled at runtime, so the stylesheet generates only the ones
             // app/tailwind.css names inline; one it does not name paints nothing at all.

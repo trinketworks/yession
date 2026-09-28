@@ -294,7 +294,7 @@ let private selectionSpan (length: int) (anchor: int) (head: int) : int * int * 
 /// A native <input> has no per-character DOM geometry, so the pixel offset of a substring is
 /// measured on a canvas in the input's own font. Given a peer's decoded selection
 /// (`anchor`,`head` indices), size its highlight span to `lo..hi` and offset the caret bar to
-/// `head`. Colour is set by the view (`EditorColour`); this only positions. Called per peer
+/// `head`. Colour is set by the view (`Entity.presenceColour`); this only positions. Called per peer
 /// whose caret is in a collaborative input after every render — the DOM is up to date
 /// synchronously.
 ///
@@ -757,8 +757,8 @@ let create (deps: Deps) : Renderer =
             |> List.choose (fun (peerId, p) ->
                 match p.Focus with
                 | Some focus when focus.Field = field ->
-                    Some ({ Colour = EditorColour.ofEditor peerId
-                            Selection = EditorColour.translucent peerId
+                    Some ({ Colour = Entity.presenceColour model peerId
+                            Selection = Entity.presenceSelection model peerId
                             Name = p.DisplayName
                             Anchor = focus.Pos.Anchor
                             Head = focus.Pos.Head } : Editor.RemoteBodyCursor)
