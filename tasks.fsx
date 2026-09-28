@@ -34,12 +34,18 @@ let tailwind = Path.Combine (binDir, "tailwindcss")
 
 // What a .NET child that died on a SIGNAL left behind, so the next one says more than a number.
 //
-// `dotnet fable` has twice died inside the nix build sandbox with exit 139 and nothing else to
-// read: silently, the instant Fable started compiling, on aarch64-linux with the CoreCLR's W^X
-// left on (release run 753) and on x86_64-linux with it off (run 849). The same signature on
-// either side of the `DOTNET_EnableWriteXorExecute=0` that nix/packages.nix sets is what rules
-// that pairing out as the explanation, and a native crash unwinds nothing and prints nothing,
-// so the third one would say exactly as little and the diagnosis would start over.
+// `dotnet fable` has died inside the nix build sandbox with exit 139 three times, each the
+// instant Fable started compiling: aarch64-linux with the CoreCLR's W^X on (release run 753),
+// x86_64-linux with it off (runs 849 and 946). A native crash unwinds nothing and prints
+// nothing, so the first two said nothing more than that number.
+//
+// Run 946 was the first to leave a report, and it names the fault's neighbourhood: the thread
+// that took the signal was inside `Regex866_Scan`, a method Reflection.Emit had just generated,
+// called from Fable's `Printer.ParsedXmlDoc.Parse`, with two more threads inside its siblings.
+// That function builds a fresh `RegexOptions.Compiled` regex for every XML doc comment it
+// prints, so a compile emits, runs and discards hundreds of dynamic methods across the thread
+// pool. W^X only changes how those pages are mapped, which is why toggling it moved nothing and
+// why the flag that once did so is gone.
 //
 // The runtime can be told to account for itself: a crash report names the faulting thread's
 // frames, native and managed. Children are started here, so here is where they are told to
