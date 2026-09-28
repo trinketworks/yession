@@ -1081,7 +1081,7 @@ let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
 
 let private shellModel : ClientModel = shellModelOf Lines 16
 
-/// The shell with one act whose sentence points at things — a sandbox, a connection — so
+/// The shell with an act whose sentence points at things — a sandbox, a connection — so
 /// the page holds a reference drawn INSIDE a line of words. What a rendered string cannot
 /// say about one is where it sits: a reference is part of the sentence, and only a browser
 /// knows whether its name shares the line's baseline or rides above it.
@@ -1104,7 +1104,23 @@ let private actsModel : ClientModel =
           Status = Complete
           Offset = offset 31L
           Woke = None; CausedBy = None }
-    { shellModel with Conversation = { shellModel.Conversation with Items = shellModel.Conversation.Items @ [ start ] } }
+    // And one still coming up, so the page holds the mark an act in flight wears in its
+    // gutter — which, like a reference's name, is a question of where on the line it stands.
+    let starting : ConversationItem =
+        { MessageId = MessageId.create "msg-act-starting" |> expect
+          Author = ActorRef.Agent
+          Content =
+            ItemContent.Act (
+                Act.SandboxStarting
+                    { MessageId = MessageId.create "msg-act-starting" |> expect
+                      Sandbox = SandboxRef.defaultRef
+                      Backend = "srt"
+                      Description = None
+                      Actor = ActorRef.Agent; OnBehalfOf = None; CausedBy = None })
+          Status = ConversationItemStatus.Running
+          Offset = offset 32L
+          Woke = None; CausedBy = None }
+    { shellModel with Conversation = { shellModel.Conversation with Items = shellModel.Conversation.Items @ [ start; starting ] } }
 
 /// The session's FIRST screen: connected, the log read to an end holding nothing, and the
 /// provider's listing arrived — so the ask card stands where the timeline's first line will

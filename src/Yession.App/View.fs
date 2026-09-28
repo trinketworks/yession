@@ -2297,16 +2297,16 @@ module View =
             | None -> Lit.nothing
         let actNoteItem (act: Act) (item: ConversationItem) =
             let by = item.Author
-            // A slow act coming up pulses in the LEFT gutter — a quiet dot on the margin
-            // rather than a mark trailing the line, so the running ones read as a column down
-            // the edge. A failed act still says so inline, where its reason sits: a terminal
+            // A slow act coming up is marked in the LEFT gutter — the agent's diamond,
+            // turning, on the margin rather than trailing the line, so the running ones read
+            // as a column down the edge. A failed act still says so inline, where its reason sits: a terminal
             // state wants a word, not a dot. A settled act says nothing here — its body is the
             // whole account. `data-act-status` on the article is the stable hook a test counts
             // running work by, wherever the design puts the cue.
             let running =
                 match item.Status with
                 | ConversationItemStatus.Running ->
-                    html $"""<span class="{Style.actNoteRunning}"><span class="{Style.actNoteRunningDot}"></span><span class="{Style.srOnly}">{Dom.Text.running}</span></span>"""
+                    html $"""<span class="{Style.actNoteRunning}"><span class="{Style.actNoteRunningMark}" data-act-running></span><span class="{Style.srOnly}">{Dom.Text.running}</span></span>"""
                 | Complete | Streaming | ConversationItemStatus.Failed -> Lit.nothing
             let failedMark =
                 match item.Status with
@@ -2326,7 +2326,7 @@ module View =
                 | Act.FileChanged { FileChanged.Diff = Some diff } -> Act.deed act, [], fileChangeFacts act diff
                 | _ -> Act.deed act, actNoteParticulars by act, [ toldRow act ]
             // The fold (`foldArrow`/`foldBody`): the particulars under the title, behind the
-            // arrow on the gutter. While the act is still RUNNING the gutter holds the pulse
+            // arrow on the gutter. While the act is still RUNNING the gutter holds the mark
             // instead: an act in flight is not one to unfold, and its account is about to
             // change under the reader anyway.
             let key = FoldKey.Act item.MessageId
