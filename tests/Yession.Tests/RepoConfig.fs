@@ -409,6 +409,47 @@ let tests =
                 (Map.ofList [ "A", "1"; "PATH", "/img:/x" ])
                 "the image's PATH extended; its HOME is the image's to set, not copied"
 
+        // What the credential proxy's references are for, read against each other: a note for
+        // each way a declaration can ask for the proxy and still not get through it.
+        testCase "a proxy URL with nothing trusting the proxy is noted where it was written" <| fun () ->
+            let text = "version: 2\nsandboxes:\n  dev:\n    env:\n      HTTPS_PROXY: ${proxy.https}\n"
+            match RepoConfig.fromText text with
+            | Error e -> failwithf "the file should decode: %s" e
+            | Ok read ->
+                Expect.equal
+                    (read.Findings |> List.map Yession.Domain.Sandboxes.LocatedFinding.where)
+                    [ "sandboxes.dev.env.HTTPS_PROXY, line 5" ]
+                    "the variable that sends HTTPS there"
+
+        testCase "a token lent with no proxy URL beside it is noted" <| fun () ->
+            let text = "version: 2\nsandboxes:\n  dev:\n    env:\n      GH_TOKEN: ${github.token}\n"
+            match RepoConfig.fromText text with
+            | Error e -> failwithf "the file should decode: %s" e
+            | Ok read ->
+                Expect.equal
+                    (read.Findings |> List.map Yession.Domain.Sandboxes.LocatedFinding.where)
+                    [ "sandboxes.dev.env.GH_TOKEN, line 5" ]
+                    "the variable lent it"
+
+        testCase "the proxy's authority alone as a whole trust store is noted" <| fun () ->
+            let text = "version: 2\nsandboxes:\n  dev:\n    env:\n      SSL_CERT_DIR: ${proxy.ca-dir}\n"
+            match RepoConfig.fromText text with
+            | Error e -> failwithf "the file should decode: %s" e
+            | Ok read ->
+                Expect.equal
+                    (read.Findings |> List.map Yession.Domain.Sandboxes.LocatedFinding.where)
+                    [ "sandboxes.dev.env.SSL_CERT_DIR, line 5" ]
+                    "the variable it replaces"
+
+        // The declaration each of those notes asks for, which none of them has anything to say
+        // about.
+        testCase "a sandbox that asks for the proxy the whole way is not noted" <| fun () ->
+            let text =
+                "version: 2\nsandboxes:\n  dev:\n    env:\n      HTTPS_PROXY: ${proxy.https}\n      SSL_CERT_DIR: ${env.SSL_CERT_DIR}:${proxy.ca-dir}\n      GH_TOKEN: ${github.token}\n"
+            match RepoConfig.fromText text with
+            | Error e -> failwithf "the file should decode: %s" e
+            | Ok read -> Expect.isEmpty read.Findings "nothing noted"
+
         testCase "a file with nothing to say about it has no notes" <| fun () ->
             let text = "version: 2\nsandboxes:\n  dev:\n    uses: [ nix ]\n    wants: [ cache ]\n"
             match RepoConfig.fromText text with
