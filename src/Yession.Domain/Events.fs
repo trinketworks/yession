@@ -119,6 +119,9 @@ type SessionEvent =
     // starts; until this, only the starts were announced — so a file with a typo in it read
     // on the timeline exactly like a file nobody had written.
     | RepoConfigRefused of RepoConfigRefused
+    // A declaration that WAS honoured, and that an analyzer has something to say about
+    // (`ConfigAnalysis`): legal, and almost certainly not what its author meant.
+    | RepoConfigWarned of RepoConfigWarned
     // What a repo's file asks for, said when it CHANGES. A capability set is authored by
     // whoever can push to the checkout, so a `uses:` line added in a pull request takes
     // effect the next time anybody touches a repo — and did so silently.

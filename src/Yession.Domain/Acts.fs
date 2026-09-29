@@ -39,6 +39,7 @@ type Act =
     | RepoCapabilitiesChanged of RepoCapabilitiesChanged
     | RepoCapabilitiesApproved of RepoCapabilitiesApproved
     | RepoConfigRefused of RepoConfigRefused
+    | RepoConfigWarned of RepoConfigWarned
     | SandboxStarting of WorkSandboxStarting
     | SandboxStarted of WorkSandboxStarted
     | SandboxStartFailed of WorkSandboxStartFailed
@@ -81,6 +82,7 @@ module Act =
         | Act.RepoCapabilitiesChanged c -> RepoCapabilitiesChanged.phrase c
         | Act.RepoCapabilitiesApproved a -> RepoCapabilitiesApproved.phrase a
         | Act.RepoConfigRefused r -> RepoConfigRefused.phrase r
+        | Act.RepoConfigWarned w -> RepoConfigWarned.phrase w
         | Act.SandboxStarting s -> WorkSandboxStarting.phrase s
         | Act.SandboxStarted s -> WorkSandboxStarted.phrase s
         | Act.SandboxStartFailed s -> WorkSandboxStartFailed.phrase s
@@ -122,6 +124,7 @@ module Act =
         | Act.RepoCapabilitiesChanged _
         | Act.RepoCapabilitiesApproved _
         | Act.RepoConfigRefused _
+        | Act.RepoConfigWarned _
         | Act.SandboxStopped _
         | Act.SandboxSetupQueued _
         | Act.FileChanged _
@@ -166,6 +169,7 @@ module Act =
         | Act.RepoAdded r -> RepoAdded.particulars r
         | Act.RepoCapabilitiesChanged c -> RepoCapabilitiesChanged.particulars c
         | Act.RepoConfigRefused r -> RepoConfigRefused.particulars r
+        | Act.RepoConfigWarned w -> RepoConfigWarned.particulars w
         | Act.SandboxStarting s -> WorkSandboxStarting.particulars s
         | Act.SandboxStarted s -> WorkSandboxStarted.particulars s
         | Act.SandboxStartFailed s -> WorkSandboxStartFailed.particulars s
@@ -219,6 +223,7 @@ module Act =
         | Act.RepoCapabilitiesChanged _ -> "changed", "repo's capabilities", "repos' capabilities"
         | Act.RepoCapabilitiesApproved _ -> "approved", "repo's capabilities", "repos' capabilities"
         | Act.RepoConfigRefused _ -> "refused", "repo config", "repo configs"
+        | Act.RepoConfigWarned _ -> "noted", "repo config", "repo configs"
         | Act.SandboxStarting _
         | Act.SandboxStarted _ -> "started", "sandbox", "sandboxes"
         | Act.SandboxStartFailed _ -> "failed to start", "sandbox", "sandboxes"
@@ -264,6 +269,7 @@ module Act =
         | Act.RepoCapabilitiesChanged _
         | Act.RepoCapabilitiesApproved _
         | Act.RepoConfigRefused _
+        | Act.RepoConfigWarned _
         | Act.SandboxStarting _
         | Act.SandboxStarted _
         | Act.SandboxStartFailed _

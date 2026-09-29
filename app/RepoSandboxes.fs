@@ -125,6 +125,16 @@ let private lastRefusal (events: SessionEvent list) (repo: RepoRef) (sandbox: Sa
     |> List.tryLast
     |> Option.flatten
 
+/// Whether the log already carries this exact note about this repo's file — the same words,
+/// at the same place. A note moves when its file does, and a moved one is news.
+let private alreadyNoted (events: SessionEvent list) (repo: RepoRef) (where: string) (warning: string) : bool =
+    events
+    |> List.exists (fun event ->
+        match event with
+        | SessionEvent.RepoConfigWarned w ->
+            RepoRef.value w.Repo = RepoRef.value repo && w.Where = where && w.Warning = warning
+        | _ -> false)
+
 /// What the log already says this repo asks for.
 ///
 /// The LOG rather than a field, for the reason every delta in this file uses it: a field is
@@ -233,8 +243,9 @@ let create
                 // saying nothing.
                 | Error _ -> ()
                 | Ok listings ->
-                    let declared, unreadable =
-                        RepoConfig.readAll reposDir (listings |> List.map (fun listing -> listing.Repo))
+                    let read = RepoConfig.readAll reposDir (listings |> List.map (fun listing -> listing.Repo))
+                    let declared = read.Declared
+                    let unreadable = read.Refused
                     // Kept BEFORE anything is started, so a sandbox that comes up in this fold
                     // can be described as it comes up rather than on the next one — and so a
                     // start in this fold can be answered about, which is what a declaration is
@@ -390,6 +401,25 @@ let create
                                           RepoConfigRefused.Reason = reason
                                           RepoConfigRefused.Actor = actor
                                           RepoConfigRefused.CausedBy = FoldCause.causeFor outcome.Repo cause })
+                    // What the analyzers had to say, each said ONCE: a note already in the log
+                    // is not news on the next fold, and re-announcing it every time anybody
+                    // touched a repo would train people to stop reading them.
+                    for repo, located in read.Findings do
+                        let sandbox = located.Finding.Sandbox |> Option.map (SandboxRef.inScope repo)
+                        let where = LocatedFinding.where located
+                        if not (alreadyNoted told repo where located.Finding.Message) then
+                            let actor = ActorRef.Configured repo
+                            do!
+                                append
+                                    actor
+                                    (SessionEvent.RepoConfigWarned
+                                        { RepoConfigWarned.MessageId = mintMessageId ()
+                                          RepoConfigWarned.Repo = repo
+                                          RepoConfigWarned.Sandbox = sandbox
+                                          RepoConfigWarned.Where = where
+                                          RepoConfigWarned.Warning = located.Finding.Message
+                                          RepoConfigWarned.Actor = actor
+                                          RepoConfigWarned.CausedBy = FoldCause.causeFor repo cause })
         }
 
     // One fold at a time. Folding is idempotent by construction, but only ONE AT A TIME:
@@ -449,8 +479,7 @@ let create
                 match! service.ListRepos () with
                 | Error reason -> return Error reason
                 | Ok listings ->
-                    let declared, _ =
-                        RepoConfig.readAll reposDir (listings |> List.map (fun listing -> listing.Repo))
+                    let declared = (RepoConfig.readAll reposDir (listings |> List.map (fun listing -> listing.Repo))).Declared
                     match askedBy declared repo with
                     | None -> return Error (sprintf "%s asks for nothing this session can resolve" (RepoRef.value repo))
                     // The set that arrived is the set a person read. If it is not what

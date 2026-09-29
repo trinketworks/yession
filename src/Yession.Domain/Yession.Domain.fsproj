@@ -120,6 +120,9 @@
     <!-- A compose-style command line read into words, for `entrypoint`/`command` strings. -->
     <Compile Include="ShellWords.fs" />
     <Compile Include="Config.fs" />
+    <!-- What is worth SAYING about a file that decoded: the analyzers, and the key path a
+         finding is about. After Config.fs, whose `ConfigFile` they read. -->
+    <Compile Include="ConfigAnalysis.fs" />
     <!-- Before SessionState: the synced state carries the approval mode and the subject
          this declares, so the policy types precede the collaborative state that holds
          them. Before Terminals.fs too, because a terminal's mode is one case of it. -->

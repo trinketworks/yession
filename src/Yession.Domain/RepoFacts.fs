@@ -116,6 +116,21 @@ and RepoConfigRefused =
       /// What made the file be read this time, as on its starts.
       CausedBy : Cause option }
 
+/// Something an analyzer had to tell a repo's file author (`ConfigAnalysis`). The file was
+/// honoured as written; this is only said.
+and RepoConfigWarned =
+    { MessageId : MessageId
+      Repo : RepoRef
+      /// Which declaration it is about, when it is about one.
+      Sandbox : SandboxRef option
+      /// Where in the file, as its author would find it: `sandboxes.dev.wants[1], line 12`.
+      Where : string
+      /// Said whole, as the analyzer said it.
+      Warning : string
+      /// The repo's file, as on its refusals.
+      Actor : ActorRef
+      CausedBy : Cause option }
+
 // --- What each repo act SAYS ----------------------------------------------------------------
 // The sentence an event writes into the timeline lives beside the event, for the reason
 // `WorkSandboxStarted.phrase` does: what an event's leaves MEAN is knowledge that belongs
@@ -184,3 +199,15 @@ module RepoConfigRefused =
         match r.Sandbox with
         | Some _ -> [ Phrase.text r.Reason ]
         | None -> []
+
+module RepoConfigWarned =
+
+    /// The declaration it is about as the headline, the analyzer's own sentence under it —
+    /// the same split a refusal about one declaration makes.
+    let phrase (w: RepoConfigWarned) : Phrase =
+        match w.Sandbox with
+        | Some sandbox -> [ Segment.Text "a note about sandbox "; Segment.Ref (EntityRef.Sandbox sandbox) ]
+        | None -> [ Segment.Text "a note about "; Segment.Ref (EntityRef.Repo w.Repo); Segment.Text "'s yession.yaml" ]
+
+    let particulars (w: RepoConfigWarned) : Phrase list =
+        [ Phrase.text (sprintf "%s: %s" w.Where w.Warning) ]

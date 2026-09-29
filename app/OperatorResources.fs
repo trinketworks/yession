@@ -22,22 +22,6 @@ open Yession.Domain
 open Yession.Domain.Sandboxes
 open Yession.Domain.Tools
 open Yession.SessionProcess
-open Fable.Yaml
-
-let private complaints (doc: Document) : string array =
-    Array.append doc.errors doc.warnings |> Array.map (fun problem -> problem.message)
-
-let private toJson (doc: Document) : string = Plain.json (doc.toJS ())
-
-/// The same parser construction `RepoConfig` uses, and every field is load-bearing there for
-/// the same reasons: `core` resolves only what JSON could express, `uniqueKeys` makes a
-/// repeated key an error rather than a silent last-wins fold — which is what makes the
-/// domain's "declared twice" refusal reachable from a real file — and `maxAliasCount` stops
-/// a self-referential anchor turning a small file into an unbounded tree.
-let private parseOptions : ParseOptions =
-    { ParseOptions.schema = "core"
-      uniqueKeys = true
-      maxAliasCount = 100 }
 
 /// Every path a resource names must be the one the KERNEL will check.
 ///
@@ -96,14 +80,11 @@ let read (path: string) : Result<ProfileFile option, string> =
     else
         let saying (reason: string) = sprintf "%s: %s" path reason
         try
-            let doc = parseDocument (Fs.readText path) parseOptions
-            match complaints doc with
-            | [||] ->
-                OperatorProfile.parse (toJson doc)
-                |> Result.bind canonicalPaths
-                |> Result.map Some
-                |> Result.mapError saying
-            | problems -> Error (saying problems.[0])
+            YamlSource.parse (Fs.readText path)
+            |> Result.bind (fun parsed -> OperatorProfile.parse parsed.Json)
+            |> Result.bind canonicalPaths
+            |> Result.map Some
+            |> Result.mapError saying
         with e -> Error (saying e.Message)
 
 let queryName : QueryName =
