@@ -120,8 +120,8 @@ let private andRefold
     : Async<Result<'a, string>> =
     async {
         match! outcome with
-        // Whoever the verb ran on the authority of. A `forward:` in a file the fold picks up
-        // resolves for THEM, by the same Plan 08 precedence the verb itself used.
+        // Whoever the verb ran on the authority of: a sandbox the fold starts from a file it
+        // picks up is started on THEIR authority, as the verb itself was.
         | Ok (answer, recordedAs) ->
             do! services.Refold (FoldCause.Changed (repo, recordedAs)) (Authority.credential invocation.Authority)
             return Ok answer
@@ -178,13 +178,13 @@ let startWorkSandboxCall (authority: Authority) (causedBy: Cause option) (sandbo
             [ SandboxRef.render sandbox; SandboxDecl.encode decl ]
             @ (causedBy |> Option.map (Codec.toString Codec.cause) |> Option.toList))
       Summary =
-        match ConnectionName.normalise decl.Forward with
+        match decl.Uses with
         | [] -> sprintf "start_work_sandbox %s" (SandboxRef.render sandbox)
-        | names ->
+        | uses ->
             sprintf
-                "start_work_sandbox %s forwarding %s"
+                "start_work_sandbox %s using %s"
                 (SandboxRef.render sandbox)
-                (names |> List.map ConnectionName.value |> String.concat ", ")
+                (uses |> List.map ResourceName.value |> String.concat ", ")
       Authority = authority }
 
 /// `startWorkSandboxCall`'s arguments read back: the sandbox, its declaration, and what caused
@@ -586,7 +586,7 @@ let dispatch (services: CommandServices) : CommandDispatch =
                                             }
                                         | _ -> async { return "" }
                                     let forwarding =
-                                        match entry.Request.Forward with
+                                        match entry.Forwarded with
                                         | [] -> "nothing forwarded into it"
                                         | names -> "forwarding " + (names |> List.map ConnectionName.value |> String.concat ", ")
                                     return
@@ -974,10 +974,7 @@ let private repoCapabilitiesFor
 /// The turn's sandbox commands (Plan 15, stage 2) and the shell profile (Plan 25), bound to
 /// the acting party.
 /// A repo's sandbox is its file's to describe, so a start that names one starts it as the
-/// file says. The caller's declaration contributes the one thing the file cannot know —
-/// which of this session's credentials to forward — and contributes it by UNION: a repo that
-/// asked for a credential does not stop needing it because somebody restarted the sandbox
-/// without naming it.
+/// file says, whatever the caller's declaration held.
 ///
 /// Resolved where the gated call is MINTED, not where it is carried out, so what the gate
 /// records and shows to whoever approves it is what will actually run.
@@ -1006,8 +1003,7 @@ let private startAs
     let declared =
         services.DeclaredSandboxes ()
         |> List.filter (fun (ref, _) -> SandboxRef.scope ref <> SessionOwned)
-    let asDeclared (ref: SandboxRef) (decl: SandboxDecl) =
-        Ok (ref, { decl with Forward = ConnectionName.normalise (decl.Forward @ asked.Forward) |> List.map ConnectionName.value })
+    let asDeclared (ref: SandboxRef) (decl: SandboxDecl) = Ok (ref, decl)
     match SandboxRef.scope name with
     | SessionOwned ->
         // The session's own name wins when it has one: `start_work_sandbox "dev"` in a

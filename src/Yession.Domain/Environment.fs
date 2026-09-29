@@ -303,33 +303,25 @@ module EnvironmentSpec =
     let container : EnvironmentSpec =
         { defaults with Runtime = Container ContainerSpec.defaults }
 
-/// One ask for a sandbox: what it should BE, and which credentials to forward into it.
-///
-/// Two fields rather than one because they are resolved by different parties — the spec is
-/// what the session builds the sandbox from, `Forward` is a list of credential NAMES the
-/// composition resolves against whoever is asking, at spawn, and never carries a value.
-///
-/// They travel together because together they are what "is this the same sandbox I already
-/// have" compares. A comparison assembled at each call site is a comparison that will be
-/// assembled differently at one of them, and the answer decides whether somebody's build
+/// One ask for a sandbox: what it should BE, which is what "is this the same sandbox I
+/// already have" compares. A comparison assembled at each call site is a comparison that will
+/// be assembled differently at one of them, and the answer decides whether somebody's build
 /// gets killed.
-type SandboxRequest =
-    { Spec : EnvironmentSpec
-      /// Constructed, so already normalised (`ConnectionName.normalise`): the registry
-      /// compares requests, and a comparison over raw spellings refused asks nobody changed.
-      Forward : ConnectionName list }
+///
+/// What it forwards is not a separate field: a connection is a resource, so it is in the
+/// spec's `uses`/`wants`, and what those come to on this host is the registry's to resolve
+/// (`WorkSandboxesConfig.Connections`). An ask cannot name a credential the selection did not.
+type SandboxRequest = { Spec : EnvironmentSpec }
 
 module SandboxRequest =
 
     /// An ask that named nothing in particular — which is also what `default` is.
-    let defaults : SandboxRequest = { Spec = EnvironmentSpec.defaults; Forward = [] }
+    let defaults : SandboxRequest = { Spec = EnvironmentSpec.defaults }
 
     let private list (names: string list) =
         match names with
         | [] -> "nothing"
         | some -> String.concat ", " some
-
-    let private connections (names: ConnectionName list) = list (names |> List.map ConnectionName.value)
 
     let private mountsOf (runtime: SandboxRuntime) =
         match runtime with
@@ -356,9 +348,7 @@ module SandboxRequest =
         let names (vars: Map<string, EnvironmentVariableRef>) =
             vars |> Map.toList |> List.map fst |> list
         let clauses =
-            [ if running.Forward <> wanted.Forward then
-                sprintf "it forwards %s, not %s" (connections running.Forward) (connections wanted.Forward)
-              if running.Spec.WorkingDirectory <> wanted.Spec.WorkingDirectory then
+            [ if running.Spec.WorkingDirectory <> wanted.Spec.WorkingDirectory then
                 sprintf
                     "it starts in %s, not %s"
                     (where running.Spec.WorkingDirectory)

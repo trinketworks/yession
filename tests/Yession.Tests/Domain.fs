@@ -2135,8 +2135,7 @@ let private configTests =
                           "workdir": "./app",
                           "env": { "NODE_ENV": "development" },
                           "uses": [ "npm" ],
-                          "files": { ".config/tool/first-run": "" },
-                          "forward": [ "github" ] } } }"""
+                          "files": { ".config/tool/first-run": "" } } } }"""
                 |> expect
             let dev = file.Sandboxes |> Map.find (sandboxName "dev")
             let container = dev.Container |> Option.get
@@ -2144,7 +2143,16 @@ let private configTests =
             Expect.equal dev.WorkingDirectory (Some "./app") "the workdir is the repo's own"
             Expect.equal container.Command (Some "npm start") "the sandbox's process"
             Expect.equal (dev.Uses |> List.map ResourceName.value) [ "npm" ] "the resources it selects"
-            Expect.equal dev.Forward [ "github" ] "the credentials by name"
+
+        // `forward:` worked yesterday, so the file that still has it is told what replaced
+        // it rather than that it was never a word.
+        testCase "a forward: is refused, naming what a connection is now" <| fun () ->
+            match
+                ConfigFile.parse """
+                    { "version": 2, "sandboxes": { "dev": { "forward": [ "github" ] } } }"""
+            with
+            | Ok _ -> failwith "expected a refusal"
+            | Error e -> Expect.stringContains e "{ connection: github }" "it says how an operator offers one"
 
         // `setup:` is a repo MAKING its environment ready rather than describing it and
         // hoping. Deliberately not `container.cmd`, which is beside it in the same file and
@@ -2414,6 +2422,31 @@ let private configTests =
             | Ok _ -> failwith "expected the conflicting pair to refuse"
             | Error e -> Expect.isTrue (e.Contains "/cache") (sprintf "the refusal names the colliding path, said: %s" e)
 
+        // A connection is a resource like any other: offered by the operator under a name,
+        // selected by a sandbox, and what that selection forwards splits the way the grant
+        // does — needed where something needs it, wanted where only a want reaches it.
+        testCase "an offered connection is needed under uses and wanted under wants" <| fun () ->
+            let profile =
+                OperatorProfile.parse
+                    """{ "version": 1,
+                         "resources": {
+                           "github": { "connection": "github" },
+                           "jira": { "connection": "jira" } } }"""
+                |> expect
+            let name raw = ResourceName.create raw |> expect
+            Expect.equal
+                (ResourceProfile.grants profile.Resources [] [ name "github" ] [ name "jira" ]
+                 |> expect
+                 |> ForwardedConnections.ofGrant)
+                { ForwardedConnections.Needed = [ "github" ]; ForwardedConnections.Wanted = [ "jira" ] }
+                "each by how it was selected"
+
+        testCase "a connection the host grants always is needed" <| fun () ->
+            Expect.equal
+                (ResourceProfile.grants ResourceProfile.empty [ Connection "github" ] [] [] |> expect |> ForwardedConnections.ofGrant)
+                { ForwardedConnections.Needed = [ "github" ]; ForwardedConnections.Wanted = [] }
+                "nothing selected it, and every sandbox holds it"
+
         // The file's whole claim: it says nothing a command could not be told. So what a
         // declaration becomes is the ask itself, with the one thing a file cannot know —
         // where the session put the checkout — filled in.
@@ -2427,14 +2460,12 @@ let private configTests =
                           "workdir": "./app",
                           "env": { "NODE_ENV": "development" },
                           "uses": [ "npm" ],
-                          "uses": [ "npm" ],
-                          "forward": [ "github" ] } } }"""
+                          "uses": [ "npm" ] } } }"""
                  |> expect).Sandboxes
                 |> Map.find (sandboxName "dev")
             let request = SandboxDecl.toRequest (checkout "/data/repos/octo/hello") decl |> expect
             Expect.equal request.Spec.WorkingDirectory (Some "/data/repos/octo/hello/app") "the workdir is under the checkout"
             Expect.equal (request.Spec.Uses |> List.map ResourceName.value) [ "npm" ] "the resources it selects"
-            Expect.equal request.Forward [ ConnectionName.create "github" |> expect ] "the credentials by name"
             Expect.equal
                 request.Spec.Runtime
                 (Container { ContainerSpec.defaults with Image = Some { Name = "node"; Tag = Some "24" } })
@@ -2531,8 +2562,8 @@ let private configTests =
 
         testCase "a declaration with no workdir needs no checkout" <| fun () ->
             Expect.equal
-                (SandboxDecl.toRequest None { SandboxDecl.empty with Forward = [ "github" ] } |> expect)
-                { SandboxRequest.defaults with Forward = [ ConnectionName.create "github" |> expect ] }
+                (SandboxDecl.toRequest None SandboxDecl.empty |> expect)
+                SandboxRequest.defaults
                 "which is every ask the agent's own tool can make"
 
         // What crosses the command gate is a declaration, so the gate's args are bounded by
@@ -2552,8 +2583,7 @@ let private configTests =
                           "env": { "NODE_ENV": "development", "DB": { "secret": "db-url" } },
                           "uses": [ "npm" ],
                           "uses": [ "npm" ],
-                          "setup": "npm ci",
-                          "forward": [ "github" ] } } }"""
+                          "setup": "npm ci" } } }"""
                  |> expect).Sandboxes
                 |> Map.find (sandboxName "dev")
             Expect.equal
@@ -2809,8 +2839,7 @@ let private configTests =
 /// A list rather than separate cases because the property under test is about ALL of them
 /// at once: whichever field moved, the refusal has something to say.
 let private variants : (string * SandboxRequest) list =
-    [ "forwarding", { SandboxRequest.defaults with Forward = [ ConnectionName.create "github" |> expect ] }
-      "workdir",
+    [ "workdir",
         { SandboxRequest.defaults with
             Spec = { EnvironmentSpec.defaults with WorkingDirectory = Some "/somewhere" } }
       "environment",

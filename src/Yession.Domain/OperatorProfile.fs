@@ -72,7 +72,7 @@ module OperatorProfile =
 
     let private fileKeys = [ "version"; "resources"; "always"; "agent"; "sandboxes" ]
     let private agentKeys = [ "guidance" ]
-    let private leafKeys = [ "mount"; "socket"; "endpoint"; "env"; "exec"; "volume"; "sensitive" ]
+    let private leafKeys = [ "mount"; "socket"; "endpoint"; "env"; "exec"; "volume"; "connection"; "sensitive" ]
     let private mountKeys = [ "from"; "at"; "mode" ]
     let private volumeKeys = [ "name"; "at" ]
 
@@ -140,6 +140,7 @@ module OperatorProfile =
                 let sockets = get.Optional.Field "socket" stringList |> Option.defaultValue []
                 let endpoints = get.Optional.Field "endpoint" stringList |> Option.defaultValue []
                 let execs = get.Optional.Field "exec" stringList |> Option.defaultValue []
+                let connections = get.Optional.Field "connection" stringList |> Option.defaultValue []
                 let volumes =
                     get.Optional.Field "volume" (Decode.oneOf [ Decode.list volume; volume |> Decode.map List.singleton ])
                     |> Option.defaultValue []
@@ -159,13 +160,14 @@ module OperatorProfile =
                     @ (variables |> List.map Variable)
                     @ (execs |> List.map Exec)
                     @ volumes
+                    @ (connections |> List.map Connection)
                 leaves, sensitivity))
         |> Decode.andThen (fun (leaves, sensitivity) ->
             // A resource that grants nothing is a name that reads as configuration and is
             // none — the same failure an unknown key would be, arriving by a different route.
             failIf
                 (List.isEmpty leaves)
-                "this resource grants nothing — name at least one of mount, socket, endpoint, env, exec or volume"
+                "this resource grants nothing — name at least one of mount, socket, endpoint, env, exec, volume or connection"
                 (Decode.succeed (ResourceDecl.Leaf (leaves, sensitivity))))
 
     /// An ARRAY is a composition. Sensitivity is deliberately not a key here: a composite is

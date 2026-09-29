@@ -288,7 +288,7 @@ first's.
   answered by the credential proxy, and only a sandbox provisioned for it has been told to
   trust that proxy's authority. One that was not fails TLS to that host rather than
   reaching it unauthenticated. `default` forwards `github` whenever the session can, so
-  in practice this is a sandbox started with `forward: []`.
+  in practice this is a sandbox whose selection reaches no `github` connection.
 - **The strict confinement profile needs a nested user namespace, which an unprivileged
   container refuses.** srt's seccomp helper creates one inside bubblewrap's to drop
   capabilities and mount a fresh `/proc`; Docker's default (and this repo's dev container)

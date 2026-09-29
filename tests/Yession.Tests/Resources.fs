@@ -55,10 +55,11 @@ let private leafShapesFor (i: int) (mode: ResourceMountMode) : ResourceLeaf list
           Endpoint (sprintf "h%d.example.com" i)
           Variable (sprintf "V%d" i, sprintf "value-%d" i)
           Volume (sprintf "vol%d" i, sprintf "/vol/%d" i)
-          Exec (sprintf "/bin/tool%d" i) ]
+          Exec (sprintf "/bin/tool%d" i)
+          Connection (sprintf "conn%d" i) ]
     for shape in shapes do
         match shape with
-        | Mount _ | Socket _ | Endpoint _ | Variable _ | Volume _ | Exec _ -> ()
+        | Mount _ | Socket _ | Endpoint _ | Variable _ | Volume _ | Exec _ | Connection _ -> ()
     shapes
 
 /// Every mount mode, proved total the same way.
@@ -817,7 +818,8 @@ let tests =
                 for leaf in differing do
                     match leaf with
                     | Variable _
-                    | Exec _ -> failwithf "%A cannot depend on the host" leaf
+                    | Exec _
+                    | Connection _ -> failwithf "%A cannot depend on the host" leaf
                     | Mount mount ->
                         Expect.equal mount.Mode ResourceMountMode.Overlay
                             "only an overlay mount can, and only because no backend has a union mount"

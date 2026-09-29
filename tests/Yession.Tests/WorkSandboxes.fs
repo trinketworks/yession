@@ -56,9 +56,19 @@ let private isAct (item: ConversationItem) : bool =
     | ItemContent.Stopped _ -> false
 
 /// The ask most of these cases make: nothing in particular about the sandbox, some
-/// credentials forwarded into it. The spec half has its own cases below.
+/// connections forwarded into it — selected under `uses`, as a repo selects them, on a host
+/// where each resource name is the connection of that name (`everyResourceAConnection`). The
+/// spec half has its own cases below.
 let private forwarding (names: string list) : SandboxRequest =
-    { SandboxRequest.defaults with Forward = ConnectionName.normalise names }
+    { Spec = { EnvironmentSpec.defaults with Uses = names |> List.map (ResourceName.create >> expect) } }
+
+/// The host these cases run on: every resource a spec selects is the connection of the same
+/// name, needed under `uses` and wanted under `wants` — what an operator offering
+/// `github: { connection: github }` comes to, without a profile to load.
+let private everyResourceAConnection (spec: EnvironmentSpec) : Result<ForwardedConnections, string> =
+    Ok
+        { Needed = spec.Uses |> List.map ResourceName.value
+          Wanted = spec.Wants |> List.map ResourceName.value }
 
 /// The one connection these cases forward, as a name.
 let private github : ConnectionName = ConnectionName.create "github" |> expect
@@ -110,6 +120,7 @@ let private registryWithSpecs (log: EventLog<SessionEvent>) (credentials: WorkSa
                   Describe = fun _ -> None
                   Checkout = fun _ -> None
                   Credentials = credentials
+                  Connections = everyResourceAConnection
                   Standing = []
                   Create =
                     fun name spec provision ->
@@ -131,6 +142,7 @@ let private registryHolding (log: EventLog<SessionEvent>) (realisation: string l
                   Describe = fun _ -> None
                   Checkout = fun _ -> None
                   Credentials = []
+                  Connections = everyResourceAConnection
                   Standing = []
                   Create = fun _ _ _ -> Ok (fakeEnvironmentHolding realisation)
                   Log = log
@@ -258,6 +270,7 @@ let private ensureTests =
                           Describe = fun _ -> None
                           Checkout = fun _ -> None
                           Credentials = []
+                          Connections = everyResourceAConnection
                           Standing = []
                           Create = fun _ _ _ -> Ok (fakeEnvironmentFailing "the docker daemon is not reachable")
                           Log = log
@@ -284,6 +297,7 @@ let private ensureTests =
                           Describe = fun _ -> Some "day-to-day work"
                           Checkout = fun _ -> None
                           Credentials = []
+                          Connections = everyResourceAConnection
                           Standing = []
                           Create = fun _ _ _ -> Ok (fakeEnvironment ())
                           Log = log
@@ -309,6 +323,7 @@ let private ensureTests =
                           Describe = fun _ -> None
                           Checkout = fun _ -> Some "/repos/owner/name"
                           Credentials = []
+                          Connections = everyResourceAConnection
                           Standing = []
                           Create = fun _ _ _ -> Ok (fakeEnvironment ())
                           Log = log
@@ -361,6 +376,7 @@ let private ensureTests =
                           Describe = fun _ -> described.Value
                           Checkout = fun _ -> None
                           Credentials = []
+                          Connections = everyResourceAConnection
                           Standing = []
                           Create = fun _ _ _ -> Ok (fakeEnvironment ())
                           Log = log
@@ -404,18 +420,10 @@ let private ensureTests =
                 Expect.equal (List.length (startedEvents events)) 1 "the second ask recorded nothing"
             }
 
-        // Equivalent-but-differently-spelled forwarding is the SAME ask, which is what
-        // normalisation is for; this pins that the registry uses it.
-        testCaseAsync "an equivalent forwarding list is the same ask" <|
-            async {
-                let log = newLog ()
-                let! sandboxes, _ = registry log [ githubCredential "tok" ]
-                let! _ = sandboxes.Ensure starter None (sandbox "test") (forwarding [ "github" ])
-                let! again = sandboxes.Ensure starter None (sandbox "test") (forwarding [ " GitHub "; "github" ])
-                Expect.isTrue (Result.isOk again) "it is not a configuration change"
-                let! events = eventsOf log
-                Expect.equal (List.length (startedEvents events)) 1 "still recorded once"
-            }
+        // A forwarding list was once free text, normalised here so ` GitHub ` and `github`
+        // compared equal. What a sandbox forwards is its selection now, and a selection is
+        // resource names, which refuse a second spelling where they are decoded — so there
+        // is no equivalent-but-different ask left to reach the registry.
 
         // The refusal, and why it is a refusal: a sandbox has processes in it. Converging
         // by killing somebody's build is not convergence.
@@ -479,7 +487,7 @@ let private ensureTests =
                 Expect.isTrue (Result.isOk stopped) "it stops"
                 let! restarted = sandboxes.Ensure starter None (sandbox "test") (forwarding [ "github" ])
                 Expect.equal
-                    (WorkSandboxes.SandboxOutcome.sandbox (expect restarted)).Request.Forward
+                    (WorkSandboxes.SandboxOutcome.sandbox (expect restarted)).Forwarded
                     [ github ]
                     "the new configuration takes"
                 let! events = eventsOf log
@@ -611,7 +619,7 @@ let private credentialTests =
                 let! sandboxes, built = registry log [ githubCredential "ghp_secret" ]
                 let! started = sandboxes.Ensure starter None (sandbox "test") (forwarding [ "github" ])
                 Expect.equal
-                    (WorkSandboxes.SandboxOutcome.sandbox (expect started)).Request.Forward
+                    (WorkSandboxes.SandboxOutcome.sandbox (expect started)).Forwarded
                     [ github ]
                     "it forwards what was asked"
 
@@ -743,6 +751,7 @@ let private credentialTests =
                           Describe = fun _ -> None
                           Checkout = fun _ -> None
                           Credentials = [ source ]
+                          Connections = everyResourceAConnection
                           Standing = []
                           Create = fun name _ _ -> if name = SandboxRef.defaultRef then Ok (fakeEnvironment ()) else Error "no room"
                           Log = log
@@ -1351,6 +1360,7 @@ let private registryStanding
                   Describe = fun _ -> None
                   Checkout = fun _ -> None
                   Credentials = credentials
+                  Connections = everyResourceAConnection
                   Standing = standing |> List.map (fun (name, request) -> SandboxName.create name |> expect, request)
                   Create = fun _ _ _ -> Ok (fakeEnvironment ())
                   Log = log
@@ -1383,7 +1393,7 @@ let private standingTests =
             async {
                 let! sandboxes = registryStanding (newLog ()) [ githubCredential "tok" ] [ "default", forwarding [] ]
                 let defaults = sandboxes.Listed () |> List.filter (fun entry -> entry.Ref = SandboxRef.defaultRef)
-                Expect.equal (defaults |> List.map (fun entry -> entry.Request.Forward)) [ [] ] "one default, forwarding what the operator said"
+                Expect.equal (defaults |> List.map (fun entry -> entry.Forwarded)) [ [] ] "one default, forwarding what the operator said"
             }
 
         // A credential the operator named that cannot reach the sandbox is said by the
@@ -1397,6 +1407,27 @@ let private standingTests =
                 match! (sandboxes.EnvironmentFor SandboxRef.defaultRef).Ensure None "a terminal was opened" with
                 | EnvironmentAvailable -> ()
                 | EnvironmentUnavailable reason -> failwithf "default should come up regardless: %s" reason
+            }
+
+        // A want is silent where it cannot be had, and a connection's "cannot" is its
+        // source's to say: one this backend cannot be reached by is left out, and the
+        // sandbox comes up without it.
+        testCaseAsync "a wanted connection that cannot reach the sandbox is left out" <|
+            async {
+                let wanting = { Spec = { EnvironmentSpec.defaults with Wants = [ ResourceName.create "github" |> expect ] } }
+                let! sandboxes = registryStanding (newLog ()) [ unroutable ] []
+                let! started = sandboxes.Ensure starter None (sandbox "test") wanting
+                Expect.equal (WorkSandboxes.SandboxOutcome.sandbox (expect started)).Forwarded [] "up, forwarding nothing"
+            }
+
+        // A need is not: the same connection under `uses` refuses the start, in the
+        // source's words.
+        testCaseAsync "a needed connection that cannot reach the sandbox refuses the start" <|
+            async {
+                let! sandboxes = registryStanding (newLog ()) [ unroutable ] []
+                match! sandboxes.Ensure starter None (sandbox "test") (forwarding [ "github" ]) with
+                | Ok _ -> failwith "expected a refusal"
+                | Error reason -> Expect.stringContains reason "no route from here" "the source's own words"
             }
 
         // Stopping takes down what runs in it; the sandbox itself is the operator's to keep.

@@ -695,6 +695,7 @@ let tests =
                                   Describe = fun _ -> None
                                   Checkout = fun _ -> None
                                   Credentials = []
+                                  Connections = fun _ -> Ok ForwardedConnections.none
                                   Standing = []
                                   Create = fun name _ _ -> Ok (environmentNamed (SandboxRef.render name))
                                   Log = log

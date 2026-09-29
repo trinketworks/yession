@@ -1950,14 +1950,22 @@ let private compositionTests =
                 let! a = connectClient (sprintf "http://127.0.0.1:%d/signal" sessionPort) openedA.PeerToken "ada" "Ada"
                 do! compose a a.Hello.PeerId "built binaries talking"
                 a.Connection.SendDraft a.Hello.PeerId
-                do! a.Runner.WaitFor (fun m ->
-                        (m.Conversation.Items |> List.exists (fun i -> (ConversationItem.said i) = "built binaries talking"))
-                        && (m.Conversation.Items
-                            |> List.exists (fun i -> i.Author = ActorRef.Agent && i.Status = Complete && (ConversationItem.said i).Contains "diagnostic-ok"))
-                        && (match m.Environment with EnvironmentRunning _ -> true | _ -> false)
-                        && (m.Terminals.Terminals
-                            |> List.exists (fun t ->
-                                t.Blocks |> List.exists (fun b -> b.Status = BlockFinished (CommandSucceeded 0)))))
+                do!
+                    Harness.waitForAll
+                        a.Runner
+                        [ "the message is on the timeline",
+                          fun m -> m.Conversation.Items |> List.exists (fun i -> (ConversationItem.said i) = "built binaries talking")
+                          "the agent answered diagnostic-ok",
+                          fun m ->
+                              m.Conversation.Items
+                              |> List.exists (fun i ->
+                                  i.Author = ActorRef.Agent && i.Status = Complete && (ConversationItem.said i).Contains "diagnostic-ok")
+                          "the environment is running",
+                          fun m -> (match m.Environment with EnvironmentRunning _ -> true | _ -> false)
+                          "a block finished with 0",
+                          fun m ->
+                              m.Terminals.Terminals
+                              |> List.exists (fun t -> t.Blocks |> List.exists (fun b -> b.Status = BlockFinished (CommandSucceeded 0))) ]
                 do! a.Channel.Close ()
 
                 // Stop and resume from the UI; history replays into the fresh child.

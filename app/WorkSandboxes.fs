@@ -114,6 +114,10 @@ type RunningSandbox =
       /// the wrong answer either kills somebody's build or hands back a sandbox configured
       /// as something else.
       Request : SandboxRequest
+      /// The connections it was provisioned with: what its selection reached on this host,
+      /// less any it only WANTED that this backend could not be reached by. What its blocks
+      /// are lent for, and what a stop gives back.
+      Forwarded : ConnectionName list
       /// Who asked for it. `None` for `default`, which nobody asked for.
       StartedBy : ActorRef option
       StartedAt : DateTimeOffset option
@@ -138,6 +142,11 @@ type WorkSandboxesConfig =
       /// the wrong view.
       Checkout : SandboxRef -> string option
       Credentials : CredentialSource list
+      /// The connections a spec's selection reaches on this host (`ForwardedConnections`),
+      /// or why it reaches nothing. Asked here rather than carried on the request because it
+      /// is the OPERATOR's profile that turns a name into a connection, and the request is
+      /// what a repo's file said.
+      Connections : EnvironmentSpec -> Result<ForwardedConnections, string>
       /// The sandboxes the operator declared (`ProfileFile.Sandboxes`), as requests: the
       /// session has each from boot, as it has `default`. An operator's `default` replaces
       /// the built-in one.
@@ -268,6 +277,33 @@ let create (config: WorkSandboxesConfig) : Async<Result<WorkSandboxes, string>> 
                 | None -> return Ok provisioned
             }
 
+        // What a spec's selection forwards, provisioned: every connection it NEEDS or refuse,
+        // then each it only WANTS that this session has a source for and this backend can be
+        // reached by — a want is silent where it cannot be had, as it is for every leaf.
+        let provisionSelection (name: SandboxRef) (spec: EnvironmentSpec) : Async<Result<ConnectionName list * Provision, string>> =
+            async {
+                match config.Connections spec with
+                | Error e -> return Error e
+                | Ok connections ->
+                    let needed = ConnectionName.normalise connections.Needed
+                    match! provisionForward name needed with
+                    | Error e -> return Error e
+                    | Ok provision ->
+                        let mutable provision = provision
+                        let mutable forwarded = needed
+                        for wanted in ConnectionName.normalise connections.Wanted do
+                            if not (List.contains wanted forwarded) then
+                                match config.Credentials |> List.tryFind (fun source -> source.Name = wanted) with
+                                | None -> ()
+                                | Some source ->
+                                    match! source.Provision name with
+                                    | CredentialForwarding.Unforwardable _ -> ()
+                                    | CredentialForwarding.Forwarded given ->
+                                        provision <- Provision.merge provision given
+                                        forwarded <- forwarded @ [ wanted ]
+                        return Ok (ConnectionName.normalise (forwarded |> List.map ConnectionName.value), provision)
+            }
+
         // The sandboxes this session has from boot: every one the operator declared, and the
         // built-in `default` while the operator declares no `default` of its own. Each is
         // created eagerly and started lazily, and its forward is baked in HERE, before its
@@ -278,7 +314,7 @@ let create (config: WorkSandboxesConfig) : Async<Result<WorkSandboxes, string>> 
         // its git carries the same route and per-block loan a repo's sandbox does. Provisioned
         // LENIENTLY: a credential that cannot route into it is skipped, not fatal — it is the
         // sandbox a terminal that names nothing finds, and it comes up with whatever forwarded.
-        let builtInDefault () : Async<SandboxRequest * Provision> =
+        let builtInDefault () : Async<SandboxRequest * ConnectionName list * Provision> =
             async {
                 let mutable provision = Provision.empty
                 let mutable forwarded = []
@@ -288,44 +324,49 @@ let create (config: WorkSandboxesConfig) : Async<Result<WorkSandboxes, string>> 
                         provision <- Provision.merge provision given
                         forwarded <- forwarded @ [ source.Name ]
                     | CredentialForwarding.Unforwardable _ -> ()
-                return { SandboxRequest.defaults with Forward = List.distinct forwarded }, provision
+                return SandboxRequest.defaults, List.distinct forwarded, provision
             }
 
         let declared =
             config.Standing |> List.map (fun (name, request) -> SandboxRef.create SessionOwned name, request)
         let declaresDefault = declared |> List.exists (fun (ref, _) -> ref = SandboxRef.defaultRef)
 
-        // An operator's sandbox forwards what it declared, and STRICTLY: the operator named
-        // that credential, so one that cannot reach this sandbox is said — by the sandbox,
-        // which refuses every spawn with the reason — rather than silently left out. The
-        // session still boots: one mis-declared sandbox is not every sandbox.
-        let standingEntry (ref: SandboxRef) (request: SandboxRequest) (provisioned: Result<Provision, string>) : RunningSandbox =
-            let environment =
+        // An operator's sandbox forwards what its selection reaches, as any sandbox does: a
+        // connection it needs that cannot reach it is said — by the sandbox, which refuses
+        // every spawn with the reason — rather than silently left out. The session still
+        // boots: one mis-declared sandbox is not every sandbox.
+        let standingEntry
+            (ref: SandboxRef)
+            (request: SandboxRequest)
+            (provisioned: Result<ConnectionName list * Provision, string>)
+            : RunningSandbox =
+            let forwarded, environment =
                 match provisioned with
-                | Error reason -> missing (sprintf "sandbox '%s' cannot start: %s" (SandboxRef.render ref) reason)
-                | Ok provision ->
+                | Error reason -> [], missing (sprintf "sandbox '%s' cannot start: %s" (SandboxRef.render ref) reason)
+                | Ok (forwarded, provision) ->
                     match config.Create ref request.Spec provision with
-                    | Ok environment -> environment
+                    | Ok environment -> forwarded, environment
                     | Error reason ->
-                        revoke ref request.Forward
-                        missing (sprintf "sandbox '%s' cannot start: %s" (SandboxRef.render ref) reason)
+                        revoke ref forwarded
+                        [], missing (sprintf "sandbox '%s' cannot start: %s" (SandboxRef.render ref) reason)
             { Ref = ref
               Backend = config.Backend ref
               Request = request
+              Forwarded = forwarded
               StartedBy = None
               StartedAt = None
               Environment = environment }
 
         let mutable standing : (SandboxRef * RunningSandbox) list = []
         for ref, request in declared do
-            let! provisioned = provisionForward ref request.Forward
+            let! provisioned = provisionSelection ref request.Spec
             standing <- standing @ [ ref, standingEntry ref request provisioned ]
         let! builtIn =
             async {
                 if declaresDefault then return None
                 else
-                    let! request, provision = builtInDefault ()
-                    return Some (SandboxRef.defaultRef, request, provision)
+                    let! request, forwarded, provision = builtInDefault ()
+                    return Some (SandboxRef.defaultRef, request, forwarded, provision)
             }
 
         // The built-in `default` failing to build is the one refusal that still fails the
@@ -334,10 +375,10 @@ let create (config: WorkSandboxesConfig) : Async<Result<WorkSandboxes, string>> 
         let builtInEntry =
             match builtIn with
             | None -> Ok []
-            | Some (ref, request, provision) ->
+            | Some (ref, request, forwarded, provision) ->
                 match config.Create ref request.Spec provision with
                 | Error e ->
-                    revoke ref request.Forward
+                    revoke ref forwarded
                     Error e
                 | Ok environment ->
                     Ok
@@ -345,6 +386,7 @@ let create (config: WorkSandboxesConfig) : Async<Result<WorkSandboxes, string>> 
                           { Ref = ref
                             Backend = config.Backend ref
                             Request = request
+                            Forwarded = forwarded
                             StartedBy = None
                             StartedAt = None
                             Environment = environment } ]
@@ -355,8 +397,10 @@ let create (config: WorkSandboxesConfig) : Async<Result<WorkSandboxes, string>> 
 
             /// What each standing sandbox resets to when it is stopped: it keeps its entry,
             /// because it is one the session has from boot, and its configuration.
-            let standingRequests : Map<SandboxRef, SandboxRequest> =
-                (builtInEntry @ standing) |> List.map (fun (ref, entry) -> ref, entry.Request) |> Map.ofList
+            let standingRequests : Map<SandboxRef, SandboxRequest * ConnectionName list> =
+                (builtInEntry @ standing)
+                |> List.map (fun (ref, entry) -> ref, (entry.Request, entry.Forwarded))
+                |> Map.ofList
 
             // Keyed by the ref itself: it is a structural value, so a lookup is an equality
             // rather than a rendered string two call sites have to agree on how to spell.
@@ -400,8 +444,6 @@ let create (config: WorkSandboxesConfig) : Async<Result<WorkSandboxes, string>> 
                 async {
                     let actor = Authority.author authority
                     let onBehalfOf = Authority.onBehalfOf authority
-                    // Already normalised by construction (`SandboxRequest.Forward` is a
-                    // `ConnectionName list`), so two asks that mean the same thing compare equal.
                     let wanted = request
                     match find name with
                     | Some existing when existing.Request = wanted ->
@@ -423,12 +465,12 @@ let create (config: WorkSandboxesConfig) : Async<Result<WorkSandboxes, string>> 
                                     (SandboxRef.render name)
                                     (SandboxRequest.differences existing.Request wanted |> String.concat "; "))
                     | None ->
-                        match! provisionForward name wanted.Forward with
+                        match! provisionSelection name wanted.Spec with
                         | Error e -> return Error e
-                        | Ok provision ->
+                        | Ok (forwarded, provision) ->
                             match config.Create name wanted.Spec provision with
                             | Error e ->
-                                revoke name wanted.Forward
+                                revoke name forwarded
                                 return Error e
                             | Ok environment ->
                                 // One id for the whole coming-up: the RUNNING act this opens
@@ -469,6 +511,7 @@ let create (config: WorkSandboxesConfig) : Async<Result<WorkSandboxes, string>> 
                                         { Ref = name
                                           Backend = config.Backend name
                                           Request = wanted
+                                          Forwarded = forwarded
                                           StartedBy = Some actor
                                           StartedAt = Some startedAt
                                           Environment = environment }
@@ -482,7 +525,7 @@ let create (config: WorkSandboxesConfig) : Async<Result<WorkSandboxes, string>> 
                                                   Backend = config.Backend name
                                                   Description = config.Describe name
                                                   Checkout = config.Checkout name
-                                                  Forwarded = wanted.Forward
+                                                  Forwarded = forwarded
                                                   // Asked of the environment that just came
                                                   // up, not computed here: what a sandbox
                                                   // holds is settled by the policy it was
@@ -502,19 +545,24 @@ let create (config: WorkSandboxesConfig) : Async<Result<WorkSandboxes, string>> 
                     | Some entry ->
                         let name = entry.Ref
                         do! entry.Environment.Stop ()
-                        revoke name entry.Request.Forward
+                        revoke name entry.Forwarded
                         // A standing sandbox keeps its ENTRY — it is one the session has
                         // from boot, and a terminal that names it must still find it — but
                         // resets to its own configuration. Any other name leaves entirely,
-                        // which is what makes "stop it first, then start it with different
-                        // forwarding" work.
+                        // which is what makes "stop it first, then start it as declared now"
+                        // work.
                         match Map.tryFind name standingRequests with
-                        | Some request ->
+                        | Some (request, forwarded) ->
                             entries <-
                                 entries
                                 |> List.map (fun (key, existing) ->
                                     if key = name then
-                                        key, { existing with Request = request; StartedBy = None; StartedAt = None }
+                                        key,
+                                        { existing with
+                                            Request = request
+                                            Forwarded = forwarded
+                                            StartedBy = None
+                                            StartedAt = None }
                                     else key, existing)
                         | None -> entries <- entries |> List.filter (fun (key, _) -> key <> name)
                         do!
@@ -534,7 +582,7 @@ let create (config: WorkSandboxesConfig) : Async<Result<WorkSandboxes, string>> 
                 async {
                     for name, entry in entries do
                         do! entry.Environment.Stop ()
-                        revoke name entry.Request.Forward
+                        revoke name entry.Forwarded
                 }
 
             /// What a block in `name` is lent for its act: each forwarded source's answer for
@@ -547,7 +595,7 @@ let create (config: WorkSandboxesConfig) : Async<Result<WorkSandboxes, string>> 
                     | None -> return BlockEnv.none
                     | Some entry ->
                         let mutable lent = BlockEnv.none
-                        for forwarded in entry.Request.Forward do
+                        for forwarded in entry.Forwarded do
                             match config.Credentials |> List.tryFind (fun source -> source.Name = forwarded) with
                             | None -> ()
                             | Some source ->
@@ -581,6 +629,7 @@ let singleton (backend: string) (environment: SessionEnvironment.SessionEnvironm
         { Ref = SandboxRef.defaultRef
           Backend = backend
           Request = SandboxRequest.defaults
+          Forwarded = []
           StartedBy = None
           StartedAt = None
           Environment = environment }
@@ -622,6 +671,7 @@ let unavailable : WorkSandboxes =
         { Ref = SandboxRef.defaultRef
           Backend = "none"
           Request = SandboxRequest.defaults
+          Forwarded = []
           StartedBy = None
           StartedAt = None
           Environment = SessionEnvironment.unavailable }
@@ -700,7 +750,7 @@ let query (current: unit -> WorkSandboxes) : Queries.QueryRegistration =
                                   | Some ref -> "running (" + ref + ")"
                                   | None -> "not started")
                               "forwarding",
-                              (match entry.Request.Forward with
+                              (match entry.Forwarded with
                                | [] -> CellText "nothing"
                                | names -> CellText (names |> List.map ConnectionName.value |> String.concat ", "))
                               // From the RUNNING sandbox, like `state` above and for the same
