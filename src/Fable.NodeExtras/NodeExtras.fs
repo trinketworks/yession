@@ -1596,9 +1596,16 @@ type Duplex =
     [<Emit("$0.end()")>]
     abstract finish : unit -> unit
 
-/// A `CONNECT` as a server sees one: its target, in authority form (`host:port`).
+    /// A connection this process DIALLED is open, and what is written now reaches the peer.
+    [<Emit("$0.once('connect', $1)")>]
+    abstract onceConnect : handler: (unit -> unit) -> unit
+
+/// A `CONNECT` as a server sees one: its target, in authority form (`host:port`), and the
+/// headers it came with — a proxy that admits only some clients reads their
+/// `proxy-authorization` there.
 [<AllowNullLiteral>]
 type ConnectRequest =
+    inherit HttpMessage
     abstract url : string
 
 /// What a `node:http` server offers a proxy beyond requests: the `CONNECT`s it would otherwise
@@ -1622,6 +1629,11 @@ module NetClients =
     /// opens is held until it does.
     [<Import("connect", "node:net")>]
     let connectPath (path: string) : Duplex = jsNative
+
+    /// Dial a TCP port on a host, by name or address. Open once `onceConnect` fires; a host
+    /// that cannot be reached is an `error` on the stream instead.
+    [<Import("connect", "node:net")>]
+    let connectTcp (port: int, host: string) : Duplex = jsNative
 
 /// Where `node:tls` keeps the certificates it trusts: the Mozilla set Node was built with,
 /// or what the operating system trusts — which is where a site's own root lives.

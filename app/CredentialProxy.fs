@@ -20,9 +20,19 @@ module Yession.Host.CredentialProxy
 // route's hosts, so a stand-in carried to another provider's host goes out as the worthless
 // value it is, and never as the credential behind it.
 //
-// Only declared hosts are carried at all. A `CONNECT` to anything else is refused: this is a
-// credential route, not a way out of a sandbox's egress policy, and an open tunnel here would
-// be one.
+// It has two doors. The UNIX socket is srt's: srt's own egress proxy hands it the `CONNECT`s
+// for declared hosts and nothing else, and a `CONNECT` there to anything else is refused —
+// this is a credential route, not a way out of a sandbox's egress policy, and an open tunnel
+// there would be one. The TCP port is for a sandbox that reaches the network directly (docker,
+// the unconfined host), which cannot dial a socket in this process's filesystem and is told
+// `HTTPS_PROXY` instead. It binds every interface, as the git gateway does and for its
+// reason (a container reaches the host at a different address per daemon), so it admits a
+// client only by a capability minted for its sandbox (`Admit`), carried as the proxy URL's
+// credentials. An admitted client's `CONNECT` to a declared host is answered as the socket's
+// is; to any other host it is TUNNELLED, untouched — a sandbox that reaches the internet
+// anyway loses nothing by going this way, and a tool that honours `HTTPS_PROXY` for every
+// host has to be carried for every host. That is also why an srt sandbox is never admitted:
+// its egress IS its policy, and the tunnel would be a way round it.
 //
 // What this does NOT do: a stand-in is in the environment `env` prints, and every process in a
 // sandbox shares one uid — so a stand-in read out of a neighbour's environment spends the
@@ -233,6 +243,15 @@ let direct (host: string) : string = "https://" + host
 type Proxy =
     { /// The UNIX socket it listens on — what srt's `network.mitmProxy` names.
       Socket : string
+      /// The TCP port it listens on, every interface — the door for a sandbox with direct
+      /// egress, which a client passes only with a capability from `Admit`.
+      Port : int
+      /// Admit a sandbox on a backend through the TCP door: the capability its proxy URL
+      /// carries, live until `Dismiss`. Asked again, the same sandbox is handed the same one.
+      /// An srt sandbox is refused: its egress is its policy, and this door tunnels any host.
+      Admit : SandboxBackend -> SandboxRef -> Result<string, string>
+      /// The sandbox's capability stops opening the door.
+      Dismiss : SandboxRef -> unit
       /// PEM: the authority, and every root this process trusts besides.
       TrustBundle : string
       /// Where `TrustBundle` is written — what a sandbox's `SSL_CERT_FILE` names.
@@ -250,6 +269,21 @@ type private Loan =
     { Route : CredentialRoute
       Terminal : TerminalId
       Lender : Lender }
+
+/// What a `CONNECT` through the TCP door presents: the capability in its
+/// `proxy-authorization`, which a client sends as `Basic` over the proxy URL's `user:password`
+/// — the password is the capability, and the user is whatever the URL said. `None` for no
+/// header, another scheme, or something that does not decode.
+let presentedCapability (proxyAuthorization: string) : string option =
+    match proxyAuthorization.Trim().Split ([| ' ' |], 2, StringSplitOptions.RemoveEmptyEntries) with
+    | [| scheme; encoded |] when scheme.Equals ("Basic", StringComparison.OrdinalIgnoreCase) ->
+        try
+            let decoded = Text.Encoding.UTF8.GetString (Convert.FromBase64String (encoded.Trim ()))
+            match decoded.IndexOf ':' with
+            | -1 -> None
+            | at -> Some (decoded.Substring (at + 1)) |> Option.filter (fun secret -> secret <> "")
+        with _ -> None
+    | _ -> None
 
 /// Start the proxy on a UNIX socket at `socket`, with its trust bundle written to
 /// `trustFile`. `upstream` is where a declared host is reached (`direct`, outside a suite);
@@ -387,41 +421,112 @@ let start
         // Nothing lent here: the client's own credential, or none, carried as it came.
         | None, None -> run (carry authorization (fun _ -> async.Zero ()))
 
-    let refuseConnect (client: Duplex) (status: string) (message: string) =
-        client.writeText (sprintf "HTTP/1.1 %s\r\ncontent-type: text/plain\r\nconnection: close\r\n\r\n%s\n" status message)
+    let refuseConnect (client: Duplex) (status: string) (extra: string) (message: string) =
+        client.writeText (
+            sprintf "HTTP/1.1 %s\r\ncontent-type: text/plain\r\n%sconnection: close\r\n\r\n%s\n" status extra message
+        )
         client.finish ()
 
-    let onConnect (request: ConnectRequest) (client: Duplex) (head: Buffer) =
+    /// A declared host's `CONNECT`: terminated here, and each request inside it answered on
+    /// its route.
+    let intercept (host: string) (route: CredentialRoute) (client: Duplex) (head: Buffer) =
+        client.writeText "HTTP/1.1 200 Connection Established\r\n\r\n"
+        if head.length > 0 then client.unshift head
+        let tls = Tls.terminate client (contextFor host)
+        tls.onError ignore
+        // One server per tunnel, so the host a request is answered for is the one the
+        // CONNECT named — never the `Host` header the client put inside it.
+        (createServer (handle host route)).serve tls
+
+    /// Any other host's `CONNECT`, from a client that reaches the internet anyway: the bytes
+    /// both ways, read by nobody. Answered only once the upstream is open, so a host that
+    /// cannot be reached is a refusal the client can print rather than a tunnel that dies.
+    let tunnel (host: string) (port: int) (client: Duplex) (head: Buffer) =
+        let upstream = connectTcp (port, host)
+        let mutable opened = false
+        upstream.onError (fun error ->
+            if opened then client.destroy ()
+            else refuseConnect client "502 Bad Gateway" "" (sprintf "%s:%d could not be reached: %s" host port (StreamError.describe error)))
+        client.onError (fun _ -> upstream.destroy ())
+        upstream.onceConnect (fun () ->
+            opened <- true
+            client.writeText "HTTP/1.1 200 Connection Established\r\n\r\n"
+            if head.length > 0 then upstream.sink.writeBytes head |> ignore
+            upstream.pipe client.sink
+            client.pipe upstream.sink)
+
+    let onSocketConnect (request: ConnectRequest) (client: Duplex) (head: Buffer) =
         client.onError ignore
         match authority request.url with
-        | None -> refuseConnect client "400 Bad Request" (sprintf "not a CONNECT target: %s" request.url)
+        | None -> refuseConnect client "400 Bad Request" "" (sprintf "not a CONNECT target: %s" request.url)
         | Some (host, _) ->
             match routeFor routes host with
             | None ->
                 refuseConnect
                     client
                     "403 Forbidden"
+                    ""
                     (sprintf "%s is not a host any credential here is spent on, and this proxy carries nothing else" host)
-            | Some route ->
-                client.writeText "HTTP/1.1 200 Connection Established\r\n\r\n"
-                if head.length > 0 then client.unshift head
-                let tls = Tls.terminate client (contextFor host)
-                tls.onError ignore
-                // One server per tunnel, so the host a request is answered for is the one the
-                // CONNECT named — never the `Host` header the client put inside it.
-                (createServer (handle host route)).serve tls
+            | Some route -> intercept host route client head
 
-    let server =
-        createServer (fun _ res -> answer res 405 "this proxy carries HTTPS, through CONNECT, and nothing else")
-    server.onConnect (Func<_, _, _, _> onConnect)
+    /// Capabilities admitted through the TCP door, by sandbox.
+    let mutable admitted : Map<SandboxRef, string> = Map.empty
+
+    let onPortConnect (request: ConnectRequest) (client: Duplex) (head: Buffer) =
+        client.onError ignore
+        let capability =
+            request.headerEntries ()
+            |> Array.tryPick (fun (name, value) ->
+                match value with
+                | HeaderValue.Single text when name = "proxy-authorization" -> presentedCapability text
+                | _ -> None)
+        match capability with
+        | Some held when admitted |> Map.exists (fun _ capability -> capability = held) ->
+            match authority request.url with
+            | None -> refuseConnect client "400 Bad Request" "" (sprintf "not a CONNECT target: %s" request.url)
+            | Some (host, port) ->
+                match routeFor routes host with
+                | Some route -> intercept host route client head
+                | None -> tunnel host port client head
+        | _ ->
+            refuseConnect
+                client
+                "407 Proxy Authentication Required"
+                "proxy-authenticate: Basic realm=\"yession\"\r\n"
+                "this proxy admits a sandbox by the capability in the proxy URL it was given, and this request carried none that is live"
+
+    let refuseRequest = fun _ res -> answer res 405 "this proxy carries HTTPS, through CONNECT, and nothing else"
+    let onSocket = createServer refuseRequest
+    onSocket.onConnect (Func<_, _, _, _> onSocketConnect)
+    let onPort = createServer refuseRequest
+    onPort.onConnect (Func<_, _, _, _> onPortConnect)
+    let listening (server: HttpServer) (where: string) (listen: (unit -> unit) -> unit) =
+        Async.FromContinuations (fun (cont, fail, _) ->
+            server.onceError (fun error ->
+                fail (exn (sprintf "credential proxy cannot listen on %s: %s" where (StreamError.describe error))))
+            listen cont)
     async {
-        do!
-            Async.FromContinuations (fun (cont, fail, _) ->
-                server.onceError (fun error ->
-                    fail (exn (sprintf "credential proxy cannot listen on %s: %s" socket (StreamError.describe error))))
-                server.listen (socket, fun () -> cont ()) |> ignore)
+        do! listening onSocket socket (fun cont -> onSocket.listen (socket, fun () -> cont ()) |> ignore)
+        do! listening onPort "a TCP port" (fun cont -> onPort.listen (0, "0.0.0.0", fun () -> cont ()) |> ignore)
+        let close (server: HttpServer) = Async.FromContinuations (fun (cont, _, _) -> server.close (fun _ -> cont ()))
         return
             { Socket = socket
+              Port = serverPort onPort
+              Admit =
+                fun backend sandbox ->
+                    match backend, Map.tryFind sandbox admitted with
+                    | SrtBackend, _ ->
+                        Error (
+                            sprintf
+                                "sandbox '%s' is confined by srt, whose egress is its policy — it reaches this proxy through srt's own, for declared hosts only, and the TCP door would tunnel it anywhere"
+                                (SandboxRef.render sandbox)
+                        )
+                    | _, Some capability -> Ok capability
+                    | _, None ->
+                        let capability = randomSecret().Replace ("-", "")
+                        admitted <- Map.add sandbox capability admitted
+                        Ok capability
+              Dismiss = fun sandbox -> admitted <- Map.remove sandbox admitted
               TrustBundle = bundle
               TrustFile = trustFile
               Lend =
@@ -431,16 +536,21 @@ let start
                     live <- Map.add standIn { Route = route; Terminal = terminal; Lender = lender } live
                     standIn
               Retire = fun terminal -> retireWhere (fun loan -> loan.Terminal = terminal)
-              Close = fun () -> Async.FromContinuations (fun (cont, _, _) -> server.close (fun _ -> cont ())) }
+              Close =
+                fun () ->
+                    async {
+                        do! close onSocket
+                        do! close onPort
+                    } }
     }
 
 // --- what a sandbox and a block are given ------------------------------------------------------
 
-/// Whether a sandbox on `backend` can reach this proxy. srt can: its egress already runs
-/// through a proxy of its own, which hands a declared host's `CONNECT` to this one's socket
-/// (`Interception`). Docker and the unconfined host reach the internet directly, and are told
-/// nothing until a listener they can reach — guarded, since it would then be reachable by more
-/// than this session — exists for them.
+/// Whether a sandbox on `backend` is routed to this proxy WITHOUT being told so. srt is: its
+/// egress already runs through a proxy of its own, which hands a declared host's `CONNECT` to
+/// this one's socket (`Interception`). Docker and the unconfined host reach the internet
+/// directly; they reach this proxy only through the TCP door, and only by a proxy URL they
+/// were given (`Admit`), which nothing gives them unasked.
 let reachable (backend: SandboxBackend) : bool =
     match backend with
     | SrtBackend -> true
