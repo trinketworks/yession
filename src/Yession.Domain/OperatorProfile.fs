@@ -48,11 +48,16 @@ open Yession.Domain
 type ProfileFile =
     { Resources : ResourceProfile
       Always : ResourceName list
-      Guidance : string option }
+      Guidance : string option
+      /// The sandboxes this host's sessions have from boot, in the form a repo declares its
+      /// own (`ConfigFile.sandboxes`). Session-owned: scoped to no repo, and run on the
+      /// backend this host configures for the session's own sandboxes.
+      Sandboxes : Map<SandboxName, SandboxDecl> }
 
 module ProfileFile =
 
-    let empty : ProfileFile = { Resources = ResourceProfile.empty; Always = []; Guidance = None }
+    let empty : ProfileFile =
+        { Resources = ResourceProfile.empty; Always = []; Guidance = None; Sandboxes = Map.empty }
 
 module OperatorProfile =
 
@@ -65,7 +70,7 @@ module OperatorProfile =
     [<Literal>]
     let Version = 1
 
-    let private fileKeys = [ "version"; "resources"; "always"; "agent" ]
+    let private fileKeys = [ "version"; "resources"; "always"; "agent"; "sandboxes" ]
     let private agentKeys = [ "guidance" ]
     let private leafKeys = [ "mount"; "socket"; "endpoint"; "env"; "exec"; "volume"; "sensitive" ]
     let private mountKeys = [ "from"; "at"; "mode" ]
@@ -244,12 +249,20 @@ module OperatorProfile =
                 failIf
                     (version <> Version)
                     (sprintf "this build speaks %s version %d, not %d" FileName Version version)
-                    (Decode.map3
-                        (fun declared selection guidance -> declared, selection, guidance)
+                    (Decode.map4
+                        (fun declared selection guidance sandboxes -> declared, selection, guidance, sandboxes)
                         (Decode.field "resources" resources)
                         (Decode.optional "always" names |> Decode.map (Option.defaultValue []))
-                        (Decode.optional "agent" agent))))
-        |> Decode.andThen (fun (declared, selection, guidance) ->
+                        (Decode.optional "agent" agent)
+                        (Decode.optional "sandboxes" Decode.value
+                         |> Decode.andThen (fun block ->
+                             match block with
+                             | None -> Decode.succeed Map.empty
+                             | Some block ->
+                                 match ConfigFile.parseSandboxes (Encode.toString 0 block) with
+                                 | Ok declared -> Decode.succeed declared
+                                 | Error e -> Decode.fail (sprintf "sandboxes: %s" e))))))
+        |> Decode.andThen (fun (declared, selection, guidance, sandboxes) ->
             // The algebra's own refusals — a cycle, a dangling name, a name declared twice, a
             // resource that contradicts itself — reached through `load` and NOT re-checked
             // here. A decoder with its own copy of those rules is the redundant spare that
@@ -263,6 +276,7 @@ module OperatorProfile =
                 // looking at the file, not when somebody else's session refuses to start.
                 match ResourceProfile.resolve profile selection with
                 | Error e -> Decode.fail (sprintf "what this host always grants cannot be granted: %s" e)
-                | Ok _ -> Decode.succeed { Resources = profile; Always = selection; Guidance = guidance })
+                | Ok _ ->
+                    Decode.succeed { Resources = profile; Always = selection; Guidance = guidance; Sandboxes = sandboxes })
 
     let parse (json: string) : Result<ProfileFile, string> = Decode.fromString decoder json

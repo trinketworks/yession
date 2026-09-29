@@ -138,6 +138,10 @@ type WorkSandboxesConfig =
       /// the wrong view.
       Checkout : SandboxRef -> string option
       Credentials : CredentialSource list
+      /// The sandboxes the operator declared (`ProfileFile.Sandboxes`), as requests: the
+      /// session has each from boot, as it has `default`. An operator's `default` replaces
+      /// the built-in one.
+      Standing : (SandboxName * SandboxRequest) list
       /// Build the environment for a sandbox: the spec it was asked to be, plus what the
       /// forwarded credentials provisioned. Synchronous and fallible — whether this
       /// backend can host what was asked for (a container under srt, say) is known without
@@ -264,47 +268,102 @@ let create (config: WorkSandboxesConfig) : Async<Result<WorkSandboxes, string>> 
                 | None -> return Ok provisioned
             }
 
-        // The default sandbox forwards everything this session knows how to forward, so its
-        // git carries the same route and per-block loan a repo's sandbox does — git in
-        // `default` reaches this session's gateway rather than github.com unauthenticated.
-        // The set is the session's credentials, not a Domain constant: no github source,
-        // nothing forwarded, exactly as before.
+        // The sandboxes this session has from boot: every one the operator declared, and the
+        // built-in `default` while the operator declares no `default` of its own. Each is
+        // created eagerly and started lazily, and its forward is baked in HERE, before its
+        // environment, because a terminal reaches it through `EnvironmentFor().Ensure`, which
+        // never runs the provisioning `ensure` below.
         //
-        // Provisioned LENIENTLY, unlike an explicit `ensure`: a credential that cannot route
-        // into the default (an `Unforwardable` backend) is skipped, not fatal — `default` is
-        // the sandbox every session has and a terminal that names nothing must still find it,
-        // so it comes up with whatever forwarded and no more. An explicit `start_work_sandbox`
-        // still refuses in words, because someone asked for that credential by name.
-        let mutable defaultProvision = Provision.empty
-        let mutable defaultForwarded = []
-        for source in config.Credentials do
-            match! source.Provision SandboxRef.defaultRef with
-            | CredentialForwarding.Forwarded provision ->
-                defaultProvision <- Provision.merge defaultProvision provision
-                defaultForwarded <- defaultForwarded @ [ source.Name ]
-            | CredentialForwarding.Unforwardable _ -> ()
-        let defaultForwarded = List.distinct defaultForwarded
-        let defaultRequest = { SandboxRequest.defaults with Forward = defaultForwarded }
+        // The built-in `default` forwards everything this session knows how to forward, so
+        // its git carries the same route and per-block loan a repo's sandbox does. Provisioned
+        // LENIENTLY: a credential that cannot route into it is skipped, not fatal — it is the
+        // sandbox a terminal that names nothing finds, and it comes up with whatever forwarded.
+        let builtInDefault () : Async<SandboxRequest * Provision> =
+            async {
+                let mutable provision = Provision.empty
+                let mutable forwarded = []
+                for source in config.Credentials do
+                    match! source.Provision SandboxRef.defaultRef with
+                    | CredentialForwarding.Forwarded given ->
+                        provision <- Provision.merge provision given
+                        forwarded <- forwarded @ [ source.Name ]
+                    | CredentialForwarding.Unforwardable _ -> ()
+                return { SandboxRequest.defaults with Forward = List.distinct forwarded }, provision
+            }
 
-        // `default` exists from boot: created eagerly, started lazily. Its forward is baked
-        // in HERE, before its environment, because a terminal reaches it through
-        // `EnvironmentFor().Ensure`, which never runs the provisioning `ensure` below.
-        match config.Create SandboxRef.defaultRef defaultRequest.Spec defaultProvision with
-        | Error e ->
-            revoke SandboxRef.defaultRef defaultForwarded
-            return Error e
-        | Ok defaultEnvironment ->
+        let declared =
+            config.Standing |> List.map (fun (name, request) -> SandboxRef.create SessionOwned name, request)
+        let declaresDefault = declared |> List.exists (fun (ref, _) -> ref = SandboxRef.defaultRef)
+
+        // An operator's sandbox forwards what it declared, and STRICTLY: the operator named
+        // that credential, so one that cannot reach this sandbox is said — by the sandbox,
+        // which refuses every spawn with the reason — rather than silently left out. The
+        // session still boots: one mis-declared sandbox is not every sandbox.
+        let standingEntry (ref: SandboxRef) (request: SandboxRequest) (provisioned: Result<Provision, string>) : RunningSandbox =
+            let environment =
+                match provisioned with
+                | Error reason -> missing (sprintf "sandbox '%s' cannot start: %s" (SandboxRef.render ref) reason)
+                | Ok provision ->
+                    match config.Create ref request.Spec provision with
+                    | Ok environment -> environment
+                    | Error reason ->
+                        revoke ref request.Forward
+                        missing (sprintf "sandbox '%s' cannot start: %s" (SandboxRef.render ref) reason)
+            { Ref = ref
+              Backend = config.Backend ref
+              Request = request
+              StartedBy = None
+              StartedAt = None
+              Environment = environment }
+
+        let mutable standing : (SandboxRef * RunningSandbox) list = []
+        for ref, request in declared do
+            let! provisioned = provisionForward ref request.Forward
+            standing <- standing @ [ ref, standingEntry ref request provisioned ]
+        let! builtIn =
+            async {
+                if declaresDefault then return None
+                else
+                    let! request, provision = builtInDefault ()
+                    return Some (SandboxRef.defaultRef, request, provision)
+            }
+
+        // The built-in `default` failing to build is the one refusal that still fails the
+        // session, as it always has: without it a session that declares nothing has nowhere
+        // for a terminal to open.
+        let builtInEntry =
+            match builtIn with
+            | None -> Ok []
+            | Some (ref, request, provision) ->
+                match config.Create ref request.Spec provision with
+                | Error e ->
+                    revoke ref request.Forward
+                    Error e
+                | Ok environment ->
+                    Ok
+                        [ ref,
+                          { Ref = ref
+                            Backend = config.Backend ref
+                            Request = request
+                            StartedBy = None
+                            StartedAt = None
+                            Environment = environment } ]
+
+        match builtInEntry with
+        | Error e -> return Error e
+        | Ok builtInEntry ->
+
+            /// What each standing sandbox resets to when it is stopped: it keeps its entry,
+            /// because it is one the session has from boot, and its configuration.
+            let standingRequests : Map<SandboxRef, SandboxRequest> =
+                (builtInEntry @ standing) |> List.map (fun (ref, entry) -> ref, entry.Request) |> Map.ofList
 
             // Keyed by the ref itself: it is a structural value, so a lookup is an equality
             // rather than a rendered string two call sites have to agree on how to spell.
+            // `default` first, then the operator's, in the order declared.
             let mutable entries : (SandboxRef * RunningSandbox) list =
-                [ SandboxRef.defaultRef,
-                  { Ref = SandboxRef.defaultRef
-                    Backend = config.Backend SandboxRef.defaultRef
-                    Request = defaultRequest
-                    StartedBy = None
-                    StartedAt = None
-                    Environment = defaultEnvironment } ]
+                (builtInEntry @ standing)
+                |> List.sortBy (fun (ref, _) -> if ref = SandboxRef.defaultRef then 0 else 1)
 
             let find (name: SandboxRef) =
                 entries |> List.tryFind (fun (key, _) -> key = name) |> Option.map snd
@@ -444,20 +503,20 @@ let create (config: WorkSandboxesConfig) : Async<Result<WorkSandboxes, string>> 
                         let name = entry.Ref
                         do! entry.Environment.Stop ()
                         revoke name entry.Request.Forward
-                        // `default` keeps its ENTRY — it is the sandbox every session has,
-                        // and a terminal that names nothing must still find it — but resets
-                        // to its own configuration, which forwards the session's credentials
-                        // like it did at boot. Any other name leaves entirely, which is what
-                        // makes "stop it first, then start it with different forwarding" work.
-                        if name = SandboxRef.defaultRef then
+                        // A standing sandbox keeps its ENTRY — it is one the session has
+                        // from boot, and a terminal that names it must still find it — but
+                        // resets to its own configuration. Any other name leaves entirely,
+                        // which is what makes "stop it first, then start it with different
+                        // forwarding" work.
+                        match Map.tryFind name standingRequests with
+                        | Some request ->
                             entries <-
                                 entries
                                 |> List.map (fun (key, existing) ->
                                     if key = name then
-                                        key, { existing with Request = defaultRequest; StartedBy = None; StartedAt = None }
+                                        key, { existing with Request = request; StartedBy = None; StartedAt = None }
                                     else key, existing)
-                        else
-                            entries <- entries |> List.filter (fun (key, _) -> key <> name)
+                        | None -> entries <- entries |> List.filter (fun (key, _) -> key <> name)
                         do!
                             append
                                 actor

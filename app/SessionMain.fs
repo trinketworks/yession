@@ -89,7 +89,12 @@ let private resourceProfile =
     | "" -> None
     | path ->
         match OperatorResources.read path with
-        | Ok profile -> profile
+        | Ok read ->
+            // What the analyzers found in the operator's own declarations, said where the
+            // operator reads a boot: the file is honoured as written, as a repo's is.
+            for located in read |> Option.map (fun r -> r.Findings) |> Option.defaultValue [] do
+                eprintfn "%s: %s: %s" path (LocatedFinding.where located) located.Finding.Message
+            read |> Option.map (fun r -> r.Profile)
         | Error e -> failwith e
 
 /// What the operator grants every work sandbox without it asking: the profile's `always`,
@@ -337,6 +342,17 @@ let private makeSandboxes
                       // Plan 14 left deferred, and it is what makes `git push` from a terminal
                       // work; resolution is the Plan 08 precedence, unchanged.
                       Credentials = credentials
+                      // What the operator declared, as the session's own sandboxes. A
+                      // declaration that cannot become a request is the operator's file
+                      // being wrong, and it stops the boot like a profile that cannot be read.
+                      Standing =
+                        resourceProfile
+                        |> Option.map (fun profile -> profile.Sandboxes |> Map.toList)
+                        |> Option.defaultValue []
+                        |> List.map (fun (name, decl) ->
+                            match SandboxDecl.toRequest None decl with
+                            | Ok request -> name, request
+                            | Error e -> failwithf "sandbox '%s' in the resources profile: %s" (SandboxName.value name) e)
                       Create = create
                       Log = log
                       Clock = clock.Now } with
