@@ -885,6 +885,97 @@ let tests =
                         perRecord rendersSmall recordsSmall rendersLarge recordsLarge budget
             })
 
+        // What one render costs does not grow with the number of terminals open.
+        //
+        // The after-render pass measures each open terminal's box, and it used to FIND each
+        // one by asking the whole document for it — a compound attribute selector, once per
+        // open terminal, per render. The pane draws one terminal at a time, so every other
+        // question was a MISS, and a miss is the expensive answer: neither clause is indexed,
+        // so the walk visits every node and cannot stop early. Measured on a session of 20,650
+        // events (54k nodes, twelve terminals open): 616 of those scans costing 5.3 seconds, a
+        // third of all the CPU a cold open spent, and 20s before the page stopped changing on
+        // a phone-speed CPU. One scan that finds them all costs 10s.
+        //
+        // What this pins is the SHAPE — scans per render, which is one however many terminals
+        // are open, and was one per terminal — and deliberately not a duration: a millisecond
+        // budget on a shared runner is the flaky test this repository warns about, while a
+        // count is the same number on every box.
+        //
+        // Both counts are per DOCUMENT, so the reload is what makes them comparable: a fresh
+        // document starts them at zero and a reopen is a burst of renders worth measuring.
+        //
+        // `Srt` because opening a terminal starts a shell in the session's work sandbox: on a
+        // box that cannot host one no terminal ever appears, and this would wait out its
+        // timeout rather than skip.
+        Tag.needs "measuring several terminals" [ Tag.Browser; Tag.Native; Tag.Srt ] (fun () ->
+        sessionCase "measuring the terminals costs one look at the document, however many are open" <|
+            fun page ->
+            async {
+                let opened = 4
+                let enough = sprintf "document.querySelectorAll('[data-terminal-tab]').length >= %d" opened
+                do! awaitU (page.Locator("[data-content-toggle='show']").First.ClickAsync ())
+                for _ in 1 .. opened do
+                    do! awaitU (page.Locator("[data-terminal-new]").First.ClickAsync ())
+                do! await (page.WaitForFunctionAsync enough) |> Async.Ignore
+
+                let! _ = await (page.ReloadAsync ())
+                do! waitFor "the reopened session to connect" page connected
+                do! waitFor (sprintf "the reopened session to offer its %d terminals" opened) page enough
+
+                // Settled when the render count has stopped moving, which is also when the
+                // scans have: they are made in the same pass.
+                let! settled =
+                    await (page.EvaluateAsync<string> """() => new Promise(resolve => {
+                      let last = -1, still = 0, waited = 0
+                      const tick = () => {
+                        const n = globalThis.__yessionRenders ?? -1
+                        if (n === last) still++ ; else { still = 0; last = n }
+                        waited += 250
+                        if (still >= 6 || waited >= 30000)
+                          resolve([n, globalThis.__yessionViewportScans ?? -1, still >= 6].join(','))
+                        else setTimeout(tick, 250)
+                      }
+                      tick()
+                    })""")
+                match settled.Split ',' with
+                | [| r; q; s |] ->
+                    let renders, scans = int r, int q
+                    // Anti-vacuity, both ways this passes while measuring nothing: a counter
+                    // the app stopped publishing (which reads -1, or 0 for a pass that never
+                    // ran), and a page still rendering when time ran out.
+                    if renders <= 0 then
+                        failwithf
+                            "the page reports %d renders — `app/browser/Render.fs` publishes \
+                             `globalThis.__yessionRenders` and this budget means nothing without it"
+                            renders
+                    if scans <= 0 then
+                        failwithf
+                            "the page reports %d viewport scans — `app/browser/Screens.fs` publishes \
+                             `globalThis.__yessionViewportScans` and this budget means nothing without it"
+                            scans
+                    if s <> "true" then
+                        failwithf
+                            "the reopened session was still rendering after 30s (%d renders, %d scans)"
+                            renders scans
+                    let perRender = float scans / float renders
+                    printfn "  reopen with %d terminals open: %d scans over %d renders — %.2f per render"
+                            opened scans renders perRender
+                    // One per render, plus whatever the resize observer added — it fires on a
+                    // box changing rather than on a render, and a load moves boxes. The line
+                    // sits at two, which is well over what one scan a render plus a settling
+                    // layout costs and well under the FOUR this case opens: a scan that goes
+                    // back to being per-terminal cannot pass it, and neither can one that
+                    // creeps to a second question per pass.
+                    let budget = 2.0
+                    if perRender > budget then
+                        failwithf
+                            "the after-render pass asked the document where the terminal boxes are %.2f times \
+                             per render with %d terminals open (%d scans over %d renders); the budget is %.1f. \
+                             Measuring is finding them ONCE — see `viewports` in `app/browser/Screens.fs`."
+                            perRender opened scans renders budget
+                | _ -> failwithf "the counters answered '%s', which is not two counts and a verdict" settled
+            })
+
         // A command line belongs to ONE terminal. The domain says so — a draft is keyed by
         // terminal AND author precisely so a person can be mid-command in two at once
         // (`BodyKey.terminalDraft`) — and the browser is the only place that promise can

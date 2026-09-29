@@ -39,20 +39,48 @@ open Yession.App
 open Yession.SessionProcess
 open Yession.Host
 
-/// The box a terminal's output is laid into, whichever mode it is in: the live screen while a
-/// program holds it, the block scrollback while commands do. ONE selector, because it is one
+/// How many times this module has asked the DOCUMENT where the terminal boxes are, published
+/// for the reason `Render.fs` publishes its render count: the cost being guarded is a number
+/// of whole-document scans, and a test that inferred it by hooking `querySelectorAll` would
+/// read a private detail of the walk below and go quietly vacuous the day the walk changes
+/// shape. This is the walk saying what it did. Read in the page by name, as the render count
+/// is — the scans-per-render case in `Browser.fs` is its one reader.
+let private scansPublished : PageGlobal<int> = PageGlobal.named "__yessionViewportScans"
+
+let private countScan () : unit =
+    PageGlobal.set
+        scansPublished
+        (match PageGlobal.tryGet scansPublished with
+         | Some n -> n + 1
+         | None -> 1)
+
+/// The box each terminal's output is laid into, whichever mode it is in: the live screen while
+/// a program holds it, the block scrollback while commands do. ONE selector, because it is one
 /// question — how wide is what this reader is looking at — and the pane shows one of the two
 /// at a time. It used to name only the screen, which is why block mode never had a width:
 /// there was nothing to measure until somebody took the keyboard.
-let private viewportOf (terminalId: string) : HTMLElement option =
-    let selector =
-        sprintf
-            "[data-terminal-screen=\"%s\"], [data-terminal-scrollback][data-terminal-id=\"%s\"]"
-            terminalId
-            terminalId
-    match document.querySelector selector with
-    | null -> None
-    | element -> Some (element :?> HTMLElement)
+///
+/// Every box at once, ONE scan, rather than a scan per terminal id. The pane draws one
+/// terminal, so a session with a dozen open ones asked the document about eleven boxes that
+/// were not in it — and a compound attribute selector that MISSES is the most expensive
+/// question there is, because nothing is indexed and the walk cannot stop early. Measured on
+/// a session of 20,650 events (54k nodes, 12 open terminals): 616 of these, 5.3 seconds, a
+/// third of all the CPU a cold open spent.
+///
+/// Keyed first-wins in document order, which is what the selector list answered before: a
+/// terminal holding both boxes at once resolves to the same one it always did.
+let private viewports () : Map<string, HTMLElement> =
+    countScan ()
+    let found = document.querySelectorAll "[data-terminal-screen], [data-terminal-scrollback][data-terminal-id]"
+    (Map.empty, [ 0 .. found.length - 1 ])
+    ||> List.fold (fun boxes i ->
+        let element = found.[i] :?> HTMLElement
+        let id =
+            match element.getAttribute "data-terminal-screen" with
+            | null | "" -> element.getAttribute "data-terminal-id"
+            | screen -> screen
+        if isNull (box id) || id = "" || Map.containsKey id boxes then boxes
+        else Map.add id element boxes)
 
 /// A CSS length as pixels, or zero. `getPropertyValue` answers `"12px"` for a resolved length
 /// and `""` for anything it cannot resolve, and only the first is a number to subtract.
@@ -75,30 +103,30 @@ let private pixels (element: HTMLElement) (property: string) : float =
 /// scrollbar, which are exactly the pixels no character is drawn on. Read rather than
 /// subtracted as a constant — the two modes pad differently, and the version of this that
 /// hard-coded `- 24` was one restyle from being quietly wrong.
-let private measure (terminalId: string) : (int * int) option =
-    match viewportOf terminalId with
-    | None -> None
-    | Some box ->
-        let probe = document.createElement "span"
-        probe.className <- Style.terminalOutput
-        // Out of flow and out of sight, so measuring a box never moves it. `pre` over the
-        // class, which wraps: a wrapped run measures the box instead of the text.
-        setStyleProperty probe "position" "absolute"
-        setStyleProperty probe "visibility" "hidden"
-        setStyleProperty probe "white-space" "pre"
-        probe.textContent <- Array.create 80 "M" |> String.concat ""
-        box.appendChild probe |> ignore
-        let rect = probe.getBoundingClientRect ()
-        let cell = rect.width / 80.0
-        let line = rect.height
-        box.removeChild probe |> ignore
-        if not (cell > 0.0) || not (line > 0.0) then None
-        else
-            let width = box.clientWidth - pixels box "padding-left" - pixels box "padding-right"
-            let height = box.clientHeight - pixels box "padding-top" - pixels box "padding-bottom"
-            let cols = int (floor (width / cell))
-            let rows = int (floor (height / line))
-            if cols > 0 && rows > 0 then Some (cols, rows) else None
+///
+/// Takes the box rather than a terminal id: finding one is `viewports` above, and it finds
+/// them all together.
+let private measure (box: HTMLElement) : (int * int) option =
+    let probe = document.createElement "span"
+    probe.className <- Style.terminalOutput
+    // Out of flow and out of sight, so measuring a box never moves it. `pre` over the
+    // class, which wraps: a wrapped run measures the box instead of the text.
+    setStyleProperty probe "position" "absolute"
+    setStyleProperty probe "visibility" "hidden"
+    setStyleProperty probe "white-space" "pre"
+    probe.textContent <- Array.create 80 "M" |> String.concat ""
+    box.appendChild probe |> ignore
+    let rect = probe.getBoundingClientRect ()
+    let cell = rect.width / 80.0
+    let line = rect.height
+    box.removeChild probe |> ignore
+    if not (cell > 0.0) || not (line > 0.0) then None
+    else
+        let width = box.clientWidth - pixels box "padding-left" - pixels box "padding-right"
+        let height = box.clientHeight - pixels box "padding-top" - pixels box "padding-bottom"
+        let cols = int (floor (width / cell))
+        let rows = int (floor (height / line))
+        if cols > 0 && rows > 0 then Some (cols, rows) else None
 
 /// One terminal's screen as this client composes it.
 type private Live =
@@ -182,11 +210,11 @@ let create (dispatch: ClientMsg -> unit) (report: TerminalId -> int -> int -> un
     /// Over the WIRE, only for the holder: the pty has one size while a program is drawing on
     /// it, and every peer is watching the same screen, so a viewer with a narrower pane
     /// scrolls rather than reshaping everyone else's terminal.
-    let measureSizes (model: ClientModel) =
+    let measureSizes (boxes: Map<string, HTMLElement>) (model: ClientModel) =
         let mine = ClientModel.me model
         for terminal in Projection.openTerminals model.Terminals do
             let key = TerminalId.value terminal.TerminalId
-            match measure key with
+            match Map.tryFind key boxes |> Option.bind measure with
             | None -> ()
             | Some (cols, rows) ->
                 let last = match measuredSize.TryGetValue key with | true, v -> Some v | _ -> None
@@ -203,17 +231,17 @@ let create (dispatch: ClientMsg -> unit) (report: TerminalId -> int -> int -> un
     /// only the frames that cross a whole character cell say anything.
     let observer =
         if ResizeObserver.isSupported () then
-            Some (ResizeObserver.create (fun () -> latest |> Option.iter measureSizes))
+            Some (ResizeObserver.create (fun () -> latest |> Option.iter (measureSizes (viewports ()))))
         else None
     let mutable observed : HTMLElement option = None
 
     /// The pane shows one terminal at a time, so there is one box worth watching. Named from
     /// the MODEL rather than found by a bare selector: two variants of a screen and a
     /// scrollback all match, and the one that matters is the one whose terminal is selected.
-    let watchViewport (model: ClientModel) =
+    let watchViewport (boxes: Map<string, HTMLElement>) (model: ClientModel) =
         let element =
             ClientModel.selectedTerminal model
-            |> Option.bind (fun terminal -> viewportOf (TerminalId.value terminal))
+            |> Option.bind (fun terminal -> Map.tryFind (TerminalId.value terminal) boxes)
         let unchanged =
             match element, observed with
             | Some element, Some observed -> System.Object.ReferenceEquals (element, observed)
@@ -309,6 +337,9 @@ let create (dispatch: ClientMsg -> unit) (report: TerminalId -> int -> int -> un
             // Last, because both read the document this render has just produced: which box
             // this reader is looking at, and how big it is.
             latest <- Some model
-            watchViewport model
-            measureSizes model
+            // One look at the document for both, because both ask it the same question —
+            // where are the terminal boxes — and asking twice is asking twice.
+            let boxes = viewports ()
+            watchViewport boxes model
+            measureSizes boxes model
       Forget = fun id -> forget (TerminalId.value id) }
