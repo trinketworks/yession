@@ -689,18 +689,18 @@ let tests =
                       Realisation = fun () -> [] }
                 let makeSandboxes log =
                     async {
-                        let! created =
+                        return!
                             WorkSandboxes.create
                                 { Backend = fun _ -> "scripted"
                                   Describe = fun _ -> None
                                   Checkout = fun _ -> None
                                   Credentials = []
                                   Connections = fun _ -> Ok ForwardedConnections.none
-                                  Standing = []
+                                  // The session's own sandboxes are the ones declared.
+                                  Standing = [ SandboxName.create "test" |> expect, SandboxRequest.defaults ]
                                   Create = fun name _ _ -> Ok (environmentNamed (SandboxRef.render name))
                                   Log = log
                                   Clock = fun () -> System.DateTimeOffset (2026, 1, 1, 0, 0, 0, System.TimeSpan.Zero) }
-                        return expect created
                     }
                 let! host = Host.startWithEnvironment None (Some makeSandboxes) None (sid ()) 0
 
