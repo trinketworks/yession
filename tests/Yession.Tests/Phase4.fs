@@ -1955,17 +1955,29 @@ let private compositionTests =
                         a.Runner
                         [ "the message is on the timeline",
                           fun m -> m.Conversation.Items |> List.exists (fun i -> (ConversationItem.said i) = "built binaries talking")
-                          "the agent answered diagnostic-ok",
+                          "the agent's turn completed",
+                          fun m -> m.Conversation.Items |> List.exists (fun i -> i.Author = ActorRef.Agent && i.Status = Complete)
+                          "its answer says diagnostic-ok",
                           fun m ->
                               m.Conversation.Items
-                              |> List.exists (fun i ->
-                                  i.Author = ActorRef.Agent && i.Status = Complete && (ConversationItem.said i).Contains "diagnostic-ok")
+                              |> List.exists (fun i -> i.Author = ActorRef.Agent && (ConversationItem.said i).Contains "diagnostic-ok")
                           "the environment is running",
                           fun m -> (match m.Environment with EnvironmentRunning _ -> true | _ -> false)
                           "a block finished with 0",
                           fun m ->
                               m.Terminals.Terminals
                               |> List.exists (fun t -> t.Blocks |> List.exists (fun b -> b.Status = BlockFinished (CommandSucceeded 0))) ]
+                        // What the agent said and how its turn stands, and every block's status:
+                        // the difference between a command whose output read back empty and one
+                        // that did not succeed, which is the question this wait has timed out on.
+                        (fun m ->
+                            let agent =
+                                m.Conversation.Items
+                                |> List.filter (fun i -> i.Author = ActorRef.Agent)
+                                |> List.map (fun i -> sprintf "%A %A" i.Status (ConversationItem.said i))
+                            let blocks =
+                                m.Terminals.Terminals |> List.collect (fun t -> t.Blocks |> List.map (fun b -> sprintf "%A" b.Status))
+                            sprintf "agent items: %s; blocks: %s" (String.concat " | " agent) (String.concat " | " blocks))
                 do! a.Channel.Close ()
 
                 // Stop and resume from the UI; history replays into the fresh child.
