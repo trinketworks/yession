@@ -103,8 +103,94 @@ module Analyzers =
                             "'%s' is under both uses and wants: uses already requires it, so this want says nothing — keep the one you mean (uses refuses on a host that does not offer it, wants does not)"
                             (ResourceName.value wanted) }))
 
+    /// Each variable a declaration sets, with where it is written.
+    let private variables (name: SandboxName) (decl: SandboxDecl) : (string * EnvironmentVariableRef * KeyPath) list =
+        decl.EnvironmentVariables
+        |> Map.toList
+        |> List.map (fun (variable, value) -> variable, value, KeyPath.sandbox name @ [ KeyStep.Key "env"; KeyStep.Key variable ])
+
+    let private proxies (value: EnvironmentVariableRef) : ProxyValue list =
+        match value with
+        | Derived template -> EnvTemplate.proxies template
+        | PlainValue _
+        | SecretRef _
+        | Lent _ -> []
+
+    let private asksFor (decl: SandboxDecl) (wanted: ProxyValue list) : bool =
+        decl.EnvironmentVariables |> Map.exists (fun _ value -> proxies value |> List.exists (fun v -> List.contains v wanted))
+
+    /// A sandbox told the proxy's URL and nothing of its authority. Legal — a client may carry
+    /// its own trust — but a client that trusts its image's store alone refuses every
+    /// connection the proxy answers, because the proxy answers them with its own certificate.
+    let proxyWithoutTrust : Analyzer =
+        fun sandboxes ->
+            sandboxes
+            |> Map.toList
+            |> List.collect (fun (name, decl) ->
+                if asksFor decl [ ProxyValue.CaFile; ProxyValue.CaDir ] then []
+                else
+                    variables name decl
+                    |> List.filter (fun (_, value, _) -> List.contains ProxyValue.Https (proxies value))
+                    |> List.map (fun (variable, _, path) ->
+                        { Finding.Sandbox = Some name
+                          Finding.Path = path
+                          Finding.Message =
+                            sprintf
+                                "%s sends HTTPS through the credential proxy, and nothing here trusts the proxy's authority — a client that trusts only its image's roots refuses every host the proxy answers; add SSL_CERT_FILE: ${proxy.ca-file}, or ${proxy.ca-dir} composed into SSL_CERT_DIR"
+                                variable }))
+
+    /// A token lent with no proxy URL beside it. A stand-in is worth something only on its way
+    /// through the proxy, which swaps it; a sandbox that reaches the network directly (docker,
+    /// the host) sends it nowhere near the proxy unless told `${proxy.https}`. Under srt the
+    /// proxy is reached without being named, which is why this is a note and not a refusal.
+    let tokenWithoutProxy : Analyzer =
+        fun sandboxes ->
+            sandboxes
+            |> Map.toList
+            |> List.collect (fun (name, decl) ->
+                if asksFor decl [ ProxyValue.Https ] then []
+                else
+                    variables name decl
+                    |> List.choose (fun (variable, value, path) ->
+                        match value with
+                        | Lent connection ->
+                            Some
+                                { Finding.Sandbox = Some name
+                                  Finding.Path = path
+                                  Finding.Message =
+                                    sprintf
+                                        "%s is lent a stand-in for %s, which is worth something only through the credential proxy — in a container or on the host, add HTTPS_PROXY: ${proxy.https} (srt reaches the proxy without it)"
+                                        variable
+                                        (ConnectionName.value connection) }
+                        | _ -> None))
+
+    /// The proxy's authority directory set as a variable's WHOLE store: it holds that one
+    /// authority, so a client told only it trusts the proxy and no other host on the internet.
+    /// `${proxy.ca-file}` is the whole-store answer; a directory is for adding to one.
+    let trustReplacesStore : Analyzer =
+        fun sandboxes ->
+            sandboxes
+            |> Map.toList
+            |> List.collect (fun (name, decl) ->
+                variables name decl
+                |> List.choose (fun (variable, value, path) ->
+                    match value with
+                    | Derived template when
+                        List.contains ProxyValue.CaDir (EnvTemplate.proxies template)
+                        && not (template |> List.contains (TemplatePart.Beneath variable))
+                        ->
+                        Some
+                            { Finding.Sandbox = Some name
+                              Finding.Path = path
+                              Finding.Message =
+                                sprintf
+                                    "%s is the proxy's authority directory and nothing else, which holds that one authority — every other host's certificate would fail; compose it over what is there (${env.%s}:${proxy.ca-dir}), or use ${proxy.ca-file}, which carries every root"
+                                    variable
+                                    variable }
+                    | _ -> None))
+
     /// Every analyzer a file is read with.
-    let all : Analyzer list = [ selectedTwice ]
+    let all : Analyzer list = [ selectedTwice; proxyWithoutTrust; tokenWithoutProxy; trustReplacesStore ]
 
 module ConfigAnalysis =
 
