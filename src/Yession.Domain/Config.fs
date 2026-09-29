@@ -178,8 +178,10 @@ module SandboxDecl =
             |> List.map (fun (name, value) ->
                 name,
                 match value with
+                | PlainValue plain when EnvTemplate.composes plain -> Encode.string (EnvTemplate.escape plain)
                 | PlainValue plain -> Encode.string plain
-                | SecretRef secret -> Encode.object [ "secret", Encode.string (SecretName.value secret) ])
+                | SecretRef secret -> Encode.object [ "secret", Encode.string (SecretName.value secret) ]
+                | Derived template -> Encode.string (EnvTemplate.render template))
         let strings (names: string list) = Encode.list (names |> List.map Encode.string)
         Encode.toString 0 (
             Encode.object
@@ -358,12 +360,23 @@ module ConfigFile =
     let private stringList : Decoder<string list> =
         Decode.oneOf [ Decode.list Decode.string; Decode.string |> Decode.map List.singleton ]
 
-    /// `NAME: value` or `NAME: { secret: name }`. Two forms and no third — a plain string
-    /// is a value, a mapping names a secret, and there is no interpolation syntax that
-    /// could be either.
+    /// `NAME: value` or `NAME: { secret: name }`. A string carrying `${` composes
+    /// (`EnvTemplate`): `${env.NAME}` is what NAME would be without this line, and `$${` a
+    /// literal `${`. A reference this build cannot read refuses the file rather than being
+    /// kept as text somebody meant as a reference.
     let private envValue : Decoder<EnvironmentVariableRef> =
         Decode.oneOf
-            [ Decode.string |> Decode.map PlainValue
+            [ Decode.string
+              |> Decode.andThen (fun text ->
+                  if not (EnvTemplate.composes text) then Decode.succeed (PlainValue text)
+                  else
+                      match EnvTemplate.parse text with
+                      | Error e -> Decode.fail e
+                      | Ok template ->
+                          match template with
+                          | [] -> Decode.succeed (PlainValue "")
+                          | [ TemplatePart.Literal text ] -> Decode.succeed (PlainValue text)
+                          | template -> Decode.succeed (Derived template))
               Decode.field "secret" Decode.string
               |> Decode.andThen (fun raw ->
                   match SecretName.create raw with

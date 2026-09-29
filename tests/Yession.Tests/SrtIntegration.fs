@@ -68,6 +68,7 @@ let private policyIn (workspace: string) (domains: string list) : SandboxPolicy 
       Env = Sandboxes.hostBaseline (Sandboxes.ambientEnv ())
       WorkingDirectory = Some workspace
       Filesystem = Confined
+      Derived = Map.empty
       Intercept = None }
 
 /// How this box confines, as the run's environment configures it — the same parse the

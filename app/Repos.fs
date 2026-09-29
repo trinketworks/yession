@@ -362,6 +362,7 @@ let create (config: ReposConfig) : Result<ReposService, string> =
               Env = Sandboxes.hostBaseline (Sandboxes.ambientEnv ())
               WorkingDirectory = Some reposDir
               Filesystem = Confined
+              Derived = Map.empty
               Intercept = None }
 
         /// Every git this service spawns, built in the one place that carries the hardened

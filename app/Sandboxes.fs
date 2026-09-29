@@ -92,21 +92,37 @@ let withGitConfig (entries: (string * string) list) (env: Map<string, string>) :
 /// Resolve the spec's environment variables: plain values verbatim, secret references
 /// through the injected resolver. Called fresh at every sandbox (re)creation — the
 /// resolved plaintext goes into the policy env and nowhere else.
+/// A declaration's variables, as far as the session can settle them: every plain value and
+/// resolved secret, and apart from them the templates only a backend can resolve.
+[<RequireQualifiedAccess>]
+type ResolvedVariables =
+    { Settled : Map<string, string>
+      Derived : Map<string, EnvTemplate> }
+
 let resolveVariables
     (resolveSecret: SecretName -> Async<Result<string, string>>)
     (variables: Map<string, EnvironmentVariableRef>)
-    : Async<Result<Map<string, string>, string>> =
-    let rec walk acc entries =
+    : Async<Result<ResolvedVariables, string>> =
+    let rec walk (settled: Map<string, string>) (derived: Map<string, EnvTemplate>) entries =
         async {
             match entries with
-            | [] -> return Ok (Map.ofList (List.rev acc))
-            | (name, PlainValue value) :: rest -> return! walk ((name, value) :: acc) rest
+            | [] -> return Ok { ResolvedVariables.Settled = settled; ResolvedVariables.Derived = derived }
+            | (name, PlainValue value) :: rest -> return! walk (Map.add name value settled) derived rest
+            | (name, Derived template) :: rest -> return! walk settled (Map.add name template derived) rest
             | (name, SecretRef secret) :: rest ->
                 match! resolveSecret secret with
                 | Error e -> return Error (sprintf "%s: %s" (SecretName.value secret) e)
-                | Ok value -> return! walk ((name, value) :: acc) rest
+                | Ok value -> return! walk (Map.add name value settled) derived rest
         }
-    walk [] (Map.toList variables)
+    walk Map.empty Map.empty (Map.toList variables)
+
+/// What a sandbox's processes are given: its policy's environment, with each template it
+/// carries resolved over what lies beneath it — `image` (a container image's own `ENV`,
+/// empty for a backend with no image) under everything the policy settled. The one place a
+/// template becomes a value, so the three backends cannot resolve one three ways.
+let environment (image: Map<string, string>) (policy: SandboxPolicy) : Map<string, string> =
+    let beneath = mergeEnv image (policy.Env |> Map.filter (fun name _ -> not (Map.containsKey name policy.Derived)))
+    mergeEnv policy.Env (EnvTemplate.resolveAll beneath policy.Derived)
 
 /// Assemble a sandbox policy for the configured backend. Host (and srt) sandboxes get
 /// the baseline allowlist under the spec's variables; a docker image supplies its own
@@ -908,6 +924,7 @@ let policyFor
           // sandbox that starts in its checkout still writes where it always did.
           WorkingDirectory = SandboxPath.resolvedFrom workspace spec.WorkingDirectory
           Filesystem = Confined
+          Derived = Map.empty
           // What a forwarded credential provisions, joined where the provision is.
           Intercept = None }
 
@@ -951,7 +968,8 @@ let preparePolicy
         async {
             match! resolveVariables resolveSecret spec.EnvironmentVariables with
             | Error e -> return Error e
-            | Ok resolved ->
+            | Ok variables ->
+                let resolved = variables.Settled
                 // What a sandbox is told it is. A file that has to work on a laptop, in CI,
                 // in a Claude Code container and in one of these can then BRANCH rather than
                 // sniff — and sniffing is what it did, badly: an agent in this repo's own
@@ -972,6 +990,7 @@ let preparePolicy
                             backend (limitsHere backend) (ambientEnv ()) resolved
                             layout.Workspace layout.SharedRepos layout.Home
                             granted optional spec
+                        |> Result.map (fun policy -> { policy with Derived = variables.Derived })
         }
 
 // --- A buffered one-shot: settle once, deliver to every (even late) awaiter --------------
@@ -1167,7 +1186,7 @@ module HostSandbox =
                 let children = Children.Registry ()
                 let spawn (exec: SandboxExec) (onChunk: OutputStream * string -> unit) =
                     async {
-                        let env = mergeEnv policy.Env exec.Env
+                        let env = mergeEnv (environment Map.empty policy) exec.Env
                         let cwd =
                             SandboxPath.resolvedFrom policy.WorkingDirectory exec.WorkingDirectory
                             |> Option.toObj
@@ -1182,7 +1201,7 @@ module HostSandbox =
                             else
                                 Some (fun exec cols rows onOutput ->
                                     async {
-                                        let env = mergeEnv policy.Env exec.Env
+                                        let env = mergeEnv (environment Map.empty policy) exec.Env
                                         let cwd =
                                             SandboxPath.resolvedFrom policy.WorkingDirectory exec.WorkingDirectory
                                             |> Option.toObj
@@ -1515,8 +1534,17 @@ module DockerSandbox =
                         let workspaceTarget =
                             policy.WorkingDirectory |> Option.defaultValue "/workspace"
                         let mounts = mountPlan workspaceTarget container.Mounts policy |> List.map (mountFor name)
+                        // What lies beneath a template is the image's own `ENV`, which is
+                        // only knowable now that the image is here.
+                        let! imageEnv =
+                            async {
+                                if Map.isEmpty policy.Derived then return Map.empty
+                                else
+                                    let! inspected = client.getImage(image).inspect () |> Interop.awaitPromise
+                                    return DK.ImageInspect.environment inspected
+                            }
                         let env =
-                            policy.Env |> Map.toList |> List.map (fun (k, v) -> sprintf "%s=%s" k v) |> List.toArray
+                            environment imageEnv policy |> Map.toList |> List.map (fun (k, v) -> sprintf "%s=%s" k v) |> List.toArray
                         // The named volume persists across container restarts by design;
                         // the label lets cleanup find it (see the workflow teardown).
                         do!
@@ -2389,7 +2417,7 @@ module SrtSandbox =
                     let spawn (exec: SandboxExec) (onChunk: OutputStream * string -> unit) =
                         async {
                             try
-                                let env = mergeEnv policy.Env exec.Env
+                                let env = mergeEnv (environment Map.empty policy) exec.Env
                                 let cwd =
                                     SandboxPath.resolvedFrom policy.WorkingDirectory exec.WorkingDirectory
                                     |> Option.toObj
@@ -2419,7 +2447,7 @@ module SrtSandbox =
                                     Some (fun exec cols rows onOutput ->
                                         async {
                                             try
-                                                let env = mergeEnv policy.Env exec.Env
+                                                let env = mergeEnv (environment Map.empty policy) exec.Env
                                                 let cwd =
                                                     SandboxPath.resolvedFrom policy.WorkingDirectory exec.WorkingDirectory
                                                     |> Option.toObj
@@ -2528,6 +2556,7 @@ module AgentSandbox =
           Env = env
           WorkingDirectory = None
           Filesystem = Confined
+          Derived = Map.empty
           Intercept = None }
 
     /// Where a spawn request says to start the child: `None` for a request that named no

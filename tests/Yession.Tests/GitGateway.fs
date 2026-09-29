@@ -961,6 +961,7 @@ let private srtTests =
                                 |> Sandboxes.withGitConfig (GitGateway.gitConfig host gateway.Port cap @ [ GitGateway.loanConfig host gateway.Port secret ])
                               WorkingDirectory = Some workspace
                               Filesystem = Confined
+                              Derived = Map.empty
                               Intercept = None }
                         match! Sandboxes.SrtSandbox.create (srtTools ()) policy with
                         | Error reason -> failwithf "srt sandbox failed: %s" reason

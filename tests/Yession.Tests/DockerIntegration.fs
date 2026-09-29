@@ -235,6 +235,19 @@ let tests =
                 do! sandbox.Dispose ()
             })
 
+            // What lies beneath a composed variable in a container is the IMAGE's own `ENV` —
+            // alpine sets PATH — and only a real image can say what that is.
+            testCaseAsync "a composed variable extends what the image itself sets" (async {
+                let spec =
+                    { alpineSpec with
+                        EnvironmentVariables =
+                            Map.ofList [ "PATH", Derived [ TemplatePart.Beneath "PATH"; TemplatePart.Literal ":/opt/extra" ] ] }
+                let! _, sandbox = startOrFail spec
+                let! _, path, _ = runInSandbox sandbox "printenv" [ "PATH" ] Map.empty None
+                Expect.equal (path.Trim ()) "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/opt/extra" "alpine's own PATH, then the declaration's"
+                do! sandbox.Dispose ()
+            })
+
             // The image ships no locale (`nixos/nix` leaves LANG and every LC_* empty), and
             // the docker env is the baseline alone — so without this the container ran in C.
             // There readline is not multibyte-aware and counts a UTF-8 character's bytes as

@@ -138,6 +138,11 @@ type SandboxPolicy =
       /// Whether the paths above are enforced at all. `Confined` everywhere except the
       /// clone sandbox — see `FilesystemConfinement`.
       Filesystem : FilesystemConfinement
+      /// Variables composed over what lies beneath them (`EnvTemplate`), left for the
+      /// backend: only it knows what lies beneath — for a container, the image's own `ENV`,
+      /// which exists only once the image has been pulled or built. `Env` never carries a
+      /// name that is here.
+      Derived : Map<string, EnvTemplate>
       /// Hosts whose HTTPS a proxy of this session's answers (`Interception`). Read by a
       /// backend whose egress already runs through a proxy it can tell (srt); `None` where
       /// nothing forwarded provisioned one.
