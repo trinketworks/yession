@@ -420,18 +420,10 @@ let private ensureTests =
                 Expect.equal (List.length (startedEvents events)) 1 "the second ask recorded nothing"
             }
 
-        // Equivalent-but-differently-spelled forwarding is the SAME ask, which is what
-        // normalisation is for; this pins that the registry uses it.
-        testCaseAsync "an equivalent forwarding list is the same ask" <|
-            async {
-                let log = newLog ()
-                let! sandboxes, _ = registry log [ githubCredential "tok" ]
-                let! _ = sandboxes.Ensure starter None (sandbox "test") (forwarding [ "github" ])
-                let! again = sandboxes.Ensure starter None (sandbox "test") (forwarding [ " GitHub "; "github" ])
-                Expect.isTrue (Result.isOk again) "it is not a configuration change"
-                let! events = eventsOf log
-                Expect.equal (List.length (startedEvents events)) 1 "still recorded once"
-            }
+        // A forwarding list was once free text, normalised here so ` GitHub ` and `github`
+        // compared equal. What a sandbox forwards is its selection now, and a selection is
+        // resource names, which refuse a second spelling where they are decoded — so there
+        // is no equivalent-but-different ask left to reach the registry.
 
         // The refusal, and why it is a refusal: a sandbox has processes in it. Converging
         // by killing somebody's build is not convergence.
