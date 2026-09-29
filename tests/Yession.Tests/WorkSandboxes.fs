@@ -129,6 +129,7 @@ let private registryDeclaringWithSpecs
                   Checkout = fun _ -> None
                   Credentials = credentials
                   Connections = everyResourceAConnection
+                  Proxy = WorkSandboxes.ProxyProvider.none
                   Standing = standing
                   Create =
                     fun name spec provision ->
@@ -156,6 +157,7 @@ let private registryHolding (log: EventLog<SessionEvent>) (realisation: string l
                   Checkout = fun _ -> None
                   Credentials = []
                   Connections = everyResourceAConnection
+                  Proxy = WorkSandboxes.ProxyProvider.none
                   Standing = declaredDefault
                   Create = fun _ _ _ -> Ok (fakeEnvironmentHolding realisation)
                   Log = log
@@ -284,6 +286,7 @@ let private ensureTests =
                           Checkout = fun _ -> None
                           Credentials = []
                           Connections = everyResourceAConnection
+                          Proxy = WorkSandboxes.ProxyProvider.none
                           Standing = []
                           Create = fun _ _ _ -> Ok (fakeEnvironmentFailing "the docker daemon is not reachable")
                           Log = log
@@ -311,6 +314,7 @@ let private ensureTests =
                           Checkout = fun _ -> None
                           Credentials = []
                           Connections = everyResourceAConnection
+                          Proxy = WorkSandboxes.ProxyProvider.none
                           Standing = []
                           Create = fun _ _ _ -> Ok (fakeEnvironment ())
                           Log = log
@@ -337,6 +341,7 @@ let private ensureTests =
                           Checkout = fun _ -> Some "/repos/owner/name"
                           Credentials = []
                           Connections = everyResourceAConnection
+                          Proxy = WorkSandboxes.ProxyProvider.none
                           Standing = []
                           Create = fun _ _ _ -> Ok (fakeEnvironment ())
                           Log = log
@@ -390,6 +395,7 @@ let private ensureTests =
                           Checkout = fun _ -> None
                           Credentials = []
                           Connections = everyResourceAConnection
+                          Proxy = WorkSandboxes.ProxyProvider.none
                           Standing = []
                           Create = fun _ _ _ -> Ok (fakeEnvironment ())
                           Log = log
@@ -770,6 +776,7 @@ let private credentialTests =
                           Checkout = fun _ -> None
                           Credentials = [ source ]
                           Connections = everyResourceAConnection
+                          Proxy = WorkSandboxes.ProxyProvider.none
                           Standing = []
                           Create = fun name _ _ -> if name = SandboxRef.defaultRef then Ok (fakeEnvironment ()) else Error "no room"
                           Log = log
@@ -1383,6 +1390,7 @@ let private registryStanding
                   Checkout = fun _ -> None
                   Credentials = credentials
                   Connections = everyResourceAConnection
+                  Proxy = WorkSandboxes.ProxyProvider.none
                   Standing = standing |> List.map (fun (name, request) -> SandboxName.create name |> expect, request)
                   Create = fun _ _ _ -> Ok (fakeEnvironment ())
                   Log = log
@@ -1478,9 +1486,113 @@ let private standingTests =
             }
     ]
 
+// --- the credential proxy, asked for by name ------------------------------------------------
+
+/// A proxy that provides every value as `provided:<name>` for a sandbox, or refuses one it was
+/// told to — and records who it provided for and who it forgot.
+type private FakeProxy =
+    { Asked : ResizeArray<SandboxRef * ProxyValue list>
+      Released : ResizeArray<SandboxRef>
+      Refuse : string option }
+
+let private fakeProxy (refuse: string option) : FakeProxy * WorkSandboxes.ProxyProvider =
+    let fake = { Asked = ResizeArray (); Released = ResizeArray (); Refuse = refuse }
+    fake,
+    { Provide =
+        fun sandbox asked ->
+            fake.Asked.Add (sandbox, asked)
+            match refuse with
+            | Some reason -> Error reason
+            | None ->
+                Ok (asked |> List.map (fun value -> value, "provided:" + ProxyValue.name value) |> Map.ofList, WorkSandboxes.Provision.empty)
+      Release = fun sandbox -> fake.Released.Add sandbox }
+
+/// A registry over `proxy`, recording the spec each sandbox was BUILT from.
+let private registryProxied (proxy: WorkSandboxes.ProxyProvider) (standing: (string * SandboxRequest) list) =
+    let built = ResizeArray<string * EnvironmentSpec> ()
+    async {
+        let! created =
+            WorkSandboxes.create
+                { Backend = fun _ -> "fake"
+                  Describe = fun _ -> None
+                  Checkout = fun _ -> None
+                  Credentials = []
+                  Connections = everyResourceAConnection
+                  Proxy = proxy
+                  Standing = standing |> List.map (fun (name, request) -> SandboxName.create name |> expect, request)
+                  Create =
+                    fun name spec _ ->
+                        built.Add (SandboxRef.render name, spec)
+                        Ok (fakeEnvironment ())
+                  Log = newLog ()
+                  Clock = fixedClock }
+        return created, built
+    }
+
+/// An ask whose environment names `text` for `variable`, decoded as a file would decode it.
+let private asking (variable: string) (text: string) : SandboxRequest =
+    { Spec =
+        { EnvironmentSpec.defaults with
+            EnvironmentVariables = Map.ofList [ variable, Derived (EnvTemplate.parse text |> expect) ] } }
+
+let private proxyTests =
+    testList "the credential proxy, asked for by name" [
+
+        testCaseAsync "a sandbox that asks for the proxy is built with what it provided" <|
+            async {
+                let fake, proxy = fakeProxy None
+                let! sandboxes, built = registryProxied proxy []
+                let! _ = sandboxes.Ensure starter None (sandbox "octo/hello:dev") (asking "HTTPS_PROXY" "${proxy.https}")
+                Expect.equal (List.ofSeq fake.Asked) [ sandbox "octo/hello:dev", [ ProxyValue.Https ] ] "asked for what it named"
+                let _, spec = built |> Seq.find (fun (name, _) -> name = "octo/hello:dev")
+                match spec.EnvironmentVariables |> Map.tryFind "HTTPS_PROXY" with
+                | Some (Derived template) -> Expect.equal (EnvTemplate.resolve (fun _ -> None) template) "provided:https" "the value, written in"
+                | other -> failwithf "expected the provided value, got %A" other
+            }
+
+        testCaseAsync "a sandbox that names nothing of the proxy is never provided for" <|
+            async {
+                let fake, proxy = fakeProxy None
+                let! sandboxes, _ = registryProxied proxy []
+                let! _ = sandboxes.Ensure starter None (sandbox "octo/hello:dev") (asking "PATH" "${env.PATH}:/x")
+                Expect.isEmpty fake.Asked "the proxy never heard of it"
+            }
+
+        testCaseAsync "a sandbox the proxy cannot provide for is refused at start, in its words" <|
+            async {
+                let _, proxy = fakeProxy (Some "not from here")
+                let! sandboxes, built = registryProxied proxy []
+                match! sandboxes.Ensure starter None (sandbox "octo/hello:dev") (asking "HTTPS_PROXY" "${proxy.https}") with
+                | Ok _ -> failwith "expected a refusal"
+                | Error reason ->
+                    Expect.stringContains reason "not from here" "the proxy's own words"
+                    Expect.isEmpty built "and nothing was built"
+            }
+
+        testCaseAsync "a sandbox that leaves gives its admission back" <|
+            async {
+                let fake, proxy = fakeProxy None
+                let! sandboxes, _ = registryProxied proxy []
+                let! _ = sandboxes.Ensure starter None (sandbox "octo/hello:dev") (asking "HTTPS_PROXY" "${proxy.https}")
+                let! _ = sandboxes.Stop caller (sandbox "octo/hello:dev")
+                Expect.equal (List.ofSeq fake.Released) [ sandbox "octo/hello:dev" ] "forgotten"
+            }
+
+        // A standing sandbox comes up again on the policy it was built with, which carries the
+        // URL its admission opens — so a stop keeps it.
+        testCaseAsync "a standing sandbox keeps its admission across a stop" <|
+            async {
+                let fake, proxy = fakeProxy None
+                let! sandboxes, _ = registryProxied proxy [ "default", asking "HTTPS_PROXY" "${proxy.https}" ]
+                let! _ = sandboxes.Stop caller SandboxRef.defaultRef
+                Expect.isEmpty fake.Released "still admitted"
+            }
+    ]
+
 let tests =
     testList "WorkSandboxes" [
         standingTests
+        proxyTests
         nameTests
         backendTests
         workspaceVolumeTests

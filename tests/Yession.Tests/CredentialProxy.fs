@@ -67,6 +67,11 @@ let private carryTests =
             for other in [ basic "yession:"; basic "no-colon"; "Bearer c4p"; "Basic !!!"; "" ] do
                 Expect.isNone (presentedCapability other) (sprintf "%s presents none" other)
 
+        // OpenSSL finds a certificate in a directory store only under this name; the value is
+        // what `openssl x509 -noout -subject_hash` answers for a certificate with this subject.
+        testCase "the authority is named as OpenSSL looks it up in a directory" <| fun () ->
+            Expect.equal (subjectHashName "yession credential proxy") "15eb50ae.0" "OpenSSL's subject hash"
+
         // The word a stand-in replaces, under both schemes a provider's API takes a token in.
         testCase "the credential an authorization header presents is its last word" <| fun () ->
             Expect.equal (presented "token ysn_1") (Some "ysn_1") "gh's scheme"
@@ -397,6 +402,55 @@ let private portsTests =
                             raw.destroy ()
                             Expect.stringContains status "407" "dismissed is refused"
                         | Error e -> failwithf "the door did not answer: %s" e
+                    })
+        }
+
+        // What each reference comes to depends on where the sandbox stands: a container sees
+        // the proxy's files where they are mounted, and reaches this host by the daemon's name.
+        testCaseAsync "a container is given the proxy's URL, and its trust where it is mounted" <| async {
+            let! upstream = startUpstream ()
+            do!
+                withProxy upstream (fun proxy ->
+                    async {
+                        let values, provision =
+                            provide proxy DockerBackend (Some "host.docker.internal") admitted [ ProxyValue.Https; ProxyValue.CaFile ]
+                            |> expect
+                        let capability = proxy.Admit DockerBackend admitted |> expect
+                        Expect.equal
+                            (Map.tryFind ProxyValue.Https values)
+                            (Some (sprintf "http://yession:%s@host.docker.internal:%d" capability proxy.Port))
+                            "its own URL, with the capability that admits it"
+                        Expect.equal (Map.tryFind ProxyValue.CaFile values) (Some "/run/yession/proxy/bundle.pem") "the bundle, where it is mounted"
+                        Expect.equal
+                            provision.Binds
+                            [ { From = proxy.TrustFile; At = "/run/yession/proxy/bundle.pem"; Mode = ResourceMountMode.Read } ]
+                            "mounted read-only"
+                    })
+        }
+
+        testCaseAsync "an unconfined sandbox is given the proxy's own paths" <| async {
+            let! upstream = startUpstream ()
+            do!
+                withProxy upstream (fun proxy ->
+                    async {
+                        let values, provision = provide proxy HostBackend (Some "127.0.0.1") admitted [ ProxyValue.CaDir ] |> expect
+                        Expect.equal (Map.tryFind ProxyValue.CaDir values) (Some proxy.AuthorityDir) "the directory itself"
+                        Expect.isEmpty provision.Binds "nothing to mount"
+                        Expect.isTrue
+                            (Fs.exists (proxy.AuthorityDir + "/" + subjectHashName "yession credential proxy"))
+                            "and the authority is in it, under the name OpenSSL looks for"
+                    })
+        }
+
+        testCaseAsync "srt is refused the proxy's URL, told what it needs instead" <| async {
+            let! upstream = startUpstream ()
+            do!
+                withProxy upstream (fun proxy ->
+                    async {
+                        match provide proxy SrtBackend (Some "127.0.0.2") admitted [ ProxyValue.Https ] with
+                        | Ok _ -> failwith "an srt sandbox was given the TCP door"
+                        | Error reason -> Expect.stringContains reason "${proxy.ca-file}" "names what an srt sandbox does need"
+                        Expect.isOk (provide proxy SrtBackend (Some "127.0.0.2") admitted [ ProxyValue.CaFile ]) "the trust it may have"
                     })
         }
 

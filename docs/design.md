@@ -296,6 +296,21 @@ sandbox selects it under `uses` or `wants`, and what it forwards is what that se
 own `ENV` under docker, which is only known once the image is pulled or built, so the backend
 resolves it (`Sandboxes.environment`; the grammar is `EnvTemplate.fs`).
 
+`${proxy.https}`, `${proxy.ca-file}` and `${proxy.ca-dir}` ask the session's credential proxy
+for its URL (this sandbox's own, admitting it), a whole trust bundle, and a directory holding
+its authority alone — each as the sandbox sees it, so a container is told mounted paths
+(`CredentialProxy.provide`). Only a sandbox that names one is provided for, and it composes
+like any value:
+
+```yaml
+    env:
+      HTTPS_PROXY: ${proxy.https}
+      SSL_CERT_DIR: ${env.SSL_CERT_DIR}:${proxy.ca-dir}
+```
+
+Under srt, whose own proxy already routes the hosts this one answers, `${proxy.https}` is
+refused and the trust references are all a sandbox needs.
+
 A container's `entrypoint` is read the way compose reads it — a list of words, or one
 string split as a shell would split it, with nothing expanded — and it governs what compose
 says it governs and one thing more. The container's own `command` runs behind it, as in
