@@ -335,9 +335,15 @@ module SessionLayout =
     /// Where the credential proxy listens. In the system temp and SHORT, for the reason srt's
     /// own bridge sockets are: a unix socket's path is capped (`sun_path`, 104 bytes on
     /// macOS), and a session directory alone can be deeper than that. Named for the process,
-    /// which is the session — so two sessions on one box never share one.
+    /// which is the session, AND a random word: a process killed before it closed leaves its
+    /// socket behind, and a later one handed the same pid — which a container recycles — would
+    /// find the name taken.
     let credentialProxySocket () : string =
-        sprintf "%s/yession-%s.sock" (Node.Api.os.tmpdir ()) (string Node.Api.``process``.pid)
+        sprintf
+            "%s/yession-%s-%s.sock"
+            (Node.Api.os.tmpdir ())
+            (string Node.Api.``process``.pid)
+            ((Interop.randomSecret ()).Substring (0, 8))
 
     /// Where the credential proxy's trust bundle is written, the directory made — canonical,
     /// because srt matches the read grant a sandbox is given against the path as written, and

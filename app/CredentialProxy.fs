@@ -415,7 +415,11 @@ let start
         createServer (fun _ res -> answer res 405 "this proxy carries HTTPS, through CONNECT, and nothing else")
     server.onConnect (Func<_, _, _, _> onConnect)
     async {
-        do! Async.FromContinuations (fun (cont, _, _) -> server.listen (socket, fun () -> cont ()) |> ignore)
+        do!
+            Async.FromContinuations (fun (cont, fail, _) ->
+                server.onceError (fun error ->
+                    fail (exn (sprintf "credential proxy cannot listen on %s: %s" socket (StreamError.describe error))))
+                server.listen (socket, fun () -> cont ()) |> ignore)
         return
             { Socket = socket
               TrustBundle = bundle

@@ -110,6 +110,7 @@ let private registryWithSpecs (log: EventLog<SessionEvent>) (credentials: WorkSa
                   Describe = fun _ -> None
                   Checkout = fun _ -> None
                   Credentials = credentials
+                  Standing = []
                   Create =
                     fun name spec provision ->
                         built.Add (SandboxRef.render name, provision)
@@ -130,6 +131,7 @@ let private registryHolding (log: EventLog<SessionEvent>) (realisation: string l
                   Describe = fun _ -> None
                   Checkout = fun _ -> None
                   Credentials = []
+                  Standing = []
                   Create = fun _ _ _ -> Ok (fakeEnvironmentHolding realisation)
                   Log = log
                   Clock = fixedClock }
@@ -256,6 +258,7 @@ let private ensureTests =
                           Describe = fun _ -> None
                           Checkout = fun _ -> None
                           Credentials = []
+                          Standing = []
                           Create = fun _ _ _ -> Ok (fakeEnvironmentFailing "the docker daemon is not reachable")
                           Log = log
                           Clock = fixedClock }
@@ -281,6 +284,7 @@ let private ensureTests =
                           Describe = fun _ -> Some "day-to-day work"
                           Checkout = fun _ -> None
                           Credentials = []
+                          Standing = []
                           Create = fun _ _ _ -> Ok (fakeEnvironment ())
                           Log = log
                           Clock = fixedClock }
@@ -305,6 +309,7 @@ let private ensureTests =
                           Describe = fun _ -> None
                           Checkout = fun _ -> Some "/repos/owner/name"
                           Credentials = []
+                          Standing = []
                           Create = fun _ _ _ -> Ok (fakeEnvironment ())
                           Log = log
                           Clock = fixedClock }
@@ -356,6 +361,7 @@ let private ensureTests =
                           Describe = fun _ -> described.Value
                           Checkout = fun _ -> None
                           Credentials = []
+                          Standing = []
                           Create = fun _ _ _ -> Ok (fakeEnvironment ())
                           Log = log
                           Clock = fixedClock }
@@ -737,6 +743,7 @@ let private credentialTests =
                           Describe = fun _ -> None
                           Checkout = fun _ -> None
                           Credentials = [ source ]
+                          Standing = []
                           Create = fun name _ _ -> if name = SandboxRef.defaultRef then Ok (fakeEnvironment ()) else Error "no room"
                           Log = log
                           Clock = fixedClock }
@@ -1329,8 +1336,83 @@ let private lentTests =
             }
     ]
 
+// --- the operator's sandboxes -------------------------------------------------------------
+
+/// A registry whose operator declared `standing`, by name and request.
+let private registryStanding
+    (log: EventLog<SessionEvent>)
+    (credentials: WorkSandboxes.CredentialSource list)
+    (standing: (string * SandboxRequest) list)
+    =
+    async {
+        let! created =
+            WorkSandboxes.create
+                { Backend = fun _ -> "fake"
+                  Describe = fun _ -> None
+                  Checkout = fun _ -> None
+                  Credentials = credentials
+                  Standing = standing |> List.map (fun (name, request) -> SandboxName.create name |> expect, request)
+                  Create = fun _ _ _ -> Ok (fakeEnvironment ())
+                  Log = log
+                  Clock = fixedClock }
+        return expect created
+    }
+
+let private unroutable : WorkSandboxes.CredentialSource =
+    { Name = github
+      Provision = fun _ -> async { return WorkSandboxes.CredentialForwarding.Unforwardable "no route from here" }
+      Revoke = ignore
+      Lend = fun _ _ _ _ -> async { return BlockEnv.none }
+      Retire = ignore }
+
+let private standingTests =
+    testList "the operator's sandboxes" [
+
+        // What the operator declared is a sandbox the session HAS, as it has `default`:
+        // nobody asked for it, and a terminal naming it finds it.
+        testCaseAsync "an operator's sandbox is there from boot, started by nobody" <|
+            async {
+                let! sandboxes = registryStanding (newLog ()) [] [ "build", forwarding [] ]
+                let build = sandboxes.Listed () |> List.tryFind (fun entry -> entry.Ref = sandbox "build")
+                Expect.equal (build |> Option.map (fun entry -> entry.StartedBy)) (Some None) "listed, and nobody's ask"
+            }
+
+        // The operator names what `default` forwards. The built-in one forwards everything
+        // the session can; an operator's forwards what it said.
+        testCaseAsync "an operator's default replaces the built-in one" <|
+            async {
+                let! sandboxes = registryStanding (newLog ()) [ githubCredential "tok" ] [ "default", forwarding [] ]
+                let defaults = sandboxes.Listed () |> List.filter (fun entry -> entry.Ref = SandboxRef.defaultRef)
+                Expect.equal (defaults |> List.map (fun entry -> entry.Request.Forward)) [ [] ] "one default, forwarding what the operator said"
+            }
+
+        // A credential the operator named that cannot reach the sandbox is said by the
+        // sandbox, in words, and costs nobody else theirs.
+        testCaseAsync "an operator's sandbox that cannot forward what it declares refuses in words" <|
+            async {
+                let! sandboxes = registryStanding (newLog ()) [ unroutable ] [ "build", forwarding [ "github" ] ]
+                match! (sandboxes.EnvironmentFor (sandbox "build")).Ensure None "a terminal was opened" with
+                | EnvironmentAvailable -> failwith "expected a refusal"
+                | EnvironmentUnavailable reason -> Expect.stringContains reason "no route from here" "the source's own words"
+                match! (sandboxes.EnvironmentFor SandboxRef.defaultRef).Ensure None "a terminal was opened" with
+                | EnvironmentAvailable -> ()
+                | EnvironmentUnavailable reason -> failwithf "default should come up regardless: %s" reason
+            }
+
+        // Stopping takes down what runs in it; the sandbox itself is the operator's to keep.
+        testCaseAsync "stopping an operator's sandbox keeps it, as it was declared" <|
+            async {
+                let log = newLog ()
+                let! sandboxes = registryStanding log [] [ "build", forwarding [] ]
+                let! _ = sandboxes.Stop caller (sandbox "build")
+                let build = sandboxes.Listed () |> List.tryFind (fun entry -> entry.Ref = sandbox "build")
+                Expect.equal (build |> Option.map (fun entry -> entry.Request)) (Some (forwarding [])) "still there, reset"
+            }
+    ]
+
 let tests =
     testList "WorkSandboxes" [
+        standingTests
         nameTests
         backendTests
         workspaceVolumeTests

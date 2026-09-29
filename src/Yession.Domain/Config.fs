@@ -601,6 +601,9 @@ module ConfigFile =
     /// This is the only place a clash can happen — across files the scope keeps them apart —
     /// and it is refused here, where the person who wrote both is standing and can pick
     /// another name, rather than resolved at read time by a precedence rule.
+    /// The `sandboxes:` block, which an operator's profile carries in the same form
+    /// (`OperatorProfile`, through `parseSandboxes`): one decoder, so one declaration means
+    /// one thing whoever wrote it.
     let private sandboxes : Decoder<Map<SandboxName, SandboxDecl>> =
         // Decoded a field at a time rather than with `keyValuePairs`, for the PATH. That
         // combinator decodes each value without putting its key on the path, so every
@@ -644,6 +647,11 @@ module ConfigFile =
                         { Version = version
                           Sandboxes =
                             get.Optional.Field "sandboxes" sandboxes |> Option.defaultValue Map.empty }))))
+
+    /// A `sandboxes:` block on its own, from JSON text — how the operator's profile, which
+    /// is decoded with a different JSON library on .NET, hands its block to the one decoder.
+    let parseSandboxes (json: string) : Result<Map<SandboxName, SandboxDecl>, string> =
+        Decode.fromString sandboxes json
 
     /// Decode one repo's file from already-parsed JSON text.
     let parse (json: string) : Result<ConfigFile, string> =

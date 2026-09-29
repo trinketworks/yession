@@ -76,9 +76,11 @@ module LocatedFinding =
         | Some at -> sprintf "%s, line %d" path at.Line
         | None -> path
 
-/// One thing worth saying about a decoded file. Pure, and about the FILE: what this host
-/// offers, and anything else a particular session knows, is not an analyzer's to ask.
-type Analyzer = ConfigFile -> Finding list
+/// One thing worth saying about a file's sandbox declarations — a repo's or an operator's,
+/// which are written in one form under one `sandboxes:` key. Pure, and about the FILE: what
+/// this host offers, and anything else a particular session knows, is not an analyzer's to
+/// ask.
+type Analyzer = Map<SandboxName, SandboxDecl> -> Finding list
 
 module Analyzers =
 
@@ -86,8 +88,8 @@ module Analyzers =
     /// says nothing — but one of the two lines is dead, and which one the author meant is
     /// exactly the question: a need refuses on a host that does not offer it, a want does not.
     let selectedTwice : Analyzer =
-        fun file ->
-            file.Sandboxes
+        fun sandboxes ->
+            sandboxes
             |> Map.toList
             |> List.collect (fun (name, decl) ->
                 decl.Wants
@@ -106,10 +108,11 @@ module Analyzers =
 
 module ConfigAnalysis =
 
-    /// Everything `analyzers` find in `file`, placed by `index`, in the order the file reads.
-    let run (analyzers: Analyzer list) (index: SourceIndex) (file: ConfigFile) : LocatedFinding list =
+    /// Everything `analyzers` find in a file's `sandboxes`, placed by `index`, in the order
+    /// the file reads.
+    let run (analyzers: Analyzer list) (index: SourceIndex) (sandboxes: Map<SandboxName, SandboxDecl>) : LocatedFinding list =
         analyzers
-        |> List.collect (fun analyze -> analyze file)
+        |> List.collect (fun analyze -> analyze sandboxes)
         |> List.map (fun finding -> { LocatedFinding.Finding = finding; LocatedFinding.At = Map.tryFind finding.Path index })
         |> List.sortBy (fun located ->
             (located.At |> Option.map (fun at -> at.Line, at.Column) |> Option.defaultValue (System.Int32.MaxValue, 0)),

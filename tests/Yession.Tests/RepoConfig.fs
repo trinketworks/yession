@@ -104,11 +104,43 @@ let tests =
             match OperatorResources.read file with
             | Ok (Some profile) ->
                 Expect.equal
-                    (Sandboxes.ResourceProfile.declared profile.Resources
+                    (Sandboxes.ResourceProfile.declared profile.Profile.Resources
                      |> Set.toList
                      |> List.map ResourceName.value)
                     [ "thing" ]
                     "it declares what it said it declares"
+            | other -> failwithf "expected a profile, got %A" other
+
+        // One form, whoever writes it: an operator's sandbox reads as a repo's does, and is
+        // analyzed by the same analyzers.
+        testCase "an operator declares sandboxes in the form a repo does, and is read the same way" <| fun () ->
+            let dir = TestFiles.tempDir "yession-config-" |> Fs.canonical |> Option.get
+            let file = dir + "/resources.yaml"
+            TestFiles.write file "version: 1\nresources: {}\nsandboxes:\n  default:\n    forward: [ github ]\n    wants: [ a, a ]\n"
+            match OperatorResources.read file with
+            | Ok (Some read) ->
+                Expect.equal
+                    (read.Profile.Sandboxes |> Map.toList |> List.map (fun (name, decl) -> SandboxName.value name, decl.Forward))
+                    [ "default", [ "github" ] ]
+                    "the declaration, as a repo's would decode"
+            | other -> failwithf "expected a profile, got %A" other
+
+        testCase "an operator's sandbox is refused as a repo's would be" <| fun () ->
+            let dir = TestFiles.tempDir "yession-config-" |> Fs.canonical |> Option.get
+            let file = dir + "/resources.yaml"
+            TestFiles.write file "version: 1\nresources: {}\nsandboxes:\n  default:\n    workdirr: .\n"
+            Expect.isError (OperatorResources.read file) "an unknown key, refused by the one decoder"
+
+        testCase "an operator's declarations are noted where they were written" <| fun () ->
+            let dir = TestFiles.tempDir "yession-config-" |> Fs.canonical |> Option.get
+            let file = dir + "/resources.yaml"
+            TestFiles.write file "version: 1\nresources:\n  a: { env: { A: '1' } }\nsandboxes:\n  default:\n    uses: [ a ]\n    wants: [ a ]\n"
+            match OperatorResources.read file with
+            | Ok (Some read) ->
+                Expect.equal
+                    (read.Findings |> List.map Yession.Domain.Sandboxes.LocatedFinding.where)
+                    [ "sandboxes.default.wants[0], line 7" ]
+                    "the want the need already covers, on its line"
             | other -> failwithf "expected a profile, got %A" other
 
         // A path nothing has created yet is left alone. A cache directory a tool makes on

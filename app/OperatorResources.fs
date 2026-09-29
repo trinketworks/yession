@@ -75,14 +75,25 @@ let private canonicalPaths (file: ProfileFile) : Result<ProfileFile, string> =
 /// with NO profile is ordinary and declares nothing, while a profile that cannot be read is
 /// an operator's mistake and must be said out loud. Folding the second into the first is how
 /// a host silently stops offering everything the day somebody mistypes a key.
-let read (path: string) : Result<ProfileFile option, string> =
+/// The profile as it was read, and what the analyzers had to say about the sandboxes it
+/// declares — the same analyzers a repo's file is read with, since it is the same form.
+[<RequireQualifiedAccess>]
+type ProfileRead =
+    { Profile : ProfileFile
+      Findings : LocatedFinding list }
+
+let read (path: string) : Result<ProfileRead option, string> =
     if not (Fs.exists path) then Ok None
     else
         let saying (reason: string) = sprintf "%s: %s" path reason
         try
             YamlSource.parse (Fs.readText path)
-            |> Result.bind (fun parsed -> OperatorProfile.parse parsed.Json)
-            |> Result.bind canonicalPaths
+            |> Result.bind (fun parsed ->
+                OperatorProfile.parse parsed.Json
+                |> Result.bind canonicalPaths
+                |> Result.map (fun profile ->
+                    { ProfileRead.Profile = profile
+                      ProfileRead.Findings = ConfigAnalysis.run Analyzers.all parsed.Index profile.Sandboxes }))
             |> Result.map Some
             |> Result.mapError saying
         with e -> Error (saying e.Message)

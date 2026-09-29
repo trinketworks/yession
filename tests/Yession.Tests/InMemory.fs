@@ -695,6 +695,7 @@ let tests =
                                   Describe = fun _ -> None
                                   Checkout = fun _ -> None
                                   Credentials = []
+                                  Standing = []
                                   Create = fun name _ _ -> Ok (environmentNamed (SandboxRef.render name))
                                   Log = log
                                   Clock = fun () -> System.DateTimeOffset (2026, 1, 1, 0, 0, 0, System.TimeSpan.Zero) }

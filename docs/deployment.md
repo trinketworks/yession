@@ -54,6 +54,13 @@ is what the host can offer; `always:` is what every sandbox holds without asking
 has to name and none can decline. Declared and not always granted means available and not
 granted.
 
+The same file may declare `sandboxes:` in exactly the form a repo's `yession.yaml` does — one
+decoder reads both (`ConfigFile.parseSandboxes` in `src/Yession.Domain/Config.fs`), and the same
+analyzers note what is legal but likely unmeant (`ConfigAnalysis.fs`), printed at boot. Each is a
+sandbox every session on this host has from boot, as it has `default`, on the backend configured
+for the session's own sandboxes; declaring `default` replaces the built-in one
+(`WorkSandboxes.create`).
+
 The same file carries the one thing you can say to the agent: `agent.guidance`, appended after
 the product's own system prompt on every turn, introduced as the operator's. It never replaces
 that prompt — the prompt describes the build's tools and sandboxes, and a copy in your file

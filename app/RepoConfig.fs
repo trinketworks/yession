@@ -34,7 +34,7 @@ let fromText (text: string) : Result<ConfigRead, string> =
         ConfigFile.parse parsed.Json
         |> Result.map (fun file ->
             { ConfigRead.File = file
-              ConfigRead.Findings = ConfigAnalysis.run Analyzers.all parsed.Index file }))
+              ConfigRead.Findings = ConfigAnalysis.run Analyzers.all parsed.Index file.Sandboxes }))
 
 /// Read one repo's file.
 ///
