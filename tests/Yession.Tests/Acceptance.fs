@@ -445,6 +445,24 @@ let private namelessButtons (html: string) : string list =
                 scan (closeAt + 9) (if named then found else tag :: found)
     scan 0 []
 
+/// A timeline holding one act still running, done by `author`.
+let private renderRunningBy (author: ActorRef) : string =
+    let running : ConversationItem =
+        { MessageId = MessageId.create "msg-running-by" |> expect
+          Author = author
+          Content =
+            ItemContent.Act (
+                Act.SandboxStarting
+                    { MessageId = MessageId.create "msg-running-by" |> expect
+                      Sandbox = SandboxRef.defaultRef
+                      Backend = "srt"
+                      Description = None
+                      Actor = author; OnBehalfOf = None; CausedBy = None })
+          Status = ConversationItemStatus.Running
+          Offset = EventOffset.create 1L |> expect
+          Woke = None; CausedBy = None }
+    Support.render { representativeModel with Conversation = { representativeModel.Conversation with Items = [ running ] } }
+
 let private uiChecklistTests =
     testList "UI checklist" [
         // Pinned ONCE, over the whole shell, rather than remembered at each control: the
@@ -1351,6 +1369,19 @@ let private uiChecklistTests =
                         Conversation = { representativeModel.Conversation with Items = [ running ] } }
             Expect.isFalse (html.Contains (Dom.attr "data-fold" "act-msg-running")) "no fold while it runs"
             Expect.isTrue (html.Contains "data-act-status=\"running\"") "the pulse has the gutter"
+
+        // The diamond is the agent's mark, so whose work an act in flight is shows in whose
+        // mark its gutter holds: the session bringing a sandbox up at boot is not the agent
+        // doing it, and a diamond there would say it was.
+        testCase "an act the session is doing is not marked as the agent's" <| fun () ->
+            Expect.isTrue
+                ((renderRunningBy ActorRef.SessionProcess).Contains (Dom.attr "data-act-running" "other"))
+                "the session's running act wears a mark that is not the agent's"
+
+        testCase "the agent's own act in flight is marked as the agent's" <| fun () ->
+            Expect.isTrue
+                ((renderRunningBy ActorRef.Agent).Contains (Dom.attr "data-act-running" "agent"))
+                "the agent's running act wears the agent's mark"
 
         // A connection a sandbox forwards is drawn as the connection — the same reference
         // every other sentence gives it — not as a badge that happens to carry the word.
