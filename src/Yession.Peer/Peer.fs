@@ -117,6 +117,30 @@ module Harness =
     let run (program: Program<unit, 'model, 'msg, unit>) : Runner<'model, 'msg> =
         runWith waitForTimeoutMs program
 
+    /// Wait for every named condition at once, and on the deadline say WHICH did not hold.
+    ///
+    /// A wait on a conjunction fails as one: its red says the predicate never held, and not
+    /// which half of it — so a case waiting on a message, a reply, an environment and a
+    /// block cost a full gate run per guess when it timed out (`Phase4`'s packaged
+    /// composition, twice in thirty master runs, both times reading exactly that). The
+    /// wait is the same one, on the same deadline; only the failure has more to say.
+    let waitForAll (runner: Runner<'model, 'msg>) (conditions: (string * ('model -> bool)) list) : Async<unit> =
+        async {
+            let all (model: 'model) = conditions |> List.forall (fun (_, holds) -> holds model)
+            match! runner.WaitFor all |> Async.Catch with
+            | Choice1Of2 () -> return ()
+            | Choice2Of2 timedOut ->
+                let model = runner.Model ()
+                let missing = conditions |> List.filter (fun (_, holds) -> not (holds model)) |> List.map fst
+                return
+                    failwithf
+                        "%s — still not true: %s"
+                        timedOut.Message
+                        (match missing with
+                         | [] -> "nothing (every condition holds now; it came true after the deadline)"
+                         | some -> String.concat "; " some)
+        }
+
 
 
 /// One peer, as the client identifies itself when it joins.

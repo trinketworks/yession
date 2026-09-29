@@ -1133,6 +1133,24 @@ let private harnessTests =
                     Expect.stringContains error.Message "50ms" "and how long it waited"
             }
 
+        // A conjunction that times out names the part that never came true, so a red run
+        // says which of four things went missing rather than that one of them did.
+        testCaseAsync "a wait on several conditions says which never held" <|
+            async {
+                let doc = Y.Doc.Create ()
+                let p = Harness.runWith 50 (Client.makeProgram doc (ClientModel.init (peer "ada" "Ada")))
+                let! outcome =
+                    Harness.waitForAll
+                        p
+                        [ "ada is here", (fun m -> m.Peer.DisplayName = "Ada")
+                          "grace is here", (fun m -> m.Peer.DisplayName = "Grace") ]
+                    |> Async.Catch
+                match outcome with
+                | Choice1Of2 () -> failwith "a never-satisfied condition must not resolve"
+                | Choice2Of2 error ->
+                    Expect.stringContains error.Message "still not true: grace is here" "it names only the one that did not hold"
+            }
+
         // The deadline must not cost anything when the condition DOES arrive — including the
         // common case where it is already true before the wait begins.
         testCaseAsync "a condition that is already true resolves without waiting" <|
