@@ -34,7 +34,7 @@ open Yession.Domain
 /// It was `default`, and the word was wrong twice over. A default is what you get unless you
 /// say otherwise, and there is no otherwise to say — a repo's selection ADDS to this set and
 /// can never subtract from it. And `default` already means something else two files away: the
-/// sandbox every session has (`SandboxRef.defaultRef`), so "the default resources" and "the
+/// sandbox a terminal that names none opens in (`SandboxRef.defaultRef`), so "the default resources" and "the
 /// default sandbox's resources" were one phrase for two things.
 ///
 /// `Guidance` is the one thing here that is not about resources: words for the agent, from the

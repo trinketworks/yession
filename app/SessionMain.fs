@@ -313,7 +313,7 @@ let private makeSandboxes
                         (Sandboxes.summaryFor backend workSpec)
                         (sprintf "env-%s" (SandboxRef.objectName sessionId sandbox)))
         async {
-            match! WorkSandboxes.create
+            return! WorkSandboxes.create
                     { Backend =
                         // Described by SCOPE — the same rule the start goes through, minus
                         // its refusal: a repo-owned entry is docker whether or not it has
@@ -357,9 +357,7 @@ let private makeSandboxes
                             | Error e -> failwithf "sandbox '%s' in the resources profile: %s" (SandboxName.value name) e)
                       Create = create
                       Log = log
-                      Clock = clock.Now } with
-            | Ok sandboxes -> return sandboxes
-            | Error e -> return failwithf "work sandboxes: %s" e
+                      Clock = clock.Now }
         }
 
 // Where this session is reachable from outside, from the same two
@@ -927,9 +925,9 @@ Async.StartImmediate (
                       VisibleAt =
                         SandboxPath.reachedFrom
                             (workspaceFor SandboxRef.defaultRef)
-                            // The DEFAULT sandbox's view, and it declares nothing — no file
-                            // may configure the session's own, so there is never a `repos:`
-                            // here to honour.
+                            // The DEFAULT sandbox's view, where its backend puts the repos.
+                            // A `repos:` the operator declared on it is not read here
+                            // (docs/GAPS.md).
                             (Sandboxes.reposVisibleAt None workBackend reposDir)
                       ExtraReadPaths = []
                       Git = Repos.gitExecutable (Sandboxes.ambientEnv ())

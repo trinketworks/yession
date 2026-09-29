@@ -744,14 +744,24 @@ let build () =
 
 // --- start / dev: run the Session Process locally --------------------------------------------
 
+// The resources profile a session this repository runs for itself is under — the suites'
+// and a local `start`/`dev`'s. A session's own sandboxes are the ones its operator declares,
+// so without one it would have no `default` to open a terminal in.
+let ownProfile = Path.Combine (repoRoot, "tests", "resources.yaml")
+
+let private underOwnProfile () =
+    Environment.SetEnvironmentVariable ("YESSION_SESSION_RESOURCES", ownProfile)
+
 // Local runs are single-machine, so the loopback trust rule is the right default here;
 // the shipped binary defaults to `--auth none` (deny) until the operator chooses.
 let start () =
     build ()
+    underOwnProfile ()
     exec "node" [ "app/out/Main.js"; "--auth"; "localhost" ]
 
 let dev () =
     make [ Target.Tools; Target.Packages ]
+    underOwnProfile ()
     exec "dotnet" [ "fable"; "watch"; "app/main/Yession.Host.Main.fsproj"; "-o"; "app/out"; "--noRestore"; "--runWatch"; "node"; "app/out/Main.js"; "--auth"; "localhost" ]
 
 // --- boot-smoke: run a yession bin with ephemeral ports and assert it comes up ---------------
@@ -1310,6 +1320,7 @@ let private runCheckOnce (requested: string list) (runtime: Runtime option) =
     | _ -> ()
     let budgetMs = nodeBudgetMs capSet
     Environment.SetEnvironmentVariable ("YESSION_TEST_CAPS", String.concat " " caps)
+    underOwnProfile ()
     // The suite is told its own budget, because a case's deadline is spent out of it: a wait
     // that asks for more than the run can afford is refused at the call rather than taking the
     // runner down later (`Support.settledWithin`).
@@ -1637,7 +1648,9 @@ let private vmCheck (target: LinuxTarget) (args: string list) =
         linkPaths |> List.iter (fun p -> exec "ln" [ "-sfn"; nodeModules; p ])
         let env =
             [ "YESSION_TEST_CAPS", String.concat " " caps
-              "YESSION_NESTED_SANDBOX", "strict" ]
+              "YESSION_NESTED_SANDBOX", "strict"
+              // The same tree, at the same path (`repoPath`), so the same file.
+              "YESSION_SESSION_RESOURCES", Path.Combine (repoPath, "tests", "resources.yaml") ]
             @ (only |> Option.map (fun text -> "YESSION_TEST_ONLY", text) |> Option.toList)
             @ LinuxTarget.sandboxTools target
         progress

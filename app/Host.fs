@@ -44,7 +44,8 @@ type SessionHost =
       /// The session's Yjs document. The Session Process owns it; peers hold replicas
       /// synced over `State` frames.
       Doc : Y.Doc
-      /// The session's `default` WorkSandbox (Step 12), the one every session has had.
+      /// The session's `default` WorkSandbox (Step 12): where a terminal that names no sandbox
+      /// opens, and one that refuses with the reason when nobody declared it.
       Environment : SessionEnvironment.SessionEnvironment
       /// Every WorkSandbox the session has, by name (Plan 15, stage 2). The commands that
       /// start and stop them are the agent's; this is where they land.
@@ -318,9 +319,8 @@ let startFull
             |> List.fold (fun proj e -> ShellProfileProjection.applyEvent proj e.Event) ShellProfileProjection.empty
 
         // The session's WorkSandboxes (Plan 15, stage 2): a registry keyed by name, each
-        // entry lazily created on first need. `default` is the one every session has had,
-        // so a Host composed without sandboxes still answers every question — its default
-        // environment records needs as unavailable, exactly as before.
+        // entry lazily created on first need. A Host composed without sandboxes still answers
+        // every question — its default environment records needs as unavailable.
         let! sandboxes =
             match makeSandboxes with
             | Some make -> make log

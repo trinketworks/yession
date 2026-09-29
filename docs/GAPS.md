@@ -371,6 +371,11 @@ first's.
 
 ## Runtime & topology
 
+- **An operator's `repos:` on `default` is not read where repo paths are resolved.** The
+  session's own sandboxes are the operator's declarations now, and `repos:` is legal on them,
+  but the path an agent is told a checkout is at (`SessionMain.fs`, `VisibleAt`) is computed
+  from the backend alone. A `default` that is a container with its own `repos:` would be told
+  the backend's path rather than its own.
 - **The process split is done** (Phase 4): each session is a child OS process of the Manager,
   supervision and secrets custody cross the boundary as a secret-scoped control RPC
   (environments are session-owned via the sandbox seam), and sessions are

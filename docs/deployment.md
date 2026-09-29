@@ -57,9 +57,12 @@ granted.
 The same file may declare `sandboxes:` in exactly the form a repo's `yession.yaml` does — one
 decoder reads both (`ConfigFile.parseSandboxes` in `src/Yession.Domain/Config.fs`), and the same
 analyzers note what is legal but likely unmeant (`ConfigAnalysis.fs`), printed at boot. Each is a
-sandbox every session on this host has from boot, as it has `default`, on the backend configured
-for the session's own sandboxes; declaring `default` replaces the built-in one
-(`WorkSandboxes.create`).
+sandbox every session on this host has from boot, on the backend configured for the session's
+own sandboxes — and they are ALL of a session's own sandboxes (`WorkSandboxes.create`). There is
+no built-in one: `default`, where a terminal that names no sandbox opens, exists only if you
+declare it, and a session on a host whose profile declares none has nowhere to run a command
+until a repo's sandbox starts. Declare it with what it should hold — `wants: [ github ]` for
+`git push` from a terminal.
 
 The same file carries the one thing you can say to the agent: `agent.guidance`, appended after
 the product's own system prompt on every turn, introduced as the operator's. It never replaces
@@ -510,6 +513,12 @@ let
         env:
           SSL_CERT_FILE: /private/etc/ssl/cert.pem
           NIX_SSL_CERT_FILE: /private/etc/ssl/cert.pem
+    # The session's own sandboxes. Nothing makes a `default` up: this is where a
+    # terminal that names no sandbox opens.
+    sandboxes:
+      default:
+        uses: [ ca ]
+        wants: [ github ]
     # Appended after the product's system prompt, as the operator's words. Host
     # conventions only — the prompt already covers the tools.
     agent:
