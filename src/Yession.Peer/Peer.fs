@@ -124,7 +124,14 @@ module Harness =
     /// block cost a full gate run per guess when it timed out (`Phase4`'s packaged
     /// composition, twice in thirty master runs, both times reading exactly that). The
     /// wait is the same one, on the same deadline; only the failure has more to say.
-    let waitForAll (runner: Runner<'model, 'msg>) (conditions: (string * ('model -> bool)) list) : Async<unit> =
+    ///
+    /// `showing` is what else to print when it fails: the part of the model a reader needs to
+    /// tell WHY a condition did not hold, which the condition's name cannot carry.
+    let waitForAll
+        (runner: Runner<'model, 'msg>)
+        (conditions: (string * ('model -> bool)) list)
+        (showing: 'model -> string)
+        : Async<unit> =
         async {
             let all (model: 'model) = conditions |> List.forall (fun (_, holds) -> holds model)
             match! runner.WaitFor all |> Async.Catch with
@@ -134,11 +141,14 @@ module Harness =
                 let missing = conditions |> List.filter (fun (_, holds) -> not (holds model)) |> List.map fst
                 return
                     failwithf
-                        "%s — still not true: %s"
+                        "%s — still not true: %s%s"
                         timedOut.Message
                         (match missing with
                          | [] -> "nothing (every condition holds now; it came true after the deadline)"
                          | some -> String.concat "; " some)
+                        (match showing model with
+                         | "" -> ""
+                         | shown -> " — " + shown)
         }
 
 

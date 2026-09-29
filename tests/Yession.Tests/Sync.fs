@@ -1144,11 +1144,13 @@ let private harnessTests =
                         p
                         [ "ada is here", (fun m -> m.Peer.DisplayName = "Ada")
                           "grace is here", (fun m -> m.Peer.DisplayName = "Grace") ]
+                        (fun m -> sprintf "named %s" m.Peer.DisplayName)
                     |> Async.Catch
                 match outcome with
                 | Choice1Of2 () -> failwith "a never-satisfied condition must not resolve"
                 | Choice2Of2 error ->
                     Expect.stringContains error.Message "still not true: grace is here" "it names only the one that did not hold"
+                    Expect.stringContains error.Message "named Ada" "and shows what the model held instead"
             }
 
         // The deadline must not cost anything when the condition DOES arrive — including the
