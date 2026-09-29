@@ -1724,6 +1724,12 @@ type HttpServer =
     /// Bind a UNIX socket at `path`, and call back once it is bound.
     abstract listen : path: string * onListening: (unit -> unit) -> HttpServer
 
+    /// A bind that failed — the address taken, the directory gone — raises here, once, and an
+    /// unhandled `error` on a server takes the PROCESS down; so a caller that binds listens
+    /// for it first and fails with a sentence instead.
+    [<Emit("$0.once('error', $1)")>]
+    abstract onceError : handler: (StreamError -> unit) -> unit
+
     /// Stop accepting connections, and call back once every open one has ended. Node hands the
     /// callback an `Error` when the server was not listening and nothing when it closed, which
     /// is what the option says.

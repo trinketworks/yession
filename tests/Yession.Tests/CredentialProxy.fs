@@ -249,6 +249,24 @@ let private portsTests =
                     })
         }
 
+        // A socket path already bound — a process killed before it closed, a pid handed on —
+        // is a start that fails in words, never an `error` event that takes the session down.
+        testCaseAsync "a socket already taken fails the start in words" <| async {
+            let! upstream = startUpstream ()
+            do!
+                withProxy upstream (fun proxy ->
+                    async {
+                        let dir = TestFiles.tempDir "yession-credproxy-"
+                        let! second =
+                            CredentialProxy.start [ route ] (fun _ -> upstream.Origin) proxy.Socket (dir + "/trust.pem") ignore
+                            |> Async.Catch
+                        TestFiles.removeTree dir
+                        match second with
+                        | Choice1Of2 _ -> failwith "a second proxy bound a socket the first holds"
+                        | Choice2Of2 refused -> Expect.stringContains refused.Message proxy.Socket "the refusal names the socket"
+                    })
+        }
+
         // A credential route, not a way out of a sandbox's egress policy.
         testCaseAsync "a host no route declares is refused at the CONNECT" <| async {
             let! upstream = startUpstream ()
