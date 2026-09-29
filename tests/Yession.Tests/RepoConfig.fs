@@ -317,10 +317,10 @@ let tests =
         // A reference a later build would understand is refused here, not kept as text: a
         // file that meant a reference and got the literal would run on something unsaid.
         testCase "a reference this build does not know refuses the file, naming it" <| fun () ->
-            let text = "version: 2\nsandboxes:\n  dev:\n    env:\n      TOKEN: ${vault.token}\n"
+            let text = "version: 2\nsandboxes:\n  dev:\n    env:\n      TOKEN: ${vault.secret}\n"
             match RepoConfig.fromText text with
             | Ok _ -> failwith "should refuse"
-            | Error e -> Expect.stringContains e "vault.token" "names what it did not know"
+            | Error e -> Expect.stringContains e "vault.secret" "names what it did not know"
 
         // What a sandbox asks the credential proxy for is a reference like `${env.NAME}`, so a
         // file composes it with what it already has: the image's trust store AND the proxy's.
@@ -340,6 +340,30 @@ let tests =
                     ))
                     "the image's, then the proxy's"
                 Expect.equal (Yession.Domain.Sandboxes.ConfigFile.parseSandbox (Yession.Domain.Sandboxes.SandboxDecl.encode decl)) (Ok decl) "and it crosses the gate as written"
+
+        // A token is lent to each command rather than held by the sandbox, so it is a
+        // variable's whole value — and reads back across the gate as it was written.
+        testCase "a connection's token is lent into the variable that names it" <| fun () ->
+            let text = "version: 2\nsandboxes:\n  dev:\n    env:\n      GH_TOKEN: ${github.token}\n"
+            match RepoConfig.fromText text with
+            | Error e -> failwithf "the file should decode: %s" e
+            | Ok read ->
+                let decl = read.File.Sandboxes |> Map.find (SandboxName.create "dev" |> expect)
+                Expect.equal
+                    (decl.EnvironmentVariables |> Map.tryFind "GH_TOKEN")
+                    (Some (Yession.Domain.Sandboxes.Lent (ConnectionName.create "github" |> expect)))
+                    "lent, not held"
+                Expect.equal (Yession.Domain.Sandboxes.ConfigFile.parseSandbox (Yession.Domain.Sandboxes.SandboxDecl.encode decl)) (Ok decl) "and it crosses the gate as written"
+
+        // Composed into a larger value it would be a value the sandbox holds while the stand-in
+        // inside it rotates — so it is refused, pointing at the open question behind the rule.
+        testCase "a token composed into a larger value refuses the file, pointing at why" <| fun () ->
+            let text = "version: 2\nsandboxes:\n  dev:\n    env:\n      AUTH: Bearer ${github.token}\n"
+            match RepoConfig.fromText text with
+            | Ok _ -> failwith "should refuse"
+            | Error e ->
+                Expect.stringContains e "whole value" "says what it may be"
+                Expect.stringContains e "docs/GAPS.md" "and where the rule is argued"
 
         testCase "a proxy field this build does not know refuses the file, naming what it knows" <| fun () ->
             let text = "version: 2\nsandboxes:\n  dev:\n    env:\n      ALL_PROXY: ${proxy.socks}\n"

@@ -193,11 +193,15 @@ let private githubSource (route: string) : WorkSandboxes.CredentialSource * Resi
       // Lends by NAME: what a block gets says whose credential it was asked for, which
       // is the whole of what the loan cases compare.
       Lend =
-        fun authority _ _ _ ->
+        fun authority _ _ _ lentInto ->
             async {
                 return
                     { BlockEnv.GitConfig = None
-                      BlockEnv.Vars = [ "LENT_TO", Some (CredentialFor.token (Authority.credential authority)) ] }
+                      BlockEnv.Vars =
+                        [ "LENT_TO", Some (CredentialFor.token (Authority.credential authority)) ]
+                        // And, where the declaration lends the token in variables of its own,
+                        // which — so a case can see the registry asked for them.
+                        @ (if List.isEmpty lentInto then [] else [ "LENT_INTO", Some (String.concat "," lentInto) ]) }
             }
       Retire = ignore },
     revoked
@@ -797,7 +801,7 @@ let private credentialTests =
                     { Name = github
                       Provision = fun _ -> async { return WorkSandboxes.CredentialForwarding.Unforwardable "no route from here" }
                       Revoke = ignore
-                      Lend = fun _ _ _ _ -> async { return BlockEnv.none }
+                      Lend = fun _ _ _ _ _ -> async { return BlockEnv.none }
                       Retire = ignore }
                 let! sandboxes, built = registry log [ source ]
                 match! sandboxes.Ensure starter None (sandbox "octo/hello:test") (forwarding [ "github" ]) with
@@ -1402,7 +1406,7 @@ let private unroutable : WorkSandboxes.CredentialSource =
     { Name = github
       Provision = fun _ -> async { return WorkSandboxes.CredentialForwarding.Unforwardable "no route from here" }
       Revoke = ignore
-      Lend = fun _ _ _ _ -> async { return BlockEnv.none }
+      Lend = fun _ _ _ _ _ -> async { return BlockEnv.none }
       Retire = ignore }
 
 let private standingTests =
@@ -1535,6 +1539,44 @@ let private asking (variable: string) (text: string) : SandboxRequest =
         { EnvironmentSpec.defaults with
             EnvironmentVariables = Map.ofList [ variable, Derived (EnvTemplate.parse text |> expect) ] } }
 
+// --- a token lent into the variables a declaration names ---------------------------------------
+
+/// An ask that forwards `forwarded` and lends each of `lent`'s variables `${github.token}`.
+let private lending (forwarded: string list) (lent: string list) : SandboxRequest =
+    let request = forwarding forwarded
+    { request with
+        Spec =
+            { request.Spec with
+                EnvironmentVariables =
+                    lent |> List.map (fun variable -> variable, Lent github) |> Map.ofList } }
+
+let private lentTokenTests =
+    let terminal = TerminalId.create "term-a" |> expect
+    let block = BlockId.create "b-1" |> expect
+    let bob = Principal.Peer (PeerId.create "bob" |> expect)
+    testList "a token lent by name" [
+
+        testCaseAsync "a command is lent the token in the variables the declaration names" <|
+            async {
+                let! sandboxes, _ = registry (newLog ()) [ githubCredential "route" ]
+                let! _ = sandboxes.Ensure starter None (sandbox "octo/hello:dev") (lending [ "github" ] [ "GH_TOKEN" ])
+                let! lent = sandboxes.Loans.Lend (sandbox "octo/hello:dev") terminal (Some block) (Authority.agentFor bob)
+                Expect.isTrue (List.contains ("LENT_INTO", Some "GH_TOKEN") lent.Vars) "the source was asked to lend into it"
+            }
+
+        // Nobody would lend it: every command would find nothing there, and never why.
+        testCaseAsync "a token lent for a connection the sandbox does not forward refuses the start" <|
+            async {
+                let! sandboxes, built = registry (newLog ()) [ githubCredential "route" ]
+                match! sandboxes.Ensure starter None (sandbox "octo/hello:dev") (lending [] [ "GH_TOKEN" ]) with
+                | Ok _ -> failwith "expected a refusal"
+                | Error reason ->
+                    Expect.stringContains reason "GH_TOKEN" "names the variable"
+                    Expect.stringContains reason "uses or wants" "and what to do"
+                    Expect.isFalse (built |> Seq.exists (fun (name, _) -> name = "octo/hello:dev")) "and nothing was built"
+            }
+    ]
+
 let private proxyTests =
     testList "the credential proxy, asked for by name" [
 
@@ -1593,6 +1635,7 @@ let tests =
     testList "WorkSandboxes" [
         standingTests
         proxyTests
+        lentTokenTests
         nameTests
         backendTests
         workspaceVolumeTests

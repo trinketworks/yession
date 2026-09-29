@@ -603,13 +603,16 @@ let provision (proxy: Proxy) (route: CredentialRoute) : WorkSandboxes.Provision 
         Reads = [ proxy.TrustFile ]
         Intercept = Some { Interception.Socket = proxy.Socket; Interception.Hosts = route.Hosts } }
 
-/// What one block is lent on `route`: a fresh stand-in, in every variable the route's tools
-/// read one from — the same stand-in in each, so the block's requests are one loan whichever
-/// variable a tool happened to read.
-let lend (proxy: Proxy) (route: CredentialRoute) (terminal: TerminalId) (lender: Lender) : BlockEnv =
-    let standIn = proxy.Lend route terminal lender
-    { BlockEnv.GitConfig = None
-      BlockEnv.Vars = route.Variables |> List.map (fun name -> name, Some standIn) }
+/// What one block is lent on `route`: a fresh stand-in, in each of `variables` — the same
+/// stand-in in each, so the block's requests are one loan whichever variable a tool happened
+/// to read. Nothing at all for no variables: a loan nobody could read is one not worth minting.
+let lend (proxy: Proxy) (route: CredentialRoute) (variables: string list) (terminal: TerminalId) (lender: Lender) : BlockEnv =
+    match List.distinct variables with
+    | [] -> BlockEnv.none
+    | variables ->
+        let standIn = proxy.Lend route terminal lender
+        { BlockEnv.GitConfig = None
+          BlockEnv.Vars = variables |> List.map (fun name -> name, Some standIn) }
 
 /// Where a container sees what the proxy gives it to trust: the bundle and the authority's
 /// directory, mounted read-only. Fixed rather than following the host's paths, because a

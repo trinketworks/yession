@@ -177,7 +177,8 @@ module SandboxDecl =
                 | PlainValue plain when EnvTemplate.composes plain -> Encode.string (EnvTemplate.escape plain)
                 | PlainValue plain -> Encode.string plain
                 | SecretRef secret -> Encode.object [ "secret", Encode.string (SecretName.value secret) ]
-                | Derived template -> Encode.string (EnvTemplate.render template))
+                | Derived template -> Encode.string (EnvTemplate.render template)
+                | Lent connection -> Encode.string (sprintf "${%s.token}" (ConnectionName.value connection)))
         let strings (names: string list) = Encode.list (names |> List.map Encode.string)
         Encode.toString 0 (
             Encode.object
@@ -360,6 +361,12 @@ module ConfigFile =
         Decode.oneOf
             [ Decode.string
               |> Decode.andThen (fun text ->
+                  match EnvTemplate.lent text with
+                  | Some connection ->
+                      match ConnectionName.create connection with
+                      | Ok name -> Decode.succeed (Lent name)
+                      | Error e -> Decode.fail (sprintf "'%s' does not name a connection: %s" text e)
+                  | None ->
                   if not (EnvTemplate.composes text) then Decode.succeed (PlainValue text)
                   else
                       match EnvTemplate.parse text with

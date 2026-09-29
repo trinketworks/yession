@@ -63,6 +63,16 @@ module EnvTemplate =
     /// `text` as a template: `${env.NAME}` is a reference, `$${` is a literal `${`, and
     /// anything else is text. Refuses a reference it cannot read, naming it — an unclosed
     /// one, an unknown namespace, a name no environment could carry.
+    /// The connection a value lends, when the value is exactly `${<connection>.token}` — the
+    /// one place a token may be named (`EnvironmentVariableRef.Lent`).
+    let lent (text: string) : string option =
+        let trimmed = text.Trim ()
+        if trimmed.StartsWith "${" && trimmed.EndsWith ".token}" && trimmed.IndexOf '}' = trimmed.Length - 1 then
+            let connection = trimmed.Substring (2, trimmed.Length - 2 - ".token}".Length)
+            if connection <> "" && connection <> "env" && connection <> "proxy" && not (connection.Contains ".") then Some connection
+            else None
+        else None
+
     let parse (text: string) : Result<EnvTemplate, string> =
         let literal (acc: TemplatePart list) (piece: string) =
             match acc with
@@ -90,6 +100,14 @@ module EnvTemplate =
                         match ProxyValue.all |> List.tryFind (fun (name, _) -> name = field) with
                         | Some (_, value) -> go (close + 1) (TemplatePart.Proxy value :: acc)
                         | None -> unknown ()
+                    // A token composed into a larger value: the one place `lent` did not
+                    // already take it, so the one place it is refused.
+                    | [| _; "token" |] ->
+                        Error (
+                            sprintf
+                                "'${%s}' is lent to each command for the act it runs as, and returned when the next one starts, so it can only be a variable's whole value — see 'A lent token rotates per command' in docs/GAPS.md"
+                                inner
+                        )
                     | [| _; _ |] -> unknown ()
                     | _ ->
                         Error (sprintf "'${%s}' is not a reference — write '${env.NAME}', or '$${' for a literal '${'" inner)

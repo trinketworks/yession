@@ -114,9 +114,28 @@ type CredentialSource =
       /// sandbox carries what every block shares (a route), a block carries whose it is.
       /// Nothing, never a refusal: a block lent nothing runs on what its shell has, and what
       /// its git is then told is the gateway's sentence to say.
-      Lend : Authority -> SandboxRef -> TerminalId -> BlockId option -> Async<BlockEnv>
+      ///
+      /// `lentInto` is the variables the sandbox's declaration lends this connection's token
+      /// in (`${<connection>.token}`), which the source puts a stand-in in beside whatever it
+      /// lends of its own accord.
+      Lend : Authority -> SandboxRef -> TerminalId -> BlockId option -> string list -> Async<BlockEnv>
       /// Whatever a terminal's last block was lent is returned (`BlockLoans.Retire`).
       Retire : TerminalId -> unit }
+
+/// The variables a declaration lends each connection's token in (`${<connection>.token}`), by
+/// connection.
+let lentVariables (spec: EnvironmentSpec) : Map<ConnectionName, string list> =
+    spec.EnvironmentVariables
+    |> Map.toList
+    |> List.choose (fun (variable, value) ->
+        match value with
+        | Lent connection -> Some (connection, variable)
+        | PlainValue _
+        | SecretRef _
+        | Derived _ -> None)
+    |> List.groupBy fst
+    |> List.map (fun (connection, pairs) -> connection, pairs |> List.map snd)
+    |> Map.ofList
 
 /// One sandbox the session has. Present in the registry does NOT mean started — the
 /// environment underneath is lazy, and `default` exists from boot without a sandbox
@@ -345,7 +364,8 @@ let create (config: WorkSandboxesConfig) : Async<WorkSandboxes> =
                     match value with
                     | Derived template -> EnvTemplate.proxies template
                     | PlainValue _
-                    | SecretRef _ -> [])
+                    | SecretRef _
+                    | Lent _ -> [])
                 |> List.distinct
             match asked with
             | [] -> Ok (spec, Provision.empty)
@@ -380,6 +400,29 @@ let create (config: WorkSandboxesConfig) : Async<WorkSandboxes> =
             async {
                 match! provisionConnections name spec with
                 | Error e -> return Error e
+                // A token lent for a connection the sandbox does not forward would be lent by
+                // nobody — every command would get nothing in that variable and no reason
+                // why. So it refuses the start, naming what to select.
+                | Ok (forwarded, _) when
+                    lentVariables spec |> Map.exists (fun connection _ -> not (List.contains connection forwarded))
+                    ->
+                    revoke name forwarded
+                    let missing =
+                        lentVariables spec
+                        |> Map.toList
+                        |> List.filter (fun (connection, _) -> not (List.contains connection forwarded))
+                        |> List.map (fun (connection, variables) ->
+                            sprintf
+                                "%s names '${%s.token}', and this sandbox forwards no '%s'"
+                                (String.concat ", " variables)
+                                (ConnectionName.value connection)
+                                (ConnectionName.value connection))
+                    return
+                        Error (
+                            sprintf
+                                "%s — select the connection under uses or wants, from a host that offers it"
+                                (String.concat "; " missing)
+                        )
                 | Ok (forwarded, provision) ->
                     match provideProxy name spec with
                     | Error e ->
@@ -645,7 +688,11 @@ let create (config: WorkSandboxesConfig) : Async<WorkSandboxes> =
                         match config.Credentials |> List.tryFind (fun source -> source.Name = forwarded) with
                         | None -> ()
                         | Some source ->
-                            let! given = source.Lend authority entry.Ref terminal block
+                            let lentInto =
+                                // A connection the declaration lends no variable is lent into
+                                // none of them, which is the absent entry's meaning.
+                                lentVariables entry.Request.Spec |> Map.tryFind forwarded |> Option.defaultValue []
+                            let! given = source.Lend authority entry.Ref terminal block lentInto
                             lent <- BlockEnv.merge lent given
                     return lent
             }

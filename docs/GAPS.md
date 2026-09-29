@@ -19,6 +19,17 @@ first's.
 
 ## Security & trust
 
+- **A lent token rotates per command, and whether that earns its keep is open.** A
+  declaration's `${github.token}` (`EnvironmentVariableRef.Lent`) is a stand-in lent to each
+  command for the act it runs as and returned when the next one starts. What it buys: a
+  stand-in that leaks dies with the next command, and each command spends the credential of
+  whoever it runs for, never whoever ran the one before. What it costs: the value can only be a
+  variable's whole value (the parser refuses one composed into a larger string, pointing here),
+  and anything that keeps a token across commands — a daemon started by one command, a tool
+  that writes the token into its own config — holds a dead one after the next command, and is
+  refused in words from then on. A stand-in per sandbox, resolved per request by whoever the
+  current command runs for, would keep the attribution without the rotation; nothing here has
+  measured whether the rotation is worth what it breaks.
 - **Event attribution is threaded, but presentation is thin** (Plan 07): under a real strategy,
   events attribute to the Manager-verified user (`ActorRef.UserRef`, riding the OIDC bounce →
   cookie → session-minted peer token — never a peer-controlled frame). Remaining: peer display

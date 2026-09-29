@@ -67,6 +67,11 @@ type EnvironmentVariableRef =
     | SecretRef of SecretName
     /// A value composed over what lies beneath (`EnvTemplate`).
     | Derived of EnvTemplate
+    /// `${<connection>.token}` as a variable's whole value: a stand-in for that connection's
+    /// credential, lent to each command for the act it runs as and returned when the next one
+    /// starts — never a value the sandbox holds, so it is not in the sandbox's environment at
+    /// all but in each command's. docs/GAPS.md asks whether the rotation earns its keep.
+    | Lent of connection: ConnectionName
 
 /// What a CONTAINER is. Every field here is one only a container has — an image to run, a
 /// filesystem to build, volumes to mount, a process to be.
