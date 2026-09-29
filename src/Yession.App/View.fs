@@ -2297,16 +2297,24 @@ module View =
             | None -> Lit.nothing
         let actNoteItem (act: Act) (item: ConversationItem) =
             let by = item.Author
-            // A slow act coming up is marked in the LEFT gutter — the agent's diamond,
-            // turning, on the margin rather than trailing the line, so the running ones read
-            // as a column down the edge. A failed act still says so inline, where its reason sits: a terminal
+            // A slow act coming up is marked in the LEFT gutter — the agent's diamond when it
+            // is the agent's act and a circle when it is anybody else's (the diamond is the
+            // agent's alone), on the margin rather than trailing the line, so the running
+            // ones read as a column down the edge. A failed act still says so inline, where its reason sits: a terminal
             // state wants a word, not a dot. A settled act says nothing here — its body is the
             // whole account. `data-act-status` on the article is the stable hook a test counts
             // running work by, wherever the design puts the cue.
             let running =
                 match item.Status with
                 | ConversationItemStatus.Running ->
-                    html $"""<span class="{Style.actNoteRunning}"><span class="{Style.actNoteRunningMark}" data-act-running></span><span class="{Style.srOnly}">{Dom.Text.running}</span></span>"""
+                    // Who is doing it, as the hook says it too: whose mark this is is the
+                    // promise, whatever the marks look like.
+                    let mark, whose =
+                        match by with
+                        | ActorRef.Agent -> Style.actNoteRunningAgent, "agent"
+                        | PeerRef _ | UserRef _ | ActorRef.SessionProcess | ActorRef.System | ActorRef.Configured _ ->
+                            Style.actNoteRunningOther, "other"
+                    html $"""<span class="{Style.actNoteRunning}"><span class="{mark}" data-act-running="{whose}"></span><span class="{Style.srOnly}">{Dom.Text.running}</span></span>"""
                 | Complete | Streaming | ConversationItemStatus.Failed -> Lit.nothing
             let failedMark =
                 match item.Status with

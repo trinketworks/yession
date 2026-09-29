@@ -2042,11 +2042,26 @@ module Style =
     /// centred across the gutter as text is. It was a flex box centring a dot on the line's
     /// height, which is the middle of the leading and not anywhere the letters are.
     let actNoteRunning = cls [ "col-start-1 text-small leading-[inherit] text-center pointer-events-none" ]
-    /// The mark: the agent's diamond, turning — the same mark that turns at the end of a
-    /// message it has not started writing, because an agent working on a tool and an agent
-    /// thinking are the same statement, and where the mark stands says which. One mark on the
-    /// screen at a time: a message's caret goes when the message closes, before a tool runs.
-    let actNoteRunningMark = agentCaretThinking
+    /// The mark for the agent's own act: its diamond, turning — the same mark that turns at
+    /// the end of a message it has not started writing, because an agent working on a tool
+    /// and an agent thinking are the same statement, and where the mark stands says which.
+    /// One mark on the screen at a time: a message's caret goes when the message closes,
+    /// before a tool runs.
+    let actNoteRunningAgent = agentCaretThinking
+
+    /// The mark for an act the agent is not doing — the session bringing a sandbox up at
+    /// boot, a repository's file configuring one: a circle, because the diamond is the
+    /// agent's and a diamond on the session's work says the agent did it. In the chrome's
+    /// dim ink rather than blue, which is the agent's colour as the diamond is its shape.
+    ///
+    /// Placed by the same rule as the diamond (`agentMark`): an `1ex` box resting on the
+    /// baseline, so it spans the title's lowercase. Overshot as a round letter is, 0.015em
+    /// each side — about what Noto's `o` carries — rather than a point's 0.03em. It keeps
+    /// the diamond's rhythm, the same animation: the turn does nothing to a circle, so what
+    /// shows is its dip in scale, one beat and a rest.
+    let actNoteRunningOther =
+        "inline-block w-[calc(1ex_+_0.03em)] h-[calc(1ex_+_0.03em)] align-[-0.015em] rounded-full bg-ink-dim "
+        + "animate-think motion-reduce:animate-none motion-reduce:opacity-60"
     /// Sentence case, deliberately. This wore the caps LABEL voice, and a label voice is for
     /// two or three words: `STARTED SANDBOX WORK (DOCKER), FORWARDING ANTHROPIC_API_KEY FROM
     /// ADA` is a line nobody reads, because uppercase flattens the word shapes a reader scans

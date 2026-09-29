@@ -1755,8 +1755,9 @@ let editorTests =
                 Expect.isTrue (drift < 0.5) (sprintf "the name's baseline is the line's, it was %.2fpx off" drift)
             }
 
-        // The same question of an act still RUNNING, whose gutter holds the agent's mark
-        // rather than an arrow. A mark beside a title is read against that title's letters,
+        // The same question of an act still RUNNING, whose gutter holds a mark rather than
+        // an arrow (the fixture's is the session's circle; the agent's diamond is measured at
+        // the end of a message, by the caret case). A mark beside a title is read against that title's letters,
         // so it spans them: lower point on the title's baseline, upper at its x-height —
         // measured by an inline-block `1ex` tall dropped into the title's first line, whose
         // bottom rests on that baseline and whose top is where an `x` ends — and it stays

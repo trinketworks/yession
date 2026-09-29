@@ -1111,9 +1111,11 @@ let private actsModel : ClientModel =
           Woke = None; CausedBy = None }
     // And one still coming up, so the page holds the mark an act in flight wears in its
     // gutter — which, like a reference's name, is a question of where on the line it stands.
+    // The session's, as a sandbox brought up at boot is: the agent's own mark stands at the
+    // end of a message, where the caret case measures it.
     let starting : ConversationItem =
         { MessageId = MessageId.create "msg-act-starting" |> expect
-          Author = ActorRef.Agent
+          Author = ActorRef.SessionProcess
           Content =
             ItemContent.Act (
                 Act.SandboxStarting
@@ -1121,7 +1123,7 @@ let private actsModel : ClientModel =
                       Sandbox = SandboxRef.defaultRef
                       Backend = "srt"
                       Description = None
-                      Actor = ActorRef.Agent; OnBehalfOf = None; CausedBy = None })
+                      Actor = ActorRef.SessionProcess; OnBehalfOf = None; CausedBy = None })
           Status = ConversationItemStatus.Running
           Offset = offset 32L
           Woke = None; CausedBy = None }
