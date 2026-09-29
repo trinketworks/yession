@@ -70,9 +70,6 @@ type SandboxDecl =
       /// `HomePath` is what keeps that true: it cannot be absolute and cannot contain `..`,
       /// so nothing declared here lands outside the home.
       Files : Map<HomePath, string>
-      /// Credential NAMES to forward. Resolved for a human at spawn; a value never appears
-      /// in a file, and could not: the type is a name.
-      Forward : string list
       /// One command to run in this sandbox before anything else does — the repo's chance
       /// to make the environment ready rather than describe it and hope.
       ///
@@ -113,7 +110,6 @@ module SandboxDecl =
           Uses = []
           Wants = []
           Files = Map.empty
-          Forward = []
           Setup = None
           Description = None
           Repos = None }
@@ -199,7 +195,6 @@ module SandboxDecl =
                         decl.Files
                         |> Map.toList
                         |> List.map (fun (path, content) -> HomePath.value path, Encode.string content))
-                  if not (List.isEmpty decl.Forward) then "forward", strings decl.Forward
                   if decl.Setup.IsSome then "setup", Encode.string decl.Setup.Value
                   if decl.Description.IsSome then "description", Encode.string decl.Description.Value
                   if decl.Repos.IsSome then "repos", Encode.string decl.Repos.Value ])
@@ -288,10 +283,7 @@ module SandboxDecl =
                       Files = decl.Files
                       Runtime = runtime
                       Setup = decl.Setup
-                      ReposAt = decl.Repos }
-                  // As written becomes as asked, here and nowhere else: what the registry
-                  // compares has already been normalised by construction.
-                  Forward = ConnectionName.normalise decl.Forward }
+                      ReposAt = decl.Repos } }
 
 /// One repo's whole file.
 type ConfigFile =
@@ -534,7 +526,19 @@ module ConfigFile =
             | _ -> Decode.succeed spec)
 
     let private sandboxKeys =
-        [ "container"; "dialect"; "workdir"; "env"; "uses"; "wants"; "files"; "forward"; "setup"; "description"; "repos" ]
+        [ "container"; "dialect"; "workdir"; "env"; "uses"; "wants"; "files"; "setup"; "description"; "repos" ]
+
+    /// `forward:` said which connections a sandbox forwarded, and a connection is a resource
+    /// now: offered by the operator and selected like every other. Refused by name rather
+    /// than left to the unknown-key sentence, because the file that has it worked yesterday
+    /// and its author needs to be told what replaced it, not that it was never a word.
+    let private noForward : Decoder<unit> =
+        Decode.optional "forward" Decode.value
+        |> Decode.andThen (function
+            | Some _ ->
+                Decode.fail
+                    "`forward:` is gone — a connection is a resource now: the operator offers it (`github: { connection: github }`) and a sandbox selects it under `uses` or `wants`"
+            | None -> Decode.succeed ())
 
     /// `dialect:` — one of the shells a terminal can instrument, by name.
     let private dialect : Decoder<string> =
@@ -567,7 +571,8 @@ module ConfigFile =
             fold [] pairs)
 
     let private sandbox : Decoder<SandboxDecl> =
-        noUnknownKeys sandboxKeys
+        noForward
+        |> Decode.andThen (fun () -> noUnknownKeys sandboxKeys)
         |> Decode.andThen (fun () ->
             Decode.object (fun get ->
                 let container = get.Optional.Field "container" container
@@ -579,7 +584,6 @@ module ConfigFile =
                   Uses = get.Optional.Field "uses" resourceNames |> Option.defaultValue []
                   Wants = get.Optional.Field "wants" resourceNames |> Option.defaultValue []
                   Files = get.Optional.Field "files" seededFiles |> Option.defaultValue Map.empty
-                  Forward = get.Optional.Field "forward" stringList |> Option.defaultValue []
                   Setup = get.Optional.Field "setup" Decode.string
                   Description =
                     get.Optional.Field "description" Decode.string

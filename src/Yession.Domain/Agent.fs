@@ -641,14 +641,13 @@ type ListSessionSecrets = unit -> Async<Result<SecretMetadata list, string>>
 type DeleteSessionSecret = SecretName -> Async<Result<bool, string>>
 
 /// Start (or get) one of the session's named WorkSandboxes (Plan 15, stage 2). ENSURE
-/// semantics: the same name with the same forwarding hands back the one already running
+/// semantics: the same name with the same declaration hands back the one already running
 /// and records nothing, so folding a declarative file into these commands at every boot
-/// converges instead of accumulating. The same name with DIFFERENT forwarding is refused,
-/// naming the difference — recreating would kill whatever is running inside it.
+/// converges instead of accumulating. The same name declared DIFFERENTLY is refused, naming
+/// the difference — recreating would kill whatever is running inside it.
 ///
-/// The request's `Forward` is a list of credential NAMES. Each resolves for the turn human
-/// (Plan 08 precedence) into that sandbox's environment; the value goes nowhere else, and
-/// the event records which names and whose, never what.
+/// What it forwards is the connections its selection reaches (`ResourceLeaf.Connection`):
+/// a route and a per-block loan each, never a value, and the event records which names.
 ///
 /// A whole `SandboxDecl` rather than a name and a list, because the same verb is what
 /// `yession.yaml` folds into and a file says more about a sandbox than a tool call does.

@@ -495,12 +495,16 @@ let
 
   # The resources profile. Paths as the kernel sees them (/private/etc, not /etc):
   # the profile refuses symlinked spellings. `nix-container-store` is what this
-  # repository's own yession.yaml reaches with `wants:`.
+  # repository's own yession.yaml reaches with `wants:`, and so is `github`, the
+  # connection that lets `git push` and `gh` in a sandbox act as whoever each
+  # command runs for.
   resources = pkgs.writeText "yession-resources.yaml" ''
     version: 1
     resources:
       nix-container-store:
         volume: { name: yession-nix, at: /nix }
+      github:
+        connection: github
       ca:
         mount: { from: /private/etc/ssl/cert.pem, mode: read }
         env:

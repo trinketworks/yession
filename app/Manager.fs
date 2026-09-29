@@ -120,6 +120,7 @@ let createFull
                                           Describe = fun _ -> None
                                           Checkout = fun _ -> None
                                           Credentials = []
+                                          Connections = fun _ -> Ok ForwardedConnections.none
                                           Standing = []
                                           Create = create
                                           Log = log

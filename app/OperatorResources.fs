@@ -64,7 +64,8 @@ let private canonicalPaths (file: ProfileFile) : Result<ProfileFile, string> =
         // path, which no host symlink can reach through.
         | Endpoint _
         | Variable _
-        | Volume _ -> None)
+        | Volume _
+        | Connection _ -> None)
     |> function
         | Some reason -> Error reason
         | None -> Ok file

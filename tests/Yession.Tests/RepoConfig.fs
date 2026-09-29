@@ -41,7 +41,6 @@ sandboxes:
       image: node:24
     uses:
       - npm
-    forward: [ github ]
 """
 
 let private duplicateName = """
@@ -116,11 +115,13 @@ let tests =
         testCase "an operator declares sandboxes in the form a repo does, and is read the same way" <| fun () ->
             let dir = TestFiles.tempDir "yession-config-" |> Fs.canonical |> Option.get
             let file = dir + "/resources.yaml"
-            TestFiles.write file "version: 1\nresources: {}\nsandboxes:\n  default:\n    forward: [ github ]\n    wants: [ a, a ]\n"
+            TestFiles.write file "version: 1\nresources: {}\nsandboxes:\n  default:\n    uses: [ github ]\n    wants: [ a, a ]\n"
             match OperatorResources.read file with
             | Ok (Some read) ->
                 Expect.equal
-                    (read.Profile.Sandboxes |> Map.toList |> List.map (fun (name, decl) -> SandboxName.value name, decl.Forward))
+                    (read.Profile.Sandboxes
+                     |> Map.toList
+                     |> List.map (fun (name, decl) -> SandboxName.value name, decl.Uses |> List.map ResourceName.value))
                     [ "default", [ "github" ] ]
                     "the declaration, as a repo's would decode"
             | other -> failwithf "expected a profile, got %A" other
@@ -165,7 +166,6 @@ let tests =
             Expect.equal (dev.Container |> Option.get).Image (Some { Name = "node"; Tag = Some "24" })
                 "the image survived the round trip"
             Expect.equal (dev.Uses |> List.map ResourceName.value) [ "npm" ] "so did the resources it selects"
-            Expect.equal dev.Forward [ "github" ] "and the credential names"
 
         // Yession's own `yession.yaml`, decoded by the real thing. It is the acceptance test
         // for the schema: if this repo cannot say what a session working on it needs, the
@@ -194,14 +194,14 @@ let tests =
                 Expect.isTrue
                     (decl.EnvironmentVariables |> Map.containsKey "NIX_CONFIG")
                     (sprintf "%s carries the nix settings its build needs" name)
-            Expect.equal dev.Forward [ "github" ] "dev forwards the credential `git push` needs"
             for name, decl in [ "dev", dev; "gate", gate ] do
-                // A WANT, not a use: the same file has to work on hosts that offer no warm
-                // store, and a `uses:` there would refuse the sandbox outright.
+                // WANTS, not uses: the same file has to work on hosts that offer no warm
+                // store and no GitHub connection, and a `uses:` there would refuse the
+                // sandbox outright. Where the operator offers `github`, `git push` works.
                 Expect.equal
                     (decl.Wants |> List.map ResourceName.value)
-                    [ "nix-container-store" ]
-                    (sprintf "%s wishes for the warm store where an operator offers one" name)
+                    [ "github"; "nix-container-store" ]
+                    (sprintf "%s wishes for the GitHub connection and the warm store where an operator offers them" name)
 
         testCase "a repo with no file asks for nothing, and that is not an error" <| fun () ->
             // The ordinary case. Most repos will never carry one.
@@ -499,13 +499,13 @@ let foldTests =
         testCaseAsync "a triggered fold runs on the authority of whoever triggered it" <|
             async {
                 let r = repo "octo/hello"
-                let dir = checkout r (Some "version: 2\nsandboxes:\n  dev:\n    forward: [ github ]\n")
+                let dir = checkout r (Some "version: 2\nsandboxes:\n  dev:\n    uses: [ github ]\n")
                 let seen = ResizeArray<GatedCall> ()
                 let folded =
                     RepoSandboxes.create dir (cell (Some (reposOver dir [ r ]))) (cell WorkSandboxes.unavailable) (recordingGate seen) (foldLog ()) noCapabilities
                 let ada = Principal.User (UserId.create "ada" |> expect)
                 do! folded.Fold (FoldCause.Connected (CredentialFor.Person ada)) (CredentialFor.Person ada)
-                Expect.equal (Authority.credential seen.[0].Authority) (CredentialFor.Person ada) "whose credential a forward: resolves against"
+                Expect.equal (Authority.credential seen.[0].Authority) (CredentialFor.Person ada) "whose authority the started sandbox is on"
             }
 
         // `start_work_sandbox` decides "already running?" before it starts anything, and a

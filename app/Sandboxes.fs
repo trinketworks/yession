@@ -651,6 +651,10 @@ let grantsFrom (leaves: ResourceLeaf list) : Result<GrantedLeaves, string> =
             // withheld it before this fold ran — so this channel is filled exactly where
             // it can be consumed.
             | Volume (name, at) -> fold { acc with Volumes = (name, at) :: acc.Volumes } rest
+            // A connection is provisioned by the credential source that forwards it — a
+            // route and a per-block loan (`WorkSandboxes`) — and puts nothing into the
+            // policy of its own.
+            | Connection _ -> fold acc rest
     fold
         { Reads = []; Writes = []; Domains = []; Sockets = []; Env = Map.empty; Binds = []; Volumes = [] }
         leaves

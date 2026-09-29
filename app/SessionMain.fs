@@ -342,6 +342,8 @@ let private makeSandboxes
                       // Plan 14 left deferred, and it is what makes `git push` from a terminal
                       // work; resolution is the Plan 08 precedence, unchanged.
                       Credentials = credentials
+                      Connections =
+                        fun spec -> grantsFor spec.Uses spec.Wants |> Result.map ForwardedConnections.ofGrant
                       // What the operator declared, as the session's own sandboxes. A
                       // declaration that cannot become a request is the operator's file
                       // being wrong, and it stops the boot like a profile that cannot be read.

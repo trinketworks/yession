@@ -238,6 +238,7 @@ let private registryReporting (outcome: WorkSandboxes.RunningSandbox -> WorkSand
                                 { Ref = name
                                   Backend = "srt"
                                   Request = { SandboxRequest.defaults with Spec = spec }
+                                  Forwarded = []
                                   StartedBy = None
                                   StartedAt = None
                                   Environment = SessionEnvironment.unavailable })
@@ -254,7 +255,7 @@ let private declaringDev (record: SandboxRequest -> unit) : Commands.CommandServ
         { SandboxDecl.empty with
             Container = Some { ContainerSpec.defaults with Image = Some { Name = "ghcr.io/octo/dev"; Tag = Some "3" } }
             Setup = Some "make deps"
-            Forward = [ "github" ] }
+            Uses = [ ResourceName.create "github" |> expect ] }
     { servicesOver (reposAnswering (fun repo -> async { return Ok { Repo = repo; Branch = "main"; Dirty = false; Path = "/repos" } })) with
         DeclaredSandboxes = fun () -> [ dev, declared ]
         Sandboxes =
@@ -270,6 +271,7 @@ let private declaringDev (record: SandboxRequest -> unit) : Commands.CommandServ
                                             { Ref = name
                                               Backend = "docker"
                                               Request = request
+                                              Forwarded = []
                                               StartedBy = None
                                               StartedAt = None
                                               Environment = SessionEnvironment.unavailable })
@@ -600,22 +602,21 @@ let private tests' =
                 Expect.equal spec.Setup (Some "make deps") "and everything else the file said"
             }
 
-        // The one thing a file cannot know is which of THIS session's credentials to forward,
-        // so the caller still contributes that — by union, because a repo that asked for a
-        // credential does not stop needing it because somebody restarted the sandbox without
-        // naming it.
-        testCaseAsync "the credentials a start names join the ones the file asked for" <|
+        // A caller used to add credentials to a start by name, joined to the file's. A
+        // connection is a resource now, so what a sandbox forwards is what its declaration
+        // selects and nothing a start can say: the tool takes a name, and the file's
+        // selection is what the request carries.
+        testCaseAsync "a start carries the connections the file selects" <|
             async {
                 let mutable asked : SandboxRequest option = None
                 let session = openToolSession (declaringDev (fun request -> asked <- Some request))
-                let! answer =
-                    session.Call "start_work_sandbox" """{"name":"octo/hello:dev","forward":["jira"]}"""
+                let! answer = session.Call "start_work_sandbox" """{"name":"octo/hello:dev"}"""
                 Expect.stringContains (answered answer) "is up" "the start happened"
                 let request : SandboxRequest = Option.get asked
                 Expect.equal
-                    (request.Forward |> List.map ConnectionName.value)
-                    [ "github"; "jira" ]
-                    "the file's credential kept, the caller's added"
+                    (request.Spec.Uses |> List.map ResourceName.value)
+                    [ "github" ]
+                    "the file's selection"
             }
 
         // The refusal a name nobody declared deserves: what this repo DOES declare. Refusing
