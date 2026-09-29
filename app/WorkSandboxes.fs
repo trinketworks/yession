@@ -44,11 +44,15 @@ type Provision =
       /// confines reads (srt); the rest read everything already.
       Reads : string list
       /// Hosts whose HTTPS the credential proxy answers (`Interception`).
-      Intercept : Interception option }
+      Intercept : Interception option
+      /// Files the sandbox must SEE, at a path of its own — a trust bundle mounted into a
+      /// container. Read by a backend that materialises mounts (docker); the rest see the
+      /// host's paths and are told those instead.
+      Binds : ResourceMount list }
 
 module Provision =
 
-    let empty : Provision = { Env = Map.empty; GitConfig = []; Domains = []; Reads = []; Intercept = None }
+    let empty : Provision = { Env = Map.empty; GitConfig = []; Domains = []; Reads = []; Intercept = None; Binds = [] }
 
     let merge (a: Provision) (b: Provision) : Provision =
         { Env = Sandboxes.mergeEnv a.Env b.Env
@@ -62,7 +66,25 @@ module Provision =
             | Some x, Some y ->
                 Some { Interception.Socket = y.Socket; Interception.Hosts = List.distinct (x.Hosts @ y.Hosts) }
             | x, None -> x
-            | None, y -> y }
+            | None, y -> y
+          Binds = List.distinct (a.Binds @ b.Binds) }
+
+/// What the session's credential proxy provides a sandbox whose declaration asks for it
+/// (`${proxy.…}`). Asked only for what a declaration names: a sandbox that names none is one
+/// the proxy never hears of.
+type ProxyProvider =
+    { /// The values asked for, and what the sandbox needs to use them — or why it cannot
+      /// have them, which refuses its start.
+      Provide : SandboxRef -> ProxyValue list -> Result<Map<ProxyValue, string> * Provision, string>
+      /// The proxy forgets a sandbox it provided for.
+      Release : SandboxRef -> unit }
+
+module ProxyProvider =
+
+    /// A composition with no credential proxy: a declaration that asks for one is refused.
+    let none : ProxyProvider =
+        { Provide = fun _ _ -> Error "this session runs no credential proxy, so nothing can provide a '${proxy.…}' reference"
+          Release = ignore }
 
 /// What forwarding one credential into one sandbox came to.
 [<RequireQualifiedAccess>]
@@ -147,6 +169,8 @@ type WorkSandboxesConfig =
       /// is the OPERATOR's profile that turns a name into a connection, and the request is
       /// what a repo's file said.
       Connections : EnvironmentSpec -> Result<ForwardedConnections, string>
+      /// The session's credential proxy, for a sandbox whose declaration asks for it.
+      Proxy : ProxyProvider
       /// The sandboxes the operator declared (`ProfileFile.Sandboxes`), as requests: the
       /// session has each from boot, as it has `default`. An operator's `default` replaces
       /// the built-in one.
@@ -286,7 +310,7 @@ let create (config: WorkSandboxesConfig) : Async<WorkSandboxes> =
         // What a spec's selection forwards, provisioned: every connection it NEEDS or refuse,
         // then each it only WANTS that this session has a source for and this backend can be
         // reached by — a want is silent where it cannot be had, as it is for every leaf.
-        let provisionSelection (name: SandboxRef) (spec: EnvironmentSpec) : Async<Result<ConnectionName list * Provision, string>> =
+        let provisionConnections (name: SandboxRef) (spec: EnvironmentSpec) : Async<Result<ConnectionName list * Provision, string>> =
             async {
                 match config.Connections spec with
                 | Error e -> return Error e
@@ -310,6 +334,60 @@ let create (config: WorkSandboxesConfig) : Async<WorkSandboxes> =
                         return Ok (ConnectionName.normalise (forwarded |> List.map ConnectionName.value), provision)
             }
 
+        // What a spec asks the credential proxy for, provided INTO the spec — so the sandbox
+        // is built from values, and a backend never sees a reference nobody answered. The
+        // request keeps the references as asked: it is what a second ask is compared to.
+        let provideProxy (name: SandboxRef) (spec: EnvironmentSpec) : Result<EnvironmentSpec * Provision, string> =
+            let asked =
+                spec.EnvironmentVariables
+                |> Map.toList
+                |> List.collect (fun (_, value) ->
+                    match value with
+                    | Derived template -> EnvTemplate.proxies template
+                    | PlainValue _
+                    | SecretRef _ -> [])
+                |> List.distinct
+            match asked with
+            | [] -> Ok (spec, Provision.empty)
+            | asked ->
+                match config.Proxy.Provide name asked with
+                | Error e -> Error e
+                | Ok (provided, provision) ->
+                    let written =
+                        spec.EnvironmentVariables
+                        |> Map.toList
+                        |> List.map (fun (variable, value) ->
+                            match value with
+                            | Derived template ->
+                                EnvTemplate.provide provided template
+                                |> Result.map (fun template -> variable, Derived template)
+                            | other -> Ok (variable, other))
+                    match written |> List.tryPick (function Error e -> Some e | Ok _ -> None) with
+                    | Some e ->
+                        config.Proxy.Release name
+                        Error e
+                    | None ->
+                        let variables = written |> List.choose (function Ok pair -> Some pair | Error _ -> None) |> Map.ofList
+                        Ok ({ spec with EnvironmentVariables = variables }, provision)
+
+        // Everything a sandbox is built with beyond its declaration: the connections its
+        // selection forwards, and what it asked the proxy for — and the spec with that
+        // written in, which is what it is built FROM.
+        let provisionSelection
+            (name: SandboxRef)
+            (spec: EnvironmentSpec)
+            : Async<Result<ConnectionName list * Provision * EnvironmentSpec, string>> =
+            async {
+                match! provisionConnections name spec with
+                | Error e -> return Error e
+                | Ok (forwarded, provision) ->
+                    match provideProxy name spec with
+                    | Error e ->
+                        revoke name forwarded
+                        return Error e
+                    | Ok (built, proxied) -> return Ok (forwarded, Provision.merge provision proxied, built)
+            }
+
         // The sandboxes this session has from boot: every one the operator declared, and no
         // other — `default` included, which is a name an operator gives a sandbox and not one
         // the session makes up. Each is created eagerly and started lazily, and its forward is
@@ -325,16 +403,17 @@ let create (config: WorkSandboxesConfig) : Async<WorkSandboxes> =
         let standingEntry
             (ref: SandboxRef)
             (request: SandboxRequest)
-            (provisioned: Result<ConnectionName list * Provision, string>)
+            (provisioned: Result<ConnectionName list * Provision * EnvironmentSpec, string>)
             : RunningSandbox =
             let forwarded, environment =
                 match provisioned with
                 | Error reason -> [], missing (sprintf "sandbox '%s' cannot start: %s" (SandboxRef.render ref) reason)
-                | Ok (forwarded, provision) ->
-                    match config.Create ref request.Spec provision with
+                | Ok (forwarded, provision, built) ->
+                    match config.Create ref built provision with
                     | Ok environment -> forwarded, environment
                     | Error reason ->
                         revoke ref forwarded
+                        config.Proxy.Release ref
                         [], missing (sprintf "sandbox '%s' cannot start: %s" (SandboxRef.render ref) reason)
             { Ref = ref
               Backend = config.Backend ref
@@ -427,10 +506,11 @@ let create (config: WorkSandboxesConfig) : Async<WorkSandboxes> =
                 | None ->
                     match! provisionSelection name wanted.Spec with
                     | Error e -> return Error e
-                    | Ok (forwarded, provision) ->
-                        match config.Create name wanted.Spec provision with
+                    | Ok (forwarded, provision, built) ->
+                        match config.Create name built provision with
                         | Error e ->
                             revoke name forwarded
+                            config.Proxy.Release name
                             return Error e
                         | Ok environment ->
                             // One id for the whole coming-up: the RUNNING act this opens
@@ -524,7 +604,12 @@ let create (config: WorkSandboxesConfig) : Async<WorkSandboxes> =
                                         StartedBy = None
                                         StartedAt = None }
                                 else key, existing)
-                    | None -> entries <- entries |> List.filter (fun (key, _) -> key <> name)
+                    | None ->
+                        // Only a sandbox that LEAVES gives its proxy admission back: a standing
+                        // one comes up again on the policy it was built with, which carries the
+                        // URL that admission opens.
+                        config.Proxy.Release name
+                        entries <- entries |> List.filter (fun (key, _) -> key <> name)
                     do!
                         append
                             actor
@@ -543,6 +628,7 @@ let create (config: WorkSandboxesConfig) : Async<WorkSandboxes> =
                 for name, entry in entries do
                     do! entry.Environment.Stop ()
                     revoke name entry.Forwarded
+                    config.Proxy.Release name
             }
 
         /// What a block in `name` is lent for its act: each forwarded source's answer for

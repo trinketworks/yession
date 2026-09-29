@@ -696,6 +696,7 @@ let tests =
                                   Checkout = fun _ -> None
                                   Credentials = []
                                   Connections = fun _ -> Ok ForwardedConnections.none
+                                  Proxy = WorkSandboxes.ProxyProvider.none
                                   // The session's own sandboxes are the ones declared.
                                   Standing = [ SandboxName.create "test" |> expect, SandboxRequest.defaults ]
                                   Create = fun name _ _ -> Ok (environmentNamed (SandboxRef.render name))

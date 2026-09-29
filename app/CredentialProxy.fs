@@ -45,6 +45,7 @@ open Fable.Core
 open Fable.Core.JsInterop
 open Fable.NodeExtras
 open Fable.NodeForge
+open Node.Api
 open Node.Buffer
 open Yession.Domain
 open Yession.Domain.Sandboxes
@@ -160,6 +161,9 @@ let private commonName (name: string) : Attribute array =
            a.name <- "commonName"
            a.value <- name) |]
 
+/// What this authority signs as.
+let private authorityName = "yession credential proxy"
+
 /// The authority this process signs with, and the one key every leaf it mints shares. Minted
 /// per process and never written anywhere but the trust bundle: it dies with the session, and
 /// a sandbox trusts it only because it was told to.
@@ -175,7 +179,7 @@ let private mintAuthority () : Authority =
     ca.publicKey <- keys.publicKey
     ca.serialNumber <- serial ()
     validFor ca
-    let name = commonName "yession credential proxy"
+    let name = commonName authorityName
     ca.setSubject name
     ca.setIssuer name
     ca.setExtensions
@@ -225,6 +229,25 @@ let private mintLeaf (authority: Authority) (host: string) : SecureContext =
             o.key <- pki.privateKeyToPem authority.LeafKeys.privateKey)
     )
 
+/// The name OpenSSL looks a certificate up by in a directory store (`SSL_CERT_DIR`): the
+/// subject's hash, then `.0`. OpenSSL's `X509_NAME_hash` is SHA-1 over the canonical subject —
+/// each RDN's DER, its value lowercased with runs of spaces made one — and names the file by
+/// the first four bytes read little-endian. Go reads every file in the directory whatever its
+/// name, so this is the spelling that serves both.
+///
+/// For a subject of one common name short enough that no length needs a second byte, which is
+/// the only subject this authority has; `commonName` below is what it signs as.
+let subjectHashName (commonName: string) : string =
+    let value =
+        Text.Encoding.UTF8.GetBytes (String.Join (" ", commonName.ToLowerInvariant().Split ([| ' ' |], StringSplitOptions.RemoveEmptyEntries)))
+    let tagged (tag: byte) (content: byte[]) = Array.concat [ [| tag; byte content.Length |]; content ]
+    let attribute = Array.append [| 0x06uy; 0x03uy; 0x55uy; 0x04uy; 0x03uy |] (tagged 0x0Cuy value)
+    let canonical = tagged 0x31uy (tagged 0x30uy attribute)
+    let hex = canonical |> Array.map (fun b -> b.ToString "x2") |> String.concat ""
+    let digest = (Digests.hash "sha1").update(buffer.Buffer.from (hex, BufferEncoding.Hex)).digest BinaryToTextEncoding.Hex
+    // The first four bytes, last first.
+    String.concat "" [ digest.Substring (6, 2); digest.Substring (4, 2); digest.Substring (2, 2); digest.Substring (0, 2) ] + ".0"
+
 /// What a sandbox is told to trust: this authority, then every root this process trusts.
 /// Whole rather than the authority alone, because `SSL_CERT_FILE` and its kin REPLACE a
 /// tool's trust store rather than add to it — a bundle of one would verify this proxy and
@@ -256,6 +279,9 @@ type Proxy =
       TrustBundle : string
       /// Where `TrustBundle` is written — what a sandbox's `SSL_CERT_FILE` names.
       TrustFile : string
+      /// A directory holding this authority ALONE, under the name OpenSSL looks it up by
+      /// (`subjectHashName`) — for a store to add it to rather than be replaced by it.
+      AuthorityDir : string
       /// Lend a block's requests a route's credential: the stand-in its line exports, live
       /// until the terminal's next loan for that route or `Retire`.
       Lend : CredentialRoute -> TerminalId -> Lender -> string
@@ -301,6 +327,9 @@ let start
     // Written before anything can be told where it is, and replaced whole: a sandbox that
     // read half a bundle would trust half the internet.
     Fs.writeTextAtomic trustFile bundle
+    let authorityDir = path.join (path.dirname trustFile, "proxy-authority")
+    Fs.ensureDir authorityDir
+    Fs.writeTextAtomic (path.join (authorityDir, subjectHashName authorityName)) (forge.pki.certificateToPem signer.Certificate)
     let mutable contexts : Map<string, SecureContext> = Map.empty
     let contextFor (host: string) =
         match Map.tryFind host contexts with
@@ -529,6 +558,7 @@ let start
               Dismiss = fun sandbox -> admitted <- Map.remove sandbox admitted
               TrustBundle = bundle
               TrustFile = trustFile
+              AuthorityDir = authorityDir
               Lend =
                 fun route terminal lender ->
                     retireWhere (fun loan -> loan.Terminal = terminal && loan.Route = route)
@@ -580,3 +610,66 @@ let lend (proxy: Proxy) (route: CredentialRoute) (terminal: TerminalId) (lender:
     let standIn = proxy.Lend route terminal lender
     { BlockEnv.GitConfig = None
       BlockEnv.Vars = route.Variables |> List.map (fun name -> name, Some standIn) }
+
+/// Where a container sees what the proxy gives it to trust: the bundle and the authority's
+/// directory, mounted read-only. Fixed rather than following the host's paths, because a
+/// container's filesystem is its image's and the session's data directory means nothing there.
+let private inContainer = "/run/yession/proxy"
+
+/// What the proxy provides a sandbox on `backend` that asked for `asked`, reaching this host as
+/// `hostAddress` — each value as THIS sandbox sees it, and what it needs to use them. Refused,
+/// saying why, for `${proxy.https}` under srt, whose own proxy already routes the hosts this one
+/// answers (and whose egress is its policy, which the TCP door would go round).
+let provide
+    (proxy: Proxy)
+    (backend: SandboxBackend)
+    (hostAddress: string option)
+    (sandbox: SandboxRef)
+    (asked: ProxyValue list)
+    : Result<Map<ProxyValue, string> * WorkSandboxes.Provision, string> =
+    let seen (hostPath: string) (containerPath: string) : string * WorkSandboxes.Provision =
+        match backend with
+        | DockerBackend ->
+            containerPath,
+            { WorkSandboxes.Provision.empty with
+                Binds = [ { From = hostPath; At = containerPath; Mode = ResourceMountMode.Read } ] }
+        | HostBackend
+        | SrtBackend -> hostPath, { WorkSandboxes.Provision.empty with Reads = [ hostPath ] }
+    let one (value: ProxyValue) : Result<string * WorkSandboxes.Provision, string> =
+        match value with
+        | ProxyValue.CaFile -> Ok (seen proxy.TrustFile (inContainer + "/bundle.pem"))
+        | ProxyValue.CaDir -> Ok (seen proxy.AuthorityDir (inContainer + "/authority"))
+        | ProxyValue.Https ->
+            match backend, hostAddress with
+            | SrtBackend, _ ->
+                Error (
+                    sprintf
+                        "sandbox '%s' is confined by srt, which already routes the hosts this proxy answers through its own — '${proxy.https}' is for a sandbox that reaches the network directly (docker, host), and '${proxy.ca-file}' or '${proxy.ca-dir}' is all an srt one needs"
+                        (SandboxRef.render sandbox)
+                )
+            | _, None ->
+                Error (sprintf "sandbox '%s' has no way to reach this host, so no proxy URL would get anywhere" (SandboxRef.render sandbox))
+            | _, Some host ->
+                proxy.Admit backend sandbox
+                |> Result.map (fun capability ->
+                    sprintf "http://yession:%s@%s:%d" capability host proxy.Port, WorkSandboxes.Provision.empty)
+    asked
+    |> List.distinct
+    |> List.fold
+        (fun acc value ->
+            acc
+            |> Result.bind (fun (values, provision) ->
+                one value
+                |> Result.map (fun (text, given) -> Map.add value text values, WorkSandboxes.Provision.merge provision given)))
+        (Ok (Map.empty, WorkSandboxes.Provision.empty))
+
+/// The session's proxy, as a sandbox registry asks it: `provide` for each sandbox's backend and
+/// the name that sandbox reaches this host by, and a sandbox forgotten through the TCP door
+/// when it leaves.
+let provider
+    (proxy: Proxy)
+    (backendOf: SandboxRef -> SandboxBackend)
+    (hostAddressOf: SandboxRef -> string option)
+    : WorkSandboxes.ProxyProvider =
+    { Provide = fun sandbox asked -> provide proxy (backendOf sandbox) (hostAddressOf sandbox) sandbox asked
+      Release = proxy.Dismiss }

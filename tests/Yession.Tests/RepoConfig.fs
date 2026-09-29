@@ -317,10 +317,51 @@ let tests =
         // A reference a later build would understand is refused here, not kept as text: a
         // file that meant a reference and got the literal would run on something unsaid.
         testCase "a reference this build does not know refuses the file, naming it" <| fun () ->
-            let text = "version: 2\nsandboxes:\n  dev:\n    env:\n      HTTPS_PROXY: ${proxy.https}\n"
+            let text = "version: 2\nsandboxes:\n  dev:\n    env:\n      TOKEN: ${vault.token}\n"
             match RepoConfig.fromText text with
             | Ok _ -> failwith "should refuse"
-            | Error e -> Expect.stringContains e "'proxy'" "names what it did not know"
+            | Error e -> Expect.stringContains e "vault.token" "names what it did not know"
+
+        // What a sandbox asks the credential proxy for is a reference like `${env.NAME}`, so a
+        // file composes it with what it already has: the image's trust store AND the proxy's.
+        testCase "a proxy reference composes with what lies beneath" <| fun () ->
+            let text = "version: 2\nsandboxes:\n  dev:\n    env:\n      SSL_CERT_DIR: ${env.SSL_CERT_DIR}:${proxy.ca-dir}\n"
+            match RepoConfig.fromText text with
+            | Error e -> failwithf "the file should decode: %s" e
+            | Ok read ->
+                let decl = read.File.Sandboxes |> Map.find (SandboxName.create "dev" |> expect)
+                Expect.equal
+                    (decl.EnvironmentVariables |> Map.tryFind "SSL_CERT_DIR")
+                    (Some (
+                        Yession.Domain.Sandboxes.Derived
+                            [ Yession.Domain.Sandboxes.TemplatePart.Beneath "SSL_CERT_DIR"
+                              Yession.Domain.Sandboxes.TemplatePart.Literal ":"
+                              Yession.Domain.Sandboxes.TemplatePart.Proxy Yession.Domain.Sandboxes.ProxyValue.CaDir ]
+                    ))
+                    "the image's, then the proxy's"
+                Expect.equal (Yession.Domain.Sandboxes.ConfigFile.parseSandbox (Yession.Domain.Sandboxes.SandboxDecl.encode decl)) (Ok decl) "and it crosses the gate as written"
+
+        testCase "a proxy field this build does not know refuses the file, naming what it knows" <| fun () ->
+            let text = "version: 2\nsandboxes:\n  dev:\n    env:\n      ALL_PROXY: ${proxy.socks}\n"
+            match RepoConfig.fromText text with
+            | Ok _ -> failwith "should refuse"
+            | Error e ->
+                Expect.stringContains e "proxy.socks" "names what it did not know"
+                Expect.stringContains e "${proxy.https}" "and what it does"
+
+        // A sandbox is built from values: what the proxy provided is written in, and a
+        // reference it did not provide is refused rather than left for a backend.
+        testCase "a provided proxy value is written into the template, and an unprovided one refused" <| fun () ->
+            let template = Yession.Domain.Sandboxes.EnvTemplate.parse "${env.SSL_CERT_DIR}:${proxy.ca-dir}" |> expect
+            let provided = Map.ofList [ Yession.Domain.Sandboxes.ProxyValue.CaDir, "/run/yession/proxy/authority" ]
+            let written = Yession.Domain.Sandboxes.EnvTemplate.provide provided template |> expect
+            Expect.equal
+                (Yession.Domain.Sandboxes.EnvTemplate.resolve (fun _ -> Some "/etc/ssl/certs") written)
+                "/etc/ssl/certs:/run/yession/proxy/authority"
+                "the image's, then what the proxy provided"
+            match Yession.Domain.Sandboxes.EnvTemplate.provide Map.empty template with
+            | Ok _ -> failwith "an unprovided reference should refuse"
+            | Error e -> Expect.stringContains e "${proxy.ca-dir}" "naming it"
 
         // What crosses the command gate reads back as the file said it.
         testCase "a composed value crosses the command gate as it was written" <| fun () ->

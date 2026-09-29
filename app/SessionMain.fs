@@ -245,6 +245,7 @@ let private workspaceFor (sandbox: SandboxRef) =
 /// backwards.
 let private makeSandboxes
     (credentials: WorkSandboxes.CredentialSource list)
+    (proxy: WorkSandboxes.ProxyProvider)
     : Yession.SessionProcess.EventLog<SessionEvent> -> Async<WorkSandboxes.WorkSandboxes> =
     let name = SessionId.value sessionId
     fun log ->
@@ -308,6 +309,9 @@ let private makeSandboxes
                                                     policy.AllowedDomains
                                                     |> Option.map (fun domains -> List.distinct (domains @ provision.Domains))
                                                 ReadPaths = List.distinct (policy.ReadPaths @ provision.Reads)
+                                                // What the provision must be SEEN at — the
+                                                // proxy's trust mounted into a container.
+                                                Binds = List.distinct (policy.Binds @ provision.Binds)
                                                 Intercept = provision.Intercept }
                             })
                         (Sandboxes.summaryFor backend workSpec)
@@ -342,6 +346,7 @@ let private makeSandboxes
                       // Plan 14 left deferred, and it is what makes `git push` from a terminal
                       // work; resolution is the Plan 08 precedence, unchanged.
                       Credentials = credentials
+                      Proxy = proxy
                       Connections =
                         fun spec -> grantsFor spec.Uses spec.Wants |> Result.map ForwardedConnections.ofGrant
                       // What the operator declared, as the session's own sandboxes. A
@@ -1323,7 +1328,7 @@ Async.StartImmediate (
                     fun terminal ->
                         gitGateway.Retire terminal
                         credentialProxy.Retire terminal } ]
-        let! host = Host.startFull clock runAgent summarize (Some (makeSandboxes forwardableCredentials)) (secretsCapabilitiesFor sessionId) (Some log) (Some docStore) (Some transcriptStore) reportName reportActivity telemetry.Emit subscribeNotifications mcpServers connectionRoutes sessionId auth sessionMount managerOrigin ephemeralStorage (resourceProfile |> Option.bind (fun file -> file.Guidance)) port
+        let! host = Host.startFull clock runAgent summarize (Some (makeSandboxes forwardableCredentials (CredentialProxy.provider credentialProxy sandboxBackend gatewayHostFor))) (secretsCapabilitiesFor sessionId) (Some log) (Some docStore) (Some transcriptStore) reportName reportActivity telemetry.Emit subscribeNotifications mcpServers connectionRoutes sessionId auth sessionMount managerOrigin ephemeralStorage (resourceProfile |> Option.bind (fun file -> file.Guidance)) port
         // The Host built the sandbox registry (it owns the log), so the cell the turn
         // capabilities and the `work_sandboxes` query read is filled here — before the
         // readiness line, and therefore before any turn or any browser can ask.
