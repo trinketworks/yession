@@ -253,6 +253,65 @@ let tests =
                 let decl = read.File.Sandboxes |> Map.find (SandboxName.create "dev" |> expect)
                 Expect.equal (decl.Uses, decl.Wants) ([ ResourceName.create "nix" |> expect ], [ ResourceName.create "nix" |> expect ]) "both lines, as written"
 
+        // What a composed value MEANS: the value beneath, then what the file added.
+        testCase "a variable composed over itself extends what lies beneath it" <| fun () ->
+            let text = "version: 2\nsandboxes:\n  dev:\n    env:\n      SSL_CERT_DIR: ${env.SSL_CERT_DIR}:/run/ca\n"
+            match RepoConfig.fromText text with
+            | Error e -> failwithf "the file should decode: %s" e
+            | Ok read ->
+                let decl = read.File.Sandboxes |> Map.find (SandboxName.create "dev" |> expect)
+                match decl.EnvironmentVariables |> Map.tryFind "SSL_CERT_DIR" with
+                | Some (Yession.Domain.Sandboxes.Derived template) ->
+                    Expect.equal
+                        (Yession.Domain.Sandboxes.EnvTemplate.resolve (fun name -> if name = "SSL_CERT_DIR" then Some "/etc/ssl/certs" else None) template)
+                        "/etc/ssl/certs:/run/ca"
+                        "the image's directory, then the file's"
+                | other -> failwithf "expected a composed value, got %A" other
+
+        testCase "a reference to nothing beneath composes over empty" <| fun () ->
+            match Yession.Domain.Sandboxes.EnvTemplate.parse "${env.UNSET}:/x" with
+            | Ok template -> Expect.equal (Yession.Domain.Sandboxes.EnvTemplate.resolve (fun _ -> None) template) ":/x" "empty where there is nothing"
+            | Error e -> failwithf "should parse: %s" e
+
+        // A file that writes `${` meaning the characters has a way to say so.
+        testCase "a doubled dollar is a literal reference opener, and stays plain text" <| fun () ->
+            let text = "version: 2\nsandboxes:\n  dev:\n    env:\n      PROMPT: cost $${dollars}\n"
+            match RepoConfig.fromText text with
+            | Error e -> failwithf "the file should decode: %s" e
+            | Ok read ->
+                let decl = read.File.Sandboxes |> Map.find (SandboxName.create "dev" |> expect)
+                Expect.equal (decl.EnvironmentVariables |> Map.tryFind "PROMPT") (Some (Yession.Domain.Sandboxes.PlainValue "cost ${dollars}")) "the characters, as meant"
+
+        // A reference a later build would understand is refused here, not kept as text: a
+        // file that meant a reference and got the literal would run on something unsaid.
+        testCase "a reference this build does not know refuses the file, naming it" <| fun () ->
+            let text = "version: 2\nsandboxes:\n  dev:\n    env:\n      HTTPS_PROXY: ${proxy.https}\n"
+            match RepoConfig.fromText text with
+            | Ok _ -> failwith "should refuse"
+            | Error e -> Expect.stringContains e "'proxy'" "names what it did not know"
+
+        // What crosses the command gate reads back as the file said it.
+        testCase "a composed value crosses the command gate as it was written" <| fun () ->
+            let text = "version: 2\nsandboxes:\n  dev:\n    env:\n      PATH: ${env.PATH}:/opt/$${odd}\n"
+            match RepoConfig.fromText text with
+            | Error e -> failwithf "the file should decode: %s" e
+            | Ok read ->
+                let decl = read.File.Sandboxes |> Map.find (SandboxName.create "dev" |> expect)
+                Expect.equal (Yession.Domain.Sandboxes.ConfigFile.parseSandbox (Yession.Domain.Sandboxes.SandboxDecl.encode decl)) (Ok decl) "the same declaration after the round trip"
+
+        // A container is told what its declaration composed, and nothing copied from beneath.
+        testCase "a sandbox's environment resolves each template over what lies beneath it" <| fun () ->
+            let policy =
+                { Support.emptyPolicy with
+                    Env = Map.ofList [ "A", "1" ]
+                    Derived =
+                        Map.ofList
+                            [ "PATH", [ Yession.Domain.Sandboxes.TemplatePart.Beneath "PATH"; Yession.Domain.Sandboxes.TemplatePart.Literal ":/x" ] ] }
+            Expect.equal
+                (Sandboxes.environment (Map.ofList [ "PATH", "/img"; "HOME", "/root" ]) policy)
+                (Map.ofList [ "A", "1"; "PATH", "/img:/x" ])
+                "the image's PATH extended; its HOME is the image's to set, not copied"
+
         testCase "a file with nothing to say about it has no notes" <| fun () ->
             let text = "version: 2\nsandboxes:\n  dev:\n    uses: [ nix ]\n    wants: [ cache ]\n"
             match RepoConfig.fromText text with

@@ -65,6 +65,8 @@ module SecretName =
 type EnvironmentVariableRef =
     | PlainValue of string
     | SecretRef of SecretName
+    /// A value composed over what lies beneath (`EnvTemplate`).
+    | Derived of EnvTemplate
 
 /// What a CONTAINER is. Every field here is one only a container has — an image to run, a
 /// filesystem to build, volumes to mount, a process to be.

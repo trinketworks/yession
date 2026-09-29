@@ -58,6 +58,7 @@
          has to know what a leaf is. Depends on nothing but Identity.fs — it knows nothing
          of sandboxes, backends or toolchains, which is what lets it sit this early. -->
     <Compile Include="Resources.fs" />
+    <Compile Include="EnvTemplate.fs" />
     <Compile Include="Sandbox.fs" />
     <!-- Where a terminal's bytes come from (Plan 16, part D). Right after Sandbox.fs
          because it reuses `PtyHandle` rather than minting a parallel handle. -->

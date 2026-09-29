@@ -392,6 +392,7 @@ let private confinedTests =
                                 |> Map.add "HOME" workspace
                               WorkingDirectory = Some workspace
                               Filesystem = Confined
+                              Derived = Map.empty
                               Intercept = provision.Intercept }
                         match! Sandboxes.SrtSandbox.create (srtTools ()) policy with
                         | Error reason -> failwithf "srt sandbox failed: %s" reason

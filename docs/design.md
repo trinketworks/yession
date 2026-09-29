@@ -282,9 +282,14 @@ sandboxes:
     workdir: ./packages/web
     env:
       DATABASE_URL: { secret: db-url }   # a name, never a value
+      PATH: ${env.PATH}:/opt/tools       # composed over what lies beneath; `$${` is a literal `${`
     uses: [ npm-cache ]
     forward: [ github ]
 ```
+
+`${env.NAME}` in a value is what NAME would be in this sandbox without that line — the image's
+own `ENV` under docker, which is only known once the image is pulled or built, so the backend
+resolves it (`Sandboxes.environment`; the grammar is `EnvTemplate.fs`).
 
 A container's `entrypoint` is read the way compose reads it — a list of words, or one
 string split as a shell would split it, with nothing expanded — and it governs what compose

@@ -208,10 +208,34 @@ type [<AllowNullLiteral>] Container =
 type [<AllowNullLiteral>] Volume =
     abstract remove: options: RemoveOptions -> JS.Promise<Unread>
 
-/// An image handle — used to test local presence before pulling.
+/// What an image says about the containers made from it, of it: the environment its
+/// `ENV` lines set. Absent on an image that sets none.
+type [<AllowNullLiteral>] ImageConfig =
+    abstract Env: string array option
+
+/// What `image.inspect()` answers with, of it.
+type [<AllowNullLiteral>] ImageInspect =
+    abstract Config: ImageConfig option
+
+[<RequireQualifiedAccess>]
+module ImageInspect =
+
+    /// The image's `ENV`, as a map. Docker reports each as `NAME=value`, split at the FIRST
+    /// `=`: a value may carry more, a name may not.
+    let environment (inspected: ImageInspect) : Map<string, string> =
+        inspected.Config
+        |> Option.bind (fun config -> config.Env)
+        |> Option.defaultValue [||]
+        |> Array.choose (fun pair ->
+            match pair.IndexOf '=' with
+            | -1 -> None
+            | at -> Some (pair.Substring (0, at), pair.Substring (at + 1)))
+        |> Map.ofArray
+
+/// An image handle — tested for local presence before pulling, and asked what it sets.
 type [<AllowNullLiteral>] Image =
     /// Resolves if the image exists locally; rejects otherwise.
-    abstract inspect: unit -> JS.Promise<Unread>
+    abstract inspect: unit -> JS.Promise<ImageInspect>
 
 /// docker-modem: the low-level plumbing dockerode exposes for stream handling.
 type [<AllowNullLiteral>] Modem =
