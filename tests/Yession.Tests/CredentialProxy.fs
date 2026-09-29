@@ -22,6 +22,8 @@ open Yession.Tests.Support
 
 let private ada = Principal.User (UserId.create "ada" |> expect)
 let private terminal = TerminalId.create "term-a" |> expect
+/// The sandbox the TCP door cases admit.
+let private admitted = SandboxRef.parse "octo/hello:dev" |> expect
 
 let private route : CredentialRoute =
     { Provider = "example"
@@ -55,6 +57,15 @@ let private carryTests =
 
         testCase "a host no route declares has no route" <| fun () ->
             Expect.isNone (routeFor [ route; other ] "example.test") "the parent domain is not declared"
+
+        // What a client's proxy URL becomes: `Basic` over `user:password`, and the password
+        // is the capability. Anything else presents none.
+        testCase "the capability a CONNECT presents is the password its proxy URL carried" <| fun () ->
+            let basic (credentials: string) = "Basic " + Convert.ToBase64String (Text.Encoding.UTF8.GetBytes credentials)
+            Expect.equal (presentedCapability (basic "yession:c4p")) (Some "c4p") "the password"
+            Expect.equal (presentedCapability (basic ":c4p")) (Some "c4p") "whatever the user was"
+            for other in [ basic "yession:"; basic "no-colon"; "Bearer c4p"; "Basic !!!"; "" ] do
+                Expect.isNone (presentedCapability other) (sprintf "%s presents none" other)
 
         // The word a stand-in replaces, under both schemes a provider's API takes a token in.
         testCase "the credential an authorization header presents is its last word" <| fun () ->
@@ -158,19 +169,53 @@ let private startUpstream () : Async<Upstream> =
 /// What one request came back with: the status line's code and everything after the head.
 type private Reply = { Status : int; Text : string }
 
-/// What a sandbox's client does: `CONNECT` over the proxy's socket, TLS to `host` trusting
-/// the proxy's bundle and nothing else, one `GET`. `Error` carries what refused it — the
-/// proxy's answer to the `CONNECT`, or the TLS failure.
-let private request (proxy: Proxy) (host: string) (authorization: string option) : Async<Result<Reply, string>> =
+/// Which of the proxy's doors a client comes through: srt's socket, or the TCP port with
+/// whatever capability its proxy URL carried.
+[<RequireQualifiedAccess>]
+type private Door =
+    | Socket
+    | Port of capability: string option
+
+/// The connection a client dials, and the `proxy-authorization` line its `CONNECT` carries.
+let private dial (proxy: Proxy) (door: Door) : Duplex * string =
+    match door with
+    | Door.Socket -> connectPath proxy.Socket, ""
+    | Door.Port capability ->
+        connectTcp (proxy.Port, "127.0.0.1"),
+        capability
+        |> Option.map (fun held ->
+            sprintf "Proxy-Authorization: Basic %s\r\n" (Convert.ToBase64String (Text.Encoding.UTF8.GetBytes ("yession:" + held))))
+        |> Option.defaultValue ""
+
+/// A `CONNECT` to `target` through `door`, and the status line it was answered with, over
+/// the connection that is now the tunnel when that line says so.
+let private connectThrough (proxy: Proxy) (door: Door) (target: string) : Async<Result<string * Duplex, string>> =
     Async.FromContinuations (fun (cont, _, _) ->
         let mutable settled = false
         let finish outcome =
             if not settled then
                 settled <- true
                 cont outcome
-        let raw = connectPath proxy.Socket
+        let raw, credentials = dial proxy door
         raw.onError (fun error -> finish (Error (StreamError.describe error)))
-        raw.writeText (sprintf "CONNECT %s:443 HTTP/1.1\r\nHost: %s:443\r\n\r\n" host host)
+        raw.writeText (sprintf "CONNECT %s HTTP/1.1\r\nHost: %s\r\n%s\r\n" target target credentials)
+        raw.onceData (fun chunk ->
+            let head = chunk.toString BufferEncoding.Utf8
+            finish (Ok (head.Split("\r\n").[0], raw))))
+
+/// What a sandbox's client does: `CONNECT` through `door`, TLS to `host` trusting the
+/// proxy's bundle and nothing else, one `GET`. `Error` carries what refused it — the proxy's
+/// answer to the `CONNECT`, or the TLS failure.
+let private requestThrough (proxy: Proxy) (door: Door) (host: string) (authorization: string option) : Async<Result<Reply, string>> =
+    Async.FromContinuations (fun (cont, _, _) ->
+        let mutable settled = false
+        let finish outcome =
+            if not settled then
+                settled <- true
+                cont outcome
+        let raw, credentials = dial proxy door
+        raw.onError (fun error -> finish (Error (StreamError.describe error)))
+        raw.writeText (sprintf "CONNECT %s:443 HTTP/1.1\r\nHost: %s:443\r\n%s\r\n" host host credentials)
         raw.onceData (fun chunk ->
             let head = chunk.toString BufferEncoding.Utf8
             let statusLine = head.Split("\r\n").[0]
@@ -194,6 +239,10 @@ let private request (proxy: Proxy) (host: string) (authorization: string option)
                     | _ -> finish (Error (sprintf "not an HTTP answer: %s" text)))
                 let auth = authorization |> Option.map (sprintf "Authorization: %s\r\n") |> Option.defaultValue ""
                 secure.writeText (sprintf "GET /user HTTP/1.1\r\nHost: %s\r\n%sConnection: close\r\n\r\n" host auth)))
+
+/// The same, through srt's socket — what every case below but the TCP door's makes.
+let private request (proxy: Proxy) (host: string) (authorization: string option) : Async<Result<Reply, string>> =
+    requestThrough proxy Door.Socket host authorization
 
 /// A lender whose answers a case controls, and which counts the provider's refusals.
 type private Lend =
@@ -264,6 +313,90 @@ let private portsTests =
                         match second with
                         | Choice1Of2 _ -> failwith "a second proxy bound a socket the first holds"
                         | Choice2Of2 refused -> Expect.stringContains refused.Message proxy.Socket "the refusal names the socket"
+                    })
+        }
+
+        // The TCP door binds every interface, so what keeps it this session's is the
+        // capability: a client with none is refused before anything is carried.
+        testCaseAsync "the TCP door refuses a CONNECT that carries no live capability" <| async {
+            let! upstream = startUpstream ()
+            do!
+                withProxy upstream (fun proxy ->
+                    async {
+                        for door in [ Door.Port None; Door.Port (Some "not-one-it-minted") ] do
+                            match! connectThrough proxy door "api.example.test:443" with
+                            | Ok (status, raw) ->
+                                raw.destroy ()
+                                Expect.stringContains status "407" (sprintf "%A is asked to authenticate" door)
+                            | Error e -> failwithf "the door did not answer: %s" e
+                    })
+        }
+
+        testCaseAsync "an admitted sandbox's stand-in arrives through the TCP door as the lender's credential" <| async {
+            let! upstream = startUpstream ()
+            do!
+                withProxy upstream (fun proxy ->
+                    async {
+                        let capability = proxy.Admit DockerBackend admitted |> expect
+                        let standIn = proxy.Lend route terminal (lenderOf { Token = Some "ghu_real"; Refusals = 0 })
+                        let! answered = requestThrough proxy (Door.Port (Some capability)) "api.example.test" (Some ("token " + standIn))
+                        Expect.equal (reply answered).Status 200 "answered"
+                        Expect.equal (List.ofSeq upstream.Authorizations) [ Some "token ghu_real" ] "the lender's credential"
+                    })
+        }
+
+        // A sandbox with direct egress loses nothing by going through the proxy, and a tool
+        // that honours HTTPS_PROXY sends every host this way — so a host no route declares is
+        // carried, and carried as it was: nothing read, nothing swapped.
+        testCaseAsync "an admitted client's CONNECT to any other host is tunnelled untouched" <| async {
+            let! upstream = startUpstream ()
+            do!
+                withProxy upstream (fun proxy ->
+                    async {
+                        let capability = proxy.Admit DockerBackend admitted |> expect
+                        let target = upstream.Origin.Replace ("http://", "")
+                        match! connectThrough proxy (Door.Port (Some capability)) target with
+                        | Error e -> failwithf "the tunnel did not open: %s" e
+                        | Ok (status, raw) ->
+                            Expect.stringContains status "200" "the tunnel opens"
+                            let! said =
+                                Async.FromContinuations (fun (cont, _, _) ->
+                                    let text = Text.StringBuilder ()
+                                    Readables.text raw (fun chunk -> text.Append chunk |> ignore)
+                                    raw.onEnd (fun () -> cont (text.ToString ()))
+                                    raw.writeText (
+                                        sprintf "GET /x HTTP/1.1\r\nHost: %s\r\nAuthorization: token ysn_passing\r\nConnection: close\r\n\r\n" target
+                                    ))
+                            Expect.stringContains said "octo" "the other host answered, through the tunnel"
+                            Expect.equal (List.ofSeq upstream.Authorizations) [ Some "token ysn_passing" ] "and nothing was swapped on the way"
+                    })
+        }
+
+        // The door tunnels any host, so admitting a sandbox srt confines would hand it a way
+        // round its own egress policy.
+        testCaseAsync "a sandbox srt confines is never admitted through the TCP door" <| async {
+            let! upstream = startUpstream ()
+            do!
+                withProxy upstream (fun proxy ->
+                    async {
+                        match proxy.Admit SrtBackend admitted with
+                        | Ok _ -> failwith "an srt sandbox was admitted"
+                        | Error reason -> Expect.stringContains reason "srt" "refused, saying why"
+                    })
+        }
+
+        testCaseAsync "a dismissed sandbox's capability no longer opens the door" <| async {
+            let! upstream = startUpstream ()
+            do!
+                withProxy upstream (fun proxy ->
+                    async {
+                        let capability = proxy.Admit DockerBackend admitted |> expect
+                        proxy.Dismiss admitted
+                        match! connectThrough proxy (Door.Port (Some capability)) "api.example.test:443" with
+                        | Ok (status, raw) ->
+                            raw.destroy ()
+                            Expect.stringContains status "407" "dismissed is refused"
+                        | Error e -> failwithf "the door did not answer: %s" e
                     })
         }
 
