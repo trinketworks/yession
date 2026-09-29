@@ -54,6 +54,7 @@ module Bootstrap =
         | SessionEvent.WorkSandboxStartFailed _ -> "work-sandbox-start-failed"
         | SessionEvent.WorkSandboxStopped _ -> "work-sandbox-stopped"
         | SessionEvent.RepoConfigRefused _ -> "repo-config-refused"
+        | SessionEvent.RepoConfigWarned _ -> "repo-config-warned"
         | SessionEvent.RepoCapabilitiesChanged _ -> "repo-capabilities-changed"
         | SessionEvent.RepoCapabilitiesApproved _ -> "repo-capabilities-approved"
         | SessionEvent.ShellProfileSet _ -> "shell-profile-set"

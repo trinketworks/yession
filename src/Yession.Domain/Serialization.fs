@@ -1595,6 +1595,27 @@ module Codec =
                   RepoConfigRefused.CausedBy =
                     get.Optional.Field "causedBy" (Decode.option cause.Decode) |> Option.flatten }) }
 
+    let private repoConfigWarned : Codec<RepoConfigWarned> =
+        { Encode =
+            fun (p: RepoConfigWarned) ->
+                Encode.object
+                    [ "messageId", messageId.Encode p.MessageId
+                      "repo", repoRef.Encode p.Repo
+                      "sandbox", Encode.option sandboxRef.Encode p.Sandbox
+                      "where", Encode.string p.Where
+                      "warning", Encode.string p.Warning
+                      "actor", actor.Encode p.Actor
+                      "causedBy", Encode.option cause.Encode p.CausedBy ]
+          Decode =
+            Decode.object (fun get ->
+                { RepoConfigWarned.MessageId = get.Required.Field "messageId" messageId.Decode
+                  RepoConfigWarned.Repo = get.Required.Field "repo" repoRef.Decode
+                  RepoConfigWarned.Sandbox = get.Required.Field "sandbox" (Decode.option sandboxRef.Decode)
+                  RepoConfigWarned.Where = get.Required.Field "where" Decode.string
+                  RepoConfigWarned.Warning = get.Required.Field "warning" Decode.string
+                  RepoConfigWarned.Actor = get.Required.Field "actor" actor.Decode
+                  RepoConfigWarned.CausedBy = get.Required.Field "causedBy" (Decode.option cause.Decode) }) }
+
     let private workSandboxStopped : Codec<WorkSandboxStopped> =
         { Encode =
             fun (p: WorkSandboxStopped) ->
@@ -1896,6 +1917,8 @@ module Codec =
                     Encode.object [ "type", Encode.string "workSandboxStopped"; "payload", workSandboxStopped.Encode p ]
                 | RepoConfigRefused p ->
                     Encode.object [ "type", Encode.string "repoConfigRefused"; "payload", repoConfigRefused.Encode p ]
+                | RepoConfigWarned p ->
+                    Encode.object [ "type", Encode.string "repoConfigWarned"; "payload", repoConfigWarned.Encode p ]
                 | RepoCapabilitiesChanged p ->
                     Encode.object
                         [ "type", Encode.string "repoCapabilitiesChanged"
@@ -1981,6 +2004,7 @@ module Codec =
                 | "sandboxSetupQueued" -> Decode.field "payload" sandboxSetupQueued.Decode |> Decode.map SandboxSetupQueued
                 | "gitCredentialSpent" -> Decode.field "payload" gitCredentialSpent.Decode |> Decode.map GitCredentialSpent
                 | "repoConfigRefused" -> Decode.field "payload" repoConfigRefused.Decode |> Decode.map RepoConfigRefused
+                | "repoConfigWarned" -> Decode.field "payload" repoConfigWarned.Decode |> Decode.map RepoConfigWarned
                 | "repoCapabilitiesChanged" ->
                     Decode.field "payload" repoCapabilitiesChanged.Decode |> Decode.map RepoCapabilitiesChanged
                 | "repoCapabilitiesApproved" ->

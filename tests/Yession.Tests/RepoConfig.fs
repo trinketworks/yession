@@ -128,7 +128,7 @@ let tests =
             // The end-to-end claim: YAML on disk reaches the domain intact.
             let r = repo "octo/hello"
             let dir = checkout r (Some devWithNet)
-            let file = RepoConfig.read dir r |> expect |> Option.get
+            let file = (RepoConfig.read dir r |> expect |> Option.get).File
             let dev = file.Sandboxes |> Map.find (SandboxName.create "dev" |> expect)
             Expect.equal (dev.Container |> Option.get).Image (Some { Name = "node"; Tag = Some "24" })
                 "the image survived the round trip"
@@ -143,7 +143,7 @@ let tests =
             let dir = TestFiles.tempDir "yession-config-"
             TestFiles.ensureDir (sprintf "%s/%s" dir (RepoRef.relativePath r))
             TestFiles.write (RepoConfig.pathIn dir r) (TestFiles.read "yession.yaml")
-            let file = RepoConfig.read dir r |> expect |> Option.get
+            let file = (RepoConfig.read dir r |> expect |> Option.get).File
             let dev = file.Sandboxes |> Map.find (SandboxName.create "dev" |> expect)
             let gate = file.Sandboxes |> Map.find (SandboxName.create "gate" |> expect)
             // A repo's work sandbox is a container; a declaration without one is refused
@@ -203,7 +203,7 @@ let tests =
             // a second sandbox on the same configuration without repeating it.
             let r = repo "octo/hello"
             let dir = checkout r (Some anchored)
-            let file = RepoConfig.read dir r |> expect |> Option.get
+            let file = (RepoConfig.read dir r |> expect |> Option.get).File
             let gate = file.Sandboxes |> Map.find (SandboxName.create "gate" |> expect)
             Expect.equal (gate.Uses |> List.map ResourceName.value) [ "npm" ] "the alias carried the anchor's value"
 
@@ -223,13 +223,41 @@ let tests =
             for r in [ good; bad ] do TestFiles.ensureDir (sprintf "%s/%s" dir (RepoRef.relativePath r))
             TestFiles.write (RepoConfig.pathIn dir good) "version: 2\nsandboxes:\n  dev: {}\n"
             TestFiles.write (RepoConfig.pathIn dir bad) "version: 2\nsandboxes:\n  dev:\n    nope: 1\n"
-            let declared, refused = RepoConfig.readAll dir [ good; bad ]
+            let read = RepoConfig.readAll dir [ good; bad ]
+            let declared, refused = read.Declared, read.Refused
             Expect.equal (Map.count declared) 1 "the good repo's sandbox survived"
             Expect.isTrue
                 (declared |> Map.containsKey (SandboxRef.inScope good (SandboxName.create "dev" |> expect)))
                 "and it is the good repo's, scoped to it"
             Expect.equal (List.length refused) 1 "the broken one is reported rather than dropped"
             Expect.equal (fst refused.[0]) bad "named, so somebody can fix it"
+
+        // The analyzer answers in key paths; the parse is what knows lines. A note an author
+        // cannot find in their own file is a note they cannot act on.
+        testCase "a resource both needed and wanted is noted where the want was written" <| fun () ->
+            let text = "version: 2\nsandboxes:\n  dev:\n    uses: [ nix ]\n    wants:\n      - cache\n      - nix\n"
+            match RepoConfig.fromText text with
+            | Error e -> failwithf "the file should decode: %s" e
+            | Ok read ->
+                Expect.equal
+                    (read.Findings |> List.map Yession.Domain.Sandboxes.LocatedFinding.where)
+                    [ "sandboxes.dev.wants[1], line 7" ]
+                    "the second want, on the line it is on"
+
+        // A note is said, never acted on: the file is honoured as written.
+        testCase "a noted file still declares everything it wrote" <| fun () ->
+            let text = "version: 2\nsandboxes:\n  dev:\n    uses: [ nix ]\n    wants: [ nix ]\n"
+            match RepoConfig.fromText text with
+            | Error e -> failwithf "the file should decode: %s" e
+            | Ok read ->
+                let decl = read.File.Sandboxes |> Map.find (SandboxName.create "dev" |> expect)
+                Expect.equal (decl.Uses, decl.Wants) ([ ResourceName.create "nix" |> expect ], [ ResourceName.create "nix" |> expect ]) "both lines, as written"
+
+        testCase "a file with nothing to say about it has no notes" <| fun () ->
+            let text = "version: 2\nsandboxes:\n  dev:\n    uses: [ nix ]\n    wants: [ cache ]\n"
+            match RepoConfig.fromText text with
+            | Error e -> failwithf "the file should decode: %s" e
+            | Ok read -> Expect.isEmpty read.Findings "nothing noted"
     ]
 
 // --- The fold ----------------------------------------------------------------------------
@@ -569,6 +597,29 @@ let foldTests =
                 let notes =
                     page.Events |> List.choose (fun e -> match e.Event with SessionEvent.RepoConfigRefused n -> Some n.Reason | _ -> None)
                 Expect.equal notes [ "the ceiling is closed" ] "three folds, one thing to say"
+            }
+
+        // A note is news once. The fold runs after every repo verb, and a note repeated at
+        // each is a note people learn to stop reading.
+        testCaseAsync "a note about a file is said once, however often the fold runs" <|
+            async {
+                let r = repo "octo/hello"
+                let dir = checkout r (Some "version: 2\nsandboxes:\n  dev:\n    uses: [ nix ]\n    wants: [ nix ]\n")
+                let log = foldLog ()
+                let folded =
+                    RepoSandboxes.create
+                        dir
+                        (cell (Some (reposOver dir [ r ])))
+                        (cell WorkSandboxes.unavailable)
+                        (recordingGate (ResizeArray ()))
+                        log
+                        noCapabilities
+                do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
+                do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
+                let! page = log.Read None System.Int32.MaxValue
+                let notes =
+                    page.Events |> List.choose (fun e -> match e.Event with SessionEvent.RepoConfigWarned n -> Some n.Where | _ -> None)
+                Expect.equal notes [ "sandboxes.dev.wants[0], line 5" ] "two folds, one note"
             }
 
         // The suppression is on the REASON, so a refusal that moved is news. Without this

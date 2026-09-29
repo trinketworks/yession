@@ -846,6 +846,8 @@ module ConversationProjection =
         | SessionEvent.RepoCapabilitiesApproved a -> proj |> noted a.MessageId a.Actor (Act.RepoCapabilitiesApproved a) envelope
         | SessionEvent.RepoConfigRefused r ->
             proj |> causedNote r.MessageId r.CausedBy r.Actor (Act.RepoConfigRefused r) envelope
+        | SessionEvent.RepoConfigWarned w ->
+            proj |> causedNote w.MessageId w.CausedBy w.Actor (Act.RepoConfigWarned w) envelope
         | SessionEvent.WorkSandboxStopped s -> proj |> noted s.MessageId s.Actor (Act.SandboxStopped s) envelope
         // Where new terminals start (Plan 25) folds in for the repo notes' reason: it is a
         // session-shaping act everyone is affected by — the next terminal a PERSON opens
