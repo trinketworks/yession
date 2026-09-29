@@ -311,6 +311,12 @@ like any value:
 Under srt, whose own proxy already routes the hosts this one answers, `${proxy.https}` is
 refused and the trust references are all a sandbox needs.
 
+`${github.token}` — any connection's `.token` — is a variable's whole value and nothing else:
+a stand-in the credential proxy swaps for the credential of whoever each command runs for,
+lent per command and returned with it (`EnvironmentVariableRef.Lent`). The sandbox must forward
+that connection, or it refuses to start. Why it rotates, and whether that is worth it, is an
+open question in docs/GAPS.md.
+
 A container's `entrypoint` is read the way compose reads it — a list of words, or one
 string split as a shell would split it, with nothing expanded — and it governs what compose
 says it governs and one thing more. The container's own `command` runs behind it, as in

@@ -109,6 +109,8 @@ let resolveVariables
             | [] -> return Ok { ResolvedVariables.Settled = settled; ResolvedVariables.Derived = derived }
             | (name, PlainValue value) :: rest -> return! walk (Map.add name value settled) derived rest
             | (name, Derived template) :: rest -> return! walk settled (Map.add name template derived) rest
+            // Not the sandbox's to hold: lent to each command instead (`WorkSandboxes`).
+            | (_, Lent _) :: rest -> return! walk settled derived rest
             | (name, SecretRef secret) :: rest ->
                 match! resolveSecret secret with
                 | Error e -> return Error (sprintf "%s: %s" (SecretName.value secret) e)

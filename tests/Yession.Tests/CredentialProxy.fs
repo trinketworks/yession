@@ -535,7 +535,7 @@ let private portsTests =
             do!
                 withProxy upstream (fun proxy ->
                     async {
-                        let lent = CredentialProxy.lend proxy route terminal (lenderOf { Token = Some "ghu_real"; Refusals = 0 })
+                        let lent = CredentialProxy.lend proxy route route.Variables terminal (lenderOf { Token = Some "ghu_real"; Refusals = 0 })
                         match lent.Vars |> List.choose snd |> List.distinct with
                         | [ standIn ] ->
                             let! _ = request proxy "api.example.test" (Some ("token " + standIn))
@@ -583,7 +583,7 @@ let private confinedTests =
                             let made = TestFiles.tempDir "yession-credproxy-srt-"
                             Fs.canonical made |> Option.defaultValue made
                         let provision = CredentialProxy.provision proxy route
-                        let lent = CredentialProxy.lend proxy route terminal (lenderOf { Token = Some "ghu_real"; Refusals = 0 })
+                        let lent = CredentialProxy.lend proxy route route.Variables terminal (lenderOf { Token = Some "ghu_real"; Refusals = 0 })
                         let policy : SandboxPolicy =
                             { ReadPaths = workspace :: provision.Reads
                               WritePaths = [ workspace ]

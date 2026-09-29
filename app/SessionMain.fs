@@ -1276,7 +1276,7 @@ Async.StartImmediate (
                 // is written to the log by the block's author, which is how the person
                 // whose credential it was finds out.
                 Lend =
-                    fun authority sandbox terminal block ->
+                    fun authority sandbox terminal block lentInto ->
                         async {
                             let owner = Authority.credential authority
                             let! identity = identityFor owner
@@ -1311,18 +1311,22 @@ Async.StartImmediate (
                                 let lent = { identity with GitConfig = Some (GitGateway.loanConfig host gitGateway.Port secret) }
                                 // The API's stand-in, lent to the same act as the push: a
                                 // block's `gh` and its `git push` spend one person's credential.
-                                if CredentialProxy.reachable (sandboxBackend sandbox) then
-                                    let api =
-                                        CredentialProxy.lend
-                                            credentialProxy
-                                            GitHubAccess.route
-                                            terminal
-                                            { CredentialProxy.Lender.Owner = owner
-                                              CredentialProxy.Lender.Resolve = fun () -> resolveGitHubToken owner
-                                              CredentialProxy.Lender.Refused =
-                                                fun () -> reportGitHubNetworkFailure owner "the credential proxy was answered 401" }
-                                    return BlockEnv.merge lent api
-                                else return lent
+                                // In the variables the declaration lends it in, and — while srt
+                                // is routed to the proxy unasked — the route's own there.
+                                let variables =
+                                    lentInto
+                                    @ (if CredentialProxy.reachable (sandboxBackend sandbox) then GitHubAccess.route.Variables else [])
+                                let api =
+                                    CredentialProxy.lend
+                                        credentialProxy
+                                        GitHubAccess.route
+                                        variables
+                                        terminal
+                                        { CredentialProxy.Lender.Owner = owner
+                                          CredentialProxy.Lender.Resolve = fun () -> resolveGitHubToken owner
+                                          CredentialProxy.Lender.Refused =
+                                            fun () -> reportGitHubNetworkFailure owner "the credential proxy was answered 401" }
+                                return BlockEnv.merge lent api
                         }
                 Retire =
                     fun terminal ->
