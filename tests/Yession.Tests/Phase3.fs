@@ -36,7 +36,7 @@ let private offlinePeer (clientId: float) (id: string) (name: string) : OfflineP
     // Pin the Yjs clientID so concurrent ties resolve the same way every run.
     doc.clientID <- clientId
     let registry = BodyRegistry doc
-    { Runner = Harness.run (Client.makeProgram doc (ClientModel.init (peer id name)))
+    { Runner = Harness.run (Client.makeProgram Client.Ports.offline doc (ClientModel.init (peer id name)))
       Registry = registry
       Doc = doc }
 

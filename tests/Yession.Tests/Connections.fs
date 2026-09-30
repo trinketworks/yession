@@ -4296,7 +4296,7 @@ let private catalogueTests =
             let model =
                 ClientModel.init peer
                 |> fun model -> { model with Claude = { model.Claude with Status = Some known } }
-                |> ClientModel.update (ClaudeStatusMsg (claudeStatus None (Some connected)))
+                |> Support.step (ClaudeStatusMsg (claudeStatus None (Some connected)))
             Expect.equal
                 (model.Claude.Status |> Option.map (fun panel -> panel.Models))
                 (Some (ModelsLoaded offered))
@@ -4316,14 +4316,14 @@ let private panelFoldTests =
             let model =
                 ClientModel.init peer
                 |> awaiting
-                |> ClientModel.update (ClaudeStatusMsg (claudeStatus None None))
+                |> Support.step (ClaudeStatusMsg (claudeStatus None None))
             Expect.equal model.Claude.Pending awaitingMine "the wait survives a probe that says nothing yet"
 
         testCase "the probe that shows the connected account ends the wait" <| fun () ->
             let model =
                 ClientModel.init peer
                 |> awaiting
-                |> ClientModel.update (ClaudeStatusMsg (claudeStatus None (Some connected)))
+                |> Support.step (ClaudeStatusMsg (claudeStatus None (Some connected)))
             Expect.equal model.Claude.Pending Pending.Ready "the status shows it, so the panel is done"
 
         testCase "one tick answers for every panel waiting at once" <| fun () ->
@@ -4331,7 +4331,7 @@ let private panelFoldTests =
                 ClientModel.init peer
                 |> awaiting
                 |> fun model -> { model with GitHub = { model.GitHub with Pending = awaitingMine } }
-                |> ClientModel.update (PendingWaitedMsg (1_000L + Pending.deadlineMillis))
+                |> Support.step (PendingWaitedMsg (1_000L + Pending.deadlineMillis))
             Expect.equal model.Claude.Pending (Pending.Refused Pending.unseen) "claude gave up"
             Expect.equal model.GitHub.Pending (Pending.Refused Pending.unseen) "and so did github"
     ]

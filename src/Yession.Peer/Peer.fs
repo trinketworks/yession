@@ -181,7 +181,10 @@ let connectClientWith (options: Client.ConnectOptions) (signalUrl: string) (toke
         let local = peer id name
         let registry = BodyRegistry doc
         let texts = TextRegistry doc
-        let runner = Harness.run (Client.makeProgram doc (ClientModel.init local))
+        // Made after the program, as the browser makes it, so the program reads it through a
+        // getter: what a message asks of the session goes to whichever connection there is.
+        let wired : Client.Connection option ref = ref None
+        let runner = Harness.run (Client.makeProgram { Client.Ports.Connection = fun () -> wired.Value } doc (ClientModel.init local))
         // The composer's publication rule, wired exactly as the browser wires it: the client's
         // draft slot appears when its body has content and goes when the body empties.
         DraftSlot.follow doc registry local.PeerId (user >> runner.Dispatch) |> ignore
@@ -189,6 +192,7 @@ let connectClientWith (options: Client.ConnectOptions) (signalUrl: string) (toke
         // The model is what "how far have we consumed" means (see `ConnectOptions`).
         let options = { options with ReadPosition = Some (fun () -> (runner.Model ()).EventConsumer.LastProcessedOffset) }
         let connection = Client.connect options doc registry texts hello (user >> runner.Dispatch) channel
+        wired.Value <- Some connection
         Async.StartImmediate connection.Run
         do! runner.WaitFor (fun m -> m.Connection = Connected)
         return { Runner = runner; Connection = connection; Registry = registry; Texts = texts; Channel = channel; Doc = doc; Hello = hello }

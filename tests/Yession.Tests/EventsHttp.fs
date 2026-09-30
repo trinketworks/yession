@@ -202,7 +202,7 @@ let private storeTests =
                                   EventConsumer =
                                     { (ClientModel.init { PeerId = PeerId.create "p" |> expect; DisplayName = "P" }).EventConsumer with
                                         Feed = FeedStalled "offline" } }
-                let folded = seen |> Seq.fold (fun m msg -> ClientModel.update msg m) stalled
+                let folded = seen |> Seq.fold (fun m msg -> Support.step msg m) stalled
                 Expect.equal folded.EventConsumer.Feed (FeedStalled "offline") "the feed's health is untouched by a local read"
                 Expect.equal
                     (folded.Conversation.Items |> List.length)
@@ -336,7 +336,7 @@ let private storeTests =
                 let model =
                     seen
                     |> Seq.fold
-                        (fun m msg -> ClientModel.update msg m)
+                        (fun m msg -> Support.step msg m)
                         (ClientModel.init { PeerId = PeerId.create "p" |> expect; DisplayName = "P" })
                 Expect.equal
                     (model.EventConsumer.MissingBefore |> Option.map EventOffset.value)
@@ -347,7 +347,7 @@ let private storeTests =
                     | Ok envelopes -> envelopes
                     | Error fault -> failwith (Client.FeedFault.describe fault)
                 let filled =
-                    ClientModel.update
+                    Support.step
                         (EventsPageMsg
                             { Events = fill
                               LastOffset = fill |> List.tryLast |> Option.map (fun e -> e.Offset)

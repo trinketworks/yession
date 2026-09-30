@@ -2587,7 +2587,7 @@ let private composing (model: ClientModel) : ClientModel =
 
 /// Send that slot and read back the entry it queued.
 let private sent (model: ClientModel) : PendingAct =
-    let after = ClientModel.update (SendTerminalDraftMsg (terminalA, ada)) model
+    let after = Support.step (SendTerminalDraftMsg (terminalA, ada)) model
     match after.Synced.Pending |> Map.toList |> List.map snd with
     | [ entry ] -> entry
     | other -> failwithf "expected one queued command, got %d" (List.length other)
@@ -2681,7 +2681,7 @@ let private viewportTests =
             // in the transcript for ever, so the width belongs to whoever asked for it.
             let model =
                 client ()
-                |> ClientModel.update (TerminalViewportMsg (terminalA, { Cols = 132; Rows = 43 }))
+                |> Support.step (TerminalViewportMsg (terminalA, { Cols = 132; Rows = 43 }))
                 |> composing
             Expect.equal (sent model).Size (Some { Cols = 132; Rows = 43 }) "the author's own viewport"
 
@@ -2697,8 +2697,8 @@ let private viewportTests =
             // unreadable for ever.
             let model =
                 client ()
-                |> ClientModel.update (TerminalViewportMsg (terminalA, { Cols = 132; Rows = 43 }))
-                |> ClientModel.update (TerminalViewportMsg (terminalA, { Cols = 0; Rows = 0 }))
+                |> Support.step (TerminalViewportMsg (terminalA, { Cols = 132; Rows = 43 }))
+                |> Support.step (TerminalViewportMsg (terminalA, { Cols = 0; Rows = 0 }))
                 |> composing
             Expect.equal (sent model).Size (Some { Cols = 132; Rows = 43 }) "the last real measurement stands"
 
@@ -2706,9 +2706,26 @@ let private viewportTests =
             // Two terminals are two panes, and the reader may have looked at only one of them.
             let model =
                 client ()
-                |> ClientModel.update (TerminalViewportMsg (terminalB, { Cols = 132; Rows = 43 }))
+                |> Support.step (TerminalViewportMsg (terminalB, { Cols = 132; Rows = 43 }))
                 |> composing
             Expect.isNone (sent model).Size "terminal B's pane says nothing about terminal A's"
+    ]
+
+let private leaseRequestTests =
+    let client () = ClientModel.init { PeerId = ada; DisplayName = "ada" }
+
+    testList "Asking the session about a terminal's lease" [
+        testCase "taking a terminal asks the session for its lease" <| fun () ->
+            let _, effects = ClientModel.update (TakeTerminalMsg terminalA) (client ())
+            Expect.equal effects [ ClientEffect.TakeTerminal terminalA ] "one request, for that terminal"
+
+        testCase "a take is not a lease until the session says so" <| fun () ->
+            // The lease arrives as `TerminalLeaseTaken`, which every peer folds alike. A client
+            // that marked itself live on the press would be the one peer believing it held a
+            // keyboard somebody else may already have taken.
+            let before = client ()
+            let after, _ = ClientModel.update (TakeTerminalMsg terminalA) before
+            Expect.equal after.Terminals before.Terminals "no terminal changed on this side"
     ]
 
 let private syncTests =
@@ -4795,6 +4812,7 @@ let tests =
         syncTests
         commandLineCaretTests
         viewportTests
+        leaseRequestTests
         transcriptCursorTests
         terminalTitleTests
     ]

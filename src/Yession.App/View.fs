@@ -111,21 +111,9 @@ type ViewActions =
       /// Consent to what a repo asks for. Takes the set that is on screen, so a file that
       /// changed under the reader cannot be approved by a click meant for something else.
       ApproveRepoCapabilities : RepoRef -> string list -> unit
-      /// Ask the Session Process to close a terminal.
-      CloseTerminal : TerminalId -> unit
       /// Send a terminal composer slot: enqueue its command. Imperative for exactly the
       /// reason `SendDraft` is — the command text is a shared type the reducer cannot move.
       SendTerminalDraft : TerminalId -> PeerId -> unit
-      /// Take the terminal's stdin — enter live mode (Plan 13, stage 2e). Also the STEAL:
-      /// there is one control because there is one act, and any peer may perform it.
-      TakeTerminal : TerminalId -> unit
-      /// Hand it back to block mode.
-      ReleaseTerminal : TerminalId -> unit
-      /// Type the shell instrumentation in again after the terminal stopped marking (Plan 13,
-      /// stage 2f). Any peer may — it repairs rather than takes.
-      RearmTerminal : TerminalId -> unit
-      /// Ask the provider for a closed terminal's stream again (Plan 19, step 4).
-      ReattachTerminal : TerminalId -> unit
       /// Send keystrokes to a terminal this peer holds (Plan 14, stage 6). Imperative
       /// because it is a frame, and deliberately not acknowledged: a keystroke that needed a
       /// reply would make typing a round trip. The Session Process checks the lease, which
@@ -221,12 +209,7 @@ module ViewActions =
           RetryNow = ignore
           OpenTerminal = ignore
           ApproveRepoCapabilities = fun _ _ -> ()
-          CloseTerminal = ignore
           SendTerminalDraft = fun _ _ -> ()
-          TakeTerminal = ignore
-          ReleaseTerminal = ignore
-          RearmTerminal = ignore
-          ReattachTerminal = ignore
           TypeIntoTerminal = fun _ _ -> ()
           ResizeTerminal = fun _ _ _ -> ()
           FocusPane = ignore
@@ -3086,7 +3069,7 @@ module View =
     /// The lease bar (Plan 13, stage 2e): who is typing here, and the one control that
     /// changes it. Shown in place of the command lines — never in place of the queue, which
     /// keeps working while a peer is live and is precisely what the release will run.
-    let private terminalLeaseBar (actions: ViewActions) (model: ClientModel) (terminal: TerminalId) (holder: ActorRef) : TemplateResult =
+    let private terminalLeaseBar (dispatch: ClientMsg -> unit) (model: ClientModel) (terminal: TerminalId) (holder: ActorRef) : TemplateResult =
         let mine = ClientModel.me model
         // The hook keeps the stable token (a test asserting WHO holds a lease should not have
         // to know what this client happens to have learned about their name); the words get
@@ -3100,14 +3083,14 @@ module View =
             if holder = mine then
                 html $"""
                     <button type="button" class="{Style.btnPrimary}" data-terminal-release="{TerminalId.value terminal}"
-                            @click={Ev(fun _ -> actions.ReleaseTerminal terminal)}>Hand it back</button>"""
+                            @click={Ev(fun _ -> dispatch (ReleaseTerminalMsg terminal))}>Hand it back</button>"""
             else
                 // Any peer may take it, and no permission is asked for: collaborators are
                 // trusted, so a steal needs to be VISIBLE rather than authorised — which the
                 // event log is, and this button says so plainly.
                 html $"""
                     <button type="button" class="{Style.btn}" data-terminal-take="{TerminalId.value terminal}"
-                            @click={Ev(fun _ -> actions.TakeTerminal terminal)}>Take over</button>"""
+                            @click={Ev(fun _ -> dispatch (TakeTerminalMsg terminal))}>Take over</button>"""
         html $"""
             <div class="{Style.terminalBandRow}" data-terminal-lease="{label}" aria-live="polite">
               <span class="{Style.statusRun}"><span class="{Style.statusDotPulse}"></span>live</span>
@@ -3204,7 +3187,7 @@ module View =
         // comes back.
         let commandLines =
             match lease with
-            | Some holder -> terminalLeaseBar actions model terminal holder
+            | Some holder -> terminalLeaseBar dispatch model terminal holder
             | None ->
                 html $"""
                     <div>
@@ -3247,7 +3230,7 @@ module View =
                       {detailNote "terminal-lost" [ Dom.Text.terminalNotMarkingWhy ]}
                       <div class="ml-auto flex items-center gap-2">
                         <button type="button" class="{Style.btnPrimary}" data-terminal-rearm="{TerminalId.value terminal}"
-                                @click={Ev(fun _ -> actions.RearmTerminal terminal)}>Re-arm</button>
+                                @click={Ev(fun _ -> dispatch (RearmTerminalMsg terminal))}>Re-arm</button>
                       </div>
                     </div>"""
         // What is left here is what this region is FOR: what is waiting to run, and the line
@@ -3585,7 +3568,7 @@ module View =
                         else
                             [ html $"""
                                 <button type="button" class="{Style.btn}" data-terminal-take="{TerminalId.value view.TerminalId}"
-                                        @click={Ev(fun _ -> actions.TakeTerminal view.TerminalId)}>{Dom.Text.takeControl}</button>""" ]
+                                        @click={Ev(fun _ -> dispatch (TakeTerminalMsg view.TerminalId))}>{Dom.Text.takeControl}</button>""" ]
                     take @ Option.toList (terminalWatchToggle dispatch model view)
             | BlockTab (terminalId, blockId) ->
                 let blocks =
@@ -3692,14 +3675,14 @@ module View =
                     html $"""
                         <button type="button" class="{Style.btnIconBare}" data-terminal-reattach="{id}"
                                 aria-label="Attach {TerminalTitle.value view.Title} again"
-                                @click={Ev(fun _ -> actions.ReattachTerminal view.TerminalId)}>{Icon.attach}</button>"""
+                                @click={Ev(fun _ -> dispatch (ReattachTerminalMsg view.TerminalId))}>{Icon.attach}</button>"""
             let kill =
                 if not affords.CanKill then Lit.nothing
                 else
                     html $"""
                         <button type="button" class="{Style.btnIconBareDanger}" data-terminal-close="{id}"
                                 aria-label="Kill {TerminalTitle.value view.Title}"
-                                @click={Ev(fun _ -> actions.CloseTerminal view.TerminalId)}>{Icon.stop}</button>"""
+                                @click={Ev(fun _ -> dispatch (CloseTerminalMsg view.TerminalId))}>{Icon.stop}</button>"""
             let nameClass = if view.IsOpen then Style.terminalListName else Style.terminalListNameClosed
             html $"""
                 <div class="{Style.terminalListRow}" role="listitem">

@@ -1474,11 +1474,6 @@ let private start () =
                                 | ListingUnavailable (reason, _) -> dispatchRef (LaunchMsg (LaunchFailed reason))
                                 | ListingUnknown -> ()
                         })
-              CloseTerminal = fun id -> connectionRef |> Option.iter (fun c -> c.CloseTerminal id)
-              TakeTerminal = fun id -> connectionRef |> Option.iter (fun c -> c.TakeTerminal id)
-              ReleaseTerminal = fun id -> connectionRef |> Option.iter (fun c -> c.ReleaseTerminal id)
-              RearmTerminal = fun id -> connectionRef |> Option.iter (fun c -> c.RearmTerminal id)
-              ReattachTerminal = fun id -> connectionRef |> Option.iter (fun c -> c.ReattachTerminal id)
               TypeIntoTerminal =
                 fun id data -> connectionRef |> Option.iter (fun c -> c.TypeIntoTerminal id data)
               ResizeTerminal =
@@ -1536,7 +1531,7 @@ let private start () =
                 launchListingAsked <- true
                 actions.LaunchSearch model.Launch.Query
 
-        Client.makeProgram doc initial
+        Client.makeProgram { Client.Ports.Connection = fun () -> connectionRef } doc initial
         |> Client.withTimers Timer.system
         |> Program.withSetState setState
         |> Program.run

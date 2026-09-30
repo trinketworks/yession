@@ -24,27 +24,6 @@ module Client =
             return { model with Synced = synced }
         }
 
-    /// The client Elmish program for a given Yjs doc: the pure `ClientModel.update`
-    /// under `Program.withYlmish`, so local draft edits flow out as CRDT deltas and
-    /// remote transactions fold back in as ordinary `Set` messages. The view is supplied
-    /// by `Program.withSetState` (the browser renders `View.view` with Lit; the headless
-    /// test harness captures the model), so the program itself carries a unit view.
-    /// `initial` is usually `ClientModel.init peer`.
-    let makeProgram (doc: Y.Doc) (initial: ClientModel) =
-        Program.mkProgram
-            (fun () -> initial, Cmd.none)
-            (fun msg model -> ClientModel.update msg model, Cmd.none)
-            (fun _ _ -> ())
-        |> Ylmish.Program.withYlmish
-            { Doc = doc
-              Create = fun (m: ClientModel) -> SyncedStateSync.create m.Synced
-              Update = fun a m -> SyncedStateSync.update a m.Synced
-              // Rich bodies are NOT encoded here — they are sibling `Y.XmlFragment` roots the
-              // app manages directly (RichText.fs), so the sync boundary carries only structure.
-              Encode = SyncedStateSync.encode
-              Decode = decodeModel
-              OnError = Ylmish.Program.OnError.log }
-
     /// Run the waits the model declares (`ClientModel.timers`) on `clock`, beside whatever the
     /// program already subscribes to — Ylmish's own binding to the doc among them, which is
     /// why this MAPS the subscription rather than setting one (`withSubscription` replaces).
@@ -134,6 +113,60 @@ module Client =
           /// call repeatedly: records fold by sequence number, so a re-read costs bytes and
           /// changes nothing.
           FetchTranscript : TerminalId -> unit }
+
+    /// What the program's effects are carried out against (`ClientEffect`).
+    ///
+    /// A getter rather than a connection because the program exists first: a client is local
+    /// first, and renders, edits and syncs before — and without — a channel to its session.
+    /// An effect asked for while there is none goes nowhere, which is what a press on a
+    /// control that needs the session did before it was a message.
+    [<RequireQualifiedAccess>]
+    type Ports =
+        { Connection : unit -> Connection option }
+
+    module Ports =
+
+        /// A client with no session to ask: every request goes nowhere.
+        let offline : Ports = { Ports.Connection = fun () -> None }
+
+        /// Carry out one effect. The whole map from what a message asked for to the verb that
+        /// does it, so that no caller holding a connection decides it a second time.
+        let perform (ports: Ports) (effect: ClientEffect) : unit =
+            match ports.Connection () with
+            | None -> ()
+            | Some connection ->
+                match effect with
+                | ClientEffect.TakeTerminal terminal -> connection.TakeTerminal terminal
+                | ClientEffect.ReleaseTerminal terminal -> connection.ReleaseTerminal terminal
+                | ClientEffect.RearmTerminal terminal -> connection.RearmTerminal terminal
+                | ClientEffect.ReattachTerminal terminal -> connection.ReattachTerminal terminal
+                | ClientEffect.CloseTerminal terminal -> connection.CloseTerminal terminal
+
+    /// The client Elmish program for a given Yjs doc: the pure `ClientModel.update`
+    /// under `Program.withYlmish`, so local draft edits flow out as CRDT deltas and
+    /// remote transactions fold back in as ordinary `Set` messages. The view is supplied
+    /// by `Program.withSetState` (the browser renders `View.view` with Lit; the headless
+    /// test harness captures the model), so the program itself carries a unit view.
+    /// `initial` is usually `ClientModel.init peer`. What a message asks of the world
+    /// (`ClientEffect`) is carried out against `ports`, after the model it came with.
+    let makeProgram (ports: Ports) (doc: Y.Doc) (initial: ClientModel) =
+        let commandOf (effects: ClientEffect list) : Cmd<ClientMsg> =
+            effects |> List.map (fun effect -> Cmd.ofEffect (fun _ -> Ports.perform ports effect)) |> Cmd.batch
+        Program.mkProgram
+            (fun () -> initial, Cmd.none)
+            (fun msg model ->
+                let model, effects = ClientModel.update msg model
+                model, commandOf effects)
+            (fun _ _ -> ())
+        |> Ylmish.Program.withYlmish
+            { Doc = doc
+              Create = fun (m: ClientModel) -> SyncedStateSync.create m.Synced
+              Update = fun a m -> SyncedStateSync.update a m.Synced
+              // Rich bodies are NOT encoded here — they are sibling `Y.XmlFragment` roots the
+              // app manages directly (RichText.fs), so the sync boundary carries only structure.
+              Encode = SyncedStateSync.encode
+              Decode = decodeModel
+              OnError = Ylmish.Program.OnError.log }
 
     /// The platform's HTTP GET, as a TOTAL function: the body, the status it refused with,
     /// or the transport error it never got past. Totality is the whole point — the old port

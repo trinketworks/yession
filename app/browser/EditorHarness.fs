@@ -1160,12 +1160,14 @@ let private launchModel : ClientModel =
     let events =
         [ at 0L (SessionStarted { MessageId = MessageId.create "msg-started" |> expect })
           at 1L (PeerJoined { PeerId = peerId; DisplayName = "swift-heron"; User = None }) ]
+    // A fixture of states, built by the reducer the page runs; nothing here has anyone to ask.
+    let folded msg model = ClientModel.update msg model |> fst
     ClientModel.init { PeerId = peerId; DisplayName = "swift-heron" }
-    |> ClientModel.update
+    |> folded
         (ConnectedMsg { SessionId = sessionId; AssignedDisplayName = "swift-heron"; LatestOffset = Some (offset 1L) })
-    |> ClientModel.update HistoryReadMsg
-    |> ClientModel.update (EventsPageMsg { Events = events; LastOffset = Some (offset 1L); IsEnd = true })
-    |> ClientModel.update
+    |> folded HistoryReadMsg
+    |> folded (EventsPageMsg { Events = events; LastOffset = Some (offset 1L); IsEnd = true })
+    |> folded
         (LaunchMsg
             (LaunchListingArrived
                 (ListingLoaded
@@ -1335,7 +1337,6 @@ do
             RevealMessage = fun id -> PaneShell.revealMessage (MessageId.value id)
             ScrollToLatest = PaneShell.scrollToLatest
             FocusItemActions = fun id -> PaneShell.toItemActions (MessageId.value id)
-            TakeTerminal = fun id -> takeRef id
             // The listing's next page, answered here because this harness has no session to
             // ask: a page arrives with two more rows and no cursor after it, which is what
             // the browser tier needs in order to watch REACHING the foot bring rows in
@@ -1381,7 +1382,18 @@ do
     /// after it — because that is the task a frame waits on when a record lands mid-scroll.
     let mutable renderTimes : ResizeArray<float> option = None
     let rec dispatch (msg: ClientMsg) : unit =
-        model <- ClientModel.update msg model
+        let next, effects = ClientModel.update msg model
+        model <- next
+        // What the page asked of a session, answered here because there is none — and only the
+        // take, which is what puts a screen in front of a keyboard. The rest go nowhere, as they
+        // would in a client whose channel has not opened.
+        effects
+        |> List.iter (function
+            | ClientEffect.TakeTerminal id -> takeRef id
+            | ClientEffect.ReleaseTerminal _
+            | ClientEffect.RearmTerminal _
+            | ClientEffect.ReattachTerminal _
+            | ClientEffect.CloseTerminal _ -> ())
         // Read back off the MODEL rather than out of the message: a measurement the reducer
         // refused is not a width anything would claim, and a hook that reported it anyway
         // would say the opposite of what happened.

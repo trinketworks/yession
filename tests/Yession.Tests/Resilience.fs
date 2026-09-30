@@ -816,8 +816,8 @@ let private channelTests =
         testCase "a settled disconnection carries its reason into the model and the page" <| fun () ->
             let init = ClientModel.init (peer "ada" "Ada")
             Expect.equal init.Connection (Disconnected None) "a fresh client knows nothing yet"
-            let refused = ClientModel.update (RejectedMsg "peer token expired") init
-            let unreachable = ClientModel.update (ConnectFailedMsg "the session did not answer") init
+            let refused = Support.step (RejectedMsg "peer token expired") init
+            let unreachable = Support.step (ConnectFailedMsg "the session did not answer") init
             Expect.equal refused.Connection (Disconnected (Some "peer token expired"))
                 "a rejection keeps the reason the session gave"
             Expect.equal unreachable.Connection (Disconnected (Some "the session did not answer"))
@@ -1033,7 +1033,7 @@ let private startLifecycle (host: Host.SessionHost) (token: string) (id: string)
     let doc = Y.Doc.Create ()
     let local = peer id name
     let registry = BodyRegistry doc
-    let runner = Harness.run (Client.makeProgram doc (ClientModel.init local))
+    let runner = Harness.run (Client.makeProgram Client.Ports.offline doc (ClientModel.init local))
     let hello = { PeerId = local.PeerId; DisplayName = name; Token = token }
     let opens = ref 0
     let resumes = ref []
@@ -1235,7 +1235,7 @@ let private lifecycleTests =
                           Dispatch =
                             fun msg ->
                                 dispatched.Add msg
-                                model.Value <- ClientModel.update msg model.Value }
+                                model.Value <- Support.step msg model.Value }
                 Expect.equal opens.Value 3 "it kept trying rather than settling on the first failure"
                 Expect.equal
                     (List.ofSeq dispatched)
