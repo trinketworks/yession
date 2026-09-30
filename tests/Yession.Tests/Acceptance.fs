@@ -198,6 +198,8 @@ let private representativeModel : ClientModel =
       TerminalScreens = Map.empty
       TerminalViewports = Map.empty
       Tabs = []
+      // Nothing pressed for and still owed: this client is looking, not mid-request.
+      Opening = 0
       Pinned = Set.empty
       Pane = None
       TerminalsOpen = true

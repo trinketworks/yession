@@ -1388,7 +1388,15 @@ let private start () =
                             if not reply.Ok then return Error reply.Body else return Ok None
                         })
                         (Some { Scope = scope; Connected = false })
-              OpenTerminal = fun title -> connectionRef |> Option.iter (fun c -> c.OpenTerminal title)
+              // Asking, and recording that this client asked (`Opening`), are ONE act here
+              // rather than two the buttons have to remember: the terminal comes back as an
+              // event that says which USER opened it and cannot say which of their tabs did,
+              // so the request is the only thing that can tell the terminal THIS press asked
+              // for from one that merely belongs to the same person.
+              OpenTerminal =
+                fun title ->
+                    dispatchRef OpeningTerminalMsg
+                    connectionRef |> Option.iter (fun c -> c.OpenTerminal title)
               ApproveRepoCapabilities =
                 fun repo granted -> connectionRef |> Option.iter (fun c -> c.ApproveRepoCapabilities repo granted)
               LaunchSearch =

@@ -25,6 +25,7 @@ let private expect =
 let private sessionId = SessionId.create "timeline-tests" |> expect
 let private terminalA = TerminalId.create "term-a" |> expect
 let private terminalB = TerminalId.create "term-b" |> expect
+let private terminalC = TerminalId.create "term-c" |> expect
 let private ada = PeerId.create "ada" |> expect
 let private bob = PeerId.create "bob" |> expect
 
@@ -411,6 +412,14 @@ let private clientOf (events: EventEnvelope<SessionEvent> list) : ClientModel =
     ClientModel.update
         (EventsPageMsg { Events = events; LastOffset = events |> List.tryLast |> Option.map (fun e -> e.Offset); IsEnd = true })
         (ClientModel.init { PeerId = ada; DisplayName = "swift-heron" })
+
+/// One MORE page, into a client that has already folded some. The live path, and the only
+/// one these cases can be written on: a terminal you press for arrives after the pane
+/// already has a choice on it, which is the whole of what went wrong.
+let private withPage (events: EventEnvelope<SessionEvent> list) (model: ClientModel) : ClientModel =
+    ClientModel.update
+        (EventsPageMsg { Events = events; LastOffset = events |> List.tryLast |> Option.map (fun e -> e.Offset); IsEnd = true })
+        model
 
 let private oneBlock =
     [ at 1L 0.0 (opened terminalA "build")
@@ -1618,6 +1627,64 @@ let private pinTests =
             Expect.isTrue (ClientModel.isMine (UserRef nick) model) "the user I joined as is me"
             Expect.isFalse (ClientModel.isMine (UserRef bobsUser) model) "another user is not"
             Expect.isFalse (ClientModel.isMine ActorRef.Agent model) "the agent is not"
+
+        // Pressing "new terminal" TAKES YOU THERE. What it did instead was mint a terminal,
+        // add a faint word to the strip and leave the pane on whatever was already showing —
+        // `selectedPane` keeps the stored choice while what it names still exists, and the
+        // terminal you were on still existed. On a phone the strip scrolls, so the new tab
+        // could be off screen and the press changed nothing a person could see at all. It
+        // read, correctly, as a dead button.
+        testCase "the terminal I asked for is the one I am shown" <| fun () ->
+            let model =
+                clientOf [ at 1L 0.0 (opened terminalA "build") ]
+                |> ClientModel.update (ShowInPaneMsg (Reading (TerminalTab terminalA)))
+                |> ClientModel.update OpeningTerminalMsg
+                |> withPage [ at 2L 1.0 (opened terminalB "the one I asked for") ]
+            Expect.equal
+                (ClientModel.selectedPane model)
+                (Some (TerminalTab terminalB))
+                "the pane went to the terminal the press asked for"
+
+        testCase "a terminal I did not ask for leaves my pane where it is" <| fun () ->
+            // The reason this is a REQUEST and not "any terminal that is mine": under a
+            // verified login the log cannot tell my tabs apart, so the phone in my pocket
+            // opening one would otherwise yank the pane I am working in.
+            let model =
+                clientOf [ at 1L 0.0 (opened terminalA "build") ]
+                |> ClientModel.update (ShowInPaneMsg (Reading (TerminalTab terminalA)))
+                |> withPage [ at 2L 1.0 (opened terminalB "somewhere else") ]
+            Expect.equal
+                (ClientModel.selectedPane model)
+                (Some (TerminalTab terminalA))
+                "still where I was"
+
+        testCase "the agent opening one never moves my pane" <| fun () ->
+            // Even mid-press. What a press is owed is the terminal it asked for, and the
+            // agent's is not that one.
+            let model =
+                clientOf [ at 1L 0.0 (opened terminalA "build") ]
+                |> ClientModel.update (ShowInPaneMsg (Reading (TerminalTab terminalA)))
+                |> ClientModel.update OpeningTerminalMsg
+                |> withPage [ at 2L 1.0 (openedBy ActorRef.Agent terminalB "running the tests") ]
+            Expect.equal
+                (ClientModel.selectedPane model)
+                (Some (TerminalTab terminalA))
+                "the agent's terminal is not what I pressed for"
+
+        testCase "one press is spent once" <| fun () ->
+            // The press is consumed by the terminal that answers it, so the NEXT one to
+            // arrive — the agent's, a collaborator's, my own from another tab — finds nothing
+            // owed and leaves the pane alone.
+            let model =
+                clientOf [ at 1L 0.0 (opened terminalA "build") ]
+                |> ClientModel.update (ShowInPaneMsg (Reading (TerminalTab terminalA)))
+                |> ClientModel.update OpeningTerminalMsg
+                |> withPage [ at 2L 1.0 (opened terminalB "the one I asked for") ]
+                |> withPage [ at 3L 2.0 (opened terminalC "one I did not") ]
+            Expect.equal
+                (ClientModel.selectedPane model)
+                (Some (TerminalTab terminalB))
+                "still the one the press bought"
 
         testCase "unattributed, I am still my peer" <| fun () ->
             // `--auth localhost` verifies nobody, so the log says `PeerRef` and the answer has
