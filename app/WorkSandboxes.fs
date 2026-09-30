@@ -101,10 +101,14 @@ type CredentialForwarding =
 /// and the first block somebody runs in there is the first thing that names a person.
 type CredentialSource =
     { Name : ConnectionName
-      /// Provision the route into one sandbox. `Unforwardable` is a legible refusal rather
-      /// than a silent start without it: a sandbox that was asked to forward `github` and
-      /// did not is a sandbox whose `git push` fails much later, somewhere less informative.
-      Provision : SandboxRef -> Async<CredentialForwarding>
+      /// The routes this source can forward by. A route it does not offer is refused when a
+      /// sandbox needs it, rather than forwarded as nothing.
+      Routes : ConnectionRoute list
+      /// Provision these routes, and no others, into one sandbox. `Unforwardable` is a
+      /// legible refusal rather than a silent start without them: a sandbox that was asked
+      /// to forward `github` and did not is a sandbox whose `git push` fails much later,
+      /// somewhere less informative.
+      Provision : SandboxRef -> ConnectionRoute list -> Async<CredentialForwarding>
       /// Take back what `Provision` gave. Called when the sandbox stops, so that whatever a
       /// provision opened (a gateway route, the loans under it) lives exactly as long as
       /// the sandbox does.
@@ -115,10 +119,13 @@ type CredentialSource =
       /// Nothing, never a refusal: a block lent nothing runs on what its shell has, and what
       /// its git is then told is the gateway's sentence to say.
       ///
+      /// Lent by the routes the sandbox forwards and no others: a block in a sandbox that
+      /// holds `git` alone is lent what its git needs, and nothing its API client could spend.
+      ///
       /// `lentInto` is the variables the sandbox's declaration lends this connection's token
       /// in (`${<connection>.token}`), which the source puts a stand-in in beside whatever it
       /// lends of its own accord.
-      Lend : Authority -> SandboxRef -> TerminalId -> BlockId option -> string list -> Async<BlockEnv>
+      Lend : Authority -> SandboxRef -> TerminalId -> BlockId option -> ConnectionRoute list -> string list -> Async<BlockEnv>
       /// Whatever a terminal's last block was lent is returned (`BlockLoans.Retire`).
       Retire : TerminalId -> unit }
 
@@ -155,14 +162,40 @@ type RunningSandbox =
       /// the wrong answer either kills somebody's build or hands back a sandbox configured
       /// as something else.
       Request : SandboxRequest
-      /// The connections it was provisioned with: what its selection reached on this host,
-      /// less any it only WANTED that this backend could not be reached by. What its blocks
-      /// are lent for, and what a stop gives back.
-      Forwarded : ConnectionName list
+      /// The connections it was provisioned with, and by which routes: what its selection
+      /// reached on this host, less any route it only WANTED that this backend could not be
+      /// reached by. What its blocks are lent for, and what a stop gives back.
+      Forwarded : Map<ConnectionName, ConnectionRoute list>
       /// Who asked for it. `None` for `default`, which nobody asked for.
       StartedBy : ActorRef option
       StartedAt : DateTimeOffset option
       Environment : SessionEnvironment.SessionEnvironment }
+
+/// A sandbox's forwards, said.
+module ForwardedRoutes =
+
+    let names (forwarded: Map<ConnectionName, ConnectionRoute list>) : ConnectionName list =
+        forwarded |> Map.toList |> List.map fst
+
+    /// `github (git, api)`, and so on — which connection, and by which routes.
+    let describe (forwarded: Map<ConnectionName, ConnectionRoute list>) : string =
+        forwarded
+        |> Map.toList
+        |> List.map (fun (connection, routes) ->
+            sprintf "%s (%s)" (ConnectionName.value connection) (routes |> List.map ConnectionRoute.name |> String.concat ", "))
+        |> String.concat ", "
+
+    /// Two sets of forwards as one: a connection's routes are the union of both.
+    let merge
+        (a: Map<ConnectionName, ConnectionRoute list>)
+        (b: Map<ConnectionName, ConnectionRoute list>)
+        : Map<ConnectionName, ConnectionRoute list> =
+        b
+        |> Map.fold
+            (fun merged connection routes ->
+                let held = merged |> Map.tryFind connection |> Option.defaultValue []
+                merged |> Map.add connection (List.distinct (held @ routes) |> List.sortBy ConnectionRoute.name))
+            a
 
 type WorkSandboxesConfig =
     { /// How a sandbox's backend describes itself, for the event and the query — a
@@ -286,19 +319,22 @@ let create (config: WorkSandboxesConfig) : Async<WorkSandboxes> =
         // owes, without which a route outlives the sandbox it was minted for. Hoisted above
         // the default's creation because the default is provisioned before its environment
         // exists, and a failed create has to give the route back.
-        let revoke (name: SandboxRef) (names: ConnectionName list) : unit =
-            for credential in names do
+        let revoke (name: SandboxRef) (forwarded: Map<ConnectionName, ConnectionRoute list>) : unit =
+            for credential in ForwardedRoutes.names forwarded do
                 config.Credentials
                 |> List.tryFind (fun source -> source.Name = credential)
                 |> Option.iter (fun source -> source.Revoke name)
 
-        // Provision every named credential's route into one sandbox, or say which one could
+        // Provision every named credential's routes into one sandbox, or say which one could
         // not be — revoking whatever was provisioned before the one that refused.
-        let provisionForward (name: SandboxRef) (names: ConnectionName list) : Async<Result<Provision, string>> =
+        let provisionForward
+            (name: SandboxRef)
+            (needed: Map<ConnectionName, ConnectionRoute list>)
+            : Async<Result<Provision, string>> =
             async {
                 let mutable provisioned = Provision.empty
                 let mutable failure = None
-                for credential in names do
+                for credential, routes in Map.toList needed do
                     match failure with
                     | Some _ -> ()
                     | None ->
@@ -315,42 +351,64 @@ let create (config: WorkSandboxesConfig) : Async<WorkSandboxes> =
                                         (ConnectionName.value credential)
                                         known)
                         | Some source ->
-                            match! source.Provision name with
-                            | CredentialForwarding.Unforwardable reason -> failure <- Some reason
-                            | CredentialForwarding.Forwarded provision ->
-                                provisioned <- Provision.merge provisioned provision
+                            match routes |> List.filter (fun route -> not (List.contains route source.Routes)) with
+                            | route :: _ ->
+                                failure <-
+                                    Some (
+                                        sprintf
+                                            "%s is not forwarded by %s here (it is by %s)"
+                                            (ConnectionName.value credential)
+                                            (ConnectionRoute.name route)
+                                            (source.Routes |> List.map ConnectionRoute.name |> String.concat ", "))
+                            | [] ->
+                                match! source.Provision name routes with
+                                | CredentialForwarding.Unforwardable reason -> failure <- Some reason
+                                | CredentialForwarding.Forwarded provision ->
+                                    provisioned <- Provision.merge provisioned provision
                 match failure with
                 | Some e ->
-                    revoke name names
+                    revoke name needed
                     return Error e
                 | None -> return Ok provisioned
             }
 
-        // What a spec's selection forwards, provisioned: every connection it NEEDS or refuse,
-        // then each it only WANTS that this session has a source for and this backend can be
-        // reached by — a want is silent where it cannot be had, as it is for every leaf.
-        let provisionConnections (name: SandboxRef) (spec: EnvironmentSpec) : Async<Result<ConnectionName list * Provision, string>> =
+        // What a spec's selection forwards, provisioned: every route it NEEDS or refuse, then
+        // each route it only WANTS that this session has a source offering and this backend can
+        // be reached by — a want is silent where it cannot be had, as it is for every leaf.
+        let provisionConnections
+            (name: SandboxRef)
+            (spec: EnvironmentSpec)
+            : Async<Result<Map<ConnectionName, ConnectionRoute list> * Provision, string>> =
             async {
+                let routed (pairs: (string * ConnectionRoute) list) : Map<ConnectionName, ConnectionRoute list> =
+                    pairs
+                    |> List.choose (fun (connection, route) ->
+                        ConnectionName.create connection |> Result.toOption |> Option.map (fun connection -> connection, [ route ]))
+                    |> List.fold (fun held (connection, routes) -> ForwardedRoutes.merge held (Map.ofList [ connection, routes ])) Map.empty
                 match config.Connections spec with
                 | Error e -> return Error e
                 | Ok connections ->
-                    let needed = ConnectionName.normalise connections.Needed
+                    let needed = routed connections.Needed
                     match! provisionForward name needed with
                     | Error e -> return Error e
                     | Ok provision ->
                         let mutable provision = provision
                         let mutable forwarded = needed
-                        for wanted in ConnectionName.normalise connections.Wanted do
-                            if not (List.contains wanted forwarded) then
-                                match config.Credentials |> List.tryFind (fun source -> source.Name = wanted) with
-                                | None -> ()
-                                | Some source ->
-                                    match! source.Provision name with
-                                    | CredentialForwarding.Unforwardable _ -> ()
-                                    | CredentialForwarding.Forwarded given ->
-                                        provision <- Provision.merge provision given
-                                        forwarded <- forwarded @ [ wanted ]
-                        return Ok (ConnectionName.normalise (forwarded |> List.map ConnectionName.value), provision)
+                        for wanted, routes in Map.toList (routed connections.Wanted) do
+                            match config.Credentials |> List.tryFind (fun source -> source.Name = wanted) with
+                            | None -> ()
+                            | Some source ->
+                                let held = forwarded |> Map.tryFind wanted |> Option.defaultValue []
+                                // One route at a time, so a want that cannot be had by one
+                                // route is still had by the others.
+                                for route in routes do
+                                    if List.contains route source.Routes && not (List.contains route held) then
+                                        match! source.Provision name [ route ] with
+                                        | CredentialForwarding.Unforwardable _ -> ()
+                                        | CredentialForwarding.Forwarded given ->
+                                            provision <- Provision.merge provision given
+                                            forwarded <- ForwardedRoutes.merge forwarded (Map.ofList [ wanted, [ route ] ])
+                        return Ok (forwarded, provision)
             }
 
         // What a spec asks the credential proxy for, provided INTO the spec — so the sandbox
@@ -393,34 +451,41 @@ let create (config: WorkSandboxesConfig) : Async<WorkSandboxes> =
         // Everything a sandbox is built with beyond its declaration: the connections its
         // selection forwards, and what it asked the proxy for — and the spec with that
         // written in, which is what it is built FROM.
+        // Whether a declaration's `${<connection>.token}` has anybody to lend it: the connection
+        // forwarded by the route a token is spent through.
+        let lendable (forwarded: Map<ConnectionName, ConnectionRoute list>) (connection: ConnectionName) : bool =
+            forwarded |> Map.tryFind connection |> Option.exists (List.contains ConnectionRoute.Api)
+
         let provisionSelection
             (name: SandboxRef)
             (spec: EnvironmentSpec)
-            : Async<Result<ConnectionName list * Provision * EnvironmentSpec, string>> =
+            : Async<Result<Map<ConnectionName, ConnectionRoute list> * Provision * EnvironmentSpec, string>> =
             async {
                 match! provisionConnections name spec with
                 | Error e -> return Error e
                 // A token lent for a connection the sandbox does not forward would be lent by
                 // nobody — every command would get nothing in that variable and no reason
-                // why. So it refuses the start, naming what to select.
+                // why. So it refuses the start, naming what to select. A token is lent through
+                // the credential proxy, so the route it needs is `api`.
                 | Ok (forwarded, _) when
-                    lentVariables spec |> Map.exists (fun connection _ -> not (List.contains connection forwarded))
+                    lentVariables spec
+                    |> Map.exists (fun connection _ -> not (lendable forwarded connection))
                     ->
                     revoke name forwarded
                     let missing =
                         lentVariables spec
                         |> Map.toList
-                        |> List.filter (fun (connection, _) -> not (List.contains connection forwarded))
+                        |> List.filter (fun (connection, _) -> not (lendable forwarded connection))
                         |> List.map (fun (connection, variables) ->
                             sprintf
-                                "%s names '${%s.token}', and this sandbox forwards no '%s'"
+                                "%s names '${%s.token}', and this sandbox does not forward '%s' by api"
                                 (String.concat ", " variables)
                                 (ConnectionName.value connection)
                                 (ConnectionName.value connection))
                     return
                         Error (
                             sprintf
-                                "%s — select the connection under uses or wants, from a host that offers it"
+                                "%s — select a resource granting it under uses or wants, from a host that offers it"
                                 (String.concat "; " missing)
                         )
                 | Ok (forwarded, provision) ->
@@ -446,18 +511,18 @@ let create (config: WorkSandboxesConfig) : Async<WorkSandboxes> =
         let standingEntry
             (ref: SandboxRef)
             (request: SandboxRequest)
-            (provisioned: Result<ConnectionName list * Provision * EnvironmentSpec, string>)
+            (provisioned: Result<Map<ConnectionName, ConnectionRoute list> * Provision * EnvironmentSpec, string>)
             : RunningSandbox =
             let forwarded, environment =
                 match provisioned with
-                | Error reason -> [], missing (sprintf "sandbox '%s' cannot start: %s" (SandboxRef.render ref) reason)
+                | Error reason -> Map.empty, missing (sprintf "sandbox '%s' cannot start: %s" (SandboxRef.render ref) reason)
                 | Ok (forwarded, provision, built) ->
                     match config.Create ref built provision with
                     | Ok environment -> forwarded, environment
                     | Error reason ->
                         revoke ref forwarded
                         config.Proxy.Release ref
-                        [], missing (sprintf "sandbox '%s' cannot start: %s" (SandboxRef.render ref) reason)
+                        Map.empty, missing (sprintf "sandbox '%s' cannot start: %s" (SandboxRef.render ref) reason)
             { Ref = ref
               Backend = config.Backend ref
               Request = request
@@ -473,7 +538,7 @@ let create (config: WorkSandboxesConfig) : Async<WorkSandboxes> =
 
         /// What each standing sandbox resets to when it is stopped: it keeps its entry,
         /// because it is one the session has from boot, and its configuration.
-        let standingRequests : Map<SandboxRef, SandboxRequest * ConnectionName list> =
+        let standingRequests : Map<SandboxRef, SandboxRequest * Map<ConnectionName, ConnectionRoute list>> =
             standing
             |> List.map (fun (ref, entry) -> ref, (entry.Request, entry.Forwarded))
             |> Map.ofList
@@ -608,7 +673,7 @@ let create (config: WorkSandboxesConfig) : Async<WorkSandboxes> =
                                               Backend = config.Backend name
                                               Description = config.Describe name
                                               Checkout = config.Checkout name
-                                              Forwarded = forwarded
+                                              Forwarded = ForwardedRoutes.names forwarded
                                               // Asked of the environment that just came
                                               // up, not computed here: what a sandbox
                                               // holds is settled by the policy it was
@@ -684,7 +749,7 @@ let create (config: WorkSandboxesConfig) : Async<WorkSandboxes> =
                 | None -> return BlockEnv.none
                 | Some entry ->
                     let mutable lent = BlockEnv.none
-                    for forwarded in entry.Forwarded do
+                    for forwarded, routes in Map.toList entry.Forwarded do
                         match config.Credentials |> List.tryFind (fun source -> source.Name = forwarded) with
                         | None -> ()
                         | Some source ->
@@ -692,7 +757,7 @@ let create (config: WorkSandboxesConfig) : Async<WorkSandboxes> =
                                 // A connection the declaration lends no variable is lent into
                                 // none of them, which is the absent entry's meaning.
                                 lentVariables entry.Request.Spec |> Map.tryFind forwarded |> Option.defaultValue []
-                            let! given = source.Lend authority entry.Ref terminal block lentInto
+                            let! given = source.Lend authority entry.Ref terminal block routes lentInto
                             lent <- BlockEnv.merge lent given
                     return lent
             }
@@ -721,7 +786,7 @@ let singleton (backend: string) (environment: SessionEnvironment.SessionEnvironm
         { Ref = SandboxRef.defaultRef
           Backend = backend
           Request = SandboxRequest.defaults
-          Forwarded = []
+          Forwarded = Map.empty
           StartedBy = None
           StartedAt = None
           Environment = environment }
@@ -763,7 +828,7 @@ let unavailable : WorkSandboxes =
         { Ref = SandboxRef.defaultRef
           Backend = "none"
           Request = SandboxRequest.defaults
-          Forwarded = []
+          Forwarded = Map.empty
           StartedBy = None
           StartedAt = None
           Environment = SessionEnvironment.unavailable }
@@ -842,9 +907,8 @@ let query (current: unit -> WorkSandboxes) : Queries.QueryRegistration =
                                   | Some ref -> "running (" + ref + ")"
                                   | None -> "not started")
                               "forwarding",
-                              (match entry.Forwarded with
-                               | [] -> CellText "nothing"
-                               | names -> CellText (names |> List.map ConnectionName.value |> String.concat ", "))
+                              (if Map.isEmpty entry.Forwarded then CellText "nothing"
+                               else CellText (ForwardedRoutes.describe entry.Forwarded))
                               // From the RUNNING sandbox, like `state` above and for the same
                               // reason: what a sandbox holds is a fact about the one that
                               // exists, and a stopped entry that still claimed a widening

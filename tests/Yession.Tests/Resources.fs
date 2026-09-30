@@ -57,7 +57,7 @@ let private leafShapesFor (i: int) (mode: ResourceMountMode) : ResourceLeaf list
           Variable (sprintf "V%d" i, sprintf "value-%d" i)
           Volume (sprintf "vol%d" i, sprintf "/vol/%d" i)
           Exec (sprintf "/bin/tool%d" i)
-          Connection (sprintf "conn%d" i) ]
+          Connection (sprintf "conn%d" i, ConnectionRoute.Git) ]
     for shape in shapes do
         match shape with
         | Mount _ | Socket _ | Endpoint _ | Variable _ | Volume _ | Exec _ | Connection _ -> ()

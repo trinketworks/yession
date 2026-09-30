@@ -2152,7 +2152,7 @@ let private configTests =
                     { "version": 2, "sandboxes": { "dev": { "forward": [ "github" ] } } }"""
             with
             | Ok _ -> failwith "expected a refusal"
-            | Error e -> Expect.stringContains e "{ connection: github }" "it says how an operator offers one"
+            | Error e -> Expect.stringContains e "{ connection: { github: [git, api] } }" "it says how an operator offers one"
 
         // `setup:` is a repo MAKING its environment ready rather than describing it and
         // hoping. Deliberately not `container.cmd`, which is beside it in the same file and
@@ -2422,6 +2422,46 @@ let private configTests =
             | Ok _ -> failwith "expected the conflicting pair to refuse"
             | Error e -> Expect.isTrue (e.Contains "/cache") (sprintf "the refusal names the colliding path, said: %s" e)
 
+        // A connection is granted by ROUTE, one grant each, so what a resource grants is
+        // written down rather than inferred from what the source happens to have.
+        testCase "a connection's routes are one grant each" <| fun () ->
+            let profile =
+                OperatorProfile.parse
+                    """{ "version": 1, "resources": { "github": { "connection": { "github": [ "git", "api" ] } } } }"""
+                |> expect
+            let name raw = ResourceName.create raw |> expect
+            Expect.equal
+                (ResourceProfile.grants profile.Resources [] [ name "github" ] [] |> expect |> fst |> Set.ofList)
+                (Set.ofList [ Connection ("github", ConnectionRoute.Git); Connection ("github", ConnectionRoute.Api) ])
+                "git and api, each its own leaf"
+
+        // The bare name meant every route the source had, which nobody wrote down.
+        testCase "a connection named without its routes is refused with the form that names them" <| fun () ->
+            match OperatorProfile.parse """{ "version": 1, "resources": { "github": { "connection": "github" } } }""" with
+            | Ok _ -> failwith "expected a refusal"
+            | Error e -> Expect.stringContains e "{ github: [git, api] }" "it says how to write it"
+
+        testCase "a route that is not one is refused where the file is read" <| fun () ->
+            match
+                OperatorProfile.parse """{ "version": 1, "resources": { "github": { "connection": { "github": [ "gti" ] } } } }"""
+            with
+            | Ok _ -> failwith "expected a refusal"
+            | Error e -> Expect.stringContains e "'gti' is not a route" "it names the word it could not read"
+
+        // Two resources granting one connection by different routes do not disagree: they add.
+        testCase "two resources granting a connection by different routes add up" <| fun () ->
+            let profile =
+                OperatorProfile.parse
+                    """{ "version": 1,
+                         "resources": {
+                           "github-git": { "connection": { "github": [ "git" ] } },
+                           "github-api": { "connection": { "github": [ "api" ] } } } }"""
+                |> expect
+            let name raw = ResourceName.create raw |> expect
+            match ResourceProfile.grants profile.Resources [] [ name "github-git"; name "github-api" ] [] with
+            | Error e -> failwithf "two routes of one connection conflicted: %s" e
+            | Ok (leaves, _) -> Expect.equal (List.length leaves) 2 "both routes are held"
+
         // A connection is a resource like any other: offered by the operator under a name,
         // selected by a sandbox, and what that selection forwards splits the way the grant
         // does — needed where something needs it, wanted where only a want reaches it.
@@ -2430,21 +2470,24 @@ let private configTests =
                 OperatorProfile.parse
                     """{ "version": 1,
                          "resources": {
-                           "github": { "connection": "github" },
-                           "jira": { "connection": "jira" } } }"""
+                           "github": { "connection": { "github": [ "git" ] } },
+                           "jira": { "connection": { "jira": [ "api" ] } } } }"""
                 |> expect
             let name raw = ResourceName.create raw |> expect
             Expect.equal
                 (ResourceProfile.grants profile.Resources [] [ name "github" ] [ name "jira" ]
                  |> expect
                  |> ForwardedConnections.ofGrant)
-                { ForwardedConnections.Needed = [ "github" ]; ForwardedConnections.Wanted = [ "jira" ] }
+                { ForwardedConnections.Needed = [ "github", ConnectionRoute.Git ]
+                  ForwardedConnections.Wanted = [ "jira", ConnectionRoute.Api ] }
                 "each by how it was selected"
 
         testCase "a connection the host grants always is needed" <| fun () ->
             Expect.equal
-                (ResourceProfile.grants ResourceProfile.empty [ Connection "github" ] [] [] |> expect |> ForwardedConnections.ofGrant)
-                { ForwardedConnections.Needed = [ "github" ]; ForwardedConnections.Wanted = [] }
+                (ResourceProfile.grants ResourceProfile.empty [ Connection ("github", ConnectionRoute.Git) ] [] []
+                 |> expect
+                 |> ForwardedConnections.ofGrant)
+                { ForwardedConnections.Needed = [ "github", ConnectionRoute.Git ]; ForwardedConnections.Wanted = [] }
                 "nothing selected it, and every sandbox holds it"
 
         // The file's whole claim: it says nothing a command could not be told. So what a

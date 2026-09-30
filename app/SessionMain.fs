@@ -1248,84 +1248,99 @@ Async.StartImmediate (
             sandboxBackend sandbox |> Sandboxes.hostAddressHere (Interop.hostname ())
         let forwardableCredentials : WorkSandboxes.CredentialSource list =
             [ { Name = GitHubConnection.connectionName
-                // The route, and only the route: nobody's credential is named at a start.
+                // `git` is the gateway, `api` the credential proxy (`GitHubAccess.route`).
+                Routes = [ ConnectionRoute.Git; ConnectionRoute.Api ]
+                // The routes, and only the routes: nobody's credential is named at a start.
                 // Each block is lent its own act's below, and a sandbox whose blocks are
                 // all somebody with no github connected is a sandbox where every push is
                 // refused in words — not one that never came up.
                 Provision =
-                    fun sandbox ->
+                    fun sandbox routes ->
                         async {
-                            match gatewayHostFor sandbox with
-                            | None ->
-                                let backend = SandboxRuntime.scopedBackend workBackend (SandboxRef.scope sandbox)
-                                return
-                                    WorkSandboxes.CredentialForwarding.Unforwardable (
-                                        sprintf
-                                            "github cannot be forwarded into a %s sandbox: its git would have no route to this session's gateway"
-                                            (SandboxBackend.describe backend))
-                            | Some host ->
-                                let cap = gitGateway.Grant sandbox
-                                let git =
-                                    { WorkSandboxes.Provision.empty with
-                                        GitConfig = GitGateway.gitConfig host gitGateway.Port cap
-                                        // The route's host, for a backend whose egress
-                                        // would otherwise refuse it (srt).
-                                        Domains = [ host ] }
-                                // And the API, where the proxy can be reached from.
-                                let api =
-                                    if CredentialProxy.reachable (sandboxBackend sandbox) then
-                                        CredentialProxy.provision credentialProxy GitHubAccess.route
-                                    else WorkSandboxes.Provision.empty
-                                return WorkSandboxes.CredentialForwarding.Forwarded (WorkSandboxes.Provision.merge git api)
+                            let git =
+                                if not (List.contains ConnectionRoute.Git routes) then Ok WorkSandboxes.Provision.empty
+                                else
+                                    match gatewayHostFor sandbox with
+                                    | None ->
+                                        let backend = SandboxRuntime.scopedBackend workBackend (SandboxRef.scope sandbox)
+                                        Error (
+                                            sprintf
+                                                "github cannot be forwarded by git into a %s sandbox: its git would have no route to this session's gateway"
+                                                (SandboxBackend.describe backend))
+                                    | Some host ->
+                                        let cap = gitGateway.Grant sandbox
+                                        Ok
+                                            { WorkSandboxes.Provision.empty with
+                                                GitConfig = GitGateway.gitConfig host gitGateway.Port cap
+                                                // The route's host, for a backend whose egress
+                                                // would otherwise refuse it (srt).
+                                                Domains = [ host ] }
+                            // The API, where the proxy can be reached from.
+                            let api =
+                                if List.contains ConnectionRoute.Api routes && CredentialProxy.reachable (sandboxBackend sandbox) then
+                                    CredentialProxy.provision credentialProxy GitHubAccess.route
+                                else WorkSandboxes.Provision.empty
+                            match git with
+                            | Error reason -> return WorkSandboxes.CredentialForwarding.Unforwardable reason
+                            | Ok git -> return WorkSandboxes.CredentialForwarding.Forwarded (WorkSandboxes.Provision.merge git api)
                         }
                 Revoke = gitGateway.Revoke
-                // What a block is lent: the loan its git carries on every request to the
-                // gateway, answered there with the credential of the block's act — and the
-                // commit identity behind that same credential. The push a loan is spent on
-                // is written to the log by the block's author, which is how the person
-                // whose credential it was finds out.
+                // What a block is lent, by the routes its sandbox forwards.
                 Lend =
-                    fun authority sandbox terminal block lentInto ->
+                    fun authority sandbox terminal block routes lentInto ->
                         async {
                             let owner = Authority.credential authority
-                            let! identity = identityFor owner
-                            match gatewayHostFor sandbox with
-                            | None -> return identity
-                            | Some host ->
-                                let secret =
-                                    gitGateway.Lend
-                                        sandbox
-                                        terminal
-                                        { Owner = owner
-                                          Resolve = fun () -> resolveGitHubToken owner
-                                          Refused = fun () -> reportGitHubNetworkFailure owner "the git gateway was answered 401"
-                                          Spent =
-                                            fun repo ->
-                                                async {
-                                                    let! _ =
-                                                        log.Append
-                                                            (Authority.author authority)
-                                                            (SessionEvent.GitCredentialSpent
-                                                                { GitCredentialSpent.MessageId =
-                                                                    MessageId.create (string (System.Guid.NewGuid ()))
-                                                                    |> Result.defaultWith failwith
-                                                                  Sandbox = sandbox
-                                                                  Terminal = terminal
-                                                                  Block = block
-                                                                  Owner = owner
-                                                                  Repo = repo
-                                                                  Actor = Authority.author authority })
-                                                    return ()
-                                                } }
-                                let lent = { identity with GitConfig = Some (GitGateway.loanConfig host gitGateway.Port secret) }
-                                // The API's stand-in, lent to the same act as the push: a
-                                // block's `gh` and its `git push` spend one person's credential.
-                                // In the variables the declaration lends it in, and — while srt
-                                // is routed to the proxy unasked — the route's own there.
-                                let variables =
-                                    lentInto
-                                    @ (if CredentialProxy.reachable (sandboxBackend sandbox) then GitHubAccess.route.Variables else [])
-                                let api =
+                            // By `git`: the loan its git carries on every request to the
+                            // gateway, answered there with the credential of the block's act —
+                            // and the commit identity behind that same credential. The push a
+                            // loan is spent on is written to the log by the block's author,
+                            // which is how the person whose credential it was finds out.
+                            let! git =
+                                async {
+                                    if not (List.contains ConnectionRoute.Git routes) then
+                                        return BlockEnv.none
+                                    else
+                                        let! identity = identityFor owner
+                                        match gatewayHostFor sandbox with
+                                        | None -> return identity
+                                        | Some host ->
+                                            let secret =
+                                                gitGateway.Lend
+                                                    sandbox
+                                                    terminal
+                                                    { Owner = owner
+                                                      Resolve = fun () -> resolveGitHubToken owner
+                                                      Refused = fun () -> reportGitHubNetworkFailure owner "the git gateway was answered 401"
+                                                      Spent =
+                                                        fun repo ->
+                                                            async {
+                                                                let! _ =
+                                                                    log.Append
+                                                                        (Authority.author authority)
+                                                                        (SessionEvent.GitCredentialSpent
+                                                                            { GitCredentialSpent.MessageId =
+                                                                                MessageId.create (string (System.Guid.NewGuid ()))
+                                                                                |> Result.defaultWith failwith
+                                                                              Sandbox = sandbox
+                                                                              Terminal = terminal
+                                                                              Block = block
+                                                                              Owner = owner
+                                                                              Repo = repo
+                                                                              Actor = Authority.author authority })
+                                                                return ()
+                                                            } }
+                                            return { identity with GitConfig = Some (GitGateway.loanConfig host gitGateway.Port secret) }
+                                }
+                            // By `api`: the API's stand-in, lent to the same act as the push,
+                            // so a block's `gh` and its `git push` spend one person's
+                            // credential. In the variables the declaration lends it in, and —
+                            // while srt is routed to the proxy unasked — the route's own there.
+                            let api =
+                                if not (List.contains ConnectionRoute.Api routes) then BlockEnv.none
+                                else
+                                    let variables =
+                                        lentInto
+                                        @ (if CredentialProxy.reachable (sandboxBackend sandbox) then GitHubAccess.route.Variables else [])
                                     CredentialProxy.lend
                                         credentialProxy
                                         GitHubAccess.route
@@ -1335,7 +1350,7 @@ Async.StartImmediate (
                                           CredentialProxy.Lender.Resolve = fun () -> resolveGitHubToken owner
                                           CredentialProxy.Lender.Refused =
                                             fun () -> reportGitHubNetworkFailure owner "the credential proxy was answered 401" }
-                                return BlockEnv.merge lent api
+                            return BlockEnv.merge git api
                         }
                 Retire =
                     fun terminal ->
