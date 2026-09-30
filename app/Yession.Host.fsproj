@@ -30,6 +30,7 @@
     <Compile Include="Emulator.fs" />
     <Compile Include="Fs.fs" />
     <Compile Include="Sandboxes.fs" />
+    <Compile Include="VolumeLeases.fs" />
     <!-- Attaching a terminal to somebody else's byte stream (Plan 16, part D). Beside the
          sandbox adapters because it is the same kind of thing: a way to get a PtyHandle. -->
     <Compile Include="AttachWs.fs" />
