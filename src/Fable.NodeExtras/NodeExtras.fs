@@ -1028,9 +1028,14 @@ module Thrown =
     /// made into text on its own terms, where `String(x)` used to be asked — and answered
     /// `[object Object]` for an object, `null` in the middle of a sentence for nothing, and
     /// `Error` for an error carrying no message. An `Error` is its message, or its name when
-    /// the message is empty; text is itself; a number or a boolean is its digits or its word;
-    /// nothing at all says so; anything else is its JSON, which is at least the value, or — for
-    /// the values JSON has no text for, a function or a symbol — says that much.
+    /// the message is empty; an F# exception is its message too; text is itself; a number or a
+    /// boolean is its digits or its word; nothing at all says so; anything else is its JSON,
+    /// which is at least the value, or — for the values JSON has no text for, a function or a
+    /// symbol — says that much.
+    ///
+    /// The F# case is its own because Fable's `Exception` is deliberately NOT an `Error` (it
+    /// skips the stack capture), so `isError` answers no for `raise (exn "…")` and it used to
+    /// fall through to the JSON — `{"message":"…"}` where a sentence wanted the message.
     let describe (thrown: obj) : string =
         match thrown with
         | null -> "nothing"
@@ -1040,14 +1045,15 @@ module Thrown =
         | error when isError error ->
             let error = unbox<JsError> error
             if System.String.IsNullOrEmpty error.message then error.name else error.message
+        | :? exn as error when not (System.String.IsNullOrEmpty error.Message) -> error.Message
         | value ->
             match (try JS.JSON.stringify value with _ -> null) with
             | null -> "a value with no text"
             | json -> json
 
     /// `new Error(message)` — the platform's own error, not F#'s `exn`, which Fable compiles
-    /// to a class of its own. Both are `instanceof Error`, and only one of them is what a
-    /// listener written in JavaScript will have its hands on.
+    /// to a class of its own that is NOT `instanceof Error`. Only this one is what a listener
+    /// written in JavaScript expects to have its hands on.
     [<Emit("new Error($0)")>]
     let errorWith (message: string) : exn = jsNative
 
