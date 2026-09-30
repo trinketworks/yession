@@ -1465,7 +1465,7 @@ do
             // empty one, and a caret taken over an empty text is a caret at index nothing.
             if text.length = 0 then
                 ClientModel.chapterNameAt messageId model |> Option.iter (fun named -> text.insert (0, named))
-            let at (index: int) = ProseMirror.relPosFromTypeIndex (box text) index |> ProseMirror.encodeRel
+            let at (index: int) = ProseMirror.relPosFromTypeIndex text index |> ProseMirror.encodeRel
             dispatch (
                 RemotePresenceMsg
                     { Who = ActorRef.PeerRef peerId

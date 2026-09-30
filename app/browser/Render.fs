@@ -661,8 +661,7 @@ let create (deps: Deps) : Renderer =
                 | Some key ->
                     match fieldOfKey key, inputSelection el with
                     | Some field, Some (anchor, head) ->
-                        let root = box (texts.Text key)
-                        let enc i = ProseMirror.relPosFromTypeIndex root i |> ProseMirror.encodeRel
+                        let enc i = ProseMirror.relPosFromTypeIndex (texts.Text key) i |> ProseMirror.encodeRel
                         sendFocus (Some { Field = field; Pos = { Anchor = enc anchor; Head = enc head } })
                     | _ -> sendFocus None
                 | None -> sendFocus None

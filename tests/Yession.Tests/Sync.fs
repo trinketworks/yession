@@ -49,13 +49,6 @@ let private syncBoth (a: Y.Doc) (b: Y.Doc) =
     Y.applyUpdate (b, Y.encodeStateAsUpdate a)
     Y.applyUpdate (a, Y.encodeStateAsUpdate b)
 
-/// A caret `index` characters into `text`: yjs's `createRelativePositionFromTypeIndex`, typed
-/// for the one kind of type this suite takes a caret in. `Fable.Yjs` declares it over
-/// `AbstractType<obj option>`, which no `Y.Text` is to the compiler, so the typed signature is
-/// written here rather than reached with a cast.
-[<Fable.Core.Import("createRelativePositionFromTypeIndex", "yjs")>]
-let private caretIn (text: Y.Text) (index: float) : Utils.RelativePosition.RelativePosition = Fable.Core.Util.jsNative
-
 /// An entry in one of the codec's keyed roots, written the way a peer's update would arrive:
 /// straight onto the doc, under no origin anything here owns. The cases that use it write what
 /// no build of ours writes — that is the point — so writing it by hand is the only way to ask
@@ -460,7 +453,7 @@ let private codecTests =
                 SyncedStateSync.chapterNameText doc (MessageId.value messageId)
                 |> Option.defaultWith (fun () -> failwith "the chapter's name should be in the doc")
             // A caret after "ship" in the seeded name, taken before anybody types.
-            let caret = caretIn text 4.0
+            let caret = Fable.ProseMirror.ProseMirror.relPosFromTypeIndex text 4
             let seeded = (p.Model ()).Synced.Chapters |> Map.find messageId
             p.Dispatch (user (EditChapterNameMsg (messageId, Text.edit "ship it now" seeded.Name)))
             Expect.equal

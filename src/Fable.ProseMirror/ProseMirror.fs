@@ -571,54 +571,96 @@ module ProseMirror =
 
     // --- Yjs relative positions (survive concurrent edits) + lib0 base64 for the wire --------
 
+    /// A position in a Yjs type that stays put under concurrent edits: yjs's own
+    /// `RelativePosition`, as `Fable.Yjs` declares it.
+    type RelativePosition = Utils.RelativePosition.RelativePosition
+
     [<Import("encodeRelativePosition", "yjs")>]
-    let private encodeRelPos (rp: obj) : JS.Uint8Array = jsNative
+    let private encodeRelPos (rp: RelativePosition) : JS.Uint8Array = jsNative
     [<Import("decodeRelativePosition", "yjs")>]
-    let private decodeRelPos (bytes: JS.Uint8Array) : obj = jsNative
+    let private decodeRelPos (bytes: JS.Uint8Array) : RelativePosition = jsNative
+    /// `Fable.Yjs` declares this over `AbstractType<obj option>`, which neither a `Y.Text` nor
+    /// a `Y.XmlFragment` is to the compiler, so it is declared again here over the type's own
+    /// event parameter — any shared type, and only a shared type.
     [<Import("createRelativePositionFromTypeIndex", "yjs")>]
-    let relPosFromTypeIndex (typ: obj) (index: int) : obj = jsNative
+    let private relPosIn (typ: Types.AbstractType.AbstractType<'event>) (index: int) : RelativePosition = jsNative
     [<Import("createAbsolutePositionFromRelativePosition", "yjs")>]
-    let private createAbsPos (rp: obj) (doc: Y.Doc) : obj = jsNative
+    let private createAbsPos (rp: RelativePosition) (doc: Y.Doc) : Utils.RelativePosition.AbsolutePosition option =
+        jsNative
     let private toBase64 = Lib0.Buffer.toBase64
     let private fromBase64 = Lib0.Buffer.fromBase64
 
+    /// A position `index` items into a shared type (a `Y.Text`'s characters, a
+    /// `Y.XmlFragment`'s children), anchored to the content there rather than the count.
+    let relPosFromTypeIndex (typ: #Types.AbstractType.AbstractType<'event>) (index: int) : RelativePosition =
+        relPosIn (typ :> Types.AbstractType.AbstractType<'event>) index
+
     /// A relative position -> its base64 wire form.
-    let encodeRel (relPos: obj) : string = toBase64 (encodeRelPos relPos)
+    let encodeRel (relPos: RelativePosition) : string = toBase64 (encodeRelPos relPos)
     /// Base64 wire form -> a relative position.
-    let decodeRel (encoded: string) : obj = decodeRelPos (fromBase64 encoded)
+    let decodeRel (encoded: string) : RelativePosition = decodeRelPos (fromBase64 encoded)
     /// The absolute index of a base64 relative position in a `Y.Text`/`Y.XmlFragment` on `doc`,
     /// or `None` if it no longer resolves (its anchor content was deleted).
     let absIndexInDoc (doc: Y.Doc) (encoded: string) : int option =
-        match createAbsPos (decodeRel encoded) doc with
-        | null -> None
-        | abs -> Some (abs?index |> unbox<int>)
+        createAbsPos (decodeRel encoded) doc |> Option.map (fun abs -> int abs.index)
 
     // --- y-prosemirror position bridging (ProseMirror positions <-> Yjs relative positions) --
 
-    [<Import("ySyncPluginKey", "y-prosemirror")>]
-    let ySyncPluginKey : PluginKey<obj, obj> = jsNative
-    [<Import("getRelativeSelection", "y-prosemirror")>]
-    let private getRelativeSelection (binding: obj) (state: EditorState) : obj = jsNative
-    [<Import("relativePositionToAbsolutePosition", "y-prosemirror")>]
-    let private relToAbs (doc: Y.Doc) (typ: obj) (relPos: obj) (mapping: obj) : obj = jsNative
+    /// y-prosemirror's map between the editor's nodes and the fragment's items. Opaque: it is
+    /// only ever handed back to y-prosemirror.
+    type YSyncMapping =
+        interface end
 
-    /// The ySync binding for a state (holds the ProseMirror<->Yjs `mapping`, the `type`, `doc`).
-    let syncBinding (state: EditorState) : obj = (pluginKeyGetState ySyncPluginKey state)?binding
+    /// What the ySync plugin binds an editor to: the doc, the fragment, and the map between.
+    [<AllowNullLiteral>]
+    type YSyncBinding =
+        abstract doc : Y.Doc
+        abstract ``type`` : Y.XmlFragment
+        abstract mapping : YSyncMapping
+
+    /// What the ySync plugin keeps in a state. `binding` is absent until the plugin has bound.
+    [<AllowNullLiteral>]
+    type YSyncState =
+        abstract binding : YSyncBinding option
+
+    /// What the ySync plugin's transactions carry under its key. Opaque: nothing here reads
+    /// it; the key is wanted as a transaction origin.
+    type YSyncMeta =
+        interface end
+
+    /// A selection as two relative positions over the editor's fragment.
+    type private RelativeSelection =
+        abstract anchor : RelativePosition
+        abstract head : RelativePosition
+
+    [<Import("ySyncPluginKey", "y-prosemirror")>]
+    let ySyncPluginKey : PluginKey<YSyncState, YSyncMeta> = jsNative
+    [<Import("getRelativeSelection", "y-prosemirror")>]
+    let private getRelativeSelection (binding: YSyncBinding) (state: EditorState) : RelativeSelection = jsNative
+    [<Import("relativePositionToAbsolutePosition", "y-prosemirror")>]
+    let private relToAbs
+        (doc: Y.Doc)
+        (typ: Y.XmlFragment)
+        (relPos: RelativePosition)
+        (mapping: YSyncMapping)
+        : int option =
+        jsNative
+
+    /// The ySync binding for a state, when the plugin runs in it and has bound its fragment.
+    let syncBinding (state: EditorState) : YSyncBinding option =
+        match pluginKeyGetState ySyncPluginKey state with
+        | null -> None
+        | synced -> synced.binding
 
     /// The editor's current selection as base64 relative anchor/head over its body fragment.
     let relSelectionOf (state: EditorState) : (string * string) option =
-        match syncBinding state with
-        | null -> None
-        | binding ->
+        syncBinding state
+        |> Option.map (fun binding ->
             let rs = getRelativeSelection binding state
-            Some (encodeRel rs?anchor, encodeRel rs?head)
+            encodeRel rs.anchor, encodeRel rs.head)
 
     /// Map a base64 relative position back to an absolute ProseMirror position in this editor,
     /// or `None` if it no longer resolves.
     let absPosInBody (state: EditorState) (encoded: string) : int option =
-        match syncBinding state with
-        | null -> None
-        | binding ->
-            match relToAbs binding?doc binding?``type`` (decodeRel encoded) binding?mapping with
-            | null -> None
-            | pos -> Some (unbox<int> pos)
+        syncBinding state
+        |> Option.bind (fun binding -> relToAbs binding.doc binding.``type`` (decodeRel encoded) binding.mapping)
