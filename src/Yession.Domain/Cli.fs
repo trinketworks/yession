@@ -101,13 +101,13 @@ type private Decl =
 
 /// One option a bin accepts, and what reading it back answers with. Private, so every option
 /// is built by `flag`, `value`, `values` or `parsedValue` and its declared shape cannot
-/// disagree with how it is read: `Declared.Refuses` and `Read` are minted from one reader,
+/// disagree with how it is read: `Declared.Refuses` and `Reader` are minted from one reader,
 /// together, by `declare`.
 [<NoEquality; NoComparison>]
 type Opt<'a> =
     private
         { Declared : Decl
-          Read : string list option -> Result<'a, string> }
+          Reader : string list option -> Result<'a, string> }
 
 /// Everything a bin accepts, in one value — the thing `--help` prints and the parser reads,
 /// so they cannot drift. Built up by `accepts`, one option at a time, because the options of
@@ -136,7 +136,7 @@ type Parsed =
 
 // --- declaring a command line ------------------------------------------------------------
 
-/// An option from its reader: the one place `Refuses` and `Read` are made, so they cannot be
+/// An option from its reader: the one place `Refuses` and `Reader` are made, so they cannot be
 /// two readers that disagree.
 let private declare
     (long: string)
@@ -153,7 +153,7 @@ let private declare
                 match read given with
                 | Ok _ -> None
                 | Error message -> Some message }
-      Read = read }
+      Reader = read }
 
 /// A boolean switch: given or not.
 let flag (long: string) (short: string option) (help: string) : Opt<bool> =
@@ -240,7 +240,7 @@ let valueOf (opt: Opt<'a>) (parsed: Parsed) : 'a =
     if not (Set.contains long parsed.Declared) then
         failwithf "--%s was read off a parse of a spec that does not declare it" long
     else
-        match opt.Read (Map.tryFind long parsed.Given) with
+        match opt.Reader (Map.tryFind long parsed.Given) with
         | Ok resolved -> resolved
         | Error message -> failwithf "--%s was refused on reading after the parse accepted it: %s" long message
 
