@@ -1468,7 +1468,7 @@ let private restartTests =
                 let peerDoc = Y.Doc.Create ()
                 let registry = Yession.Domain.Collab.BodyRegistry peerDoc
                 let bob = PeerId.create "bob" |> expect
-                let runner = Harness.run (Client.makeProgram peerDoc (ClientModel.init (peer "bob" "Bob")))
+                let runner = Harness.run (Client.makeProgram Client.Ports.offline peerDoc (ClientModel.init (peer "bob" "Bob")))
                 Body.author registry runner bob "are you there?"
                 Body.send registry runner bob |> ignore
                 let processDoc = Y.Doc.Create ()
@@ -1516,7 +1516,7 @@ let private restartTests =
 /// nobody asked for is still a turn.
 let private schedulerOverPickedModel (choice: ModelId option) =
     let doc = Y.Doc.Create ()
-    let picker = Harness.run (Client.makeProgram doc (ClientModel.init (peer "ada" "Ada")))
+    let picker = Harness.run (Client.makeProgram Client.Ports.offline doc (ClientModel.init (peer "ada" "Ada")))
     picker.Dispatch (user (SetModelMsg choice))
     let log = newLog ()
     appendNow log (blockStarted "b1" true (Principal.Peer ada))

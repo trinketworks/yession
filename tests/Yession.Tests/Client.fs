@@ -78,7 +78,7 @@ let tests =
                 let checkConnected, connected = waiterFor (fun m -> m.Connection = Connected)
                 let checkReconnecting, reconnecting = waiterFor (fun m -> m.Connection = Reconnecting)
                 let dispatch msg =
-                    model <- ClientModel.update msg model
+                    model <- Support.step msg model
                     checkConnected model
                     checkReconnecting model
 
@@ -103,7 +103,7 @@ let tests =
                 // catch-up has lasted long enough to be worth reporting, which is the only
                 // state that shows them (a catch-up too brief to wait on is silent, so that
                 // sending a message does not flicker the status).
-                let html = Support.render (ClientModel.update (CatchUpSlowMsg true) model)
+                let html = Support.render (Support.step (CatchUpSlowMsg true) model)
                 Expect.isTrue (html.Contains Dom.Hooks.lastProcessedOffset) "last-processed offset display rendered"
                 Expect.isTrue (html.Contains Dom.Hooks.latestKnownOffset) "latest-known offset display rendered"
                 Expect.isTrue (html.Contains Dom.Hooks.catchUp) "catch-up indicator rendered"

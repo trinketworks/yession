@@ -1340,7 +1340,7 @@ let private uiChecklistTests =
             let shut = Support.render folded
             Expect.isTrue ((control shut).Contains "aria-expanded=\"false\"") "folded by default, and the control says so"
             Expect.isTrue (shut.Contains (Dom.attr "data-fold-open" "no")) "and the particulars agree"
-            let open' = Support.render (ClientModel.update (ToggleFoldMsg (FoldKey.Act note.MessageId)) folded)
+            let open' = Support.render (Support.step (ToggleFoldMsg (FoldKey.Act note.MessageId)) folded)
             Expect.isTrue ((control open').Contains "aria-expanded=\"true\"") "one press unfolds it, and the control says so"
             Expect.isTrue (open'.Contains (Dom.attr "data-fold-open" "yes")) "and the particulars agree"
 
@@ -2067,7 +2067,7 @@ let private paneActionsTests =
         testCase "a file's way to have it is in the row, not inside the picture" <| fun () ->
             let html =
                 representativeModel
-                |> ClientModel.update (ShowInPaneMsg (Reading (ContentTab picture)))
+                |> Support.step (ShowInPaneMsg (Reading (ContentTab picture)))
                 |> Support.render
             let row = rowFor "content:artifacts/chart.png/0000-e7f1a6" html
             Expect.isTrue
@@ -2087,7 +2087,7 @@ let private paneActionsTests =
         testCase "a content tab in the strip says which kind it is" <| fun () ->
             let html =
                 representativeModel
-                |> ClientModel.update (ShowInPaneMsg (Reading (ContentTab picture)))
+                |> Support.step (ShowInPaneMsg (Reading (ContentTab picture)))
                 |> Support.render
             let tab =
                 let at = html.IndexOf (Dom.attr Dom.Hooks.paneTab "content:artifacts/chart.png/0000-e7f1a6")
@@ -2136,7 +2136,7 @@ let private paneActionsTests =
                   EndedAt = DateTimeOffset (2026, 8, 8, 0, 2, 0, TimeSpan.Zero) }
             let html =
                 representativeModel
-                |> ClientModel.update (ShowInPaneMsg (Reading (StretchTab stretch)))
+                |> Support.step (ShowInPaneMsg (Reading (StretchTab stretch)))
                 |> Support.render
             Expect.isFalse (html.Contains Dom.Hooks.paneActions) "no row"
     ]
@@ -2548,7 +2548,7 @@ let private syncStatusTests =
         // The flag describes a catch-up that is RUNNING, so it cannot outlive one: a timer
         // that fires just as the page lands must not leave a status nothing can clear.
         testCase "'slow' cannot be claimed once there is nothing left to catch up on" <| fun () ->
-            let model = ClientModel.update (CatchUpSlowMsg true) settled
+            let model = Support.step (CatchUpSlowMsg true) settled
             Expect.isFalse model.EventConsumer.CatchUpIsSlow "a late timer is refused, not stored"
             Expect.isFalse ((Support.render model).Contains Dom.Hooks.catchUp) "and nothing is shown"
     ]

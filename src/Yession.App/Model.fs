@@ -992,6 +992,39 @@ type ClientMsg =
     | DeletePendingMsg of QueueId
     /// Reorder a queued command within its terminal: one fractional-index register write.
     | ReorderPendingMsg of QueueId * order: float
+    /// Take a terminal's stdin — enter live mode, stealing the lease if another peer holds it
+    /// (Plan 13, stage 2e). There is one control because there is one act, and any peer may
+    /// perform it. Asked of the session (`ClientEffect.TakeTerminal`); the lease arrives as a
+    /// `TerminalLeaseTaken` event, so the model changes only when every peer's does.
+    | TakeTerminalMsg of TerminalId
+    /// Hand a terminal this peer holds back to block mode. Refused by the session unless this
+    /// peer is the holder.
+    | ReleaseTerminalMsg of TerminalId
+    /// Type the shell instrumentation in again after a terminal stopped marking (Plan 13,
+    /// stage 2f). Any peer may — it repairs rather than takes.
+    | RearmTerminalMsg of TerminalId
+    /// Ask the provider for a closed terminal's stream again (Plan 19, step 4).
+    | ReattachTerminalMsg of TerminalId
+    /// End a terminal. Not closing its tab: this is the one verb that stops what runs in it.
+    | CloseTerminalMsg of TerminalId
+
+/// What a message asks of the world outside the model, as a value `ClientModel.update` returns
+/// beside the next model.
+///
+/// Data rather than an Elmish `Cmd`, because a `Cmd` is a function: a test can see that one
+/// was returned and never what it would do. A value says which request a message makes, in
+/// the cheap tier, next to the fold that decided it; carrying it out is the composition
+/// root's, which is handed the ports to do it with (`Client.makeProgram`).
+///
+/// Qualified access because the Domain's commands share these names — `CloseTerminal` is the
+/// request as it reaches the session, and this is this client asking for it.
+[<RequireQualifiedAccess>]
+type ClientEffect =
+    | TakeTerminal of TerminalId
+    | ReleaseTerminal of TerminalId
+    | RearmTerminal of TerminalId
+    | ReattachTerminal of TerminalId
+    | CloseTerminal of TerminalId
 
 module ClientModel =
 
@@ -1968,11 +2001,11 @@ module ClientModel =
                 | Pending.Ready | Pending.Sending | Pending.Refused _ -> None)
         catchUp @ copied @ pending @ quiet
 
-    /// Fold a message into the model.
+    /// Fold a message into the model — the state half of `update`, its only caller.
     /// Piped through `reconcileLaunch` (see its doc) so the launch surface anchors here,
     /// after every message, rather than being read live from whatever the connection
     /// happens to be doing at render time.
-    let rec update (msg: ClientMsg) (model: ClientModel) : ClientModel =
+    let rec private fold (msg: ClientMsg) (model: ClientModel) : ClientModel =
         reconcileLaunch (
         match msg with
         | ConnectingMsg ->
@@ -2286,12 +2319,12 @@ module ClientModel =
             // a page and the same lines arriving one at a time cannot come to differ.
             let folded =
                 records
-                |> List.fold (fun m (seq, record) -> update (TerminalRecordMsg (terminal, seq, record)) m) model
+                |> List.fold (fun m (seq, record) -> fold (TerminalRecordMsg (terminal, seq, record)) m) model
             let withHeader =
                 match header with
-                | Some h -> update (TerminalHeaderMsg (terminal, h)) folded
+                | Some h -> fold (TerminalHeaderMsg (terminal, h)) folded
                 | None -> folded
-            update (TerminalReadThroughMsg (terminal, readThrough)) withHeader
+            fold (TerminalReadThroughMsg (terminal, readThrough)) withHeader
         | TerminalAvailableMsg (terminal, length) ->
             let feed = terminalFeed terminal model
             { model with
@@ -2520,5 +2553,23 @@ module ClientModel =
                 |> withSynced
                     { model.Synced with Chapters = Chapters.rename item said model.Synced.Chapters }
             | None -> model
-)
+        // Requests of the session and nothing else: what they change arrives as events, which
+        // every peer folds alike, so a local guess here would be a state only this peer had.
+        | TakeTerminalMsg _
+        | ReleaseTerminalMsg _
+        | RearmTerminalMsg _
+        | ReattachTerminalMsg _
+        | CloseTerminalMsg _ -> model
+        )
 
+    /// A message's consequences: the next model, and what it asks of the world outside it.
+    let update (msg: ClientMsg) (model: ClientModel) : ClientModel * ClientEffect list =
+        let effects =
+            match msg with
+            | TakeTerminalMsg terminal -> [ ClientEffect.TakeTerminal terminal ]
+            | ReleaseTerminalMsg terminal -> [ ClientEffect.ReleaseTerminal terminal ]
+            | RearmTerminalMsg terminal -> [ ClientEffect.RearmTerminal terminal ]
+            | ReattachTerminalMsg terminal -> [ ClientEffect.ReattachTerminal terminal ]
+            | CloseTerminalMsg terminal -> [ ClientEffect.CloseTerminal terminal ]
+            | _ -> []
+        fold msg model, effects

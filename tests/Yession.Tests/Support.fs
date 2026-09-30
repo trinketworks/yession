@@ -225,6 +225,11 @@ let saidOn (model: ClientModel) : string list =
 
 let render (model: ClientModel) : string = Ssr.renderModel model
 
+/// The model after one message, for a case that asserts on state. What the message asked of
+/// the world outside the model is `ClientModel.update`'s other half, and a case about that
+/// reads it there.
+let step (msg: ClientMsg) (model: ClientModel) : ClientModel = ClientModel.update msg model |> fst
+
 /// Open one fold, and answer only what is behind it.
 ///
 /// A shut fold builds NOTHING (`View.foldBodyIn`): the wrapper is always there, so every
@@ -242,7 +247,7 @@ let render (model: ClientModel) : string = Ssr.renderModel model
 /// same words, and one of them was — the act's own headline, one line above the disclosure
 /// quoting it.
 let behindFold (key: FoldKey) (model: ClientModel) : string =
-    let html = render (ClientModel.update (ToggleFoldMsg key) model)
+    let html = render (step (ToggleFoldMsg key) model)
     let hook = sprintf "data-fold-body=\"%s\"" (FoldKey.value key)
     match html.IndexOf hook with
     | -1 ->
@@ -590,7 +595,9 @@ let connectInMemoryClientVia
         let local = peer id name
         let registry = BodyRegistry doc
         let texts = TextRegistry doc
-        let runner = Harness.run (Client.makeProgram doc (ClientModel.init local))
+        // Read through a getter, for the reason `connectClientWith` gives.
+        let wired : Client.Connection option ref = ref None
+        let runner = Harness.run (Client.makeProgram { Client.Ports.Connection = fun () -> wired.Value } doc (ClientModel.init local))
         // As the browser wires it (see `connectClientWith`).
         DraftSlot.follow doc registry local.PeerId (user >> runner.Dispatch) |> ignore
         let hello = { PeerId = local.PeerId; DisplayName = name; Token = host.MintPeerToken () }
@@ -599,6 +606,7 @@ let connectInMemoryClientVia
             { makeOptions dispatch with
                 ReadPosition = Some (fun () -> (runner.Model ()).EventConsumer.LastProcessedOffset) }
         let connection = Client.connect options doc registry texts hello dispatch clientEnd
+        wired.Value <- Some connection
         Async.StartImmediate connection.Run
         do! runner.WaitFor (fun m -> m.Connection = Connected)
         return { Runner = runner; Connection = connection; Registry = registry; Texts = texts; Channel = clientEnd; Doc = doc; Hello = hello }

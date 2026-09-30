@@ -65,9 +65,9 @@ let private page (names: string list) (next: string option) : RepoPage =
 
 let private clientAt (latest: int64) (events: EventEnvelope<SessionEvent> list) : ClientModel =
     ClientModel.init { PeerId = ada; DisplayName = "swift-heron" }
-    |> ClientModel.update (ConnectedMsg { SessionId = sessionId; AssignedDisplayName = "swift-heron"; LatestOffset = Some (offset latest) })
-    |> ClientModel.update HistoryReadMsg
-    |> ClientModel.update
+    |> Support.step (ConnectedMsg { SessionId = sessionId; AssignedDisplayName = "swift-heron"; LatestOffset = Some (offset latest) })
+    |> Support.step HistoryReadMsg
+    |> Support.step
         (EventsPageMsg { Events = events; LastOffset = events |> List.tryLast |> Option.map (fun e -> e.Offset); IsEnd = true })
 
 /// A fresh session: created, one peer in — nothing on the timeline.
@@ -75,7 +75,7 @@ let private fresh =
     [ at 0L (SessionStarted { MessageId = MessageId.create "msg-started" |> expect })
       at 1L (PeerJoined { PeerId = ada; DisplayName = "swift-heron"; User = None }) ]
 
-let private launch (msg: LaunchMsg) (model: ClientModel) = ClientModel.update (LaunchMsg msg) model
+let private launch (msg: LaunchMsg) (model: ClientModel) = Support.step (LaunchMsg msg) model
 
 let private offeredTests =
     testList "when it is offered" [
@@ -87,7 +87,7 @@ let private offeredTests =
         testCase "a client that has not connected is not, whatever it has read" <| fun () ->
             let unconnected =
                 ClientModel.init { PeerId = ada; DisplayName = "swift-heron" }
-                |> ClientModel.update HistoryReadMsg
+                |> Support.step HistoryReadMsg
             Expect.isFalse (ClientModel.launchOffered unconnected) "the command it produces needs a session to send it to"
 
         testCase "a client still reading is not: the log may hold the repo it is about to see" <| fun () ->
@@ -298,13 +298,13 @@ let private answerTests =
             |> launch (LaunchSent (request, target))
 
         testCase "a rejection at the door is shown, and choosing is open again" <| fun () ->
-            let rejected = ClientModel.update (CommandAnsweredMsg (request, CommandRejected "this session already has octo/other")) waiting
+            let rejected = Support.step (CommandAnsweredMsg (request, CommandRejected "this session already has octo/other")) waiting
             Expect.equal rejected.Launch.Stage Choosing "back to choosing"
             Expect.equal rejected.Launch.Problem (Some "this session already has octo/other") "with the reason"
             Expect.stringContains (render rejected) "data-repo-picker-problem" "on the surface"
 
         testCase "another command's answer is not this surface's" <| fun () ->
-            let other = ClientModel.update (CommandAnsweredMsg (RequestId.fresh (), CommandRejected "no")) waiting
+            let other = Support.step (CommandAnsweredMsg (RequestId.fresh (), CommandRejected "no")) waiting
             Expect.equal other.Launch.Stage (Sent (request, target)) "still waiting on its own"
             Expect.equal other.Launch.Problem None "and nothing to say"
 
@@ -317,16 +317,16 @@ let private answerTests =
             Expect.isFalse ((render waiting).Contains "data-repo-picker") "and nothing of it is drawn"
 
         testCase "admitted, the card stays aside while the clone runs, on the row that was tapped" <| fun () ->
-            let admitted = ClientModel.update (CommandAnsweredMsg (request, CommandAccepted)) waiting
+            let admitted = Support.step (CommandAnsweredMsg (request, CommandAccepted)) waiting
             Expect.equal admitted.Launch.Stage (Cloning target) "cloning"
             Expect.isTrue (Launch.committed admitted.Launch) "still committed"
             Expect.isFalse (ClientModel.launchOffered admitted) "so the card stays aside — the timeline is showing the add"
             Expect.isTrue (Launch.busy admitted.Launch) "and no row is for holding meanwhile"
 
         testCase "a clone that failed reaches the screen that asked, while it is waiting" <| fun () ->
-            let admitted = ClientModel.update (CommandAnsweredMsg (request, CommandAccepted)) waiting
+            let admitted = Support.step (CommandAnsweredMsg (request, CommandAccepted)) waiting
             let failed =
-                ClientModel.update
+                Support.step
                     (EventsPageMsg
                         { Events =
                             [ at 2L

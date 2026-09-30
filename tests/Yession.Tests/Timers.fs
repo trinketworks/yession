@@ -74,7 +74,7 @@ let private completed (offset: int64) (body: string) : ClientMsg =
     page [ envelope offset (AgentMessageCompleted { AgentTurnId = turn; MessageId = writing; Body = body }) ]
 
 let private fold (msgs: ClientMsg list) : ClientModel =
-    msgs |> List.fold (fun model msg -> ClientModel.update msg model) (ClientModel.init (peer "ada" "Ada"))
+    msgs |> List.fold (fun model msg -> Support.step msg model) (ClientModel.init (peer "ada" "Ada"))
 
 let private thinking (model: ClientModel) : bool =
     match model.Conversation.Items |> List.tryFind (fun item -> item.MessageId = writing) with
@@ -84,7 +84,7 @@ let private thinking (model: ClientModel) : bool =
 /// The real client program, with the model's timers running on a hand-turned clock.
 let private program () =
     let clock = ManualClock ()
-    let runner = Harness.run (Client.makeProgram (Y.Doc.Create ()) (ClientModel.init (peer "ada" "Ada")) |> Client.withTimers clock.Clock)
+    let runner = Harness.run (Client.makeProgram Client.Ports.offline (Y.Doc.Create ()) (ClientModel.init (peer "ada" "Ada")) |> Client.withTimers clock.Clock)
     clock, (fun msg -> runner.Dispatch (user msg)), runner.Model
 
 /// The program with a message open and nothing said in it yet.
@@ -143,13 +143,13 @@ let tests =
         testCase "a quiet measured before the latest words cannot make them read as a pause" <| fun () ->
             let before = fold [ opened; delta 3L "Looking" ]
             let stale = ClientModel.timers before |> List.map (fun timer -> timer.Fire)
-            let after = List.fold (fun model msg -> ClientModel.update msg model) (ClientModel.update (delta 4L " at it") before) stale
+            let after = List.fold (fun model msg -> Support.step msg model) (Support.step (delta 4L " at it") before) stale
             Expect.isFalse (thinking after) "the quiet belonged to the shorter body"
 
         testCase "writing already found quiet asks for no second wait" <| fun () ->
             let quiet =
                 let model = fold [ opened; delta 3L "Looking" ]
-                ClientModel.timers model |> List.fold (fun model timer -> ClientModel.update timer.Fire model) model
+                ClientModel.timers model |> List.fold (fun model timer -> Support.step timer.Fire model) model
             Expect.isEmpty (ClientModel.timers quiet) "a settled question is not asked again"
 
         testCase "catch-up that runs past its quiet interval is reported as slow" <| fun () ->
