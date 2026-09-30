@@ -21,6 +21,27 @@ let
 
   node-pty = pkgs.callPackage ./node-pty.nix { };
 
+  # The node the installed bins run — on macOS, re-signed ad hoc rather than nixpkgs' own.
+  # nixpkgs' node carries only the signature the linker wrote (`linker-signed`), and macOS will
+  # not durably record a grant for linker-signed code: the Manager keeps its secrets key in the
+  # login keychain (`KeyStore.keyring`), and a node the item was not created by is prompted on
+  # every read, "Always Allow" notwithstanding. Every nixpkgs bump that moved node therefore
+  # left the Manager hung before it listened, on a prompt no launchd agent can answer — a host
+  # tracking master rolled back every build from #980 on. A real ad-hoc signature is one
+  # macOS keeps a grant for, keyed by its cdhash, which moves only when node itself does.
+  # Sessions run on `process.execPath`, so they inherit this node too.
+  node =
+    if pkgs.stdenv.hostPlatform.isDarwin then
+      pkgs.runCommand "node-adhoc-${pkgs.nodejs_24.version}" {
+        nativeBuildInputs = [ pkgs.darwin.sigtool pkgs.cctools ];
+      } ''
+        mkdir -p $out/bin
+        cp ${pkgs.nodejs_24}/bin/node $out/bin/node
+        chmod u+w $out/bin/node
+        codesign -s - -f $out/bin/node
+      ''
+    else pkgs.nodejs_24;
+
   # claude-code is unfree; instantiate a nixpkgs that allows just that package (the agent
   # points at it so the SDK never needs its own native binary).
   claude-code = (import pkgs.path {
@@ -391,7 +412,7 @@ let
       # where a makeWrapper that failed is reported as the pipeline failing and names the node
       # that produced the list instead of the wrapper that could not be made.
       while IFS="$(printf '\t')" read -r name entry; do
-        makeWrapper ${pkgs.nodejs_24}/bin/node "$out/bin/$name" \
+        makeWrapper ${node}/bin/node "$out/bin/$name" \
           --add-flags "$out/libexec/yession/$entry" \
           --set-default YESSION_BIN_CLAUDE ${claude-code}/bin/claude \
           --set-default YESSION_BIN_GIT ${pkgs.git}/bin/git ${srtToolFlags}
