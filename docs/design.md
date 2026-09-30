@@ -284,13 +284,17 @@ sandboxes:
       DATABASE_URL: { secret: db-url }   # a name, never a value
       PATH: ${env.PATH}:/opt/tools       # composed over what lies beneath; `$${` is a literal `${`
     uses: [ npm-cache ]
-    wants: [ github ]                     # the operator's `{ connection: github }`, where offered
+    wants: [ github ]                     # the operator's `{ connection: { github: [git, api] } }`, where offered
 ```
 
 A connection — what lets `git push` and `gh` in a sandbox act as whoever each command runs for
-— is a resource like any other: the operator offers it (`github: { connection: github }`), a
-sandbox selects it under `uses` or `wants`, and what it forwards is what that selection reaches
-(`ForwardedConnections`, `WorkSandboxes.provisionSelection`).
+— is a resource like any other: the operator offers it (`github: { connection: { github: [git,
+api] } }`), a sandbox selects it under `uses` or `wants`, and what it forwards is what that
+selection reaches (`ForwardedConnections`, `WorkSandboxes.provisionSelection`). The operator
+names the ROUTES it is forwarded by (`ConnectionRoute`), each its own grant (`conn:github/git`):
+`git` is the git gateway, `api` the credential proxy, and a sandbox holding `git` alone is lent
+nothing its API client could spend. A route the provider does not offer is refused where a
+sandbox needs it.
 
 `${env.NAME}` in a value is what NAME would be in this sandbox without that line — the image's
 own `ENV` under docker, which is only known once the image is pulled or built, so the backend

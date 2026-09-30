@@ -586,9 +586,8 @@ let dispatch (services: CommandServices) : CommandDispatch =
                                             }
                                         | _ -> async { return "" }
                                     let forwarding =
-                                        match entry.Forwarded with
-                                        | [] -> "nothing forwarded into it"
-                                        | names -> "forwarding " + (names |> List.map ConnectionName.value |> String.concat ", ")
+                                        if Map.isEmpty entry.Forwarded then "nothing forwarded into it"
+                                        else "forwarding " + WorkSandboxes.ForwardedRoutes.describe entry.Forwarded
                                     return
                                         Ok (
                                             sprintf

@@ -55,6 +55,42 @@ type ResourceMount =
       At : string
       Mode : ResourceMountMode }
 
+/// How a forwarded connection reaches a sandbox — the MECHANISM, which is the session's and
+/// not the provider's: `Git` is the git gateway (a sandbox's git sends its requests there,
+/// and each block's are answered with its act's credential), `Api` is the credential proxy (a
+/// sandbox's HTTPS to the provider's API is answered there, with a stand-in swapped for the
+/// credential). Two, because those are the two ways this session has of lending a credential
+/// without handing it over; a provider offers whichever of them it has hosts for.
+///
+/// Closed, so a route an operator misspells is refused where the file is read rather than
+/// quietly forwarding nothing — and named rather than implied, so a sandbox that needs a
+/// repository's git is not also a sandbox whose every API call carries somebody's token.
+[<RequireQualifiedAccess>]
+type ConnectionRoute =
+    | Git
+    | Api
+
+module ConnectionRoute =
+
+    let all : ConnectionRoute list = [ ConnectionRoute.Git; ConnectionRoute.Api ]
+
+    /// The word a file writes and a grant prints.
+    let name (route: ConnectionRoute) : string =
+        match route with
+        | ConnectionRoute.Git -> "git"
+        | ConnectionRoute.Api -> "api"
+
+    let parse (raw: string) : Result<ConnectionRoute, string> =
+        match all |> List.tryFind (fun route -> name route = raw.Trim().ToLowerInvariant ()) with
+        | Some route -> Ok route
+        | None ->
+            Error (
+                sprintf
+                    "'%s' is not a route — a connection is forwarded by %s"
+                    raw
+                    (all |> List.map name |> String.concat " or ")
+            )
+
 /// The seven primitives, and there is no eighth.
 type ResourceLeaf =
     | Mount of ResourceMount
@@ -84,7 +120,12 @@ type ResourceLeaf =
     /// A leaf like any other so a repo selects it the way it selects everything else, under
     /// `uses` (refused where the operator offers none) or `wants` (nothing where it offers
     /// none), and an operator can grant it `always` or declare a sandbox around it.
-    | Connection of name: string
+    ///
+    /// ONE route of it, for the reason a declared `env` map is one leaf per variable: two
+    /// resources granting `github` by different routes are two grants that add up, where a
+    /// leaf carrying a set of routes would be two different leaves on one target — a
+    /// conflict, for asks that do not disagree.
+    | Connection of name: string * route: ConnectionRoute
 
 /// One resource as the operator declared it: either a thing, or a name for several things.
 ///
@@ -109,7 +150,7 @@ type ResourceTarget =
     | EndpointTarget of host: string
     | VariableTarget of name: string
     | ExecTarget of path: string
-    | ConnectionTarget of name: string
+    | ConnectionTarget of name: string * route: ConnectionRoute
 
 module ResourceLeaf =
 
@@ -123,7 +164,7 @@ module ResourceLeaf =
         | Endpoint host -> EndpointTarget host
         | Variable (name, _) -> VariableTarget name
         | Exec path -> ExecTarget path
-        | Connection name -> ConnectionTarget name
+        | Connection (name, route) -> ConnectionTarget (name, route)
         // A volume occupies the same axis a mount does — a container path — so a volume
         // and a mount at one target collide like two mounts would.
         | Volume (_, at) -> MountTarget at
@@ -171,7 +212,7 @@ module ResourceLeaf =
         | Variable (name, value) -> sprintf "env:%s=%s" name (quotedValue value)
         | Exec path -> sprintf "exec:%s" path
         | Volume (name, at) -> sprintf "vol:%s>%s" name at
-        | Connection name -> sprintf "conn:%s" name
+        | Connection (name, route) -> sprintf "conn:%s/%s" name (ConnectionRoute.name route)
 
     /// Every colliding pair in a set of leaves.
     ///
@@ -533,9 +574,10 @@ module GrantNotation =
              read as the end of the grant"
         | Exec _ -> "exec:PATH", "an executable, on PATH"
         | Connection _ ->
-            "conn:NAME",
-            "a connection this session forwards, spent as whoever each command runs for — \
-             its route, never its credential"
+            "conn:NAME/ROUTE",
+            "a connection this session forwards by one route — git through the gateway, api \
+             through the credential proxy — spent as whoever each command runs for, and never \
+             its credential"
 
     /// One leaf per kind. What makes `kind` a total match over the vocabulary rather than a
     /// list somebody keeps in step with it.
@@ -546,7 +588,7 @@ module GrantNotation =
           Volume ("yession-nix", "/nix")
           Variable ("CI", "1")
           Exec "/usr/bin/git"
-          Connection "github" ]
+          Connection ("github", ConnectionRoute.Git) ]
 
     /// Whether a written grant is of this kind, by the token the RENDERER emits for it —
     /// everything up to its first colon, read off `describe` rather than off the shape
@@ -797,7 +839,9 @@ module ResourceProfile =
 /// one kind of leaf whose realisation is the credential source's to decide rather than the
 /// host's confinement.
 [<RequireQualifiedAccess>]
-type ForwardedConnections = { Needed : string list; Wanted : string list }
+type ForwardedConnections =
+    { Needed : (string * ConnectionRoute) list
+      Wanted : (string * ConnectionRoute) list }
 
 module ForwardedConnections =
 
@@ -807,7 +851,7 @@ module ForwardedConnections =
     let ofGrant (leaves: ResourceLeaf list, wantedOnly: Set<ResourceLeaf>) : ForwardedConnections =
         let named (leaf: ResourceLeaf) =
             match leaf with
-            | Connection name -> Some name
+            | Connection (name, route) -> Some (name, route)
             | _ -> None
         { Needed = leaves |> List.filter (fun leaf -> not (Set.contains leaf wantedOnly)) |> List.choose named
           Wanted = wantedOnly |> Set.toList |> List.choose named }
