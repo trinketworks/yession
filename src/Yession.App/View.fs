@@ -2210,7 +2210,7 @@ module View =
             html $"""
                 <div id="fold-{FoldKey.value key}" class="{width opened}"
                      data-fold-body="{FoldKey.value key}" data-fold-open="{if opened then "yes" else "no"}">
-                  <div class="{inner}">{body}</div>
+                  <div class="{inner}">{if opened then body else []}</div>
                 </div>"""
         let foldBody = foldBodyIn (fun opened -> if opened then Style.foldBodyOpen else Style.foldBodyShut)
         let foldBodyWide = foldBodyIn (fun opened -> if opened then Style.foldBodyWideOpen else Style.foldBodyWideShut)
