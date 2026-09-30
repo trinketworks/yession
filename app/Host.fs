@@ -778,7 +778,7 @@ let startFull
                             SyncedStateSync.nameTextOf doc subject
                             |> Option.map (fun text ->
                                 // Collapsed: a writer's caret is a bar, never a selection.
-                                let at = Fable.ProseMirror.ProseMirror.relPosFromTypeIndex (box text) index |> Fable.ProseMirror.ProseMirror.encodeRel
+                                let at = Fable.ProseMirror.ProseMirror.relPosFromTypeIndex text index |> Fable.ProseMirror.ProseMirror.encodeRel
                                 { Field = fieldOf subject; Pos = { Anchor = at; Head = at } }))
                     broadcastPresence
                         // The agent writes; it never has a pane open, so it views nothing.
