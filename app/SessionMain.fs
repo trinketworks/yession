@@ -281,6 +281,15 @@ let private makeSandboxes
                         layout
                         grantsFor
                         workSpec
+                // Every maintained volume this sandbox holds is leased for as long as it
+                // lives (`VolumeLeases`); a sandbox holding none is created exactly as before.
+                let createSandbox =
+                    VolumeLeases.around
+                        clock
+                        (fun said -> eprintfn "[session %s] %s" (SessionId.value sessionId) said)
+                        (resourceProfile |> Option.map (fun file -> file.Maintenance) |> Option.defaultValue Map.empty)
+                        (SandboxRef.objectName sessionId sandbox)
+                        createSandbox
                 Ok (
                     SessionEnvironment.create
                         log
