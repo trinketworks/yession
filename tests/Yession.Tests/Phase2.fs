@@ -957,7 +957,36 @@ let private sandboxPolicyTests =
             Expect.equal
                 (Sandboxes.SrtSandbox.startFailure (fun path -> path <> "/usr/bin/rg") namedToolsConfig)
                 Sandboxes.HostCannotConfine
-                "that answer does not change while the process lives, so it is the one kept"
+                "that answer does not change while the process lives, so it is not asked again"
+
+        // A sandbox's srt manager runs in a process of its own and is told its config over a
+        // pipe. What it is told is the whole of its network policy, so a field the wire drops
+        // is a grant the sandbox silently lost — or, for a field whose absence means "allow",
+        // one it silently gained.
+        testCase "a config reaches its srt host as it was sent" <| fun () ->
+            let config =
+                { namedToolsConfig with
+                    AllowedDomains = [ "api.github.com" ]
+                    AllowUnixSockets = [ "/run/nix.sock" ]
+                    MitmProxy = Some { Interception.Socket = "/tmp/p.sock"; Interception.Hosts = [ "api.github.com" ] } }
+            let sent = Sandboxes.SrtSandbox.HostWire.Start config
+            Expect.equal
+                (Sandboxes.SrtSandbox.HostWire.parseRequest (Sandboxes.SrtSandbox.HostWire.request sent))
+                (Some sent)
+                "every field survives the pipe"
+
+        testCase "a confined command line reaches the session as the host sent it" <| fun () ->
+            let sent = Sandboxes.SrtSandbox.HostWire.Confined (7, [ "/usr/bin/bwrap"; "--"; "sh"; "-c"; "echo 'two words'" ])
+            Expect.equal
+                (Sandboxes.SrtSandbox.HostWire.parseReply (Sandboxes.SrtSandbox.HostWire.reply sent))
+                (Some sent)
+                "the argv, and which wrap it answers"
+
+        testCase "a line the host printed for a person is not a reply" <| fun () ->
+            Expect.equal
+                (Sandboxes.SrtSandbox.HostWire.parseReply "[SandboxDebug] starting proxy")
+                None
+                "it is passed on as a log line rather than read as an answer"
 
         testCase "the srt start policy waits out what settled nothing and believes what did not" <| fun () ->
             // The pace and the decision as VALUES: three attempts a quarter-second apart for
