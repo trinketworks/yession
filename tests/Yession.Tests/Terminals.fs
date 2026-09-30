@@ -98,15 +98,15 @@ let private allOpen (_: TerminalId) = true
 /// No lane cap in play. These cases are about the drain's other holds; the cap has its own.
 let private noLaneCap (_: TerminalId) = false
 let private planWith consumed busy isOpen entries =
-    TerminalQueueDrain.plan consumed busy Set.empty Set.empty isOpen (queueOf entries)
+    TerminalQueueDrain.plan consumed Set.empty busy Set.empty Set.empty isOpen (queueOf entries)
 
 /// The same plan with a lease in play (Plan 13, stage 2e).
 let private planLeased consumed busy leased isOpen entries =
-    TerminalQueueDrain.plan consumed busy leased Set.empty isOpen (queueOf entries)
+    TerminalQueueDrain.plan consumed Set.empty busy leased Set.empty isOpen (queueOf entries)
 
 /// ...and with the shell's marks gone (Plan 13, stage 2f).
 let private planLost consumed lost isOpen entries =
-    TerminalQueueDrain.plan consumed Set.empty Set.empty lost isOpen (queueOf entries)
+    TerminalQueueDrain.plan consumed Set.empty Set.empty Set.empty lost isOpen (queueOf entries)
 
 let private drainTests =
     testList "Terminal drain plan" [
@@ -154,6 +154,34 @@ let private drainTests =
                 "the closed terminal's unconsumed entries, in queue order"
             Expect.equal (plan.Ready |> List.map (fun (_, e) -> QueueId.value e.QueueId)) [ "q-b1" ] "the open one runs as before"
             Expect.equal (plan.Removals |> List.map QueueId.value) [ "q-a0" ] "and the consumed one is repaired, not refused"
+
+        // A drain takes an entry some while before its block is on the record — the shell may
+        // still be starting — and a drain re-entered in that window used to take the entry for
+        // a crash's leftover and remove it: its block then started a moment later, but the
+        // waiter had already read it gone, and answered that the command was withdrawn.
+        testCase "an entry a drain has taken is not removed before its block is on the record" <| fun () ->
+            let plan =
+                TerminalQueueDrain.plan
+                    Set.empty
+                    (Set.singleton "q-a1")
+                    (Set.singleton (TerminalId.value terminalA))
+                    Set.empty
+                    Set.empty
+                    allOpen
+                    (queueOf [ entry "a1" terminalA byAda 1.0 ])
+            Expect.isEmpty plan.Removals "it is still queued, as far as anybody waiting on it can tell"
+
+        testCase "an entry a drain has taken is not started a second time" <| fun () ->
+            let plan =
+                TerminalQueueDrain.plan
+                    Set.empty
+                    (Set.singleton "q-a1")
+                    Set.empty
+                    Set.empty
+                    Set.empty
+                    allOpen
+                    (queueOf [ entry "a1" terminalA byAda 1.0 ])
+            Expect.isEmpty plan.Ready "the taken one is not run again"
 
         testCase "an entry already named by a started block is repaired away, never re-run" <| fun () ->
             // The crash window: the block event was appended and the doc removal was not.
