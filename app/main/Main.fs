@@ -166,8 +166,16 @@ Async.StartImmediate(
         // without one runs in-memory only (loud at boot) — never a plaintext key file.
         // `--secrets` overrides both directions: `ephemeral` refuses persistence this host
         // could have had, `durable` refuses the BOOT on a host that cannot offer it.
+        // The read below is synchronous, so a credential manager that asks the person first —
+        // macOS prompting for a node it does not trust — stops the whole process here, before
+        // anything listens, and says nothing. A host tracking master rolled back every build
+        // for a day on exactly that, logging "manager started" and no more. Said first, to
+        // stderr, which is what a supervisor shows when a boot never answers.
         let! keyStore =
-            if ProcessManager.SecretsMode.needsCredentialManager secretsMode then KeyStore.detect ()
+            if ProcessManager.SecretsMode.needsCredentialManager secretsMode then
+                eprintfn
+                    "Yession Manager: reading the secrets key from the OS credential manager — if nothing follows, it is waiting on a prompt (on macOS, a keychain dialog for node)"
+                KeyStore.detect ()
             else async { return None }
         let secretsBacking =
             match ProcessManager.SecretsBacking.forMode secretsMode keyStore with
