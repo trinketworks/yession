@@ -1,5 +1,6 @@
 namespace Yession.Domain.Sandboxes
 
+open System
 open Thoth.Json
 open Yession.Domain
 
@@ -18,6 +19,28 @@ open Yession.Domain
 // a composition. One namespace, so a repo selecting `nix` cannot tell which it got — and an
 // operator can therefore split a leaf into three, or gather three into one name, without any
 // repo's file changing. That is what makes the vocabulary genuinely theirs.
+
+/// How the operator keeps a shared named volume from growing without bound: the half of it
+/// that has to happen INSIDE a sandbox.
+///
+/// A warm store is what every sandbox on the host writes to, and what makes the next session
+/// fast. Collecting it needs to know what each sandbox still uses, and only the sandbox can
+/// say: a Nix store's roots point into the sandbox's own checkout, and the processes holding
+/// paths open are in the sandbox's own process table. A collector outside sees neither, so
+/// it takes every other session's shell for garbage. So a session runs `Pin` in each of its
+/// sandboxes holding the volume — when the sandbox starts, every `Every` after that, and once
+/// more before it is removed — handing it a directory of its own on the volume, its LEASE.
+/// What `Pin` writes there is the operator's business and never read here.
+///
+/// The other half, collecting, is not the product's at all: the operator's own sweep, run on
+/// the operator's schedule, reads every lease and decides how long one outlives its session.
+/// That is why this carries no retention and no schedule for a sweep: the product holds no
+/// opinion about what a volume contains, and does not need one to keep leases current.
+type VolumeMaintenance =
+    { /// An executable inside the sandbox, run with the lease directory as its one argument.
+      Pin : string
+      /// How often a live sandbox renews its lease. The staleness a sweep has to allow for.
+      Every : TimeSpan }
 
 /// A whole profile: the vocabulary, and what every sandbox on this host holds without asking.
 ///
@@ -52,12 +75,22 @@ type ProfileFile =
       /// The sandboxes this host's sessions have from boot, in the form a repo declares its
       /// own (`ConfigFile.sandboxes`). Session-owned: scoped to no repo, and run on the
       /// backend this host configures for the session's own sandboxes.
-      Sandboxes : Map<SandboxName, SandboxDecl> }
+      Sandboxes : Map<SandboxName, SandboxDecl>
+      /// By Docker volume name, since that is what a lease belongs to: a volume is one thing
+      /// on the host however many resources name it, so its maintenance is a fact about the
+      /// volume and not about any grant of it. Declared on a `volume` leaf (`maintain`), and
+      /// deliberately not part of the leaf itself, so what a sandbox is told it holds
+      /// (`vol:NAME>AT`) does not change with how the operator looks after it.
+      Maintenance : Map<string, VolumeMaintenance> }
 
 module ProfileFile =
 
     let empty : ProfileFile =
-        { Resources = ResourceProfile.empty; Always = []; Guidance = None; Sandboxes = Map.empty }
+        { Resources = ResourceProfile.empty
+          Always = []
+          Guidance = None
+          Sandboxes = Map.empty
+          Maintenance = Map.empty }
 
 module OperatorProfile =
 
@@ -74,7 +107,8 @@ module OperatorProfile =
     let private agentKeys = [ "guidance" ]
     let private leafKeys = [ "mount"; "socket"; "endpoint"; "env"; "exec"; "volume"; "connection"; "sensitive" ]
     let private mountKeys = [ "from"; "at"; "mode" ]
-    let private volumeKeys = [ "name"; "at" ]
+    let private volumeKeys = [ "name"; "at"; "maintain" ]
+    let private maintainKeys = [ "pin"; "every" ]
 
     let private failIf (condition: bool) (message: string) (decoder: Decoder<'a>) : Decoder<'a> =
         if condition then Decode.fail message else decoder
@@ -121,12 +155,50 @@ module OperatorProfile =
                   At = get.Optional.Field "at" Decode.string |> Option.defaultValue from
                   Mode = get.Optional.Field "mode" mountMode |> Option.defaultValue ResourceMountMode.Read }))
 
+    /// `90s` / `10m` / `2h`, the grammar `--idle-timeout` takes, with a unit always written:
+    /// a renewal read as 10 seconds when 10 minutes was meant is a pin run sixty times as
+    /// often as asked, in every sandbox, and nothing about it would look wrong.
+    let private interval : Decoder<TimeSpan> =
+        Decode.string
+        |> Decode.andThen (fun raw ->
+            let trimmed = raw.Trim ()
+            let digits = trimmed.TrimEnd ('s', 'm', 'h')
+            let unit = trimmed.Substring digits.Length
+            let refused = Decode.fail (sprintf "'%s' is not an interval like 90s, 10m or 2h" raw)
+            if digits.Length = 0 || digits.Length > 9 || not (digits |> Seq.forall Char.IsDigit) || unit.Length <> 1 then
+                refused
+            else
+                let value = float digits
+                match unit with
+                | _ when value = 0.0 -> Decode.fail (sprintf "'%s' renews continuously — an interval must be greater than zero" raw)
+                | "s" -> Decode.succeed (TimeSpan.FromSeconds value)
+                | "m" -> Decode.succeed (TimeSpan.FromMinutes value)
+                | "h" -> Decode.succeed (TimeSpan.FromHours value)
+                | _ -> refused)
+
+    /// Both required. `Pin` is a path inside the sandbox and must be absolute: it is run
+    /// through the container, where a relative one means whatever the working directory
+    /// happens to be.
+    let private maintain : Decoder<VolumeMaintenance> =
+        noUnknownKeys maintainKeys
+        |> Decode.andThen (fun () ->
+            Decode.object (fun get ->
+                { Pin = get.Required.Field "pin" Decode.string
+                  Every = get.Required.Field "every" interval }))
+        |> Decode.andThen (fun m ->
+            failIf
+                (not (m.Pin.StartsWith "/"))
+                (sprintf "pin '%s' must be an absolute path inside the sandbox" m.Pin)
+                (Decode.succeed m))
+
     /// Both halves required: a volume with no `at` is a thing with nowhere to be, and the
-    /// operator is the one author who knows where it belongs.
+    /// operator is the one author who knows where it belongs. `maintain` is decoded here so
+    /// a mistake in it is refused at its own address, and collected by `maintenance`.
     let private volume : Decoder<ResourceLeaf> =
         noUnknownKeys volumeKeys
         |> Decode.andThen (fun () ->
             Decode.object (fun get ->
+                get.Optional.Field "maintain" maintain |> ignore
                 Volume (get.Required.Field "name" Decode.string, get.Required.Field "at" Decode.string)))
 
     /// A leaf declares primitives directly, and may declare several: the things that make one
@@ -204,6 +276,41 @@ module OperatorProfile =
                     | Error e -> Decode.fail e))
             |> List.fold (fun acc one -> Decode.map2 (fun taken x -> taken @ [ x ]) acc one) (Decode.succeed []))
 
+    /// Every `maintain` in the file, by volume name — a second pass over `resources` that only
+    /// looks at leaves' volumes, since the leaf itself does not carry it (`ProfileFile`).
+    /// A volume maintained two different ways is refused: which pin its sandboxes run would
+    /// otherwise depend on which resource a repo happened to select.
+    let private maintenance : Decoder<Map<string, VolumeMaintenance>> =
+        let maintained : Decoder<(string * VolumeMaintenance) list> =
+            Decode.object (fun get ->
+                match get.Optional.Field "maintain" maintain with
+                | Some m -> [ get.Required.Field "name" Decode.string, m ]
+                | None -> [])
+        let fromResource : Decoder<(string * VolumeMaintenance) list> =
+            Decode.oneOf
+                [ Decode.list Decode.string |> Decode.map (fun _ -> [])
+                  Decode.optional "volume" (Decode.oneOf [ Decode.list maintained |> Decode.map List.concat; maintained ])
+                  |> Decode.map (Option.defaultValue []) ]
+        Decode.keys
+        |> Decode.andThen (fun raws ->
+            raws
+            |> List.map (fun raw -> Decode.field raw fromResource)
+            |> List.fold (fun acc one -> Decode.map2 (@) acc one) (Decode.succeed []))
+        |> Decode.andThen (fun pairs ->
+            pairs
+            |> List.fold
+                (fun acc (name, m) ->
+                    acc
+                    |> Result.bind (fun (taken: Map<string, VolumeMaintenance>) ->
+                        match Map.tryFind name taken with
+                        | Some existing when existing <> m ->
+                            Error (sprintf "volume '%s' is maintained two different ways — declare its maintain once" name)
+                        | _ -> Ok (Map.add name m taken)))
+                (Ok Map.empty)
+            |> function
+                | Ok found -> Decode.succeed found
+                | Error e -> Decode.fail e)
+
     let private names : Decoder<ResourceName list> =
         stringList
         |> Decode.andThen (fun raws ->
@@ -251,8 +358,9 @@ module OperatorProfile =
                 failIf
                     (version <> Version)
                     (sprintf "this build speaks %s version %d, not %d" FileName Version version)
-                    (Decode.map4
-                        (fun declared selection guidance sandboxes -> declared, selection, guidance, sandboxes)
+                    (Decode.map5
+                        (fun declared selection guidance sandboxes maintained ->
+                            declared, selection, guidance, sandboxes, maintained)
                         (Decode.field "resources" resources)
                         (Decode.optional "always" names |> Decode.map (Option.defaultValue []))
                         (Decode.optional "agent" agent)
@@ -263,8 +371,9 @@ module OperatorProfile =
                              | Some block ->
                                  match ConfigFile.parseSandboxes (Encode.toString 0 block) with
                                  | Ok declared -> Decode.succeed declared
-                                 | Error e -> Decode.fail (sprintf "sandboxes: %s" e))))))
-        |> Decode.andThen (fun (declared, selection, guidance, sandboxes) ->
+                                 | Error e -> Decode.fail (sprintf "sandboxes: %s" e)))
+                        (Decode.field "resources" maintenance))))
+        |> Decode.andThen (fun (declared, selection, guidance, sandboxes, maintained) ->
             // The algebra's own refusals — a cycle, a dangling name, a name declared twice, a
             // resource that contradicts itself — reached through `load` and NOT re-checked
             // here. A decoder with its own copy of those rules is the redundant spare that
@@ -279,6 +388,11 @@ module OperatorProfile =
                 match ResourceProfile.resolve profile selection with
                 | Error e -> Decode.fail (sprintf "what this host always grants cannot be granted: %s" e)
                 | Ok _ ->
-                    Decode.succeed { Resources = profile; Always = selection; Guidance = guidance; Sandboxes = sandboxes })
+                    Decode.succeed
+                        { Resources = profile
+                          Always = selection
+                          Guidance = guidance
+                          Sandboxes = sandboxes
+                          Maintenance = maintained })
 
     let parse (json: string) : Result<ProfileFile, string> = Decode.fromString decoder json

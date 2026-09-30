@@ -17,6 +17,7 @@ module Yession.Tests.Resources
 // no representation in `ResourceDecl`, so a case asserting it could only prove that the test
 // file compiles.
 
+open System
 open Fable.Pyxpecto
 open Hedgehog
 open Yession.Domain
@@ -490,6 +491,52 @@ let tests =
                 Expect.equal name "yession-nix" "docker's name for it"
                 Expect.equal at "/nix" "and where the operator says it belongs"
             | other -> failwithf "expected one volume, got %A" other
+
+        // Maintenance is a fact about the volume, not the grant: what a sandbox is told it
+        // holds does not change, and the pin is looked up by the volume's name.
+        testCase "a volume's maintain decodes onto the profile by volume name, leaving the leaf as it was" <| fun () ->
+            let profile =
+                OperatorProfile.parse
+                    """{ "version": 1, "resources": { "warm-store": { "volume": { "name": "yession-nix", "at": "/nix", "maintain": { "pin": "/nix/var/yession/pin", "every": "10m" } } } } }"""
+                |> expect
+            Expect.equal
+                (Map.tryFind "yession-nix" profile.Maintenance)
+                (Some { Pin = "/nix/var/yession/pin"; Every = TimeSpan.FromMinutes 10.0 })
+                "the pin and its interval, under docker's name for the volume"
+            match ResourceProfile.resolve profile.Resources [ ResourceName.create "warm-store" |> expect ] |> expect |> ResourceClosure.leaves |> Set.toList with
+            | [ Volume (name, at) ] -> Expect.equal (name, at) ("yession-nix", "/nix") "the grant is the plain volume"
+            | other -> failwithf "expected one volume, got %A" other
+
+        testCase "a volume with no maintain is not maintained" <| fun () ->
+            let profile =
+                OperatorProfile.parse """{ "version": 1, "resources": { "v": { "volume": { "name": "x", "at": "/x" } } } }"""
+                |> expect
+            Expect.isEmpty profile.Maintenance "nothing is run in a sandbox the operator did not ask for"
+
+        testCase "maintain refuses what it cannot run: a relative pin, a unitless or zero interval, an unknown key" <| fun () ->
+            let withMaintain (m: string) =
+                OperatorProfile.parse (sprintf """{ "version": 1, "resources": { "v": { "volume": { "name": "x", "at": "/x", "maintain": %s } } } }""" m)
+            Expect.isError (withMaintain """{ "pin": "pin.sh", "every": "10m" }""") "relative to whatever the container's working directory is"
+            Expect.isError (withMaintain """{ "pin": "/p", "every": "10" }""") "ten what: a unit is always written"
+            Expect.isError (withMaintain """{ "pin": "/p", "every": "0m" }""") "a pin run continuously"
+            Expect.isError (withMaintain """{ "pin": "/p", "every": "1d" }""") "s, m or h"
+            Expect.isError (withMaintain """{ "pin": "/p" }""") "an interval is required"
+            Expect.isError (withMaintain """{ "pin": "/p", "every": "1h", "keep": "7d" }""") "retention is the sweep's, not the product's"
+            Expect.isOk (withMaintain """{ "pin": "/p", "every": "90s" }""") "seconds are a unit"
+
+        testCase "one volume maintained two ways is refused; the same way twice is one maintenance" <| fun () ->
+            let two (a: string) (b: string) =
+                OperatorProfile.parse (
+                    sprintf
+                        """{ "version": 1, "resources": { "a": { "volume": { "name": "x", "at": "/x", "maintain": %s } }, "b": { "volume": { "name": "x", "at": "/x", "maintain": %s } } } }"""
+                        a b)
+            Expect.isError
+                (two """{ "pin": "/p", "every": "10m" }""" """{ "pin": "/q", "every": "10m" }""")
+                "which pin runs would depend on which resource a repo selected"
+            Expect.equal
+                (two """{ "pin": "/p", "every": "10m" }""" """{ "pin": "/p", "every": "10m" }""" |> Result.map (fun p -> Map.count p.Maintenance))
+                (Ok 1)
+                "agreeing declarations are one"
 
         testCase "a volume with no target is refused" <| fun () ->
             Expect.isError
