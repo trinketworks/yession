@@ -857,8 +857,8 @@ let private queryTests =
                     let test = rows |> List.find (fun row -> row |> List.contains ("name", CellText "octo/hello:test"))
                     Expect.equal
                         (test |> List.tryFind (fst >> (=) "forwarding") |> Option.map snd)
-                        (Some (CellText "github"))
-                        "the forwarding is named"
+                        (Some (CellText "github (git, api)"))
+                        "the forwarding is named, with its routes"
                     let rendered = sprintf "%A" rows
                     Expect.isFalse (rendered.Contains "ghp_secret") "and the value is not in the answer"
                 | Ok other -> failwithf "expected rows, got %A" other

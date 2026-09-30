@@ -194,7 +194,7 @@ module ForwardedRoutes =
         |> Map.fold
             (fun merged connection routes ->
                 let held = merged |> Map.tryFind connection |> Option.defaultValue []
-                merged |> Map.add connection (List.distinct (held @ routes) |> List.sortBy ConnectionRoute.name))
+                merged |> Map.add connection (List.distinct (held @ routes) |> List.sort))
             a
 
 type WorkSandboxesConfig =
