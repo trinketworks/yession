@@ -19,10 +19,8 @@ open Fable.Core.JsInterop
 // nobody assigned is ABSENT, and absent is what srt reads as "you decide" — `bwrapPath ??
 // 'bwrap'`, a ripgrep default parameter, `if (!enableWeakerNestedSandbox)`.
 
-/// The network half. `allowedDomains` and `allowUnixSockets` are the two fields this
-/// repository widens after the manager is up: srt reads both from the config the manager was
-/// INITIALIZED with, never from a spawn's own, which is why they are rewritten on the manager
-/// rather than sent with the command.
+/// The network half. srt reads it from the config the manager was INITIALIZED with, never
+/// from a spawn's own — so a manager's network policy is fixed when it starts.
 type [<AllowNullLiteral>] NetworkConfig =
     abstract allowedDomains : string array with get, set
     abstract deniedDomains : string array with get, set
@@ -67,34 +65,6 @@ type [<AllowNullLiteral>] RuntimeConfig =
     /// which cannot nest a user namespace, is left with.
     abstract enableWeakerNestedSandbox : bool with get, set
 
-[<RequireQualifiedAccess>]
-module RuntimeConfig =
-
-    /// A copy of `config` carrying these network fields — the interception only when there
-    /// is one to say, since `None` means "unchanged" and not "none". The rest of it — the filesystem
-    /// rules, the credential scrubbing, srt's own proxy state — is copied through rather than
-    /// restated, because `updateConfig` REPLACES what it is given, and the manager's config
-    /// holds fields srt put there that nothing here declares: `Object.assign` copies every
-    /// field, a rebuild would copy the ones it knows.
-    let widened
-        (config: RuntimeConfig)
-        (allowedDomains: string array)
-        (allowUnixSockets: string array)
-        (mitmProxy: MitmProxyConfig option)
-        : RuntimeConfig =
-        // `Object.assign` copies into its target and hands the same target back, so each copy
-        // is the value made here — typed from the start, and nothing needs to be read back out
-        // of the call's `obj`.
-        let network = createEmpty<NetworkConfig>
-        JS.Constructors.Object.assign (network, config.network) |> ignore
-        network.allowedDomains <- allowedDomains
-        network.allowUnixSockets <- allowUnixSockets
-        mitmProxy |> Option.iter (fun mitm -> network.mitmProxy <- mitm)
-        let copy = createEmpty<RuntimeConfig>
-        JS.Constructors.Object.assign (copy, config) |> ignore
-        copy.network <- network
-        copy
-
 /// The platform's `AbortSignal`, as `wrapWithSandboxArgv` takes one to cancel a wrap in
 /// flight. Opaque: nothing here cancels a wrap, so nothing here makes one — `None` is the only
 /// value ever passed, and the slot is declared because the arguments after it are positional.
@@ -106,7 +76,8 @@ type [<AllowNullLiteral>] Wrapped =
     abstract argv : string array
 
 /// The manager: a PROCESS-WIDE singleton of statics. One filtering proxy pair, one egress
-/// allowlist, initialized once.
+/// allowlist, initialized once — which is why the Host runs one per sandbox, each in a process
+/// of its own.
 type [<AllowNullLiteral>] SandboxManager =
     abstract isSupportedPlatform : unit -> bool
     /// `initialize(runtimeConfig, sandboxAskCallback?, enableLogMonitor?)` — the config as
@@ -124,9 +95,6 @@ type [<AllowNullLiteral>] SandboxManager =
     /// connects to. Both are absent off Linux, where Seatbelt needs no such bridge.
     abstract getLinuxHttpSocketPath : unit -> string option
     abstract getLinuxSocksSocketPath : unit -> string option
-    /// The manager's own config object — absent before `initialize`.
-    abstract getConfig : unit -> RuntimeConfig option
-    abstract updateConfig : RuntimeConfig -> unit
 
 /// What the package exports, as much of it as is used.
 type [<AllowNullLiteral>] Exports =

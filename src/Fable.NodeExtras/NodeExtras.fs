@@ -1101,6 +1101,17 @@ type Writable =
     [<Emit("$0.write($1)")>]
     abstract writeBytes : bytes: Buffer -> bool
 
+    /// Write TEXT, encoded as UTF-8 — what a line protocol over a pipe writes, where the
+    /// bytes are the encoding of the text by definition. Answers what `writeBytes` answers.
+    [<Emit("$0.write($1)")>]
+    abstract writeText : text: string -> bool
+
+    /// `end()`: no more is coming. The reader sees the stream END — for a child's stdin, the
+    /// same end of input it sees when the writer dies, which is what makes it the polite
+    /// half of one protocol rather than a second one.
+    [<Emit("$0.end()")>]
+    abstract finish : unit -> unit
+
     /// An `error` here is terminal: a stream that has errored never emits `finish`. Declared
     /// as its own member rather than a `on(name, handler)` taking a string for the reason the
     /// WebSocket bindings above are: the event's name and its handler's type are one fact,
@@ -1320,6 +1331,14 @@ module ChildProcessStreams =
     /// as `onClose`.
     [<Emit("$0.on('exit', $1)")>]
     let onExit (child: ChildProcess) (handler: int option -> unit) : unit = jsNative
+
+/// This process's own standard input, as the stream this project reads — `Fable.Node` types
+/// it as its own socket class, which `Readables.text` cannot be handed.
+[<RequireQualifiedAccess>]
+module ProcessStreams =
+
+    [<Emit("process.stdin")>]
+    let stdin () : Readable = jsNative
 
 /// callback `httpRequest` took.
 [<AllowNullLiteral>]
