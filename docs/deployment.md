@@ -619,3 +619,27 @@ Four choices in it are deliberate:
   new builds as they idle (§Session lifetime). The proxy
   and the map ride out a Manager restart: the map empties while it is unreachable and refills
   on the first frame after.
+
+#### Keeping the warm store bounded
+
+`nix-container-store` is one volume every sandbox writes to, which is the point — what one
+session builds, the next starts with — and nothing ever collects it. A collector run from
+outside cannot do it safely: each sandbox's roots point into its own checkout, and what its
+processes hold open is in its own process table, so from anywhere else they look like
+garbage. So the volume carries a **lease** per sandbox, written from inside it, and your
+sweep reads the leases:
+
+```yaml
+nix-container-store:
+  volume:
+    name: yession-nix
+    at: /nix
+    maintain: { pin: /nix/var/yession/pin, every: 10m }
+```
+
+Each session runs `pin` in every sandbox holding the volume — at start, every `every`, and
+once more before the sandbox is removed — with that sandbox's lease directory,
+`/nix/.yession/leases/<sandbox>`, as its argument. Collecting is yours, on your schedule:
+[examples/nix-store](../examples/nix-store/) has the pair for a Nix store, and its README
+says how to install them into the volume and run the sweep. Why it is split this way is
+[docs/decisions/2026-09-30-a-sandbox-leases-what-it-uses-of-a-shared-volume.md](decisions/2026-09-30-a-sandbox-leases-what-it-uses-of-a-shared-volume.md).

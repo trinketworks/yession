@@ -255,6 +255,83 @@ let tests =
                 | Some e -> return raise e
                 | None -> return ()
             })
+
+            // The shared store's whole reason for a lease (`VolumeLeases`,
+            // examples/nix-store): two sandboxes root a path at the SAME place in their own
+            // filesystems, so their indirect roots collide on the volume and at most one
+            // survives there; neither is visible to a collector outside. Each pins through the
+            // real backend, the example sweep runs in a container of its own, and both paths
+            // must still be there while an unrooted one is gone. One case, not three, for the
+            // reason at the top of this list: the fixture is two containers and a sweep, and
+            // the three assertions are one invariant seen from both sides.
+            testCaseAsync "a sweep keeps what each sandbox pinned of the shared store, and nothing else" (async {
+                let volume = sprintf "yession-test-%s" (SessionId.value (SessionId.mint ())) |> fun s -> s.ToLowerInvariant ()
+                do! createLabelledVolume (DK.create ()) volume
+                let withExamples (dir: string) =
+                    copiedConfig dir
+                    TestFiles.copyFile "examples/nix-store/pin" (dir + "/pin")
+                    TestFiles.chmod (dir + "/pin") 0o755
+                // The sweep runs in a container of its own, from a directory the daemon can
+                // bind — under $HOME, for the reason at the top of this file.
+                let sweepDir = TestFiles.tempDirAt (TestFiles.homeDir () + "/.cache/yession-tests/sweep-")
+                TestFiles.copyFile "examples/nix-store/sweep" (sweepDir + "/sweep")
+                TestFiles.chmod (sweepDir + "/sweep") 0o755
+                let checkout = sprintf "/repos/%s" (RepoRef.value repoRef)
+                let lease (name: string) : VolumeLeases.Lease =
+                    { Volume = volume
+                      Dir = VolumeLeases.leaseDir "/nix" name
+                      Maintenance = { Pin = checkout + "/pin"; Every = TimeSpan.FromMinutes 10.0 } }
+                /// A fresh store path rooted at /root/result — the same place in every sandbox.
+                let rootOne (sandbox: Sandbox) (tag: string) : Async<string> =
+                    async {
+                        let! run, out, err =
+                            runInSandbox sandbox "sh"
+                                [ "-c"
+                                  sprintf "echo %s-$$ > /tmp/f && p=$(nix-store --add /tmp/f) && nix-store --realise --add-root /root/result $p >/dev/null && echo $p" tag ]
+                                Map.empty None
+                        Expect.equal run (SandboxExited 0) (sprintf "rooted a path (stderr: %s)" err)
+                        return out.Trim ()
+                    }
+                let exists (sandbox: Sandbox) (path: string) : Async<bool> =
+                    async {
+                        let! run, _, _ = runInSandbox sandbox "test" [ "-e"; path ] Map.empty None
+                        return run = SandboxExited 0
+                    }
+                let said = ResizeArray<string> ()
+                let mutable failure = None
+                try
+                    do!
+                        withDev [ Volume (volume, "/nix") ] withExamples (fun first -> async {
+                            do!
+                                withDev [ Volume (volume, "/nix") ] withExamples (fun second -> async {
+                                    let! a = rootOne first "a"
+                                    let! b = rootOne second "b"
+                                    let! run, garbage, _ =
+                                        runInSandbox first "sh" [ "-c"; "echo g-$$ > /tmp/g && nix-store --add /tmp/g" ] Map.empty None
+                                    Expect.equal run (SandboxExited 0) "an unrooted path"
+                                    do! VolumeLeases.pinOnce Clock.system said.Add first (lease "first")
+                                    do! VolumeLeases.pinOnce Clock.system said.Add second (lease "second")
+                                    Expect.isEmpty said "both pins ran clean"
+                                    runLine (
+                                        sprintf
+                                            "docker run --rm -v %s:/nix -v %s:/ex:ro --tmpfs /nix/var/nix/gcroots/auto nixos/nix /ex/sweep 1 3600"
+                                            volume
+                                            sweepDir)
+                                    let! keptA = exists first a
+                                    let! keptB = exists second b
+                                    let! keptGarbage = exists first (garbage.Trim ())
+                                    Expect.isTrue keptA "the first sandbox's path survived"
+                                    Expect.isTrue keptB "and the second's, whose root collided with the first's"
+                                    Expect.isFalse keptGarbage "while the sweep still collected"
+                                })
+                        })
+                with e -> failure <- Some e
+                TestFiles.removeTree sweepDir
+                do! removeVolume (DK.create ()) volume
+                match failure with
+                | Some e -> return raise e
+                | None -> return ()
+            })
         ])
 
 /// The self-hosting run: this repo's whole suite, inside the very container its file

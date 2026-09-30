@@ -1,0 +1,25 @@
+#!/bin/sh
+# pin LEASE
+#
+# Writes, into LEASE, every Nix store path this sandbox holds: one per line, in
+# LEASE/paths, replaced whole. Yession runs this inside each sandbox holding a
+# maintained volume (the profile's `maintain: { pin: ..., every: ... }`), when the
+# sandbox starts, every interval while it lives, and once more before it goes.
+#
+# It has to run in here because this is the only place that can see the answer:
+# `--print-roots` resolves the indirect roots under gcroots/auto through THIS
+# sandbox's checkout, and reports the store paths THIS sandbox's processes hold
+# open. From any other container the first look stale and the second are absent.
+set -eu
+
+lease=$1
+mkdir -p "$lease"
+next="$lease/paths.$$"
+nix-store --gc --print-roots | while IFS= read -r line; do
+    path=${line##* -> }
+    case $path in
+        /nix/store/*) printf '%s\n' "$path" ;;
+    esac
+done | sort -u > "$next"
+# One rename, so a sweep reading the lease sees the last whole answer or this one.
+mv "$next" "$lease/paths"
