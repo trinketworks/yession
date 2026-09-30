@@ -670,6 +670,21 @@ type ClientModel =
       /// own press, or the terminal in it ending — unless you kept it, which is the whole of
       /// what keeping means here.
       Tabs          : PaneTab list
+      /// How many terminals this client has ASKED for and not yet been shown.
+      ///
+      /// Pressing "new terminal" is a REQUEST, and the only record of it. `OpenTerminal`
+      /// answers nothing — the new terminal reaches every peer as an event like any other
+      /// (`Client.OpenTerminal`) — so without this the client cannot tell the terminal it
+      /// asked for from one that merely belongs to it, and it must be able to: under a
+      /// verified login the log records which USER opened a terminal and cannot say which
+      /// of their connections did, so "any terminal that is mine" would let the phone in
+      /// somebody's pocket take the pane out of the tab they are working in.
+      ///
+      /// A COUNT rather than a flag, because two presses are owed two terminals and a flag
+      /// would land the second press on the first terminal. Spent on arrival: a press buys
+      /// exactly the terminal that answers it, and the next one to arrive finds nothing
+      /// owed.
+      Opening       : int
       /// Which of them this client KEPT, by tab key.
       ///
       /// A mark on an open tab rather than a list of its own, because "in my strip" and
@@ -915,6 +930,13 @@ type ClientMsg =
     /// A tab shown and not pinned is the PREVIEW slot (Plan 20, stage 1): showing anything
     /// else replaces it, so a person reading twenty chips ends with one tab, not twenty.
     | ShowInPaneMsg of TabMode
+    /// This client has asked the session for a terminal (`Opening`).
+    ///
+    /// Sent where the request is SENT rather than from each button, so no third `+ new`
+    /// can be added that opens a terminal without recording that somebody here asked for
+    /// it: asking and remembering that you asked are one act, and a caller that could do
+    /// the first without the second is the dead button this exists to end.
+    | OpeningTerminalMsg
     /// Keep this tab, or stop keeping it (Plan 20, stage 1). Unpinning is not closing:
     /// unpinning a terminal leaves it running and leaves its row in the list, and the one
     /// verb that ends a terminal lives on that row.
@@ -1018,6 +1040,7 @@ module ClientModel =
           TerminalScreens = Map.empty
           TerminalViewports = Map.empty
           Tabs = []
+          Opening = 0
           Pinned = Set.empty
           Pane = None
           TerminalsOpen = false
@@ -2054,18 +2077,33 @@ module ClientModel =
             // `PeerJoined` that says who I am can arrive in the SAME page as the terminal I
             // opened. Reading the older copy here would leave the session's first page
             // tabless and nothing else, which is the kind of gap that is found once.
-            let tabs =
+            let opened =
                 let mine = Attribution.actorFor attribution.PeerUsers model.Peer.PeerId
-                let opened =
-                    freshEvents
-                    |> List.choose (fun e ->
-                        match e.Event with
-                        | SessionEvent.TerminalOpened t when t.OpenedBy = mine -> Some (TerminalTab t.TerminalId)
-                        | _ -> None)
+                freshEvents
+                |> List.choose (fun e ->
+                    match e.Event with
+                    | SessionEvent.TerminalOpened t when t.OpenedBy = mine -> Some (TerminalTab t.TerminalId)
+                    | _ -> None)
+            let tabs =
                 (model.Tabs @ opened)
                 |> List.distinctBy PaneTab.key
                 |> List.filter (fun tab ->
                     Set.contains (PaneTab.key tab) model.Pinned || not (PaneTab.ended terminals tab))
+            // Being SHOWN the terminal you pressed for, which is the whole of what the press
+            // promised. A tab in the strip is not that: `selectedPane` keeps the stored
+            // choice while what it names still exists, and the terminal you were on still
+            // exists — so the press added a word to the strip and moved nothing, which on a
+            // phone, where the strip scrolls, is a control that does nothing at all.
+            //
+            // Only against a press (`Opening`), and spent by it. The agent opening a terminal
+            // beside your work never takes the pane, and neither does your own other tab —
+            // which the log cannot tell from this one, and which is why the request rather
+            // than the ownership is what this reads.
+            let pane, opening =
+                match model.Opening, List.tryLast opened with
+                | 0, _ | _, None -> model.Pane, model.Opening
+                | asked, Some arrived ->
+                    Some (OnTab (Reading arrived)), max 0 (asked - List.length opened)
             let latestKnown = EventOffset.maxOption model.EventConsumer.LatestKnownOffset highWater
             { model with
                 Conversation = conversation
@@ -2077,6 +2115,8 @@ module ClientModel =
                 Environment = environment
                 Terminals = terminals
                 Tabs = tabs
+                Pane = pane
+                Opening = opening
                 Peers = peers
                 Attribution = attribution
                 EventConsumer =
@@ -2280,6 +2320,7 @@ module ClientModel =
             if Size.isValid size then
                 { model with TerminalViewports = Map.add terminal size model.TerminalViewports }
             else model
+        | OpeningTerminalMsg -> { model with Opening = model.Opening + 1 }
         | ShowInPaneMsg mode ->
             // The WHOLE next face, stated by every way in. Nothing here clears a subset and
             // hopes the rest was already right: the list cannot survive a choice that
