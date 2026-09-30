@@ -1227,7 +1227,8 @@ let private toolTests =
             let events =
                 [ at 1L 0.0 (SessionEvent.ToolUseStarted { ToolUseId = toolUse "1"; AgentTurnId = turn "a"; Namespace = "yession"; Name = "edit_file"; Arguments = Some args })
                   at 2L 1.0 (toolDoneWith "1" ToolCallOk None (Some "edited src/A.fs: −1 +1 lines")) ]
-            let html = Support.render (clientOf events)
+            let model = clientOf events
+            let html = Support.render model
             let callAt = html.IndexOf (Dom.attr Dom.Hooks.chatTool "t-1")
             Expect.isTrue (callAt >= 0) "the call is drawn"
             let bodyAt = html.IndexOf (Dom.attr "data-fold-body" "call-t-1", callAt)
@@ -1235,12 +1236,14 @@ let private toolTests =
             let line = html.Substring (callAt, bodyAt - callAt)
             Expect.isTrue (line.Contains "edit_file") "the line names the tool"
             Expect.isFalse (line.Contains "old_string") "and carries its outcome, not its arguments"
-            let inputAt = html.IndexOf ("data-chat-tool-input=\"t-1\"", bodyAt)
-            Expect.isTrue (inputAt > bodyAt) "the input is its own element, in the fold"
-            let input = html.Substring (inputAt, html.IndexOf ("</pre>", inputAt) - inputAt)
+            // Behind the fold, which is the half this case is about.
+            let behind = Support.behindFold (FoldKey.ToolCall (toolUse "1")) model
+            let inputAt = behind.IndexOf "data-chat-tool-input=\"t-1\""
+            Expect.isTrue (inputAt >= 0) "the input is its own element, in the fold"
+            let input = behind.Substring (inputAt, behind.IndexOf ("</pre>", inputAt) - inputAt)
             Expect.isTrue (input.Contains "old_string") "carrying what the call was given"
             Expect.isTrue (input.Contains "\n") "laid out a field per line, not as one row of JSON"
-            let outputAt = html.IndexOf ("data-chat-tool-result=\"t-1\"", inputAt)
+            let outputAt = behind.IndexOf ("data-chat-tool-result=\"t-1\"", inputAt)
             Expect.isTrue (outputAt > inputAt) "and the answer follows it, in the same place"
 
         // A run is a fold like an act's — the same control, the same state — and each run is
