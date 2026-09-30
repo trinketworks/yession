@@ -274,32 +274,20 @@ first's.
       (srt bakes it into the wrapped argv: bwrap `--setenv` on Linux, an `env VAR=…` prefix
       on macOS), and there is no TLS interception to fail — srt runs a plain authenticated
       CONNECT proxy by default, no MITM CA — so a missing CA bundle was never it.
-    - **Why it stays `host`, and is not a small fix.** Two things would each have to change.
-      srt's `SandboxManager` is process-wide (next bullet), so the agent CLI and the
-      WorkSandbox in one Session Process share one egress policy — dropping the agent's
-      network isolation to let its direct connection through would drop the WorkSandbox's
-      too, unless the agent runs in its own process. And only the Bun binary is shipped (the
+    - **Why it stays `host`, and is not a small fix.** srt's `SandboxManager` is
+      process-wide, which used to mean the agent CLI and the WorkSandbox shared one egress
+      policy; each srt sandbox now runs its manager in a process of its own
+      (`SrtSandbox.HostWire`), so the agent's network policy could be loosened without
+      loosening anybody else's. What remains is the binary: only the Bun one is shipped (the
       SDK's per-platform optional deps; no Node-runnable CLI), so "run it on Node, where
       undici's global dispatcher governs `fetch` and the proxy is honoured" means adding a
-      large dependency and packaging it under Nix. Until one of those is done the agent CLI
+      large dependency and packaging it under Nix. Until that is done the agent CLI
       is confined by its env allowlist and scratch HOME only — the same standing as `host`
       everywhere else — and `host` is the honest default.
   - The SDK's spawn seam is SYNCHRONOUS and srt's wrap is not, so the srt tier hands the
     SDK a stand-in process whose streams are live immediately and joins the real child to
     them when the wrap resolves. It is plumbing, not policy, and the `Srt` suite drives it
     end to end (stdin in, stdout out, exit code) rather than trusting it.
-- **srt's egress allowlist is per PROCESS, not per sandbox.** `SandboxManager` is a
-  singleton with one filtering proxy pair, so a session whose AgentSandbox and WorkSandbox
-  are both srt confines their FILES exactly (the profile rides each spawn) but can only
-  UNION their allowlists — the work sandbox can reach the agent's API hosts, without any
-  credential for them. Splitting it needs either a manager instance per sandbox (srt does
-  not offer one) or a Session Process per sandbox. Its interception (`network.mitmProxy`)
-  is per process for the same reason: once any sandbox of a session forwards `github`,
-  EVERY srt spawn in it — the agent CLI's included — has its HTTPS to `api.github.com`
-  answered by the credential proxy, and only a sandbox provisioned for it has been told to
-  trust that proxy's authority. One that was not fails TLS to that host rather than
-  reaching it unauthenticated. `default` forwards `github` whenever the session can, so
-  in practice this is a sandbox whose selection reaches no `github` connection.
 - **The strict confinement profile needs a nested user namespace, which an unprivileged
   container refuses.** srt's seccomp helper creates one inside bubblewrap's to drop
   capabilities and mount a fresh `/proc`; Docker's default (and this repo's dev container)
@@ -680,10 +668,11 @@ first's.
     hardening (hooks/fsmonitor/ext off, no global config, protocol pinned) still
     applies; the filesystem and egress boundaries do not.
   - **Every srt sandbox may write a checkout's `.git/config`.** srt denies that write by
-    default; a `git clone` makes it, so the flag is on. It cannot be scoped to the git
-    sandbox: srt reads it from the session config that whichever sandbox came up first
-    initialized the process-wide manager with, and ignores the per-spawn one. So the
-    WorkSandbox and the
+    default; a `git clone` makes it, so the flag is on — for every sandbox. srt reads it
+    from the config the manager was initialized with and ignores the per-spawn one, which
+    forced the answer to be one while a session shared a manager; each srt sandbox now
+    initializes its own, so scoping it to the git sandbox is a change nobody has made yet
+    rather than one srt refuses. Until then the WorkSandbox and the
     agent can write a `.git/config` too — planting a `core.fsmonitor`, an alias, or a
     pager that runs when git next runs in that checkout. Inside the session that is the
     shared-trust boundary already stated above, and the verbs themselves are immune (the

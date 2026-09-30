@@ -156,11 +156,12 @@ let tests =
             // and the same fault wearing a different hat: srt reads the socket allowance from
             // the config the MANAGER was initialized with, not the one a spawn carries, so a
             // sandbox that names a socket the FIRST sandbox of the session did not would hold
-            // a grant that exists only in its own config object.
+            // a grant that exists only in its own config object — which is what it was while
+            // one manager served every sandbox, and why each now starts its own.
             //
             // Deliberately the second sandbox, and deliberately a socket outside the
             // workspace: inside it, the workspace's own read/write grant would satisfy the
-            // connect and this would pass with the union deleted.
+            // connect and this would pass whoever's config the grant was read from.
             // Only where the grant is PATH-SCOPED, which is macOS. On Linux srt filters unix
             // sockets with seccomp-bpf, which cannot read a socket path out of user-space
             // memory, so the wrapper takes `allowAllUnixSockets` and ignores the path list
@@ -461,10 +462,9 @@ let tests =
              else
              testCaseAsync "a probe that could not run is not an answer, and is not remembered" (async {
                 let workspace = TestFiles.tempDir "yession-srt-"
-                // A manager is already up by now, and `initialize` returns early once srt
-                // has one — probe included. So the question can only be asked of a process
-                // that has none, which is what forgetting both halves leaves behind.
-                do! Sandboxes.SrtSandbox.forgetManager ()
+                // Each sandbox's manager starts in a process of its own, inheriting this
+                // one's environment as it stands — so the empty PATH below is the host's,
+                // and its probe is asked fresh.
                 let! refused =
                     Support.withEnv [ "PATH", Some "" ] (fun () ->
                         Sandboxes.SrtSandbox.create (srtTools ()) (policyIn workspace []))
@@ -505,3 +505,52 @@ let tests =
                 do! sandbox.Dispose ()
              }))
         ])
+
+// --- [Srt, Ports]: two sandboxes, one session ----------------------------------------------
+
+let siblings =
+    testList "Srt sandboxes side by side" [
+
+        // Each sandbox's network policy is its own. srt reads the allowlist from the config
+        // its manager was initialized with, and one manager used to serve every sandbox of a
+        // session — so a second sandbox widened the first's, and each could reach whatever
+        // either was allowed. Asked of the NARROWER sandbox while the wider one is still up,
+        // which is the shape the union leaked in; the wider one reaching the same server
+        // first is what says the refusal is the policy's and not a route this box lacks.
+        testCaseAsync "a sibling's allowlist is not this sandbox's" (async {
+            let host =
+                match Sandboxes.hostAddressHere (Interop.hostname ()) SrtBackend with
+                | Some host -> host
+                | None -> failwith "srt is a backend with a route to the host"
+            let server =
+                createServer (fun _ res ->
+                    res.writeHead (200, [ ResponseHeader.ContentType "text/plain" ])
+                    res.``end`` "reached")
+            // Every interface: on Linux srt's route to the host is `127.0.0.2`, which a
+            // listener on `127.0.0.1` alone does not answer (`hostAddressFrom`).
+            do! Async.FromContinuations (fun (cont, _, _) -> server.listen (0, "0.0.0.0", fun () -> cont ()) |> ignore)
+            let url = sprintf "http://%s:%d/" host (serverPort server)
+            let workspace = TestFiles.tempDir "yession-srt-"
+            let! wider = startSandbox (policyIn workspace [ host ])
+            let! narrower = startSandbox (policyIn workspace [])
+            // Node's `fetch` takes the proxy srt names only when told to.
+            let fetch (sandbox: Sandbox) =
+                runInSandbox
+                    sandbox
+                    (nodePath ())
+                    [ "-e"
+                      sprintf
+                          "fetch('%s').then(r => r.text()).then(t => { process.stdout.write(t); process.exit(0) }, e => { console.error(String(e.cause ?? e)); process.exit(9) })"
+                          url ]
+                    (Map.ofList [ "NODE_USE_ENV_PROXY", "1" ])
+                    None
+            let! reached, reachedOut, reachedErr = fetch wider
+            let! _, refusedOut, _ = fetch narrower
+            do! wider.Dispose ()
+            do! narrower.Dispose ()
+            do! Async.FromContinuations (fun (cont, _, _) -> server.close (fun _ -> cont ()))
+            if exitCode reached <> 0 || not (reachedOut.Contains "reached") then
+                failwithf "the sandbox that named the host could not reach it, so nothing below means anything: %s" reachedErr
+            Expect.isFalse (refusedOut.Contains "reached") "the sibling that named no host did not reach it"
+        })
+    ]

@@ -123,6 +123,7 @@ let all =
         Tag.needs "The declared dev container" [ Tag.Docker ] (fun () -> DevContainer.tests)
         Tag.needs "The dev container, self-hosting" [ Tag.Docker; Tag.Dogfood ] (fun () -> DevContainer.dogfood)
         Tag.needs "Srt integration" [ Tag.Srt ] (fun () -> SrtIntegration.tests)
+        Tag.needs "Srt sandboxes side by side" [ Tag.Srt; Tag.Ports ] (fun () -> SrtIntegration.siblings)
         Tag.needs "Git integration" [] (fun () -> GitIntegration.tests)
         // The route a sandbox's git takes to github.com without holding a credential. Its
         // git-driven half asks for `Ports` inside.

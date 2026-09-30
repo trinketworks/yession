@@ -135,13 +135,11 @@ let private srtTests =
             let config = Sandboxes.SrtSandbox.configFor tools { Support.emptyPolicy with Intercept = Some intercept }
             Expect.equal config.MitmProxy (Some intercept) "the socket and the hosts, as the policy said"
 
-        // srt reads `mitmProxy` from the manager a session shares, so a sandbox that asks
-        // for fewer hosts than one before it must not take them away.
-        testCase "the manager's interception only ever widens" <| fun () ->
-            let held = interception "/tmp/y.sock" [ "api.example.test" ]
-            let wider = Sandboxes.SrtSandbox.widerInterception (Some held) (Some (interception "/tmp/y.sock" [ "api.other.test" ]))
-            Expect.equal wider (Some (interception "/tmp/y.sock" [ "api.example.test"; "api.other.test" ])) "the union"
-            Expect.equal (Sandboxes.SrtSandbox.widerInterception (Some held) None) (Some held) "and nothing asked is nothing taken"
+        // There was a case here that the manager's interception only ever widened: srt reads
+        // `mitmProxy` from the manager, and one manager served every sandbox of a session.
+        // Each sandbox's manager is now its own process, initialized with that sandbox's
+        // config and nothing else, so there is no union left to take — what one sandbox
+        // intercepts is pinned by the config case above and by the `Srt` tier.
     ]
 
 // --- [Ports]: a real client, through a real proxy -------------------------------------------
