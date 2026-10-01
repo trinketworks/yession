@@ -491,10 +491,14 @@ let private routeTests =
                 let! listening =
                     Async.FromContinuations (fun (cont, _, _) -> server.listen (0, "127.0.0.1", fun () -> cont server) |> ignore)
                 let url = sprintf "http://127.0.0.1:%d/stream" (serverPort listening)
-                let subscription = Sse.subscribeWhile url [] optionalStream ignore
-                // The retry delay is one second, so anything past it that still reads ONE is
-                // a subscription that gave up rather than one that has not come round yet.
-                let! _ = Async.Sleep 2500
+                let verdicts = ResizeArray<bool> ()
+                let judged : Sse.Retry = fun refusal -> let v = optionalStream refusal in verdicts.Add v; v
+                let clock = Support.virtualClock (System.DateTimeOffset (2026, 1, 1, 0, 0, 0, System.TimeSpan.Zero))
+                let subscription = Sse.subscribeWhile clock.Clock url [] judged ignore
+                do! Support.waitUntil "the refusal to be judged" (fun () -> verdicts.Count > 0)
+                // The verdict is acted on in the tick that judged it, so a subscription that had
+                // not believed it would already be parked on the clock, waiting to re-dial.
+                Expect.equal (clock.Pending ()) 0 "no reconnect was armed"
                 Expect.equal (Seq.length attempts) 1 "asked once, and believed the answer"
                 subscription.Stop ()
             }
@@ -513,9 +517,12 @@ let private routeTests =
                 let! listening =
                     Async.FromContinuations (fun (cont, _, _) -> server.listen (0, "127.0.0.1", fun () -> cont server) |> ignore)
                 let url = sprintf "http://127.0.0.1:%d/stream" (serverPort listening)
-                let subscription = Sse.subscribeWhile url [] optionalStream ignore
-                let! _ = Async.Sleep 2500
-                Expect.isTrue (Seq.length attempts > 1) "a server that is merely down is still coming back"
+                let clock = Support.virtualClock (System.DateTimeOffset (2026, 1, 1, 0, 0, 0, System.TimeSpan.Zero))
+                let subscription = Sse.subscribeWhile clock.Clock url [] optionalStream ignore
+                do! clock.Armed ()
+                clock.Advance (System.TimeSpan.FromMinutes 1.0)
+                // A server that is merely down is still coming back.
+                do! Support.waitUntil "the server to be asked again" (fun () -> Seq.length attempts > 1)
                 subscription.Stop ()
             }
     ]
