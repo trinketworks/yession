@@ -1480,21 +1480,33 @@ module Style =
     /// of the headline under it and the head stops as far above the chevron as a chain's does.
     let causeCorner = "relative block w-3.5 h-[calc(1lh+0.75rem)]"
     /// Its turn: from the sentence's middle, in to the centre line.
-    let causeCornerTurn = "absolute top-2.5 left-[6.5px] right-0 h-px bg-current"
+    ///
+    /// The centre line is the pixel column 7px into this box (and into the head's box,
+    /// which is the same box): a WHOLE number of pixels from the head's left edge, so the
+    /// line and the head round to the pixel grid together. A browser snaps a box and an
+    /// SVG alike by rounding each one's own edges, and the line used to sit 6.5px in — half
+    /// a pixel off the head's grid — so the two rounded apart and the head painted half a
+    /// pixel to one side of its stem. The head's tip is drawn at 7.5px (`Icon.chained`),
+    /// the middle of that column.
+    let causeCornerTurn = "absolute top-2.5 left-[7px] right-0 h-px bg-current"
     /// Its stem: down the centre line from the turn to the head.
-    let causeCornerStem = "absolute top-2.5 bottom-1.5 left-[6.5px] w-px bg-current"
+    let causeCornerStem = "absolute top-2.5 bottom-1.5 left-[7px] w-px bg-current"
     let causeSaid = "flex items-baseline text-small leading-[inherit] text-ink-faint"
     /// The link of a chain, above the act's chevron: shorter than a line, and reaching up
     /// through the act's top padding to meet the rail the act above draws (`causeRail`). Its
     /// line is a box, as the rail is, with only the head drawn over its foot. The bottom
     /// padding holds the head off the chevron by the gap the corner mark keeps (~12px).
     let causeChainMark = "col-start-1 -mt-2 h-5.5 pb-1.5 relative flex justify-center text-edge"
-    let causeChainBody = "w-px h-full bg-current"
+    /// The body sits one pixel right of centre (`ml-px`: a 2px margin box, centred), 7px into
+    /// the head's box — the corner's centre line (`causeCornerTurn`), on the same grid.
+    let causeChainBody = "w-px h-full ml-px bg-current"
     let causeChainHead = "absolute bottom-1.5 left-1/2 -translate-x-1/2"
     /// The line from an act's chevron down to the next link of its chain: the gutter's centre,
     /// through the rows under the headline and on through the gap between the two acts.
     /// Starts the same ~12px under the chevron that the head stops above the next one.
-    let causeRail = "col-start-1 row-span-2 justify-self-center w-px mt-1.5 -mb-2.5 bg-edge"
+    /// On the same centre line as every head it runs to (`causeCornerTurn`): `ml-px` makes a
+    /// 2px margin box to centre, putting the line in the column right of the gutter's middle.
+    let causeRail = "col-start-1 row-span-2 justify-self-center w-px ml-px mt-1.5 -mb-2.5 bg-edge"
     let causeJump =
         cls [ "bg-transparent border-0 p-0 cursor-pointer hover:text-ink focus-visible:text-ink"; focusRing ]
     /// The same quiet line as `replyRef`, but a real control — it jumps to the message it
@@ -2041,7 +2053,10 @@ module Style =
     /// the title's baseline by the same rule it stands on a message's (`agentMark`), and is
     /// centred across the gutter as text is. It was a flex box centring a dot on the line's
     /// height, which is the middle of the leading and not anywhere the letters are.
-    let actNoteRunning = cls [ "col-start-1 text-small leading-[inherit] text-center pointer-events-none" ]
+    ///
+    /// `pl-px` centres the mark on the cause's line rather than the gutter's middle: the line
+    /// runs in the pixel column right of that middle (`causeCornerTurn`), half a pixel over.
+    let actNoteRunning = cls [ "col-start-1 pl-px text-small leading-[inherit] text-center pointer-events-none" ]
     /// The mark for the agent's own act: its diamond, turning — the same mark that turns at
     /// the end of a message it has not started writing, because an agent working on a tool
     /// and an agent thinking are the same statement, and where the mark stands says which.
