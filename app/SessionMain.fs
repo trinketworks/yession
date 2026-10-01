@@ -356,8 +356,7 @@ let private makeSandboxes
                       // work; resolution is the Plan 08 precedence, unchanged.
                       Credentials = credentials
                       Proxy = proxy
-                      Connections =
-                        fun spec -> grantsFor spec.Uses spec.Wants |> Result.map ForwardedConnections.ofGrant
+                      Selection = fun spec -> grantsFor spec.Uses spec.Wants |> Result.map SelectionGrant.ofGrant
                       // What the operator declared, as the session's own sandboxes. A
                       // declaration that cannot become a request is the operator's file
                       // being wrong, and it stops the boot like a profile that cannot be read.

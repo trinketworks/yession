@@ -216,11 +216,11 @@ type WorkSandboxesConfig =
       /// the wrong view.
       Checkout : SandboxRef -> string option
       Credentials : CredentialSource list
-      /// The connections a spec's selection reaches on this host (`ForwardedConnections`),
-      /// or why it reaches nothing. Asked here rather than carried on the request because it
-      /// is the OPERATOR's profile that turns a name into a connection, and the request is
-      /// what a repo's file said.
-      Connections : EnvironmentSpec -> Result<ForwardedConnections, string>
+      /// What a spec's selection grants on this host beyond its policy (`SelectionGrant`) —
+      /// the connections it forwards and the variables the operator bound — or why it grants
+      /// nothing. Asked here rather than carried on the request because it is the OPERATOR's
+      /// profile that turns a name into these, and the request is what a repo's file said.
+      Selection : EnvironmentSpec -> Result<SelectionGrant, string>
       /// The session's credential proxy, for a sandbox whose declaration asks for it.
       Proxy : ProxyProvider
       /// The sandboxes the operator declared (`ProfileFile.Sandboxes`), as requests: the
@@ -385,9 +385,9 @@ let create (config: WorkSandboxesConfig) : Async<WorkSandboxes> =
                     |> List.choose (fun (connection, route) ->
                         ConnectionName.create connection |> Result.toOption |> Option.map (fun connection -> connection, [ route ]))
                     |> List.fold (fun held (connection, routes) -> ForwardedRoutes.merge held (Map.ofList [ connection, routes ])) Map.empty
-                match config.Connections spec with
+                match config.Selection spec with
                 | Error e -> return Error e
-                | Ok connections ->
+                | Ok { Connections = connections } ->
                     let needed = routed connections.Needed
                     match! provisionForward name needed with
                     | Error e -> return Error e
@@ -456,6 +456,31 @@ let create (config: WorkSandboxesConfig) : Async<WorkSandboxes> =
         let lendable (forwarded: Map<ConnectionName, ConnectionRoute list>) (connection: ConnectionName) : bool =
             forwarded |> Map.tryFind connection |> Option.exists (List.contains ConnectionRoute.Api)
 
+        // The spec with what the operator bound written in under it: a resource's `${proxy.…}`
+        // and `${<connection>.token}` become the declaration's own references, so they are
+        // provided and lent exactly as a repo's are. The declaration's own lines win, as they
+        // win over a resource's text. A bound token only a want reached, whose connection is
+        // not forwarded, is left out — a want is silent where it cannot be had.
+        let withBound
+            (spec: EnvironmentSpec)
+            (forwarded: Map<ConnectionName, ConnectionRoute list>)
+            : Result<EnvironmentSpec, string> =
+            config.Selection spec
+            |> Result.map (fun grant ->
+                let kept =
+                    grant.Bound
+                    |> Map.filter (fun variable value ->
+                        match value with
+                        | Lent connection when Set.contains variable grant.WantedOnly -> lendable forwarded connection
+                        | _ -> true)
+                { spec with
+                    EnvironmentVariables =
+                        kept
+                        |> Map.fold
+                            (fun declared variable value ->
+                                if Map.containsKey variable declared then declared else Map.add variable value declared)
+                            spec.EnvironmentVariables })
+
         let provisionSelection
             (name: SandboxRef)
             (spec: EnvironmentSpec)
@@ -463,37 +488,43 @@ let create (config: WorkSandboxesConfig) : Async<WorkSandboxes> =
             async {
                 match! provisionConnections name spec with
                 | Error e -> return Error e
-                // A token lent for a connection the sandbox does not forward would be lent by
-                // nobody — every command would get nothing in that variable and no reason
-                // why. So it refuses the start, naming what to select. A token is lent through
-                // the credential proxy, so the route it needs is `api`.
-                | Ok (forwarded, _) when
-                    lentVariables spec
-                    |> Map.exists (fun connection _ -> not (lendable forwarded connection))
-                    ->
-                    revoke name forwarded
-                    let missing =
-                        lentVariables spec
-                        |> Map.toList
-                        |> List.filter (fun (connection, _) -> not (lendable forwarded connection))
-                        |> List.map (fun (connection, variables) ->
-                            sprintf
-                                "%s names '${%s.token}', and this sandbox does not forward '%s' by api"
-                                (String.concat ", " variables)
-                                (ConnectionName.value connection)
-                                (ConnectionName.value connection))
-                    return
-                        Error (
-                            sprintf
-                                "%s — select a resource granting it under uses or wants, from a host that offers it"
-                                (String.concat "; " missing)
-                        )
                 | Ok (forwarded, provision) ->
-                    match provideProxy name spec with
+                    match withBound spec forwarded with
                     | Error e ->
                         revoke name forwarded
                         return Error e
-                    | Ok (built, proxied) -> return Ok (forwarded, Provision.merge provision proxied, built)
+                    | Ok spec ->
+                        // A token lent for a connection the sandbox does not forward would be
+                        // lent by nobody — every command would get nothing in that variable and
+                        // no reason why. So it refuses the start, naming what to select. A token
+                        // is lent through the credential proxy, so the route it needs is `api`.
+                        let missing =
+                            lentVariables spec
+                            |> Map.toList
+                            |> List.filter (fun (connection, _) -> not (lendable forwarded connection))
+                        match missing with
+                        | _ :: _ ->
+                            revoke name forwarded
+                            let said =
+                                missing
+                                |> List.map (fun (connection, variables) ->
+                                    sprintf
+                                        "%s names '${%s.token}', and this sandbox does not forward '%s' by api"
+                                        (String.concat ", " variables)
+                                        (ConnectionName.value connection)
+                                        (ConnectionName.value connection))
+                            return
+                                Error (
+                                    sprintf
+                                        "%s — select a resource granting it under uses or wants, from a host that offers it"
+                                        (String.concat "; " said)
+                                )
+                        | [] ->
+                            match provideProxy name spec with
+                            | Error e ->
+                                revoke name forwarded
+                                return Error e
+                            | Ok (built, proxied) -> return Ok (forwarded, Provision.merge provision proxied, built)
             }
 
         // The sandboxes this session has from boot: every one the operator declared, and no
@@ -749,6 +780,13 @@ let create (config: WorkSandboxesConfig) : Async<WorkSandboxes> =
                 | None -> return BlockEnv.none
                 | Some entry ->
                     let mutable lent = BlockEnv.none
+                    // The variables lent into are the declaration's AND the operator's: the
+                    // selection is the one this sandbox started with, so it answers as it did
+                    // then, and a start it could not answer never made the entry this reads.
+                    let lending =
+                        match withBound entry.Request.Spec entry.Forwarded with
+                        | Ok spec -> lentVariables spec
+                        | Error _ -> lentVariables entry.Request.Spec
                     for forwarded, routes in Map.toList entry.Forwarded do
                         match config.Credentials |> List.tryFind (fun source -> source.Name = forwarded) with
                         | None -> ()
@@ -756,7 +794,7 @@ let create (config: WorkSandboxesConfig) : Async<WorkSandboxes> =
                             let lentInto =
                                 // A connection the declaration lends no variable is lent into
                                 // none of them, which is the absent entry's meaning.
-                                lentVariables entry.Request.Spec |> Map.tryFind forwarded |> Option.defaultValue []
+                                lending |> Map.tryFind forwarded |> Option.defaultValue []
                             let! given = source.Lend authority entry.Ref terminal block routes lentInto
                             lent <- BlockEnv.merge lent given
                     return lent

@@ -2448,6 +2448,46 @@ let private configTests =
             | Ok _ -> failwith "expected a refusal"
             | Error e -> Expect.stringContains e "'gti' is not a route" "it names the word it could not read"
 
+        // What only the session can supply, bound by the operator in a resource's env.
+        testCase "a resource's env can bind the proxy and a connection's token" <| fun () ->
+            let profile =
+                OperatorProfile.parse
+                    """{ "version": 1,
+                         "resources": {
+                           "github": {
+                             "connection": { "github": [ "api" ] },
+                             "env": { "HTTPS_PROXY": "${proxy.https}", "GH_TOKEN": "${github.token}", "CI": "1" } } } }"""
+                |> expect
+            let name raw = ResourceName.create raw |> expect
+            let leaves = ResourceProfile.grants profile.Resources [] [ name "github" ] [] |> expect |> fst |> Set.ofList
+            Expect.isTrue
+                (Set.isSubset
+                    (Set.ofList
+                        [ Variable ("HTTPS_PROXY", VariableValue.Composed [ TemplatePart.Proxy ProxyValue.Https ])
+                          Variable ("GH_TOKEN", VariableValue.Token "github")
+                          Variable ("CI", VariableValue.Text "1") ])
+                    leaves)
+                "each value as what it is"
+
+        // The token is lent through the proxy, so a resource binding it without the route would
+        // be a variable nothing ever fills.
+        testCase "a resource lending a token it does not forward by api is refused where the file is read" <| fun () ->
+            match
+                OperatorProfile.parse
+                    """{ "version": 1,
+                         "resources": {
+                           "github": { "connection": { "github": [ "git" ] }, "env": { "GH_TOKEN": "${github.token}" } } } }"""
+            with
+            | Ok _ -> failwith "expected a refusal"
+            | Error e -> Expect.stringContains e "does not forward github by api" "it names the route"
+
+        testCase "a reference a resource's env cannot read is refused" <| fun () ->
+            match
+                OperatorProfile.parse """{ "version": 1, "resources": { "x": { "env": { "A": "${proxy.nope}" } } } }"""
+            with
+            | Ok _ -> failwith "expected a refusal"
+            | Error e -> Expect.stringContains e "proxy.nope" "it names what it could not read"
+
         // Two resources granting one connection by different routes do not disagree: they add.
         testCase "two resources granting a connection by different routes add up" <| fun () ->
             let profile =

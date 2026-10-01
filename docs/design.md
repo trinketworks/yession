@@ -318,8 +318,24 @@ refused and the trust references are all a sandbox needs.
 `${github.token}` — any connection's `.token` — is a variable's whole value and nothing else:
 a stand-in the credential proxy swaps for the credential of whoever each command runs for,
 lent per command and returned with it (`EnvironmentVariableRef.Lent`). The sandbox must forward
-that connection, or it refuses to start. Why it rotates, and whether that is worth it, is an
-open question in docs/GAPS.md.
+that connection by `api`, or it refuses to start. Why it rotates, and whether that is worth it,
+is an open question in docs/GAPS.md.
+
+An operator may bind the same references in a resource's `env:`, so a sandbox selecting it is
+given them without its repo writing them (`VariableValue`, `SelectionGrant`):
+
+```yaml
+resources:
+  github:
+    connection: { github: [ git, api ] }
+    env:
+      HTTPS_PROXY: ${proxy.https}
+      GH_TOKEN: ${github.token}
+```
+
+They join the sandbox's declaration under its own lines — a repo's line for the same variable
+wins — and are provided and lent exactly as a repo's are. A resource lending a token it does
+not itself forward by `api` is refused where the file is read.
 
 A container's `entrypoint` is read the way compose reads it — a list of words, or one
 string split as a shell would split it, with nothing expanded — and it governs what compose

@@ -652,7 +652,11 @@ let grantsFrom (leaves: ResourceLeaf list) : Result<GrantedLeaves, string> =
                         Sockets = path :: acc.Sockets }
                     rest
             | Endpoint host -> fold { acc with Domains = host :: acc.Domains } rest
-            | Variable (name, value) -> fold { acc with Env = Map.add name value acc.Env } rest
+            | Variable (name, VariableValue.Text value) -> fold { acc with Env = Map.add name value acc.Env } rest
+            // What only the session can supply is not text a policy can carry: it reaches the
+            // sandbox through its declaration, provided and lent there (`SelectionGrant`).
+            | Variable (_, VariableValue.Composed _)
+            | Variable (_, VariableValue.Token _) -> fold acc rest
             | Exec path -> fold { acc with Reads = path :: acc.Reads } rest
             // Only the container backend can hold one — everywhere else the realisation
             // withheld it before this fold ran — so this channel is filled exactly where
