@@ -1654,6 +1654,21 @@ let private pinTests =
             let _, effects = ClientModel.update (OpenTerminalMsg "build") (clientOf [])
             Expect.equal effects [ ClientEffect.OpenTerminal "build" ] "one request, under the title pressed for"
 
+        testCase "a chip that opens a tab takes the reader to the pane" <| fun () ->
+            // One message for both halves, so no chip can open a pane and leave focus behind it.
+            let model, effects = ClientModel.update (OpenInPaneMsg (Reading (TerminalTab terminalA))) (clientOf [ at 1L 0.0 (opened terminalA "build") ])
+            Expect.equal
+                (ClientModel.selectedPane model, effects)
+                (Some (TerminalTab terminalA), [ ClientEffect.Move DomMove.FocusPane ])
+                "the tab is showing, and focus is asked to follow it"
+
+        testCase "show in terminal scrolls the history to the command and focuses the pane" <| fun () ->
+            let _, effects = ClientModel.update (ShowInTerminalMsg (terminalA, block "1")) (clientOf [ at 1L 0.0 (opened terminalA "build") ])
+            Expect.equal
+                effects
+                [ ClientEffect.Move (DomMove.RevealBlock (terminalA, block "1")); ClientEffect.Move DomMove.FocusPane ]
+                "scrolled to, then focused, in that order"
+
         testCase "a terminal I did not ask for leaves my pane where it is" <| fun () ->
             // The reason this is a REQUEST and not "any terminal that is mine": under a
             // verified login the log cannot tell my tabs apart, so the phone in my pocket

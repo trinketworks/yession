@@ -1235,14 +1235,7 @@ let private start () =
               RetryNow =
                 // Cut short whatever wait the lifecycle is in. On a refused peer that wait is
                 // indefinite by design, so this is its only way back short of a reload.
-                fun () -> pokeRetry ()
-              FocusPane = PaneShell.toPane
-              FocusChat = PaneShell.toChatItem
-              FocusWatch = PaneShell.toWatchToggle
-              RevealBlock = fun id blockId -> PaneShell.revealBlock (TerminalId.value id) (BlockId.value blockId)
-              RevealMessage = fun id -> PaneShell.revealMessage (MessageId.value id)
-              ScrollToLatest = PaneShell.scrollToLatest
-              FocusItemActions = fun id -> PaneShell.toItemActions (MessageId.value id) }
+                fun () -> pokeRetry () }
 
         let el = appRoot ()
         // Take over the server-rendered shell: from here Lit owns it. lit-html's `render`
@@ -1294,7 +1287,8 @@ let private start () =
                     { Client.PanelWrites.Claude = claudeWrite
                       Client.PanelWrites.GitHub = githubWrite
                       Client.PanelWrites.GitHubPoll = githubPoll
-                      Client.PanelWrites.Now = nowMillis } }
+                      Client.PanelWrites.Now = nowMillis }
+              Client.Ports.Moves = PaneShell.move }
             doc
             initial
         |> Client.withTimers Timer.system

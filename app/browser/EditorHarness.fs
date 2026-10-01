@@ -1329,15 +1329,7 @@ do
     /// reference `takeRef` is, for the same reason.
     let mutable moreRef : string -> unit = ignore
     let actions =
-        { ViewActions.ssr with
-            FocusPane = PaneShell.toPane
-            FocusChat = PaneShell.toChatItem
-            FocusWatch = PaneShell.toWatchToggle
-            RevealBlock = fun id blockId -> PaneShell.revealBlock (TerminalId.value id) (BlockId.value blockId)
-            RevealMessage = fun id -> PaneShell.revealMessage (MessageId.value id)
-            ScrollToLatest = PaneShell.scrollToLatest
-            FocusItemActions = fun id -> PaneShell.toItemActions (MessageId.value id)
-            TypeIntoTerminal = recordTyped }
+        { ViewActions.ssr with TypeIntoTerminal = recordTyped }
     // The forward reference is the same shape `Browser.fs` uses: the render needs dispatch
     // (a rewound cast that plays off its end jumps back to live) and dispatch's render needs
     // the render.
@@ -1400,7 +1392,8 @@ do
             | ClientEffect.Launch _
             | ClientEffect.Claude _
             | ClientEffect.GitHub _
-            | ClientEffect.GitHubPoll _ -> ())
+            | ClientEffect.GitHubPoll _ -> ()
+            | ClientEffect.Move move -> PaneShell.move move)
         // Read back off the MODEL rather than out of the message: a measurement the reducer
         // refused is not a width anything would claim, and a hook that reported it anyway
         // would say the opposite of what happened.

@@ -95,44 +95,7 @@ type ViewActions =
       TypeIntoTerminal : TerminalId -> string -> unit
       /// Report the holder's viewport size, so the pty and the program inside it agree about
       /// the screen (Plan 14, stage 6).
-      ResizeTerminal : TerminalId -> int -> int -> unit
-      /// Move focus into the side pane after a chip opened a tab there (Plan 14, stage 2).
-      /// Imperative because it is a focus move: the model says which tab is showing, and the
-      /// browser has to wait for the render that put it on screen. A chip that opened a pane
-      /// and left focus behind it is the failure the WCAG floor names.
-      FocusPane : unit -> unit
-      /// Return focus to the chat item that opened a tab, once that tab is closed. Takes the
-      /// tab's key, which is the only thing the chip and the tab share — the browser turns it
-      /// back into a selector. Without this, closing a tab strands focus on a control that
-      /// has just been removed from the document.
-      FocusChat : string -> unit
-      /// Hand focus to a terminal's watch toggle when the reader has been stranded (Plan 14,
-      /// stage 7; Plan 25, stage 3).
-      ///
-      /// The toggle itself never needs this: it relabels in place, so a press keeps its own
-      /// focus. What does is the AUTOMATIC catch-up — a rewound cast playing off its end
-      /// unmounts the player under whoever was focused inside it — and that is the only
-      /// caller left now the four differently-named exits have become one control.
-      FocusWatch : unit -> unit
-      /// Scroll a terminal's history to one of its commands and mark it (Plan 25, stage 3) —
-      /// the browser's half of "show in terminal". Imperative for the same reason `FocusPane`
-      /// is: the model moves the reader's position, and only the document can scroll.
-      RevealBlock : TerminalId -> BlockId -> unit
-      /// Scroll the conversation to one message and mark it — the rail's half of "take me
-      /// back there". Imperative for the reason `RevealBlock` is: the model says where the
-      /// chapters are, and only the document can scroll to one.
-      RevealMessage : MessageId -> unit
-      /// Scroll the conversation to its own tail — the "jump to latest" float's press.
-      /// Imperative for the same reason its siblings above are: how far the reader has
-      /// scrolled is a fact the document holds, not the model (`Render.fs` watches it and
-      /// shows or hides the float accordingly), so reaching the end is a document act too.
-      ScrollToLatest : unit -> unit
-      /// Put focus back on one item's actions control, after the menu it opened has gone.
-      /// Imperative for the reason every focus move here is: the model says the menu is
-      /// shut, and only the document knows where the cursor went. Without it, dismissing a
-      /// menu strands focus on `body` — the failure the WCAG floor names, and the one a
-      /// keyboard reader hits on the very first Escape.
-      FocusItemActions : MessageId -> unit }
+      ResizeTerminal : TerminalId -> int -> int -> unit }
 
 module ViewActions =
     /// A no-op action set for rendering the view to a string (SSR + tests). The handlers
@@ -148,14 +111,7 @@ module ViewActions =
           RetryNow = ignore
           SendTerminalDraft = fun _ _ -> ()
           TypeIntoTerminal = fun _ _ -> ()
-          ResizeTerminal = fun _ _ _ -> ()
-          FocusPane = ignore
-          FocusChat = ignore
-          FocusWatch = ignore
-          RevealBlock = fun _ _ -> ()
-          RevealMessage = fun _ -> ()
-          ScrollToLatest = ignore
-          FocusItemActions = fun _ -> () }
+          ResizeTerminal = fun _ _ _ -> () }
 
 module View =
 
@@ -1013,7 +969,7 @@ module View =
     ///
     /// Absent until there is a chapter. A heading over nothing teaches a reader to skip the
     /// place the list will appear.
-    let private chaptersSection (actions: ViewActions) (model: ClientModel) : TemplateResult =
+    let private chaptersSection (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
         match ClientModel.chapters model with
         | [] -> Lit.nothing
         | chapters ->
@@ -1025,7 +981,7 @@ module View =
                 html $"""
                     <button type="button" class="{Style.chapterEntry}"
                             data-chapter-entry="{MessageId.value item.MessageId}"
-                            @click={Ev(fun _ -> actions.RevealMessage item.MessageId)}>
+                            @click={Ev(fun _ -> dispatch (MoveMsg (DomMove.RevealMessage item.MessageId)))}>
                       <span class="{Style.chapterEntryDot}"></span>
                       <span class="truncate min-w-0">{ClientModel.chapterName model item}</span>
                     </button>"""
@@ -1045,7 +1001,7 @@ module View =
               </div>
               {connectionSection actions model}
               {peopleSection actions dispatch model}
-              {chaptersSection actions model}
+              {chaptersSection dispatch model}
               {environmentSection model.Environment}
               <div class="flex-1"></div>
               <button type="button" class="{Style.cls [ Style.navPivot; Style.navLane2 ]}" data-settings-toggle="open" @click={Ev(fun _ -> actions.ToggleSettings ())}>settings<span class="{Style.pivotMarkForward}">{Icon.pivotRight}</span></button>
@@ -1571,7 +1527,7 @@ module View =
                     data-chat-pending="{QueueId.value entry.QueueId}"
                     data-chat-pending-status="{statusToken}"
                     data-terminal-id="{TerminalId.value entry.Terminal}"
-                    @click={Ev(fun _ -> dispatch (ShowInPaneMsg (Reading (TerminalTab entry.Terminal))); actions.FocusPane ())}>
+                    @click={Ev(fun _ -> dispatch (OpenInPaneMsg (Reading (TerminalTab entry.Terminal))))}>
               <span class="{Style.terminalPrompt}">$</span>
               <code class="{Style.chatChipCommand}" data-terminal-text="{BodyKey.terminalQueued entry.QueueId}"></code>
               <span class="{Style.chatChipSubject}" data-pending-subject="terminal:{TerminalId.value entry.Terminal}">{what}</span>
@@ -1948,7 +1904,7 @@ module View =
                                                  // does: the entry is removed by the render
                                                  // that follows, and a keyboard that pressed
                                                  // Enter on it is left on `body`.
-                                                 actions.FocusItemActions item.MessageId)}>
+                                                 dispatch (MoveMsg (DomMove.FocusItemActions item.MessageId)))}>
                             {if isChapter then Dom.Text.removeChapter else Dom.Text.makeChapter}
                           </button>
                         </div>"""
@@ -1959,7 +1915,7 @@ module View =
                                                        let key = (unbox<Browser.Types.KeyboardEvent> e).key
                                                        if key = "Escape" && opened then
                                                            dispatch CloseItemMenuMsg
-                                                           actions.FocusItemActions item.MessageId)}>
+                                                           dispatch (MoveMsg (DomMove.FocusItemActions item.MessageId)))}>
                   <button type="button" class="{dress}"
                           data-item-actions="{MessageId.value item.MessageId}"
                           aria-haspopup="menu" aria-expanded="{if opened then "true" else "false"}"
@@ -2184,7 +2140,7 @@ module View =
                                 Entity.phrase model cause.Author (Segment.Ref (EntityRef.Actor cause.Author) :: Segment.Text " " :: Act.phrase act)
                             | _ -> [ html $"""{ConversationItem.said cause}""" ]
                         let jump =
-                            html $"""<button type="button" class="{Style.cls [ Style.causeCorner; Style.causeJump ]}" data-cause-jump aria-label="{Dom.Text.causeJumpLabel}" @click={Ev(fun _ -> actions.RevealMessage target)}>{corner}</button>"""
+                            html $"""<button type="button" class="{Style.cls [ Style.causeCorner; Style.causeJump ]}" data-cause-jump aria-label="{Dom.Text.causeJumpLabel}" @click={Ev(fun _ -> dispatch (MoveMsg (DomMove.RevealMessage target)))}>{corner}</button>"""
                         // The session starting is not drawn, so there is nothing to jump to.
                         let mark =
                             match cause.Content with
@@ -2392,7 +2348,7 @@ module View =
                         html $"""
                             <button type="button" class="{Style.replyRefJump}" data-reply-ref="{MessageId.value target}" data-reply-jump
                                     aria-label="{Dom.Text.replyRefJumpLabel}"
-                                    @click={Ev(fun _ -> actions.RevealMessage target)}>
+                                    @click={Ev(fun _ -> dispatch (MoveMsg (DomMove.RevealMessage target)))}>
                               <span class="{Style.replyRefMark}" aria-hidden="true">↩</span>
                               <span class="{Style.replyRefQuote}">{ConversationItem.said parent}</span>
                             </button>"""
@@ -2426,7 +2382,7 @@ module View =
                         data-chat-block="{BlockId.value blockId}"
                         data-chat-block-status="{terminalBlockStatusLabel block.Status}"
                         data-terminal-id="{TerminalId.value terminalId}"
-                        @click={Ev(fun _ -> dispatch (ShowInPaneMsg (Reading (BlockTab (terminalId, blockId)))); actions.FocusPane ())}>
+                        @click={Ev(fun _ -> dispatch (OpenInPaneMsg (Reading (BlockTab (terminalId, blockId)))))}>
                   <span class="{Style.terminalPrompt}">$</span>
                   <code class="{Style.chatChipCommand}">{block.Command}</code>
                   <span class="shrink-0">{terminalBlockStatus model block.Status}</span>
@@ -2438,7 +2394,7 @@ module View =
                         data-chat-stretch="{TerminalStretch.key stretch}"
                         data-chat-stretch-end="{stretchEndLabel stretch.End}"
                         data-terminal-id="{TerminalId.value stretch.TerminalId}"
-                        @click={Ev(fun _ -> dispatch (ShowInPaneMsg (Reading (StretchTab stretch))); actions.FocusPane ())}>
+                        @click={Ev(fun _ -> dispatch (OpenInPaneMsg (Reading (StretchTab stretch))))}>
                   <span class="{Style.chatChipText}">typed in {stretch.Title} for {length}</span>
                   <span class="shrink-0">{stretchEnding model stretch.End}</span>
                 </button>"""
@@ -2837,15 +2793,14 @@ module View =
                     | ContentKind.Download -> ()
                     | ContentKind.Image _ ->
                         e.preventDefault ()
-                        dispatch (ShowInPaneMsg (Reading (ContentTab ref)))
-                        actions.FocusPane ()
+                        dispatch (OpenInPaneMsg (Reading (ContentTab ref)))
         html $"""
             <div class="{Style.chatRegion}">
               <section class="{Style.timeline}" data-conversation @click={Ev(contentOpen)}>{body}</section>
               <div class="{Style.chatJumpToLatestSlot}" data-jump-to-latest>
                 <div class="{Style.chatJumpToLatestRail}">
                   <button type="button" class="{Style.chatJumpToLatest}" aria-label="{Dom.Text.jumpToLatest}"
-                          @click={Ev(fun _ -> actions.ScrollToLatest ())}>{Icon.down}</button>
+                          @click={Ev(fun _ -> dispatch (MoveMsg DomMove.ScrollToLatest))}>{Icon.down}</button>
                 </div>
               </div>
             </div>"""
@@ -3531,9 +3486,7 @@ module View =
                         [ html $"""
                             <button type="button" class="{Style.btn}" data-pane-show-in-terminal="{BlockId.value blockId}"
                                     @click={Ev(fun _ ->
-                                                  dispatch (ShowInPaneMsg (ReadingAt (terminalId, blockId)))
-                                                  actions.RevealBlock terminalId blockId
-                                                  actions.FocusPane ())}>Show in terminal</button>""" ]
+                                                  dispatch (ShowInTerminalMsg (terminalId, blockId)))}>Show in terminal</button>""" ]
                 watch @ showInTerminal
             // A stretch is always its recording and it plays without being asked: there is no
             // other read of it to offer, and nothing to step out to.
@@ -3601,7 +3554,7 @@ module View =
                                               // but leave the list. The rewind states the whole
                                               // face now, list included.
                                               dispatch (RewindTerminalMsg view.TerminalId)
-                                              actions.FocusPane ())}>{Icon.rewind}</button>"""
+                                              dispatch (MoveMsg DomMove.FocusPane))}>{Icon.rewind}</button>"""
             let reattach =
                 if not affords.CanReattach then Lit.nothing
                 else
@@ -3622,7 +3575,7 @@ module View =
                   {state}
                   <span class="min-w-0 flex items-center">
                     <button type="button" class="{nameClass}" data-terminal-list-row="{id}"
-                            @click={Ev(fun _ -> dispatch (ShowInPaneMsg (Reading (TerminalTab view.TerminalId))); actions.FocusPane ())}>{TerminalTitle.value view.Title}</button>
+                            @click={Ev(fun _ -> dispatch (OpenInPaneMsg (Reading (TerminalTab view.TerminalId))))}>{TerminalTitle.value view.Title}</button>
                     <span class="{Style.terminalTabPeers}">{peers}</span>
                   </span>
                   <span class="{Style.terminalListVerbs}">{rewind}{reattach}{kill}</span>
@@ -3646,8 +3599,7 @@ module View =
                     <button type="button" class="{Style.terminalListName}"
                             data-artifact-list-row="{ContentRef.value content}"
                             @click={Ev(fun _ ->
-                                          dispatch (ShowInPaneMsg (Reading (ContentTab content)))
-                                          actions.FocusPane ())}>{ArtifactRef.name a.Ref}</button>
+                                          dispatch (OpenInPaneMsg (Reading (ContentTab content))))}>{ArtifactRef.name a.Ref}</button>
                   </span>
                   <span class="{Style.artifactListSize}">{ContentSize.render a.Bytes}</span>
                 </div>"""
@@ -4043,7 +3995,7 @@ module View =
                                         // On a phone this control IS the way back, and it is
                                         // about to leave the screen — so focus goes where the
                                         // reader came from, exactly as closing a tab does.
-                                        selected |> Option.iter (PaneTab.key >> actions.FocusChat))}>{Icon.right}</button>
+                                        selected |> Option.iter (fun tab -> dispatch (MoveMsg (DomMove.FocusChat (PaneTab.key tab)))))}>{Icon.right}</button>
                 </div>
                 {if ClientModel.showsList model then Lit.nothing else strip}
                 {if ClientModel.showsList model then contentListView actions dispatch model else body ()}
