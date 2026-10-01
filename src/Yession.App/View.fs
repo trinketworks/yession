@@ -3770,10 +3770,6 @@ module View =
             // holding on to. Delete on a focused tab is deliberate enough to, and does.
             let closeControl =
                 if not (isOn tab) || pinned then Lit.nothing
-                elif not (model.Tabs |> List.exists (fun open' -> PaneTab.key open' = PaneTab.key tab)) then
-                    // A preview is whatever is being looked at; "close" said of it would mean
-                    // closing the pane, which is not a thing this strip does.
-                    Lit.nothing
                 else
                     let named = Dom.Text.closeTab (tabLabel tab)
                     html $"""
@@ -3979,17 +3975,16 @@ module View =
                                         // back after it, because the tab being closed is the
                                         // one leaving the document.
                                         //
-                                        // Only a tab that is OPEN: the preview is whatever is
-                                        // being looked at, and "close" said of it would mean
-                                        // closing the pane, which is not a thing this strip
-                                        // does.
+                                        // Every tab in the strip, with no test for whether it
+                                        // is in `Tabs`: there was one, and it was the keyboard
+                                        // half of the fault that a tab reached from the chat
+                                        // could not be closed. What the strip shows, the strip
+                                        // closes.
                                         match closeKeyOn pressed with
                                         | "" -> ()
                                         | key ->
                                             tabs
                                             |> List.tryFind (fun tab -> PaneTab.key tab = key)
-                                            |> Option.filter (fun tab ->
-                                                model.Tabs |> List.exists (fun open' -> PaneTab.key open' = PaneTab.key tab))
                                             |> Option.iter (fun tab ->
                                                 focusNeighbourTab pressed
                                                 dispatch (CloseTabMsg tab)))}>

@@ -1565,16 +1565,27 @@ let private pinTests =
                 (offered (Support.step (TogglePinMsg (TerminalTab terminalA)) model))
                 "and once kept, not by a tap"
 
-        testCase "a previewed tab offers no close, because there is nothing to close" <| fun () ->
-            // The preview is whatever is being looked at rather than something in the strip,
-            // so "close" said of it would mean closing the pane — which is not a thing this
-            // strip does. Looking at something else is what takes a preview away.
-            let model =
-                clientOf oneBlock
-                |> Support.step (ShowInPaneMsg (Reading (BlockTab (terminalA, block "1"))))
-            Expect.isFalse
-                ((Support.render model).Contains (Dom.attr Dom.Hooks.paneTabClose "block:term-a:b-1"))
-                "nothing to take off a strip it is not on"
+        testCase "a terminal reached from the chat is open, and closes like any other" <| fun () ->
+            // Reported from a live session: a command tapped in the transcript put a terminal
+            // in the strip that could be pinned and unpinned but never closed. It was the
+            // PREVIEW — whatever was being looked at, held outside the strip's own list so
+            // that reading one chip after another left one tab rather than twenty. The
+            // distinction was real in the model and invisible on screen: a tab among tabs,
+            // with no close, for a reason nobody could see. Showing opens now.
+            let agentsBlock =
+                [ at 1L 0.0 (openedBy ActorRef.Agent terminalA "running the tests")
+                  at 2L 1.0 (started terminalA "1" byAda "ls -la" 1)
+                  at 3L 2.0 (completed terminalA "1" (CommandSucceeded 0) 3) ]
+            let reached =
+                clientOf agentsBlock
+                |> Support.step (ShowInTerminalMsg (terminalA, block "1"))
+            Expect.equal
+                (reached.Tabs |> List.map PaneTab.key)
+                [ "terminal:term-a" ]
+                "reaching it opened it, rather than previewing it beside the strip"
+            Expect.isTrue
+                ((Support.render reached).Contains (Dom.attr Dom.Hooks.paneTabClose "terminal:term-a"))
+                "so it offers a close, like every other tab nobody kept"
 
         testCase "a terminal that ends takes its tab with it, when nobody kept it" <| fun () ->
             // The other half of the tab rule, and why the strip does not need tidying: what
@@ -1755,17 +1766,25 @@ let private pinTests =
                 (Map.containsKey (terminalB, ada) model.Synced.TerminalDrafts)
                 "and the seat itself is still taken"
 
-        testCase "reading one recording after another leaves ONE tab, not a row of them" <| fun () ->
-            // The preview slot: the choice, while nothing pins it. Twenty chips tapped in a
-            // busy chat used to leave twenty tabs nobody closed.
+        testCase "reading one recording after another leaves a tab each, and each one closes" <| fun () ->
+            // This used to leave ONE tab: a preview slot held whatever was being looked at,
+            // and the next thing replaced it, so twenty chips tapped in a busy chat could not
+            // leave twenty tabs nobody closed. What was missing then was the close; now that
+            // every tab has one, the slot was buying a tidiness nobody could act on — and
+            // charging for it a tab among tabs that would not close.
             let model =
                 clientOf oneBlock
                 |> Support.step (ShowInPaneMsg (Reading (BlockTab (terminalA, block "1"))))
                 |> Support.step (ShowInPaneMsg (Reading (BlockTab (terminalA, block "2"))))
             Expect.equal
                 (stripKeys model |> List.filter (fun key -> key.StartsWith "block:"))
+                [ "block:term-a:b-1"; "block:term-a:b-2" ]
+                "both are open, in the order they were opened"
+            let closed = model |> Support.step (CloseTabMsg (BlockTab (terminalA, block "1")))
+            Expect.equal
+                (stripKeys closed |> List.filter (fun key -> key.StartsWith "block:"))
                 [ "block:term-a:b-2" ]
-                "the second replaced the first"
+                "and the one closed is the one that goes"
 
         testCase "pinning what is previewed keeps it when the next thing is opened" <| fun () ->
             let kept = BlockTab (terminalA, block "1")
