@@ -37,7 +37,9 @@ module Icon =
     /// The head of a cause's mark alone, tip at the foot of the box. The corner that opens a
     /// chain and the links that continue it both draw their line as one-pixel boxes on the
     /// gutter's centre, so no stem here can sit a sub-pixel off it.
-    let private chainedPath = "M6 13.5 L8 15.5 L10 13.5"
+    /// The chain's head, in the 14px of its own box (`chained`): tip at 7.5, the middle of the
+    /// line's pixel column.
+    let private chainedPath = "M5.75 11.8125 L7.5 13.5625 L9.25 11.8125"
     let private leftPath = "M9.75 3.5 L5.25 8 L9.75 12.5"
     let private rightPath = "M6.25 3.5 L10.75 8 L6.25 12.5"
     /// Two chevrons, one behind the other: the mark of a disclosure with SEVERAL things
@@ -129,7 +131,17 @@ module Icon =
     let down = stroked "w-3.5 h-3.5" downPath
     /// A lighter stroke than the chevrons': a cause's marks say how acts are linked, and
     /// recede behind the controls beside them.
-    let chained = strokedAt "1.25" "w-3.5 h-3.5" chainedPath
+    ///
+    /// Drawn in its own pixels rather than on the shared 16px grid, because where its tip
+    /// lands is measured in pixels: it hangs from a one-pixel line 7px into the same box
+    /// (`Style.causeCornerTurn`), so the tip is at 7.5, the middle of that column. On the
+    /// shared grid it was at 8 of 16 — 7px, the box's middle, which is the edge between two
+    /// pixels, while the line paints on one of them. Same strokes as before, scaled by 14/16:
+    /// the arms, the depth and the weight (1.25 → 1.09) are unchanged on screen.
+    let chained =
+        html
+            $"""<svg class="w-3.5 h-3.5 block" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.09375"
+                     stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true" focusable="false"><path d="{chainedPath}"></path></svg>"""
     let left = stroked "w-3.5 h-3.5" leftPath
     let right = stroked "w-3.5 h-3.5" rightPath
     let rights = stroked "w-3.5 h-3.5" rightsPath

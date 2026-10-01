@@ -1890,6 +1890,44 @@ let editorTests =
                 Expect.equal misplaced "" "the running act's mark stands on its title's line"
             }
 
+        // A cause's head is the end of its line, so it paints centred on that line: its tip
+        // in the middle of the line's pixel column. Both round to the device-pixel grid by
+        // their own edges — the line as a box, the head as an SVG, which a browser snaps the
+        // same way — so the case rounds each as the painter does: the line's two edges, and
+        // the head's box with the tip's place inside it. The tip is the middle of the head's
+        // path, which is symmetric. Every head on the page, each against the line in its own
+        // mark; the head stood half a pixel left of its stem before.
+        editorCase "every cause's head paints centred on its line" <| fun page ->
+            async {
+                do! awaitU (page.EvaluateAsync "() => window.__acts()")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-cause-ref] svg")
+                let! off =
+                    await (page.EvaluateAsync<string> """() => {
+                        const d = devicePixelRatio
+                        const heads = [...document.querySelectorAll('#shell [data-cause-ref] svg, #shell [data-cause-chain] svg')]
+                          .filter(svg => !svg.closest('[data-entity]'))
+                        if (heads.length === 0) return 'the page draws no cause heads'
+                        const wrong = []
+                        for (const svg of heads) {
+                          const mark = svg.parentElement.parentElement
+                          const line = [...mark.querySelectorAll('*')].find(e => {
+                            const b = e.getBoundingClientRect()
+                            return b.width === 1 && b.height > 1
+                          })
+                          if (!line) { wrong.push('a head with no line'); continue }
+                          const l = line.getBoundingClientRect()
+                          const lineAt = (Math.round(l.left * d) + Math.round(l.right * d)) / 2
+                          const box = svg.getBoundingClientRect()
+                          const path = svg.querySelector('path').getBBox()
+                          const scale = box.width / svg.viewBox.baseVal.width
+                          const tipAt = Math.round(box.left * d) + (path.x + path.width / 2) * scale * d
+                          if (Math.abs(tipAt - lineAt) > 0.01) wrong.push('a head paints at ' + tipAt + ' and its line at ' + lineAt)
+                        }
+                        return wrong.join('; ')
+                    }""")
+                Expect.equal off "" "each head sits on its line"
+            }
+
         // A mark in the gutter under a cause's corner hangs from that corner's line, so it is
         // centred on the line AS PAINTED. Geometry alone cannot say so: a browser paints a box
         // by rounding each edge to the device-pixel grid on its own, and a one-pixel line whose
