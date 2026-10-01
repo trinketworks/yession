@@ -162,6 +162,23 @@ let tests =
                     Expect.stringContains reason "found none" "and that nothing was there"
             })
 
+            // A devshell entrypoint that fails — `nix develop` losing a fetch it raced another
+            // sandbox for — used to be reported as "found none", which reads as a missing shell
+            // in an environment that was never assembled.
+            testCaseAsync "an entrypoint that fails refuses the start as itself, with its code and what it said" (async {
+                let spec =
+                    alpineSpec
+                    |> withContainer (fun c -> { c with Entrypoint = Some [ "sh"; "-c"; "echo 'error: the devshell broke' >&2; exit 3" ] })
+                match! start envSecrets spec with
+                | Ok (_, sandbox) ->
+                    do! sandbox.Dispose ()
+                    failwith "an entrypoint that exits 3 cannot have had a shell looked for behind it"
+                | Error reason ->
+                    Expect.stringContains reason "exited 3" "it names the entrypoint's failure and its code"
+                    Expect.stringContains reason "error: the devshell broke" "and carries what it said"
+                    Expect.isFalse (reason.Contains "found none") "rather than claiming a shell was looked for"
+            })
+
             // Through the Session Process as production composes it (`hostOver`), over a
             // docker sandbox with an entrypoint: the terminal's shell is the one found
             // behind it, a block runs inside it, `cd` carries to the next block — and the
