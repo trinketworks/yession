@@ -1067,10 +1067,15 @@ let private liveClone =
             // Printed on the happy path too: a green run that says nothing teaches nothing, and
             // this is the only place a CI reader can see what the live session actually did.
             printfn "%s" (report (if checkoutWhole checkout then "the checkout landed" else "no checkout"))
-            Expect.isTrue (checkoutWhole checkout) (report "the checkout never landed")
+            let landed = checkoutWhole checkout
+            let verdict = report "the checkout never landed"
 
+            // Torn down BEFORE the verdict, so a case that fails still closes what it opened. A
+            // throw ahead of the close left this peer's connection open, and the run's
+            // connection check then failed a second case for a fault that was this one's.
             do! ada.Channel.Close ()
             do! pm.StopAll ()
+            Expect.isTrue landed verdict
         }
     ]
 
