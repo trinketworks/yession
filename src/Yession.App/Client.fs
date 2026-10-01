@@ -748,6 +748,164 @@ module Client =
                                       IsEnd = List.length envelopes < EventChunk.size }
                 }
 
+        /// A feed that asks what is AHEAD of its cursor and fetches those answers at once.
+        ///
+        /// The cursor alone is a LINKED LIST: the next address is knowable only from the last
+        /// answer, because the tiling begins wherever the reader did (`after/137` answers
+        /// `138-237`), so no client can run two reads at once or compute one ahead. Measured
+        /// on a session of 20,650 events over a 30ms link, that was 416 requests and 15.6
+        /// seconds of a cold open spent waiting; the same ranges fetched together take 1.5s.
+        /// Six at a time is as quick as twenty-four — the browser's per-origin cap is already
+        /// more concurrency than the saving needs — so nothing here sets a width. It asks for
+        /// one plan's worth and lets the browser schedule them.
+        ///
+        /// It still names no address. `GET /events/ahead/{n}` answers with the addresses, and
+        /// each is fetched and kept exactly as given — which is what the cursor always
+        /// promised, said about several addresses instead of one.
+        ///
+        /// **A plan is not kept and a range is.** The decorator goes on the RANGE fetch here
+        /// rather than around the whole feed at the composition root, because which of the
+        /// two is immutable is this function's own knowledge: a plan is a question about now,
+        /// and a kept one would put an answer in the history store that holds no history.
+        ///
+        /// **One page per turn of the event loop.** A plan's worth of answers arrives
+        /// together, and handing all sixty-four back without yielding would fold six thousand
+        /// events in one task — the read loop calls straight back for the next page, so
+        /// nothing between them would let a frame paint. That is the stall that bigger pages
+        /// bought and this is written to avoid: measured, one 1,000-event page cost a 687ms
+        /// frozen frame where a hundred cost 215ms. So a queued page is handed back after a
+        /// yield, and the shape the renderer sees is the shape it saw before.
+        let aheadOf (cache: HistoryCache) (get: HttpGet) (urlOf: SessionRoute -> string) (token: string option) : EventFeed =
+            let fetchRange = storing cache get
+            let withToken (url: string) =
+                match token with
+                | Some t -> url + (if url.Contains "?" then "&" else "?") + "token=" + System.Uri.EscapeDataString t
+                | None -> url
+            // What has been fetched and not yet handed back, in log order. Keyed by nothing:
+            // the head is always the page for the cursor the loop will ask with next, and a
+            // cursor that does not match it is a reader who has moved (a gap repaired, a
+            // position restored), which drops the queue and asks for a plan again.
+            // The BODIES, undecoded, in log order. Decoding is the other half of the stall
+            // the yield below exists for: a plan's worth is six thousand envelopes, and
+            // parsing them all at the moment they arrive freezes a frame just as surely as
+            // folding them all would (measured: a 1,047ms gap, which is what sent this from
+            // decoding at refill to decoding at serve).
+            let mutable queued : string list = []
+
+            let pageOf (envelopes: EventEnvelope<SessionEvent> list) : EventPage<SessionEvent> =
+                { Events = envelopes
+                  LastOffset = envelopes |> List.tryLast |> Option.map (fun e -> e.Offset)
+                  // The same reading a cursor's answer gets: a capped answer means the server
+                  // had more to give, and anything shorter is the log's current tail. Derived
+                  // from the answer rather than from the plan's length, so this feed and the
+                  // cursor tell the read loop the same story.
+                  IsEnd = List.length envelopes < EventChunk.size }
+
+            /// Ask what is ahead, fetch all of it, and queue the pages in log order. A plan
+            /// with nothing in it is a caller who is current, which arrives as no lines.
+            let refill (after: EventOffset option) : Async<Result<unit, FeedFault>> =
+                async {
+                    match! get (withToken (urlOf (EventsAhead after))) with
+                    | Error (HttpUnreachable detail) -> return Error (FeedUnreachable detail)
+                    | Error (HttpStatus status) -> return Error (FeedRefused status)
+                    | Ok plan ->
+                        let addresses =
+                            plan.Body.Split '\n'
+                            |> Array.map (fun l -> l.Trim ())
+                            |> Array.filter (fun l -> l.Length > 0)
+                        if addresses.Length = 0 then
+                            queued <- []
+                            return Ok ()
+                        else
+                            // All of them at once. `Async.Parallel` starts every child before
+                            // awaiting any, which is the whole point of having asked.
+                            let! answers = addresses |> Array.map fetchRange |> Async.Parallel
+                            let faulted =
+                                answers
+                                |> Array.tryPick (function
+                                    | Error (HttpUnreachable detail) -> Some (FeedUnreachable detail)
+                                    | Error (HttpStatus status) -> Some (FeedRefused status)
+                                    | Ok _ -> None)
+                            match faulted with
+                            // One bad answer fails the refill rather than leaving a hole in
+                            // the queue: a page missing from the middle is a gap the fold
+                            // would walk straight past, and the policy around this feed is
+                            // what decides whether to try again.
+                            | Some fault -> return Error fault
+                            | None ->
+                                queued <-
+                                    answers
+                                    |> Array.toList
+                                    |> List.choose (function
+                                        | Ok answer -> Some answer.Body
+                                        | Error _ -> None)
+                                return Ok ()
+                }
+
+            fun after ->
+                async {
+                    let wanted =
+                        match after with
+                        | Some o -> EventOffset.value o + 1L
+                        | None -> 0L
+                    // The queue serves only the reader it was filled for. Anything else —
+                    // a cursor that went backwards to repair a gap, a position restored from
+                    // a store — asks again rather than being answered from somebody else's
+                    // place in the log.
+                    // Whether the head of the queue is the page this cursor is asking for.
+                    // Read off the answer's FIRST OFFSET rather than off a count the feed
+                    // kept, because the answer is the only thing that knows what is in it.
+                    // ONE envelope, not the whole answer: this runs on every call and the
+                    // answer is decoded again when it is served, so decoding a hundred here
+                    // would double the parsing the yield above exists to spread out.
+                    let headStartsAt () =
+                        match queued with
+                        | body :: _ ->
+                            match body.Split '\n' |> Array.tryFind (fun l -> l.Trim().Length > 0) with
+                            | Some line ->
+                                match Codec.fromString Codec.sessionEventEnvelope line with
+                                | Ok envelope -> Some (EventOffset.value envelope.Offset)
+                                | Error _ -> None
+                            | None -> None
+                        | [] -> None
+                    let usable = headStartsAt () = Some wanted
+                    let! refilled =
+                        if usable then async { return Ok () }
+                        else
+                            async {
+                                queued <- []
+                                return! refill after
+                            }
+                    match refilled with
+                    | Error fault -> return Error fault
+                    | Ok () ->
+                        match queued with
+                        | [] ->
+                            // Nothing ahead: the caller is current, which is what the
+                            // cursor's `204` says and what an empty page with `IsEnd` means
+                            // to the loop.
+                            return Ok { Events = []; LastOffset = None; IsEnd = true }
+                        | body :: rest ->
+                            queued <- rest
+                            match decodeLines body with
+                            | Error fault -> return Error fault
+                            | Ok envelopes ->
+                                let page = pageOf envelopes
+                                // `IsEnd` is "the loop may stop asking", and with a queue
+                                // behind this page that is simply false — whatever the
+                                // page's own length says. Derived from what the feed KNOWS
+                                // rather than inferred from the answer's size, which is the
+                                // only reading a cursor had available to it and is wrong
+                                // here the moment a range is short for any reason other
+                                // than being the last one.
+                                let page = if List.isEmpty rest then page else { page with IsEnd = false }
+                                // The yield. See the note above: without it a plan's worth
+                                // of pages decodes and folds as one task and no frame paints
+                                // through it.
+                                if not (List.isEmpty rest) then do! Async.Sleep 0
+                                return Ok page
+                }
+
         /// Fold what this client has already been given, oldest first, before anything asks
         /// the network — and before the client even knows whether it may connect.
         ///
