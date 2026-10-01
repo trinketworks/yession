@@ -1914,6 +1914,17 @@ module Aborting =
     [<Emit("new AbortController()")>]
     let abortController () : AbortController = jsNative
 
+/// The microtask queue, as the `queueMicrotask` global reaches it — a web-platform global Node
+/// ships, which neither `Fable.Node` nor `Fable.Core`'s `JS` types.
+[<RequireQualifiedAccess>]
+module Microtasks =
+
+    /// Run `callback` once the current task — and every microtask queued ahead of it — has
+    /// finished, before any timer or I/O callback. A throw from it is an uncaught exception,
+    /// as it would be from a task, not a rejection somebody could be expected to handle.
+    [<Emit("queueMicrotask($0)")>]
+    let queue (callback: unit -> unit) : unit = jsNative
+
 // --- Relaying somebody else's listeners --------------------------------------------------------
 
 /// A listener somebody ELSE wrote, held only to be handed on.
