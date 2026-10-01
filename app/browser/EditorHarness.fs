@@ -1126,7 +1126,7 @@ let private actsModel : ClientModel =
                       Actor = ActorRef.SessionProcess; OnBehalfOf = None; CausedBy = None })
           Status = ConversationItemStatus.Running
           Offset = offset 32L
-          Woke = None; CausedBy = None }
+          Woke = None; CausedBy = Some (Cause.Item (MessageId.create "msg-act-start" |> expect)) }
     { shellModel with Conversation = { shellModel.Conversation with Items = shellModel.Conversation.Items @ [ start; starting ] } }
 
 /// The session's FIRST screen: connected, the log read to an end holding nothing, and the
