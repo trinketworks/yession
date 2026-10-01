@@ -224,7 +224,10 @@ let private representativeModel : ClientModel =
       GitHub =
         { Status = Some { SessionCredential = None; MineCredential = None; Owner = OwnedByUser }
           Flow = GitHubIdle
-          Pending = Pending.Ready }
+          Pending = Pending.Ready
+          Scope = "mine"
+          Token = ""
+          Polling = PollWaiting 0 }
       // The generated read surface (Plan 15), with all three shapes declared at once, so
       // the acceptance render exercises the ONE renderer every future query goes through
       // rather than the one shape today's queries happen to use.

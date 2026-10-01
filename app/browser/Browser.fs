@@ -911,13 +911,6 @@ let private claudeWrite (action: ClaudeAction) (request: ClaudeRequest) : Async<
         else return Ok None
     }
 
-/// What a panel's field holds. A selector that matches nothing — a panel that is not on
-/// screen — reads as the empty string, which is what the caller acts on anyway.
-let private panelInput (selector: string) : string =
-    match Browser.Dom.document.querySelector selector with
-    | null -> ""
-    | field -> (field :?> Browser.Types.HTMLInputElement).value
-
 // --- GitHub connection panel round-trips (Plan 14) ---------------------------------------
 // Same fetch shapes as the Claude panel's; the flow differs (device code) so the two
 // extra parsers below read the begin/poll replies.
@@ -969,6 +962,35 @@ let private parseDevicePoll (body: string) : {| status: string option; interval:
     Decode.fromString devicePoll body
     |> Result.toOption
     |> Option.defaultValue {| status = None; interval = 0 |}
+
+/// One GitHub panel write, answered as the panel's next step. A begin answers with the device
+/// flow it started, under the scope it was asked for; a reply that begins none is refused.
+let private githubWrite (action: GitHubAction) (request: GitHubRequest) : Async<GitHubAnswer> =
+    async {
+        let! reply = postJson (Page.href (GitHub action)) (githubBody request)
+        if not reply.Ok then return Error reply.Body
+        elif action = GitHubAction.Begin then
+            match parseDeviceBegin reply.Body with
+            | None -> return Error "the reply began no device flow"
+            | Some began ->
+                return Ok (Some (GitHubAwaitingApproval (began.UserCode, began.VerificationUri, request.Scope, began.Interval)))
+        else return Ok None
+    }
+
+/// One device-flow poll. A failed poll is not necessarily a flow that ended: only the
+/// session's own 4xx says this one is over (`GitHubFlow.ended`); anything else is a bad
+/// moment, and the code on screen is still good.
+let private githubPoll (scope: string) : Async<GitHubPollAnswer> =
+    async {
+        let! reply = postJson (Page.href (GitHub GitHubAction.Poll)) (githubBody (GitHubRequest.scoped scope))
+        if not reply.Ok then
+            return if GitHubFlow.ended reply.Status then PollEnded reply.Body else PollFailed
+        else
+            let outcome = parseDevicePoll reply.Body
+            match outcome.status with
+            | Some "connected" -> return PollConnected
+            | _ -> return PollPending outcome.interval
+    }
 
 // --- The launch surface's reads ---------------------------------------------------------------
 // Three GETs, answered on this person's own credential by the session, read in the codec the
@@ -1102,8 +1124,8 @@ let private start () =
         // plain-text roots the terminal composers live in (Plan 13), resolved the same way.
         let registry = BodyRegistry doc
         let texts = TextRegistry doc
-        // Kept current by `setState`: the read positions and the connection panels' flows
-        // are read off it rather than out of a message.
+        // Kept current by `setState`: the read positions are read off it rather than out of
+        // a message.
         let mutable latestModel = initial
         // A caret moved: reported once per frame, to whichever connection there is by then.
         let sendFocus = Render.focusReporter (fun focus -> connectionRef |> Option.iter (fun c -> c.ReportPresence focus))
@@ -1145,50 +1167,6 @@ let private start () =
         // delivers. The net for that is the deadline the model declares for every wait
         // (`ClientModel.timers`), which is the clock's to keep and not an answer's.
 
-        // The GitHub panel's round-trips (Plan 14). Device flow: begin puts the user
-        // code on screen, then this tab drives the session's poll at GitHub's stated
-        // interval until the grant lands (the pushed panel then flips the flow to idle),
-        // the human cancels, or the flow dies. That poll is a COMMAND — it is what makes
-        // GitHub hand the grant over — and is the one loop here that is not a status probe.
-        let rec pollGitHubWhileAwaiting () =
-            Async.StartImmediate (
-                async {
-                    let interval =
-                        match latestModel.GitHub.Flow with
-                        | GitHubAwaitingApproval (_, _, _, interval) -> max 1 interval
-                        | _ -> 0
-                    do! Async.Sleep (interval * 1000)
-                    match latestModel.GitHub.Flow with
-                    | GitHubAwaitingApproval (userCode, verificationUri, scope, interval) ->
-                        let! reply =
-                            postJson
-                                (Page.href (GitHub GitHubAction.Poll))
-                                (githubBody (GitHubRequest.scoped scope))
-                        if not reply.Ok then
-                            // A poll that failed is not necessarily a flow that ended. Only the
-                            // session's own 4xx says this one is over; a 5xx or a fetch that
-                            // never answered is a bad moment, and the code on screen — which the
-                            // human may already have approved — is still good.
-                            if GitHubFlow.ended reply.Status then
-                                // The flow is over as well as refused, and both have to be
-                                // said: the code on screen is dead, so it goes with the
-                                // reason it died. (When the two were one state, saying the
-                                // error did this by accident.)
-                                dispatchRef (GitHubFlowMsg GitHubIdle)
-                                dispatchRef (GitHubPendingMsg (Pending.Refused reply.Body))
-                            else pollGitHubWhileAwaiting ()
-                        else
-                            let outcome = parseDevicePoll reply.Body
-                            match outcome.status with
-                            // The grant landed. Nothing to ask: the Manager's frame reaches
-                            // this session, and the session tells every open drawer.
-                            | Some "connected" -> ()
-                            | _ ->
-                                if outcome.interval > interval then
-                                    dispatchRef (GitHubFlowMsg (GitHubAwaitingApproval (userCode, verificationUri, scope, outcome.interval)))
-                                pollGitHubWhileAwaiting ()
-                    | _ -> ()
-                })
         // The read surface (Plan 15): subscribe once, fold every frame. A malformed frame
         // is dropped rather than thrown — this is a best-effort push leg, and a stream
         // that dies on one bad line takes the whole surface down with it.
@@ -1210,26 +1188,6 @@ let private start () =
                         dispatchRef (GitHubStatusMsg github)
                     | Error _ -> ())
             |> ignore
-
-        let githubAction
-            (run: unit -> Async<Result<GitHubFlowState option, string>>)
-            (expect: ConnectionExpectation option)
-            =
-            dispatchRef (GitHubPendingMsg Pending.Sending)
-            Async.StartImmediate (
-                async {
-                    match! run () with
-                    | Error reason -> dispatchRef (GitHubPendingMsg (Pending.Refused reason))
-                    | Ok (Some flow) ->
-                        dispatchRef (GitHubPendingMsg Pending.Ready)
-                        dispatchRef (GitHubFlowMsg flow)
-                        pollGitHubWhileAwaiting ()
-                    | Ok None ->
-                        match expect with
-                        | Some expect ->
-                            dispatchRef (GitHubPendingMsg (Pending.Awaiting (expect, nowMillis ())))
-                        | None -> dispatchRef (GitHubPendingMsg Pending.Ready)
-                })
 
         // The side effects a template can't derive from the model. Send routes to the one
         // implementation in `Client.connect` (capture markdown, enqueue, seed the queue fragment).
@@ -1259,43 +1217,6 @@ let private start () =
                                 let enc i = ProseMirror.relPosFromTypeIndex text i |> ProseMirror.encodeRel
                                 { Field = field; Pos = { Anchor = enc anchor; Head = enc head } }))
                     sendFocus focus
-              GitHubConnect =
-                fun () ->
-                    let scope = match panelInput "[data-github-scope]" with "" -> "mine" | s -> s
-                    // Nothing for the status to show yet: the grant lands when the human
-                    // approves the code this puts on screen.
-                    githubAction
-                        (fun () ->
-                        async {
-                            let! reply =
-                                postJson
-                                    (Page.href (GitHub GitHubAction.Begin))
-                                    (githubBody (GitHubRequest.scoped scope))
-                            if not reply.Ok then return Error reply.Body
-                            else
-                                match parseDeviceBegin reply.Body with
-                                | None -> return Error "the reply began no device flow"
-                                | Some began ->
-                                    return
-                                        Ok (Some (GitHubAwaitingApproval (began.UserCode, began.VerificationUri, scope, began.Interval)))
-                        })
-                        None
-              GitHubPasteToken =
-                fun () ->
-                    match panelInput "[data-github-token]" with
-                    | "" -> dispatchRef (GitHubPendingMsg (Pending.Refused "paste a token first"))
-                    | token ->
-                        let scope = match panelInput "[data-github-scope]" with "" -> "mine" | s -> s
-                        githubAction
-                            (fun () ->
-                            async {
-                                let! reply =
-                                    postJson
-                                        (Page.href (GitHub GitHubAction.Token))
-                                        (githubBody { Scope = scope; Token = Some token })
-                                if not reply.Ok then return Error reply.Body else return Ok None
-                            })
-                            (Some { Scope = scope; Connected = true })
               Copy =
                 fun key text ->
                     writeClipboard text (fun written ->
@@ -1305,18 +1226,6 @@ let private start () =
                         // other tab with nothing to paste.
                         // How long it says so is the model's (`ClientModel.timers`).
                         if written then dispatchRef (CopiedMsg (Some key)))
-              GitHubDisconnect =
-                fun scope ->
-                    githubAction
-                        (fun () ->
-                        async {
-                            let! reply =
-                                postJson
-                                    (Page.href (GitHub GitHubAction.Disconnect))
-                                    (githubBody (GitHubRequest.scoped scope))
-                            if not reply.Ok then return Error reply.Body else return Ok None
-                        })
-                        (Some { Scope = scope; Connected = false })
               TypeIntoTerminal =
                 fun id data -> connectionRef |> Option.iter (fun c -> c.TypeIntoTerminal id data)
               ResizeTerminal =
@@ -1380,7 +1289,12 @@ let private start () =
         Client.makeProgram
             { Client.Ports.Connection = (fun () -> connectionRef)
               Client.Ports.Launch = Some launchReads
-              Client.Ports.Panels = Some { Client.PanelWrites.Claude = claudeWrite; Client.PanelWrites.Now = nowMillis } }
+              Client.Ports.Panels =
+                Some
+                    { Client.PanelWrites.Claude = claudeWrite
+                      Client.PanelWrites.GitHub = githubWrite
+                      Client.PanelWrites.GitHubPoll = githubPoll
+                      Client.PanelWrites.Now = nowMillis } }
             doc
             initial
         |> Client.withTimers Timer.system

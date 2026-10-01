@@ -223,13 +223,62 @@ module GitHubPanel =
     let landed (expect: ConnectionExpectation) (panel: GitHubPanel) : bool =
         ConnectionExpectation.landed expect panel.SessionCredential panel.MineCredential
 
+/// Where the device flow's poll is while a code is on screen. The poll is a COMMAND — it is
+/// what makes GitHub hand the grant over — and this tab is the one asking, at the interval
+/// GitHub sets, until the grant lands, the human cancels, or the session says the flow ended.
+type GitHubPolling =
+    /// Waiting out the interval before asking. `round` keys the wait (`ClientModel.timers`),
+    /// so each answer arms a new one and an answer to an old round is recognised as one.
+    | PollWaiting of round: int
+    /// The poll for `round` is out; its answer arms the next wait or ends the flow.
+    | PollAsking of round: int
+    /// The grant landed. Nothing is asked again: the Manager's frame reaches this session,
+    /// the session tells every open drawer, and that status closes the flow.
+    | PollGranted
+
+/// What one poll came back with.
+type GitHubPollAnswer =
+    /// The session said this flow is over — the code expired, the human denied it, nothing is
+    /// pending for that scope (`GitHubFlow.ended`) — with its reason.
+    | PollEnded of reason: string
+    /// A bad moment, not an ending: a 5xx, a proxy, a fetch that never answered. The code on
+    /// screen, which the human may already have approved, is still good.
+    | PollFailed
+    /// Still waiting, at the interval GitHub now asks for (`0` when it revised nothing).
+    | PollPending of interval: int
+    | PollConnected
+
 [<RequireQualifiedAccess>]
 type GitHubViewState =
     { /// As Claude's, for its reason.
       Status : GitHubPanel option
       Flow : GitHubFlowState
       /// A command of ours on its way into `Status`, modelled rather than assumed.
-      Pending : Pending<ConnectionExpectation> }
+      Pending : Pending<ConnectionExpectation>
+      /// The panel's fields as typed, for Claude's reason: which credential a sign-in is for,
+      /// and a pasted token. This client's own; none of it is synced.
+      Scope : string
+      Token : string
+      /// The device flow's poll, while `Flow` has a code on screen.
+      Polling : GitHubPolling }
+
+/// One write the GitHub panel asks the session for, as `ClaudeCall` is for Claude's.
+[<RequireQualifiedAccess>]
+type GitHubCall =
+    { Action : GitHubAction
+      Request : GitHubRequest
+      Expect : ConnectionExpectation option }
+
+/// The GitHub panel's three presses.
+[<RequireQualifiedAccess>]
+type GitHubPress =
+    | Connect
+    | SaveToken
+    | Disconnect of scope: string
+
+/// What a GitHub panel write came back with: refused with the session's reason, a device
+/// flow begun (the code to show), or accepted with nothing to show yet.
+type GitHubAnswer = Result<GitHubFlowState option, string>
 
 /// The generated read surface's state (Plan 15), folded from the `/queries` stream.
 ///
@@ -894,6 +943,17 @@ type ClientMsg =
     | GitHubFlowMsg of GitHubFlowState
     /// A GitHub connection command moved, exactly as Claude's does.
     | GitHubPendingMsg of Pending<ConnectionExpectation>
+    /// The GitHub panel's fields, as typed (`GitHubViewState`).
+    | GitHubScopeChosen of string
+    | GitHubTokenTyped of string
+    /// A press on the panel, as Claude's.
+    | GitHubPressedMsg of GitHubPress
+    /// What a write came back with, as Claude's.
+    | GitHubAnsweredMsg of GitHubCall * GitHubAnswer * at: int64
+    /// The interval before poll `round` has passed (`ClientModel.timers`).
+    | GitHubPollDueMsg of round: int
+    /// What poll `round` came back with.
+    | GitHubPolledMsg of round: int * GitHubPollAnswer
     /// The clock, for every panel waiting on a query at once: one tick, because a deadline
     /// is about elapsed time and not about which panel is watching it. Fired by the deadline
     /// the model declares for each wait (`ClientModel.timers`), carrying the moment it fell
@@ -1077,6 +1137,9 @@ type ClientEffect =
     | ApproveRepoCapabilities of RepoRef * granted: string list
     | Launch of LaunchEffect
     | Claude of ClaudeCall
+    | GitHub of GitHubCall
+    /// Ask poll `round` of the device flow begun for this scope.
+    | GitHubPoll of round: int * scope: string
 
 /// What each of the Claude panel's presses asks the session for, or why it asks nothing.
 /// One function for both halves of a press — the state it moves to and the effect it
@@ -1116,6 +1179,50 @@ module ClaudePress =
                 { Action = ClaudeAction.Disconnect
                   Request = ClaudeRequest.scoped scope
                   Expect = Some { Scope = scope; Connected = false } }
+
+/// What each of the GitHub panel's presses asks the session for, or why it asks nothing.
+module GitHubPress =
+
+    let call (press: GitHubPress) (github: GitHubViewState) : Result<GitHubCall, string> =
+        match press with
+        // Nothing for the status to show yet: the grant lands when the human approves the
+        // code this puts on screen.
+        | GitHubPress.Connect ->
+            Ok { Action = GitHubAction.Begin; Request = GitHubRequest.scoped github.Scope; Expect = None }
+        | GitHubPress.SaveToken ->
+            match github.Token with
+            | "" -> Error "paste a token first"
+            | token ->
+                Ok
+                    { Action = GitHubAction.Token
+                      Request = { Scope = github.Scope; Token = Some token }
+                      Expect = Some { Scope = github.Scope; Connected = true } }
+        | GitHubPress.Disconnect scope ->
+            Ok
+                { Action = GitHubAction.Disconnect
+                  Request = GitHubRequest.scoped scope
+                  Expect = Some { Scope = scope; Connected = false } }
+
+/// The device flow's poll, beside the state it reads.
+module GitHubPoll =
+
+    /// The scope to poll for, when poll `round` is the one this panel is waiting to ask — and
+    /// nothing for a round already asked, a flow cancelled or granted, or no flow at all.
+    let due (round: int) (github: GitHubViewState) : string option =
+        match github.Flow, github.Polling with
+        | GitHubAwaitingApproval (_, _, scope, _), PollWaiting waiting when waiting = round -> Some scope
+        | _ -> None
+
+    /// The wait before the next poll, while a code is on screen and nothing is out. Keyed by
+    /// the code and the round, so each answer arms a fresh wait and a new flow never inherits
+    /// an old one's.
+    let timer (github: GitHubViewState) : Timer<ClientMsg> list =
+        match github.Flow, github.Polling with
+        | GitHubAwaitingApproval (userCode, _, _, interval), PollWaiting round ->
+            [ { Key = [ "github-poll"; userCode; string round ]
+                After = max 1 interval * 1000
+                Fire = GitHubPollDueMsg round } ]
+        | _ -> []
 
 module ClientModel =
 
@@ -1182,7 +1289,10 @@ module ClientModel =
           GitHub =
             { Status = None
               Flow = GitHubIdle
-              Pending = Pending.Ready }
+              Pending = Pending.Ready
+              Scope = "mine"
+              Token = ""
+              Polling = PollWaiting 0 }
           Queries = { Declared = []; Values = Map.empty } }
 
     /// Advance the latest-known offset and recompute the catch-up indicator. "Slow" is a
@@ -2093,7 +2203,7 @@ module ClientModel =
                           After = int Pending.deadlineMillis
                           Fire = PendingWaitedMsg (since + Pending.deadlineMillis) }
                 | Pending.Ready | Pending.Sending | Pending.Refused _ -> None)
-        catchUp @ copied @ pending @ quiet
+        catchUp @ copied @ pending @ quiet @ GitHubPoll.timer model.GitHub
 
     /// Fold a message into the model — the state half of `update`, its only caller.
     /// Piped through `reconcileLaunch` (see its doc) so the launch surface anchors here,
@@ -2413,13 +2523,56 @@ module ClientModel =
                 | flow, _ -> flow
             { model with
                 GitHub =
-                  { Status = Some status
-                    Flow = flow
-                    Pending = model.GitHub.Pending |> Pending.observed GitHubPanel.landed status } }
+                  { model.GitHub with
+                      Status = Some status
+                      Flow = flow
+                      Pending = model.GitHub.Pending |> Pending.observed GitHubPanel.landed status } }
         | GitHubFlowMsg flow ->
             { model with GitHub = { model.GitHub with Flow = flow } }
         | GitHubPendingMsg pending ->
             { model with GitHub = { model.GitHub with Pending = pending } }
+        | GitHubScopeChosen scope -> { model with GitHub = { model.GitHub with Scope = scope } }
+        | GitHubTokenTyped token -> { model with GitHub = { model.GitHub with Token = token } }
+        | GitHubPressedMsg press ->
+            match GitHubPress.call press model.GitHub with
+            | Ok _ -> { model with GitHub = { model.GitHub with Pending = Pending.Sending; Token = "" } }
+            | Error reason -> { model with GitHub = { model.GitHub with Pending = Pending.Refused reason } }
+        | GitHubAnsweredMsg (call, answer, at) ->
+            match answer with
+            | Error reason -> { model with GitHub = { model.GitHub with Pending = Pending.Refused reason } }
+            | Ok (Some flow) ->
+                { model with GitHub = { model.GitHub with Pending = Pending.Ready; Flow = flow; Polling = PollWaiting 0 } }
+            | Ok None ->
+                let pending =
+                    match call.Expect with
+                    | Some expect -> Pending.Awaiting (expect, at)
+                    | None -> Pending.Ready
+                { model with GitHub = { model.GitHub with Pending = pending } }
+        | GitHubPollDueMsg round ->
+            match GitHubPoll.due round model.GitHub with
+            | Some _ -> { model with GitHub = { model.GitHub with Polling = PollAsking round } }
+            | None -> model
+        | GitHubPolledMsg (round, answer) ->
+            match model.GitHub.Flow, model.GitHub.Polling with
+            | GitHubAwaitingApproval (userCode, verificationUri, scope, interval), PollAsking asked when asked = round ->
+                let next = PollWaiting (round + 1)
+                match answer with
+                // The flow is over as well as refused, and both have to be said: the code on
+                // screen is dead, so it goes with the reason it died.
+                | PollEnded reason ->
+                    { model with GitHub = { model.GitHub with Flow = GitHubIdle; Pending = Pending.Refused reason; Polling = next } }
+                | PollFailed -> { model with GitHub = { model.GitHub with Polling = next } }
+                // GitHub's `slow_down` only ever widens the interval.
+                | PollPending revised when revised > interval ->
+                    { model with
+                        GitHub =
+                            { model.GitHub with
+                                Flow = GitHubAwaitingApproval (userCode, verificationUri, scope, revised)
+                                Polling = next } }
+                | PollPending _ -> { model with GitHub = { model.GitHub with Polling = next } }
+                | PollConnected -> { model with GitHub = { model.GitHub with Polling = PollGranted } }
+            // An answer to a flow that was cancelled, or to a round already answered.
+            | _ -> model
         | PendingWaitedMsg now ->
             { model with
                 Claude = { model.Claude with Pending = Pending.waited now model.Claude.Pending }
@@ -2707,5 +2860,8 @@ module ClientModel =
             | ApproveRepoCapabilitiesMsg (repo, granted) -> [ ClientEffect.ApproveRepoCapabilities (repo, granted) ]
             | LaunchMsg launchMsg -> Launch.update launchMsg model.Launch |> snd |> List.map ClientEffect.Launch
             | ClaudePressedMsg press -> ClaudePress.call press model.Claude |> Result.toList |> List.map ClientEffect.Claude
+            | GitHubPressedMsg press -> GitHubPress.call press model.GitHub |> Result.toList |> List.map ClientEffect.GitHub
+            | GitHubPollDueMsg round ->
+                GitHubPoll.due round model.GitHub |> Option.map (fun scope -> ClientEffect.GitHubPoll (round, scope)) |> Option.toList
             | _ -> []
         next, effects @ offering

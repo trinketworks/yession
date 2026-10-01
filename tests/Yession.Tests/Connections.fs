@@ -4381,6 +4381,52 @@ let private claudePressTests =
             Expect.equal model.Claude.Pending (Pending.Awaiting (disconnectMine, 5_000L)) "the deadline runs from the answer"
     ]
 
+/// The GitHub device flow's poll, as the model's own timer. It used to be a loop of sleeps in
+/// the browser reading back whatever model it last saw; the rules it carried — ask at GitHub's
+/// interval, keep the code through a bad moment, give it up only when the session says so,
+/// stop once the grant lands — are the reducer's now, and reachable without a browser.
+let private githubPollTests =
+    let peer : PeerState = { PeerId = PeerId.create "poll-peer" |> expect; DisplayName = "Ada" }
+    let begun : GitHubCall = { Action = GitHubAction.Begin; Request = GitHubRequest.scoped "mine"; Expect = None }
+    let flow interval = GitHubAwaitingApproval ("ABCD-1234", "https://github.com/login/device", "mine", interval)
+    let showing =
+        ClientModel.init peer |> Support.step (GitHubAnsweredMsg (begun, Ok (Some (flow 5)), 1_000L))
+    let polls (model: ClientModel) =
+        ClientModel.timers model |> List.filter (fun timer -> List.head timer.Key = "github-poll")
+    let asked = showing |> Support.step (GitHubPollDueMsg 0)
+    testList "the github device flow's poll" [
+        testCase "a code on screen waits GitHub's interval before asking" <| fun () ->
+            Expect.equal
+                (polls showing |> List.map (fun timer -> timer.After, timer.Fire))
+                [ 5_000, GitHubPollDueMsg 0 ]
+                "one wait, as long as GitHub asked"
+
+        testCase "the poll that falls due asks the session, for the scope the flow began with" <| fun () ->
+            Expect.equal (ClientModel.update (GitHubPollDueMsg 0) showing |> snd) [ ClientEffect.GitHubPoll (0, "mine") ] "one poll"
+
+        testCase "a round already asked is not asked again" <| fun () ->
+            Expect.equal (ClientModel.update (GitHubPollDueMsg 0) asked |> snd) [] "the first answer is still out"
+
+        testCase "a bad moment keeps the code on screen and waits again" <| fun () ->
+            let after = asked |> Support.step (GitHubPolledMsg (0, PollFailed))
+            Expect.equal (after.GitHub.Flow, polls after |> List.map (fun timer -> timer.Fire)) (flow 5, [ GitHubPollDueMsg 1 ]) "the code the human may have approved stays"
+
+        testCase "a flow the session ended takes the code away, with its reason" <| fun () ->
+            let after = asked |> Support.step (GitHubPolledMsg (0, PollEnded "the code expired"))
+            Expect.equal (after.GitHub.Flow, after.GitHub.Pending) (GitHubIdle, Pending.Refused "the code expired") "over, and said why"
+
+        testCase "slow_down widens the wait" <| fun () ->
+            let after = asked |> Support.step (GitHubPolledMsg (0, PollPending 10))
+            Expect.equal (polls after |> List.map (fun timer -> timer.After)) [ 10_000 ] "asked less often"
+
+        testCase "the grant landing stops the asking" <| fun () ->
+            let after = asked |> Support.step (GitHubPolledMsg (0, PollConnected))
+            Expect.isEmpty (polls after) "the status closes the flow; nothing more to ask"
+
+        testCase "cancelling stops the asking" <| fun () ->
+            Expect.isEmpty (polls (showing |> Support.step (GitHubFlowMsg GitHubIdle))) "no code, no poll"
+    ]
+
 /// What a listing asks for, and what it says — pure, so no capability.
 let private prListingTests =
     let octo = RepoRef.create "octo/hello" |> expect
@@ -4589,6 +4635,7 @@ let tests =
         panelTests
         panelFoldTests
         claudePressTests
+        githubPollTests
         panelWireTests
         catalogueTests
         codecTests
