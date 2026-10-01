@@ -18,7 +18,7 @@ open Lit
 
 /// The client shell as Fable.Lit templates. The view is a total function of the model
 /// (plus injected `ViewActions` for the few things a template cannot derive from the
-/// model: fresh ids, the interrupt round-trip, the sidebar toggle). In the browser Lit
+/// model: the draft sends, the sidebar toggle, focus moves). In the browser Lit
 /// renders it into `#app` on every model change (no manual innerHTML, no delegation, no
 /// focus juggling — Lit diffs); the host renders the same templates to a string for the
 /// served bootstrap (`Yession.Host.Ssr`).
@@ -42,8 +42,6 @@ type ViewActions =
       /// the slot alone (what the button used to do) left the text sitting in the composer and
       /// the next keystroke published it straight back, so the button looked broken.
       DiscardDraft : PeerId -> unit
-      /// Ask the Session Process to cancel the running agent turn.
-      Interrupt : AgentTurnId -> unit
       /// Collapse or reveal the sidebar column (a presentation bit on the shell root, not
       /// model; the browser also remembers a desktop collapse and moves focus to whichever
       /// control replaces the one that was pressed).
@@ -105,12 +103,6 @@ type ViewActions =
       /// carry — a peer whose token was refused, which no amount of waiting fixes and which
       /// therefore parks until somebody asks.
       RetryNow : unit -> unit
-      /// Ask the Session Process to open a terminal (Plan 13). A command, so imperative:
-      /// the terminal's id is minted by the Process and comes back as an event.
-      OpenTerminal : string -> unit
-      /// Consent to what a repo asks for. Takes the set that is on screen, so a file that
-      /// changed under the reader cannot be approved by a click meant for something else.
-      ApproveRepoCapabilities : RepoRef -> string list -> unit
       /// Send a terminal composer slot: enqueue its command. Imperative for exactly the
       /// reason `SendDraft` is — the command text is a shared type the reducer cannot move.
       SendTerminalDraft : TerminalId -> PeerId -> unit
@@ -187,7 +179,6 @@ module ViewActions =
     let ssr : ViewActions =
         { SendDraft = ignore
           DiscardDraft = ignore
-          Interrupt = ignore
           ToggleNav = ignore
           ReportFieldSelection = fun _ _ -> ()
           ToggleSettings = ignore
@@ -207,8 +198,6 @@ module ViewActions =
           LaunchStart = ignore
           LaunchLink = ignore
           RetryNow = ignore
-          OpenTerminal = ignore
-          ApproveRepoCapabilities = fun _ _ -> ()
           SendTerminalDraft = fun _ _ -> ()
           TypeIntoTerminal = fun _ _ -> ()
           ResizeTerminal = fun _ _ _ -> ()
@@ -567,7 +556,7 @@ module View =
                   <dl class="{Style.queryLegendEntries}">{rows}</dl>
                 </details>"""
 
-    let private peopleSection (actions: ViewActions) (model: ClientModel) : TemplateResult =
+    let private peopleSection (actions: ViewActions) (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
         // The agent's row says whether a turn can RUN, which is not the same question as
         // whether a credential is stored. `agentAvailable` answers the second (any relevant
         // credential, or the host's ambient one), so a Claude sign-in that has stopped
@@ -644,7 +633,7 @@ module View =
                           <ul class="{Style.cls [ Style.label; "w-full min-w-0 whitespace-normal" ]}">{lines}</ul>
                           <button type="button" class="{Style.cls [ Style.btnPrimary; Style.noAgentAction; "w-full min-w-0" ]}"
                                   data-repo-approve="{RepoRef.value repo}"
-                                  @click={Ev(fun _ -> actions.ApproveRepoCapabilities repo granted)}>Approve</button>
+                                  @click={Ev(fun _ -> dispatch (ApproveRepoCapabilitiesMsg (repo, granted)))}>Approve</button>
                         </div>
                       </div>
                     </div>""")
@@ -1091,7 +1080,7 @@ module View =
                 </section>"""
 
     /// The workspace face of the column: identity, sync health, membership, environment, log.
-    let private navPane (actions: ViewActions) (model: ClientModel) : TemplateResult =
+    let private navPane (actions: ViewActions) (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
         html $"""
             <div class="{Style.navPane}">
               <div class="{Style.cls [ Style.sideHead; Style.navLane0 ]}">
@@ -1099,7 +1088,7 @@ module View =
                 <button type="button" class="{Style.navChevronBack}" aria-label="Collapse sidebar" data-nav-toggle="hide" @click={Ev(fun _ -> actions.ToggleNav ())}>{Icon.left}</button>
               </div>
               {connectionSection actions model}
-              {peopleSection actions model}
+              {peopleSection actions dispatch model}
               {chaptersSection actions model}
               {environmentSection model.Environment}
               <div class="flex-1"></div>
@@ -1111,7 +1100,7 @@ module View =
         html $"""
             <div class="{Style.scrim}" data-nav-toggle="hide" @click={Ev(fun _ -> actions.ToggleNav ())}></div>
             <aside class="{Style.sidebar}">
-              {navPane actions model}
+              {navPane actions dispatch model}
               {settingsPane actions dispatch model}
             </aside>"""
 
@@ -1382,7 +1371,7 @@ module View =
     /// It rides the composer's dock rather than the streaming message because a message
     /// scrolls and the dock does not: a stop control that leaves the screen when the
     /// conversation moves is one nobody can reach at the moment they want it.
-    let private interrupt (actions: ViewActions) (model: ClientModel) : TemplateResult =
+    let private interrupt (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
         match model.Agent.ActiveTurn with
         | None -> Lit.nothing
         | Some turn ->
@@ -1390,7 +1379,7 @@ module View =
                 <div class="{Style.interruptBand}">
                   <button type="button" class="{Style.btnInterrupt}" aria-label="{Dom.Text.interruptLabel}"
                           data-interrupt-turn="{AgentTurnId.value turn}"
-                          @click={Ev(fun _ -> actions.Interrupt turn)}>interrupt</button>
+                          @click={Ev(fun _ -> dispatch (InterruptTurnMsg turn))}>interrupt</button>
                 </div>"""
 
     /// The composer: ONE draft open, everyone else's as a line you can open.
@@ -3731,7 +3720,7 @@ module View =
                 <div class="{Style.contentListEmpty}" data-content-list>
                   <span class="font-terminal text-[28px] leading-8 text-ink-faint select-none" aria-hidden="true">$</span>
                   <button type="button" class="{Style.btnPrimary}" data-terminal-new
-                          @click={Ev(fun _ -> actions.OpenTerminal "terminal")}>New terminal</button>
+                          @click={Ev(fun _ -> dispatch (OpenTerminalMsg "terminal"))}>New terminal</button>
                 </div>"""
         | rows, shared ->
             let items = rows |> List.map row
@@ -3996,7 +3985,7 @@ module View =
                     <div class="{Style.terminalEmpty}">
                       <span class="font-terminal text-[28px] leading-8 text-ink-faint select-none" aria-hidden="true">$</span>
                       <button type="button" class="{Style.btnPrimary}" data-terminal-new
-                              @click={Ev(fun _ -> actions.OpenTerminal "terminal")}>New terminal</button>
+                              @click={Ev(fun _ -> dispatch (OpenTerminalMsg "terminal"))}>New terminal</button>
                     </div>"""
             | Some tab ->
                 let inner =
@@ -4077,7 +4066,7 @@ module View =
                     {tabs |> List.map tabButton}
                   </div>
                   <button type="button" class="{Style.terminalTabNew}" data-terminal-new
-                          @click={Ev(fun _ -> actions.OpenTerminal "terminal")}>+ new</button>
+                          @click={Ev(fun _ -> dispatch (OpenTerminalMsg "terminal"))}>+ new</button>
                 </div>"""
         // ONE control with two faces rather than a pair that swap places: it never leaves the
         // document, so pressing it can never strand the focus that is on it. Its value is the
@@ -4136,7 +4125,7 @@ module View =
               {chat actions dispatch model}
               {if ClientModel.launchOffered model then askCard actions dispatch model else Lit.nothing}
               {queue dispatch model}
-              {interrupt actions model}
+              {interrupt dispatch model}
               {drafts actions dispatch model}
             </div>
             {contentPane actions dispatch model}

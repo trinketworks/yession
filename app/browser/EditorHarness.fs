@@ -1393,7 +1393,10 @@ do
             | ClientEffect.ReleaseTerminal _
             | ClientEffect.RearmTerminal _
             | ClientEffect.ReattachTerminal _
-            | ClientEffect.CloseTerminal _ -> ())
+            | ClientEffect.CloseTerminal _
+            | ClientEffect.OpenTerminal _
+            | ClientEffect.InterruptTurn _
+            | ClientEffect.ApproveRepoCapabilities _ -> ())
         // Read back off the MODEL rather than out of the message: a measurement the reducer
         // refused is not a width anything would claim, and a hook that reported it anyway
         // would say the opposite of what happened.

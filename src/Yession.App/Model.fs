@@ -930,13 +930,17 @@ type ClientMsg =
     /// A tab shown and not pinned is the PREVIEW slot (Plan 20, stage 1): showing anything
     /// else replaces it, so a person reading twenty chips ends with one tab, not twenty.
     | ShowInPaneMsg of TabMode
-    /// This client has asked the session for a terminal (`Opening`).
+    /// Ask the session for a terminal with this title, and remember that this client asked
+    /// (`Opening`).
     ///
-    /// Sent where the request is SENT rather than from each button, so no third `+ new`
-    /// can be added that opens a terminal without recording that somebody here asked for
-    /// it: asking and remembering that you asked are one act, and a caller that could do
-    /// the first without the second is the dead button this exists to end.
-    | OpeningTerminalMsg
+    /// One message for both halves, so no third `+ new` can be added that opens a terminal
+    /// without recording that somebody here asked for it: asking and remembering that you
+    /// asked are one act, and a caller that could do the first without the second is the dead
+    /// button this exists to end. The terminal comes back as an event that says which USER
+    /// opened it and cannot say which of their tabs did, so the count is the only thing that
+    /// can tell the terminal THIS press asked for from one that merely belongs to the same
+    /// person.
+    | OpenTerminalMsg of title: string
     /// Keep this tab, or stop keeping it (Plan 20, stage 1). Unpinning is not closing:
     /// unpinning a terminal leaves it running and leaves its row in the list, and the one
     /// verb that ends a terminal lives on that row.
@@ -1007,6 +1011,12 @@ type ClientMsg =
     | ReattachTerminalMsg of TerminalId
     /// End a terminal. Not closing its tab: this is the one verb that stops what runs in it.
     | CloseTerminalMsg of TerminalId
+    /// Ask the session to cancel the running agent turn (Step 17). The outcome arrives as
+    /// events: `AgentTurnInterrupted` on success, or nothing if the turn already finished.
+    | InterruptTurnMsg of AgentTurnId
+    /// Consent to what a repo asks for (Plan 27). Carries the set that is on screen, so the
+    /// session can refuse if the file moved between the screen and the button.
+    | ApproveRepoCapabilitiesMsg of RepoRef * granted: string list
 
 /// What a message asks of the world outside the model, as a value `ClientModel.update` returns
 /// beside the next model.
@@ -1025,6 +1035,9 @@ type ClientEffect =
     | RearmTerminal of TerminalId
     | ReattachTerminal of TerminalId
     | CloseTerminal of TerminalId
+    | OpenTerminal of title: string
+    | InterruptTurn of AgentTurnId
+    | ApproveRepoCapabilities of RepoRef * granted: string list
 
 module ClientModel =
 
@@ -2353,7 +2366,7 @@ module ClientModel =
             if Size.isValid size then
                 { model with TerminalViewports = Map.add terminal size model.TerminalViewports }
             else model
-        | OpeningTerminalMsg -> { model with Opening = model.Opening + 1 }
+        | OpenTerminalMsg _ -> { model with Opening = model.Opening + 1 }
         | ShowInPaneMsg mode ->
             // The WHOLE next face, stated by every way in. Nothing here clears a subset and
             // hopes the rest was already right: the list cannot survive a choice that
@@ -2559,7 +2572,9 @@ module ClientModel =
         | ReleaseTerminalMsg _
         | RearmTerminalMsg _
         | ReattachTerminalMsg _
-        | CloseTerminalMsg _ -> model
+        | CloseTerminalMsg _
+        | InterruptTurnMsg _
+        | ApproveRepoCapabilitiesMsg _ -> model
         )
 
     /// A message's consequences: the next model, and what it asks of the world outside it.
@@ -2571,5 +2586,8 @@ module ClientModel =
             | RearmTerminalMsg terminal -> [ ClientEffect.RearmTerminal terminal ]
             | ReattachTerminalMsg terminal -> [ ClientEffect.ReattachTerminal terminal ]
             | CloseTerminalMsg terminal -> [ ClientEffect.CloseTerminal terminal ]
+            | OpenTerminalMsg title -> [ ClientEffect.OpenTerminal title ]
+            | InterruptTurnMsg turn -> [ ClientEffect.InterruptTurn turn ]
+            | ApproveRepoCapabilitiesMsg (repo, granted) -> [ ClientEffect.ApproveRepoCapabilities (repo, granted) ]
             | _ -> []
         fold msg model, effects
