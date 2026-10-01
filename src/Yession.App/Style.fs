@@ -2054,13 +2054,14 @@ module Style =
     /// agent's and a diamond on the session's work says the agent did it. In the chrome's
     /// dim ink rather than blue, which is the agent's colour as the diamond is its shape.
     ///
-    /// Placed by the same rule as the diamond (`agentMark`): an `1ex` box resting on the
-    /// baseline, so it spans the title's lowercase. Overshot as a round letter is, 0.015em
-    /// each side — about what Noto's `o` carries — rather than a point's 0.03em. It keeps
-    /// the diamond's rhythm, the same animation: the turn does nothing to a circle, so what
-    /// shows is its dip in scale, one beat and a rest.
+    /// Placed by the same rule as the diamond (`agentMark`): an `1ex` box on the baseline,
+    /// so it spans the title's lowercase, overshot as a round letter is. Its diameter is
+    /// rounded to an odd number of pixels (`mark-round` in `app/tailwind.css`, which says
+    /// why) so it paints centred on the one-pixel line of the cause it hangs under, rather
+    /// than half a pixel to its side. It keeps the diamond's rhythm, the same animation: the
+    /// turn does nothing to a circle, so what shows is its dip in scale, one beat and a rest.
     let actNoteRunningOther =
-        "inline-block w-[calc(1ex_+_0.03em)] h-[calc(1ex_+_0.03em)] align-[-0.015em] rounded-full bg-ink-dim "
+        "inline-block mark-round rounded-full bg-ink-dim "
         + "animate-think motion-reduce:animate-none motion-reduce:opacity-60"
     /// Sentence case, deliberately. This wore the caps LABEL voice, and a label voice is for
     /// two or three words: `STARTED SANDBOX WORK (DOCKER), FORWARDING ANTHROPIC_API_KEY FROM

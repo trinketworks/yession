@@ -334,6 +334,22 @@
    the effect is decoration over a surface that works without it. */
 @custom-variant reduced-transparency (@media (prefers-reduced-transparency: reduce));
 
+/* A round mark that has to sit on a one-pixel line (`Style.actNoteRunningOther`, under a cause's
+   corner): an `1ex` disc overshot as a round letter is, its diameter rounded to an ODD number
+   of pixels. A browser paints a box by rounding each edge to the pixel grid on its own, so a
+   one-pixel line whose centre falls between two pixels is painted on one of them — and a disc
+   of any other width rounds its edges differently and lands half a pixel to the side (it did:
+   7.34px wide, painted 0.5px left of the line it hung from). An odd diameter has the line's
+   parity: both edges of both shapes sit on the same fraction of a pixel, round the same way,
+   and the centres stay together at any offset and any whole device-pixel ratio. Lowered by
+   half its excess over `1ex`, so it straddles the lowercase as an `o` does. */
+@utility mark-round {
+  --mark-round: calc(round(nearest, (1ex + 0.03em - 1px) / 2, 1px) * 2 + 1px);
+  width: var(--mark-round);
+  height: var(--mark-round);
+  vertical-align: calc((1ex - var(--mark-round)) / 2);
+}
+
 @utility bg-grad {
   background-image: linear-gradient(90deg, var(--color-blue), var(--color-green));
 }

@@ -1865,7 +1865,8 @@ let editorTests =
                         const note = document.querySelector('#shell [data-act-status="running"]')
                         const mark = note.querySelector('[data-act-running]')
                         const gutter = mark.parentElement.getBoundingClientRect()
-                        const title = note.querySelector('.col-start-2')
+                        // The title, not the cause's sentence above it (which sits in the same column).
+                        const title = [...note.querySelectorAll('.col-start-2')].find(e => !e.closest('[data-cause-ref]'))
                         const walk = document.createTreeWalker(title, NodeFilter.SHOW_TEXT)
                         let first = null
                         while (!first && walk.nextNode()) if (walk.currentNode.textContent.trim()) first = walk.currentNode
@@ -1887,6 +1888,38 @@ let editorTests =
                         return wrong.join('; ')
                     }""")
                 Expect.equal misplaced "" "the running act's mark stands on its title's line"
+            }
+
+        // A mark in the gutter under a cause's corner hangs from that corner's line, so it is
+        // centred on the line AS PAINTED. Geometry alone cannot say so: a browser paints a box
+        // by rounding each edge to the device-pixel grid on its own, and a one-pixel line whose
+        // centre falls between two pixels lands on one of them. The disc and the line both
+        // measured 328.0 at their centres while the disc painted half a pixel left of the
+        // line. So the case rounds each measured edge as the painter does and compares the
+        // centres that come out — and the stem is found by its shape (one pixel wide, taller
+        // than that), not by a class.
+        editorCase "a running act's mark paints centred on its cause's line" <| fun page ->
+            async {
+                do! awaitU (page.EmulateMediaAsync (PageEmulateMediaOptions (ReducedMotion = ReducedMotion.Reduce)))
+                do! awaitU (page.EvaluateAsync "() => window.__acts()")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-act-status=\"running\"] [data-cause-ref]")
+                let! off =
+                    await (page.EvaluateAsync<string> """() => {
+                        const note = document.querySelector('#shell [data-act-status="running"]')
+                        const stem = [...note.querySelectorAll('[data-cause-ref] *')].find(e => {
+                          const b = e.getBoundingClientRect()
+                          return b.width === 1 && b.height > 1
+                        })
+                        if (!stem) return 'the cause draws no line'
+                        const painted = e => {
+                          const b = e.getBoundingClientRect(), d = devicePixelRatio
+                          return (Math.round(b.left * d) + Math.round(b.right * d)) / 2
+                        }
+                        const mark = painted(note.querySelector('[data-act-running]'))
+                        const line = painted(stem)
+                        return mark === line ? '' : 'the mark paints at ' + mark + ' and the line at ' + line + ' (device pixels)'
+                    }""")
+                Expect.equal off "" "the mark hangs on the line"
             }
 
         // EVERY fold's arrow sits on the centre of its own title's line, and every arrow on
