@@ -96,11 +96,6 @@ type CommandServices =
 
 let private encodeArgs (values: string list) : string = Codec.toString Codec.gatedArgs values
 
-let private decodeArgs (raw: string) : string list =
-    match Codec.fromString Codec.gatedArgs raw with
-    | Ok values -> values
-    | Error _ -> []
-
 /// Re-read every checkout's `yession.yaml` once a verb has actually changed what checkouts
 /// exist or what is in them (Plan 27).
 ///
@@ -206,6 +201,12 @@ let private readStartArgs (values: string list) : Result<string * string * Cause
 ///
 /// A malformed invocation FAILS rather than guessing: "run something adjacent to what was
 /// asked for" is the one outcome a gate must never produce.
+///
+/// The arguments are read once, here, before any verb sees them, and arguments that will not
+/// read are refused as exactly that. They used to decode to `[]` when they did not decode at
+/// all, so every verb refused them with its own count — "takes one repo, got 0 arguments" —
+/// which is the sentence for a call that carried nothing, about a call that carried
+/// something nobody could read. Each verb now matches on a list that was really there.
 let dispatch (services: CommandServices) : CommandDispatch =
     // Whose credential, asked once: the borrowed authority when there is one, the author
     // otherwise. It used to be a `defaultArg` per call site with `ActorRef.Agent` written in
@@ -219,9 +220,9 @@ let dispatch (services: CommandServices) : CommandDispatch =
     let sandboxCaller (invocation: GatedInvocation) : ActorRef = Authority.author invocation.Authority
     Map.ofList
         [ addRepoTool,
-          fun (invocation: GatedInvocation) ->
+          fun (invocation: GatedInvocation) (args: string list) ->
             async {
-                match services.Repos (), decodeArgs invocation.Args with
+                match services.Repos (), args with
                 | None, _ -> return Error "this session has no repos"
                 | Some service, [ repo ] ->
                     match RepoRef.create repo with
@@ -271,9 +272,9 @@ let dispatch (services: CommandServices) : CommandDispatch =
             }
 
           removeRepoTool,
-          fun (invocation: GatedInvocation) ->
+          fun (invocation: GatedInvocation) (args: string list) ->
             async {
-                match services.Repos (), decodeArgs invocation.Args with
+                match services.Repos (), args with
                 | None, _ -> return Error "this session has no repos"
                 | Some service, [ repo; force ] ->
                     match RepoRef.create repo with
@@ -320,9 +321,9 @@ let dispatch (services: CommandServices) : CommandDispatch =
             }
 
           switchBranchTool,
-          fun (invocation: GatedInvocation) ->
+          fun (invocation: GatedInvocation) (args: string list) ->
             async {
-                match services.Repos (), decodeArgs invocation.Args with
+                match services.Repos (), args with
                 | None, _ -> return Error "this session has no repos"
                 | Some service, [ repo; branch; create ] ->
                     match RepoRef.create repo with
@@ -342,14 +343,14 @@ let dispatch (services: CommandServices) : CommandDispatch =
             }
 
           createPrTool,
-          fun (invocation: GatedInvocation) ->
+          fun (invocation: GatedInvocation) (args: string list) ->
             async {
                 // A description is present or it is not, and the ARITY carries that, like
                 // `set_shell_profile`'s directory below: five arguments is a pull request with
                 // no body, six is one with the body last. Never an empty string standing in
                 // for the absence.
                 let parsed =
-                    match decodeArgs invocation.Args with
+                    match args with
                     | [ repo; head; onto; title; draft ] -> Ok (repo, head, onto, title, draft, None)
                     | [ repo; head; onto; title; draft; body ] -> Ok (repo, head, onto, title, draft, Some body)
                     | other -> Error other
@@ -376,9 +377,9 @@ let dispatch (services: CommandServices) : CommandDispatch =
             }
 
           mergePrTool,
-          fun (invocation: GatedInvocation) ->
+          fun (invocation: GatedInvocation) (args: string list) ->
             async {
-                match services.Prs (), decodeArgs invocation.Args with
+                match services.Prs (), args with
                 | None, _ -> return Error "this session cannot merge pull requests"
                 | Some service, [ repo; number; method ] ->
                     match RepoRef.create repo, System.Int32.TryParse number, PrMergeMethod.create method with
@@ -399,9 +400,9 @@ let dispatch (services: CommandServices) : CommandDispatch =
             }
 
           unmergePrTool,
-          fun (invocation: GatedInvocation) ->
+          fun (invocation: GatedInvocation) (args: string list) ->
             async {
-                match services.Prs (), decodeArgs invocation.Args with
+                match services.Prs (), args with
                 | None, _ -> return Error "this session cannot merge pull requests"
                 | Some service, [ repo; number ] ->
                     match RepoRef.create repo, System.Int32.TryParse number with
@@ -416,9 +417,9 @@ let dispatch (services: CommandServices) : CommandDispatch =
             }
 
           readyPrTool,
-          fun (invocation: GatedInvocation) ->
+          fun (invocation: GatedInvocation) (args: string list) ->
             async {
-                match services.Prs (), decodeArgs invocation.Args with
+                match services.Prs (), args with
                 | None, _ -> return Error "this session cannot mark pull requests ready"
                 | Some service, [ repo; number ] ->
                     match RepoRef.create repo, System.Int32.TryParse number with
@@ -433,9 +434,9 @@ let dispatch (services: CommandServices) : CommandDispatch =
             }
 
           draftPrTool,
-          fun (invocation: GatedInvocation) ->
+          fun (invocation: GatedInvocation) (args: string list) ->
             async {
-                match services.Prs (), decodeArgs invocation.Args with
+                match services.Prs (), args with
                 | None, _ -> return Error "this session cannot make pull requests drafts"
                 | Some service, [ repo; number ] ->
                     match RepoRef.create repo, System.Int32.TryParse number with
@@ -450,9 +451,9 @@ let dispatch (services: CommandServices) : CommandDispatch =
             }
 
           watchPrTool,
-          fun (invocation: GatedInvocation) ->
+          fun (invocation: GatedInvocation) (args: string list) ->
             async {
-                match services.Prs (), decodeArgs invocation.Args with
+                match services.Prs (), args with
                 | None, _ -> return Error "this session cannot watch pull requests"
                 | Some service, [ repo; number ] ->
                     match RepoRef.create repo, System.Int32.TryParse number with
@@ -470,9 +471,9 @@ let dispatch (services: CommandServices) : CommandDispatch =
             }
 
           unwatchPrTool,
-          fun (invocation: GatedInvocation) ->
+          fun (invocation: GatedInvocation) (args: string list) ->
             async {
-                match services.Prs (), decodeArgs invocation.Args with
+                match services.Prs (), args with
                 | None, _ -> return Error "this session cannot watch pull requests"
                 | Some service, [ repo; number ] ->
                     match RepoRef.create repo, System.Int32.TryParse number with
@@ -490,13 +491,13 @@ let dispatch (services: CommandServices) : CommandDispatch =
             }
 
           startWorkSandboxTool,
-          fun (invocation: GatedInvocation) ->
+          fun (invocation: GatedInvocation) (args: string list) ->
             async {
                 // A sandbox and a DECLARATION, because a declaration is what both callers
                 // have: the agent's names some credentials, a repo's file names everything.
                 // One shape, so the declarative route and the interactive one cannot
                 // diverge — which is the reason this gate is a capability at all.
-                match readStartArgs (decodeArgs invocation.Args) with
+                match readStartArgs (args) with
                 | Ok (name, declared, causedBy) ->
                     match SandboxRef.parse name with
                     | Error e -> return Error (sprintf "not a sandbox: %s" e)
@@ -600,9 +601,9 @@ let dispatch (services: CommandServices) : CommandDispatch =
             }
 
           stopWorkSandboxTool,
-          fun (invocation: GatedInvocation) ->
+          fun (invocation: GatedInvocation) (args: string list) ->
             async {
-                match decodeArgs invocation.Args with
+                match args with
                 | [ name ] ->
                     match SandboxRef.parse name with
                     | Error e -> return Error (sprintf "not a sandbox: %s" e)
@@ -616,14 +617,14 @@ let dispatch (services: CommandServices) : CommandDispatch =
             }
 
           setShellProfileTool,
-          fun (invocation: GatedInvocation) ->
+          fun (invocation: GatedInvocation) (args: string list) ->
             async {
                 // A directory is present or it is not, and the ARITY carries that — one arg
                 // clears the profile, two sets it. The absence is a shorter list, never an
                 // empty string standing in for a value; both halves of this gated command
                 // live in one file so the encode above and this decode stay the one shape.
                 let parsed =
-                    match decodeArgs invocation.Args with
+                    match args with
                     | [ name ] -> Ok (name, None)
                     | [ name; cwd ] -> Ok (name, Some cwd)
                     | other -> Error other
@@ -647,9 +648,9 @@ let dispatch (services: CommandServices) : CommandDispatch =
           // pass the gate like every other command here; the sandbox does the reading and
           // writing (`SessionFiles`), and this side only decodes what the other encoded.
           editFileTool,
-          fun (invocation: GatedInvocation) ->
+          fun (invocation: GatedInvocation) (args: string list) ->
             async {
-                match decodeArgs invocation.Args with
+                match args with
                 | [ rawName; path; oldText; newText; replaceAll ] ->
                     match SandboxRef.parse rawName with
                     | Error e -> return Error (sprintf "not a sandbox: %s" e)
@@ -680,9 +681,9 @@ let dispatch (services: CommandServices) : CommandDispatch =
             }
 
           writeFileTool,
-          fun (invocation: GatedInvocation) ->
+          fun (invocation: GatedInvocation) (args: string list) ->
             async {
-                match decodeArgs invocation.Args with
+                match args with
                 | [ rawName; path; content ] ->
                     match SandboxRef.parse rawName with
                     | Error e -> return Error (sprintf "not a sandbox: %s" e)
@@ -697,7 +698,7 @@ let dispatch (services: CommandServices) : CommandDispatch =
           // asked for; which VERSION it becomes is minted on the far side, by the store, after
           // the verdict — so an approval is never for an address that has since been taken.
           shareArtifactTool,
-          fun (invocation: GatedInvocation) ->
+          fun (invocation: GatedInvocation) (args: string list) ->
             async {
                 let named (values: string list) =
                     match values with
@@ -708,7 +709,7 @@ let dispatch (services: CommandServices) : CommandDispatch =
                             sprintf
                                 "share_artifact takes a sandbox, a path and an optional name, got %d arguments"
                                 (List.length other))
-                match named (decodeArgs invocation.Args) with
+                match named (args) with
                 | Error e -> return Error e
                 | Ok (rawName, path, name) ->
                     match SandboxRef.parse rawName with
@@ -729,6 +730,11 @@ let dispatch (services: CommandServices) : CommandDispatch =
                                         (ArtifactRef.url shared.Ref)
                                         (ContentSize.render shared.Bytes))
             } ]
+    |> Map.map (fun _ (run: GatedInvocation -> string list -> Async<Result<string, string>>) ->
+        fun (invocation: GatedInvocation) ->
+            match Codec.fromString Codec.gatedArgs invocation.Args with
+            | Ok args -> run invocation args
+            | Error reason -> async { return Error (sprintf "the call's arguments could not be read: %s" reason) })
 
 /// How a PERSON puts the first repo into a session — the launch surface's one act, and the
 /// one human-authored repo verb there is.
