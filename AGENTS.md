@@ -552,7 +552,8 @@ any of its family, `EmitMethod`, `EmitConstructor`, `EmitIndexer`, `EmitProperty
 binding project and nowhere else. The residue outside `src/Fable.*` was driven to zero by a
 long sweep, one binding at a time: a hundred-odd lines of JavaScript in `PaneShell.fs`, a
 65-line program in `AttachWs.fs`, twelve tool definitions inside one macro in the Domain. Then
-nothing kept it there. `Type safety` above says not to write one, and the two emit rules read
+nothing kept it there — and its first run found three more that every text search for
+`[<Emit` had walked past, because they spelled the attribute in full, `[<Fable.Core.Emit(...)>]`. `Type safety` above says not to write one, and the two emit rules read
 every macro they find, but neither asks where a macro is written — a new emit in `app/` that
 names its arguments and declares nothing in its body is clean to both. The population is
 derived, not listed: a binding project is one with nothing Yession in its reach, neither its
